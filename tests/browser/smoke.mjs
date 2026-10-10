@@ -16,7 +16,7 @@ import { runCinematicAcceptance } from './cinematics.mjs';
 import { installBloodProbe, runBloodAcceptance } from './blood.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const webRoot = path.resolve(process.env.BROWSER_WEB_ROOT || path.join(root, 'web'));
+const webRoot = path.resolve(process.env.BROWSER_WEB_ROOT || path.join(root, 'web/dist'));
 const artifacts = path.resolve(process.env.BROWSER_ARTIFACTS || path.join(root, 'artifacts/browser'));
 const tools = process.env.SPELUNKY_TOOLS || path.join(root, 'target/debug/spelunky-tools');
 const require = createRequire(import.meta.url);
@@ -61,7 +61,7 @@ report.nativeReplays = native;
 let server;
 let base = process.env.BASE_URL;
 if (!base) {
-  const mime = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm', '.json': 'application/json', '.txt': 'text/plain' };
+  const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.json': 'application/json', '.txt': 'text/plain' };
   server = http.createServer(async (request, response) => {
     try {
       const pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
