@@ -122,6 +122,14 @@ impl Game {
         self.player.buffered_jump_ticks = 0;
         self.player.animation = 0.0;
         self.player.data.clear();
+        // Rooms recreate oPlayer1 with its selected character's initial sprite.
+        // Retaining an exit sprite would keep the new controller disabled.
+        self.player.sprite = match characters::selected(self) {
+            characters::Character::Explorer => "sStandLeft",
+            characters::Character::Damsel => "sDamselLeft",
+            characters::Character::TunnelMan => "sTunnelLeft",
+        }
+        .into();
         self.player.invincible = 0;
         self.data
             .insert("darkness".into(), if self.world.dark { 1.0 } else { 0.0 });
@@ -682,6 +690,90 @@ mod tests {
         assert_eq!(carried.object, "oShotgun");
         assert!(!carried.data.contains_key("ammo"));
         assert!(!game.flags.contains("carry:oShotgun"));
+    }
+
+    #[test]
+    fn completed_exit_recreates_a_moving_player_in_linked_and_campaign_rooms() {
+        use characters::Character;
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
+                for custom in [true, false] {
+                    let mut first = level::Level::default();
+                    first.set_tile(6, 7, '@').unwrap();
+                    first.set_tile(7, 7, 'X').unwrap();
+                    for x in 0..level::LEVEL_WIDTH {
+                        first.set_tile(x, 8, '1').unwrap();
+                    }
+                    let mut game = Game::shell(7, rules);
+                    characters::apply(&mut game, character);
+                    game.load_custom(&first, "first", "");
+                    if !custom {
+                        game.flags.remove("custom");
+                        game.flags.remove("custom_level");
+                    }
+                    for _ in 0..60 {
+                        game.step(&InputFrame {
+                            right: true,
+                            up: true,
+                            ..Default::default()
+                        });
+                        if game.state == RunState::Ending {
+                            break;
+                        }
+                    }
+                    assert!(game.player.is_exiting(), "{rules:?}/{character:?}/{custom}");
+                    for _ in 0..1_000 {
+                        if game.state == RunState::Transition {
+                            break;
+                        }
+                        game.step(&InputFrame {
+                            start_pressed: true,
+                            ..Default::default()
+                        });
+                    }
+                    assert_eq!(game.state, RunState::Transition);
+                    assert_eq!(
+                        game.ending.as_ref().unwrap().stage,
+                        ending::EndingStage::Complete
+                    );
+                    if custom {
+                        let mut next = first.clone();
+                        next.set_tile(6, 7, '0').unwrap();
+                        next.set_tile(7, 7, '0').unwrap();
+                        next.set_tile(15, 7, '@').unwrap();
+                        next.exit_targets = vec!["first".into()];
+                        game.continue_custom(&next, "second", "first");
+                    } else {
+                        game.next_level();
+                    }
+                    for _ in 0..60 {
+                        game.step(&InputFrame::default());
+                        if game.player.grounded {
+                            break;
+                        }
+                    }
+                    assert!(game.player.grounded, "{rules:?}/{character:?}/{custom}");
+                    let start = game.player.pos;
+                    for tick in 0..6 {
+                        game.step(&InputFrame {
+                            right: true,
+                            jump: true,
+                            jump_pressed: tick == 0,
+                            ..Default::default()
+                        });
+                    }
+                    assert!(
+                        game.player.pos.x > start.x + 4.,
+                        "continued player did not move: {rules:?}/{character:?}/{custom}: {:?}",
+                        game.player
+                    );
+                    assert!(
+                        game.player.vel.y < 0. && game.player.pos.y < start.y,
+                        "continued player did not jump: {rules:?}/{character:?}/{custom}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
