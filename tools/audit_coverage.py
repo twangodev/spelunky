@@ -7,13 +7,100 @@ Run after dispatch changes, then manually review the shared-equivalent mappings.
 from pathlib import Path
 import argparse, re, json, collections
 root = Path(__file__).resolve().parents[1]
+
+def blank(text):
+ return re.sub(r'[^\n]', ' ', text)
+
+def lexical_shadow(text):
+ """Keep Rust punctuation/offsets while hiding comments and literal contents."""
+ chars=list(text);i=0
+ while i<len(text):
+  start=i
+  if text.startswith('//',i):
+   end=text.find('\n',i);i=len(text) if end<0 else end
+  elif text.startswith('/*',i):
+   depth=1;i+=2
+   while i<len(text) and depth:
+    if text.startswith('/*',i):depth+=1;i+=2
+    elif text.startswith('*/',i):depth-=1;i+=2
+    else:i+=1
+   assert depth==0, 'Unterminated Rust comment'
+  else:
+   raw=re.match(r'(?:br|r)(#*)"',text[i:])
+   if raw:
+    end=text.find('"'+raw.group(1),i+len(raw.group()))
+    assert end>=0, 'Unterminated Rust raw string'
+    i=end+1+len(raw.group(1))
+   elif text[i]=='"':
+    i+=1
+    while i<len(text):
+     if text[i]=='\\':i+=2
+     elif text[i]=='"':i+=1;break
+     else:i+=1
+   elif text[i]=="'" and (literal:=re.match(r"'(?:\\.|[^'\\\n])'",text[i:])):
+    i+=len(literal.group())
+   else:i+=1;continue
+  chars[start:i]=blank(text[start:i])
+ return ''.join(chars)
+
+def production_text(text):
+ """Remove cfg(test) items, preserving later production code and line numbers.
+
+ Handles inline test modules, early helper functions and external module
+ declarations. This is a conservative source scanner, not a Rust compiler.
+ """
+ shadow=lexical_shadow(text);ranges=[]
+ for match in re.finditer(r'#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]',shadow):
+  if ranges and match.start()<ranges[-1][1]:continue
+  i=match.end()
+  while True:
+   while i<len(text) and shadow[i].isspace():i+=1
+   if not shadow.startswith('#[',i):break
+   end=shadow.find(']',i);assert end>=0
+   i=end+1
+  delimiter=re.search(r'[;{]',shadow[i:]);assert delimiter, 'cfg(test) item has no boundary'
+  i+=delimiter.start()
+  if shadow[i]==';':end=i+1
+  else:
+   depth=1;end=i+1
+   while end<len(text) and depth:
+    if shadow[end]=='{':depth+=1
+    elif shadow[end]=='}':depth-=1
+    end+=1
+   assert depth==0, 'Unbalanced cfg(test) item'
+  ranges.append((match.start(),end))
+ for start,end in reversed(ranges):text=text[:start]+blank(text[start:end])+text[end:]
+ return text,ranges
+
+# Regressions: an early helper/external test module must not hide later handlers;
+# braces inside literals/comments must not end an excluded item.
+fixture='#[cfg(test)]\nfn helper() { let s = r#"}"#; /* { */ }\n#[cfg(test)]\n#[path = "traversal.rs"]\nmod traversal;\nfn live() { match x { "oLive" => {} } }\n#[cfg(test)]\nmod tests { fn t() { match x { "oTest" => {} } } }\n'
+filtered,fixture_ranges=production_text(fixture)
+assert '"oLive"' in filtered and '"oTest"' not in filtered and 'fn helper' not in filtered
+assert len(filtered)==len(fixture) and filtered.count('\n')==fixture.count('\n') and len(fixture_ranges)==3
+
+sources={p:p.read_text() for p in sorted((root/'crates/core/src').rglob('*.rs'))}
+excluded=set()
+for p,source in sources.items():
+ _,ranges=production_text(source)
+ for start,end in ranges:
+  item=source[start:end]
+  module=re.search(r'\bmod\s+(\w+)\s*;',item)
+  if not module:continue
+  path=re.search(r'#\[path\s*=\s*"([^"]+)"\]',item)
+  if path:excluded.add((p.parent/path.group(1)).resolve())
+  else:
+   base=p.parent if p.name in {'mod.rs','lib.rs','main.rs'} else p.parent/p.stem
+   excluded.update({(base/(module.group(1)+'.rs')).resolve(),(base/module.group(1)/'mod.rs').resolve()})
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--check', action='store_true')
 args = parser.parse_args()
 index=json.loads((root/'references/source-index.json').read_text())
 handlers=collections.defaultdict(list)
-for p in sorted((root/'crates/core/src').rglob('*.rs')):
- text=p.read_text().split('#[cfg(test)]')[0]
+for p,source in sources.items():
+ if p.resolve() in excluded:continue
+ text,_=production_text(source)
  text=re.sub(r'//[^\n]*','',text)
  # Explicit object-valued match arms are behavior dispatch evidence; arbitrary
  # mentions, spawn strings, comments and tests are intentionally excluded.
@@ -52,7 +139,7 @@ equivalents = {
  'crates/core/src/player.rs': ['oPlayer1','oParachute','oParaUsed','oCape','oTreeBranchTile'],
 }
 for module,names in equivalents.items():
- text=(root/module).read_text().split('#[cfg(test)]')[0]
+ text,_=production_text((root/module).read_text())
  for name in names:
   token={'oGold':'gold_chunks','oGoldBig':'gold_nuggets','oFrozenCaveman':'frozen_caveman','oCape':'Cape','oParachute':'Parachute','oParaUsed':'Parachute','oTreeBranchTile':'oPlatform','oFinalBoss':'boss_exit'}.get(name,name)
   match=re.search(r'"'+token+r'"',text)
@@ -69,7 +156,7 @@ abstract=set('oBackdrop oCharacter oDetritus oDrawnSprite oEnemy oForeground oFr
 root_host=set('oCredits1 oCredits2 oCursObj oEnd oEnd2 oEnd3 oEndCustom oGame oGamepad oGlobals oHighscores oIntro oJoyConfig oKeyConfig oLevel oLevelEditor oLoadLevel oMoonRoom oMusic oRoom oScreen oStarsRoom oSunRoom oTitle oTransition'.split())
 # Original shared rubble-family update is a real inheritance dispatcher.
 rubble_module = 'crates/core/src/world_events.rs'
-rubble_text = (root / rubble_module).read_text().split('#[cfg(test)]')[0]
+rubble_text,_ = production_text((root / rubble_module).read_text())
 rubble_dispatch = re.search(r'_ if catalog::is_a\(&e.object, "oRubblePiece"\)', rubble_text)
 if rubble_dispatch:
  for name in objects:
