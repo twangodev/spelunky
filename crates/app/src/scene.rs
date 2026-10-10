@@ -937,6 +937,48 @@ mod tests {
     use spelunky_core::RulesPreset;
 
     #[test]
+    fn integrated_rising_platform_and_rider_preserve_offset_at_fractional_alpha() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let id = game.world.spawn("oThwompTrap", Vec2::new(80.0, 80.0));
+        let platform = game.world.entity_mut(id).unwrap();
+        platform.state = 3;
+        platform.vel.y = -1.0;
+        game.player.pos = Vec2::new(88.0, 73.0);
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        game.step(&spelunky_core::InputFrame::default());
+
+        // Game's snapshot must precede the source global platform pass. The
+        // character tick must not discard that pass's one-pixel carry delta.
+        let platform = game.world.entity(id).unwrap();
+        assert_eq!(platform.previous_pos, Vec2::new(80.0, 80.0));
+        assert_eq!(platform.pos, Vec2::new(80.0, 79.0));
+        assert_eq!(game.player.previous_pos, Vec2::new(88.0, 73.0));
+        assert_eq!(game.player.pos, Vec2::new(88.0, 72.0));
+        let platform_uv = atlas
+            .sprite(&platform.sprite, platform.animation)
+            .unwrap()
+            .uv;
+        let mut player_uv = atlas
+            .sprite(&game.player.sprite, game.player.animation)
+            .unwrap()
+            .uv;
+        player_uv[0] += player_uv[2];
+        player_uv[2] = -player_uv[2];
+        let hash = game.state_hash();
+        for alpha in [0.0, 0.125, 0.25, 0.5, 0.875, 1.0] {
+            let quads = game_scene(&game, alpha, false, &atlas);
+            let platform = quads.iter().find(|quad| quad.uv == platform_uv).unwrap();
+            let player = quads.iter().find(|quad| quad.uv == player_uv).unwrap();
+            assert_eq!(platform.rect[1], 80.0 - alpha as f32);
+            assert_eq!(player.rect[1], 65.0 - alpha as f32);
+            assert_eq!(platform.rect[1] - player.rect[1], 15.0);
+            assert_eq!(game.state_hash(), hash);
+        }
+    }
+
+    #[test]
     fn newly_created_whip_stays_at_source_offset_during_intermediate_frames() {
         let atlas = Atlas::load().unwrap();
         let mut game = Game::shell(1, RulesPreset::Classic);
