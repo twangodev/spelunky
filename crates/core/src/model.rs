@@ -267,6 +267,12 @@ impl Entity {
     pub fn mask_intersects(&self, rect: Rect, precision: CollisionPrecision) -> bool {
         self.collision_mask().intersects(rect, precision)
     }
+    /// Source Collision event overlap, distinct from explicit rectangle/point
+    /// query precision and from the platform engine's movement dimensions.
+    pub fn event_intersects(&self, other: &Entity) -> bool {
+        self.collision_mask()
+            .intersects_mask(&other.collision_mask())
+    }
     fn collision_mask(&self) -> crate::catalog::CollisionMask {
         // Unlike enemy draw_sprite_ext mirroring, Damsel's Draw event writes
         // the actual image_xscale property and therefore changes her mask.

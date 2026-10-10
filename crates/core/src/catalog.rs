@@ -79,6 +79,13 @@ pub fn sprite_def(name: &str) -> Option<&'static SpriteDef> {
     catalog().sprites.get(name)
 }
 
+/// Original sprite frame count used by independent Animation End events.
+pub fn sprite_frame_count(name: &str) -> usize {
+    sprite_frames()
+        .get(name)
+        .map_or(0, |sprite| sprite.frames.len())
+}
+
 /// Unscaled first-frame sprite mask at its original source origin.
 pub fn sprite_bounds(name: &str, pos: Vec2) -> Rect {
     static BOUNDS: OnceLock<BTreeMap<String, Rect>> = OnceLock::new();
@@ -318,6 +325,37 @@ impl CollisionMask {
         for y in top..bottom {
             for x in left..right {
                 if self.pixel(x, y) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Collision-event overlap between two instance masks. This deliberately
+    /// does not change explicit `prec=0` shape queries. Only pairs of precise
+    /// sprites with verified raster transforms use pixels; mixed mask kinds
+    /// and unsupported transforms retain the existing bounding-box behavior.
+    pub fn intersects_mask(&self, other: &Self) -> bool {
+        if !self.bounds.intersects(other.bounds) {
+            return false;
+        }
+        if !self.precise
+            || !other.precise
+            || !self.supports_precise_pixels()
+            || !other.supports_precise_pixels()
+        {
+            return true;
+        }
+        let left = self.bounds.x.max(other.bounds.x) as i32;
+        let top = self.bounds.y.max(other.bounds.y) as i32;
+        let right = (self.bounds.x + self.bounds.w).min(other.bounds.x + other.bounds.w) as i32;
+        let bottom = (self.bounds.y + self.bounds.h).min(other.bounds.y + other.bounds.h) as i32;
+        for y in top..bottom {
+            for x in left..right {
+                if self.pixel(x - self.pos.x as i32, y - self.pos.y as i32)
+                    && other.pixel(x - other.pos.x as i32, y - other.pos.y as i32)
+                {
                     return true;
                 }
             }
@@ -607,6 +645,102 @@ mod tests {
         );
         assert!(!vertical.contains(pos, precise));
         assert!(vertical.contains(Vec2::new(80.0, 79.0), precise));
+    }
+
+    #[test]
+    fn collision_events_require_a_shared_opaque_pixel_for_precise_pairs() {
+        let unit = Vec2::new(1.0, 1.0);
+        let web = instance_mask(
+            "oWebBall",
+            "sWebBall",
+            Vec2::new(80.0, 80.0),
+            0.0,
+            unit,
+            0.0,
+        );
+        let corner = instance_mask("oRock", "sRock", Vec2::new(74.0, 72.0), 0.0, unit, 0.0);
+        // Each alpha mask touches the other bounding box, but no opaque
+        // pixels coincide. Checking only one partner's mask is insufficient.
+        assert!(web.intersects(corner.bounds(), CollisionPrecision::Precise));
+        assert!(corner.intersects(web.bounds(), CollisionPrecision::Precise));
+        assert!(!web.intersects_mask(&corner));
+        assert!(!corner.intersects_mask(&web));
+        let contact = instance_mask("oRock", "sRock", Vec2::new(74.0, 74.0), 0.0, unit, 0.0);
+        assert!(web.intersects_mask(&contact));
+        assert!(contact.intersects_mask(&web));
+        // The corresponding pixels must agree after both source mirrors.
+        let mirror = Vec2::new(-1.0, -1.0);
+        let web = instance_mask(
+            "oWebBall",
+            "sWebBall",
+            Vec2::new(80.0, 80.0),
+            0.0,
+            mirror,
+            0.0,
+        );
+        let corner = instance_mask("oRock", "sRock", Vec2::new(86.0, 88.0), 0.0, mirror, 0.0);
+        let contact = instance_mask("oRock", "sRock", Vec2::new(86.0, 86.0), 0.0, mirror, 0.0);
+        assert!(!web.intersects_mask(&corner));
+        assert!(web.intersects_mask(&contact));
+        let frame0 = instance_mask(
+            "oAlienBoss",
+            "sAlienBossDie",
+            Vec2::default(),
+            0.0,
+            unit,
+            0.0,
+        );
+        let frame1 = instance_mask(
+            "oAlienBoss",
+            "sAlienBossDie",
+            Vec2::default(),
+            1.0,
+            unit,
+            0.0,
+        );
+        // Spark frame 3 has just two opaque pixels, placed at (13,1)/(14,1).
+        // Both are absent in boss frame 0 and present in frame 1.
+        let spark = instance_mask(
+            "oFlareSpark",
+            "sFlareSpark",
+            Vec2::new(14.0, 2.0),
+            3.0,
+            unit,
+            0.0,
+        );
+        assert!(frame0.bounds().intersects(spark.bounds()));
+        assert!(!frame0.intersects_mask(&spark));
+        assert!(frame1.intersects_mask(&spark));
+    }
+
+    #[test]
+    fn event_precision_retains_mixed_kind_and_unsupported_transform_fallbacks() {
+        let unit = Vec2::new(1.0, 1.0);
+        let web = instance_mask(
+            "oWebBall",
+            "sWebBall",
+            Vec2::new(80.0, 80.0),
+            0.0,
+            unit,
+            0.0,
+        );
+        let rectangle = instance_mask("oBrick", "sBrick", Vec2::new(60.0, 60.0), 0.0, unit, 0.0);
+        assert!(web.bounds().intersects(rectangle.bounds()));
+        assert!(!web.intersects(rectangle.bounds(), CollisionPrecision::Precise));
+        assert!(web.intersects_mask(&rectangle));
+        let corner = instance_mask("oRock", "sRock", Vec2::new(72.0, 72.0), 0.0, unit, 0.0);
+        assert!(!web.intersects_mask(&corner));
+        let fractional = instance_mask(
+            "oWebBall",
+            "sWebBall",
+            Vec2::new(80.0, 80.25),
+            0.0,
+            unit,
+            0.0,
+        );
+        assert!(!fractional.supports_precise_pixels());
+        assert!(fractional.intersects_mask(&corner));
+        assert!(web.intersects(corner.bounds(), CollisionPrecision::BoundingBox));
     }
 
     #[test]
