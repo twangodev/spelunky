@@ -229,11 +229,12 @@ pub fn instance_sprite_bounds(
 /// independent from precise queries, exactly as Classic's `prec` arguments.
 pub struct CollisionMask {
     bounds: Rect,
-    /// Canonical fractional event placement is verified for single-frame
-    /// sprites. Multi-frame bbox loading still needs independent evidence.
-    fractional_event_bounds: Option<[i32; 4]>,
+    /// Source sprite envelope, independent of the selected mask frame.
+    event_bounds: Option<[i32; 4]>,
     frame: Option<&'static FrameBounds>,
     precise: bool,
+    rectangle: bool,
+    rectangle_bounds: Option<[i32; 4]>,
     origin: [i32; 2],
     pos: Vec2,
     scale: Vec2,
@@ -258,12 +259,17 @@ pub fn instance_mask(
     });
     CollisionMask {
         bounds: instance_sprite_bounds(object, current_sprite, pos, animation, scale, angle),
-        fractional_event_bounds: frames
-            .filter(|frames| frames.frames.len() == 1)
-            .and_then(|_| sprite_def(sprite))
-            .map(|sprite| sprite.bounds),
+        event_bounds: sprite_def(sprite).map(|sprite| sprite.bounds),
         frame,
         precise: frames.is_some_and(|frames| frames.mask.shape == "PRECISE"),
+        rectangle: frames.is_some_and(|frames| frames.mask.shape == "RECTANGLE"),
+        rectangle_bounds: frames.and_then(|frames| {
+            if frames.mask.separate {
+                frame.and_then(|frame| frame.bounds)
+            } else {
+                sprite_def(sprite).map(|sprite| sprite.bounds)
+            }
+        }),
         origin: sprite_def(sprite).map_or([0, 0], |sprite| sprite.origin),
         pos,
         scale,
@@ -291,6 +297,17 @@ impl CollisionMask {
         let Some(frame) = self.frame else {
             return false;
         };
+        let image_x = self.origin[0] + if self.scale.x > 0.0 { x } else { -x };
+        let image_y = self.origin[1] + if self.scale.y > 0.0 { y } else { -y };
+        if self.rectangle {
+            // GM8 materializes rectangle masks as boolean pixels filling the
+            // selected mask's inclusive bounds, regardless of image alpha.
+            return self
+                .rectangle_bounds
+                .is_some_and(|[left, top, right, bottom]| {
+                    image_x >= left && image_x <= right && image_y >= top && image_y <= bottom
+                });
+        }
         let (Some(offset), Some(stride), Some(width), Some(height)) = (
             frame.mask_offset,
             frame.mask_stride,
@@ -299,8 +316,6 @@ impl CollisionMask {
         ) else {
             return false;
         };
-        let image_x = self.origin[0] + if self.scale.x > 0.0 { x } else { -x };
-        let image_y = self.origin[1] + if self.scale.y > 0.0 { y } else { -y };
         if image_x < 0 || image_y < 0 || image_x as usize >= width || image_y as usize >= height {
             return false;
         }
@@ -353,36 +368,40 @@ impl CollisionMask {
     }
 
     fn event_geometry(&self) -> Option<(Rect, Vec2)> {
-        if self.supports_precise_pixels() {
-            return Some((self.bounds, self.pos));
-        }
         if self.angle != 0.0
-            || self.scale != Vec2::new(1.0, 1.0)
+            || self.scale.x.abs() != 1.0
+            || self.scale.y.abs() != 1.0
             || !self.pos.x.is_finite()
             || !self.pos.y.is_finite()
+            || ((self.pos.x.fract() != 0.0 || self.pos.y.fract() != 0.0)
+                && self.scale != Vec2::new(1.0, 1.0))
         {
             return None;
         }
-        let [left, top, right, bottom] = self.fractional_event_bounds?;
+        let [left, top, right, bottom] = self.event_bounds?;
         // Canonical GM8 rounds each translated inclusive bbox edge before
         // broad-phase rejection, and rounds the instance origin independently
         // for pixel indexing. Rounding the origin alone differs at .5 ties.
-        let left = (self.pos.x + f64::from(left - self.origin[0])).round_ties_even();
-        let top = (self.pos.y + f64::from(top - self.origin[1])).round_ties_even();
-        let right = (self.pos.x + f64::from(right - self.origin[0])).round_ties_even();
-        let bottom = (self.pos.y + f64::from(bottom - self.origin[1])).round_ties_even();
+        let x0 = self.pos.x + f64::from(left - self.origin[0]) * self.scale.x;
+        let y0 = self.pos.y + f64::from(top - self.origin[1]) * self.scale.y;
+        let x1 = self.pos.x + f64::from(right - self.origin[0] + 1) * self.scale.x - 1.0;
+        let y1 = self.pos.y + f64::from(bottom - self.origin[1] + 1) * self.scale.y - 1.0;
+        let left = x0.min(x1).round_ties_even();
+        let top = y0.min(y1).round_ties_even();
+        let right = x0.max(x1).round_ties_even();
+        let bottom = y0.max(y1).round_ties_even();
         Some((
             Rect::new(left, top, right - left + 1.0, bottom - top + 1.0),
             Vec2::new(self.pos.x.round_ties_even(), self.pos.y.round_ties_even()),
         ))
     }
 
-    /// Collision-event overlap between two precise instance masks. This does
-    /// not change explicit shape-query precision. Fractional placement is
-    /// verified only for single-frame, positive unit-scale, unrotated sprites;
-    /// mixed mask kinds and unsupported transforms retain their bbox fallback.
+    /// Collision-event overlap of the two loaded source masks, including
+    /// rectangle/precise pairs. Explicit shape-query precision is unchanged.
+    /// Fractional placement is verified for positive unit scale and no rotation;
+    /// fractional mirrors and other transforms retain their bbox fallback.
     pub fn intersects_mask(&self, other: &Self) -> bool {
-        if !self.precise || !other.precise {
+        if !(self.precise || self.rectangle) || !(other.precise || other.rectangle) {
             return self.bounds.intersects(other.bounds);
         }
         let (Some((bounds, pos)), Some((other_bounds, other_pos))) =
@@ -842,7 +861,7 @@ mod tests {
     }
 
     #[test]
-    fn event_precision_retains_mixed_kind_and_unsupported_transform_fallbacks() {
+    fn event_precision_preserves_explicit_queries_and_unsupported_transform_fallbacks() {
         let unit = Vec2::new(1.0, 1.0);
         let web = instance_mask(
             "oWebBall",
@@ -855,7 +874,7 @@ mod tests {
         let rectangle = instance_mask("oBrick", "sBrick", Vec2::new(60.0, 60.0), 0.0, unit, 0.0);
         assert!(web.bounds().intersects(rectangle.bounds()));
         assert!(!web.intersects(rectangle.bounds(), CollisionPrecision::Precise));
-        assert!(web.intersects_mask(&rectangle));
+        assert!(!web.intersects_mask(&rectangle));
         let corner = instance_mask("oRock", "sRock", Vec2::new(72.0, 72.0), 0.0, unit, 0.0);
         assert!(!web.intersects_mask(&corner));
         let fractional = instance_mask(
@@ -888,8 +907,120 @@ mod tests {
             unit,
             0.0,
         );
-        assert!(multiframe.event_geometry().is_none());
+        assert!(multiframe.event_geometry().is_some());
+        let fractional_mirror = instance_mask(
+            "oWebBall",
+            "sWebBall",
+            Vec2::new(80.25, 80.0),
+            0.0,
+            Vec2::new(-1.0, 1.0),
+            0.0,
+        );
+        assert!(fractional_mirror.event_geometry().is_none());
         assert!(web.intersects(corner.bounds(), CollisionPrecision::BoundingBox));
+    }
+
+    #[test]
+    fn mixed_events_test_filled_rectangle_pixels_against_precise_alpha() {
+        let unit = Vec2::new(1.0, 1.0);
+        let web = instance_mask(
+            "oWebBall",
+            "sWebBall",
+            Vec2::new(100.0, 100.0),
+            0.0,
+            unit,
+            0.0,
+        );
+        for (x, y, hit) in [
+            (81.0, 80.0, false),
+            (82.0, 81.0, true),
+            (81.0, 81.0, false),
+            (82.0, 80.0, false),
+        ] {
+            let snake = instance_mask("oSnake", "sSnakeLeft", Vec2::new(x, y), 0.0, unit, 0.0);
+            assert!(snake.bounds().intersects(web.bounds()));
+            assert_eq!(snake.intersects_mask(&web), hit, "snake at ({x},{y})");
+            assert_eq!(web.intersects_mask(&snake), hit);
+            let mirrored_snake = instance_mask(
+                "oSnake",
+                "sSnakeLeft",
+                Vec2::new(-x, -y),
+                0.0,
+                Vec2::new(-1.0, -1.0),
+                0.0,
+            );
+            let mirrored_web = instance_mask(
+                "oWebBall",
+                "sWebBall",
+                Vec2::new(-100.0, -100.0),
+                0.0,
+                Vec2::new(-1.0, -1.0),
+                0.0,
+            );
+            assert_eq!(mirrored_snake.intersects_mask(&mirrored_web), hit);
+        }
+        // Boulder PNG corners are transparent; its source RECTANGLE mask
+        // still fills them, so a tiny precise spark contacts the corner.
+        let boulder = instance_mask(
+            "oBoulder",
+            "sBoulder",
+            Vec2::new(80.0, 80.0),
+            0.0,
+            unit,
+            0.0,
+        );
+        let spark = instance_mask(
+            "oFlareSpark",
+            "sFlareSpark",
+            Vec2::new(65.0, 65.0),
+            3.0,
+            unit,
+            0.0,
+        );
+        assert!(boulder.intersects_mask(&spark));
+    }
+
+    #[test]
+    fn event_envelopes_are_aggregate_but_rectangle_pixels_follow_current_frames() {
+        let unit = Vec2::new(1.0, 1.0);
+        for (web_pos, expected) in [
+            (Vec2::new(80.0, 98.0), [true, false, false]),
+            (Vec2::new(85.0, 80.0), [false, false, true]),
+            (Vec2::new(85.0, 90.0), [true, true, true]),
+        ] {
+            let web = instance_mask("oWebBall", "sWebBall", web_pos, 0.0, unit, 0.0);
+            for (frame, expected) in expected.into_iter().enumerate() {
+                let bat = instance_mask(
+                    "oBat",
+                    "sBatLeft",
+                    Vec2::new(80.0, 80.0),
+                    frame as f64,
+                    unit,
+                    0.0,
+                );
+                assert_eq!(
+                    bat.intersects_mask(&web),
+                    expected,
+                    "frame={frame}, web={web_pos:?}"
+                );
+            }
+        }
+        // Original engine's rounded aggregate bbox retains (82,93). Rounding
+        // only frame 1's bbox would clip that real shared pixel away.
+        let bat = instance_mask("oBat", "sBatLeft", Vec2::new(81.5, 81.5), 1.0, unit, 0.0);
+        let web = instance_mask(
+            "oWebBall",
+            "sWebBall",
+            Vec2::new(79.0, 96.0),
+            0.0,
+            unit,
+            0.0,
+        );
+        assert_eq!(
+            bat.event_geometry().unwrap().0,
+            Rect::new(82.0, 84.0, 15.0, 11.0)
+        );
+        assert!(bat.intersects_mask(&web));
     }
 
     #[test]
