@@ -38,6 +38,7 @@ pub fn init(e: &mut Entity) {
         }
         "oTombLord" => {
             e.health = 20;
+            e.data.insert("bloodless".into(), 1.0);
             e.vel.x = 2.5;
             e.set_sprite("sTombLordLeft");
             e.data.insert("contact_damage".into(), 2.0);
@@ -1301,6 +1302,32 @@ fn magma(game: &mut Game, e: &mut Entity) {
 mod tests {
     use super::*;
     use crate::model::{Area, RulesPreset};
+
+    #[test]
+    fn actual_step_tomb_lord_bullet_damage_preserves_source_bloodless_rng() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = room();
+            game.rules = rules;
+            let lord = game.spawn("oTombLord", Vec2::new(80.0, 128.0));
+            let bullet = game.spawn("oBullet", Vec2::new(100.0, 144.0));
+            let mut expected_rng = game.rng.clone();
+
+            game.step(&crate::InputFrame::default());
+
+            let target = game.world.entity(lord).unwrap();
+            assert_eq!(target.health, 16, "real bullet collision subtracts four HP");
+            assert!(game.world.entity(bullet).is_none());
+            // oTombLord Create sets bloodless=true. The bullet's inherited
+            // enemy collision still deals damage, but scrCreateBlood returns
+            // before creating a drop or consuming its four random draws.
+            assert!(!game.world.entities.iter().any(|e| e.object == "oBlood"));
+            assert_eq!(target.value("bloodless"), 1.0);
+            assert_eq!(target.value("blood_left"), 4.0);
+            assert_eq!(target.vel, Vec2::new(0.0, -2.0));
+            assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
+        }
+    }
+
     #[test]
     fn paired_hawk_and_tomb_stomps_restore_prior_environmental_kill_credit() {
         for object in ["oHawkman", "oTombLord"] {

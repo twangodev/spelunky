@@ -50,6 +50,7 @@ pub fn init(e: &mut Entity) {
         "oDeadFish" => {
             e.set_sprite("sDeadFishRight");
             e.facing = 1;
+            e.data.insert("bloodless".into(), 1.0);
         }
         "oBarrier" | "oBarrierEmitter" => {
             e.data.insert("invincible".into(), 1.0);
@@ -1441,6 +1442,37 @@ mod tests {
         g.player.previous_pos = g.player.pos;
         g
     }
+
+    #[test]
+    fn actual_step_dead_fish_bullet_damage_preserves_source_bloodless_rng() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = actual_room();
+            game.rules = rules;
+            for y in 4..8 {
+                for x in 4..8 {
+                    game.world.set_tile(x, y, "oWater");
+                }
+            }
+            let fish = game.spawn("oDeadFish", Vec2::new(80.0, 80.0));
+            let bullet = game.spawn("oBullet", Vec2::new(84.0, 84.0));
+            let mut expected_rng = game.rng.clone();
+
+            game.step(&InputFrame::default());
+
+            let target = game.world.entity(fish).unwrap();
+            assert_eq!(target.health, -3, "real bullet collision subtracts four HP");
+            assert!(game.world.entity(bullet).is_none());
+            // oDeadFish Create sets bloodless=true. Its lethal bullet hit
+            // consumes the bullet and bloodLeft, but the source blood script
+            // creates no drop and consumes no random draws.
+            assert!(!game.world.entities.iter().any(|e| e.object == "oBlood"));
+            assert_eq!(target.value("bloodless"), 1.0);
+            assert_eq!(target.value("blood_left"), 3.0);
+            assert_eq!(target.vel, Vec2::new(0.0, -4.0));
+            assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
+        }
+    }
+
     #[test]
     fn actual_step_scarab_source_create_draw_precedes_caller_rng() {
         let mut g = actual_room();
