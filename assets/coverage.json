@@ -8442,7 +8442,7 @@
         },
         {
           "kind": "source_player_phase_adapter",
-          "line": 589,
+          "line": 595,
           "module": "crates/core/src/dispatcher.rs"
         }
       ],
