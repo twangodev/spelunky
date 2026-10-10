@@ -13,7 +13,7 @@ export function level({ start = 6, floor = '1', health = 9, bombs = 2, ropes = 3
     String(health), String(bombs), String(ropes), next, String(targets.length), ...targets, '0'].join('\n');
 }
 
-async function importDocument(page, name, text) {
+export async function importDocument(page, name, text) {
   const chooser = page.waitForEvent('filechooser', { timeout: 10000 });
   await page.keyboard.press('Control+i');
   await (await chooser).setFiles({ name: `${name}.lvl`, mimeType: 'text/plain', buffer: Buffer.from(text) });
@@ -47,7 +47,7 @@ function finiteAndInside(path) {
   }
 }
 
-async function startCustom(page, name) {
+export async function startCustom(page, name) {
   await page.reload({ waitUntil: 'domcontentloaded' });
   await state(page, 'Title');
   await page.locator('canvas').focus();
@@ -62,7 +62,7 @@ async function startCustom(page, name) {
     name, { timeout: 10000 });
 }
 
-async function walkThroughNextDoor(page) {
+export async function walkThroughNextDoor(page) {
   const from = await snapshot(page);
   await page.keyboard.down('ArrowRight');
   // Holding Up lets the authoritative tick select the door as we enter its
@@ -74,6 +74,26 @@ async function walkThroughNextDoor(page) {
   }, from.world.name, { timeout: 10000 });
   await page.keyboard.up('ArrowRight');
   await page.keyboard.up('ArrowUp');
+  return snapshot(page);
+}
+
+export async function continueTransition({ page, result, screenshot, name }) {
+  const entry = { exit: await snapshot(page) };
+  await page.waitForFunction(() => window.__spelunkyTest?.state === 'Ending'
+    && window.__spelunkyTest.ending?.kind === 'Transition'
+    && window.__spelunkyTest.ending?.stage === 'Transition', null, { timeout: 15000 });
+  entry.scene = await snapshot(page);
+  assert.equal(entry.scene.screen, 'Playing');
+  assert.equal(entry.scene.world.name, 'rTransition1');
+  assert.equal(entry.scene.ending.recordReady, false);
+  await screenshot(page, `${name}-transition`, result);
+  await page.keyboard.press('Enter'); // Source hurry-up action, not a room mutation.
+  await page.waitForFunction(() => window.__spelunkyTest.ending?.drawLoot === 2
+    && window.__spelunkyTest.ending.moneyCount === window.__spelunkyTest.ending.levelMoney,
+  null, { timeout: 15000 });
+  entry.ready = await snapshot(page);
+  await page.keyboard.press('Enter');
+  return entry;
 }
 
 function resources(value) {
@@ -205,6 +225,7 @@ export async function runAdversarialAcceptance({ page, result, screenshot }) {
   await page.waitForFunction(() => window.__spelunkyTest.player.bombs === 1, null, { timeout: 10000 });
   linked.spent = await snapshot(page);
   await walkThroughNextDoor(page);
+  linked.outboundTransition = await continueTransition({ page, result, screenshot, name: 'linked-custom-outbound' });
   await page.waitForFunction(name => window.__spelunkyTest.world.name === name && window.__spelunkyTest.state === 'Playing', second,
     { timeout: 10000 });
   linked.second = await snapshot(page);
@@ -212,6 +233,7 @@ export async function runAdversarialAcceptance({ page, result, screenshot }) {
   assert.ok(Math.abs(linked.second.player.x - 248) <= 6, 'Previous-room link must select the matching second entrance');
   await screenshot(page, 'linked-custom-second', result);
   await walkThroughNextDoor(page);
+  linked.returnTransition = await continueTransition({ page, result, screenshot, name: 'linked-custom-return' });
   await page.waitForFunction(name => window.__spelunkyTest.world.name === name && window.__spelunkyTest.state === 'Playing', first,
     { timeout: 10000 });
   linked.returned = await snapshot(page);

@@ -12,6 +12,7 @@ import { execFileSync } from 'node:child_process';
 import { installMovementTrace, runMovementAcceptance } from './movement.mjs';
 import { runAdversarialAcceptance, runOnboardingAcceptance } from './adversarial.mjs';
 import { installLightingProfile, installLightingProbe, runLightingAcceptance } from './lighting.mjs';
+import { runCinematicAcceptance } from './cinematics.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const artifacts = path.resolve(process.env.BROWSER_ARTIFACTS || path.join(root, 'artifacts/browser'));
@@ -32,7 +33,7 @@ const report = {
   scope: 'Automated browser engine acceptance, optionally using a virtual display; no physical 240 Hz display or Safari application validation.',
   engines: [],
 };
-assert.ok(['full', 'adversarial', 'movement', 'onboarding', 'lighting'].includes(report.suite), 'BROWSER_SUITE must be full, adversarial, movement, onboarding, or lighting');
+assert.ok(['full', 'adversarial', 'movement', 'onboarding', 'lighting', 'cinematics'].includes(report.suite), 'BROWSER_SUITE must be full, adversarial, movement, onboarding, lighting, or cinematics');
 await mkdir(artifacts, { recursive: true });
 await access(tools);
 report.bundle = {
@@ -211,6 +212,7 @@ try {
         if (report.suite === 'adversarial') await runAdversarialAcceptance({ page, result, screenshot });
         else if (report.suite === 'movement') await runMovementAcceptance({ page, result, screenshot });
         else if (report.suite === 'onboarding') await runOnboardingAcceptance({ page, result, screenshot });
+        else if (report.suite === 'cinematics') await runCinematicAcceptance({ page, result, screenshot });
         else await runLightingAcceptance({ page, result, screenshot });
         assert.deepEqual(result.errors, []);
         assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
@@ -334,6 +336,7 @@ try {
       assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
       await runMovementAcceptance({ page, result, screenshot });
       await runAdversarialAcceptance({ page, result, screenshot });
+      await runCinematicAcceptance({ page, result, screenshot });
       assert.deepEqual(result.errors, []);
       assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
       await context.close();
