@@ -354,6 +354,13 @@ fn apply_ball_tether(w: &World, p: &mut Player, input: &InputFrame, fall: &mut f
 /// belongs to the host; this function never accepts a frame delta.
 pub fn tick(game: &mut Game, input: &InputFrame) {
     let engine_time = game.engine_time();
+    // scrStealItem destroys the Cape when a Jetpack replaces it. This port
+    // stores Cape openness on the player, so discard that derived state once
+    // its owning equipment is gone, before it can reset fall time or add drag.
+    // Pickups run after this controller: their pickup tick retains source drag.
+    if !has(&game.player, &["Cape", "cape"]) {
+        set(&mut game.player, "cape_open", 0.0);
+    }
     environmental_prelude(game);
     if game.state == RunState::Dead {
         game.player.state = PlayerState::Dead;
@@ -1320,6 +1327,53 @@ fn character_sprite<'a>(p: &Player, name: &'a str) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn natural_cape_open_then_jetpack_pickup_stops_cape_drag_on_following_tick() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut level = crate::level::Level::default();
+            level.set_tile(4, 3, '@').unwrap();
+            for x in 0..40 {
+                level.set_tile(x, 20, '1').unwrap();
+            }
+            let mut g = Game::shell(7, rules);
+            g.load_custom(&level, "cape-swap", "");
+            let spawn = g.player.pos;
+            g.world
+                .spawn("oCapePickup", Vec2::new(spawn.x, spawn.y + 2.0));
+            g.world
+                .spawn("oJetpack", Vec2::new(spawn.x + 8.0, spawn.y + 4.0));
+            g.step(&InputFrame {
+                down: true,
+                attack_pressed: true,
+                jump: true,
+                ..Default::default()
+            });
+            assert!(g.player.has("Cape"));
+            g.step(&InputFrame {
+                jump_released: true,
+                ..Default::default()
+            });
+            g.step(&InputFrame {
+                jump: true,
+                jump_pressed: true,
+                down: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            assert!(g.player.has("Jetpack"));
+            assert!(!g.player.has("Cape"));
+            // The controller ran before item pickup: the source Cape was
+            // still present for this tick's drag and its falling-time reset.
+            assert_eq!(g.player.vel.y, 1.5);
+            assert_eq!(value(&g.player, "cape_open", 0.0), 1.0);
+            g.step(&InputFrame::default());
+            assert_eq!(value(&g.player, "cape_open", -1.0), 0.0);
+            assert_eq!(g.player.vel.y, 2.5);
+            assert!(value(&g.player, "fall_timer", 0.0) > 0.0);
+            g.step(&InputFrame::default());
+            assert_eq!(g.player.vel.y, 3.5);
+        }
+    }
     #[test]
     fn source_precise_floor_probe_rejects_only_dark_fall_transparent_corner() {
         for (x, supported) in [(76.0, false), (77.0, true)] {
