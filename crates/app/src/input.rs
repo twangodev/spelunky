@@ -82,10 +82,12 @@ pub struct InputState {
     keys: HashSet<KeyCode>,
     bindings: BTreeMap<String, Vec<KeyCode>>,
     gamepad_actions: Actions,
+    blocked_gamepad_actions: Actions,
     keyboard_held: Actions,
     gamepad_held: Actions,
     frame: InputFrame,
     gamepad_ui: u8,
+    blocked_gamepad_ui: u8,
     ui_edges: Vec<UiButton>,
     #[cfg(not(target_arch = "wasm32"))]
     gilrs: Option<gilrs::Gilrs>,
@@ -100,10 +102,12 @@ impl Default for InputState {
                 .map(|(_, name, key)| (name.to_string(), vec![*key]))
                 .collect(),
             gamepad_actions: Actions::default(),
+            blocked_gamepad_actions: Actions::default(),
             keyboard_held: Actions::default(),
             gamepad_held: Actions::default(),
             frame: InputFrame::default(),
             gamepad_ui: 0,
+            blocked_gamepad_ui: 0,
             ui_edges: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             gilrs: gilrs::Gilrs::new().ok(),
@@ -165,12 +169,21 @@ impl InputState {
     pub fn clear(&mut self) {
         self.clear_gameplay();
         self.gamepad_ui = 0;
+        // Focus may have been lost before a controller press or release was
+        // sampled. Require neutral input rather than treating the first poll
+        // on return as a new menu confirmation or gameplay action.
+        self.blocked_gamepad_ui = u8::MAX;
+        self.blocked_gamepad_actions = Actions(u16::MAX);
     }
 
     /// Clear gameplay at screen transitions while keeping controller menu
     /// buttons latched until release, so holding Start cannot toggle repeatedly.
     pub fn clear_gameplay(&mut self) {
         self.keys.clear();
+        // A controller is sampled continuously, unlike keyboard key-down
+        // events. The button that confirmed a menu or was held while pausing
+        // must be released before it can act in the new screen.
+        self.blocked_gamepad_actions.0 |= self.gamepad_actions.0;
         self.gamepad_actions = Actions::default();
         self.keyboard_held = Actions::default();
         self.gamepad_held = Actions::default();
@@ -224,6 +237,8 @@ impl InputState {
     }
 
     fn accept_gamepads(&mut self, actions: Actions, ui: u8) {
+        self.blocked_gamepad_ui &= ui;
+        let ui = ui & !self.blocked_gamepad_ui;
         for (index, button) in [
             UiButton::Up,
             UiButton::Down,
@@ -240,7 +255,8 @@ impl InputState {
                 self.ui_edges.push(button);
             }
         }
-        self.gamepad_actions = actions;
+        self.blocked_gamepad_actions.0 &= actions.0;
+        self.gamepad_actions = Actions(actions.0 & !self.blocked_gamepad_actions.0);
         self.gamepad_ui = ui;
         self.refresh();
     }
@@ -610,6 +626,86 @@ mod tests {
             assert_eq!(input.ui_pressed(), vec![button]);
             input.accept_gamepads(Actions::default(), 0);
         }
+    }
+
+    #[test]
+    fn controller_confirmation_cannot_jump_in_the_started_or_resumed_game() {
+        use spelunky_core::{Area, Game, PlayerState, RulesPreset, Vec2, World};
+        for rate in [60, 120, 144, 240] {
+            let mut input = InputState::default();
+            let mut actions = Actions::default();
+            actions.set(Action::Jump, true);
+            input.accept_gamepads(actions, 1 << 4);
+            assert_eq!(input.ui_pressed(), [UiButton::Confirm]);
+            // App::screen resets gameplay when Confirm starts or resumes play.
+            input.clear_gameplay();
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            game.world = World::new(20, 20, Area::Mines, 1);
+            for x in 0..20 {
+                game.world.set_tile(x, 10, "oBlock");
+            }
+            game.player.pos = Vec2::new(88., 152.);
+            game.player.previous_pos = game.player.pos;
+            game.player.state = PlayerState::Standing;
+            game.player.grounded = true;
+            let mut clock = crate::timing::FixedClock::new();
+            for _ in 0..rate {
+                input.accept_gamepads(actions, 1 << 4);
+                assert!(input.ui_pressed().is_empty());
+                for _ in 0..clock.advance(1. / f64::from(rate)).ticks {
+                    game.step(&input.take_tick());
+                    assert!(game.player.grounded, "held Confirm jumped at {rate} Hz");
+                }
+            }
+            input.accept_gamepads(Actions::default(), 0);
+            input.take_tick();
+            input.accept_gamepads(actions, 1 << 4);
+            game.step(&input.take_tick());
+            assert!(
+                game.player.vel.y < 0.,
+                "a fresh press must jump at {rate} Hz"
+            );
+        }
+    }
+
+    #[test]
+    fn paused_controller_actions_need_release_but_new_keyboard_input_remains_available() {
+        let mut input = InputState::default();
+        let actions = Actions(u16::MAX);
+        input.accept_gamepads(actions, 0);
+        input.take_tick();
+        input.clear_gameplay();
+        for _ in 0..10 {
+            input.accept_gamepads(actions, 0);
+            assert_eq!(input.take_tick(), InputFrame::default());
+        }
+        input.key(KeyCode::KeyZ, true, false);
+        assert!(input.take_tick().jump_pressed);
+        input.accept_gamepads(Actions::default(), 0);
+        input.take_tick();
+        input.accept_gamepads(actions, 0);
+        let fresh = input.take_tick();
+        assert!(fresh.jump_pressed && fresh.attack_pressed && fresh.bomb_pressed);
+        assert!(fresh.rope_pressed && fresh.cycle_pressed && fresh.pay_pressed);
+    }
+
+    #[test]
+    fn focus_return_does_not_resume_or_act_from_unobserved_controller_holds() {
+        let mut input = InputState::default();
+        input.clear(); // Focus loss; no controller state is known here.
+        let mut actions = Actions::default();
+        actions.set(Action::Jump, true);
+        actions.set(Action::Attack, true);
+        for _ in 0..5 {
+            input.accept_gamepads(actions, (1 << 4) | (1 << 6));
+            assert!(input.ui_pressed().is_empty());
+            assert_eq!(input.take_tick(), InputFrame::default());
+        }
+        input.accept_gamepads(Actions::default(), 0);
+        input.accept_gamepads(actions, (1 << 4) | (1 << 6));
+        assert_eq!(input.ui_pressed(), [UiButton::Confirm, UiButton::Pause]);
+        let tick = input.take_tick();
+        assert!(tick.jump_pressed && tick.attack_pressed);
     }
 
     #[test]

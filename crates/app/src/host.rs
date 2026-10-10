@@ -146,6 +146,7 @@ struct App {
     donation: Option<TransitionDonation>,
     donation_confirm: bool,
     recorded: bool,
+    finish_tick: Option<u64>,
     focused: bool,
     occluded: bool,
     next_frame: f64,
@@ -183,6 +184,7 @@ impl App {
             donation: None,
             donation_confirm: false,
             recorded: false,
+            finish_tick: None,
             focused: true,
             occluded: false,
             next_frame: 0.,
@@ -214,6 +216,9 @@ impl App {
         self.donation_confirm = false;
         self.timing.reset(self.now());
         self.input.clear_gameplay();
+        self.mouse_left = false;
+        self.mouse_right = false;
+        self.editor.cancel_pointer();
     }
     fn reset_room_timing(&mut self) {
         self.donation_confirm = false;
@@ -260,26 +265,7 @@ impl App {
         } else {
             Game::new(seed, self.store.data.settings.rules)
         };
-        donation_ui::hydrate(&mut game, &self.store.data.tunnel_remaining);
-        game.flags.extend(
-            self.store
-                .data
-                .unlocks
-                .iter()
-                .filter(|s| persistent_flag(s))
-                .cloned(),
-        );
-        let character =
-            if game.flags.contains("character_damsel") && game.flags.contains("unlock_damsel") {
-                spelunky_core::characters::Character::Damsel
-            } else if game.flags.contains("character_tunnelman")
-                && game.flags.contains("unlock_tunnel_man")
-            {
-                spelunky_core::characters::Character::TunnelMan
-            } else {
-                spelunky_core::characters::Character::Explorer
-            };
-        spelunky_core::characters::apply(&mut game, character);
+        hydrate_run(&mut game, &self.store.data);
         if tutorial {
             game.player.bombs = 0;
             game.player.ropes = 2;
@@ -287,6 +273,7 @@ impl App {
         self.game = Some(game);
         self.editor_play = false;
         self.recorded = false;
+        self.finish_tick = None;
         self.screen(Screen::Playing);
     }
     fn open_hub(&mut self, kind: spelunky_core::hub::HubKind) {
@@ -355,12 +342,18 @@ impl App {
         }
         self.editor_play = false;
         self.recorded = false;
+        self.finish_tick = None;
         self.screen(Screen::Playing);
     }
     fn is_hub(&self) -> bool {
         self.game
             .as_ref()
             .is_some_and(|game| game.flags.contains("hub"))
+    }
+    fn is_custom(&self) -> bool {
+        self.game
+            .as_ref()
+            .is_some_and(|game| game.flags.contains("custom"))
     }
     fn key(&mut self, key: KeyCode, text_value: Option<&str>) {
         if key == KeyCode::F4
@@ -376,6 +369,22 @@ impl App {
                 }
             }
             Screen::Playing => {
+                if self
+                    .game
+                    .as_ref()
+                    .is_some_and(|game| game.state == RunState::Dead)
+                {
+                    if self.pause_key(key)
+                        || self.action_key("attack", key)
+                        || key == KeyCode::Enter
+                    {
+                        if let Some(game) = &mut self.game {
+                            skip_death_reveal(game);
+                        }
+                        self.input.clear_edges();
+                    }
+                    return;
+                }
                 if self.pause_key(key) {
                     self.screen(Screen::Pause)
                 }
@@ -394,19 +403,25 @@ impl App {
         }
     }
     fn pause_key(&self, key: KeyCode) -> bool {
-        key == KeyCode::Escape
-            || self
-                .store
-                .data
-                .settings
-                .bindings
-                .get("pause")
-                .is_some_and(|keys| {
-                    keys.split(',')
-                        .any(|name| name.trim() == format!("{key:?}"))
-                })
+        key == KeyCode::Escape || self.action_key("pause", key)
+    }
+    fn action_key(&self, action: &str, key: KeyCode) -> bool {
+        self.store
+            .data
+            .settings
+            .bindings
+            .get(action)
+            .is_some_and(|keys| {
+                keys.split(',')
+                    .any(|name| name.trim() == format!("{key:?}"))
+            })
     }
     fn menu_key(&mut self, key: KeyCode) {
+        let key = if self.screen == Screen::Finished && self.action_key("attack", key) {
+            KeyCode::Enter
+        } else {
+            key
+        };
         if key == KeyCode::Escape {
             match self.screen {
                 Screen::Pause => self.screen(Screen::Playing),
@@ -506,6 +521,8 @@ impl App {
                             spelunky_core::hub::HubKind::Stars
                         };
                         self.open_hub(kind);
+                    } else if self.is_custom() {
+                        self.screen(Screen::Custom)
                     } else {
                         self.start_game(false)
                     }
@@ -547,10 +564,12 @@ impl App {
         match spelunky_core::level::Level::parse(contents) {
             Ok(level) => {
                 let mut game = Game::new(wall_seed(), self.store.data.settings.rules);
+                hydrate_run(&mut game, &self.store.data);
                 load_custom(&mut game, &level, name, "");
                 self.game = Some(game);
                 self.editor_play = editor;
                 self.recorded = false;
+                self.finish_tick = None;
                 self.screen(Screen::Playing)
             }
             Err(error) => self.toast(error),
@@ -615,10 +634,12 @@ impl App {
             },
             EditorCommand::Play(level) => {
                 let mut game = Game::new(wall_seed(), self.store.data.settings.rules);
+                hydrate_run(&mut game, &self.store.data);
                 load_custom(&mut game, &level, self.editor.level_name(), "");
                 self.game = Some(game);
                 self.editor_play = true;
                 self.recorded = false;
+                self.finish_tick = None;
                 self.screen(Screen::Playing)
             }
         }
@@ -631,6 +652,7 @@ impl App {
             return;
         }
         self.recorded = true;
+        self.finish_tick = Some(game.tick);
         if self.editor_play
             || game.flags.contains("custom")
             || game.flags.contains("tutorial")
@@ -714,45 +736,18 @@ impl App {
             return;
         }
         if game.flags.contains("tutorial") {
-            self.screen(Screen::Title);
+            prepare_tutorial_return(game);
+            self.open_hub(spelunky_core::hub::HubKind::Title);
             return;
         }
         if game.flags.contains("custom") {
-            let target = game
-                .flags
-                .iter()
-                .find_map(|f| f.strip_prefix("custom_level:"))
-                .or_else(|| {
-                    game.flags
-                        .iter()
-                        .find_map(|f| f.strip_prefix("default_next_custom:"))
-                })
-                .unwrap_or("")
-                .to_owned();
-            if target.is_empty() || target == "NONE" {
-                game.state = RunState::Won;
-                return;
-            }
-            let key = level_name(&target);
-            let contents = self
-                .store
-                .data
-                .custom_levels
-                .get(&target)
-                .or_else(|| self.store.data.custom_levels.get(&key));
-            match contents.and_then(|s| spelunky_core::level::Level::parse(s).ok()) {
-                Some(level) => {
-                    let previous = game.world.name.clone();
-                    load_custom(game, &level, &key, &previous);
-                    self.reset_room_timing()
-                }
-                None => {
+            match custom_exit(game, &self.store.data.custom_levels, self.editor_play) {
+                CustomExit::Editor => self.screen(Screen::Editor),
+                CustomExit::Finished => {}
+                CustomExit::Continued => self.reset_room_timing(),
+                CustomExit::Missing(target) => {
                     self.toast(format!("LINKED LEVEL MISSING: {target}"));
-                    self.screen(if self.editor_play {
-                        Screen::Editor
-                    } else {
-                        Screen::Custom
-                    })
+                    self.screen(Screen::Custom)
                 }
             }
         } else {
@@ -804,6 +799,23 @@ impl App {
                 }
                 continue;
             }
+            if self.screen == Screen::Playing
+                && self
+                    .game
+                    .as_ref()
+                    .is_some_and(|game| game.state == RunState::Dead)
+            {
+                if matches!(
+                    button,
+                    UiButton::Confirm | UiButton::Cancel | UiButton::Pause
+                ) {
+                    if let Some(game) = &mut self.game {
+                        skip_death_reveal(game);
+                    }
+                    self.input.clear_edges();
+                }
+                continue;
+            }
             if button == UiButton::Pause && self.screen == Screen::Playing {
                 self.screen(Screen::Pause);
                 continue;
@@ -841,7 +853,14 @@ impl App {
         if self.screen == Screen::Playing && self.focused && !self.occluded {
             let frame = self.timing.advance(host_frame);
             for _ in 0..frame.ticks {
-                let input = self.input.take_tick();
+                let mut input = self.input.take_tick();
+                if self
+                    .game
+                    .as_ref()
+                    .is_some_and(|game| game.state == RunState::Dead)
+                {
+                    input = spelunky_core::InputFrame::default();
+                }
                 if let Some(game) = &mut self.game {
                     game.step(&input);
                     self.timing.history_ready = true;
@@ -873,10 +892,40 @@ impl App {
                     self.transition();
                     break;
                 }
-                if matches!(state, Some(RunState::Dead | RunState::Won)) {
+                if state == Some(RunState::Dead) {
+                    // Source writes highscores on the lethal frame, before
+                    // corpse/world simulation advances the room clock again.
+                    self.finish_record();
+                    if self.game.as_ref().is_some_and(death_reveal_ready) {
+                        self.screen(Screen::Finished);
+                        break;
+                    }
+                } else if state == Some(RunState::Won) {
                     self.finish_record();
                     self.screen(Screen::Finished);
                     break;
+                }
+            }
+        }
+        if self.screen == Screen::Finished
+            && self.focused
+            && !self.occluded
+            && self
+                .game
+                .as_ref()
+                .is_some_and(|game| game.state == RunState::Dead)
+        {
+            let frame = self.timing.advance(host_frame);
+            for _ in 0..frame.ticks {
+                if let Some(game) = &mut self.game {
+                    game.step(&spelunky_core::InputFrame::default());
+                    self.timing.history_ready = true;
+                    for event in &game.events {
+                        if let GameEvent::Sound { name, pos } = event {
+                            self.audio
+                                .play(name, ((pos.x - game.camera.x) / 320. * 2. - 1.) as f32);
+                        }
+                    }
                 }
             }
         }
@@ -920,22 +969,7 @@ impl App {
             self.screen,
             Screen::Playing | Screen::Pause | Screen::Finished | Screen::Donation
         ) {
-            self.game
-                .as_ref()
-                .map(|game| {
-                    if game.state == RunState::Won {
-                        "victory"
-                    } else {
-                        match game.world.area {
-                            Area::Mines => "cave",
-                            Area::Jungle => "lush",
-                            Area::Ice => "ice",
-                            Area::Temple => "temple",
-                            Area::Boss => "boss",
-                        }
-                    }
-                })
-                .unwrap_or("title")
+            self.game.as_ref().map(game_music).unwrap_or("title")
         } else {
             "title"
         };
@@ -967,7 +1001,18 @@ impl App {
             q
         };
         match self.screen {
-            Screen::Playing => {}
+            Screen::Playing => {
+                if let Some(game) = self
+                    .game
+                    .as_ref()
+                    .filter(|game| game.state == RunState::Dead)
+                {
+                    text(&mut quads, atlas, "GAME OVER", 88., 48., 1., GOLD);
+                    if game.data.get("death_ticks").copied().unwrap_or(0.) >= 50. {
+                        text(&mut quads, atlas, "FINAL SCORE:", 88., 80., 0.75, GOLD);
+                    }
+                }
+            }
             Screen::Donation => {
                 rect(
                     &mut quads,
@@ -1155,7 +1200,7 @@ impl App {
                             "${}  LEVEL {}  {:.1}S",
                             game.player.money,
                             game.world.level,
-                            game.tick as f64 / 30.
+                            self.finish_tick.unwrap_or(game.tick) as f64 / 30.
                         ),
                         66.,
                         79.,
@@ -1170,6 +1215,8 @@ impl App {
                         &["RETURN TO EDITOR", "TITLE"]
                     } else if self.is_hub() {
                         &["RETRY CHALLENGE", "RETURN TO HUB"]
+                    } else if self.is_custom() {
+                        &["CUSTOM LEVELS", "TITLE"]
                     } else {
                         &["NEW ADVENTURE", "TITLE"]
                     },
@@ -1454,11 +1501,19 @@ fn test_snapshot(
     serde_json::json!({
         "screen": format!("{screen:?}"), "state": format!("{:?}", game.state),
         "tick": game.tick, "levelTick": game.level_tick, "alpha": alpha,
+        "deathTicks": game.data.get("death_ticks").copied().unwrap_or(0.),
+        "money": player.money,
+        "world": {
+            "name": game.world.name, "width": game.world.width, "height": game.world.height,
+            "level": game.world.level, "entityCount": game.world.entities.len(),
+        },
         "player": {
             "x": player.pos.x, "y": player.pos.y,
             "previousX": player.previous_pos.x, "previousY": player.previous_pos.y,
             "vx": player.vel.x, "vy": player.vel.y, "state": format!("{:?}", player.state),
             "grounded": player.grounded, "sprite": player.sprite,
+            "health": player.health, "stun": player.stun, "invincible": player.invincible,
+            "bombs": player.bombs, "ropes": player.ropes,
         },
         "rendered": { "x": rendered.x, "y": rendered.y, "screenX": screen_x, "screenY": screen_y },
         "camera": {
@@ -1468,14 +1523,133 @@ fn test_snapshot(
         },
     })
 }
-fn load_custom(game: &mut Game, level: &spelunky_core::level::Level, name: &str, previous: &str) {
+fn game_music(game: &Game) -> &'static str {
+    if game.state == RunState::Dead {
+        ""
+    } else if game.state == RunState::Won {
+        "victory"
+    } else if game.flags.contains("custom") || game.flags.contains("custom_level") {
+        // rLoadLevel's selected music does not change campaign area rules.
+        // startMusic recognizes these four codes; all other values use Cave.
+        match game.data.get("custom_music").copied() {
+            Some(1.) => "lush",
+            Some(2.) => "ice",
+            Some(3.) => "temple",
+            Some(4.) => "boss",
+            _ => "cave",
+        }
+    } else {
+        match game.world.area {
+            Area::Mines => "cave",
+            Area::Jungle => "lush",
+            Area::Ice => "ice",
+            Area::Temple => "temple",
+            Area::Boss => "boss",
+        }
+    }
+}
+fn hydrate_run(game: &mut Game, data: &crate::storage::SaveData) {
+    donation_ui::hydrate(game, &data.tunnel_remaining);
+    game.flags.extend(
+        data.unlocks
+            .iter()
+            .filter(|flag| persistent_flag(flag))
+            .cloned(),
+    );
+    let character = if game.flags.contains("character_damsel")
+        && game.flags.contains("unlock_damsel")
+    {
+        spelunky_core::characters::Character::Damsel
+    } else if game.flags.contains("character_tunnelman") && game.flags.contains("unlock_tunnel_man")
+    {
+        spelunky_core::characters::Character::TunnelMan
+    } else {
+        spelunky_core::characters::Character::Explorer
+    };
+    spelunky_core::characters::apply(game, character);
+}
+fn prepare_tutorial_return(game: &mut Game) {
+    game.flags.insert("title_start:3".into());
+    game.flags.insert("reset_run_on_title".into());
+}
+fn death_reveal_ready(game: &Game) -> bool {
+    game.state == RunState::Dead && game.data.get("death_ticks").copied().unwrap_or(0.) >= 100.
+}
+fn skip_death_reveal(game: &mut Game) {
+    if game.state == RunState::Dead {
+        let elapsed = game.data.entry("death_ticks".into()).or_default();
+        *elapsed = elapsed.max(100.);
+    }
+}
+
+fn runtime_level(level: &spelunky_core::level::Level) -> spelunky_core::level::Level {
     // The editor accepts file names as links; source files traditionally use
     // basenames. Resolve both forms without rewriting the stored document.
     let mut runtime_level = level.clone();
     for target in &mut runtime_level.exit_targets {
-        *target = level_name(target);
+        *target = runtime_level_name(target);
     }
-    game.load_custom(&runtime_level, &level_name(name), &level_name(previous));
+    runtime_level
+}
+fn load_custom(game: &mut Game, level: &spelunky_core::level::Level, name: &str, previous: &str) {
+    game.load_custom(
+        &runtime_level(level),
+        &runtime_level_name(name),
+        &runtime_level_name(previous),
+    );
+}
+fn continue_custom(
+    game: &mut Game,
+    level: &spelunky_core::level::Level,
+    name: &str,
+    previous: &str,
+) {
+    game.continue_custom(
+        &runtime_level(level),
+        &runtime_level_name(name),
+        &runtime_level_name(previous),
+    );
+}
+#[derive(Debug, PartialEq, Eq)]
+enum CustomExit {
+    Editor,
+    Finished,
+    Continued,
+    Missing(String),
+}
+fn custom_exit(
+    game: &mut Game,
+    levels: &std::collections::BTreeMap<String, String>,
+    editor_play: bool,
+) -> CustomExit {
+    // Source oPlayer1 Animation end returns testLevel sessions directly to
+    // the editor before ordinary custom-room linking and transition rewards.
+    if editor_play {
+        return CustomExit::Editor;
+    }
+    let target = game
+        .flags
+        .iter()
+        .find_map(|flag| flag.strip_prefix("custom_level:"))
+        .or_else(|| {
+            game.flags
+                .iter()
+                .find_map(|flag| flag.strip_prefix("default_next_custom:"))
+        })
+        .unwrap_or("")
+        .to_owned();
+    if target.is_empty() || target == "NONE" {
+        game.state = RunState::Won;
+        return CustomExit::Finished;
+    }
+    let Some(level) = custom_level_source(levels, &target)
+        .and_then(|source| spelunky_core::level::Level::parse(source).ok())
+    else {
+        return CustomExit::Missing(target);
+    };
+    let previous = game.world.name.clone();
+    continue_custom(game, &level, &target, &previous);
+    CustomExit::Continued
 }
 fn capture_challenge_records(
     game: &Game,
@@ -1530,12 +1704,30 @@ fn wrap_message(value: &str, width: usize) -> Vec<String> {
     lines
 }
 fn level_name(value: &str) -> String {
-    value
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(value)
-        .trim_end_matches(".lvl")
-        .to_owned()
+    let name = value.rsplit(['/', '\\']).next().unwrap_or(value);
+    if name.to_ascii_lowercase().ends_with(".lvl") {
+        name[..name.len() - 4].to_owned()
+    } else {
+        name.to_owned()
+    }
+}
+fn runtime_level_name(value: &str) -> String {
+    level_name(value).to_ascii_lowercase()
+}
+fn custom_level_source<'a>(
+    levels: &'a std::collections::BTreeMap<String, String>,
+    target: &str,
+) -> Option<&'a str> {
+    let key = level_name(target);
+    levels
+        .get(target)
+        .or_else(|| levels.get(&key))
+        .or_else(|| {
+            levels.iter().find_map(|(name, text)| {
+                level_name(name).eq_ignore_ascii_case(&key).then_some(text)
+            })
+        })
+        .map(String::as_str)
 }
 fn wall_seed() -> u64 {
     #[cfg(not(target_arch = "wasm32"))]
@@ -1673,9 +1865,19 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.control = modifiers.state().control_key()
             }
-            WindowEvent::KeyboardInput { event, .. } => {
+            WindowEvent::KeyboardInput {
+                event,
+                is_synthetic,
+                ..
+            } => {
                 if let PhysicalKey::Code(key) = event.physical_key {
                     let pressed = event.state == ElementState::Pressed;
+                    // Winit can recreate held key-downs on focus gain. The
+                    // matching focus loss already cleared input and paused;
+                    // restoring an old Escape/Confirm must not resume play.
+                    if is_synthetic && pressed {
+                        return;
+                    }
                     if pressed {
                         self.audio.unlock();
                     }
@@ -1799,6 +2001,9 @@ mod tests {
         game.player.pos = spelunky_core::Vec2::new(100., 100.);
         game.previous_camera = spelunky_core::Vec2::new(80., 80.);
         game.camera = spelunky_core::Vec2::new(84., 82.);
+        game.player.bombs = 2;
+        game.player.ropes = 3;
+        game.player.money = 1234;
         let hash = game.state_hash();
         let mut timing = HostTiming {
             alpha: 0.25,
@@ -1811,6 +2016,14 @@ mod tests {
         assert_eq!(snapshot["rendered"]["x"], 97.);
         assert_eq!(snapshot["rendered"]["screenX"], 16.);
         assert_eq!(snapshot["rendered"]["screenY"], 18.);
+        assert_eq!(snapshot["player"]["bombs"], 2);
+        assert_eq!(snapshot["player"]["ropes"], 3);
+        assert_eq!(snapshot["money"], 1234);
+        assert_eq!(snapshot["world"]["name"], game.world.name);
+        assert_eq!(snapshot["world"]["width"], game.world.width);
+        assert_eq!(snapshot["world"]["height"], game.world.height);
+        assert_eq!(snapshot["world"]["level"], game.world.level);
+        assert_eq!(snapshot["world"]["entityCount"], game.world.entities.len());
         assert_eq!(game.state_hash(), hash);
         timing.reset(10.);
         let paused = test_snapshot(Screen::Pause, Some(&game), &timing, false);
@@ -1867,6 +2080,133 @@ mod tests {
         }
     }
     #[test]
+    fn death_reveal_keeps_corpse_and_world_simulating_for_two_fifty_tick_stages() {
+        use spelunky_core::{Area, InputFrame, RulesPreset, Vec2, World};
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.world = World::new(30, 20, Area::Mines, 1);
+        for x in 0..30 {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        game.player.pos = Vec2::new(80., 64.);
+        game.player.vel = Vec2::new(3., -4.);
+        game.player.health = 0;
+        let rock = game.world.spawn("oRock", Vec2::new(200., 64.));
+        game.step(&InputFrame::default());
+        let lethal_tick = game.tick;
+        assert_eq!(game.state, RunState::Dead);
+        assert!(!death_reveal_ready(&game));
+        assert_eq!(
+            game.events
+                .iter()
+                .filter(|event| matches!(event, GameEvent::Died))
+                .count(),
+            1
+        );
+        let corpse_start = game.player.pos;
+        let rock_start = game.world.entity(rock).unwrap().pos;
+        for elapsed in 1..=100 {
+            game.step(&InputFrame::default());
+            assert_eq!(game.tick, lethal_tick + elapsed);
+            assert_eq!(death_reveal_ready(&game), elapsed >= 100);
+            assert!(
+                !game
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, GameEvent::Died))
+            );
+            assert!(
+                !game.events.iter().any(
+                    |event| matches!(event, GameEvent::Sound { name, .. } if name == "sndDie")
+                )
+            );
+            if elapsed == 5 {
+                assert_ne!(game.player.pos, corpse_start);
+                assert_ne!(game.world.entity(rock).unwrap().pos, rock_start);
+            }
+        }
+        let menu_tick = game.tick;
+        game.step(&InputFrame::default());
+        assert_eq!(
+            game.tick,
+            menu_tick + 1,
+            "the visible menu must not freeze the room"
+        );
+    }
+
+    #[test]
+    fn entering_finished_cannot_consume_the_same_presentation_frame_twice() {
+        let mut game = Game::shell(42, spelunky_core::RulesPreset::Classic);
+        game.player.health = 0;
+        game.step(&spelunky_core::InputFrame::default());
+        game.data.insert("death_ticks".into(), 99.);
+        let tick_before_reveal = game.tick;
+        let mut timing = HostTiming::default();
+        timing.reset(1.);
+        let now = 1. + 1. / 30.;
+        let sampled = timing.begin_frame(now);
+        for _ in 0..timing.advance(sampled).ticks {
+            game.step(&spelunky_core::InputFrame::default());
+        }
+        assert!(death_reveal_ready(&game));
+        assert_eq!(game.tick, tick_before_reveal + 1);
+        // App::screen(Finished) resets timing between the Playing and Finished
+        // update branches, which both see the frame sampled before the change.
+        timing.reset(now);
+        for _ in 0..timing.advance(sampled).ticks {
+            game.step(&spelunky_core::InputFrame::default());
+        }
+        assert_eq!(game.tick, tick_before_reveal + 1);
+        assert_eq!(timing.alpha(), 1.);
+    }
+
+    #[test]
+    fn skipping_death_reveal_preserves_the_corpse_and_only_applies_after_death() {
+        let mut game = Game::shell(42, spelunky_core::RulesPreset::Classic);
+        skip_death_reveal(&mut game);
+        assert!(!game.data.contains_key("death_ticks"));
+        game.player.health = 0;
+        game.step(&spelunky_core::InputFrame::default());
+        let body = (game.player.pos, game.player.vel);
+        let tick = game.tick;
+        skip_death_reveal(&mut game);
+        assert!(death_reveal_ready(&game));
+        assert_eq!((game.player.pos, game.player.vel), body);
+        assert_eq!(game.tick, tick);
+        game.step(&spelunky_core::InputFrame::default());
+        skip_death_reveal(&mut game);
+        assert_eq!(game.data["death_ticks"], 101.);
+    }
+
+    #[test]
+    fn tutorial_completion_returns_to_the_source_hub_door_and_resets_run_inventory() {
+        let mut game = Game::tutorial(42, spelunky_core::RulesPreset::Classic);
+        spelunky_core::characters::apply(
+            &mut game,
+            spelunky_core::characters::Character::TunnelMan,
+        );
+        game.flags.insert("unlock_tunnel_man".into());
+        game.player.health = 1;
+        game.player.bombs = 7;
+        game.player.ropes = 8;
+        game.player.money = 42_000;
+        game.player.equipment.insert("Jetpack".into());
+        prepare_tutorial_return(&mut game);
+        game.load_hub(spelunky_core::hub::HubKind::Title);
+        assert_eq!(game.player.pos, spelunky_core::Vec2::new(344., 184.));
+        assert_eq!(
+            (game.player.health, game.player.bombs, game.player.ropes),
+            (2, 0, 0)
+        );
+        assert_eq!(game.player.money, 0);
+        assert!(game.player.equipment.is_empty());
+        assert!(game.flags.contains("unlock_tunnel_man"));
+        assert_eq!(
+            spelunky_core::characters::selected(&game),
+            spelunky_core::characters::Character::TunnelMan
+        );
+        assert_eq!(game.state, RunState::Playing);
+    }
+    #[test]
     fn custom_file_links_select_the_return_entrance_without_rewriting_documents() {
         let mut level = spelunky_core::level::Level::default();
         level.set_tile(1, 1, '@').unwrap();
@@ -1882,6 +2222,138 @@ mod tests {
         assert_eq!(level, original);
     }
     #[test]
+    fn mixed_case_custom_file_names_select_the_same_return_entrance() {
+        let mut level = spelunky_core::level::Level::default();
+        level.set_tile(1, 1, '@').unwrap();
+        level.set_tile(15, 10, '@').unwrap();
+        level.exit_targets = vec!["elsewhere".into(), "PREVIOUS.LVL".into()];
+        let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+        load_custom(&mut game, &level, "Next.LVL", "Previous.lvl");
+        assert_eq!(game.world.name, "next");
+        assert_eq!(game.player.pos, spelunky_core::Vec2::new(264., 184.));
+        assert_eq!(level.exit_targets[1], "PREVIOUS.LVL");
+        let levels = std::collections::BTreeMap::from([("Next".into(), level.to_text())]);
+        for target in ["next", "NEXT.LVL", "C:\\levels\\Next.LVL"] {
+            assert_eq!(
+                custom_level_source(&levels, target),
+                Some(levels["Next"].as_str())
+            );
+        }
+        assert!(custom_level_source(&levels, "missing.lvl").is_none());
+    }
+    #[test]
+    fn custom_and_editor_starts_preserve_the_unlocked_character_selection() {
+        for (flag, unlock, expected) in [
+            (
+                "character_damsel",
+                "unlock_damsel",
+                spelunky_core::characters::Character::Damsel,
+            ),
+            (
+                "character_tunnelman",
+                "unlock_tunnel_man",
+                spelunky_core::characters::Character::TunnelMan,
+            ),
+        ] {
+            let mut save = crate::storage::SaveData::default();
+            save.unlocks.extend([flag.into(), unlock.into()]);
+            let mut level = spelunky_core::level::Level::default();
+            level.starting_life = 7;
+            level.starting_bombs = 8;
+            level.starting_ropes = 9;
+            let mut game = Game::new(42, save.settings.rules);
+            hydrate_run(&mut game, &save);
+            load_custom(&mut game, &level, "custom.lvl", "");
+            assert_eq!(spelunky_core::characters::selected(&game), expected);
+            assert_eq!(
+                (game.player.health, game.player.bombs, game.player.ropes),
+                (7, 8, 9)
+            );
+        }
+        let mut save = crate::storage::SaveData::default();
+        save.unlocks.insert("character_tunnelman".into());
+        let mut game = Game::new(42, save.settings.rules);
+        hydrate_run(&mut game, &save);
+        assert_eq!(
+            spelunky_core::characters::selected(&game),
+            spelunky_core::characters::Character::Explorer
+        );
+    }
+    #[test]
+    fn custom_music_tracks_are_independent_from_campaign_area_rules() {
+        for (code, track) in [
+            ("CAVE", "cave"),
+            ("LUSH", "lush"),
+            ("ICE", "ice"),
+            ("TEMPLE", "temple"),
+            ("BOSS", "boss"),
+            ("JUNGLE", "cave"),
+            ("unknown", "cave"),
+        ] {
+            let mut level = spelunky_core::level::Level::default();
+            level.music = code.into();
+            let mut game = Game::shell(42, spelunky_core::RulesPreset::Classic);
+            load_custom(&mut game, &level, "music.lvl", "");
+            assert_eq!(
+                game.world.area,
+                Area::Mines,
+                "{code} must not change gameplay rules"
+            );
+            assert_eq!(game_music(&game), track, "custom music code {code}");
+            game.state = RunState::Dead;
+            assert_eq!(game_music(&game), "");
+        }
+    }
+
+    #[test]
+    fn linked_custom_rooms_keep_run_resources_instead_of_reapplying_start_headers() {
+        let mut first = spelunky_core::level::Level::default();
+        first.starting_life = 8;
+        first.starting_bombs = 9;
+        first.starting_ropes = 10;
+        let mut second = spelunky_core::level::Level::default();
+        second.set_tile(1, 1, '@').unwrap();
+        second.set_tile(15, 10, '@').unwrap();
+        second.exit_targets = vec!["elsewhere.lvl".into(), "first.lvl".into()];
+        second.starting_life = 99;
+        second.starting_bombs = 99;
+        second.starting_ropes = 99;
+        let original = second.clone();
+        let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+        load_custom(&mut game, &first, "first.lvl", "");
+        game.player.health = 3;
+        game.player.bombs = 2;
+        game.player.ropes = 1;
+        game.player.money = 12_345;
+        game.player.equipment.insert("cape".into());
+        let gun = game.world.spawn("oPistol", game.player.pos);
+        let entity = game.world.entity_mut(gun).unwrap();
+        entity.held = true;
+        entity.data.insert("ammo".into(), 3.);
+        game.player.held = Some(gun);
+        game.flags.insert("carry:oPistol".into());
+        continue_custom(&mut game, &second, "second.lvl", "first.lvl");
+        assert_eq!(game.player.pos, spelunky_core::Vec2::new(264., 184.));
+        assert_eq!(
+            (game.player.health, game.player.bombs, game.player.ropes),
+            (3, 2, 1)
+        );
+        assert_eq!(game.player.money, 12_345);
+        assert!(game.player.equipment.contains("cape"));
+        let gun = game.world.entity(game.player.held.unwrap()).unwrap();
+        assert_eq!(gun.object, "oPistol");
+        assert_eq!(gun.value("ammo"), 3.);
+        assert!(gun.held);
+        assert_eq!(gun.previous_pos, gun.pos);
+        assert_eq!(second, original);
+        continue_custom(&mut game, &first, "first.lvl", "second.lvl");
+        assert_eq!(
+            (game.player.health, game.player.bombs, game.player.ropes),
+            (3, 2, 1)
+        );
+        assert_eq!(game.player.money, 12_345);
+    }
+    #[test]
     fn editor_playtest_uses_document_name_and_source_spawn_offset() {
         let mut editor = EditorUi::new();
         let EditorCommand::Play(level) = editor.key(KeyCode::F5, None, false) else {
@@ -1893,6 +2365,49 @@ mod tests {
         assert_eq!(game.player.pos, spelunky_core::Vec2::new(56., 504.));
         assert_eq!(game.player.previous_pos, game.player.pos);
         assert_eq!(game.previous_camera, game.camera);
+    }
+    #[test]
+    fn editor_playtest_exits_return_to_editor_before_following_or_finishing_links() {
+        let level = spelunky_core::level::Level::default();
+        let levels = std::collections::BTreeMap::from([("next".into(), level.to_text())]);
+        for target in ["NONE", "NEXT.LVL", "missing.lvl"] {
+            let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+            load_custom(&mut game, &level, "edited.lvl", "");
+            game.flags.insert(format!("custom_level:{target}"));
+            game.state = RunState::Transition;
+            game.player.health = 2;
+            let original = game.state_hash();
+            assert_eq!(custom_exit(&mut game, &levels, true), CustomExit::Editor);
+            assert_eq!(game.world.name, "edited");
+            assert_eq!(game.state_hash(), original);
+        }
+    }
+
+    #[test]
+    fn ordinary_custom_exit_follows_links_and_reports_missing_or_final_rooms() {
+        let level = spelunky_core::level::Level::default();
+        let levels = std::collections::BTreeMap::from([("Next".into(), level.to_text())]);
+        let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+        load_custom(&mut game, &level, "first.lvl", "");
+        game.player.health = 2;
+        game.player.bombs = 1;
+        game.flags.insert("custom_level:NEXT.LVL".into());
+        assert_eq!(
+            custom_exit(&mut game, &levels, false),
+            CustomExit::Continued
+        );
+        assert_eq!(game.world.name, "next");
+        assert_eq!((game.player.health, game.player.bombs), (2, 1));
+        game.flags.insert("custom_level:missing.lvl".into());
+        let original = game.state_hash();
+        assert_eq!(
+            custom_exit(&mut game, &levels, false),
+            CustomExit::Missing("missing.lvl".into())
+        );
+        assert_eq!(game.state_hash(), original);
+        game.flags.remove("custom_level:missing.lvl");
+        assert_eq!(custom_exit(&mut game, &levels, false), CustomExit::Finished);
+        assert_eq!(game.state, RunState::Won);
     }
     #[test]
     fn challenge_score_is_captured_before_scores_room_clears_run_counters() {
@@ -1929,5 +2444,7 @@ mod tests {
     fn imported_names_are_portable() {
         assert_eq!(level_name("/tmp/example.lvl"), "example");
         assert_eq!(level_name("C:\\levels\\example.lvl"), "example");
+        assert_eq!(level_name("C:\\levels\\Example.LVL"), "Example");
+        assert_eq!(level_name("map.lvl.lvl"), "map.lvl");
     }
 }

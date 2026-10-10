@@ -120,6 +120,12 @@ impl EditorUi {
         &self.name
     }
 
+    /// Focus loss and leaving the editor terminate a stroke even when the
+    /// operating system delivers no matching mouse-button release event.
+    pub fn cancel_pointer(&mut self) {
+        self.stroke = None;
+    }
+
     pub fn key(&mut self, key: KeyCode, typed: Option<&str>, control: bool) -> EditorCommand {
         if self.entry.is_some() {
             match key {
@@ -595,6 +601,18 @@ mod tests {
         ui.pointer(44.0, 48.0, true, false);
         for x in 0..=5 {
             assert_eq!(ui.state.level.get_tile(x, 12), Some('1'));
+        }
+    }
+    #[test]
+    fn interrupted_pointer_stroke_does_not_connect_the_next_click() {
+        let mut ui = EditorUi::new();
+        ui.pointer(4., 40., true, false);
+        ui.cancel_pointer();
+        ui.pointer(44., 40., true, false);
+        assert_eq!(ui.state.level.get_tile(0, 11), Some('1'));
+        assert_eq!(ui.state.level.get_tile(5, 11), Some('1'));
+        for x in 1..5 {
+            assert_eq!(ui.state.level.get_tile(x, 11), Some('0'));
         }
     }
     #[test]
