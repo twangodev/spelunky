@@ -11,10 +11,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { installMovementTrace, runMovementAcceptance } from './movement.mjs';
 import { runAdversarialAcceptance, runOnboardingAcceptance } from './adversarial.mjs';
-import { installLightingProfile, installLightingProbe, runLightingAcceptance } from './lighting.mjs';
+import { installLightingProfile, installLightingSeedControl, installLightingProbe, runLightingAcceptance } from './lighting.mjs';
 import { runCinematicAcceptance } from './cinematics.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const webRoot = path.resolve(process.env.BROWSER_WEB_ROOT || path.join(root, 'web'));
 const artifacts = path.resolve(process.env.BROWSER_ARTIFACTS || path.join(root, 'artifacts/browser'));
 const tools = process.env.SPELUNKY_TOOLS || path.join(root, 'target/debug/spelunky-tools');
 const require = createRequire(import.meta.url);
@@ -30,16 +31,19 @@ const engines = (process.env.BROWSERS || 'chromium,firefox,webkit').split(',');
 const report = {
   timestamp: new Date().toISOString(),
   suite: process.env.BROWSER_SUITE || 'full',
+  productionRevision: process.env.BROWSER_PRODUCTION_REVISION || null,
+  runnerRevision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
   scope: 'Automated browser engine acceptance, optionally using a virtual display; no physical 240 Hz display or Safari application validation.',
   engines: [],
 };
-assert.ok(['full', 'adversarial', 'movement', 'onboarding', 'lighting', 'cinematics'].includes(report.suite), 'BROWSER_SUITE must be full, adversarial, movement, onboarding, lighting, or cinematics');
+assert.ok(['full', 'gameplay', 'adversarial', 'movement', 'onboarding', 'lighting', 'cinematics'].includes(report.suite), 'BROWSER_SUITE must be full, gameplay, adversarial, movement, onboarding, lighting, or cinematics');
+if (report.suite === 'gameplay') report.deferredChecks = ['Source-valid natural dark-room WebGL pixel acceptance runs separately; gameplay success does not imply lighting acceptance.'];
 await mkdir(artifacts, { recursive: true });
 await access(tools);
 report.bundle = {
-  wasmSha256: createHash('sha256').update(await readFile(path.join(root, 'web/pkg/spelunky_bg.wasm'))).digest('hex'),
-  htmlSha256: createHash('sha256').update(await readFile(path.join(root, 'web/index.html'))).digest('hex'),
-  bindingsSha256: createHash('sha256').update(await readFile(path.join(root, 'web/pkg/spelunky.js'))).digest('hex'),
+  wasmSha256: createHash('sha256').update(await readFile(path.join(webRoot, 'pkg/spelunky_bg.wasm'))).digest('hex'),
+  htmlSha256: createHash('sha256').update(await readFile(path.join(webRoot, 'index.html'))).digest('hex'),
+  bindingsSha256: createHash('sha256').update(await readFile(path.join(webRoot, 'pkg/spelunky.js'))).digest('hex'),
   nativeSha256: createHash('sha256').update(await readFile(tools)).digest('hex'),
 };
 const native = [];
@@ -56,7 +60,6 @@ report.nativeReplays = native;
 let server;
 let base = process.env.BASE_URL;
 if (!base) {
-  const webRoot = path.join(root, 'web');
   const mime = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm', '.json': 'application/json', '.txt': 'text/plain' };
   server = http.createServer(async (request, response) => {
     try {
@@ -83,6 +86,12 @@ if (!base) {
   base = `http://127.0.0.1:${server.address().port}/`;
 }
 report.url = base;
+report.webRoot = webRoot;
+report.runnerSha256 = Object.fromEntries(await Promise.all(
+  ['smoke.mjs', 'movement.mjs', 'adversarial.mjs', 'lighting.mjs', 'cinematics.mjs'].map(async filename => [
+    filename, createHash('sha256').update(await readFile(path.join(root, 'tests/browser', filename))).digest('hex'),
+  ]),
+));
 
 function instrument() {
   const probe = window.__smoke = { contexts: [], draws: 0, callbacks: 0, contextLost: 0 };
@@ -188,6 +197,7 @@ try {
       await context.addInitScript(installMovementTrace);
       if (report.suite === 'lighting') {
         await context.addInitScript(installLightingProfile);
+        await context.addInitScript(installLightingSeedControl);
         await context.addInitScript(installLightingProbe);
       }
       const page = await context.newPage();
@@ -208,7 +218,7 @@ try {
       const title = await screenshot(page, 'title', result);
       result.checks.push('Wasm startup and real WebGL 2 draw calls');
 
-      if (report.suite !== 'full') {
+      if (!['full', 'gameplay'].includes(report.suite)) {
         if (report.suite === 'adversarial') await runAdversarialAcceptance({ page, result, screenshot });
         else if (report.suite === 'movement') await runMovementAcceptance({ page, result, screenshot });
         else if (report.suite === 'onboarding') await runOnboardingAcceptance({ page, result, screenshot });
@@ -357,23 +367,26 @@ try {
       assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
       await onboarding.close();
 
-      const lighting = await browser.newContext({ viewport: { width: 960, height: 720 } });
-      await lighting.addInitScript(instrument);
-      await lighting.addInitScript(installMovementTrace);
-      await lighting.addInitScript(installLightingProfile);
-      await lighting.addInitScript(installLightingProbe);
-      const lightingPage = await lighting.newPage();
-      activePage = lightingPage;
-      lightingPage.on('pageerror', error => result.errors.push(String(error)));
-      lightingPage.on('console', message => {
-        if (message.type() === 'error') result.consoleErrors.push(message.text());
-        if (message.type() === 'warning') result.warnings.push(message.text());
-      });
-      await ready(lightingPage);
-      await runLightingAcceptance({ page: lightingPage, result, screenshot });
-      assert.deepEqual(result.errors, []);
-      assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
-      await lighting.close();
+      if (report.suite === 'full') {
+        const lighting = await browser.newContext({ viewport: { width: 960, height: 720 } });
+        await lighting.addInitScript(instrument);
+        await lighting.addInitScript(installMovementTrace);
+        await lighting.addInitScript(installLightingProfile);
+        await lighting.addInitScript(installLightingSeedControl);
+        await lighting.addInitScript(installLightingProbe);
+        const lightingPage = await lighting.newPage();
+        activePage = lightingPage;
+        lightingPage.on('pageerror', error => result.errors.push(String(error)));
+        lightingPage.on('console', message => {
+          if (message.type() === 'error') result.consoleErrors.push(message.text());
+          if (message.type() === 'warning') result.warnings.push(message.text());
+        });
+        await ready(lightingPage);
+        await runLightingAcceptance({ page: lightingPage, result, screenshot });
+        assert.deepEqual(result.errors, []);
+        assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
+        await lighting.close();
+      }
 
       // Failure paths run in fresh storage, separate from the happy-path session.
       const corrupt = await browser.newContext();

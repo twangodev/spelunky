@@ -128,6 +128,8 @@ impl Game {
         self.player.coyote_ticks = 0;
         self.player.buffered_jump_ticks = 0;
         self.player.animation = 0.0;
+        // Recreate the selected character's initial sprite so the previous
+        // room's exit animation cannot keep the new controller disabled.
         self.player.set_sprite(match characters::selected(self) {
             characters::Character::Explorer => "sStandLeft",
             characters::Character::Damsel => "sDamselLeft",
