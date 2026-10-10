@@ -212,7 +212,6 @@ fn movable(e: &Entity) -> bool {
         "oItem",
         "oTreasure",
         "oMoveableSolid",
-        "oRubblePiece",
     ]
     .iter()
     .any(|parent| crate::catalog::is_a(&e.object, parent))
@@ -521,6 +520,45 @@ mod tests {
         g.player.vel.x = 1.0;
         tick(&mut g);
         assert!(!g.world.entities.iter().any(|e| e.object == "oArrow"));
+    }
+    #[test]
+    fn arrow_detector_ignores_moving_debris_but_accepts_items_and_moveable_solids() {
+        // oArrowTrapTest declares collisions with Character, Enemy, Item,
+        // Treasure, MoveableSolid, and Boulder. RubblePiece inherits only
+        // DrawnSprite: its visible motion must not activate those callbacks.
+        for (object, should_fire) in [
+            ("oRubble", false),
+            ("oRubbleSmall", false),
+            ("oRock", true),
+            ("oPushBlock", true),
+        ] {
+            let mut game = room();
+            game.world = crate::World::new(20, 15, crate::Area::Mines, 1);
+            game.player.pos = Vec2::new(40.0, 184.0);
+            game.player.previous_pos = game.player.pos;
+            game.player.state = PlayerState::Standing;
+            game.player.grounded = true;
+            for x in 0..20 {
+                game.world.set_tile(x, 12, "oBlock");
+            }
+            game.world.spawn("oArrowTrapLeft", Vec2::new(80.0, 80.0));
+            let moving = game.world.spawn(object, Vec2::new(50.0, 82.0));
+            game.world.entity_mut(moving).unwrap().vel.x = 1.0;
+
+            game.step(&crate::InputFrame::default());
+
+            let entity = game.world.entity(moving).unwrap();
+            assert_ne!(
+                entity.pos,
+                Vec2::new(50.0, 82.0),
+                "{object} must actually move"
+            );
+            assert_eq!(
+                game.world.entities.iter().any(|e| e.object == "oArrow"),
+                should_fire,
+                "source collision family: {object}",
+            );
+        }
     }
     #[test]
     fn spikes_require_long_descent_or_stun() {
