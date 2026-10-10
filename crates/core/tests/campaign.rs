@@ -4,7 +4,7 @@
 mod common;
 
 use common::complete_source_exit;
-use spelunky_core::{Area, Game, InputFrame, RulesPreset, RunState, Vec2};
+use spelunky_core::{Area, Game, InputFrame, Rect, RulesPreset, RunState, Vec2};
 
 fn position_player(game: &mut Game, pos: Vec2) {
     game.player.pos = pos;
@@ -176,12 +176,8 @@ fn actual_pickups_and_walking_open_gold_door_without_entering_its_solid() {
     }
 }
 
-#[test]
-fn exposed_generated_market_ankh_moai_and_gold_door_form_a_reachable_state_chain() {
-    // Source scrEntityGen enables Tomb Lord placement on level thirteen, but
-    // still requires eligible support and a successful rand(1, 40) draw. Seed 1
-    // supplies that generated prerequisite throughout this complete chain.
-    let mut game = Game::new(1, RulesPreset::Classic);
+fn generated_market_ankh_moai_chain_to_temple(seed: u64) -> Game {
+    let mut game = Game::new(seed, RulesPreset::Classic);
     while !game.world.entities.iter().any(|e| e.object == "oXMarket") {
         assert!(
             game.world.level < 7,
@@ -280,6 +276,26 @@ fn exposed_generated_market_ankh_moai_and_gold_door_form_a_reachable_state_chain
         positioned_exit(&mut game);
         game.next_level();
     }
+    game
+}
+
+#[test]
+fn exposed_generated_market_ankh_moai_and_gold_door_form_a_reachable_state_chain() {
+    // scrEntityGen:385 enables Tomb Lord placement on thirteen, but :458–464
+    // still requires eligible support and rand(1,40). Try a known natural
+    // fixture first, then a bounded seed fallback if generation rolls change.
+    // Select only this prerequisite after the complete asserted prefix; never
+    // catch an interaction failure or filter on the downstream chain result.
+    let mut game = [2, 0, 1, 3, 4, 5, 6, 7]
+        .into_iter()
+        .map(generated_market_ankh_moai_chain_to_temple)
+        .find(|game| {
+            game.world
+                .entities
+                .iter()
+                .any(|entity| entity.alive && entity.object == "oTombLord")
+        })
+        .expect("bounded natural chain fixtures must supply a level-thirteen Tomb Lord");
     let tomb = game
         .world
         .entities
@@ -289,9 +305,39 @@ fn exposed_generated_market_ankh_moai_and_gold_door_form_a_reachable_state_chain
         .id;
     // Isolate the generated boss's death/drop transition from combat execution.
     let tomb_pos = game.world.entity(tomb).unwrap().pos;
-    position_player(&mut game, Vec2::new(tomb_pos.x + 16.0, tomb_pos.y + 16.0));
+    // Choose a nearby clear player pose instead of assuming the boss's center
+    // is clear. Source crushing ignores the fixture's invincibility timer.
+    let player_bounds = game.player.bounds();
+    let clear_pose = |position: Vec2| {
+        let bounds = Rect::new(
+            position.x + player_bounds.x - game.player.pos.x,
+            position.y + player_bounds.y - game.player.pos.y,
+            player_bounds.w,
+            player_bounds.h,
+        );
+        !game.world.tiles_collide(bounds, "oSolid")
+            && !game.world.entities.iter().any(|entity| {
+                entity.alive
+                    && spelunky_core::catalog::is_a(&entity.object, "oSolid")
+                    && entity.sprite_bounds().intersects(bounds)
+            })
+    };
+    let staging = [
+        Vec2::new(tomb_pos.x + 16.0, tomb_pos.y + 16.0),
+        Vec2::new(tomb_pos.x - 8.0, tomb_pos.y + 16.0),
+        Vec2::new(tomb_pos.x + 16.0, tomb_pos.y - 8.0),
+        Vec2::new(tomb_pos.x + 40.0, tomb_pos.y + 16.0),
+    ]
+    .into_iter()
+    .find(|position| clear_pose(*position))
+    .expect("generated boss needs a nearby clear interaction pose");
+    assert!(clear_pose(staging));
+    position_player(&mut game, staging);
+    assert!(!game.world.solid_at(game.player.pos.x, game.player.pos.y));
     game.world.entity_mut(tomb).unwrap().health = 0;
     game.step(&InputFrame::default());
+    assert_eq!(game.state, RunState::Playing);
+    assert!(game.player.health > 0);
     let sceptre_id = game
         .world
         .entities
