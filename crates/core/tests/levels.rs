@@ -339,8 +339,6 @@ fn custom_tiles_retain_source_solid_platform_and_ladder_families() {
     for (x, object, group) in [
         (1, "oTree", "oSolid"),
         (2, "oTree", "oSolid"),
-        (3, "oTreeBranch", "oPlatform"),
-        (4, "oLeaves", "oPlatform"),
         (5, "oLadderOrange", "oLadder"),
         (6, "oLadderTop", "oPlatform"),
         (7, "oVine", "oLadder"),
@@ -349,6 +347,16 @@ fn custom_tiles_retain_source_solid_platform_and_ladder_families() {
         assert_eq!(world.tile(x, 4).unwrap().object, object);
         assert!(catalog::is_a(object, group));
         assert_eq!(world.tile(x, 4).unwrap().is_solid(), group == "oSolid");
+    }
+    for (x, object) in [(3, "oTreeBranch"), (4, "oLeaves")] {
+        assert!(world.tile(x, 4).unwrap().object.is_empty());
+        let platform = world
+            .entities
+            .iter()
+            .find(|e| e.object == object && e.pos == Vec2::new(f64::from(x) * 16.0, 64.0))
+            .unwrap();
+        assert!(catalog::is_a(&platform.object, "oPlatform"));
+        assert!(!platform.solid);
     }
     assert_eq!(
         catalog::bounds("oTreeBranch", Vec2::new(48.0, 64.0)).h,
@@ -521,4 +529,56 @@ fn editing_an_import_with_unused_records_still_exports_a_readable_level() {
     assert_eq!(editor.level.signs, level.signs);
     assert!(editor.redo());
     assert_eq!(Level::parse(&editor.level.to_text()).unwrap(), editor.level);
+}
+
+#[test]
+fn imported_canopies_collapse_after_their_supporting_tree_is_removed() {
+    use spelunky_core::{Game, InputFrame, RulesPreset, Vec2};
+    let mut level = Level::default();
+    // Row-major creation: left leaves are created before their trunk; the
+    // right branch is created after it. The source Create event observes that
+    // order, and Step removes either platform when the tree disappears.
+    level.set_tile(3, 4, ')').unwrap();
+    level.set_tile(4, 4, '|').unwrap();
+    level.set_tile(5, 4, 'q').unwrap();
+    level.set_tile(4, 5, '1').unwrap();
+    let mut game = Game::new(1, RulesPreset::Classic);
+    game.load_custom(&level, "canopy", "");
+    let leaves = game
+        .world
+        .entities
+        .iter()
+        .find(|e| e.object == "oLeaves")
+        .unwrap()
+        .id;
+    let branch = game
+        .world
+        .entities
+        .iter()
+        .find(|e| e.object == "oTreeBranch")
+        .unwrap()
+        .id;
+    assert_eq!(game.world.entity(leaves).unwrap().sprite, "sLeaves");
+    game.step(&InputFrame::default());
+    assert!(game.world.entity(leaves).is_some());
+    assert!(game.world.entity(branch).is_some());
+    game.world.set_tile(5, 5, "");
+    game.step(&InputFrame::default());
+    assert!(game.world.entity(leaves).is_none());
+    assert!(game.world.entity(branch).is_none());
+    assert_eq!(
+        game.world
+            .entities
+            .iter()
+            .filter(|e| e.object == "oLeaf")
+            .count(),
+        3
+    );
+    // Gone platforms no longer catch the player.
+    game.player.pos = Vec2::new(72.0, 64.0);
+    game.player.vel = Vec2::new(0.0, 2.0);
+    for _ in 0..8 {
+        game.step(&InputFrame::default());
+    }
+    assert!(game.player.pos.y > 80.0);
 }

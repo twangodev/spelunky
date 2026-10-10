@@ -218,6 +218,9 @@ impl Level {
                     // state/sprite/free-item overrides. Use the same initializer path
                     // as generated levels, so the first tick cannot undo those overrides.
                     let id = world.spawn(spawn.object, pos);
+                    if spawn.object == "oLeaves" {
+                        crate::world_events::initialize_leaves(&mut world, id, false);
+                    }
                     if symbol == 'X' && first_exit {
                         world.exit = Vec2::new(pos.x + 8.0, pos.y + 8.0);
                         first_exit = false;
@@ -343,8 +346,6 @@ fn is_static_terrain(object: &str) -> bool {
             | "oVine"
             | "oVineTop"
             | "oTree"
-            | "oLeaves"
-            | "oTreeBranch"
     )
 }
 
