@@ -192,6 +192,7 @@ impl Game {
         self.level_tick += 1;
         enemies::olmec_intro_alarms(self);
         traps::pre_tick(self);
+        items::pre_player_tick(self);
         world_events::sample_light_distances(self);
         player::tick(self, input);
         world_events::lighting_tick(self);

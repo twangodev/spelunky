@@ -17,6 +17,7 @@ pub fn init(e: &mut Entity) {
             e.timer = 200;
             e.sprite = "sDamselLeft".into();
             e.facing = -1;
+            e.data.entry("canPickUp".into()).or_insert(1.0);
         }
         "oShopkeeper" | "oShopkeeper2" => {
             e.health = 20;

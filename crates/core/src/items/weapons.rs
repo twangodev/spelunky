@@ -103,6 +103,7 @@ pub fn init_entity(e: &mut Entity) {
             e.data.insert("gravity".into(), 0.2);
         }
         "oFlare" => {
+            e.data.entry("dist_to_player".into()).or_insert(0.0);
             e.data.insert("gravity".into(), 0.6);
             e.data.insert("invincible".into(), 1.0);
         }
@@ -543,6 +544,53 @@ fn hit_player(game: &mut Game, projectile: &mut Entity, damage: i32) {
     super::release_held_after_hit(game);
 }
 
+/// oPlayer1 Step checks rocks independently from Arrow collisions. Rocks
+/// survive impact, and the Mitt catches an unsafe fast rock only with empty
+/// hands. Contact-damage invulnerability does not guard this source branch.
+fn rock_player_contact(game: &mut Game) {
+    if super::player_dead(game) || game.player.is_stunned() {
+        return;
+    }
+    let query = Rect::new(game.player.pos.x - 8.0, game.player.pos.y - 8.0, 17.0, 17.0);
+    if !game
+        .world
+        .entities
+        .iter()
+        .any(|e| e.alive && e.object == "oRock" && e.sprite_bounds().intersects(query))
+    {
+        return;
+    }
+    // The original first tests collision_rectangle, then instance_nearest.
+    let Some(rock) = game
+        .world
+        .entities
+        .iter()
+        .filter(|e| e.alive && e.object == "oRock")
+        .min_by(|a, b| {
+            a.pos
+                .distance(game.player.pos)
+                .total_cmp(&b.pos.distance(game.player.pos))
+        })
+    else {
+        return;
+    };
+    if rock.vel.x.abs() <= 4.0 || rock.value("safe") != 0.0 {
+        return;
+    }
+    let (id, vx) = (rock.id, rock.vel.x);
+    if game.player.has("Mitt") && game.player.held.is_none() {
+        game.player.held = Some(id);
+        game.world.entity_mut(id).unwrap().held = true;
+    } else {
+        game.player.health -= 2;
+        game.player.vel = Vec2::new(vx, -4.0);
+        game.player.stun = 20;
+        game.events.push(GameEvent::Damage { amount: 2 });
+        game.sound("sndHurt", game.player.pos);
+        super::release_held_after_hit(game);
+    }
+}
+
 fn mattock_dig(game: &mut Game, e: &Entity) {
     if matches!(game.world.name.as_str(), "rTitle" | "rHighscores") {
         return;
@@ -872,6 +920,14 @@ pub fn tick(game: &mut Game) {
                 }
             }
             "oFlare" => {
+                tick_item_body(game, &mut e);
+                e.data.insert(
+                    "dist_to_player".into(),
+                    crate::world_events::mask_distance(
+                        e.sprite_bounds(),
+                        game.player.sprite_bounds(),
+                    ),
+                );
                 if tile_object(game, e.pos) == "oWater"
                     || game.world.entities.iter().any(|water| {
                         water.alive && water.object == "oWater" && water.bounds().contains(e.pos)
@@ -882,11 +938,9 @@ pub fn tick(game: &mut Game) {
                         game.player.held = None;
                     }
                     game.sound("sndSplash", e.pos);
-                } else {
-                    tick_item_body(game, &mut e);
                 }
                 e.animation += 0.3;
-                e.data.insert("light_radius".into(), 64.0);
+                e.data.insert("light_radius".into(), 96.0);
             }
             "oPsychicWaveP" => {
                 if e.timer > 0 {
@@ -939,7 +993,7 @@ pub fn tick(game: &mut Game) {
                                 && target.object != "oGiantSpider"
                                 || crate::catalog::is_a(&target.object, "oItem")
                                 || matches!(target.object.as_str(), "oWater" | "oWeb"))
-                            && target.sprite_bounds().intersects(e.sprite_bounds())
+                            && target.event_intersects(&e)
                     });
                     if collided || target || life < 0.0 {
                         e.state = 1;
@@ -1014,6 +1068,7 @@ pub fn tick(game: &mut Game) {
             *original = e;
         }
     }
+    rock_player_contact(game);
 }
 
 #[cfg(test)]
@@ -1210,12 +1265,11 @@ mod tests {
         }
         assert!(!game.world.entities.iter().any(|e| e.object == "oSlash"));
         tick(&mut game);
-        assert!(
-            game.world
-                .entities
-                .iter()
-                .any(|e| e.object == "oSlash" && e.alive && e.value("damage") == 2.0)
-        );
+        assert!(game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.object == "oSlash" && e.alive && e.value("damage") == 2.0));
     }
     #[test]
     fn mattock_requires_ground_and_only_slows_the_onset_tick() {
@@ -1232,20 +1286,17 @@ mod tests {
         for _ in 0..3 {
             tick(&mut game);
         }
-        assert!(
-            !game
-                .world
-                .entities
-                .iter()
-                .any(|e| e.object == "oMattockHit")
-        );
+        assert!(!game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.object == "oMattockHit"));
         tick(&mut game);
-        assert!(
-            game.world
-                .entities
-                .iter()
-                .any(|e| e.object == "oMattockHit" && e.alive)
-        );
+        assert!(game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.object == "oMattockHit" && e.alive));
     }
     #[test]
     fn bomb_arrow_requires_but_does_not_consume_bomb_and_preserves_cooked_fuse() {
@@ -1311,12 +1362,11 @@ mod tests {
         assert!(!game.world.entities.iter().any(|e| e.object == "oExplosion"));
         pre_tick(&mut game);
         tick(&mut game);
-        assert!(
-            game.world
-                .entities
-                .iter()
-                .any(|e| e.object == "oExplosion" && e.pos == game.player.pos)
-        );
+        assert!(game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.object == "oExplosion" && e.pos == game.player.pos));
         assert_eq!(game.player.data["bow_bomb_armed"], 0.0);
     }
 
@@ -1397,10 +1447,24 @@ mod tests {
         game.flags.insert("character_tunnelman".into());
         game.world.set_tile(6, 5, "oBlock");
         let mut expected = game.rng.clone();
+        // oBlock Destroy creates three debris pieces, with four rand(0,8)
+        // position draws each, before Mattock Animation End rolls durability.
+        for _ in 0..12 {
+            expected.range(9);
+        }
         expected.chance(1, 20);
         let mut hit = Entity::new(999, "oMattockHit", Vec2::new(104.0, 88.0));
         hit.data.insert("weapon_id".into(), id as f64);
         mattock_dig(&mut game, &hit);
+        assert_eq!(game.world.tile(6, 5).unwrap().object, "");
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| matches!(e.object.as_str(), "oRubble" | "oRubbleSmall"))
+                .count(),
+            3
+        );
         assert!(game.world.entity(id).is_some());
         assert_eq!(game.rng.next_u64(), expected.next_u64());
     }
@@ -1782,5 +1846,148 @@ mod tests {
             assert!((item_rotation(velocity, false, 1.0).to_degrees() - degrees).abs() < 1e-10);
         }
         assert_eq!(item_rotation(Vec2::default(), true, 0.7), 0.7);
+    }
+
+    fn incoming_rock(mitt: bool) -> (Game, u64) {
+        let (mut game, weapon) = flat_room("oMachete");
+        game.world.entity_mut(weapon).unwrap().alive = false;
+        game.player.held = None;
+        if mitt {
+            game.player.equipment.insert("Mitt".into());
+        }
+        let id = game.world.spawn("oRock", Vec2::new(128.0, 148.0));
+        game.world.entity_mut(id).unwrap().vel.x = -8.0;
+        (game, id)
+    }
+
+    #[test]
+    fn game_step_unsafe_rock_damages_player_and_survives_impact() {
+        let (mut game, id) = incoming_rock(false);
+        game.player.invincible = 60;
+        for _ in 0..8 {
+            game.step(&InputFrame::default());
+            if game.player.health < 4 {
+                break;
+            }
+        }
+        assert_eq!(game.player.health, 2);
+        assert_eq!(game.player.stun, 20);
+        assert_eq!(game.player.vel.x, -8.0);
+        assert_eq!(game.player.vel.y, -4.0);
+        assert!(
+            game.world.entity(id).is_some(),
+            "Rock is not consumed like an Arrow"
+        );
+    }
+
+    #[test]
+    fn game_step_mitt_catches_incoming_rock_only_with_empty_hands() {
+        let (mut game, id) = incoming_rock(true);
+        for _ in 0..8 {
+            game.step(&InputFrame::default());
+            if game.player.held.is_some() {
+                break;
+            }
+        }
+        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.stun, 0);
+        assert_eq!(game.player.held, Some(id));
+        assert!(game.world.entity(id).unwrap().held);
+        let (mut occupied, _) = incoming_rock(true);
+        let held = occupied.world.spawn("oPistol", occupied.player.pos);
+        occupied.world.entity_mut(held).unwrap().held = true;
+        occupied.player.held = Some(held);
+        for _ in 0..8 {
+            occupied.step(&InputFrame::default());
+            if occupied.player.health < 4 {
+                break;
+            }
+        }
+        assert_eq!(occupied.player.health, 2);
+        assert!(occupied.player.held.is_none());
+    }
+
+    #[test]
+    fn game_step_safe_and_slow_rocks_do_not_hurt_or_get_caught() {
+        for mitt in [false, true] {
+            for safe in [false, true] {
+                let (mut game, id) = incoming_rock(mitt);
+                if safe {
+                    game.world
+                        .entity_mut(id)
+                        .unwrap()
+                        .data
+                        .insert("safe".into(), 20.0);
+                } else {
+                    game.world.entity_mut(id).unwrap().vel.x = -4.0;
+                }
+                for _ in 0..8 {
+                    game.step(&InputFrame::default());
+                }
+                assert_eq!(game.player.health, 4);
+                assert!(game.player.held.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn game_step_flare_uses_source_ninety_six_pixel_light_radius() {
+        let (mut game, _) = flat_room("oMachete");
+        let id = game.world.spawn("oFlare", Vec2::new(200.0, 80.0));
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().value("light_radius"), 96.0);
+    }
+
+    #[test]
+    fn game_step_webball_collision_requires_shared_precise_pixels() {
+        for (rock_pos, expected_state) in [(Vec2::new(72.0, 72.0), 0), (Vec2::new(74.0, 74.0), 1)] {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            game.player.pos = Vec2::new(24.0, 24.0);
+            game.world.spawn("oRock", rock_pos);
+            let id = game.world.spawn("oWebBall", Vec2::new(79.0, 82.0));
+            let ball = game.world.entity_mut(id).unwrap();
+            ball.vel = Vec2::new(1.0, -2.0);
+            ball.data.insert("life".into(), 50.0);
+            game.step(&InputFrame::default());
+            let ball = game.world.entity(id).unwrap();
+            assert_eq!(ball.pos, Vec2::new(80.0, 80.0));
+            assert_eq!(ball.state, expected_state, "rock at {rock_pos:?}");
+        }
+    }
+
+    #[test]
+    fn game_step_flare_light_distance_samples_after_inherited_motion() {
+        let (mut game, _) = flat_room("oMachete");
+        let id = game.world.spawn("oFlare", Vec2::new(200.0, 140.0));
+        game.world.entity_mut(id).unwrap().vel.x = 6.0;
+        let before = crate::world_events::mask_distance(
+            game.world.entity(id).unwrap().sprite_bounds(),
+            game.player.sprite_bounds(),
+        );
+        game.step(&InputFrame::default());
+        let flare = game.world.entity(id).unwrap();
+        assert_eq!(flare.pos.x, 206.0);
+        let sampled = flare.value("dist_to_player");
+        assert!(
+            sampled > before,
+            "Flare's own Step samples its moved position"
+        );
+        assert_eq!(
+            sampled,
+            crate::world_events::mask_distance(flare.sprite_bounds(), game.player.sprite_bounds())
+        );
+    }
+
+    #[test]
+    fn game_step_cooked_bomb_arrow_illuminates_on_its_expiry_tick() {
+        let (mut game, _) = flat_room("oBow");
+        game.world.dark = true;
+        game.player.data.insert("bow_bomb_armed".into(), 1.0);
+        game.player.data.insert("bow_bomb_fuse".into(), 0.0);
+        game.step(&InputFrame::default());
+        assert!(game.world.entities.iter().any(|e| e.object == "oExplosion"));
+        assert_eq!(game.player.data["dist_to_nearest_light_source"], 0.0);
+        assert_eq!(game.data["darkness"], 0.0);
+        assert_eq!(game.player.data["bow_bomb_armed"], 0.0);
     }
 }

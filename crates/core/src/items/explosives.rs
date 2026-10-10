@@ -819,6 +819,7 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
     }
     let mut magma_spawns = Vec::new();
     let mut solid_destroys = Vec::new();
+    let mut fragile_destroys = Vec::new();
     for entity in &mut game.world.entities {
         if !entity.alive || entity.id == explosion.id || !hits(entity.sprite_bounds()) {
             continue;
@@ -877,6 +878,9 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
             "oWeb" | "oBoulder" | "oBarrierEmitter" | "oArrow" | "oFishBone" | "oJar" | "oSkull"
         ) {
             entity.alive = false;
+            if matches!(entity.object.as_str(), "oJar" | "oSkull") {
+                fragile_destroys.push(entity.id);
+            }
         } else if crate::catalog::is_a(&entity.object, "oItem") {
             if entity.object != "oRopeThrow" || entity.value("falling") == 0.0 {
                 entity.vel.y += if entity.pos.y < explosion.pos.y {
@@ -898,6 +902,9 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
                 game.player.held = None;
             }
         }
+    }
+    for id in fragile_destroys {
+        super::break_item(game, id);
     }
     for id in solid_destroys {
         destroy_solid_instance(game, id);
@@ -944,6 +951,23 @@ pub(super) fn destroy_terrain(game: &mut Game, x: usize, y: usize) {
         return;
     }
     game.world.set_tile(x, y, "");
+    let mut source = Entity::new(0, &object, Vec2::new(center.x - 8.0, center.y - 8.0));
+    if let Some(metadata) = &metadata {
+        source.data = metadata.data.clone();
+        source.text = metadata.text.clone();
+        if let Some(sprite) = metadata.text.get("terrain_sprite") {
+            source.sprite = sprite.clone();
+        }
+    }
+    if inherits_solid_destroy(&object) {
+        solid_parent_destroy(game, source.pos, false);
+    }
+    // Generated metadata already records gold released from source sprites.
+    // Block/Xoc families additionally have source global-city loot branches.
+    let stored_gold =
+        source.data.contains_key("gold_chunks") || source.data.contains_key("gold_nuggets");
+    solid_destroy_body(game, &source, !stored_gold);
+    let outputs_enabled = solid_outputs_enabled(game, &source);
     if let Some(metadata) = metadata {
         game.world.entity_mut(metadata.id).unwrap().alive = false;
         if metadata.value("shopWall") != 0.0 {
@@ -955,7 +979,11 @@ pub(super) fn destroy_terrain(game: &mut Game, x: usize, y: usize) {
             ("gold_chunks", "oGoldChunk"),
             ("gold_nuggets", "oGoldNugget"),
         ] {
-            for _ in 0..metadata.value(key).max(0.0) as usize {
+            for _ in 0..if outputs_enabled {
+                metadata.value(key).max(0.0) as usize
+            } else {
+                0
+            } {
                 let pos = Vec2::new(
                     center.x + f64::from(game.rng.range(5)) - f64::from(game.rng.range(5)),
                     center.y + f64::from(game.rng.range(5)) - f64::from(game.rng.range(5)),
@@ -968,7 +996,10 @@ pub(super) fn destroy_terrain(game: &mut Game, x: usize, y: usize) {
                 game.world.entity_mut(id).unwrap().vel = velocity;
             }
         }
-        if metadata.value("embedded_treasure") != 0.0 && metadata.value("frozen_caveman") == 0.0 {
+        if metadata.value("embedded_treasure") != 0.0
+            && metadata.value("frozen_caveman") == 0.0
+            && object != "oXocBlock"
+        {
             if let Some(treasure) = metadata.text.get("treasure") {
                 let object = match treasure.as_str() {
                     "Big Ruby" => "oRubyBig",
@@ -988,7 +1019,7 @@ pub(super) fn destroy_terrain(game: &mut Game, x: usize, y: usize) {
                 game.world.entity_mut(id).unwrap().state = 1;
             }
         }
-        if metadata.value("frozen_caveman") != 0.0 {
+        if metadata.value("frozen_caveman") != 0.0 && outputs_enabled {
             let id = game
                 .world
                 .spawn("oCaveman", Vec2::new(center.x - 8.0, center.y - 8.0));
@@ -999,8 +1030,182 @@ pub(super) fn destroy_terrain(game: &mut Game, x: usize, y: usize) {
             caveman.data.insert("invincible".into(), 20.0);
         }
     }
-    if inherits_solid_destroy(&object) {
-        solid_parent_destroy(game, Vec2::new(center.x - 8.0, center.y - 8.0), false);
+}
+
+// Resolve the nearest source Destroy event, rather than applying a parent's
+// debris to descendants whose own event replaces it.
+fn solid_destroy_family(object: &str) -> &str {
+    let mut family = object;
+    while let Some(definition) = crate::catalog::object(family) {
+        if matches!(
+            family,
+            "oSolid"
+                | "oBrick"
+                | "oBrickSmooth"
+                | "oLush"
+                | "oTemple"
+                | "oDark"
+                | "oBlock"
+                | "oPushBlock"
+                | "oXocBlock"
+                | "oIce"
+                | "oIceBlock"
+                | "oGrave"
+                | "oSign"
+                | "oTree"
+                | "oAltarLeft"
+                | "oAltarRight"
+                | "oSacAltarLeft"
+                | "oAlienShip"
+                | "oAlienShipFloor"
+        ) || matches!(
+            family,
+            "oArrowRepeaterR"
+                | "oArrowTrapLeft"
+                | "oSmashTrapLit"
+                | "oArrowRepeaterL"
+                | "oDoor"
+                | "oSmashTrap"
+                | "oTrapBlock"
+                | "oCeilingTrap"
+                | "oArrowTrapRight"
+                | "oSpearTrapTop"
+                | "oSpearTrapBottom"
+        ) {
+            return family;
+        }
+        family = &definition.parent;
+    }
+    object
+}
+
+fn solid_outputs_enabled(game: &Game, entity: &Entity) -> bool {
+    let family = solid_destroy_family(&entity.object);
+    if family == "oGrave" {
+        return true; // Its own event has no clean-death guard.
+    }
+    entity.value("cleanDeath") == 0.0
+        && (matches!(family, "oBlock" | "oXocBlock")
+            || (!game.flags.contains("cleanSolids")
+                && game.data.get("cleanSolids").copied().unwrap_or(0.0) == 0.0))
+}
+
+fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
+    let family = solid_destroy_family(&entity.object);
+    if family == "oXocBlock" {
+        // tile_layer_find(99,x,y) removes the individual foreground mural
+        // fragment, independently from cleanDeath and the loot branch.
+        if let Some(tile) = game.world.entities.iter_mut().find(|tile| {
+            tile.alive
+                && tile.object == "oGenerationDecoration"
+                && tile.sprite == "bgLadyXoc"
+                && tile.value("depth") == 99.0
+                && tile.pos == entity.pos
+        }) {
+            tile.alive = false;
+        }
+    }
+    if !solid_outputs_enabled(game, entity) {
+        return;
+    }
+    let city = game.flags.contains("city_of_gold") || game.flags.contains("cityOfGold");
+    let center = Vec2::new(entity.pos.x + 8.0, entity.pos.y + 8.0);
+    let rubble_style = match family {
+        "oBrick" | "oTree" => Some(("sRubble", "sRubbleSmall")),
+        "oBrickSmooth" | "oGrave" | "oSign" | "oAltarLeft" | "oAltarRight" | "oSacAltarLeft" => {
+            Some(("sRubbleTan", "sRubbleTanSmall"))
+        }
+        "oLush" | "oTemple" => Some(("sRubbleLush", "sRubbleLushSmall")),
+        "oBlock" | "oPushBlock" | "oXocBlock" if !city => Some(("sRubbleLush", "sRubbleLushSmall")),
+        _ => None,
+    };
+    if let Some((large, small)) = rubble_style {
+        for (object, sprite) in [
+            ("oRubble", large),
+            ("oRubbleSmall", small),
+            ("oRubbleSmall", small),
+        ] {
+            let pos = Vec2::new(
+                center.x + f64::from(game.rng.range(9)) - f64::from(game.rng.range(9)),
+                center.y + f64::from(game.rng.range(9)) - f64::from(game.rng.range(9)),
+            );
+            let id = game.world.spawn(object, pos);
+            game.world.entity_mut(id).unwrap().sprite = sprite.into();
+        }
+    }
+    if matches!(family, "oIce" | "oIceBlock") {
+        for _ in 0..3 {
+            let pos = Vec2::new(
+                entity.pos.x + f64::from(game.rng.range(17)),
+                entity.pos.y + f64::from(game.rng.range(17)),
+            );
+            game.world.spawn("oDrip", pos);
+        }
+    }
+    // Dark and AlienShip source events contain malformed one-argument
+    // rand(0-8) calls. Their offsets/RNG coercion remain explicitly unaudited.
+    if release_gold {
+        let gold_sprite = matches!(
+            entity.sprite.as_str(),
+            "sBrickGold" | "sLushGold" | "sDarkGold" | "sTempleGold"
+        );
+        let big_gold_sprite = matches!(
+            entity.sprite.as_str(),
+            "sBrickGoldBig" | "sLushGoldBig" | "sDarkGoldBig" | "sTempleGoldBig"
+        );
+        let (chunks, nuggets) = if matches!(family, "oBlock" | "oPushBlock" | "oXocBlock") && city {
+            (3, 1)
+        } else if matches!(family, "oBrick" | "oLush" | "oDark" | "oTemple") && gold_sprite {
+            (3, 0)
+        } else if matches!(family, "oBrick" | "oLush" | "oDark" | "oTemple")
+            && (big_gold_sprite || (family == "oTemple" && city))
+        {
+            (3, 1)
+        } else {
+            (0, 0)
+        };
+        for (object, count) in [("oGoldChunk", chunks), ("oGoldNugget", nuggets)] {
+            for _ in 0..count {
+                let pos = Vec2::new(
+                    center.x + f64::from(game.rng.range(5)) - f64::from(game.rng.range(5)),
+                    center.y + f64::from(game.rng.range(5)) - f64::from(game.rng.range(5)),
+                );
+                let vel = Vec2::new(
+                    f64::from(game.rng.range(4)) - f64::from(game.rng.range(4)),
+                    2.0 + f64::from(game.rng.range(3)),
+                );
+                let id = game.world.spawn(object, pos);
+                game.world.entity_mut(id).unwrap().vel = vel;
+            }
+        }
+    }
+    if family == "oXocBlock" && city {
+        let treasure = entity
+            .text
+            .get("treasure")
+            .map(String::as_str)
+            .unwrap_or("");
+        let gem = match treasure {
+            "Diamond" | "oDiamond" => Some("oDiamond"),
+            "Ruby" | "oRubyBig" => Some("oRubyBig"),
+            "Sapphire" | "oSapphireBig" => Some("oSapphireBig"),
+            "Emerald" | "oEmeraldBig" => Some("oEmeraldBig"),
+            _ => None,
+        };
+        if let Some(gem) = gem {
+            for _ in 0..2 {
+                game.world.spawn(gem, center);
+            }
+        }
+    }
+    if family == "oTemple"
+        && entity.id != 0
+        && entity
+            .text
+            .get("treasure")
+            .is_some_and(|treasure| treasure == "Big Ruby")
+    {
+        game.world.spawn("oRubyBig", center);
     }
 }
 
@@ -1051,6 +1256,7 @@ fn solid_parent_destroy(game: &mut Game, pos: Vec2, shop_wall: bool) {
     let upper = Vec2::new(pos.x + 8.0, pos.y - 1.0);
     let lower = Vec2::new(pos.x + 8.0, pos.y + 18.0);
     let mut lamps = Vec::new();
+    let mut graves = Vec::new();
     for entity in &mut game.world.entities {
         if !entity.alive {
             continue;
@@ -1058,6 +1264,10 @@ fn solid_parent_destroy(game: &mut Game, pos: Vec2, shop_wall: bool) {
         if matches!(entity.object.as_str(), "oSpikes" | "oTikiTorch" | "oGrave")
             && entity.sprite_bounds().contains(upper)
         {
+            if entity.object == "oGrave" {
+                graves.push(entity.clone());
+                entity.data.insert("destroy_done".into(), 1.0);
+            }
             entity.alive = false;
         } else if matches!(entity.object.as_str(), "oLamp" | "oLampRed")
             && entity.sprite_bounds().contains(lower)
@@ -1072,6 +1282,9 @@ fn solid_parent_destroy(game: &mut Game, pos: Vec2, shop_wall: bool) {
             ));
             entity.alive = false;
         }
+    }
+    for grave in graves {
+        solid_destroy_body(game, &grave, true);
     }
     for (object, pos) in lamps {
         game.world.spawn(object, pos);
@@ -1108,24 +1321,7 @@ pub(crate) fn destroy_solid_instance(game: &mut Game, id: u64) -> bool {
     if inherits_solid_destroy(&entity.object) {
         solid_parent_destroy(game, entity.pos, entity.value("shopWall") != 0.0);
     }
-    if entity.object == "oPushBlock"
-        && entity.value("cleanDeath") == 0.0
-        && !game.flags.contains("cleanSolids")
-        && (game.flags.contains("city_of_gold") || game.flags.contains("cityOfGold"))
-    {
-        for object in ["oGoldChunk", "oGoldChunk", "oGoldChunk", "oGoldNugget"] {
-            let pos = Vec2::new(
-                entity.pos.x + 8.0 + f64::from(game.rng.range(5)) - f64::from(game.rng.range(5)),
-                entity.pos.y + 8.0 + f64::from(game.rng.range(5)) - f64::from(game.rng.range(5)),
-            );
-            let velocity = Vec2::new(
-                f64::from(game.rng.range(4)) - f64::from(game.rng.range(4)),
-                2.0 + f64::from(game.rng.range(3)),
-            );
-            let gold = game.world.spawn(object, pos);
-            game.world.entity_mut(gold).unwrap().vel = velocity;
-        }
-    }
+    solid_destroy_body(game, &entity, true);
     true
 }
 
@@ -1844,6 +2040,254 @@ mod frozen_caveman_regression {
         assert_eq!(actors.len(), 1);
         assert_eq!(actors[0].timer, 200);
         assert_eq!(actors[0].state, 98);
+    }
+}
+
+#[cfg(test)]
+mod destruction_callbacks {
+    use super::*;
+
+    fn count(game: &Game, object: &str) -> usize {
+        game.world
+            .entities
+            .iter()
+            .filter(|e| e.object == object)
+            .count()
+    }
+
+    #[test]
+    fn source_rubble_consumes_twelve_draws_and_preserves_family_sprites() {
+        for (object, large, small) in [
+            ("oBrick", "sRubble", "sRubbleSmall"),
+            ("oBrickSmooth", "sRubbleTan", "sRubbleTanSmall"),
+            ("oLush", "sRubbleLush", "sRubbleLushSmall"),
+            ("oSacAltarRight", "sRubbleTan", "sRubbleTanSmall"),
+        ] {
+            let mut game = Game::shell(7, RulesPreset::Classic);
+            let mut expected = game.rng.clone();
+            for _ in 0..12 {
+                expected.next_u64();
+            }
+            let target = game.world.spawn(object, Vec2::new(80.0, 80.0));
+            assert!(destroy_solid_instance(&mut game, target));
+            assert_eq!(count(&game, "oRubble"), 1, "{object}");
+            assert_eq!(count(&game, "oRubbleSmall"), 2, "{object}");
+            assert!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oRubble")
+                    .all(|e| e.sprite == large && e.vel == Vec2::default())
+            );
+            assert!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oRubbleSmall")
+                    .all(|e| e.sprite == small && e.vel == Vec2::default())
+            );
+            assert_eq!(game.rng.next_u64(), expected.next_u64(), "{object}");
+        }
+    }
+
+    #[test]
+    fn game_step_blast_gold_brick_runs_rubble_before_gold_for_tiles_and_instances() {
+        for dynamic in [false, true] {
+            let mut game = Game::shell(7, RulesPreset::Classic);
+            game.player.pos = Vec2::new(200.0, 200.0);
+            if dynamic {
+                let id = game.world.spawn("oBrick", Vec2::new(80.0, 80.0));
+                game.world.entity_mut(id).unwrap().sprite = "sBrickGoldBig".into();
+            } else {
+                game.world.set_tile(5, 5, "oBrick");
+                let id = game.world.spawn("oTerrainMetadata", Vec2::new(88.0, 88.0));
+                game.world
+                    .entity_mut(id)
+                    .unwrap()
+                    .text
+                    .insert("terrain_sprite".into(), "sBrickGoldBig".into());
+            }
+            game.world.spawn("oExplosion", Vec2::new(88.0, 88.0));
+            game.step(&InputFrame::default());
+            assert_eq!(count(&game, "oRubble"), 1, "{dynamic}");
+            assert_eq!(count(&game, "oRubbleSmall"), 2, "{dynamic}");
+            assert_eq!(count(&game, "oGoldChunk"), 3, "{dynamic}");
+            assert_eq!(count(&game, "oGoldNugget"), 1, "{dynamic}");
+            let rubble = game
+                .world
+                .entities
+                .iter()
+                .find(|e| e.object == "oRubble")
+                .unwrap();
+            let gold = game
+                .world
+                .entities
+                .iter()
+                .find(|e| e.object == "oGoldChunk")
+                .unwrap();
+            assert!(rubble.id < gold.id);
+        }
+    }
+
+    #[test]
+    fn game_step_blast_xoc_releases_four_gold_two_gems_and_only_its_mural_fragment() {
+        for dynamic in [false, true] {
+            for (treasure, gem) in [
+                ("Diamond", "oDiamond"),
+                ("Ruby", "oRubyBig"),
+                ("Sapphire", "oSapphireBig"),
+                ("Emerald", "oEmeraldBig"),
+            ] {
+                let mut game = Game::shell(7, RulesPreset::Classic);
+                game.flags.insert("city_of_gold".into());
+                game.player.pos = Vec2::new(200.0, 200.0);
+                let source = if dynamic {
+                    game.world.spawn("oXocBlock", Vec2::new(80.0, 80.0))
+                } else {
+                    game.world.set_tile(5, 5, "oXocBlock");
+                    game.world.spawn("oTerrainMetadata", Vec2::new(88.0, 88.0))
+                };
+                game.world
+                    .entity_mut(source)
+                    .unwrap()
+                    .text
+                    .insert("treasure".into(), treasure.into());
+                game.world
+                    .entity_mut(source)
+                    .unwrap()
+                    .data
+                    .insert("embedded_treasure".into(), 1.0);
+                let mut decorations = Vec::new();
+                for (pos, depth) in [
+                    (Vec2::new(80.0, 80.0), 99.0),
+                    (Vec2::new(96.0, 80.0), 99.0),
+                    (Vec2::new(80.0, 80.0), 98.0),
+                ] {
+                    let id = game.world.spawn("oGenerationDecoration", pos);
+                    game.world.entity_mut(id).unwrap().sprite = "bgLadyXoc".into();
+                    game.world
+                        .entity_mut(id)
+                        .unwrap()
+                        .data
+                        .insert("depth".into(), depth);
+                    decorations.push(id);
+                }
+                game.world.spawn("oExplosion", Vec2::new(88.0, 88.0));
+                game.step(&InputFrame::default());
+                assert_eq!(count(&game, "oGoldChunk"), 3, "{dynamic}/{treasure}");
+                assert_eq!(count(&game, "oGoldNugget"), 1);
+                assert_eq!(count(&game, gem), 2, "{dynamic}/{treasure}");
+                assert!(game.world.entity(decorations[0]).is_none());
+                assert!(game.world.entity(decorations[1]).is_some());
+                assert!(game.world.entity(decorations[2]).is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn source_clean_guards_suppress_outputs_but_xoc_mural_cleanup_is_unconditional() {
+        for object in ["oBrick", "oIceBlock", "oPushBlock"] {
+            let mut game = Game::shell(7, RulesPreset::Classic);
+            game.flags.insert("cleanSolids".into());
+            let id = game.world.spawn(object, Vec2::new(80.0, 80.0));
+            let mut expected = game.rng.clone();
+            assert!(destroy_solid_instance(&mut game, id));
+            assert_eq!(game.world.entities.len(), 1, "{object}");
+            assert_eq!(game.rng.next_u64(), expected.next_u64());
+        }
+        // oBlock omits the global cleanSolids condition in its own event.
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.flags.insert("cleanSolids".into());
+        let block = game.world.spawn("oBlock", Vec2::new(80.0, 80.0));
+        assert!(destroy_solid_instance(&mut game, block));
+        assert_eq!(count(&game, "oRubbleSmall"), 2);
+        let xoc = game.world.spawn("oXocBlock", Vec2::new(112.0, 80.0));
+        game.world
+            .entity_mut(xoc)
+            .unwrap()
+            .data
+            .insert("cleanDeath".into(), 1.0);
+        let mural = game
+            .world
+            .spawn("oGenerationDecoration", Vec2::new(112.0, 80.0));
+        game.world.entity_mut(mural).unwrap().sprite = "bgLadyXoc".into();
+        game.world
+            .entity_mut(mural)
+            .unwrap()
+            .data
+            .insert("depth".into(), 99.0);
+        assert!(destroy_solid_instance(&mut game, xoc));
+        assert!(game.world.entity(mural).is_none());
+        assert_eq!(count(&game, "oRubbleSmall"), 2);
+    }
+
+    #[test]
+    fn game_step_blast_ice_families_emit_three_inherited_drips() {
+        for object in ["oIce", "oIceBlock"] {
+            for dynamic in [false, true] {
+                let mut game = Game::shell(7, RulesPreset::Classic);
+                game.player.pos = Vec2::new(200.0, 200.0);
+                if dynamic {
+                    game.world.spawn(object, Vec2::new(80.0, 80.0));
+                } else {
+                    game.world.set_tile(5, 5, object);
+                }
+                game.world.spawn("oExplosion", Vec2::new(88.0, 88.0));
+                game.step(&InputFrame::default());
+                assert_eq!(count(&game, "oDrip"), 3, "{object}/{dynamic}");
+                assert!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(|e| e.object == "oDrip")
+                        .all(|e| e.vel.y == 0.6)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn inherited_support_destroy_invokes_graves_own_rubble_callback() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        let support = game.world.spawn("oThinIce", Vec2::new(80.0, 80.0));
+        let grave = game.world.spawn("oGrave", Vec2::new(80.0, 64.0));
+        assert!(destroy_solid_instance(&mut game, support));
+        assert!(game.world.entity(grave).is_none());
+        assert_eq!(count(&game, "oRubble"), 1);
+        assert_eq!(count(&game, "oRubbleSmall"), 2);
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oRubble")
+                .all(|e| e.sprite == "sRubbleTan")
+        );
+    }
+
+    #[test]
+    fn game_step_explosion_executes_jar_and_skull_destroy_callbacks() {
+        for object in ["oJar", "oSkull"] {
+            let mut game = Game::shell(7, RulesPreset::Classic);
+            game.player.pos = Vec2::new(200.0, 200.0);
+            let item = game.world.spawn(object, Vec2::new(88.0, 88.0));
+            game.world.spawn("oExplosion", Vec2::new(88.0, 88.0));
+            game.step(&InputFrame::default());
+            assert!(game.world.entity(item).is_none());
+            assert_eq!(count(&game, "oSmokePuff"), 1);
+            let fragments = count(
+                &game,
+                if object == "oJar" {
+                    "oRubbleSmall"
+                } else {
+                    "oBone"
+                },
+            );
+            if object == "oJar" {
+                assert_eq!(fragments, 3);
+            } else {
+                assert!((1..=2).contains(&fragments));
+            }
+        }
     }
 }
 

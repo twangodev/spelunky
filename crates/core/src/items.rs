@@ -95,6 +95,12 @@ pub fn init_entity(entity: &mut Entity) {
     utility::init_entity(entity);
 }
 
+/// Early oPlayer1 Step work runs before its light-distance sampling and
+/// character movement. Item use and ordinary item updates remain later.
+pub(crate) fn pre_player_tick(game: &mut Game) {
+    weapons::pre_tick(game);
+}
+
 pub fn tick(game: &mut Game, input: &InputFrame) {
     for entity in &mut game.world.entities {
         init_entity(entity);
@@ -108,7 +114,6 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         }
     }
     utility::pre_tick(game);
-    weapons::pre_tick(game);
     game.player
         .data
         .insert("attack_held".into(), f64::from(input.attack));
@@ -330,7 +335,9 @@ fn pick_up(game: &mut Game) {
             entity.alive
                 && !entity.held
                 && entity.value("canPickUp") != 0.0
-                && (is_item(&entity.object) || entity.state >= 98)
+                && (is_item(&entity.object)
+                    || (entity.object == "oDamsel" && entity.state != 4)
+                    || (crate::enemies::is_enemy(&entity.object) && entity.state >= 98))
                 && area.intersects(entity.sprite_bounds())
                 && !game
                     .world
@@ -566,7 +573,7 @@ fn ordinary_body(name: &str) -> bool {
         )
 }
 
-fn item_body_active(game: &Game, entity: &Entity) -> bool {
+pub(crate) fn item_body_active(game: &Game, entity: &Entity) -> bool {
     entity.pos.x > game.camera.x - 16.0
         && entity.pos.x < game.camera.x + VIEW_WIDTH + 16.0
         && entity.pos.y > game.camera.y - 16.0
@@ -1000,14 +1007,43 @@ pub fn break_item(game: &mut Game, id: u64) {
     let pieces = entity.data.get("breakPieces").copied().unwrap_or(1.0) != 0.0;
     let left = entity.value("colLeft") != 0.0;
     let right = entity.value("colRight") != 0.0;
+    let top = entity.value("colTop") != 0.0;
+    let skull = entity.object == "oSkull";
     if game.player.held == Some(id) {
         game.player.held = None;
     }
     if !pieces {
         return;
     }
-    if jar || entity.object == "oSkull" {
+    if jar || skull {
         game.sound("sndBreak", pos);
+        game.world.spawn("oSmokePuff", pos);
+        let mut index = 0;
+        // Skull's source condition evaluates rand(1,2) on every loop test,
+        // including the final failed comparison. Jar has a fixed three pieces.
+        while index < if jar { 3 } else { 1 + game.rng.range(2) } {
+            let object = if jar { "oRubbleSmall" } else { "oBone" };
+            let id = game
+                .world
+                .spawn(object, Vec2::new(pos.x - 2.0, pos.y - 2.0));
+            let mut piece = game.world.entity(id).unwrap().clone();
+            if skull {
+                // instance_create completes Bone's random Create defaults
+                // before this Destroy event assigns the launch velocities.
+                crate::world_events::initialize_detritus(game, &mut piece);
+            }
+            piece.vel.x = if left {
+                f64::from(1 + game.rng.range(3))
+            } else if right {
+                -f64::from(1 + game.rng.range(3))
+            } else {
+                f64::from(1 + game.rng.range(3)) - f64::from(1 + game.rng.range(3))
+            };
+            piece.vel.y = f64::from(game.rng.range(4)) * if top { 1.0 } else { -1.0 };
+            let slot = game.world.entities.iter_mut().find(|e| e.id == id).unwrap();
+            *slot = piece;
+            index += 1;
+        }
     }
     if jar {
         let loot = if game.rng.chance(1, 3) {
@@ -1237,6 +1273,150 @@ mod tests {
         );
         assert_eq!(game.world.entity(rock).unwrap().vel, Vec2::new(1.0, 2.0));
         assert_eq!(game.world.entity(jar).unwrap().pos, Vec2::new(381.0, 102.0));
+    }
+
+    #[test]
+    fn game_step_naturally_picks_up_living_damsel_but_not_exiting_or_living_enemy() {
+        for (object, state, expected) in [
+            ("oDamsel", 0, true),
+            ("oDamsel", 4, false),
+            ("oCaveman", 0, false),
+        ] {
+            let mut game = game();
+            for x in 0..game.world.width {
+                game.world.set_tile(x, 8, "oHardBlock");
+            }
+            game.player.pos = Vec2::new(100.0, 120.0);
+            game.player.grounded = true;
+            game.player.state = PlayerState::Standing;
+            let id = game.world.spawn(object, Vec2::new(104.0, 120.0));
+            game.world.entity_mut(id).unwrap().state = state;
+            game.step(&InputFrame {
+                down: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            assert_eq!(game.player.held, expected.then_some(id), "{object}/{state}");
+        }
+    }
+
+    #[test]
+    fn jar_fragments_consume_source_random_draws_before_loot() {
+        let mut game = Game::shell(2, RulesPreset::Classic);
+        let mut expected_rng = game.rng.clone();
+        // Three unobstructed fragments consume three draws each. Seed 2 then
+        // fails all seven loot branches: this was a Sapphire before debris.
+        for _ in 0..16 {
+            expected_rng.next_u64();
+        }
+        let jar = game.world.spawn("oJar", Vec2::new(100.0, 100.0));
+        break_item(&mut game, jar);
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oSmokePuff")
+                .count(),
+            1
+        );
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oRubbleSmall")
+                .count(),
+            3
+        );
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .all(|e| matches!(e.object.as_str(), "oJar" | "oSmokePuff" | "oRubbleSmall"))
+        );
+        assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
+        let entity_count = game.world.entities.len();
+        break_item(&mut game, jar);
+        assert_eq!(game.world.entities.len(), entity_count);
+    }
+
+    #[test]
+    fn skull_creation_precedes_launch_overrides_and_loop_condition_is_resampled() {
+        let mut game = Game::shell(2, RulesPreset::Classic);
+        game.player.pos = Vec2::new(200.0, 200.0);
+        let mut expected_rng = game.rng.clone();
+        // Seed 2 executes two bodies: each has four Bone Create draws plus
+        // three launch draws, with three separate loop-condition draws.
+        for _ in 0..17 {
+            expected_rng.next_u64();
+        }
+        let skull = game.world.spawn("oSkull", Vec2::new(100.0, 100.0));
+        break_item(&mut game, skull);
+        let bones: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.object == "oBone")
+            .collect();
+        assert_eq!(bones.len(), 2);
+        assert_eq!(bones[0].vel, Vec2::new(-2.0, -3.0));
+        assert_eq!(bones[1].vel, Vec2::new(-1.0, -1.0));
+        assert!(
+            bones
+                .iter()
+                .all(|e| e.value("world_effect_initialized") == 1.0)
+        );
+        let ids = [bones[0].id, bones[1].id];
+        assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
+        game.step(&InputFrame::default());
+        assert_eq!(
+            game.world.entity(ids[0]).unwrap().pos,
+            Vec2::new(96.0, 95.0)
+        );
+        assert_eq!(
+            game.world.entity(ids[1]).unwrap().pos,
+            Vec2::new(97.0, 97.0)
+        );
+    }
+
+    #[test]
+    fn game_step_floor_breaks_emit_source_jar_and_skull_fragments() {
+        for object in ["oJar", "oSkull"] {
+            let mut game = game();
+            game.player.pos = Vec2::new(200.0, 200.0);
+            for x in 0..game.world.width {
+                game.world.set_tile(x, 6, "oHardBlock");
+            }
+            let id = game.world.spawn(object, Vec2::new(80.0, 80.0));
+            game.world.entity_mut(id).unwrap().vel.y = 6.0;
+            for _ in 0..3 {
+                game.step(&InputFrame::default());
+            }
+            assert!(game.world.entity(id).is_none());
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oSmokePuff")
+                    .count(),
+                1
+            );
+            let fragment = if object == "oJar" {
+                "oRubbleSmall"
+            } else {
+                "oBone"
+            };
+            let count = game
+                .world
+                .entities
+                .iter()
+                .filter(|e| e.object == fragment)
+                .count();
+            if object == "oJar" {
+                assert_eq!(count, 3);
+            } else {
+                assert!((1..=2).contains(&count));
+            }
+        }
     }
 
     #[test]
