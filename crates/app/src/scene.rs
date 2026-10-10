@@ -1970,19 +1970,24 @@ mod tests {
 
     #[test]
     fn actual_snake_whip_kill_draws_opaque_blood_at_fractional_refresh() {
-        use spelunky_core::{InputFrame, World};
+        use spelunky_core::InputFrame;
 
         let atlas = Atlas::load().unwrap();
-        let mut game = Game::shell(42, RulesPreset::Classic);
-        game.world = World::new(20, 16, Area::Mines, 1);
-        game.world.name = "rLevel".into();
-        for x in 0..20 {
-            game.world.set_tile(x, 10, "oBlock");
+        let mut level = spelunky_core::level::Level::default();
+        level.tiles[8 * 40 + 4] = '@';
+        level.tiles[8 * 40 + 6] = 'n';
+        for x in 0..40 {
+            level.tiles[9 * 40 + x] = '1';
         }
-        game.player.pos = Vec2::new(80.0, 152.0);
-        game.player.previous_pos = game.player.pos;
-        game.player.facing = 1;
-        let snake = game.spawn("oSnake", Vec2::new(104.0, 144.0));
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.load_custom(&level, "blood-draw", "");
+        let snake = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oSnake")
+            .unwrap()
+            .id;
         game.step(&InputFrame {
             right: true,
             attack: true,
