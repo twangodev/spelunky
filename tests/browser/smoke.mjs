@@ -107,7 +107,7 @@ function instrument() {
 async function ready(page) {
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => document.querySelector('#status')?.hidden || document.querySelector('#status.error'), null, { timeout: 120000 });
-  assert.equal(await page.locator('#status').evaluate(element => element.hidden), true, await page.locator('#status').innerText());
+  assert.equal(await page.locator('#status').evaluate(element => element.hidden), true, await page.locator('#status').textContent());
   await page.waitForFunction(() => window.__smoke.draws > 2, null, { timeout: 120000 });
   await page.locator('canvas').focus();
 }
@@ -185,7 +185,7 @@ try {
       });
       await ready(page);
       assert.match(await page.title(), /Spelunky Classic/);
-      assert.match(await page.locator('#attribution').innerText(), /Derek Yu \/ Mossmouth/);
+      assert.match(await page.locator('#attribution').textContent(), /Derek Yu \/ Mossmouth/);
       const license = await page.request.get(new URL('assets/COPYING.txt', base).href);
       assert.equal(license.status(), 200);
       assert.match(await license.text(), /Spelunky/);
@@ -341,7 +341,7 @@ try {
       const unavailablePage = await unavailable.newPage();
       await unavailablePage.goto(base);
       await unavailablePage.locator('#status.error').waitFor();
-      assert.match(await unavailablePage.locator('#status').innerText(), /WebGL 2 is required/);
+      assert.match(await unavailablePage.locator('#status').textContent(), /WebGL 2 is required/);
       await screenshot(unavailablePage, 'webgl-unavailable', result);
       await unavailable.close();
       assert.deepEqual(result.errors, []);
