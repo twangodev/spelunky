@@ -1695,7 +1695,8 @@ fn test_snapshot(
     let Some(game) = game else {
         return serde_json::json!({ "screen": format!("{screen:?}"), "player": null });
     };
-    let alpha = if game.flags.contains("render_discontinuity") {
+    let presentation = game.presentation();
+    let alpha = if presentation.flags.contains("render_discontinuity") {
         1.
     } else {
         timing.alpha()
@@ -1708,8 +1709,9 @@ fn test_snapshot(
         }
     };
     let player = &game.player;
-    let rendered = interpolate(player.previous_pos, player.pos);
-    let camera = interpolate(game.previous_camera, game.camera);
+    let drawn_player = &presentation.player;
+    let rendered = interpolate(drawn_player.previous_pos, drawn_player.pos);
+    let camera = interpolate(presentation.previous_camera, presentation.camera);
     let screen_pos = spelunky_core::Vec2::new(rendered.x - camera.x, rendered.y - camera.y);
     let screen_x = if pixel_snap {
         screen_pos.x.round()
@@ -1779,11 +1781,17 @@ fn test_snapshot(
             "bombs": player.bombs, "ropes": player.ropes,
             "dist_to_nearest_light_source": player.data.get("dist_to_nearest_light_source"),
         },
-        "rendered": { "x": rendered.x, "y": rendered.y, "screenX": screen_x, "screenY": screen_y },
+        "rendered": {
+            "x": rendered.x, "y": rendered.y, "screenX": screen_x, "screenY": screen_y,
+            "previousX": drawn_player.previous_pos.x, "previousY": drawn_player.previous_pos.y,
+            "currentX": drawn_player.pos.x, "currentY": drawn_player.pos.y,
+            "sprite": drawn_player.sprite, "frame": drawn_player.animation,
+        },
         "camera": {
-            "x": game.camera.x, "y": game.camera.y,
-            "previousX": game.previous_camera.x, "previousY": game.previous_camera.y,
+            "x": presentation.camera.x, "y": presentation.camera.y,
+            "previousX": presentation.previous_camera.x, "previousY": presentation.previous_camera.y,
             "renderedX": camera.x, "renderedY": camera.y,
+            "authoritativeX": game.camera.x, "authoritativeY": game.camera.y,
         },
     })
 }
@@ -2685,6 +2693,126 @@ mod tests {
         let teleported = test_snapshot(Screen::Playing, Some(&game), &timing, false);
         assert_eq!(teleported["alpha"], 1.);
         assert_eq!(teleported["rendered"]["x"], teleported["player"]["x"]);
+    }
+    fn camera_follow_fixture() -> Game {
+        use spelunky_core::{RulesPreset, Vec2, World};
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.world = World::new(40, 40, Area::Mines, 1);
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 30, "oBlock");
+        }
+        game.player.pos = Vec2::new(224., 248.);
+        game.player.previous_pos = game.player.pos;
+        game.player.vel = Vec2::new(3., 1.);
+        game.player.state = spelunky_core::PlayerState::Falling;
+        game.player.sprite = "sFallLeft".into();
+        game.camera = Vec2::new(32., 104.);
+        game.previous_camera = game.camera;
+        game
+    }
+    fn drawn_player_anchor(game: &Game, alpha: f64, atlas: &Atlas) -> [f64; 2] {
+        let player = &game.presentation().player;
+        let frame = atlas.sprite(&player.sprite, player.animation).unwrap();
+        let mut uv = frame.uv;
+        let mirrored = player.facing > 0;
+        if mirrored {
+            uv[0] += uv[2];
+            uv[2] = -uv[2];
+        }
+        let quads = scene::game_scene(game, alpha, false, atlas);
+        let quad = quads.iter().find(|quad| quad.uv == uv).unwrap();
+        [
+            f64::from(
+                quad.rect[0]
+                    + if mirrored {
+                        frame.size[0] - frame.origin[0]
+                    } else {
+                        frame.origin[0]
+                    },
+            ),
+            f64::from(quad.rect[1] + frame.origin[1]),
+        ]
+    }
+    #[test]
+    fn camera_follow_actual_scene_stays_continuous_across_high_refresh_ticks() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = camera_follow_fixture();
+        for _ in 0..4 {
+            let previous_camera = game.camera;
+            game.step(&spelunky_core::InputFrame {
+                right: true,
+                ..Default::default()
+            });
+            assert!(game.camera.x > previous_camera.x);
+            assert!(game.camera.y > previous_camera.y);
+            let hash = game.state_hash();
+            for alpha in [0., 0.125, 0.25, 0.5, 0.875, 1.] {
+                let anchor = drawn_player_anchor(&game, alpha, &atlas);
+                assert!((anchor[0] - 192.).abs() < 0.0001, "{alpha}: {anchor:?}");
+                assert!((anchor[1] - 144.).abs() < 0.0001, "{alpha}: {anchor:?}");
+                let timing = HostTiming {
+                    alpha,
+                    history_ready: true,
+                    ..Default::default()
+                };
+                let snapshot = test_snapshot(Screen::Playing, Some(&game), &timing, false);
+                assert!(
+                    (snapshot["rendered"]["screenX"].as_f64().unwrap() - anchor[0]).abs() < 0.0001
+                );
+                assert!(
+                    (snapshot["rendered"]["screenY"].as_f64().unwrap() - anchor[1]).abs() < 0.0001
+                );
+                assert_eq!(
+                    snapshot["rendered"]["frame"],
+                    game.presentation().player.animation
+                );
+            }
+            assert_eq!(game.state_hash(), hash, "presentation is read-only");
+        }
+    }
+    #[test]
+    fn camera_follow_room_entry_and_teleport_keep_snap_controls() {
+        use spelunky_core::{InputFrame, PlayerState, RulesPreset, Vec2};
+        let atlas = Atlas::load().unwrap();
+        let mut game = camera_follow_fixture();
+        game.step(&InputFrame {
+            right: true,
+            ..Default::default()
+        });
+        assert!(game.draw_view.is_some());
+        let mut room = spelunky_core::level::Level::default();
+        room.set_tile(1, 1, '@').unwrap();
+        game.load_custom(&room, "new-room", "");
+        assert!(game.draw_view.is_none());
+        assert_eq!(game.camera, game.previous_camera);
+        assert_eq!(game.player.pos, game.player.previous_pos);
+        let room_anchor = drawn_player_anchor(&game, 1., &atlas);
+        for alpha in [0., 0.125, 0.5, 0.875] {
+            assert_eq!(drawn_player_anchor(&game, alpha, &atlas), room_anchor);
+        }
+
+        let mut game = Game::shell(11, RulesPreset::Classic);
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 11, "oBlock");
+        }
+        game.player.pos = Vec2::new(160., 168.);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        let teleporter = game.spawn("oTeleporter", game.player.pos);
+        game.world.entity_mut(teleporter).unwrap().held = true;
+        game.player.held = Some(teleporter);
+        game.step(&InputFrame {
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert!(game.flags.contains("render_discontinuity"));
+        assert!(game.player.pos.x > 160.);
+        assert_eq!(game.presentation().camera, game.camera);
+        let target = drawn_player_anchor(&game, 1., &atlas);
+        for alpha in [0., 0.125, 0.5, 0.875] {
+            assert_eq!(drawn_player_anchor(&game, alpha, &atlas), target);
+        }
     }
     #[test]
     fn browser_snapshot_preserves_source_darkness_and_cached_light_distances() {

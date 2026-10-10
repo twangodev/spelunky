@@ -209,6 +209,13 @@ impl Game {
         self.flags.remove("render_discontinuity");
         dispatcher::step(self, input);
         self.update_camera();
+        // Draw freezes actors before Animation callbacks. Camera following
+        // finishes afterward, so retain that actor snapshot while supplying
+        // the camera endpoints needed to interpolate the same tick's view.
+        if let Some(draw) = self.draw_view.as_mut() {
+            draw.previous_camera = self.previous_camera;
+            draw.camera = self.camera;
+        }
     }
 
     /// Start a destination using the existing source RNG and persistent profile.
@@ -493,6 +500,32 @@ mod tests {
         game.player.pos = Vec2::new(40.0, 40.0);
         game.player.previous_pos = game.player.pos;
         game
+    }
+    #[test]
+    fn camera_follow_reaches_draw_snapshot_without_advancing_frozen_actor() {
+        let mut game = flat_game();
+        game.player.pos.x = 224.0;
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Running;
+        game.player.grounded = true;
+        game.player.vel.x = 3.0;
+        game.camera.x = 32.0;
+        game.previous_camera = game.camera;
+        let before_camera = game.camera;
+        game.step(&InputFrame {
+            right: true,
+            ..Default::default()
+        });
+        assert!(game.camera.x > before_camera.x);
+        let drawn = game.presentation();
+        assert_eq!(drawn.previous_camera, before_camera);
+        assert_eq!(drawn.camera, game.camera);
+        assert_eq!(drawn.player.pos, game.player.pos);
+        assert!(drawn.player.image_speed() > 0.0);
+        assert_ne!(
+            drawn.player.animation, game.player.animation,
+            "following the camera must not replace the pre-Animation actor"
+        );
     }
     #[test]
     fn gem_collection_delay_advances_in_real_simulation() {
