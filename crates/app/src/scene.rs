@@ -96,11 +96,14 @@ fn sprite(
     } else {
         x - frame.origin[0]
     };
-    if left + width < 0.0
-        || left > 320.0
-        || y - frame.origin[1] + height < 0.0
-        || y - frame.origin[1] > 240.0
-    {
+    // Entity rotation is applied after this helper. Cull only when even the
+    // furthest rotated corner cannot reach the viewport; an unrotated AABB
+    // incorrectly drops projectiles that turn into view at a screen edge.
+    let radius = frame.origin[0]
+        .abs()
+        .max((width - frame.origin[0]).abs())
+        .hypot(frame.origin[1].abs().max((height - frame.origin[1]).abs()));
+    if x + radius < 0.0 || x - radius > 320.0 || y + radius < 0.0 || y - radius > 240.0 {
         return;
     }
     quads.push(DrawQuad {
@@ -169,6 +172,104 @@ fn entity_draw_x(object: &str, x: f32, mirrored: bool) -> f32 {
     }
 }
 
+fn entity_mirrored(entity: &Entity, name: &str) -> bool {
+    // These objects override oEnemy's Draw event and use their already
+    // directional sprite without the inherited horizontal flip.
+    if matches!(entity.object.as_str(), "oJaws" | "oYetiKing" | "oTombLord") {
+        false
+    } else if entity.data.contains_key("image_xscale") {
+        entity.value("image_xscale") < 0.0
+    } else {
+        (entity.object == "oAlien" || name.ends_with("Left") || name.ends_with('L'))
+            && entity.facing > 0
+    }
+}
+
+fn entity_draw_extras(
+    layer: &mut Vec<DrawQuad>,
+    game: &Game,
+    entity: &Entity,
+    atlas: &Atlas,
+    x: f32,
+    y: f32,
+) {
+    if entity.object == "oJaws" {
+        let damage = if entity.health < 10 {
+            3
+        } else if entity.health < 20 {
+            2
+        } else {
+            1
+        };
+        let (side, offset) = match entity.sprite.as_str() {
+            "sJawsLeft" => ("L", 16.0),
+            "sJawsRight" => ("R", -48.0),
+            _ => ("", 0.0), // The turn animation already contains the body.
+        };
+        if !side.is_empty() {
+            sprite(
+                layer,
+                atlas,
+                &format!("sJawsBody{damage}{side}"),
+                0.0,
+                x + offset,
+                y,
+                false,
+                WHITE,
+            );
+        }
+    }
+    if matches!(entity.object.as_str(), "oShopkeeper" | "oShopkeeper2")
+        && entity.value("has_gun") > 0.0
+        && !matches!(entity.state, 0 | 5)
+    {
+        let right = entity.facing > 0;
+        sprite(
+            layer,
+            atlas,
+            if right {
+                "sShotgunRight"
+            } else {
+                "sShotgunLeft"
+            },
+            0.0,
+            x + if right { 10.0 } else { 6.0 },
+            y + 10.0,
+            false,
+            WHITE,
+        );
+    }
+    if catalog::is_a(&entity.object, "oItem") && entity.value("cost") > 0.0 {
+        // Source increments cimg in Draw at its fixed 30 Hz. Keep this visual
+        // animation on simulation time when rendering at higher refresh rates.
+        sprite(
+            layer,
+            atlas,
+            "sSmallCollect",
+            entity.age.saturating_sub(1) as f64,
+            x,
+            y - 12.0,
+            false,
+            WHITE,
+        );
+    }
+    if entity.object == "oDice"
+        && entity.value("rolled") == 0.0
+        && game.player.data.get("bet").copied().unwrap_or(0.0) > 0.0
+    {
+        sprite(
+            layer,
+            atlas,
+            "sRedArrowDown",
+            0.0,
+            x,
+            y - 12.0,
+            false,
+            WHITE,
+        );
+    }
+}
+
 /// Alpha interpolates positions only. Sprite frames and all HUD values are
 /// simulation state, so presentation never changes gameplay or animation speed.
 pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> Vec<DrawQuad> {
@@ -183,7 +284,7 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
     let mut quads = Vec::with_capacity(1000);
     background(&mut quads, game, camera, pixel_snap, atlas);
     let mut layers: Vec<(i32, u64, Vec<DrawQuad>)> = Vec::new();
-    let terrain_sprites: BTreeMap<(usize, usize), &str> = game
+    let terrain_sprites: BTreeMap<(usize, usize), (&str, f64)> = game
         .world
         .entities
         .iter()
@@ -200,7 +301,7 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
                         (entity.pos.x / 16.0).floor() as usize,
                         (entity.pos.y / 16.0).floor() as usize,
                     ),
-                    name.as_str(),
+                    (name.as_str(), entity.animation),
                 )
             })
         })
@@ -211,9 +312,9 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
         }
         let tile_x = index % game.world.width.max(1);
         let tile_y = index / game.world.width.max(1);
-        let Some(name) = terrain_sprites
-            .get(&(tile_x, tile_y))
-            .copied()
+        let override_sprite = terrain_sprites.get(&(tile_x, tile_y)).copied();
+        let Some(name) = override_sprite
+            .map(|(name, _)| name)
             .or_else(|| catalog::sprite(&tile.object))
             .or_else(|| {
                 (tile.object == "oSolid").then_some(match game.world.area {
@@ -236,8 +337,72 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
             continue;
         }
         let mut layer = Vec::with_capacity(1);
-        sprite(&mut layer, atlas, name, 0.0, x, y, false, WHITE);
+        sprite(
+            &mut layer,
+            atlas,
+            name,
+            override_sprite.map_or(0.0, |(_, frame)| frame),
+            x,
+            y,
+            false,
+            WHITE,
+        );
         layers.push((definition.map_or(100, |def| def.depth), index as u64, layer));
+    }
+    for metadata in game
+        .world
+        .entities
+        .iter()
+        .filter(|entity| entity.alive && entity.object == "oTerrainMetadata")
+    {
+        let frozen = metadata.value("frozen_caveman") != 0.0;
+        let embedded = metadata.value("embedded_treasure") != 0.0;
+        if !frozen && !embedded {
+            continue;
+        }
+        let (name, position, depth) = if frozen {
+            // oIce Create places oFrozenCaveman at the tile's top left. Its
+            // depth 100 draws it above the translucent ice at depth 110.
+            (
+                "sFrozenCaveman",
+                Vec2::new(metadata.pos.x - 8.0, metadata.pos.y - 8.0),
+                100,
+            )
+        } else {
+            let Some(object) = metadata.text.get("treasure") else {
+                continue;
+            };
+            let object = match object.as_str() {
+                "Big Ruby" => "oRubyBig",
+                "Big Sapphire" => "oSapphireBig",
+                "Big Emerald" => "oEmeraldBig",
+                "Ruby" => "oRuby",
+                "Sapphire" => "oSapphire",
+                "Emerald" => "oEmerald",
+                "Diamond" => "oDiamond",
+                name => name,
+            };
+            let treasure = catalog::is_a(object, "oTreasure");
+            let spectacles = game.player.has("Spectacles");
+            if !spectacles && !(treasure && game.player.has("UdjatEye")) {
+                continue;
+            }
+            let Some(name) = catalog::sprite(object) else {
+                continue;
+            };
+            (
+                name,
+                Vec2::new(
+                    metadata.pos.x + metadata.value("treasure_dx"),
+                    metadata.pos.y + metadata.value("treasure_dy"),
+                ),
+                if treasure { 0 } else { 51 },
+            )
+        };
+        let [x, y] = screen(position, position, camera, alpha, pixel_snap);
+        let mut layer = Vec::with_capacity(1);
+        sprite(&mut layer, atlas, name, 0.0, x, y, false, WHITE);
+        layers.push((depth, 1_000_000 + metadata.id, layer));
     }
     for entity in game.world.entities.iter().filter(|entity| entity.alive) {
         if entity.data.get("visible") == Some(&0.0)
@@ -292,12 +457,7 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
             }
             continue;
         }
-        let scale = entity.value("image_xscale");
-        let mirror = if entity.data.contains_key("image_xscale") {
-            scale < 0.0
-        } else {
-            (name.ends_with("Left") || name.ends_with('L')) && entity.facing > 0
-        };
+        let mirror = entity_mirrored(entity, name);
         let alpha = entity
             .data
             .get("image_alpha")
@@ -326,6 +486,7 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
                 ];
             }
         }
+        entity_draw_extras(&mut layer, game, entity, atlas, x, y);
         let depth = entity.data.get("depth").map_or_else(
             || definition.map_or(60, |def| def.depth),
             |depth| *depth as i32,
@@ -333,9 +494,7 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
         layers.push((depth, 1_000_000 + entity.id, layer));
     }
     let player = &game.player;
-    if player.data.get("hidden") != Some(&1.0)
-        && (player.invincible == 0 || (game.tick / 3).is_multiple_of(2))
-    {
+    if player.data.get("hidden") != Some(&1.0) && player.data.get("blink_toggle") != Some(&1.0) {
         let [x, y] = screen(player.previous_pos, player.pos, camera, alpha, pixel_snap);
         let mut layer = Vec::with_capacity(3);
         let jetpack = player.has("Jetpack") || player.has("jetpack");
@@ -432,10 +591,41 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
             player.facing > 0,
             WHITE,
         );
+        if player.data.get("bow_armed").copied().unwrap_or(0.0) > 0.0 {
+            let bomb = player.data.get("bow_bomb_armed").copied().unwrap_or(0.0) > 0.0;
+            let right = player.facing > 0;
+            let name = match (bomb, right) {
+                (false, false) => "sArrowLeft",
+                (false, true) => "sArrowRight",
+                (true, false) => "sBombArrowLeft",
+                (true, true) => "sBombArrowRight",
+            };
+            sprite(
+                &mut layer,
+                atlas,
+                name,
+                if bomb && player.data.get("bow_arrow_toggle").copied().unwrap_or(0.0) == 0.0 {
+                    1.0
+                } else {
+                    0.0
+                },
+                x + if right { 4.0 } else { -4.0 },
+                y + if bomb { 2.0 } else { 1.0 },
+                false,
+                WHITE,
+            );
+        }
         if jetpack && climbing {
             sprite(&mut layer, atlas, "sJetpackBack", 0.0, x, y, false, WHITE);
         }
-        layers.push((50, u64::MAX, layer));
+        let depth = player.data.get("depth").copied().unwrap_or_else(|| {
+            if player.data.get("burning").copied().unwrap_or(0.0) > 0.0 {
+                999.0
+            } else {
+                50.0
+            }
+        }) as i32;
+        layers.push((depth, u64::MAX, layer));
     }
     // GameMaker draws larger depths first. Stable IDs break ties deterministically.
     layers.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
@@ -807,6 +997,11 @@ fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, atlas: &Atlas) {
 }
 
 fn hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas) {
+    // oPlayer1's death handler clears global.drawHUD while the corpse and
+    // surrounding actors continue to simulate behind the game-over text.
+    if game.player.state == PlayerState::Dead {
+        return;
+    }
     if game.flags.contains("hub") {
         hub_hud(quads, game, atlas);
         return;
@@ -927,6 +1122,393 @@ fn hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas) {
 mod tests {
     use super::*;
     use spelunky_core::RulesPreset;
+
+    #[test]
+    fn jaws_keeps_complete_body_at_source_damage_stages_and_directions() {
+        let atlas = Atlas::load().unwrap();
+        for (health, damage) in [(40, 1), (20, 1), (19, 2), (10, 2), (9, 3)] {
+            for (head, side, offset) in [("sJawsLeft", "L", 16.0), ("sJawsRight", "R", -48.0)] {
+                let mut game = Game::shell(1, RulesPreset::Classic);
+                let id = game.world.spawn("oJaws", Vec2::new(120.0, 80.0));
+                let jaws = game.world.entity_mut(id).unwrap();
+                jaws.sprite = head.into();
+                jaws.health = health;
+                jaws.facing = 1;
+                let quads = game_scene(&game, 1.0, false, &atlas);
+                let body = atlas
+                    .sprite(&format!("sJawsBody{damage}{side}"), 0.0)
+                    .unwrap();
+                let quad = quads
+                    .iter()
+                    .find(|q| q.uv == body.uv)
+                    .expect("complete Mega Mouth body");
+                assert_eq!(
+                    quad.rect,
+                    [
+                        120.0 + offset - body.origin[0],
+                        80.0 - body.origin[1],
+                        48.0,
+                        32.0
+                    ]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn boss_custom_draw_does_not_inherit_enemy_flip_but_alien_does() {
+        let atlas = Atlas::load().unwrap();
+        for (object, name) in [
+            ("oYetiKing", "sYetiKingTurnL"),
+            ("oTombLord", "sTombLordTurnL"),
+            ("oAlien", "sAlien"),
+        ] {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            let id = game.world.spawn(object, Vec2::new(120.0, 80.0));
+            let entity = game.world.entity_mut(id).unwrap();
+            entity.sprite = name.into();
+            entity.facing = 1;
+            let frame = atlas.sprite(name, 0.0).unwrap();
+            let quads = game_scene(&game, 1.0, false, &atlas);
+            let quad = quads
+                .iter()
+                .find(|q| {
+                    q.uv[1] == frame.uv[1]
+                        && q.uv[3] == frame.uv[3]
+                        && q.rect[1] == 80.0 - frame.origin[1]
+                })
+                .unwrap();
+            assert_eq!(quad.uv[2].is_sign_negative(), object == "oAlien");
+            assert_eq!(quad.rect[0], 120.0 - frame.origin[0]);
+        }
+    }
+
+    #[test]
+    fn armed_shopkeeper_draws_weapon_only_in_source_active_states() {
+        let atlas = Atlas::load().unwrap();
+        for (state, armed, visible) in [
+            (0, true, false),
+            (5, true, false),
+            (2, true, true),
+            (2, false, false),
+        ] {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            let id = game.world.spawn("oShopkeeper", Vec2::new(120.0, 80.0));
+            let keeper = game.world.entity_mut(id).unwrap();
+            keeper.state = state;
+            keeper.facing = 1;
+            keeper
+                .data
+                .insert("has_gun".into(), if armed { 1.0 } else { 0.0 });
+            let gun = atlas.sprite("sShotgunRight", 0.0).unwrap();
+            let quads = game_scene(&game, 1.0, false, &atlas);
+            assert_eq!(
+                quads.iter().any(|q| q.uv == gun.uv
+                    && q.rect[..2] == [130.0 - gun.origin[0], 90.0 - gun.origin[1]]),
+                visible
+            );
+        }
+    }
+
+    #[test]
+    fn spectacles_reveal_items_udjat_reveals_gems_and_frozen_cavemen_are_visible() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        for (x, object) in [(56.0, "oRubyBig"), (88.0, "oJetpack")] {
+            game.world.set_tile((x / 16.0) as usize, 4, "oBrick");
+            let id = game.world.spawn("oTerrainMetadata", Vec2::new(x, 72.0));
+            let metadata = game.world.entity_mut(id).unwrap();
+            metadata.data.insert("embedded_treasure".into(), 1.0);
+            metadata.text.insert("treasure".into(), object.into());
+        }
+        game.world.set_tile(7, 4, "oIce");
+        let id = game.world.spawn("oTerrainMetadata", Vec2::new(120.0, 72.0));
+        game.world
+            .entity_mut(id)
+            .unwrap()
+            .data
+            .insert("frozen_caveman".into(), 1.0);
+        let gem = atlas.sprite("sRubyBig", 0.0).unwrap().uv;
+        let item = atlas.sprite("sJetpackRight", 0.0).unwrap().uv;
+        let frozen = atlas.sprite("sFrozenCaveman", 0.0).unwrap().uv;
+        for (equipment, gems, items) in [
+            (None, false, false),
+            (Some("UdjatEye"), true, false),
+            (Some("Spectacles"), true, true),
+        ] {
+            game.player.equipment.clear();
+            if let Some(name) = equipment {
+                game.player.equipment.insert(name.into());
+            }
+            let quads = game_scene(&game, 1.0, false, &atlas);
+            assert_eq!(quads.iter().any(|q| q.uv == gem && q.rect[1] > 40.0), gems);
+            assert_eq!(
+                quads.iter().any(|q| q.uv == item && q.rect[1] > 40.0),
+                items
+            );
+            assert!(
+                quads
+                    .iter()
+                    .any(|q| q.uv == frozen && q.rect[..2] == [112.0, 64.0])
+            );
+        }
+    }
+
+    #[test]
+    fn priced_merchandise_and_unrolled_wagered_dice_show_source_markers() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let id = game.world.spawn("oDamsel", Vec2::new(120.0, 80.0));
+        game.world
+            .entity_mut(id)
+            .unwrap()
+            .data
+            .insert("cost".into(), 5000.0);
+        let id = game.world.spawn("oDice", Vec2::new(160.0, 80.0));
+        game.player.data.insert("bet".into(), 1500.0);
+        let quads = game_scene(&game, 1.0, false, &atlas);
+        assert!(
+            quads
+                .iter()
+                .any(|q| q.uv == atlas.sprite("sSmallCollect", 0.0).unwrap().uv)
+        );
+        assert!(
+            quads
+                .iter()
+                .any(|q| q.uv == atlas.sprite("sRedArrowDown", 0.0).unwrap().uv)
+        );
+        game.world
+            .entity_mut(id)
+            .unwrap()
+            .data
+            .insert("rolled".into(), 1.0);
+        assert!(
+            !game_scene(&game, 1.0, false, &atlas)
+                .iter()
+                .any(|q| q.uv == atlas.sprite("sRedArrowDown", 0.0).unwrap().uv)
+        );
+    }
+
+    #[test]
+    fn dead_player_hides_gameplay_hud_while_corpse_remains_visible() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.player.state = PlayerState::Dead;
+        game.player.facing = -1;
+        game.player.sprite = "sDieL".into();
+        game.player.pos = Vec2::new(120.0, 80.0);
+        game.player.previous_pos = game.player.pos;
+        let quads = game_scene(&game, 1.0, false, &atlas);
+        assert!(
+            !quads
+                .iter()
+                .any(|q| q.uv == atlas.sprite("sHeart", 0.0).unwrap().uv)
+        );
+        assert!(
+            quads
+                .iter()
+                .any(|q| q.uv == atlas.sprite("sDieL", 0.0).unwrap().uv)
+        );
+    }
+
+    #[test]
+    fn game_step_charged_bow_displays_arrow_at_interpolated_owner_until_release() {
+        let atlas = Atlas::load().unwrap();
+        for right in [false, true] {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            game.player.pos = Vec2::new(120.0, 80.0);
+            game.player.previous_pos = game.player.pos;
+            game.player.facing = if right { 1 } else { -1 };
+            let id = game.world.spawn("oBow", game.player.pos);
+            game.player.held = Some(id);
+            game.world.entity_mut(id).unwrap().held = true;
+            game.data.insert("arrows".into(), 6.0);
+            game.step(&spelunky_core::InputFrame {
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            assert_eq!(game.player.data.get("bow_armed"), Some(&1.0));
+            for bomb in [false, true] {
+                if bomb {
+                    game.step(&spelunky_core::InputFrame {
+                        attack: true,
+                        bomb_pressed: true,
+                        ..Default::default()
+                    });
+                    assert_eq!(game.player.data.get("bow_bomb_armed"), Some(&1.0));
+                }
+                let name = match (bomb, right) {
+                    (false, false) => "sArrowLeft",
+                    (false, true) => "sArrowRight",
+                    (true, false) => "sBombArrowLeft",
+                    (true, true) => "sBombArrowRight",
+                };
+                let frame = atlas
+                    .sprite(
+                        name,
+                        if bomb
+                            && game
+                                .player
+                                .data
+                                .get("bow_arrow_toggle")
+                                .copied()
+                                .unwrap_or(0.0)
+                                == 0.0
+                        {
+                            1.0
+                        } else {
+                            0.0
+                        },
+                    )
+                    .unwrap();
+                for alpha in [0.0, 0.5, 1.0] {
+                    let owner = game.player.previous_pos.lerp(game.player.pos, alpha);
+                    let camera = game.previous_camera.lerp(game.camera, alpha);
+                    let quads = game_scene(&game, alpha, false, &atlas);
+                    let quad = quads
+                        .iter()
+                        .find(|q| q.uv == frame.uv && q.rect[1] > 40.0)
+                        .unwrap();
+                    assert!(
+                        (quad.rect[0]
+                            - (owner.x - camera.x) as f32
+                            - if right { 4.0 } else { -4.0 }
+                            + frame.origin[0])
+                            .abs()
+                            < 0.001
+                    );
+                    assert!(
+                        (quad.rect[1] - (owner.y - camera.y) as f32 - if bomb { 2.0 } else { 1.0 }
+                            + frame.origin[1])
+                            .abs()
+                            < 0.001
+                    );
+                }
+            }
+            game.step(&spelunky_core::InputFrame::default());
+            assert_eq!(game.player.data.get("bow_armed"), Some(&0.0));
+        }
+    }
+
+    #[test]
+    fn actual_enemy_contact_blinks_every_step_without_hiding_invulnerability_alone() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = spelunky_core::World::new(20, 20, Area::Mines, 1);
+        for x in 0..20 {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        game.player.pos = Vec2::new(88.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.facing = -1;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        game.player.invincible = 60;
+        game.step(&spelunky_core::InputFrame::default());
+        let visible = |game: &Game| {
+            let mut uv = atlas
+                .sprite(&game.player.sprite, game.player.animation)
+                .unwrap()
+                .uv;
+            if game.player.facing > 0 {
+                uv[0] += uv[2];
+                uv[2] = -uv[2];
+            }
+            game_scene(game, 1.0, false, &atlas)
+                .iter()
+                .any(|q| q.uv == uv)
+        };
+        assert!(visible(&game), "invulnerability alone must remain visible");
+        game.player.invincible = 0;
+        let snake = game.world.spawn("oSnake", Vec2::new(80.0, 144.0));
+        game.step(&spelunky_core::InputFrame::default());
+        assert_eq!(game.player.health, 3);
+        assert!(visible(&game));
+        game.world.entity_mut(snake).unwrap().alive = false;
+        for step in 1..=30 {
+            game.step(&spelunky_core::InputFrame::default());
+            assert_eq!(visible(&game), step % 2 == 0, "blink step {step}");
+        }
+        game.step(&spelunky_core::InputFrame::default());
+        assert!(visible(&game));
+    }
+
+    #[test]
+    fn rotated_projectile_corner_at_viewport_edge_is_not_culled_before_rotation() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let id = game.world.spawn("oArrow", Vec2::new(80.0, -5.0));
+        let arrow = game.world.entity_mut(id).unwrap();
+        arrow.sprite = "sArrowRight".into();
+        arrow
+            .data
+            .insert("rotation".into(), std::f64::consts::FRAC_PI_4);
+        let quads = game_scene(&game, 1.0, false, &atlas);
+        let frame = atlas.sprite("sArrowRight", 0.0).unwrap();
+        let quad = quads
+            .iter()
+            .find(|q| q.uv == frame.uv)
+            .expect("rotated corner reaches into view");
+        assert_eq!(quad.rect, [76.0, -9.0, 8.0, 8.0]);
+        assert_eq!(quad.rotation, std::f32::consts::FRAC_PI_4);
+    }
+
+    #[test]
+    fn game_step_lava_surface_animation_is_authoritative_at_every_render_alpha() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.player.pos = Vec2::new(40.0, 40.0);
+        game.player.previous_pos = game.player.pos;
+        game.world.set_tile(5, 5, "oLava");
+        let id = game.world.spawn("oTerrainMetadata", Vec2::new(88.0, 88.0));
+        game.world
+            .entity_mut(id)
+            .unwrap()
+            .text
+            .insert("terrain_sprite".into(), "sLavaTop".into());
+        for step in 1..=7 {
+            game.step(&spelunky_core::InputFrame::default());
+            let animation = game.world.entity(id).unwrap().animation;
+            assert!((animation - f64::from(step) * 0.4).abs() < 0.0001);
+            let uv = atlas.sprite("sLavaTop", animation).unwrap().uv;
+            for alpha in [0.0, 0.25, 0.5, 1.0] {
+                assert!(
+                    game_scene(&game, alpha, false, &atlas)
+                        .iter()
+                        .any(|q| q.uv == uv)
+                );
+            }
+            assert_eq!(game.world.entity(id).unwrap().animation, animation);
+        }
+    }
+
+    #[test]
+    fn actual_lava_death_draws_corpse_behind_surface() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.player.pos = Vec2::new(120.0, 75.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.facing = -1;
+        game.world.set_tile(7, 5, "oLava");
+        game.step(&spelunky_core::InputFrame::default());
+        assert_eq!(game.player.state, PlayerState::Dead);
+        game.step(&spelunky_core::InputFrame::default());
+        let quads = game_scene(&game, 1.0, false, &atlas);
+        let player_uv = atlas
+            .sprite(&game.player.sprite, game.player.animation)
+            .unwrap()
+            .uv;
+        let corpse = quads.iter().position(|q| q.uv == player_uv).unwrap();
+        let lava = quads
+            .iter()
+            .position(|q| q.uv == atlas.sprite("sLava", 0.0).unwrap().uv)
+            .unwrap();
+        assert!(
+            corpse < lava,
+            "source depth999 burns beneath the lava surface"
+        );
+    }
 
     #[test]
     fn integrated_rising_platform_and_rider_preserve_offset_at_fractional_alpha() {
