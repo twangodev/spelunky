@@ -357,27 +357,52 @@ mod tests {
 
     #[test]
     fn natural_generated_shop_entrance_walk_welcomes_immediately_once() {
-        let mut game = Game::new(0, RulesPreset::Classic);
-        game.data.insert("next_level".into(), 2.0);
-        game.next_level();
-        let keeper = game
-            .world
-            .entities
-            .iter()
-            .find(|entity| {
-                entity.object == "oShopkeeper"
-                    && entity
-                        .text
-                        .get("style")
-                        .is_some_and(|style| style == "Bomb")
+        // Source generation changes can move or replace a seeded shop. Select
+        // an actual Bomb shop with a quiet viewport, without filtering on its
+        // welcome result. GiantSpider Create also draws RNG outside the view.
+        let (mut game, keeper, entry, camera) = std::iter::once(20)
+            .chain((0..64).filter(|seed| *seed != 20))
+            .find_map(|seed| {
+                let mut game = Game::new(seed, RulesPreset::Classic);
+                game.data.insert("next_level".into(), 2.0);
+                game.next_level();
+                let keeper = game
+                    .world
+                    .entities
+                    .iter()
+                    .find(|entity| {
+                        entity.object == "oShopkeeper"
+                            && entity
+                                .text
+                                .get("style")
+                                .is_some_and(|style| style == "Bomb")
+                    })?
+                    .clone();
+                let entry = Vec2::new(keeper.pos.x + 120.0, keeper.pos.y + 8.0);
+                let camera = Vec2::new((entry.x - 160.0).max(0.0), (entry.y - 120.0).max(0.0));
+                let other_rng_actor = game.world.entities.iter().any(|entity| {
+                    entity.id != keeper.id
+                        && (entity.object == "oGiantSpider"
+                            || crate::catalog::is_a(&entity.object, "oEnemy")
+                                && entity.pos.x > camera.x - 36.0
+                                && entity.pos.x < camera.x + 324.0
+                                && entity.pos.y > camera.y - 36.0
+                                && entity.pos.y < camera.y + 244.0)
+                });
+                if other_rng_actor
+                    || !game.world.solid_at(entry.x, entry.y + 8.0)
+                    || game.world.solid_at(entry.x, entry.y)
+                {
+                    return None;
+                }
+                Some((game, keeper, entry, camera))
             })
-            .unwrap()
-            .clone();
-        assert_eq!(keeper.pos, Vec2::new(208.0, 112.0));
-        game.player.pos = Vec2::new(328.0, 120.0);
+            .expect("bounded natural seeds must include a quiet Bomb shop entrance");
+        assert_eq!(keeper.value("welcomed"), 0.0);
+        game.player.pos = entry;
         game.player.previous_pos = game.player.pos;
         game.player.grounded = true;
-        game.camera = Vec2::new(168.0, 0.0);
+        game.camera = camera;
         game.previous_camera = game.camera;
         let mut expected = game.rng.clone();
         let name = NAMES[expected.range(32) as usize];
@@ -395,7 +420,8 @@ mod tests {
             });
             assert!(!game.events.iter().any(|event|matches!(event,GameEvent::Dialogue(message) if message.first.starts_with("WELCOME"))));
         }
-        assert!(game.player.pos.x < 328.0);
+        assert!(game.player.pos.x < entry.x);
+        assert_eq!(game.player.health, 4);
     }
 
     #[test]
