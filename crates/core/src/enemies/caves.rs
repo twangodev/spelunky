@@ -897,6 +897,83 @@ mod tests {
     use crate::RulesPreset;
 
     #[test]
+    fn natural_whip_kills_create_three_source_initialized_blood_drops() {
+        for (rules, object) in [
+            (RulesPreset::Classic, "oSnake"),
+            (RulesPreset::Classic, "oBat"),
+            (RulesPreset::Assisted, "oSnake"),
+            (RulesPreset::Assisted, "oBat"),
+        ] {
+            let mut game = Game::shell(42, rules);
+            game.world = World::new(20, 16, crate::Area::Mines, 1);
+            game.world.name = "rLevel".into();
+            for x in 0..20 {
+                game.world.set_tile(x, 10, "oBlock");
+            }
+            game.player.pos = Vec2::new(80.0, 152.0);
+            game.player.previous_pos = game.player.pos;
+            game.player.facing = 1;
+            let animal = game.spawn(object, Vec2::new(104.0, 144.0));
+            game.step(&crate::InputFrame {
+                right: true,
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            let mut death_rng = None;
+            let mut previous_blood = Vec::new();
+            for _ in 0..30 {
+                if game.world.entity(animal).is_some_and(|e| e.health <= 0) {
+                    death_rng = Some(game.rng.clone());
+                    previous_blood = game
+                        .world
+                        .entities
+                        .iter()
+                        .filter(|e| e.alive && e.object == "oBlood")
+                        .map(|e| e.id)
+                        .collect();
+                }
+                if game.world.entity(animal).is_none() {
+                    break;
+                }
+                game.step(&crate::InputFrame {
+                    right: true,
+                    ..Default::default()
+                });
+            }
+            let mut expected_rng = death_rng.expect("actual whip must inflict lethal damage");
+            assert!(game.world.entity(animal).is_none(), "{object} must die");
+            let blood: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oBlood" && !previous_blood.contains(&e.id))
+                .collect();
+            assert_eq!(blood.len(), 3, "source death burst for {object}");
+            for drop in blood {
+                let expected_velocity = Vec2::new(
+                    expected_rng.unit() * 4.0 - expected_rng.unit() * 4.0,
+                    -1.0 - expected_rng.unit() * 2.0,
+                );
+                let expected_gravity = f64::from(1 + expected_rng.range(6)) * 0.1;
+                assert_eq!(drop.vel, expected_velocity);
+                assert_eq!(drop.value("gravity"), expected_gravity);
+                assert!(drop.engine_active);
+                assert_eq!(drop.sprite, "sBlood");
+                assert_eq!(drop.value("world_effect_initialized"), 1.0);
+                assert_eq!(drop.image_speed(), 0.3);
+                assert_eq!(drop.alarms[0], 1);
+                assert_eq!(drop.alarms[1], 1);
+                assert_eq!(drop.alarms[2], 5);
+                assert!((-4.0..4.0).contains(&drop.vel.x));
+                assert!((-3.0..=-1.0).contains(&drop.vel.y));
+                assert!((0.1..=0.6 + f64::EPSILON).contains(&drop.value("gravity")));
+            }
+            assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
+        }
+    }
+
+    #[test]
     fn cave_family_and_source_hitpoints() {
         for name in ["oSnake", "oBat", "oSpider", "oGiantSpider", "oCaveman"] {
             assert!(matches(name));

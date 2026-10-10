@@ -1969,6 +1969,107 @@ mod tests {
     }
 
     #[test]
+    fn actual_snake_whip_kill_draws_opaque_blood_at_fractional_refresh() {
+        use spelunky_core::{InputFrame, World};
+
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.world = World::new(20, 16, Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        for x in 0..20 {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        game.player.pos = Vec2::new(80.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.facing = 1;
+        let snake = game.spawn("oSnake", Vec2::new(104.0, 144.0));
+        game.step(&InputFrame {
+            right: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+
+        let mut blood_draw_ticks = 0;
+        let mut frames = std::collections::BTreeSet::new();
+        let mut saw_trail = false;
+        for _ in 0..30 {
+            let draw = game.presentation();
+            let blood: Vec<_> = draw
+                .world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.engine_active && entity.object == "oBlood")
+                .collect();
+            if !blood.is_empty() {
+                blood_draw_ticks += 1;
+            }
+            saw_trail |= draw.world.entities.iter().any(|entity| {
+                entity.alive && entity.engine_active && entity.object == "oBloodTrail"
+            });
+            let hash = game.state_hash();
+            let draw_hash = draw.state_hash();
+            for entity in blood {
+                let frame = atlas.sprite("sBlood", entity.animation).unwrap();
+                frames.insert(entity.animation.floor() as usize);
+                let atlas_x = (frame.uv[0] * atlas.width as f32).round() as usize;
+                let atlas_y = (frame.uv[1] * atlas.height as f32).round() as usize;
+                let mut red_texels = 0;
+                for y in atlas_y..atlas_y + frame.size[1] as usize {
+                    for x in atlas_x..atlas_x + frame.size[0] as usize {
+                        let offset = (y * atlas.width as usize + x) * 4;
+                        let pixel = &atlas.rgba()[offset..offset + 4];
+                        if pixel[3] != 0 {
+                            assert_eq!(pixel[3], 255);
+                            assert!(pixel[0] > pixel[1] && pixel[0] > pixel[2]);
+                            red_texels += 1;
+                        }
+                    }
+                }
+                assert!(
+                    red_texels >= 17,
+                    "all original blood frames contain opaque red"
+                );
+                for alpha in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                    let quads = game_scene(&game, alpha, false, &atlas);
+                    let position = entity_position(draw, entity, alpha);
+                    let camera = interpolated(draw.previous_camera, draw.camera, alpha);
+                    let expected = [
+                        (position.x - camera.x) as f32 - frame.origin[0],
+                        (position.y - camera.y) as f32 - frame.origin[1],
+                        frame.size[0],
+                        frame.size[1],
+                    ];
+                    let quad = quads
+                        .iter()
+                        .find(|quad| quad.uv == frame.uv && quad.rect == expected)
+                        .expect("natural death blood has its own interpolated scene quad");
+                    assert_eq!(quad.color, WHITE);
+                    assert_eq!(quad.blend, QuadBlend::Alpha);
+                    assert!(quad.rect[0] >= 0.0 && quad.rect[0] + quad.rect[2] <= 320.0);
+                    assert!(quad.rect[1] >= 0.0 && quad.rect[1] + quad.rect[3] <= 240.0);
+                    assert_eq!(game.state_hash(), hash);
+                    assert_eq!(game.presentation().state_hash(), draw_hash);
+                }
+            }
+            game.step(&InputFrame {
+                right: true,
+                ..Default::default()
+            });
+        }
+        assert!(
+            game.world.entity(snake).is_none(),
+            "actual player whip kills the snake"
+        );
+        assert!(
+            blood_draw_ticks >= 10,
+            "blood remains visible across actual Draw phases"
+        );
+        assert_eq!(frames, [0, 1, 2].into_iter().collect());
+        assert!(saw_trail, "actual blood alarms also produce visible trails");
+    }
+
+    #[test]
     fn actual_animation_end_destruction_keeps_the_last_source_draw_frame() {
         let atlas = Atlas::load().unwrap();
         let mut game = source_draw_room();
