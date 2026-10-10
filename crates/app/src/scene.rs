@@ -1,5 +1,5 @@
 //! Builds a presentation snapshot without advancing simulation or animation.
-use spelunky_core::{Area, Entity, Game, PlayerState, TICK_RATE, Vec2, catalog};
+use spelunky_core::{catalog, Area, Entity, Game, PlayerState, Vec2, TICK_RATE};
 use std::collections::BTreeMap;
 
 use crate::{atlas::Atlas, renderer::DrawQuad};
@@ -137,6 +137,27 @@ fn entity_sprite<'a>(atlas: &Atlas, entity: &'a Entity) -> Option<&'a str> {
     catalog::sprite(&entity.object)
 }
 
+fn entity_position(game: &Game, entity: &Entity, alpha: f64) -> Vec2 {
+    let attached = (entity.held && game.player.held == Some(entity.id))
+        || matches!(
+            entity.object.as_str(),
+            "oWhip" | "oWhipPre" | "oMachetePre" | "oMattockPre" | "oSlash" | "oMattockHit"
+        );
+    if attached {
+        // Source Step events attach these objects to the character, including
+        // their very first frame. Interpolating their independently initialized
+        // previous positions detaches a new attack and sweeps held items through
+        // the body when facing changes. Only the owner's motion is continuous.
+        let owner = interpolated(game.player.previous_pos, game.player.pos, alpha);
+        Vec2::new(
+            owner.x + entity.pos.x - game.player.pos.x,
+            owner.y + entity.pos.y - game.player.pos.y,
+        )
+    } else {
+        interpolated(entity.previous_pos, entity.pos, alpha)
+    }
+}
+
 fn entity_draw_x(object: &str, x: f32, mirrored: bool) -> f32 {
     // oEnemy's inherited Draw event compensates by exactly 16 original
     // pixels. A raw origin flip would move its top-left-origin sprite into
@@ -232,7 +253,8 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
         let Some(name) = entity_sprite(atlas, entity) else {
             continue;
         };
-        let [x, y] = screen(entity.previous_pos, entity.pos, camera, alpha, pixel_snap);
+        let position = entity_position(game, entity, alpha);
+        let [x, y] = screen(position, position, camera, alpha, pixel_snap);
         let mut layer = Vec::with_capacity(1);
         if entity.object == "oGenerationDecoration" {
             let region = if name == "bgAlienShip" {
@@ -334,9 +356,17 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
             let name = if climbing {
                 "sCapeBack"
             } else if open {
-                if right { "sCapeUR" } else { "sCapeUL" }
+                if right {
+                    "sCapeUR"
+                } else {
+                    "sCapeUL"
+                }
             } else if player.vel.x.abs() > 0.0 {
-                if right { "sCapeRight" } else { "sCapeLeft" }
+                if right {
+                    "sCapeRight"
+                } else {
+                    "sCapeLeft"
+                }
             } else if right {
                 "sCapeDR"
             } else {
@@ -485,7 +515,7 @@ fn scene_lights(game: &Game, alpha: f64) -> Vec<Light> {
                 0.0
             },
         );
-        let distance = player.distance(interpolated(entity.previous_pos, entity.pos, alpha));
+        let distance = player.distance(entity_position(game, entity, alpha));
         if range > 0.0 && distance <= range {
             // oScreen's red lamp changes the nearby player's light color;
             // it does not create a separate white light circle.
@@ -520,7 +550,7 @@ fn scene_lights(game: &Game, alpha: f64) -> Vec<Light> {
         if !radius.is_finite() || radius <= 0.0 {
             continue;
         }
-        let mut position = interpolated(entity.previous_pos, entity.pos, alpha);
+        let mut position = entity_position(game, entity, alpha);
         let static_lamp = matches!(
             entity.object.as_str(),
             "oLamp" | "oArrowTrapLeftLit" | "oArrowTrapRightLit"
@@ -907,6 +937,72 @@ mod tests {
     use spelunky_core::RulesPreset;
 
     #[test]
+    fn newly_created_whip_stays_at_source_offset_during_intermediate_frames() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.player.sprite = "sAttackLeft".into();
+        game.player.previous_pos = Vec2::new(40.0, 40.0);
+        game.player.pos = Vec2::new(48.0, 40.0);
+        game.previous_camera = Vec2::default();
+        game.camera = Vec2::new(8.0, 0.0);
+        let id = game.world.spawn("oWhip", Vec2::new(64.0, 40.0));
+        game.world.entity_mut(id).unwrap().sprite = "sWhipRight".into();
+        let whip_uv = atlas.sprite("sWhipRight", 0.0).unwrap().uv;
+        let mut player_uv = atlas.sprite("sAttackLeft", 0.0).unwrap().uv;
+        player_uv[0] += player_uv[2];
+        player_uv[2] = -player_uv[2];
+        for alpha in [0.0, 0.125, 0.25, 0.5, 0.875, 1.0] {
+            let quads = game_scene(&game, alpha, false, &atlas);
+            let player = quads.iter().find(|quad| quad.uv == player_uv).unwrap();
+            let whip = quads.iter().find(|quad| quad.uv == whip_uv).unwrap();
+            assert_eq!(whip.rect[0] - player.rect[0], 16.0);
+        }
+        assert_eq!(game.player.pos, Vec2::new(48.0, 40.0));
+        assert_eq!(game.world.entity(id).unwrap().pos, Vec2::new(64.0, 40.0));
+    }
+
+    #[test]
+    fn held_item_turns_with_owner_without_sweeping_through_the_body() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.player.previous_pos = Vec2::new(40.0, 40.0);
+        game.player.pos = Vec2::new(48.0, 40.0);
+        let id = game.world.spawn("oRock", Vec2::new(52.0, 42.0));
+        game.player.held = Some(id);
+        let rock = game.world.entity_mut(id).unwrap();
+        rock.held = true;
+        rock.previous_pos = Vec2::new(36.0, 42.0);
+        assert_eq!(
+            entity_position(&game, game.world.entity(id).unwrap(), 0.125),
+            Vec2::new(45.0, 42.0)
+        );
+        game.world.entity_mut(id).unwrap().held = false;
+        assert_eq!(
+            entity_position(&game, game.world.entity(id).unwrap(), 0.125),
+            Vec2::new(38.0, 42.0)
+        );
+    }
+
+    #[test]
+    fn all_playable_characters_keep_original_center_and_flip_animation_origins() {
+        let atlas = Atlas::load().unwrap();
+        for (standing, flip) in [
+            ("sStandLeft", "sDuckToHangL"),
+            ("sDamselLeft", "sDamselDtHL"),
+            ("sTunnelLeft", "sTunnelDtHL"),
+        ] {
+            let mut quads = Vec::new();
+            sprite(&mut quads, &atlas, standing, 0.0, 40.0, 40.0, false, WHITE);
+            sprite(&mut quads, &atlas, standing, 0.0, 40.0, 40.0, true, WHITE);
+            sprite(&mut quads, &atlas, flip, 0.0, 40.0, 40.0, false, WHITE);
+            sprite(&mut quads, &atlas, flip, 0.0, 40.0, 40.0, true, WHITE);
+            assert_eq!(quads[0].rect, [32.0, 32.0, 16.0, 16.0]);
+            assert_eq!(quads[1].rect, [32.0, 32.0, 16.0, 16.0]);
+            assert_eq!(quads[2].rect, [16.0, 32.0, 32.0, 32.0]);
+            assert_eq!(quads[3].rect, [32.0, 32.0, 32.0, 32.0]);
+        }
+    }
+
+    #[test]
     fn challenge_hud_uses_source_icons_and_countdown_instead_of_campaign_hud() {
         let atlas = Atlas::load().unwrap();
         let mut game = Game::shell(1, RulesPreset::Classic);
@@ -916,21 +1012,15 @@ mod tests {
         game.data.insert("hub_draw_status".into(), 1.0);
         let mut quads = Vec::new();
         hud(&mut quads, &game, Vec2::default(), &atlas);
-        assert!(
-            quads
-                .iter()
-                .any(|quad| quad.uv == atlas.sprite("sHoopsIcon", 0.0).unwrap().uv)
-        );
-        assert!(
-            quads
-                .iter()
-                .any(|quad| quad.uv == atlas.sprite("sTimerIcon", 0.0).unwrap().uv)
-        );
-        assert!(
-            !quads
-                .iter()
-                .any(|quad| quad.uv == atlas.sprite("sBombIcon", 0.0).unwrap().uv)
-        );
+        assert!(quads
+            .iter()
+            .any(|quad| quad.uv == atlas.sprite("sHoopsIcon", 0.0).unwrap().uv));
+        assert!(quads
+            .iter()
+            .any(|quad| quad.uv == atlas.sprite("sTimerIcon", 0.0).unwrap().uv));
+        assert!(!quads
+            .iter()
+            .any(|quad| quad.uv == atlas.sprite("sBombIcon", 0.0).unwrap().uv));
         let mut expected = Vec::new();
         text(
             &mut expected,
@@ -1028,16 +1118,12 @@ mod tests {
         lamp.data.insert("light_offset_y".into(), -4.0);
         lamp.data.insert("light_offset_x".into(), 3.0);
         let lights = scene_lights(&game, 1.0);
-        assert!(
-            lights
-                .iter()
-                .any(|light| light.position == Vec2::new(28.0, 38.0) && light.radius == 96.0)
-        );
-        assert!(
-            lights
-                .iter()
-                .any(|light| light.position == Vec2::new(153.0, 146.0) && light.radius == 96.0)
-        );
+        assert!(lights
+            .iter()
+            .any(|light| light.position == Vec2::new(28.0, 38.0) && light.radius == 96.0));
+        assert!(lights
+            .iter()
+            .any(|light| light.position == Vec2::new(153.0, 146.0) && light.radius == 96.0));
         assert_eq!(illumination(&lights, Vec2::new(153.0, 146.0)), [1.0; 3]);
     }
 
@@ -1067,11 +1153,9 @@ mod tests {
         assert_eq!(scene_lights(&game, 1.0).len(), 1);
         let mut quads = Vec::new();
         darkness(&mut quads, &game, Vec2::default(), 1.0);
-        assert!(
-            quads
-                .iter()
-                .any(|quad| quad.color[0] > 0.0 && quad.color[1] == 0.0 && quad.color[3] > 0.0)
-        );
+        assert!(quads
+            .iter()
+            .any(|quad| quad.color[0] > 0.0 && quad.color[1] == 0.0 && quad.color[3] > 0.0));
     }
 
     #[test]
@@ -1086,12 +1170,10 @@ mod tests {
         decoration.sprite = "bgAlienShip".into();
         decoration.data.insert("variant".into(), 1.0);
         let quads = game_scene(&game, 1.0, false, &atlas);
-        assert!(
-            quads
-                .iter()
-                .any(|quad| quad.rect == [100.0, 100.0, 32.0, 64.0]
-                    && quad.uv == atlas.region("bgAlienShip", [32, 0, 32, 64]).unwrap().uv)
-        );
+        assert!(quads
+            .iter()
+            .any(|quad| quad.rect == [100.0, 100.0, 32.0, 64.0]
+                && quad.uv == atlas.region("bgAlienShip", [32, 0, 32, 64]).unwrap().uv));
         assert!(quads.iter().any(|quad| quad.rect[..2] == [0.0, 0.0]
             && quad.uv == atlas.sprite("sBrick", 0.0).unwrap().uv));
     }
@@ -1160,16 +1242,12 @@ mod tests {
             .insert("hidden".into(), 1.0);
         let quads = game_scene(&game, 0.0, false, &atlas);
         let terrain_uv = atlas.sprite("sDarkSmooth", 0.0).unwrap().uv;
-        assert!(
-            quads
-                .iter()
-                .any(|quad| quad.uv == terrain_uv && quad.rect[..2] == [48.0, 64.0])
-        );
-        assert!(
-            !quads
-                .iter()
-                .any(|quad| quad.uv == atlas.sprite("sRock", 0.0).unwrap().uv)
-        );
+        assert!(quads
+            .iter()
+            .any(|quad| quad.uv == terrain_uv && quad.rect[..2] == [48.0, 64.0]));
+        assert!(!quads
+            .iter()
+            .any(|quad| quad.uv == atlas.sprite("sRock", 0.0).unwrap().uv));
     }
 
     #[test]
