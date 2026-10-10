@@ -27,27 +27,31 @@ function fixture(side) {
   const start = side === 'right' ? 7 : 14;
   rows[4][start] = '1';
   rows[3][start] = '@';
+  // A low ceiling cancels a real initial ground jump, allowing Classic's jump
+  // key to remain held before walking off, without a narrow input-delivery race.
+  // It ends before the target ledge and cannot block the hanging climb.
+  rows[2][start] = '1';
   rows[8][20] = 'X';
   return [...rows.map(row => row.join('')), 'BROWSER LEDGE REGRESSION', 'CAVE', '99', '0', '0', 'NONE', '0', '0', ''].join('\n');
 }
 
-async function snapshot(page) {
+export async function snapshot(page) {
   return page.evaluate(() => window.__spelunkyTest);
 }
 
-async function state(page, expected) {
+export async function state(page, expected) {
   await page.waitForFunction(expected => window.__spelunkyTest?.screen === expected, expected, { timeout: 10000 });
   return snapshot(page);
 }
 
-async function press(page, key, count = 1) {
+export async function press(page, key, count = 1) {
   for (let i = 0; i < count; i++) {
     await page.keyboard.press(key);
     await page.waitForTimeout(35);
   }
 }
 
-async function returnToEditor(page) {
+export async function returnToEditor(page) {
   await page.keyboard.press('Escape');
   await state(page, 'Pause');
   await press(page, 'ArrowDown', 2);
@@ -106,7 +110,7 @@ async function pauseWhileMoving(page, direction, toward, result) {
   result.pause = { moving, paused, resumed };
 }
 
-export async function runMovementAcceptance({ page, result, screenshot }) {
+export async function restoreDefaultSettings(page) {
   await page.setViewportSize({ width: 960, height: 720 });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await state(page, 'Title');
@@ -124,6 +128,10 @@ export async function runMovementAcceptance({ page, result, screenshot }) {
   });
   await page.keyboard.press('Escape');
   await state(page, 'Title');
+}
+
+export async function runMovementAcceptance({ page, result, screenshot }) {
+  await restoreDefaultSettings(page);
   result.movement = [];
 
   for (const rules of ['Classic', 'Assisted']) {
@@ -155,12 +163,18 @@ export async function runMovementAcceptance({ page, result, screenshot }) {
         await page.waitForFunction(() => window.__spelunkyTest?.screen === 'Playing' && window.__spelunkyTest.player.grounded, null, { timeout: 10000 });
         entry.start = await snapshot(page);
         assert.equal(entry.start.player.y, 72);
+        if (rules === 'Classic') {
+          await page.keyboard.down('z');
+          await page.waitForFunction(tick => {
+            const value = window.__spelunkyTest;
+            return value.tick >= tick + 12 && value.player.grounded;
+          }, entry.start.tick, { timeout: 10000 });
+          entry.heldJumpPrimed = await snapshot(page);
+          assert.equal(entry.heldJumpPrimed.player.y, 72, 'The ceiling must cancel the initial ground jump');
+        }
         await page.keyboard.down(direction);
-        await page.waitForFunction(() => window.__spelunkyTest?.screen === 'Playing' && !window.__spelunkyTest.player.grounded, null, { timeout: 10000 });
-        // Classic ignores a fresh airborne jump. Keeping it held through the
-        // grab checks that a release/repress is required. Assisted intentionally
-        // permits coyote jumps, so its approach walks/drops without that press.
-        if (rules === 'Classic') await page.keyboard.down('z');
+        // Classic is already holding jump after the blocked ground jump;
+        // Assisted approaches without jump to avoid its intentional coyote jump.
         await page.waitForFunction(() => window.__spelunkyTest?.player.state === 'Hanging', null, { timeout: 10000 });
         entry.hanging = await snapshot(page);
         assert.equal(entry.hanging.player.y, 88);

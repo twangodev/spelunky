@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { installMovementTrace, runMovementAcceptance } from './movement.mjs';
+import { runAdversarialAcceptance, runOnboardingAcceptance } from './adversarial.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const artifacts = path.resolve(process.env.BROWSER_ARTIFACTS || path.join(root, 'artifacts/browser'));
@@ -26,9 +27,11 @@ try {
 const engines = (process.env.BROWSERS || 'chromium,firefox,webkit').split(',');
 const report = {
   timestamp: new Date().toISOString(),
+  suite: process.env.BROWSER_SUITE || 'full',
   scope: 'Automated browser engine acceptance, optionally using a virtual display; no physical 240 Hz display or Safari application validation.',
   engines: [],
 };
+assert.ok(['full', 'adversarial', 'movement', 'onboarding'].includes(report.suite), 'BROWSER_SUITE must be full, adversarial, movement, or onboarding');
 await mkdir(artifacts, { recursive: true });
 await access(tools);
 report.bundle = {
@@ -126,6 +129,9 @@ async function saved(page) {
 }
 
 async function screenshot(page, name, result) {
+  // Host telemetry is published before its GPU submission. Let the browser
+  // present the new scene before capturing a transition's visible evidence.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const filename = `${result.engine}-${name}.png`;
   const png = await page.screenshot({ path: path.join(artifacts, filename) });
   const hash = createHash('sha256').update(png).digest('hex');
@@ -195,6 +201,17 @@ try {
       assert.ok(result.graphics.contexts.length > 0, 'Actual application canvas must use WebGL 2');
       const title = await screenshot(page, 'title', result);
       result.checks.push('Wasm startup and real WebGL 2 draw calls');
+
+      if (report.suite !== 'full') {
+        if (report.suite === 'adversarial') await runAdversarialAcceptance({ page, result, screenshot });
+        else if (report.suite === 'movement') await runMovementAcceptance({ page, result, screenshot });
+        else await runOnboardingAcceptance({ page, result, screenshot });
+        assert.deepEqual(result.errors, []);
+        assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
+        result.status = 'passed';
+        await context.close();
+        continue;
+      }
 
       result.replays = await page.evaluate(async cases => {
         const module = await import('./pkg/spelunky.js');
@@ -310,9 +327,26 @@ try {
       assert.deepEqual(result.errors, []);
       assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
       await runMovementAcceptance({ page, result, screenshot });
+      await runAdversarialAcceptance({ page, result, screenshot });
       assert.deepEqual(result.errors, []);
       assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
       await context.close();
+
+      const onboarding = await browser.newContext({ viewport: { width: 960, height: 720 } });
+      await onboarding.addInitScript(instrument);
+      await onboarding.addInitScript(installMovementTrace);
+      const onboardingPage = await onboarding.newPage();
+      activePage = onboardingPage;
+      onboardingPage.on('pageerror', error => result.errors.push(String(error)));
+      onboardingPage.on('console', message => {
+        if (message.type() === 'error') result.consoleErrors.push(message.text());
+        if (message.type() === 'warning') result.warnings.push(message.text());
+      });
+      await ready(onboardingPage);
+      await runOnboardingAcceptance({ page: onboardingPage, result, screenshot });
+      assert.deepEqual(result.errors, []);
+      assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
+      await onboarding.close();
 
       // Failure paths run in fresh storage, separate from the happy-path session.
       const corrupt = await browser.newContext();
