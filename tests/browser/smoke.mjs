@@ -11,6 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { installMovementTrace, runMovementAcceptance } from './movement.mjs';
 import { runAdversarialAcceptance, runOnboardingAcceptance } from './adversarial.mjs';
+import { installLightingProfile, installLightingProbe, runLightingAcceptance } from './lighting.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const artifacts = path.resolve(process.env.BROWSER_ARTIFACTS || path.join(root, 'artifacts/browser'));
@@ -31,7 +32,7 @@ const report = {
   scope: 'Automated browser engine acceptance, optionally using a virtual display; no physical 240 Hz display or Safari application validation.',
   engines: [],
 };
-assert.ok(['full', 'adversarial', 'movement', 'onboarding'].includes(report.suite), 'BROWSER_SUITE must be full, adversarial, movement, or onboarding');
+assert.ok(['full', 'adversarial', 'movement', 'onboarding', 'lighting'].includes(report.suite), 'BROWSER_SUITE must be full, adversarial, movement, onboarding, or lighting');
 await mkdir(artifacts, { recursive: true });
 await access(tools);
 report.bundle = {
@@ -184,6 +185,10 @@ try {
       const context = await browser.newContext({ viewport: { width: 960, height: 720 }, acceptDownloads: true });
       await context.addInitScript(instrument);
       await context.addInitScript(installMovementTrace);
+      if (report.suite === 'lighting') {
+        await context.addInitScript(installLightingProfile);
+        await context.addInitScript(installLightingProbe);
+      }
       const page = await context.newPage();
       activePage = page;
       page.on('pageerror', error => result.errors.push(String(error)));
@@ -205,7 +210,8 @@ try {
       if (report.suite !== 'full') {
         if (report.suite === 'adversarial') await runAdversarialAcceptance({ page, result, screenshot });
         else if (report.suite === 'movement') await runMovementAcceptance({ page, result, screenshot });
-        else await runOnboardingAcceptance({ page, result, screenshot });
+        else if (report.suite === 'onboarding') await runOnboardingAcceptance({ page, result, screenshot });
+        else await runLightingAcceptance({ page, result, screenshot });
         assert.deepEqual(result.errors, []);
         assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
         result.status = 'passed';
@@ -347,6 +353,24 @@ try {
       assert.deepEqual(result.errors, []);
       assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
       await onboarding.close();
+
+      const lighting = await browser.newContext({ viewport: { width: 960, height: 720 } });
+      await lighting.addInitScript(instrument);
+      await lighting.addInitScript(installMovementTrace);
+      await lighting.addInitScript(installLightingProfile);
+      await lighting.addInitScript(installLightingProbe);
+      const lightingPage = await lighting.newPage();
+      activePage = lightingPage;
+      lightingPage.on('pageerror', error => result.errors.push(String(error)));
+      lightingPage.on('console', message => {
+        if (message.type() === 'error') result.consoleErrors.push(message.text());
+        if (message.type() === 'warning') result.warnings.push(message.text());
+      });
+      await ready(lightingPage);
+      await runLightingAcceptance({ page: lightingPage, result, screenshot });
+      assert.deepEqual(result.errors, []);
+      assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
+      await lighting.close();
 
       // Failure paths run in fresh storage, separate from the happy-path session.
       const corrupt = await browser.newContext();
