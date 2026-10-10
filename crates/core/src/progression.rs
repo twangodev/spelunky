@@ -160,6 +160,7 @@ fn revive(game: &mut Game) {
     game.player.health = 4;
     game.player.invincible = 60;
     game.player.data.insert("blink".into(), 60.);
+    game.player.data.insert("active".into(), 1.);
     // Revival resets death, not the separate stun flag or its countdown.
     // A fatal explosion therefore retains its source 100-tick stun.
     if game.player.state == PlayerState::Dead {
@@ -492,7 +493,7 @@ fn deposit_at_exit(game: &mut Game) {
         .iter()
         .find(|e| {
             e.alive
-                && matches!(e.object.as_str(), "oExit" | "oXMarket" | "oXGold" | "oXEnd")
+                && crate::catalog::is_a(&e.object, "oExit")
                 && e.sprite_bounds().contains(game.player.pos)
         })
         .map(|e| Vec2::new(e.pos.x + 8., e.pos.y + 8.))
@@ -514,6 +515,7 @@ fn complete(game: &mut Game, door_id: u64) {
         return;
     };
     let object = door.object.clone();
+    let ending = object == "oXEnd";
     let leads_to = door.text.get("leadsTo").cloned().unwrap_or_default();
     let door_center = Vec2::new(door.pos.x + 8., door.pos.y + 8.);
     if object == "oXMarket" {
@@ -536,7 +538,14 @@ fn complete(game: &mut Game, door_id: u64) {
             )
         });
         if let Some((object, health, heavy, armed)) = carried {
-            if object == "oDamsel" && health > 0 {
+            // oXEnd inherits oXStart, not oExit. The authored Olmec exit
+            // follows the start-portal branch, which drops every heavy object
+            // before the ordinary door's idol/damsel redemption rules.
+            if ending && heavy {
+                if let Some(item) = game.world.entity_mut(id) {
+                    item.held = false;
+                }
+            } else if object == "oDamsel" && health > 0 {
                 rescue_held_damsel(game, id, door_center);
             } else if matches!(object.as_str(), "oGoldIdol" | "oCrystalSkull") {
                 redeem_held_idol(game, id, true);
@@ -585,17 +594,22 @@ fn complete(game: &mut Game, door_id: u64) {
     game.flags.insert("render_discontinuity".into());
     let collect = game.data.remove("collect").unwrap_or(0.).max(0.) as u32;
     game.player.money = game.player.money.saturating_add(collect);
-    if let Some(thief) = game.data.get_mut("thiefLevel") {
-        *thief = (*thief - 1.).max(0.);
+    // Only the ordinary oExit branch advances the level and forgives theft.
+    // xEND goes directly to the ending after the common collection payout.
+    if !ending {
+        if let Some(thief) = game.data.get_mut("thiefLevel") {
+            *thief = (*thief - 1.).max(0.);
+        }
+        if game.data.get("thiefLevel").copied().unwrap_or(0.) == 0.
+            && !game.flags.contains("murderer")
+        {
+            game.flags.remove("wanted");
+        }
+        game.data.insert(
+            "next_level".into(),
+            game.world.level.saturating_add(1) as f64,
+        );
     }
-    if game.data.get("thiefLevel").copied().unwrap_or(0.) == 0. && !game.flags.contains("murderer")
-    {
-        game.flags.remove("wanted");
-    }
-    game.data.insert(
-        "next_level".into(),
-        game.world.level.saturating_add(1) as f64,
-    );
     game.events.push(GameEvent::LevelComplete);
     game.sound("sndSteps", game.player.pos);
     if object == "oXEnd" || (game.world.area == Area::Boss && object == "oExit") {
@@ -608,7 +622,18 @@ fn complete(game: &mut Game, door_id: u64) {
 }
 
 pub fn tick(game: &mut Game, input: &InputFrame) {
-    if !matches!(game.state, RunState::Playing | RunState::Dead) || game.flags.contains("hub") {
+    if !matches!(game.state, RunState::Playing | RunState::Dead) {
+        return;
+    }
+    if game.flags.contains("hub") {
+        // Player Step explicitly includes these challenge rooms in its Ankh
+        // branch, while Title and Highscores remain outside that branch.
+        if ["hub_sun", "hub_moon", "hub_stars"]
+            .iter()
+            .any(|flag| game.flags.contains(*flag))
+        {
+            revive(game);
+        }
         return;
     }
     initialize_level(game);
@@ -1164,6 +1189,115 @@ mod tests {
         assert_eq!(g.data["damsels"], 1., "rescue must be counted only once");
     }
 
+    fn walk_carried_item_to_portal(object: &str, door: &str) -> (Game, u64) {
+        let mut g = Game::shell(3, RulesPreset::Classic);
+        g.world = crate::World::new(
+            40,
+            20,
+            if door == "oXEnd" {
+                Area::Boss
+            } else {
+                Area::Mines
+            },
+            if door == "oXEnd" { 16 } else { 1 },
+        );
+        for x in 0..g.world.width {
+            g.world.set_tile(x, 4, "oTemple");
+        }
+        g.world.spawn(door, Vec2::new(128., 48.));
+        g.player.pos = Vec2::new(88., 56.);
+        g.player.previous_pos = g.player.pos;
+        g.player.grounded = true;
+        let id = g.world.spawn(object, g.player.pos);
+        g.step(&InputFrame::default());
+        g.step(&InputFrame {
+            down: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(g.player.held, Some(id), "controller pickup: {object}");
+        assert!(g.world.entity(id).unwrap().held);
+        for _ in 0..60 {
+            if g.player.pos.x >= 132. {
+                break;
+            }
+            g.step(&InputFrame {
+                right: true,
+                ..Default::default()
+            });
+        }
+        assert!((132.0..144.0).contains(&g.player.pos.x));
+        assert!(g.player.grounded);
+        (g, id)
+    }
+
+    #[test]
+    fn actual_pickup_and_walk_redeems_at_ordinary_exit_but_drops_at_ending() {
+        for (object, counter, value) in [
+            ("oGoldIdol", "idols", 5000.),
+            ("oCrystalSkull", "skulls", 15000.),
+            ("oDamsel", "damsels", 0.),
+        ] {
+            let (mut ordinary, id) = walk_carried_item_to_portal(object, "oExit");
+            assert_eq!(ordinary.state, RunState::Playing);
+            assert_eq!(ordinary.player.held, None);
+            assert_eq!(ordinary.data[counter], 1., "ordinary exit: {object}");
+            assert_eq!(
+                ordinary.player.money as f64 + ordinary.data.get("collect").copied().unwrap_or(0.),
+                value
+            );
+            if object == "oDamsel" {
+                assert_eq!(ordinary.world.entity(id).unwrap().state, 4);
+                assert_eq!(ordinary.data["pending_damsel_kisses"], 1.);
+            } else {
+                assert!(ordinary.world.entity(id).is_none());
+            }
+            ordinary.data.insert("thiefLevel".into(), 1.);
+            ordinary.flags.insert("wanted".into());
+            ordinary.step(&InputFrame {
+                up: true,
+                ..Default::default()
+            });
+            assert_eq!(ordinary.state, RunState::Transition);
+            assert_eq!(ordinary.data["thiefLevel"], 0.);
+            assert!(!ordinary.flags.contains("wanted"));
+            assert_eq!(ordinary.data["next_level"], 2.);
+            assert_eq!(ordinary.player.money as f64, value);
+
+            let (mut ending, id) = walk_carried_item_to_portal(object, "oXEnd");
+            // Merely touching the ending door is not an ordinary rescue or
+            // treasure deposit, even though both portals share an exit sprite.
+            assert_eq!(ending.state, RunState::Playing);
+            assert_eq!(ending.player.held, Some(id));
+            assert!(ending.world.entity(id).unwrap().held);
+            assert_eq!(ending.data.get(counter).copied().unwrap_or(0.), 0.);
+            assert_eq!(ending.data.get("collect").copied().unwrap_or(0.), 0.);
+            assert_eq!(ending.player.money, 0);
+
+            ending.data.insert("thiefLevel".into(), 1.);
+            ending.flags.insert("wanted".into());
+            ending.step(&InputFrame {
+                up: true,
+                ..Default::default()
+            });
+            assert_eq!(ending.state, RunState::Won);
+            assert_eq!(ending.player.held, None);
+            let dropped = ending.world.entity(id).expect("heavy item is dropped");
+            assert!(!dropped.held);
+            if object == "oDamsel" {
+                assert_ne!(dropped.state, 4);
+                assert!(!ending.data.contains_key("pending_damsel_kisses"));
+            }
+            assert_eq!(ending.data.get(counter).copied().unwrap_or(0.), 0.);
+            assert_eq!(ending.data.get("collect").copied().unwrap_or(0.), 0.);
+            assert_eq!(ending.player.money, 0);
+            assert!(!ending.flags.iter().any(|f| f.starts_with("carry:")));
+            assert_eq!(ending.data["thiefLevel"], 1.);
+            assert!(ending.flags.contains("wanted"));
+            assert!(!ending.data.contains_key("next_level"));
+        }
+    }
+
     #[test]
     fn actual_step_multiple_damsels_each_restore_one_life() {
         let (mut g, _) = carried_exit("oDamsel");
@@ -1247,6 +1381,113 @@ mod tests {
             PlayerState::Falling,
             "revival preserves the pre-existing movement controller rather than overwriting it"
         );
+    }
+
+    fn pickup_free_ankh() -> Game {
+        let mut g = Game::new(42, RulesPreset::Classic);
+        let ankh = g
+            .world
+            .spawn("oAnkh", Vec2::new(g.player.pos.x, g.player.pos.y + 4.));
+        crate::items::init_entity(g.world.entity_mut(ankh).unwrap());
+        let item = g.world.entity_mut(ankh).unwrap();
+        item.data.insert("cost".into(), 0.);
+        item.data.insert("forSale".into(), 0.);
+        g.step(&InputFrame {
+            down: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert!(g.player.has("Ankh"));
+        g
+    }
+
+    #[test]
+    fn controlled_intro_explosion_ankh_restores_active_and_stun_recovery() {
+        let mut g = pickup_free_ankh();
+        while g.world.level < 16 {
+            g.next_level();
+        }
+        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.data["active"], 0.);
+        // Controlled hazard during the real generated intro, not a claim that
+        // an explosion naturally occurs on arrival. The final blast frame
+        // avoids repeated damage after revival and retains the real hurt path.
+        let blast = g.world.spawn("oExplosion", g.player.pos);
+        crate::items::init_entity(g.world.entity_mut(blast).unwrap());
+        g.world.entity_mut(blast).unwrap().timer = 1;
+        g.step(&InputFrame::default());
+        assert_eq!(g.state, RunState::Playing);
+        assert_eq!(g.player.health, 4);
+        assert!(!g.player.has("Ankh"));
+        assert_eq!(g.player.data["active"], 1.);
+        assert_eq!(g.player.stun, 100);
+        assert_eq!(g.player.data["blink"], 60.);
+        for _ in 0..200 {
+            g.step(&InputFrame::default());
+        }
+        assert!(
+            g.level_tick < 439,
+            "intro alarm must not release the player"
+        );
+        assert_eq!(g.state, RunState::Playing);
+        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.data["active"], 1.);
+        assert_eq!(g.player.stun, 0);
+        assert!(!g.player.is_stunned());
+    }
+
+    #[test]
+    fn controlled_challenge_entry_ankh_revives_only_in_source_challenge_rooms() {
+        use crate::hub::HubKind;
+        for kind in [
+            HubKind::Sun,
+            HubKind::Moon,
+            HubKind::Stars,
+            HubKind::Title,
+            HubKind::Scores,
+        ] {
+            let mut g = pickup_free_ankh();
+            // The public room-loading API supplies a controlled carried-Ankh
+            // entry. This does not claim that normal menu navigation carries
+            // campaign equipment into a challenge in the original game.
+            g.load_hub(kind);
+            assert!(g.player.has("Ankh"));
+            let room = g.world.name.clone();
+            let time = g.data.get("time").copied();
+            let blast = g.world.spawn("oExplosion", g.player.pos);
+            crate::items::init_entity(g.world.entity_mut(blast).unwrap());
+            g.world.entity_mut(blast).unwrap().timer = 1;
+            g.step(&InputFrame::default());
+            if kind.challenge() {
+                assert_eq!(g.state, RunState::Playing, "{kind:?}");
+                assert_eq!(g.player.health, 4);
+                assert!(!g.player.has("Ankh"));
+                assert_eq!(g.player.pos, g.world.entrance);
+                assert_eq!(g.player.invincible, 60);
+                assert_eq!(g.player.data["blink"], 60.);
+                assert_eq!(
+                    g.events
+                        .iter()
+                        .filter(|event| matches!(event, GameEvent::Sound { name, .. } if name == "sndTeleport"))
+                        .count(),
+                    1
+                );
+                for _ in 0..12 {
+                    g.step(&InputFrame::default());
+                }
+                assert_eq!(g.state, RunState::Playing);
+                assert_eq!(g.player.health, 4);
+                assert!(!g.player.has("Ankh"));
+            } else {
+                assert_eq!(g.state, RunState::Dead, "{kind:?}");
+                assert!(g.player.has("Ankh"));
+            }
+            assert_eq!(g.world.name, room);
+            assert_eq!(g.world.level, 0);
+            assert_eq!(g.data.get("time").copied(), time);
+            assert!(!g.data.contains_key("next_level"));
+            assert!(!g.data.contains_key("progression_initialized"));
+        }
     }
 
     #[test]
