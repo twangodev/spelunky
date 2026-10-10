@@ -302,7 +302,17 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let p = &mut game.player;
     set(p, "character_damsel", f64::from(damsel));
     set(p, "character_tunnelman", f64::from(tunnelman));
-    p.invincible = p.invincible.saturating_sub(1);
+    if p.health > 0 && p.state != PlayerState::Dead {
+        p.invincible = p.invincible.saturating_sub(1);
+    }
+    let blink = value(p, "blink", 0.0);
+    if blink > 0.0 {
+        let toggle = value(p, "blink_toggle", -1.0);
+        set(p, "blink_toggle", -toggle);
+        set(p, "blink", blink - 1.0);
+    } else {
+        set(p, "blink_toggle", -1.0);
+    }
     let stationary_stun_pose = matches!(
         p.sprite.as_str(),
         "sStunL" | "sDamselStunL" | "sTunnelStunL"
@@ -616,16 +626,14 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         gravity = 1.0;
         set(p, "jump_released", 0.0);
         if in_web {
-            if let Some(web) = w
-                .entities
-                .iter_mut()
-                .find(|e| e.alive && e.object == "oWeb" && e.pos.distance(p.pos) < 12.0)
-            {
-                let life = web.data.entry("life".into()).or_insert(3.0);
+            let player_mask = p.sprite_bounds();
+            if let Some(web) = w.entities.iter_mut().find(|e| {
+                e.alive && e.object == "oWeb" && e.sprite_bounds().intersects(player_mask)
+            }) {
+                let life = web.data.entry("life".into()).or_insert(12.0);
                 *life -= 1.0;
-                if *life <= 0.0 {
-                    web.alive = false;
-                }
+                // oWeb's Step owns alpha, natural decay, and destruction at
+                // life <= 1. Jumping consumes the same lifetime counter.
             }
         }
     } else if has(p, &["Cape", "cape"]) && jump_pressed && jumped && airborne(p.state) {
@@ -1240,6 +1248,107 @@ fn character_sprite<'a>(p: &Player, name: &'a str) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn real_contact_blink_alternates_every_authoritative_tick_and_stops_at_expiry() {
+        use crate::characters::{self, Character};
+        for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
+            let mut g = room(RulesPreset::Classic);
+            characters::apply(&mut g, character);
+            g.player.health = 20;
+            let snake = g.world.spawn("oSnake", Vec2::new(80.0, 144.0));
+            g.step(&InputFrame::default());
+            assert_eq!(g.player.health, 19, "real contact {character:?}");
+            assert_eq!(value(&g.player, "blink", -1.0), 30.0);
+            assert_eq!(value(&g.player, "blink_toggle", 0.0), -1.0);
+            g.world.entity_mut(snake).unwrap().alive = false;
+            for n in 1..=30 {
+                g.step(&InputFrame::default());
+                assert_eq!(value(&g.player, "blink", -1.0), f64::from(30 - n));
+                assert_eq!(
+                    value(&g.player, "blink_toggle", 0.0),
+                    if n % 2 == 1 { 1.0 } else { -1.0 }
+                );
+            }
+            for _ in 0..5 {
+                g.step(&InputFrame::default());
+                assert_eq!(value(&g.player, "blink_toggle", 0.0), -1.0);
+            }
+        }
+    }
+    #[test]
+    fn invulnerability_without_blink_stays_visible_and_does_not_count_down_on_corpses() {
+        let mut g = room(RulesPreset::Classic);
+        g.player.invincible = 60;
+        g.step(&InputFrame::default());
+        assert_eq!(g.player.invincible, 59);
+        assert_eq!(value(&g.player, "blink_toggle", 0.0), -1.0);
+        let bullet = g.world.spawn("oBullet", Vec2::new(80.0, 152.0));
+        g.world.entity_mut(bullet).unwrap().vel.x = 8.0;
+        g.step(&InputFrame::default());
+        assert_eq!(g.state, RunState::Dead);
+        let remaining = g.player.invincible;
+        for _ in 0..10 {
+            g.step(&InputFrame::default());
+        }
+        assert_eq!(g.player.invincible, remaining);
+        assert_eq!(value(&g.player, "blink_toggle", 0.0), -1.0);
+    }
+    #[test]
+    fn repeated_actual_web_jumps_consume_source_twelve_life_until_eleven_jumps() {
+        let mut g = room(RulesPreset::Classic);
+        let web = g.world.spawn("oWeb", Vec2::new(80.0, 144.0));
+        for n in 1..=11 {
+            assert!(
+                g.world.entity(web).is_some(),
+                "web vanished before jump {n}"
+            );
+            g.step(&InputFrame {
+                jump: true,
+                jump_pressed: true,
+                ..Default::default()
+            });
+            if n == 11 {
+                assert!(g.world.entity(web).is_none());
+            } else {
+                assert_eq!(
+                    g.world.entity(web).unwrap().value("life"),
+                    f64::from(12 - n)
+                );
+                for _ in 0..60 {
+                    g.step(&InputFrame {
+                        jump_released: true,
+                        ..Default::default()
+                    });
+                    if g.player.grounded && grounded_state(g.player.state) && g.player.vel.y == 0.0
+                    {
+                        break;
+                    }
+                }
+                assert!(g.player.grounded);
+            }
+        }
+    }
+    #[test]
+    fn web_jump_uses_instance_mask_at_far_corner_instead_of_origin_radius() {
+        let mut g = room(RulesPreset::Classic);
+        g.player.pos.x = 95.0;
+        let web = g.world.spawn("oWeb", Vec2::new(80.0, 144.0));
+        assert!(
+            g.world
+                .entity(web)
+                .unwrap()
+                .sprite_bounds()
+                .contains(g.player.pos)
+        );
+        assert!(g.world.entity(web).unwrap().pos.distance(g.player.pos) > 12.0);
+        g.step(&InputFrame {
+            jump: true,
+            jump_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(g.world.entity(web).unwrap().value("life"), 11.0);
+        assert!(g.player.vel.y < 0.0);
+    }
     #[test]
     fn sustained_wall_push_uses_selected_pose_and_clears_on_release_or_jump() {
         use crate::characters::{self, Character};
