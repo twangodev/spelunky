@@ -1,5 +1,5 @@
 //! Moving trap rules transcribed from Classic 1.1's object events.
-use crate::model::{Entity, Game, GameEvent, PlayerState, Rect, Vec2};
+use crate::model::{CollisionPrecision, Entity, Game, GameEvent, PlayerState, Rect, Vec2};
 
 /// The global oGame platform pass precedes character input and object AI.
 pub(super) fn pre_tick(game: &mut Game) {
@@ -44,7 +44,12 @@ pub(super) fn pre_tick(game: &mut Game) {
                         let gravity = entity.data.get("push_gravity").copied().unwrap_or(0.6);
                         entity.vel.y = (entity.vel.y + gravity).min(8.0);
                         let speed = entity.vel.y;
-                        if move_body(game, &mut entity, Vec2::new(0.0, speed.ceil())) {
+                        if move_body(
+                            game,
+                            &mut entity,
+                            Vec2::new(0.0, speed.ceil()),
+                            CollisionPrecision::BoundingBox,
+                        ) {
                             if speed > 0.6 {
                                 game.sound("sndThud", entity.pos);
                             }
@@ -146,7 +151,21 @@ fn edge_blocked(game: &Game, entity: &Entity, direction: u8, distance: f64) -> b
             1.0,
         ),
     };
-    collides_except(game, line, entity.id)
+    precise_collides_except(game, line, entity.id)
+}
+
+/// Explicit `prec=1` source edge probes. Keep implicit event/placement and
+/// explicit `prec=0` callers on their separate bounding-box path below.
+fn precise_collides_except(game: &Game, rect: Rect, excluded: u64) -> bool {
+    game.world
+        .tiles_collide_precision(rect, "oSolid", CollisionPrecision::Precise)
+        || game.world.entities.iter().any(|entity| {
+            entity.id != excluded
+                && entity.alive
+                && entity.solid
+                && !entity.held
+                && entity.mask_intersects(rect, CollisionPrecision::Precise)
+        })
 }
 
 fn collides_except(game: &Game, rect: Rect, excluded: u64) -> bool {
@@ -307,12 +326,6 @@ fn move_solid(game: &mut Game, entity: &mut Entity, delta: Vec2, carried: &mut b
             Vec2::new(0.0, distance.signum())
         };
         for _ in 0..distance.abs() as u32 {
-            let source_bounds = entity.sprite_bounds();
-            let old = if source_bounds.w > 0.0 && source_bounds.h > 0.0 {
-                source_bounds
-            } else {
-                bounds(entity)
-            };
             let player = game.player.bounds();
             let lb = player.x.round_ties_even();
             let rb = (player.x + player.w - 1.0).round_ties_even();
@@ -321,11 +334,15 @@ fn move_solid(game: &mut Game, entity: &mut Entity, delta: Vec2, carried: &mut b
             let top_line = Rect::new(lb, bb, rb - lb + 1.0, 1.0);
             let bottom_line = Rect::new(lb, tb - 1.0, rb - lb + 1.0, 1.0);
             let rider = if horizontal {
-                viscid && can_carry && old.intersects(top_line)
+                viscid && can_carry && entity.mask_intersects(top_line, CollisionPrecision::Precise)
             } else if step.y > 0.0 {
-                viscid && old.intersects(shifted(top_line, Vec2::new(0.0, 1.0)))
+                viscid
+                    && entity.mask_intersects(
+                        shifted(top_line, Vec2::new(0.0, 1.0)),
+                        CollisionPrecision::Precise,
+                    )
             } else {
-                old.intersects(top_line)
+                entity.mask_intersects(top_line, CollisionPrecision::Precise)
             };
             let side = if step.x > 0.0 {
                 Rect::new(lb - 1.0, tb, 1.0, (bb - 1.0).round_ties_even() - tb + 1.0)
@@ -333,9 +350,9 @@ fn move_solid(game: &mut Game, entity: &mut Entity, delta: Vec2, carried: &mut b
                 Rect::new(rb + 1.0, tb, 1.0, (bb - 1.0).round_ties_even() - tb + 1.0)
             };
             let touching = if horizontal {
-                old.intersects(side)
+                entity.mask_intersects(side, CollisionPrecision::Precise)
             } else {
-                old.intersects(bottom_line)
+                entity.mask_intersects(bottom_line, CollisionPrecision::Precise)
             };
             // oGame cancels variable jumping under a rising platform without
             // attaching the character to its underside.
@@ -359,7 +376,7 @@ fn move_solid(game: &mut Game, entity: &mut Entity, delta: Vec2, carried: &mut b
                 )
             };
             if rider {
-                if !collides_except(game, obstruction, entity.id) {
+                if !precise_collides_except(game, obstruction, entity.id) {
                     game.player.pos.x += step.x;
                     game.player.pos.y += step.y;
                     game.player.grounded = true;
@@ -371,7 +388,7 @@ fn move_solid(game: &mut Game, entity: &mut Entity, delta: Vec2, carried: &mut b
                     break;
                 }
             } else if touching && (horizontal || step.y > 0.0) {
-                if collides_except(game, obstruction, entity.id) {
+                if precise_collides_except(game, obstruction, entity.id) {
                     obstructed = true;
                     break;
                 }
@@ -414,14 +431,51 @@ fn trap_damage(game: &mut Game, amount: i32) {
 
 /// Smash traps use their own xv/yv, rather than the platform engine's xVel/yVel.
 /// Consequently the collision event must see their overlap with a character.
-fn move_body(game: &Game, entity: &mut Entity, delta: Vec2) -> bool {
+fn move_body(game: &Game, entity: &mut Entity, delta: Vec2, precision: CollisionPrecision) -> bool {
     let steps = delta.x.abs().max(delta.y.abs()).ceil() as u32;
     if steps == 0 {
         return false;
     }
     let step = Vec2::new(delta.x / f64::from(steps), delta.y / f64::from(steps));
     for _ in 0..steps {
-        if blocked(game, entity, step) {
+        let blocked = if precision == CollisionPrecision::Precise {
+            // moveTo's getIdCollisionLeft/Right starts five pixels below
+            // the custom top; vertical isCollisionTop/Bottom uses full width.
+            let body = bounds(entity);
+            let probe = if step.x != 0.0 {
+                let top = (body.y + 5.0).round_ties_even();
+                let bottom = (body.y + body.h - 1.0).round_ties_even();
+                Rect::new(
+                    (if step.x > 0.0 {
+                        body.x + body.w
+                    } else {
+                        body.x - 1.0
+                    })
+                    .round_ties_even(),
+                    top,
+                    1.0,
+                    bottom - top + 1.0,
+                )
+            } else {
+                let left = body.x.round_ties_even();
+                let right = (body.x + body.w - 1.0).round_ties_even();
+                Rect::new(
+                    left,
+                    (if step.y > 0.0 {
+                        body.y + body.h
+                    } else {
+                        body.y - 1.0
+                    })
+                    .round_ties_even(),
+                    right - left + 1.0,
+                    1.0,
+                )
+            };
+            precise_collides_except(game, probe, entity.id)
+        } else {
+            blocked(game, entity, step)
+        };
+        if blocked {
             return true;
         }
         entity.pos.x += step.x;
@@ -579,7 +633,12 @@ fn boulder(game: &mut Game, entity: &mut Entity) {
                 entity.vel.x *= -0.5;
                 break;
             }
-            if move_body(game, entity, Vec2::new(dx, 0.0)) {
+            if move_body(
+                game,
+                entity,
+                Vec2::new(dx, 0.0),
+                CollisionPrecision::Precise,
+            ) {
                 entity.vel.x *= -0.5;
                 break;
             }
@@ -587,7 +646,12 @@ fn boulder(game: &mut Game, entity: &mut Entity) {
     }
     let vertical_speed = entity.vel.y;
     let vertical_distance = scheduled_delta(vertical_speed, game.engine_time());
-    let vertical_hit = move_body(game, entity, Vec2::new(0.0, vertical_distance));
+    let vertical_hit = move_body(
+        game,
+        entity,
+        Vec2::new(0.0, vertical_distance),
+        CollisionPrecision::Precise,
+    );
     entity.vel.y = (entity.vel.y + 0.6).min(8.0);
     if entity.pos.x - 17.0 <= 16.0 && entity.vel.x < 0.0 {
         entity.pos.x += 1.0;
@@ -716,12 +780,15 @@ fn dark_fall(game: &mut Game, entity: &mut Entity) {
     let player = game.player.bounds();
     let left = player.x.round_ties_even();
     let right = (player.x + player.w - 1.0).round_ties_even();
-    let touching = entity.sprite_bounds().intersects(Rect::new(
-        left,
-        (player.y + player.h).round_ties_even(),
-        right - left + 1.0,
-        1.0,
-    ));
+    let touching = entity.mask_intersects(
+        Rect::new(
+            left,
+            (player.y + player.h).round_ties_even(),
+            right - left + 1.0,
+            1.0,
+        ),
+        CollisionPrecision::Precise,
+    );
     let mut time = entity.data.get("timeFall").copied().unwrap_or(20.0);
     if touching {
         time -= 1.0;
@@ -855,6 +922,43 @@ fn is_item(object: &str) -> bool {
 mod tests {
     use super::*;
     use crate::model::RulesPreset;
+
+    #[test]
+    fn global_platform_carry_rejects_transparent_corner_and_accepts_opaque_neighbor() {
+        // sDarkFall row zero is .##############.; the source's precise
+        // character-bottom line therefore differs from its bounding box.
+        for (player_x, expected_x, expected_y, expected_countdown) in
+            [(76.0, 76.0, 73.0, 20.0), (77.0, 78.0, 72.0, 19.0)]
+        {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            let id = game.world.spawn("oDarkFall", Vec2::new(80.0, 80.0));
+            game.world.entity_mut(id).unwrap().vel.x = 1.0;
+            game.player.pos = Vec2::new(player_x, 72.0);
+            game.player.state = PlayerState::Standing;
+            game.player.grounded = true;
+            game.step(&crate::InputFrame::default());
+            assert_eq!(game.world.entity(id).unwrap().pos.x, 81.0);
+            assert_eq!(game.player.pos, Vec2::new(expected_x, expected_y));
+            assert_eq!(
+                game.world.entity(id).unwrap().value("timeFall"),
+                expected_countdown
+            );
+        }
+    }
+
+    #[test]
+    fn thwomp_precise_floor_line_distinguishes_transparent_and_opaque_platform_pixels() {
+        for (trap_x, expected_state, expected_velocity) in [(65.0, 1, 1.0), (66.0, 2, 0.0)] {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            let id = game.world.spawn("oThwompTrap", Vec2::new(trap_x, 64.0));
+            game.world.entity_mut(id).unwrap().state = 1;
+            game.world.spawn("oDarkFall", Vec2::new(80.0, 80.0));
+            game.step(&crate::InputFrame::default());
+            let trap = game.world.entity(id).unwrap();
+            assert_eq!(trap.state, expected_state);
+            assert_eq!(trap.vel.y, expected_velocity);
+        }
+    }
 
     #[test]
     fn rising_platform_ends_variable_jump_under_its_underside() {
@@ -1157,6 +1261,7 @@ mod tests {
     fn moving_solid_carries_player_at_original_top_left_bounds() {
         let mut game = Game::shell(1, RulesPreset::Classic);
         let id = game.world.spawn("oMovingSolid", Vec2::new(80.0, 80.0));
+        game.world.entity_mut(id).unwrap().sprite = "sBlock".into();
         game.world.entity_mut(id).unwrap().vel.x = 1.0;
         game.world
             .entity_mut(id)
