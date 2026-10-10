@@ -19,7 +19,7 @@ class BundleHandler(SimpleHTTPRequestHandler):
 
     def send_head(self):
         # SimpleHTTPRequestHandler follows symlinks by default. Reject paths
-        # outside this bundle even if a symlink was created under web/.
+        # outside this bundle even if a symlink was created under web/dist/.
         resolved = Path(self.translate_path(self.path)).resolve()
         if not resolved.is_relative_to(Path(self.directory).resolve()):
             self.send_error(403, "Path is outside the web bundle")
@@ -40,9 +40,9 @@ def main():
     parser.add_argument("--bind", default="127.0.0.1", help="Address to bind (default: localhost only)")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args()
-    bundle = Path(__file__).resolve().parent.parent / "web"
+    bundle = Path(__file__).resolve().parent.parent / "web" / "dist"
     if not (bundle / "pkg" / "spelunky.js").is_file():
-        parser.error("Missing web/pkg/spelunky.js; run ./tools/build_web.sh first")
+        parser.error("Missing web/dist/pkg/spelunky.js; run ./tools/build_web.sh first")
     handler = partial(BundleHandler, directory=str(bundle))
     with ThreadingHTTPServer((args.bind, args.port), handler) as server:
         print(f"Spelunky: http://{args.bind}:{server.server_port}/", flush=True)
