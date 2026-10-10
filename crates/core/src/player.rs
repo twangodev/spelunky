@@ -42,14 +42,27 @@ fn solid(w: &World, p: &Player, pos: Vec2) -> bool {
 }
 
 fn collision_rect(w: &World, r: Rect, group: &str) -> bool {
+    collision_rect_precision(w, r, group, CollisionPrecision::BoundingBox)
+}
+
+fn precise_rect(w: &World, r: Rect, group: &str) -> bool {
+    collision_rect_precision(w, r, group, CollisionPrecision::Precise)
+}
+
+fn collision_rect_precision(
+    w: &World,
+    r: Rect,
+    group: &str,
+    precision: CollisionPrecision,
+) -> bool {
     // GameMaker has no implicit room-edge collider. In particular, the Ice
     // Caves abyss must let the player leave the room and trigger falling death.
-    w.tiles_collide(r, group)
+    w.tiles_collide_precision(r, group, precision)
         || w.entities.iter().any(|e| {
             e.alive
                 && !e.held
                 && (crate::catalog::is_a(&e.object, group) || (group == "oSolid" && e.solid))
-                && e.sprite_bounds().intersects(r)
+                && e.mask_intersects(r, precision)
         })
 }
 
@@ -86,7 +99,7 @@ fn edge_rect(p: &Player, side: Side, distance: f64, move_probe: bool) -> Rect {
 }
 
 fn edge(w: &World, p: &Player, side: Side, distance: f64) -> bool {
-    collision_rect(w, edge_rect(p, side, distance, false), "oSolid")
+    precise_rect(w, edge_rect(p, side, distance, false), "oSolid")
 }
 
 fn solid_point(w: &World, pos: Vec2) -> bool {
@@ -125,15 +138,59 @@ fn ladder_match(w: &World, pos: Vec2, include_top: bool) -> Option<Vec2> {
         .map(|e| Vec2::new(e.pos.x + 8.0, e.pos.y))
 }
 fn water(w: &World, pos: Vec2) -> bool {
-    object_at(w, pos, &["oWater", "oWaterSwim", "oWaterTop"])
+    collision_rect(w, Rect::new(pos.x, pos.y, 0.001, 0.001), "oWater")
+        || object_at(w, pos, &["oWater", "oWaterTop"])
+}
+
+fn swimming_without_lava(w: &World, p: &Player) -> bool {
+    value(p, "swimming", 0.0) > 0.0
+        && !collision_rect(w, Rect::new(p.pos.x, p.pos.y, 0.001, 0.001), "oLava")
+}
+
+/// oPlayer1 runs these effects before entering its dead/stunned controller.
+/// The swimming flag starts only in oWaterSwim; ordinary movement clears it
+/// after leaving water and webs. A stunned swimmer still emits source bubbles.
+fn environmental_prelude(game: &mut Game) {
+    let pos = game.player.pos;
+    if collision_rect(
+        &game.world,
+        Rect::new(pos.x, pos.y, 0.001, 0.001),
+        "oWaterSwim",
+    ) && value(&game.player, "swimming", 0.0) == 0.0
+    {
+        set(&mut game.player, "swimming", 1.0);
+        game.world.spawn("oSplash", Vec2::new(pos.x, pos.y - 8.0));
+        game.sound("sndSplash", pos);
+    }
+    let burning = value(&game.player, "burning", 0.0);
+    if burning > 0.0 {
+        if game.rng.range(5) == 0 {
+            let x = pos.x - 8.0 + 4.0 + f64::from(game.rng.range(9));
+            let y = pos.y - 8.0 + 4.0 + f64::from(game.rng.range(9));
+            game.world.spawn("oBurn", Vec2::new(x, y));
+        }
+        set(&mut game.player, "burning", burning - 1.0);
+    }
+    let bubble_max = value(&game.player, "bubble_timer_max", 20.0);
+    if swimming_without_lava(&game.world, &game.player) {
+        let bubble = value(&game.player, "bubble_timer", 0.0);
+        if bubble > 0.0 {
+            set(&mut game.player, "bubble_timer", bubble - 1.0);
+        } else {
+            game.world.spawn("oBubble", Vec2::new(pos.x, pos.y - 4.0));
+            set(&mut game.player, "bubble_timer", bubble_max);
+        }
+    } else {
+        set(&mut game.player, "bubble_timer", bubble_max);
+    }
 }
 fn platform(w: &World, p: &Player, pos: Vec2, dy: f64) -> bool {
     if dy <= 0.0 {
         return false;
     }
     debug_assert_eq!(pos, p.pos);
-    !collision_rect(w, bounds_at(p, pos), "oPlatform")
-        && collision_rect(w, edge_rect(p, Side::Bottom, dy, false), "oPlatform")
+    !precise_rect(w, bounds_at(p, pos), "oPlatform")
+        && precise_rect(w, edge_rect(p, Side::Bottom, dy, false), "oPlatform")
 }
 fn below(w: &World, p: &Player) -> bool {
     edge(w, p, Side::Bottom, 1.0) || platform(w, p, p.pos, 1.0)
@@ -163,7 +220,7 @@ fn move_by(w: &mut World, p: &mut Player, tick: u64, down: bool, movement: Vec2)
     for _ in 0..dx.unsigned_abs() {
         let next = Vec2::new(p.pos.x + f64::from(dx.signum()), p.pos.y);
         let probe = edge_rect(p, if dx > 0 { Side::Right } else { Side::Left }, 1.0, true);
-        if collision_rect(w, probe, "oSolid") {
+        if precise_rect(w, probe, "oSolid") {
             // Source canPushMoveableSolids checks player ancestry, so a player's
             // remaining airborne momentum can also push a block pixel by pixel.
             let target = probe;
@@ -171,7 +228,7 @@ fn move_by(w: &mut World, p: &mut Player, tick: u64, down: bool, movement: Vec2)
                 e.alive
                     && e.solid
                     && crate::catalog::is_a(&e.object, "oMoveableSolid")
-                    && e.sprite_bounds().intersects(target)
+                    && e.mask_intersects(target, CollisionPrecision::Precise)
             });
             let pushed = block.is_some_and(|index| {
                 let destination = Vec2::new(
@@ -297,6 +354,10 @@ fn apply_ball_tether(w: &World, p: &mut Player, input: &InputFrame, fall: &mut f
 /// belongs to the host; this function never accepts a frame delta.
 pub fn tick(game: &mut Game, input: &InputFrame) {
     let engine_time = game.engine_time();
+    environmental_prelude(game);
+    if game.state == RunState::Dead {
+        game.player.state = PlayerState::Dead;
+    }
     let damsel = game.flags.contains("character_damsel");
     let tunnelman = game.flags.contains("character_tunnelman");
     let p = &mut game.player;
@@ -323,7 +384,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     // Throws can set Classic's independent `stunned` flag without adding any
     // timer. They still tumble until the stationary stun pose is reached.
     let stunned = p.stun > 0 || (p.state == PlayerState::Stunned && !stationary_stun_pose);
-    if p.health <= 0 || stunned {
+    if p.health <= 0 || p.state == PlayerState::Dead || stunned {
         // This precedes the separate hurt controller in oPlayer1 Step. A long
         // fall ends a throw's one-shot wall injury even while input is disabled.
         let mut fall = value(p, "fall_timer", 0.0);
@@ -337,6 +398,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
                 set(p, "wallHurt", 0.0);
             }
         } else {
+            fall = 0.0;
+        }
+        if swimming_without_lava(&game.world, p) {
             fall = 0.0;
         }
         set(p, "fall_timer", fall);
@@ -379,13 +443,12 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let col_left = edge(w, p, Side::Left, 1.0);
     let col_right = edge(w, p, Side::Right, 1.0);
     let col_top = edge(w, p, Side::Top, 1.0);
-    let col_moveable_left =
-        collision_rect(w, edge_rect(p, Side::Left, 1.0, false), "oMoveableSolid");
+    let col_moveable_left = precise_rect(w, edge_rect(p, Side::Left, 1.0, false), "oMoveableSolid");
     let col_moveable_right =
-        collision_rect(w, edge_rect(p, Side::Right, 1.0, false), "oMoveableSolid");
+        precise_rect(w, edge_rect(p, Side::Right, 1.0, false), "oMoveableSolid");
     let in_water = water(w, p.pos);
     let in_web = object_at(w, p.pos, &["oWeb"]);
-    let water_jump = collision_rect(w, edge_rect(p, Side::Top, 1.0, false), "oWater");
+    let water_jump = precise_rect(w, edge_rect(p, Side::Top, 1.0, false), "oWater");
     let water_surface = in_water && !water(w, Vec2::new(p.pos.x, p.pos.y - 9.0));
     let was_grounded = grounded_state(p.state);
     let mut fall = value(p, "fall_timer", 0.0);
@@ -458,10 +521,12 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     if was_grounded {
         fuel = 50.0;
     }
-    if in_water && value(p, "swimming", 0.0) == 0.0 {
-        sound = Some("sndSplash");
+    if swimming_without_lava(w, p) {
+        fall = 0.0;
     }
-    set(p, "swimming", f64::from(in_water));
+    if !in_water && !in_web {
+        set(p, "swimming", 0.0);
+    }
     set(p, "in_web", f64::from(in_web));
 
     // Classic intentionally waits two ticks before horizontal acceleration.
@@ -1025,6 +1090,7 @@ fn duck_to_hang_tick(w: &World, p: &mut Player) {
 }
 
 fn stunned_tick(w: &mut World, p: &mut Player, time: u64) -> bool {
+    let dead = p.health <= 0 || p.state == PlayerState::Dead;
     let bounced = value(p, "bounced", 0.0) > 0.0;
     p.vel.y += if bounced { 1.0 } else { 0.6 };
     if p.vel.y < 0.0 && edge(w, p, Side::Top, 1.0) {
@@ -1059,7 +1125,7 @@ fn stunned_tick(w: &mut World, p: &mut Player, time: u64) -> bool {
         set(p, "wallHurt", remaining);
     }
     p.grounded = below(w, p);
-    p.state = if p.health <= 0 {
+    p.state = if dead {
         PlayerState::Dead
     } else if p.stun > 0 || p.state == PlayerState::Stunned {
         PlayerState::Stunned
@@ -1069,7 +1135,7 @@ fn stunned_tick(w: &mut World, p: &mut Player, time: u64) -> bool {
     p.sprite = character_sprite(
         p,
         if p.vel.x == 0.0 {
-            if p.health <= 0 { "sDieL" } else { "sStunL" }
+            if dead { "sDieL" } else { "sStunL" }
         } else if value(p, "bounced", 0.0) > 0.0 {
             if p.vel.y < 0.0 {
                 "sDieLBounce"
@@ -1248,6 +1314,186 @@ fn character_sprite<'a>(p: &Player, name: &'a str) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn source_precise_floor_probe_rejects_only_dark_fall_transparent_corner() {
+        for (x, supported) in [(76.0, false), (77.0, true)] {
+            let mut g = room(RulesPreset::Classic);
+            g.world.spawn("oDarkFall", Vec2::new(80.0, 80.0));
+            g.player.pos = Vec2::new(x, 72.0);
+            g.step(&InputFrame::default());
+            if supported {
+                assert_eq!(g.player.pos.y, 72.0);
+            } else {
+                // The next image row is opaque: fall past the transparent
+                // corner, then gain support from the real image pixels.
+                assert_eq!(g.player.pos.y, 73.0);
+                assert_eq!(g.player.state, PlayerState::Falling);
+            }
+        }
+    }
+    #[test]
+    fn kapala_healing_a_real_corpse_preserves_latched_death_and_suppresses_movement() {
+        use crate::characters::{self, Character};
+        for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
+            let mut g = room(RulesPreset::Classic);
+            characters::apply(&mut g, character);
+            g.player.health = 4;
+            g.player.equipment.insert("Kapala".into());
+            let bullet = g.world.spawn("oBullet", Vec2::new(80.0, 152.0));
+            g.world.entity_mut(bullet).unwrap().vel.x = 8.0;
+            g.step(&InputFrame::default());
+            assert_eq!(g.state, RunState::Dead);
+            g.data.insert("bloodLevel".into(), 8.0);
+            let blood = g.world.spawn("oBlood", g.player.pos);
+            let particle = g.world.entity_mut(blood).unwrap();
+            particle.age = 4;
+            particle.data.insert("world_effect_initialized".into(), 1.0);
+            particle.data.insert("life".into(), 60.0);
+            particle.data.insert("gravity".into(), 0.1);
+            g.step(&InputFrame::default());
+            assert_eq!(g.player.health, 1, "legitimate Kapala heal {character:?}");
+            assert_eq!(g.state, RunState::Dead);
+            let mut neutral = g.clone();
+            for _ in 0..5 {
+                g.step(&InputFrame {
+                    right: true,
+                    jump: true,
+                    jump_pressed: true,
+                    ..Default::default()
+                });
+                neutral.step(&InputFrame::default());
+                assert_eq!(
+                    g.player.pos, neutral.player.pos,
+                    "input changed corpse motion {character:?}"
+                );
+                assert_eq!(g.player.vel, neutral.player.vel);
+                assert_eq!(g.player.state, PlayerState::Dead);
+                assert_eq!(g.player.health, 1);
+            }
+        }
+    }
+    fn fill_bath(g: &mut Game, start_x: usize) {
+        for x in start_x..20 {
+            for y in 6..10 {
+                g.world.set_tile(x, y, "oWaterSwim");
+            }
+        }
+    }
+    #[test]
+    fn actual_water_entry_splashes_once_and_bubbles_on_source_twenty_one_tick_cycle() {
+        let mut g = room(RulesPreset::Classic);
+        fill_bath(&mut g, 0);
+        g.step(&InputFrame::default());
+        assert_eq!(value(&g.player, "swimming", 0.0), 1.0);
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oSplash")
+                .count(),
+            1
+        );
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oBubble")
+                .count(),
+            1
+        );
+        assert_eq!(value(&g.player, "bubble_timer", -1.0), 20.0);
+        assert!(
+            g.events
+                .iter()
+                .any(|e| matches!(e, GameEvent::Sound { name, .. } if name == "sndSplash"))
+        );
+        for _ in 0..20 {
+            g.step(&InputFrame::default());
+            assert!(
+                !g.events
+                    .iter()
+                    .any(|e| matches!(e, GameEvent::Sound { name, .. } if name == "sndSplash"))
+            );
+        }
+        assert_eq!(value(&g.player, "bubble_timer", -1.0), 0.0);
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oBubble")
+                .count(),
+            1
+        );
+        g.step(&InputFrame::default());
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oBubble")
+                .count(),
+            2
+        );
+        assert_eq!(value(&g.player, "fall_timer", -1.0), 0.0);
+    }
+    #[test]
+    fn actual_projectile_knockback_into_water_runs_effects_before_stunned_return() {
+        let mut g = room(RulesPreset::Classic);
+        g.player.pos.x = 95.0;
+        g.player.health = 20;
+        fill_bath(&mut g, 6);
+        let bullet = g.world.spawn("oBullet", Vec2::new(87.0, 152.0));
+        g.world.entity_mut(bullet).unwrap().vel.x = 8.0;
+        g.step(&InputFrame::default());
+        assert!(g.player.is_stunned());
+        assert_eq!(value(&g.player, "swimming", 0.0), 0.0);
+        g.step(&InputFrame::default());
+        assert!(g.player.pos.x >= 96.0);
+        g.step(&InputFrame::default());
+        assert!(g.player.is_stunned());
+        assert_eq!(value(&g.player, "swimming", 0.0), 1.0);
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oSplash")
+                .count(),
+            1
+        );
+        assert!(
+            g.events
+                .iter()
+                .any(|e| matches!(e, GameEvent::Sound { name, .. } if name == "sndSplash"))
+        );
+        assert_eq!(value(&g.player, "fall_timer", -1.0), 0.0);
+    }
+    #[test]
+    fn lava_death_burns_after_leaving_lava_and_counter_eventually_expires() {
+        let mut g = room(RulesPreset::Classic);
+        g.world.set_tile(5, 9, "oLava");
+        g.step(&InputFrame::default());
+        assert_eq!(g.state, RunState::Dead);
+        assert_eq!(value(&g.player, "swimming", 0.0), 0.0);
+        assert_eq!(value(&g.player, "burning", 0.0), 100.0);
+        assert!(
+            !g.world
+                .entities
+                .iter()
+                .any(|e| e.object == "oSplash" || e.object == "oBubble")
+        );
+        // Isolate the lingering source effect from lava reapplying burning100.
+        g.world.set_tile(5, 9, "");
+        let mut produced = false;
+        for n in 1..=100 {
+            g.step(&InputFrame::default());
+            produced |= g.world.entities.iter().any(|e| e.object == "oBurn");
+            assert_eq!(value(&g.player, "burning", -1.0), f64::from(100 - n));
+        }
+        assert!(produced);
+        for _ in 0..30 {
+            g.step(&InputFrame::default());
+        }
+        assert!(!g.world.entities.iter().any(|e| e.object == "oBurn"));
+    }
     #[test]
     fn real_contact_blink_alternates_every_authoritative_tick_and_stops_at_expiry() {
         use crate::characters::{self, Character};
