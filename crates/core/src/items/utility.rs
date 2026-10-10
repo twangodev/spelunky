@@ -261,6 +261,27 @@ pub(crate) fn collision(_game: &mut Game, _id: u64, _other: crate::dispatcher::I
 // belong exclusively to its outer alarm-number pass.
 pub fn pre_tick(_game: &mut Game) {}
 
+/// oDice replaces oItem Step: its camera/shop checks precede held attachment
+/// and movement, while the final rolling/face block runs outside this gate.
+pub(crate) fn dice_begin_step(game: &mut Game, entity: &mut Entity) -> bool {
+    if !super::item_body_active(game, entity) {
+        return false;
+    }
+    if entity.value("cost") > 0.0
+        && !game
+            .world
+            .entities
+            .iter()
+            .any(|keeper| keeper.alive && crate::catalog::is_a(&keeper.object, "oShopkeeper"))
+    {
+        entity.data.insert("cost".into(), 0.0);
+    }
+    if game.is_level() && !crate::economy::in_shop(game, entity.pos) {
+        crate::economy::anger(game, entity.pos, "COME BACK HERE, THIEF!");
+    }
+    true
+}
+
 pub(crate) fn step_instance(game: &mut Game, id: u64) {
     let Some(index) = game
         .world
@@ -373,6 +394,99 @@ pub fn tick(game: &mut Game) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dice_shop() -> (Game, u64, u64) {
+        let mut game = Game::shell(18, RulesPreset::Classic);
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        game.player.pos = Vec2::new(160.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.grounded = true;
+        let keeper = game.spawn("oShopkeeper", Vec2::new(96.0, 144.0));
+        game.world
+            .entity_mut(keeper)
+            .unwrap()
+            .text
+            .insert("style".into(), "Craps".into());
+        let die = game.spawn("oDice", game.player.pos);
+        game.step(&InputFrame {
+            down: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.held, Some(die));
+        (game, keeper, die)
+    }
+
+    #[test]
+    fn actual_pickup_carry_and_throw_die_out_of_shop_reports_theft() {
+        let (mut game, keeper, die) = dice_shop();
+        for frame in 0..12 {
+            game.step(&InputFrame {
+                right: true,
+                ..Default::default()
+            });
+            if frame == 6 {
+                // The source checks the old position before this attachment
+                // crosses the room boundary; anger begins on the next Step.
+                assert_eq!(game.world.entity(die).unwrap().pos.x, 178.0);
+                assert_eq!(game.data.get("thiefLevel").copied().unwrap_or(0.0), 0.0);
+            }
+            if frame == 7 {
+                assert_eq!(game.data["thiefLevel"], 2.0);
+                assert_eq!(game.world.entity(keeper).unwrap().state, 2);
+                assert!(game.events.iter().any(|event| matches!(event,
+                    GameEvent::Dialogue(message) if message.first == "COME BACK HERE, THIEF!"
+                )));
+            }
+        }
+        game.step(&InputFrame {
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.held, None);
+        assert!(!game.world.entity(die).unwrap().held);
+        for _ in 0..9 {
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(game.data["thiefLevel"], 2.0);
+        assert_eq!(game.world.entity(keeper).unwrap().value("angered"), 1.0);
+    }
+
+    #[test]
+    fn actual_held_die_stays_in_shop_without_reporting_theft() {
+        let (mut game, keeper, die) = dice_shop();
+        for _ in 0..22 {
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(game.world.entity(die).unwrap().pos, Vec2::new(164.0, 150.0));
+        assert_eq!(game.player.held, Some(die));
+        assert_eq!(game.data.get("thiefLevel").copied().unwrap_or(0.0), 0.0);
+        assert_eq!(game.world.entity(keeper).unwrap().state, 0);
+        assert_eq!(game.world.entity(keeper).unwrap().value("angered"), 0.0);
+    }
+
+    #[test]
+    fn actual_offcamera_die_keeps_position_but_draws_rolling_face() {
+        let mut game = Game::shell(18, RulesPreset::Classic);
+        game.player.pos = Vec2::new(160.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        let die = game.spawn("oDice", Vec2::new(336.0, 152.0));
+        game.world.entity_mut(die).unwrap().vel.x = 4.0;
+        let mut expected_rng = game.rng.clone();
+        let face = 1 + expected_rng.range(6);
+        game.step(&InputFrame::default());
+        let entity = game.world.entity(die).unwrap();
+        assert!(entity.engine_active);
+        assert_eq!(entity.pos, Vec2::new(336.0, 152.0));
+        assert_eq!(entity.vel, Vec2::new(4.0, 0.0));
+        assert_eq!(entity.sprite, "sDiceRoll");
+        assert_eq!(entity.value("value"), f64::from(face));
+        assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
+    }
 
     fn held_teleporter(seed: u64) -> (Game, u64) {
         let mut game = Game::shell(seed, RulesPreset::Classic);

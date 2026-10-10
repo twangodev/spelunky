@@ -970,7 +970,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 339,
+          "line": 360,
           "module": "crates/core/src/items/utility.rs"
         },
         {
@@ -3278,7 +3278,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 303,
+          "line": 324,
           "module": "crates/core/src/items/utility.rs"
         },
         {
@@ -4117,7 +4117,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 279,
+          "line": 300,
           "module": "crates/core/src/items/utility.rs"
         },
         {
@@ -4153,7 +4153,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 347,
+          "line": 368,
           "module": "crates/core/src/items/utility.rs"
         },
         {

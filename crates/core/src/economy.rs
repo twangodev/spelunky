@@ -10,7 +10,7 @@ fn room(pos: Vec2) -> (i32, i32) {
         (((pos.y - 16.).max(0.) / 128.).floor() as i32).min(4),
     )
 }
-fn in_shop(game: &Game, pos: Vec2) -> bool {
+pub(crate) fn in_shop(game: &Game, pos: Vec2) -> bool {
     game.world.entities.iter().any(|e| {
         e.alive
             && crate::catalog::is_a(&e.object, "oShopkeeper")

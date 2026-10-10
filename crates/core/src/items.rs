@@ -175,6 +175,37 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         return;
     }
     init_entity(&mut entity);
+    if entity.object == "oDice" {
+        // Dice replaces oItem Step. Its camera-gated theft check precedes
+        // attachment/movement; its final rolling block runs even off camera.
+        let body_active = utility::dice_begin_step(game, &mut entity);
+        if body_active {
+            if entity.held {
+                align_held(game, &mut entity);
+                entity.data.insert("depth".into(), 1.0);
+            } else {
+                if advance_item_body(game, &mut entity) {
+                    entity.alive = false;
+                }
+                entity.data.insert(
+                    "depth".into(),
+                    if game.player.has("Spectacles") {
+                        0.0
+                    } else {
+                        101.0
+                    },
+                );
+            }
+        }
+        if let Some(slot) = game.world.entities.iter_mut().find(|e| e.id == id) {
+            *slot = entity;
+        }
+        if body_active {
+            crate::enemies::item_step_impacts(game, id);
+        }
+        utility::step_instance(game, id);
+        return;
+    }
     if crate::catalog::is_a(&entity.object, "oItem") {
         crate::economy::item_step(game, &mut entity);
     }
