@@ -24,11 +24,13 @@ pub fn init(e: &mut Entity) {
     match e.object.as_str() {
         "oHawkman" | "oHawkmanWorship" => {
             e.health = 4;
+            e.vel.x = 2.5;
             e.sprite = "sHawkLeft".into();
             e.data.insert("contact_damage".into(), 0.0);
         }
         "oTombLord" => {
             e.health = 20;
+            e.vel.x = 2.5;
             e.sprite = "sTombLordRight".into();
             e.data.insert("contact_damage".into(), 2.0);
         }
@@ -49,6 +51,9 @@ pub fn init(e: &mut Entity) {
         }
         "oMagmaMan" | "oMagma" => {
             e.health = 200;
+            if e.object == "oMagmaMan" {
+                e.vel.x = 2.5;
+            }
             // oMagmaMan Create sets invincible=0; its whip collision only
             // plays a sound, but other projectile damage remains possible.
             e.data.insert("no_stomp".into(), 1.0);
@@ -68,6 +73,7 @@ pub fn init(e: &mut Entity) {
         }
         "oYellowBall" => {
             e.data.insert("launch".into(), 1.0);
+            e.data.insert("trail_alarm".into(), 1.0);
         }
         _ => {}
     }
@@ -99,7 +105,7 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
 
 fn ground(world: &World, e: &Entity) -> bool {
     let b = e.bounds();
-    world.collides(Rect::new(b.x, b.y + b.h, b.w, 1.0))
+    world.collides_except(Rect::new(b.x, b.y + b.h, b.w, 1.0), e.id)
 }
 fn countdown(e: &mut Entity, key: &str) {
     let v = e.value(key);
@@ -120,6 +126,7 @@ fn spawn(game: &mut Game, object: &str, pos: Vec2) -> u64 {
 
 fn hawk(game: &mut Game, e: &mut Entity) {
     e.animation += if e.state == 2 { 1.0 } else { 0.5 };
+    let impact_y = (e.vel.y + super::inherited::gravity(e, 0.6)).min(10.0);
     let (wall, landed) = move_body(&game.world, e, 0.6);
     let grounded = landed || ground(&game.world, e);
     // oHawkman Step checks the lower corpse origin after moveTo, and the
@@ -133,12 +140,16 @@ fn hawk(game: &mut Game, e: &mut Entity) {
     }
     if e.state >= 98 {
         if grounded {
-            e.vel.x *= 0.8;
             if e.timer > 0 {
                 e.timer -= 1;
             } else if e.health > 0 {
                 e.state = 0;
             }
+        }
+        super::settle_body(&game.world, e, impact_y);
+        e.vel.x = (e.vel.x.abs() - 0.1).max(0.0) * e.vel.x.signum();
+        if e.vel.x.abs() < 0.5 {
+            e.vel.x = 0.0;
         }
         e.sprite = if e.health <= 0 {
             "sHawkDeadL"
@@ -183,10 +194,10 @@ fn hawk(game: &mut Game, e: &mut Entity) {
             }
             e.vel.x = 1.5 * e.facing as f64;
             if grounded
-                && (!game
-                    .world
-                    .solid_at(center(e).x + 9.0 * e.facing as f64, e.pos.y + 17.0)
-                    || game.rng.chance(1, 100))
+                && (!game.world.solid_at(
+                    e.pos.x + if e.facing < 0 { -1.0 } else { 16.0 },
+                    e.pos.y + 16.0,
+                ) || game.rng.chance(1, 100))
             {
                 e.state = 0;
                 e.timer = 20 + game.rng.range(31);
@@ -236,7 +247,16 @@ fn hawk(game: &mut Game, e: &mut Entity) {
         && !(game.player.vel.y > 0.0 && game.player.pos.y < e.pos.y + 5.0)
     {
         if game.world.solid_at(e.pos.x + 8.0, e.pos.y - 4.0) {
-            game.damage_player(1);
+            game.player.health -= 1;
+            game.player.invincible = 30;
+            game.player.data.insert("blink".into(), 30.0);
+            game.player.vel.x = if game.player.pos.x < e.pos.x {
+                -6.0
+            } else {
+                6.0
+            };
+            game.events.push(GameEvent::Damage { amount: 1 });
+            game.sound("sndHurt", game.player.pos);
         } else {
             e.facing = if game.player.pos.x > e.pos.x + 8.0 {
                 1
@@ -250,15 +270,12 @@ fn hawk(game: &mut Game, e: &mut Entity) {
             // Collision with oCharacter: the grabbed character moves to the
             // opposite side of the Hawkman before being thrown.
             game.player.pos = Vec2::new(e.pos.x + if e.facing > 0 { 0.0 } else { 16.0 }, e.pos.y);
+            game.player.previous_pos = game.player.pos;
             game.player.vel = Vec2::new(6.0 * e.facing as f64, -6.0);
-            game.player.stun = 20;
+            game.player.stun = 0;
+            game.player.state = crate::PlayerState::Stunned;
             game.player.data.insert("bounced".into(), 0.0);
-            if let Some(id) = game.player.held.take() {
-                if let Some(item) = game.world.entity_mut(id) {
-                    item.held = false;
-                    item.vel = game.player.vel;
-                }
-            }
+            super::drop_from_throw(game);
             game.player.data.insert("wall_hurt".into(), 1.0);
         }
     }
@@ -379,7 +396,12 @@ fn fly(game: &mut Game, e: &mut Entity) {
         game.sound("sndHit", e.pos);
         return;
     }
-    if super::touches_player(game, e) {
+    if super::touches_player(game, e)
+        && !matches!(
+            game.player.sprite.as_str(),
+            "sPExit" | "sDamselExit" | "sTunnelExit"
+        )
+    {
         // oFly Collision with oCharacter has no invincibility guard and does
         // not grant new invincibility. Several flies may hit during one volley.
         let invincible = game.player.invincible;
@@ -454,6 +476,16 @@ fn olmec_move(world: &World, e: &mut Entity) -> bool {
 }
 fn olmec(game: &mut Game, e: &mut Entity) {
     let old = e.pos;
+    // Olmec has an additional raw-velocity carry in its own Step, after the
+    // oGame moving-solid pass. This deliberately differs from moveTo's integer
+    // displacement, and includes the source's persistent carryPlayer flag.
+    if e.value("carryPlayer") != 0.0
+        || Rect::new(e.pos.x - 1.0, e.pos.y, 68.0, 63.0)
+            .intersects(game.player.sprite_bounds())
+    {
+        game.player.pos.x += e.vel.x;
+        game.player.pos.y += e.vel.y;
+    }
     let ceiling = olmec_move(&game.world, e);
     if ceiling {
         spawn(game, "oOlmecSlam", Vec2::new(e.pos.x, e.pos.y - 16.0));
@@ -464,10 +496,10 @@ fn olmec(game: &mut Game, e: &mut Entity) {
     let grounded = olmec_ground(&game.world, e);
     let player_on_top = (game.player.pos.y + 8.0 - old.y).abs() < 3.0
         && (game.player.pos.x - (old.x + 32.0)).abs() < 34.0;
-    if player_on_top && e.state != 6 {
-        game.player.pos.x += e.pos.x - old.x;
-        game.player.pos.y += e.pos.y - old.y;
-    }
+    e.data.insert("carryPlayer".into(), f64::from(
+        Rect::new(e.pos.x, e.pos.y - 2.0, 65.0, 67.0)
+            .intersects(game.player.sprite_bounds()),
+    ));
     // oPlayer1 Step's crushed check is origin-in-oSolid in every state;
     // touching the boss with a limb is not by itself lethal.
     if olmec_rect(e).contains(game.player.pos) && !player_on_top && game.player.health > 0 {
@@ -692,6 +724,22 @@ fn debris(game: &mut Game, e: &mut Entity) {
     e.animation += 0.3;
 }
 fn yellow_ball(game: &mut Game, e: &mut Entity) {
+    let alarm = e.value("trail_alarm") - 1.0;
+    if alarm <= 0.0 {
+        if game
+            .world
+            .entities
+            .iter()
+            .filter(|trail| trail.alive && trail.object == "oYellowTrail")
+            .count()
+            < 12
+        {
+            game.world.spawn("oYellowTrail", e.pos);
+        }
+        e.data.insert("trail_alarm".into(), 4.0);
+    } else {
+        e.data.insert("trail_alarm".into(), alarm);
+    }
     if e.value("launch") != 0.0 {
         let direction = if game.rng.chance(1, 2) { -1.0 } else { 1.0 };
         e.vel = Vec2::new(
@@ -755,7 +803,17 @@ fn magma_man(game: &mut Game, e: &mut Entity) {
         e.alive = false;
         return;
     }
-    let (wall, _) = move_body(&game.world, e, 0.6);
+    let b = e.bounds();
+    let wall = game.world.collides_except(
+        Rect::new(
+            if e.facing < 0 { b.x - 1.0 } else { b.x + b.w },
+            b.y,
+            1.0,
+            b.h,
+        ),
+        e.id,
+    );
+    e.vel.y = 0.0;
     if e.state == 0 {
         if e.timer > 0 {
             e.timer -= 1;
@@ -776,16 +834,17 @@ fn magma_man(game: &mut Game, e: &mut Entity) {
             e.facing = -e.facing;
         }
         e.vel.x = 1.5 * e.facing as f64;
-        if !game
-            .world
-            .solid_at(center(e).x + 9.0 * e.facing as f64, e.pos.y + 17.0)
-            || game.rng.chance(1, 100)
+        if !game.world.solid_at(
+            e.pos.x + if e.facing < 0 { -1.0 } else { 16.0 },
+            e.pos.y + 16.0,
+        ) || game.rng.chance(1, 100)
         {
             e.state = 0;
             e.timer = 20 + game.rng.range(31);
             e.vel.x = 0.0;
         }
     }
+    move_body(&game.world, e, 0.0);
     e.sprite = if e.vel.x == 0.0 {
         "sMagmaManLeft"
     } else {
@@ -797,46 +856,43 @@ fn magma_man(game: &mut Game, e: &mut Entity) {
 }
 fn magma(game: &mut Game, e: &mut Entity) {
     if e.value("started") == 0.0 {
-        e.vel = Vec2::new(
-            game.rng.unit() * 4.0 - game.rng.unit() * 4.0,
-            -1.0 - game.rng.unit() * 2.0,
-        );
-        e.data
-            .insert("gravity".into(), (1 + game.rng.range(6)) as f64 * 0.1);
+        crate::world_events::initialize_detritus(game, e);
         e.data.insert("started".into(), 1.0);
+    } else if e.value("world_effect_initialized") == 0.0 {
+        // Existing launch overrides are already post-Create. Preserve them.
+        e.data.insert("world_effect_initialized".into(), 1.0);
+        e.data.entry("life".into()).or_insert(60.0);
     }
-    let (_, landed) = move_body(&game.world, e, e.value("gravity"));
-    if landed || ground(&game.world, e) {
-        e.vel = Vec2::default();
-        e.sprite = "sMagmaManCreate".into();
-        if e.value("create_timer") == 0.0 {
-            e.animation = 0.0;
-        }
-        let t = e.value("create_timer") + 1.0;
-        e.data.insert("create_timer".into(), t);
-        if t >= 24.0 {
-            let id = spawn(game, "oMagmaMan", Vec2::new(e.pos.x - 8.0, e.pos.y - 8.0));
-            if let Some(m) = game.world.entity_mut(id) {
-                m.health = e.health;
-            }
-            e.alive = false;
-        }
-    } else if e.age % 2 == 0 {
+    if e.age > 0 && e.age.is_multiple_of(2) {
         spawn(game, "oMagmaTrail", e.pos);
     }
-    let x = (e.pos.x / 16.0).floor() as i32;
-    let y = (e.pos.y / 16.0).floor() as i32;
-    if game.world.tile(x, y).is_some_and(|t| t.object == "oWater")
+    crate::world_events::detritus(game, e);
+    if !e.alive { return; }
+    if game.world.collides_except(Rect::new(e.pos.x - 8.0, e.pos.y + 8.0, 16.0, 1.0), e.id) {
+        e.vel = Vec2::default();
+        if e.value("dying") == 0.0 {
+            e.sprite = "sMagmaManCreate".into();
+            e.animation = 0.0;
+            e.data.insert("dying".into(), 1.0);
+        }
+    }
+    e.animation += 0.3;
+    if e.value("dying") != 0.0 && e.animation + 1e-9 >= 7.0 {
+        let id = spawn(game, "oMagmaMan", Vec2::new(e.pos.x - 8.0, e.pos.y - 8.0));
+        if let Some(m) = game.world.entity_mut(id) { m.health = e.health; }
+        e.alive = false;
+        return;
+    }
+    if game.world.tiles_collide(e.sprite_bounds(), "oWater")
         || game.world.entities.iter().any(|water| {
-            water.alive
-                && crate::catalog::is_a(&water.object, "oWater")
+            water.alive && crate::catalog::is_a(&water.object, "oWater")
                 && water.sprite_bounds().intersects(e.sprite_bounds())
         })
     {
         e.alive = false;
         spawn(game, "oSmokePuff", e.pos);
+        return;
     }
-    e.animation += 0.3;
     ignite(game, e);
 }
 fn ignite(game: &mut Game, e: &Entity) {
@@ -871,29 +927,23 @@ fn ignite(game: &mut Game, e: &Entity) {
             game.player.held = None;
         }
     }
+    let mut flames=Vec::new();
     for other in game.world.entities.iter_mut().filter(|o| {
         o.alive
             && super::is_enemy(&o.object)
-            && !matches!(
-                o.object.as_str(),
-                "oMagmaMan"
-                    | "oMagma"
-                    | "oMagmaTrail"
-                    | "oOlmec"
-                    | "oOlmecSlam"
-                    | "oOlmecDebris"
-                    | "oYellowBall"
-            )
+            && o.object!="oMagmaMan"
             && o.sprite_bounds().intersects(e.sprite_bounds())
     }) {
+        if other.state!=98 {flames.push(other.pos);}
         other.health -= 2;
         other.vel = Vec2::new(if e.pos.x < other.pos.x { -3.0 } else { 3.0 }, -4.0);
         other.data.insert("burning".into(), 100.0);
-        if !matches!(other.object.as_str(), "oTombLord" | "oYetiKing") {
+        if e.object=="oMagma" || !matches!(other.object.as_str(), "oTombLord" | "oYetiKing") {
             other.state = 98;
             other.timer = 50;
         }
     }
+    for pos in flames {game.sound("sndFlame",pos);}
 }
 
 #[cfg(test)]
@@ -916,6 +966,7 @@ mod tests {
         g.player.pos = Vec2::new(88.0, 148.0);
         g.player.vel.y = 1.0;
         let id = g.world.spawn("oHawkman", Vec2::new(80.0, 144.0));
+        g.world.entity_mut(id).unwrap().vel = Vec2::default();
         super::super::tick(&mut g);
         assert_eq!(g.player.health, 4);
         assert_eq!(g.world.entity(id).unwrap().health, 3);
@@ -930,12 +981,16 @@ mod tests {
         g.world.entity_mut(held).unwrap().held = true;
         g.player.held = Some(held);
         let id = g.world.spawn("oHawkman", Vec2::new(80.0, 144.0));
+        g.world.entity_mut(id).unwrap().vel = Vec2::default();
         super::super::tick(&mut g);
         assert_eq!(g.player.health, 4);
         assert_eq!(g.player.pos, Vec2::new(80.0, 144.0));
         assert_eq!(g.player.held, None);
         assert!(!g.world.entity(held).unwrap().held);
         assert_eq!(g.world.entity(id).unwrap().sprite, "sHawkThrowL");
+        // Keep the animation check independent of the source-correct thrown
+        // item collision: a dropped, fast RopePile can itself stun Hawkman.
+        g.world.entity_mut(held).unwrap().pos = Vec2::new(250.0, 64.0);
         super::super::tick(&mut g);
         assert_eq!(g.world.entity(id).unwrap().state, 3);
         assert_eq!(g.world.entity(id).unwrap().sprite, "sHawkThrowL");
@@ -1073,7 +1128,7 @@ mod tests {
     #[test]
     fn slam_destroys_source_solid_family_even_when_bomb_proof() {
         let mut g = room();
-        g.world.set_tile(7, 10, "oSolid");
+        g.world.set_tile(7, 10, "oBlock");
         let mut e = Entity::new(1, "oOlmecSlam", Vec2::new(96.0, 160.0));
         init(&mut e);
         tick(&mut g, &mut e);

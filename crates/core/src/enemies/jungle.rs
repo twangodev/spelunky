@@ -57,13 +57,9 @@ fn water(world: &World, p: Vec2) -> bool {
 }
 
 fn vine(world: &World, p: Vec2) -> bool {
-    world
-        .tile((p.x / 16.0).floor() as i32, (p.y / 16.0).floor() as i32)
-        .is_some_and(|t| t.is_ladder())
+    world.tiles_point(p, "oLadder")
         || world.entities.iter().any(|e| {
-            e.alive
-                && matches!(e.object.as_str(), "oVine" | "oLadder" | "oRope")
-                && e.bounds().contains(p)
+            e.alive && crate::catalog::is_a(&e.object, "oLadder") && e.sprite_bounds().contains(p)
         })
 }
 
@@ -487,7 +483,7 @@ fn monkey_steal(game: &mut Game, e: &Entity) {
 }
 
 fn fish(game: &mut Game, e: &mut Entity) {
-    let target_swimming = game.player.health > 0 && water(&game.world, game.player.pos);
+    let target_swimming = super::player_alive(game) && water(&game.world, game.player.pos);
     let near = center(e).distance(game.player.pos) < 90.0;
     countdown(e, "bite_counter");
     match e.state {
@@ -613,7 +609,7 @@ fn jaws(game: &mut Game, e: &mut Entity) {
             return;
         }
     }
-    let swimming = game.player.health > 0 && water(&game.world, game.player.pos);
+    let swimming = super::player_alive(game) && water(&game.world, game.player.pos);
     let turn_before = e.value("jaws_turn_ticks") > 0.0;
     let turn_serial = e.value("jaws_turn_serial");
     match e.state {
@@ -937,7 +933,14 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
         && touches_player(game, e)
         && !can_stomp(game, e)
     {
-        eat(e, "sManTrapEatL", game.player.pos.x);
+        let sprite = if game.flags.contains("character_damsel") {
+            "sManTrapEatDamselL"
+        } else if game.flags.contains("character_tunnelman") {
+            "sManTrapEatTunnelL"
+        } else {
+            "sManTrapEatL"
+        };
+        eat(e, sprite, game.player.pos.x);
         game.player.health = -99;
         game.player.invincible = 9999;
         game.player.data.insert("hidden".into(), 1.0);

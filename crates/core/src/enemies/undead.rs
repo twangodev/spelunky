@@ -96,6 +96,11 @@ fn source_move(world: &World, e: &mut Entity, gravity: f64) {
     // Step applies gravity afterward, and scrCheckCollisions needs the impact speed.
     let y_velocity = e.vel.y;
     move_body(world, e, 0.0);
+    let gravity = if gravity > 0.0 && !(e.object == "oVampire" && e.state == 98) {
+        super::inherited::gravity(e, gravity)
+    } else {
+        gravity
+    };
     e.vel.y = (y_velocity + gravity).min(10.0);
 }
 fn water(world: &World, p: Vec2) -> bool {
@@ -128,7 +133,7 @@ fn distance_to_point(e: &Entity, point: Vec2) -> f64 {
     dx.hypot(dy)
 }
 fn player_available(game: &Game) -> bool {
-    game.player.health > 0
+    super::player_alive(game)
         && game.player.state != PlayerState::Dead
         && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
 }
@@ -706,7 +711,7 @@ mod tests {
         let mut game = Game::shell(42, RulesPreset::Classic);
         game.player.pos = Vec2::new(200.0, 200.0);
         for x in 0..12 {
-            game.world.set_tile(x, 4, "oSolid");
+            game.world.set_tile(x, 4, "oBlock");
         }
         let id = game.world.spawn("oVampire", Vec2::new(40.0, 48.0));
         let e = game.world.entity_mut(id).unwrap();
@@ -794,7 +799,7 @@ mod tests {
         let mut game = Game::shell(42, RulesPreset::Classic);
         game.player.pos = Vec2::new(200.0, 200.0);
         for x in 0..12 {
-            game.world.set_tile(x, 4, "oSolid");
+            game.world.set_tile(x, 4, "oBlock");
         }
         game.world.spawn("oPushBlock", Vec2::new(64.0, 48.0));
         let id = game.world.spawn("oSkeleton", Vec2::new(50.0, 48.0));

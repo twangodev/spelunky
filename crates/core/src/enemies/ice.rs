@@ -135,7 +135,7 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
 }
 
 fn yeti(game: &mut Game, e: &mut Entity) {
-    let impact_y = (e.vel.y + 0.6).min(10.0);
+    let impact_y = (e.vel.y + super::inherited::gravity(e, 0.6)).min(10.0);
     let (wall, floor) = move_body(&game.world, e, 0.6);
     let crush_y = if e.state >= 98 || e.health <= 0 {
         12.0
@@ -194,6 +194,7 @@ fn yeti(game: &mut Game, e: &mut Entity) {
         if game.world.solid_at(e.pos.x + 8.0, e.pos.y - 4.0) {
             hurt_player(game, 1);
             game.player.invincible = 30;
+            game.player.data.insert("blink".into(), 30.0);
             game.player.vel.x = if game.player.pos.x < e.pos.x {
                 -6.0
             } else {
@@ -209,16 +210,11 @@ fn yeti(game: &mut Game, e: &mut Entity) {
             game.player.previous_pos = game.player.pos;
             enter(e, 3);
             game.player.vel = Vec2::new(f64::from(e.facing) * 6.0, -6.0);
-            game.player.stun = 30;
+            game.player.stun = 0;
             game.player.state = PlayerState::Stunned;
             game.player.data.insert("wall_hurt".into(), 1.0);
             game.player.data.insert("bounced".into(), 0.0);
-            if let Some(id) = game.player.held.take() {
-                if let Some(item) = game.world.entity_mut(id) {
-                    item.held = false;
-                    item.vel = game.player.vel;
-                }
-            }
+            super::drop_from_throw(game);
             e.sprite = "sYetiThrowL".into();
             return;
         }
@@ -399,7 +395,7 @@ fn alien(game: &mut Game, e: &mut Entity) {
 }
 
 fn king(game: &mut Game, e: &mut Entity) {
-    let next_y = (e.vel.y + 0.6).min(10.0);
+    let next_y = (e.vel.y + super::inherited::gravity(e, 0.6)).min(10.0);
     let (wall, floor) = move_body(&game.world, e, 0.6);
     e.vel.y = if floor && e.state != 98 { 0.0 } else { next_y };
     if game
@@ -430,7 +426,9 @@ fn king(game: &mut Game, e: &mut Entity) {
         return;
     }
     counter(e, "attack_timer");
-    counter(e, "counter");
+    if matches!(e.state, 0 | 1) {
+        counter(e, "counter");
+    }
     match e.state {
         0 => {
             e.vel.x = 0.0;
@@ -441,7 +439,10 @@ fn king(game: &mut Game, e: &mut Entity) {
         1 => {
             let dx = game.player.pos.x - (e.pos.x + 16.0);
             let dy = (game.player.pos.y - (e.pos.y + 16.0)).abs();
-            if wall || (dx * f64::from(e.facing) < 0.0 && dy < 16.0 && e.value("counter") == 0.0) {
+            let turn_dy = (game.player.pos.y - (e.pos.y + 32.0)).abs();
+            if wall
+                || (dx * f64::from(e.facing) < 0.0 && turn_dy < 16.0 && e.value("counter") == 0.0)
+            {
                 enter(e, 2);
                 e.vel.x = 0.0;
                 e.data.insert("counter".into(), 30.0);
@@ -653,8 +654,9 @@ fn boss(game: &mut Game, e: &mut Entity) {
     counter(e, "psychic_recover");
     if recovered
         && distance_to_player(game, e) < 96.0
-        && game.player.health > 0
+        && super::player_alive(game)
         && game.player.stun == 0
+        && game.player.state != PlayerState::Stunned
         && game.player.invincible == 0
     {
         for _ in 0..6 {
@@ -742,6 +744,7 @@ fn eject(game: &mut Game, e: &mut Entity) {
         } else if game.player.invincible == 0 {
             hurt_player(game, 1);
             game.player.invincible = 30;
+            game.player.data.insert("blink".into(), 30.0);
             game.player.vel.x = if game.player.pos.x < e.pos.x {
                 -6.0
             } else {
@@ -902,7 +905,11 @@ fn psychic(game: &mut Game, e: &mut Entity) {
         e.alive = false;
         return;
     }
-    if hazard_hits_player(game, e) && game.player.stun == 0 && game.player.health > 0 {
+    if hazard_hits_player(game, e)
+        && game.player.stun == 0
+        && game.player.state != PlayerState::Stunned
+        && super::player_alive(game)
+    {
         hurt_player(game, 1);
         game.player.stun = 40;
         game.player.state = PlayerState::Stunned;
@@ -1126,7 +1133,7 @@ mod tests {
     #[test]
     fn integrated_yeti_low_ceiling_hit_grants_thirty_ticks_without_stun() {
         let mut g = game();
-        g.world.set_tile(4, 3, "oSolid");
+        g.world.set_tile(4, 3, "oBlock");
         let id = g.world.spawn("oYeti", Vec2::new(64.0, 64.0));
         g.world.entity_mut(id).unwrap().vel = Vec2::default();
         g.player.pos = Vec2::new(72.0, 72.0);
@@ -1163,7 +1170,7 @@ mod tests {
         let mut g = game();
         g.player.pos = Vec2::new(200.0, 200.0);
         for x in 0..20 {
-            g.world.set_tile(x, 5, "oSolid");
+            g.world.set_tile(x, 5, "oBlock");
         }
         let id = g.world.spawn("oYeti", Vec2::new(64.0, 64.0));
         let yeti = g.world.entity_mut(id).unwrap();
@@ -1214,7 +1221,7 @@ mod tests {
     fn integrated_boss_crush_uses_source_point_instead_of_body_center() {
         let mut g = game();
         g.player.pos = Vec2::new(200.0, 200.0);
-        g.world.set_tile(4, 4, "oSolid");
+        g.world.set_tile(4, 4, "oBlock");
         let id = g.world.spawn("oAlienBoss", Vec2::new(52.0, 52.0));
         crate::enemies::tick(&mut g);
         assert_eq!(g.world.entity(id).unwrap().health, 10);
@@ -1243,7 +1250,7 @@ mod tests {
     #[test]
     fn integrated_ufo_preserves_search_velocity_when_blocked_by_ceiling() {
         let mut g = game();
-        g.world.set_tile(3, 2, "oSolid");
+        g.world.set_tile(3, 2, "oBlock");
         let id = g.world.spawn("oUFO", Vec2::new(50.0, 46.0));
         g.world.entity_mut(id).unwrap().vel.y = -2.0;
         crate::enemies::tick(&mut g);

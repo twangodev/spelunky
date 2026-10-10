@@ -122,6 +122,16 @@ pub(super) fn tick_inactive_alarm(game: &mut Game, e: &mut Entity) {
     if matches!(e.object.as_str(), "oSpider" | "oGiantSpider") {
         spider_alarms(game, e);
     }
+    if e.alive
+        && e.object == "oSpider"
+        && e.state != 4
+        && in_water(game, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0))
+    {
+        e.state = 4;
+        e.timer = 30;
+        e.sprite = "sSpiderDrowning".into();
+        e.vel = Vec2::new(0.0, 0.2);
+    }
 }
 
 fn spider_alarms(game: &mut Game, e: &mut Entity) -> bool {
@@ -319,7 +329,7 @@ fn snake(game: &mut Game, e: &mut Entity) {
 }
 
 fn player_available(game: &Game) -> bool {
-    game.player.health > 0
+    super::player_alive(game)
         && game.player.state != PlayerState::Dead
         && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
 }
@@ -552,6 +562,13 @@ fn spider(game: &mut Game, e: &mut Entity, giant: bool) {
 }
 
 fn caveman(game: &mut Game, e: &mut Entity) {
+    let impact_y = (e.vel.y
+        + if e.held {
+            0.0
+        } else {
+            super::inherited::gravity(e, 0.6)
+        })
+    .min(10.0);
     let (_, grounded) = move_body(&game.world, e, if e.held { 0.0 } else { 0.6 });
     let crush_y = if e.state >= 98 { 12.0 } else { 8.0 };
     if (!e.held || e.state >= 98) && crushed(game, e, Vec2::new(8.0, crush_y)) {
@@ -613,8 +630,9 @@ fn caveman(game: &mut Game, e: &mut Entity) {
             }
             .into();
             if grounded || e.held {
-                e.timer = e.timer.saturating_sub(1);
-                if e.timer == 0 && e.health > 0 {
+                if e.timer > 0 {
+                    e.timer -= 1;
+                } else if e.health > 0 {
                     e.state = 0;
                     e.held = false;
                     if game.player.held == Some(e.id) {
@@ -650,6 +668,9 @@ fn caveman(game: &mut Game, e: &mut Entity) {
         } else {
             e.data.insert("sight_timer".into(), sight_timer - 1.0);
         }
+    }
+    if e.state >= 98 {
+        super::settle_body(&game.world, e, impact_y);
     }
     e.vel.x = (e.vel.x.abs() - 0.1).max(0.0) * e.vel.x.signum();
     if e.vel.x.abs() < 0.5 {
@@ -692,7 +713,7 @@ mod tests {
     #[test]
     fn bat_wakes_below_and_has_unit_flight_speed() {
         let mut game = Game::shell(42, RulesPreset::Classic);
-        game.world.set_tile(2, 1, "oSolid");
+        game.world.set_tile(2, 1, "oBlock");
         game.player.pos = Vec2::new(40.0, 70.0);
         let mut bat = Entity::new(1, "oBat", Vec2::new(40.0, 39.0));
         init(&mut bat);
@@ -725,7 +746,7 @@ mod tests {
     fn moving_sight_dies_at_solids_without_alerting() {
         let mut game = Game::shell(42, RulesPreset::Classic);
         game.player.pos = Vec2::new(88.0, 72.0);
-        game.world.set_tile(5, 4, "oSolid");
+        game.world.set_tile(5, 4, "oBlock");
         let ray = game.world.spawn("oEnemySight", Vec2::new(64.0, 64.0));
         game.world.entity_mut(ray).unwrap().vel.x = 10.0;
         let caveman = game.world.spawn("oCaveman", Vec2::new(64.0, 100.0));
@@ -740,7 +761,7 @@ mod tests {
         let mut game = Game::shell(42, RulesPreset::Classic);
         game.player.pos = Vec2::new(250.0, 160.0);
         for x in 0..20 {
-            game.world.set_tile(x, 5, "oSolid");
+            game.world.set_tile(x, 5, "oBlock");
         }
         let id = game.world.spawn("oCaveman", Vec2::new(64.0, 64.0));
         let enemy = game.world.entity_mut(id).unwrap();
@@ -764,7 +785,7 @@ mod tests {
     fn patrol_ledge_probes_use_original_instance_origin() {
         let mut game = Game::shell(1, RulesPreset::Classic);
         let enemy = Entity::new(1, "oSnake", Vec2::new(32.0, 48.0));
-        game.world.set_tile(3, 4, "oSolid");
+        game.world.set_tile(3, 4, "oBlock");
         assert!(floor_ahead(&game.world, &enemy, 1));
         assert!(!floor_ahead(&game.world, &enemy, -1));
     }
@@ -774,7 +795,7 @@ mod tests {
         let mut game = Game::shell(42, RulesPreset::Classic);
         game.player.pos = Vec2::new(250.0, 200.0);
         for x in 0..20 {
-            game.world.set_tile(x, 5, "oSolid");
+            game.world.set_tile(x, 5, "oBlock");
         }
         let id = game.world.spawn("oCaveman", Vec2::new(64.0, 64.0));
         let enemy = game.world.entity_mut(id).unwrap();
@@ -818,7 +839,7 @@ mod tests {
     #[test]
     fn hanging_spider_drops_on_player_alignment_and_lost_ceiling() {
         let mut game = Game::shell(1, RulesPreset::Classic);
-        game.world.set_tile(4, 3, "oSolid");
+        game.world.set_tile(4, 3, "oBlock");
         game.player.pos = Vec2::new(120.0, 110.0);
         let mut enemy = Entity::new(100, "oSpiderHang", Vec2::new(64.0, 64.0));
         super::super::init_entity(&mut enemy);
@@ -855,7 +876,7 @@ mod tests {
     #[test]
     fn giant_hanger_starts_with_ten_health_and_releases_when_hurt() {
         let mut game = Game::shell(1, RulesPreset::Classic);
-        game.world.set_tile(4, 3, "oSolid");
+        game.world.set_tile(4, 3, "oBlock");
         game.player.pos = Vec2::new(200.0, 200.0);
         let mut enemy = Entity::new(100, "oGiantSpiderHang", Vec2::new(64.0, 64.0));
         super::super::init_entity(&mut enemy);
@@ -905,7 +926,7 @@ mod tests {
         let mut game = Game::shell(42, RulesPreset::Classic);
         game.player.pos = Vec2::new(88.0, 72.0);
         for x in 0..20 {
-            game.world.set_tile(x, 5, "oSolid");
+            game.world.set_tile(x, 5, "oBlock");
         }
         let id = game.world.spawn("oSpider", Vec2::new(64.0, 64.0));
         let enemy = game.world.entity_mut(id).unwrap();
@@ -923,7 +944,7 @@ mod tests {
         let mut game = Game::shell(42, RulesPreset::Classic);
         game.player.pos = Vec2::new(68.0, 72.0);
         for x in 0..20 {
-            game.world.set_tile(x, 5, "oSolid");
+            game.world.set_tile(x, 5, "oBlock");
         }
         let id = game.world.spawn("oSpider", Vec2::new(64.0, 64.0));
         let enemy = game.world.entity_mut(id).unwrap();
@@ -937,7 +958,7 @@ mod tests {
     fn hanging_trigger_uses_rectangle_distance_instead_of_center_distance() {
         let mut game = Game::shell(42, RulesPreset::Classic);
         game.player.pos = Vec2::new(72.0, 170.0);
-        game.world.set_tile(4, 3, "oSolid");
+        game.world.set_tile(4, 3, "oBlock");
         let id = game.world.spawn("oSpiderHang", Vec2::new(64.0, 64.0));
         super::super::tick(&mut game);
         assert!(game.world.entity(id).is_none());
@@ -982,7 +1003,7 @@ mod tests {
     #[test]
     fn offscreen_spider_alarms_expire_without_moving_the_actor() {
         let mut game = Game::shell(42, RulesPreset::Classic);
-        game.world.set_tile(32, 5, "oSolid");
+        game.world.set_tile(32, 5, "oBlock");
         let id = game.world.spawn("oSpider", Vec2::new(512.0, 64.0));
         let enemy = game.world.entity_mut(id).unwrap();
         enemy.state = 2;
@@ -1004,7 +1025,7 @@ mod tests {
     fn spider_crush_uses_source_point_instead_of_body_center() {
         let mut game = Game::shell(42, RulesPreset::Classic);
         game.player.pos = Vec2::new(200.0, 200.0);
-        game.world.set_tile(4, 4, "oSolid");
+        game.world.set_tile(4, 4, "oBlock");
         let id = game.world.spawn("oSpider", Vec2::new(64.0, 55.0));
         super::super::tick(&mut game);
         assert_eq!(game.world.entity(id).unwrap().health, 1);
@@ -1014,7 +1035,7 @@ mod tests {
     fn caveman_corpse_crush_uses_lower_source_point() {
         let mut game = Game::shell(42, RulesPreset::Classic);
         game.player.pos = Vec2::new(200.0, 200.0);
-        game.world.set_tile(4, 4, "oSolid");
+        game.world.set_tile(4, 4, "oBlock");
         let id = game.world.spawn("oCaveman", Vec2::new(64.0, 55.0));
         let enemy = game.world.entity_mut(id).unwrap();
         enemy.health = 0;

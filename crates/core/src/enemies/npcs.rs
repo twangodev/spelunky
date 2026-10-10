@@ -1,6 +1,6 @@
 //! NPC/ghost behavior from oGhost, oDamsel, oShopkeeper and oScarab events.
 //! Shop purchase UI/dice/kissing-parlor economics belong to the economy system.
-use super::{bounds, can_stomp, center, in_stars, move_body, steer_toward, touches_player};
+use super::{can_stomp, center, in_stars, move_body, steer_toward, touches_player};
 use crate::*;
 
 pub fn init(e: &mut Entity) {
@@ -24,6 +24,12 @@ pub fn init(e: &mut Entity) {
             e.facing = -1;
             e.data.insert("has_gun".into(), 1.0);
             e.data.insert("stun_time".into(), 5.0);
+            e.data
+                .entry("shop_room_x".into())
+                .or_insert((((e.pos.x - 16.0).max(0.0) / 160.0).floor()).min(3.0));
+            e.data
+                .entry("shop_room_y".into())
+                .or_insert((((e.pos.y - 16.0).max(0.0) / 128.0).floor()).min(4.0));
             if e.object == "oShopkeeper2" {
                 e.state = 2;
                 e.data.insert("has_gun".into(), 0.0);
@@ -100,7 +106,7 @@ fn ghost(game: &mut Game, e: &mut Entity) {
                     x.object.as_str(),
                     "oEmeraldBig" | "oSapphireBig" | "oRubyBig"
                 )
-                && x.bounds().intersects(bounds(e))
+                && x.sprite_bounds().intersects(e.sprite_bounds())
         })
         .map(|x| x.id)
         .collect();
@@ -112,7 +118,7 @@ fn ghost(game: &mut Game, e: &mut Entity) {
     }
     if game.player.invincible == 0
         && game.player.health > 0
-        && game.player.bounds().intersects(bounds(e))
+        && game.player.sprite_bounds().intersects(e.sprite_bounds())
     {
         game.player.health = -99;
         game.player.invincible = 9999;
@@ -133,27 +139,94 @@ fn ghost(game: &mut Game, e: &mut Entity) {
 }
 
 fn damsel(game: &mut Game, e: &mut Entity) {
+    e.data
+        .insert("depth".into(), if e.held { 1.0 } else { 99.0 });
     if e.state == 4 {
+        e.data.insert("depth".into(), 1000.0);
         return;
     }
-    let (_, grounded) = move_body(&game.world, e, 0.6);
-    if e.value("invincible") == 0.0 && game.world.solid_at(e.pos.x, e.pos.y) {
+    let swimming = super::inherited::point(&game.world, e.pos, "oWaterSwim");
+    e.data.insert("swimming".into(), f64::from(swimming));
+    let (_, grounded) = if e.held {
+        (false, false)
+    } else {
+        move_body(&game.world, e, if swimming { 0.2 } else { 0.6 })
+    };
+    if e.value("invincible") == 0.0 && !e.held && game.world.solid_at(e.pos.x, e.pos.y) {
         e.health = 0;
         e.alive = false;
         return;
     }
-    if e.health > 0 && e.state != 2 && e.pos.distance(game.world.exit) < 12.0 {
+    if e.value("invincible") == 0.0 {
+        if super::inherited::point(&game.world, Vec2::new(e.pos.x, e.pos.y + 6.0), "oLava") {
+            e.health = 0;
+            e.state = 99;
+            e.vel = Vec2::new(0.0, 0.1);
+            e.data.insert("burning".into(), 1.0);
+            e.data.insert("depth".into(), 999.0);
+        }
+        if e.vel.y > 2.0
+            && super::inherited::point(&game.world, Vec2::new(e.pos.x, e.pos.y + 6.0), "oSpikes")
+        {
+            e.health = 0;
+            e.state = 99;
+            e.vel = Vec2::new(0.0, 0.2);
+        }
+        let spear_area = Rect::new(e.pos.x - 3.0, e.pos.y - 3.0, 7.0, 7.0);
+        let spear = game
+            .world
+            .entities
+            .iter()
+            .filter(|s| {
+                s.alive
+                    && crate::catalog::is_a(&s.object, "oSpearsLeft")
+                    && s.sprite_bounds().intersects(spear_area)
+            })
+            .min_by(|a, b| a.pos.distance(e.pos).total_cmp(&b.pos.distance(e.pos)))
+            .map(|s| (s.pos, s.animation));
+        if let Some((pos, _)) =
+            spear.filter(|(_, frame)| *frame >= 19.0 && *frame < 28.0 && (e.state != 2 || grounded))
+        {
+            e.health -= 2;
+            e.state = 2;
+            e.timer = 120;
+            e.vel = Vec2::new(if pos.x < e.pos.x { 4.0 } else { -4.0 }, -6.0);
+            if e.held {
+                e.held = false;
+                game.player.held = game.player.held.filter(|id| *id != e.id);
+            }
+            game.sound("sndHit", e.pos);
+        }
+    }
+    let exit = game
+        .world
+        .entities
+        .iter()
+        .find(|door| {
+            door.alive
+                && crate::catalog::is_a(&door.object, "oExit")
+                && door.sprite_bounds().contains(e.pos)
+        })
+        .map(|door| door.pos);
+    if let Some(exit) = exit.filter(|_| e.health > 0 && e.state != 2 && !e.held) {
         e.state = 4;
         e.vel = Vec2::default();
-        e.pos = game.world.exit;
+        e.pos = Vec2::new(exit.x + 8.0, exit.y + 8.0);
+        e.previous_pos = e.pos;
         e.sprite = "sDamselExit2".into();
+        e.animation = 0.0;
         e.data.insert("inactive".into(), 1.0);
+        e.data.insert("depth".into(), 1000.0);
         game.flags.insert("damsel_rescued".into());
+        *game.data.entry("pending_damsel_kisses".into()).or_default() += 1.0;
         *game.data.entry("damsels".into()).or_default() += 1.0;
         game.sound("sndSteps", e.pos);
         return;
     }
     if e.health <= 0 {
+        if e.value("cost") > 0.0 || e.value("for_sale") > 0.0 {
+            game.flags.insert("shopkeepers_angry".into());
+        }
         e.state = 99;
         e.sprite = "sDamselDieL".into();
         return;
@@ -188,7 +261,16 @@ fn damsel(game: &mut Game, e: &mut Entity) {
         }
         2 => {
             e.sprite = "sDamselStunL".into();
-            if grounded {
+            let b = e.bounds();
+            let supported = game
+                .world
+                .collides_except(Rect::new(b.x, b.y + b.h + 1.0, b.w, 1.0), e.id)
+                || game.world.entities.iter().any(|web| {
+                    web.alive
+                        && web.object == "oWeb"
+                        && web.sprite_bounds().intersects(e.sprite_bounds())
+                });
+            if grounded || supported {
                 e.vel.x *= 0.7;
                 if e.vel.x.abs() < 0.5 {
                     e.vel.x = 0.0;
@@ -207,11 +289,38 @@ fn damsel(game: &mut Game, e: &mut Entity) {
                 e.animation = 0.0;
             }
         }
+        5 => {
+            e.facing = if game.player.pos.x < e.pos.x { -1 } else { 1 };
+            e.vel.x = 0.0;
+            e.sprite = if game.flags.contains("character_damsel") {
+                "sStandLeft"
+            } else {
+                "sDamselLeft"
+            }
+            .into();
+        }
+        6 => {
+            if e.animation == 7.0 {
+                game.world.spawn(
+                    "oHeart",
+                    Vec2::new(
+                        e.pos.x + if e.facing < 0 { -8.0 } else { 8.0 },
+                        e.pos.y - 8.0,
+                    ),
+                );
+                game.sound("sndKiss", e.pos);
+            }
+            if e.animation >= 10.0 {
+                e.state = 5;
+                e.animation = 0.0;
+            }
+        }
         _ => {}
     }
 }
 
 fn shopkeeper(game: &mut Game, e: &mut Entity) {
+    let impact_y = (e.vel.y + super::inherited::gravity(e, 0.6)).min(10.0);
     let (wall, grounded) = move_body(&game.world, e, 0.6);
     if game.world.solid_at(
         e.pos.x + 8.0,
@@ -262,6 +371,7 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
             "sShopDieL"
         }
         .into();
+        super::settle_body(&game.world, e, impact_y);
         e.vel.x -= e.vel.x.signum() * 0.1;
         if e.vel.x.abs() < 0.5 {
             e.vel.x = 0.0;
@@ -397,6 +507,12 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
                     .world
                     .solid_at(e.pos.x + f64::from(e.facing) * 24.0, e.pos.y + 16.0))
             && game.player.pos.y <= e.pos.y + 8.0
+            && {
+                let b = e.bounds();
+                !game
+                    .world
+                    .collides_except(Rect::new(b.x, b.y - 4.0, b.w, 1.0), e.id)
+            }
         {
             e.vel.y = -f64::from(7 + game.rng.range(2));
         }
@@ -419,19 +535,15 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
                     Vec2::new(e.pos.x + if e.facing > 0 { 0.0 } else { 16.0 }, e.pos.y);
                 game.player.previous_pos = game.player.pos;
                 game.player.vel = Vec2::new(f64::from(e.facing) * 6.0, -6.0);
-                game.player.stun = 30;
+                game.player.stun = 0;
                 game.player.state = PlayerState::Stunned;
                 game.player.data.insert("bounced".into(), 0.0);
                 game.player.data.insert("wall_hurt".into(), 1.0);
-                if let Some(id) = game.player.held.take() {
-                    if let Some(held) = game.world.entity_mut(id) {
-                        held.held = false;
-                        held.vel = game.player.vel;
-                    }
-                }
+                super::drop_from_throw(game);
             } else {
                 game.player.health -= 1;
                 game.player.invincible = 30;
+                game.player.data.insert("blink".into(), 30.0);
                 game.player.vel.x = if game.player.pos.x < e.pos.x {
                     -6.0
                 } else {
@@ -485,7 +597,7 @@ fn scarab(game: &mut Game, e: &mut Entity) {
             e.timer = 10 + game.rng.range(21);
         }
     }
-    if game.player.bounds().intersects(e.bounds()) {
+    if game.player.sprite_bounds().intersects(e.sprite_bounds()) {
         let value = match game.world.area {
             Area::Mines => 4000,
             Area::Jungle => 8000,
@@ -526,7 +638,7 @@ fn dead_fish(game: &mut Game, e: &mut Entity) {
         e.alive = false;
         return;
     }
-    let swimming = water(game, game.player.pos) && game.player.health > 0;
+    let swimming = water(game, game.player.pos) && super::player_alive(game);
     let dist = e.pos.distance(game.player.pos);
     if e.state == 0 {
         e.vel = Vec2::new(f64::from(e.facing), 0.0);
@@ -605,9 +717,12 @@ fn barrier(game: &mut Game, e: &mut Entity) {
         e.alive = false;
         return;
     }
-    if e.bounds().intersects(game.player.bounds()) && game.player.invincible == 0 {
-        game.damage_player(1);
+    if e.sprite_bounds().intersects(game.player.sprite_bounds()) && game.player.invincible == 0 {
+        game.player.health -= 1;
+        game.events.push(GameEvent::Damage { amount: 1 });
+        game.sound("sndHurt", game.player.pos);
         game.player.invincible = 30;
+        game.player.data.insert("blink".into(), 30.0);
         game.player.vel = Vec2::new(
             if game.player.pos.x < e.pos.x {
                 -6.0
@@ -619,7 +734,7 @@ fn barrier(game: &mut Game, e: &mut Entity) {
     }
     let mut release = false;
     for item in &mut game.world.entities {
-        if !item.alive || !item.bounds().intersects(e.bounds()) {
+        if !item.alive || !item.sprite_bounds().intersects(e.sprite_bounds()) {
             continue;
         }
         if matches!(item.object.as_str(), "oBullet" | "oWebBall") {
@@ -644,13 +759,99 @@ fn barrier(game: &mut Game, e: &mut Entity) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn actual_room() -> Game {
+        let mut g = Game::shell(123, RulesPreset::Classic);
+        g.world = World::new(30, 20, Area::Mines, 1);
+        g.player.pos = Vec2::new(240.0, 128.0);
+        g.player.previous_pos = g.player.pos;
+        g
+    }
+    #[test]
+    fn actual_step_barrier_hit_does_not_stun() {
+        let mut g = actual_room();
+        g.player.pos = Vec2::new(104.0, 104.0);
+        g.world.set_tile(6, 4, "oBlock");
+        let emitter = g.world.spawn("oBarrierEmitter", Vec2::new(96.0, 80.0));
+        g.world
+            .entity_mut(emitter)
+            .unwrap()
+            .data
+            .insert("barrier_created".into(), 1.0);
+        g.world.spawn("oBarrier", Vec2::new(96.0, 96.0));
+        g.step(&InputFrame::default());
+        assert_eq!(g.player.health, 3);
+        assert_eq!(g.player.stun, 0);
+        assert_eq!(g.player.invincible, 30);
+        assert_ne!(g.player.state, PlayerState::Stunned);
+    }
+    #[test]
+    fn actual_step_ghost_visible_edge_hits_player() {
+        let mut g = actual_room();
+        g.player.pos = Vec2::new(101.0, 96.0);
+        g.world.spawn("oGhost", Vec2::new(80.0, 80.0));
+        g.step(&InputFrame::default());
+        assert_eq!(g.state, RunState::Dead);
+    }
+    #[test]
+    fn actual_step_damsel_requires_real_exit_and_finishes_exit_animation_once() {
+        let mut g = actual_room();
+        g.world.exit = Vec2::new(104.0, 104.0);
+        let id = g.world.spawn("oDamsel", g.world.exit);
+        g.step(&InputFrame::default());
+        assert!(!g.flags.contains("damsel_rescued"));
+        g.world.spawn("oExit", Vec2::new(96.0, 96.0));
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().state, 4);
+        assert_eq!(g.data["damsels"], 1.0);
+        assert_eq!(g.data["pending_damsel_kisses"], 1.0);
+        for _ in 0..40 {
+            g.step(&InputFrame::default());
+        }
+        assert!(g.world.entity(id).is_none());
+        assert_eq!(g.data["damsels"], 1.0);
+    }
+    #[test]
+    fn actual_step_damsel_water_and_lava_hazards() {
+        for (liquid, health, vy) in [("oWaterSwim", 4, 0.2), ("oLava", 0, 0.1)] {
+            let mut g = actual_room();
+            g.world.spawn(liquid, Vec2::new(96.0, 96.0));
+            let id = g.world.spawn("oDamsel", Vec2::new(104.0, 104.0));
+            g.step(&InputFrame::default());
+            let e = g.world.entity(id).unwrap();
+            assert_eq!(e.health, health);
+            assert!((e.vel.y - vy).abs() < 1e-9, "{liquid} vy={}", e.vel.y);
+        }
+    }
+    #[test]
+    fn actual_step_kiss_frame_emits_once_and_returns_to_slave() {
+        let mut g = actual_room();
+        g.world.set_tile(6, 7, "oBlock");
+        let id = g.world.spawn("oDamsel", Vec2::new(104.0, 104.0));
+        let e = g.world.entity_mut(id).unwrap();
+        e.state = 6;
+        e.sprite = "sDamselKissL".into();
+        e.animation = 6.5;
+        g.step(&InputFrame::default());
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oHeart")
+                .count(),
+            1
+        );
+        for _ in 0..6 {
+            g.step(&InputFrame::default());
+        }
+        assert_eq!(g.world.entity(id).unwrap().state, 5);
+    }
     #[test]
     fn ghost_moves_one_pixel_through_walls() {
         let mut g = Game::shell(1, RulesPreset::Classic);
         g.player.pos = Vec2::new(100.0, 48.0);
         let mut e = Entity::new(1, "oGhost", Vec2::new(40.0, 40.0));
         init(&mut e);
-        g.world.set_tile(2, 2, "oSolid");
+        g.world.set_tile(2, 2, "oBlock");
         let before = e.pos;
         ghost(&mut g, &mut e);
         assert!((e.pos.distance(before) - 1.0).abs() < 1e-9);
@@ -669,6 +870,7 @@ mod tests {
     fn damsel_exit_sets_rescue_without_immediate_heal() {
         let mut g = Game::shell(1, RulesPreset::Classic);
         g.world.exit = Vec2::new(40.0, 40.0);
+        g.world.spawn("oExit", Vec2::new(32.0, 32.0));
         let mut e = Entity::new(1, "oDamsel", g.world.exit);
         init(&mut e);
         damsel(&mut g, &mut e);
@@ -688,7 +890,7 @@ mod tests {
     #[test]
     fn destroying_emitter_releases_barrier() {
         let mut g = Game::shell(1, RulesPreset::Classic);
-        g.world.set_tile(5, 4, "oSolid");
+        g.world.set_tile(5, 4, "oBlock");
         let mut e = Entity::new(99, "oBarrierEmitter", Vec2::new(80.0, 80.0));
         init(&mut e);
         barrier(&mut g, &mut e);
@@ -713,7 +915,7 @@ mod tests {
         let mut game = Game::shell(1, RulesPreset::Classic);
         game.flags.insert("hub_stars".into());
         game.player.pos = Vec2::new(200.0, 200.0);
-        game.world.set_tile(4, 5, "oSolid");
+        game.world.set_tile(4, 5, "oBlock");
         let mut e = Entity::new(99, "oShopkeeper2", Vec2::new(64.0, 64.0));
         super::super::init_entity(&mut e);
         e.health = 0;
