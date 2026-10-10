@@ -189,13 +189,16 @@ pub(super) fn stamp_at(
             }
             b'$' if world.area == Area::Ice => shop_item(world, rng, p, shop_type),
             b'd' if world.area == Area::Mines || yeti => {
-                spawn(world, "oDice", offset(p, 8.0, 8.0));
+                let id = spawn(world, "oDice", offset(p, 8.0, 8.0));
+                crate::items::initialize_dice(rng, world.entity_mut(id).unwrap());
             }
             b'u' if !yeti && matches!(world.area, Area::Jungle | Area::Ice | Area::Temple) => {
-                spawn(world, "oDice", offset(p, 8.0, 8.0));
+                let id = spawn(world, "oDice", offset(p, 8.0, 8.0));
+                crate::items::initialize_dice(rng, world.entity_mut(id).unwrap());
             }
             b'z' if market => {
-                spawn(world, "oDice", offset(p, 8.0, 8.0));
+                let id = spawn(world, "oDice", offset(p, 8.0, 8.0));
+                crate::items::initialize_dice(rng, world.entity_mut(id).unwrap());
             }
             b'D' if world.area == Area::Mines || yeti || world.area == Area::Jungle && !market => {
                 sale_damsel(world, p)
@@ -852,8 +855,13 @@ fn tree(w: &mut World, r: &mut Rng, x: usize, y: usize, p: Vec2) {
         ty -= 1;
     }
     let top = Vec2::new(p.x, ty as f64 * 16.0 + 16.0);
-    spawn(w, "oLeaves", offset(top, -16.0, 0.0));
-    spawn(w, "oLeaves", offset(top, 16.0, 0.0));
+    for dx in [-16.0, 16.0] {
+        let id = spawn(w, "oLeaves", offset(top, dx, 0.0));
+        // Create chooses its orientation immediately, using only instances
+        // already present. The coordinator applies the cemetery sprite variant
+        // before the first frame, without changing these equal-sized masks.
+        crate::world_events::initialize_leaves(w, id, false);
+    }
 }
 
 fn high_end(r: &mut Rng) -> &'static str {
@@ -1011,6 +1019,53 @@ mod tests {
             false,
             "General",
         );
+    }
+
+    #[test]
+    fn dice_create_draws_before_following_prize_in_each_source_alphabet() {
+        for (area, name, symbol) in [
+            (Area::Mines, "Mines", 'd'),
+            (Area::Ice, "Yeti Lair", 'd'),
+            (Area::Jungle, "Jungle", 'u'),
+            (Area::Ice, "Ice Caves", 'u'),
+            (Area::Temple, "Temple", 'u'),
+            (Area::Jungle, "Black Market", 'z'),
+        ] {
+            let mut world = World::new(42, 34, area, 2);
+            world.name = name.into();
+            let mut actual = Rng::new(123);
+            let mut source = actual.clone();
+            let values = [1 + source.range(6), 1 + source.range(6)];
+            source.range(6); // q's source-local unused dice roll.
+            let prize = high_end(&mut source);
+            stamp(
+                &mut world,
+                &mut actual,
+                &format!("{symbol}{symbol}q{:0<77}", ""),
+                0,
+                0,
+                false,
+                false,
+                "Craps",
+            );
+            let dice: Vec<_> = world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oDice")
+                .collect();
+            assert_eq!(dice.len(), 2, "{name}");
+            for (die, expected) in dice.into_iter().zip(values) {
+                assert_eq!(die.value("value"), f64::from(expected), "{name}");
+                assert_eq!(die.value("dice_create_initialized"), 1.0);
+            }
+            let generated_prize = world
+                .entities
+                .iter()
+                .find(|e| e.value("inDiceHouse") != 0.0)
+                .unwrap();
+            assert_eq!(generated_prize.object, prize, "{name}");
+            assert_eq!(actual.range(100000), source.range(100000), "{name}");
+        }
     }
 
     #[test]

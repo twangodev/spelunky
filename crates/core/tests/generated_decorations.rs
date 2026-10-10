@@ -253,3 +253,92 @@ fn authored_hubs_emit_default_high_fringes_and_custom_rooms_skip_setup() {
             .any(|e| e.sprite.starts_with("bgCaveTop") || e.sprite.starts_with("bgExtras"))
     );
 }
+
+#[test]
+fn generated_canopies_run_source_create_before_first_step_including_cemetery() {
+    for cemetery in [false, true] {
+        let selected = if cemetery {
+            flags(&["cemetery"])
+        } else {
+            flags(&[])
+        };
+        let world = generation::generate(&mut Rng::new(0), 5, &selected);
+        let leaves: Vec<_> = world
+            .entities
+            .iter()
+            .filter(|e| e.object == "oLeaves")
+            .collect();
+        assert!(
+            !leaves.is_empty(),
+            "actual source tree fixture must contain canopy leaves"
+        );
+        let left = if cemetery { "sLeavesDead" } else { "sLeaves" };
+        let right = if cemetery {
+            "sLeavesDeadR"
+        } else {
+            "sLeavesRight"
+        };
+        assert!(
+            leaves.iter().any(|e| e.sprite == left),
+            "left Create sprite must exist before any step"
+        );
+        assert!(
+            leaves.iter().any(|e| e.sprite == right),
+            "right Create sprite must exist before any step"
+        );
+        for leaf in leaves {
+            assert_eq!(leaf.value("leaves_initialized"), 1.0);
+            assert_eq!(leaf.value("sprite_set"), 0.0);
+            assert!([left, right].contains(&leaf.sprite.as_str()));
+        }
+    }
+}
+
+#[test]
+fn natural_casino_initializes_offscreen_dice_before_prize_generation() {
+    let mut game = Game::new(123, RulesPreset::Classic);
+    game.next_level();
+    assert_eq!(game.world.level, 2);
+    let dice: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|e| e.object == "oDice")
+        .collect();
+    assert_eq!(dice.len(), 2);
+    assert_eq!(
+        dice.iter()
+            .map(|e| e.value("value") as u32)
+            .collect::<Vec<_>>(),
+        vec![5, 4]
+    );
+    for die in dice {
+        assert_eq!(die.age, 0);
+        assert_eq!(die.value("dice_create_initialized"), 1.0);
+    }
+    let prize = game
+        .world
+        .entities
+        .iter()
+        .find(|e| e.value("inDiceHouse") != 0.0)
+        .unwrap();
+    assert_eq!(prize.object, "oBombBox");
+    assert_eq!(prize.pos, Vec2::new(632.0, 376.0));
+    game.step(&InputFrame::default());
+    let dice: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|e| e.object == "oDice")
+        .collect();
+    assert_eq!(
+        dice.iter()
+            .map(|e| e.value("value") as u32)
+            .collect::<Vec<_>>(),
+        vec![5, 4]
+    );
+    assert!(
+        dice.iter().all(|die| die.age == 0),
+        "offscreen dice must remain source-deactivated; Create has already run"
+    );
+}

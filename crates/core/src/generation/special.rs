@@ -177,6 +177,8 @@ pub(super) fn apply(world: &mut World, _rng: &mut Rng, flags: &BTreeSet<String>)
         for entity in &mut world.entities {
             entity.sprite = match entity.sprite.as_str() {
                 "sTreeTop" => "sTreeTopDead".into(),
+                "sLeaves" => "sLeavesDead".into(),
+                "sLeavesRight" => "sLeavesDeadR".into(),
                 "sTreeBranchLeft" => "sTreeBranchDeadL".into(),
                 "sTreeBranchRight" => "sTreeBranchDeadR".into(),
                 _ => continue,
