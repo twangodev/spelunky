@@ -1,6 +1,6 @@
 //! Shop policy from scrShopkeeperAnger, oItem Step and oPlayer1 Step.
 //! Original shop membership is a 160×128 room, not distance to the keeper.
-use crate::model::{Game, GameEvent, InputFrame, RunState, Vec2};
+use crate::model::{Game, GameEvent, InputFrame, Rect, RunState, Vec2};
 
 fn room(pos: Vec2) -> (i32, i32) {
     (
@@ -9,10 +9,25 @@ fn room(pos: Vec2) -> (i32, i32) {
     )
 }
 fn in_shop(game: &Game, pos: Vec2) -> bool {
-    game.world
-        .entities
-        .iter()
-        .any(|e| e.alive && e.object == "oShopkeeper" && room(e.pos) == room(pos))
+    game.world.entities.iter().any(|e| {
+        e.alive
+            && e.object == "oShopkeeper"
+            && (
+                e.data
+                    .get("shop_room_x")
+                    .copied()
+                    .unwrap_or(f64::from(room(e.pos).0)) as i32,
+                e.data
+                    .get("shop_room_y")
+                    .copied()
+                    .unwrap_or(f64::from(room(e.pos).1)) as i32,
+            ) == room(pos)
+    })
+}
+fn rect_distance(a: Rect, b: Rect) -> f64 {
+    let x = (a.x - b.x - b.w).max(b.x - a.x - a.w).max(0.);
+    let y = (a.y - b.y - b.h).max(b.y - a.y - a.h).max(0.);
+    x.hypot(y)
 }
 fn count(game: &mut Game, key: &str) {
     *game.data.entry(key.into()).or_default() += 1.;
@@ -62,7 +77,16 @@ fn craps_keeper(game: &Game) -> bool {
             && e.health > 0
             && e.object == "oShopkeeper"
             && e.text.get("style").is_some_and(|style| style == "Craps")
-            && room(e.pos) == room(game.player.pos)
+            && (
+                e.data
+                    .get("shop_room_x")
+                    .copied()
+                    .unwrap_or(f64::from(room(e.pos).0)) as i32,
+                e.data
+                    .get("shop_room_y")
+                    .copied()
+                    .unwrap_or(f64::from(room(e.pos).1)) as i32,
+            ) == room(game.player.pos)
     })
 }
 
@@ -161,8 +185,23 @@ fn settle_dice(game: &mut Game) {
 }
 
 pub fn tick(game: &mut Game, input: &InputFrame) {
-    if game.state != RunState::Playing {
+    if game.state != RunState::Playing || game.flags.contains("hub") {
         return;
+    }
+    // Source membership uses immutable roomPath entries, not the keeper's
+    // following/patrol position. Retain each keeper's original shop room.
+    for keeper in &mut game.world.entities {
+        if keeper.object == "oShopkeeper" {
+            let (x, y) = room(keeper.pos);
+            keeper
+                .data
+                .entry("shop_room_x".into())
+                .or_insert(f64::from(x));
+            keeper
+                .data
+                .entry("shop_room_y".into())
+                .or_insert(f64::from(y));
+        }
     }
     settle_dice(game);
     // A keeper struck by another subsystem reports anger through its state.
@@ -215,6 +254,15 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             anger(game, pos, "COME BACK HERE, THIEF!");
             clear_sale(game, id);
             count(game, "itemsStolen");
+        }
+    }
+    if let Some(id) = game.player.held {
+        if game
+            .world
+            .entity(id)
+            .is_some_and(|item| item.value("forSale") == 0. && item.value("cost") == 0.)
+        {
+            crate::items::collectibles::grant(game, id);
         }
     }
     if !input.pay_pressed
@@ -282,7 +330,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
                 && e.object == "oDamsel"
                 && e.value("forSale") > 0.
                 && !e.held
-                && e.pos.distance(game.player.pos) < 16.
+                && rect_distance(e.sprite_bounds(), game.player.sprite_bounds()) < 16.
         })
         .map(|e| e.pos);
     if let Some(pos) = kiss {
@@ -360,7 +408,8 @@ mod tests {
         tick(&mut game, &InputFrame::default());
         assert_eq!(game.data["thiefLevel"], 2.);
         assert_eq!(game.data["itemsStolen"], 1.);
-        assert_eq!(game.world.entity(id).unwrap().value("cost"), 0.);
+        assert!(game.world.entity(id).is_none());
+        assert_eq!(game.player.bombs, 7);
     }
     #[test]
     fn ordinary_pickup_price_is_not_sale() {
@@ -450,5 +499,43 @@ mod tests {
             1
         );
         assert_eq!(g.player.data["bet"], 0.);
+    }
+    #[test]
+    fn actual_step_theft_uses_original_shop_room_when_keeper_follows_outside() {
+        let (mut g, id) = shop();
+        for x in 0..g.world.width {
+            g.world.set_tile(x, 4, "oTemple");
+        }
+        g.player.pos = Vec2::new(140., 56.);
+        g.player.previous_pos = g.player.pos;
+        g.player.invincible = 999;
+        let keeper = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oShopkeeper")
+            .unwrap()
+            .id;
+        g.world.entity_mut(keeper).unwrap().pos = Vec2::new(128., 48.);
+        g.step(&InputFrame::default());
+        assert!(!g.flags.contains("wanted"));
+        g.player.pos = Vec2::new(185., 56.);
+        g.player.previous_pos = g.player.pos;
+        g.world.entity_mut(keeper).unwrap().pos = Vec2::new(188., 48.);
+        g.step(&InputFrame::default());
+        assert!(g.flags.contains("wanted"));
+        assert_eq!(g.data["thiefLevel"], 2.);
+        assert_eq!(g.player.bombs, 7);
+        assert!(g.world.entity(id).is_none());
+    }
+    #[test]
+    fn hub_shopkeeper_flags_do_not_create_campaign_bounty() {
+        let (mut g, _) = shop();
+        g.flags.insert("hub".into());
+        g.flags.insert("hub_stars".into());
+        g.flags.insert("shopkeepers_angry".into());
+        tick(&mut g, &InputFrame::default());
+        assert!(!g.flags.contains("wanted"));
+        assert!(!g.data.contains_key("thiefLevel"));
     }
 }

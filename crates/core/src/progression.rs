@@ -1,9 +1,14 @@
 //! Run progression translated from oPlayer1 Step, oGame Step, GoldDoor
 //! collision, and TunnelMan Step. Filesystem loading belongs to the host.
 use crate::model::{
-    Area, Game, GameEvent, InputFrame, PlayerState, RunState, VIEW_HEIGHT, VIEW_WIDTH, Vec2,
+    Area, Game, GameEvent, InputFrame, PlayerState, Rect, RunState, VIEW_HEIGHT, VIEW_WIDTH, Vec2,
 };
 
+fn sprite_gap(a: Rect, b: Rect) -> f64 {
+    let x = (a.x - b.x - b.w).max(b.x - a.x - a.w).max(0.);
+    let y = (a.y - b.y - b.h).max(b.y - a.y - a.h).max(0.);
+    x.hypot(y)
+}
 fn count(game: &mut Game, key: &str) {
     *game.data.entry(key.into()).or_default() += 1.;
 }
@@ -17,6 +22,7 @@ fn initialize_level(game: &mut Game) {
     game.data.insert("progression_level".into(), level);
     game.flags.remove("ghost_exists");
     game.flags.remove("ghost_warning");
+    game.flags.remove("udjat_blink");
     game.data.insert("udjat_blink_counter".into(), 0.);
     if game.world.dark {
         game.flags.insert("had_dark_level".into());
@@ -138,14 +144,11 @@ fn secrets(game: &mut Game) {
             .world
             .entity(id)
             .filter(|e| e.object == "oSceptre")
-            .map(|e| e.pos);
-        if let Some(pos) = sceptre {
-            if let Some(door) = game
-                .world
-                .entities
-                .iter()
-                .position(|e| e.alive && e.object == "oGoldDoor" && e.pos.distance(pos) < 16.)
-            {
+            .map(|e| e.sprite_bounds());
+        if let Some(bounds) = sceptre {
+            if let Some(door) = game.world.entities.iter().position(|e| {
+                e.alive && e.object == "oGoldDoor" && e.sprite_bounds().intersects(bounds)
+            }) {
                 if game.player.has("Crown") {
                     let door_pos = game.world.entities[door].pos;
                     game.world.entities[door].alive = false;
@@ -172,17 +175,26 @@ fn secrets(game: &mut Game) {
             .entities
             .iter()
             .filter(|e| e.alive && e.object == "oXMarket")
-            .map(|e| e.pos.distance(game.player.pos))
+            .map(|e| sprite_gap(e.sprite_bounds(), game.player.sprite_bounds()))
             .min_by(f64::total_cmp);
         if let Some(distance) = distance {
             let counter = game.data.entry("udjat_blink_counter".into()).or_default();
-            *counter -= 1.;
-            if *counter <= 0. || *counter > distance.max(4.) {
+            if *counter <= 0. {
+                // First Step schedules alarm 2; shortening an existing alarm
+                // does not fire it early. Its blink state lasts until next fire.
                 *counter = distance.max(4.);
-                game.flags.insert("udjat_blink".into());
-                game.sound("sndBlink", game.player.pos);
             } else {
-                game.flags.remove("udjat_blink");
+                *counter -= 1.;
+                if *counter <= 0. {
+                    *counter = distance.max(4.);
+                    let on = !game.flags.remove("udjat_blink");
+                    if on {
+                        game.flags.insert("udjat_blink".into());
+                    }
+                    game.sound(if on { "sndBlink1" } else { "sndBlink2" }, game.player.pos);
+                } else if *counter > distance.max(4.) {
+                    *counter = distance.max(4.);
+                }
             }
         } else {
             game.flags.remove("udjat_blink");
@@ -254,6 +266,7 @@ fn tunnel_remaining(game: &Game, stage: u8) -> u32 {
 pub fn tunnel_offer(game: &Game) -> Option<TunnelOffer> {
     if game.state != RunState::Transition
         || game.flags.contains("custom_level")
+        || game.flags.contains("custom")
         || game.flags.contains("tutorial")
         || game.flags.contains("hub")
     {
@@ -304,6 +317,12 @@ pub fn donate_to_tunnel(game: &mut Game, amount: u32) -> u32 {
 }
 
 fn donate(game: &mut Game, input: &InputFrame) {
+    if ["hub", "custom", "custom_level", "tutorial"]
+        .iter()
+        .any(|flag| game.flags.contains(*flag))
+    {
+        return;
+    }
     let tunnel = game
         .world
         .entities
@@ -316,6 +335,9 @@ fn donate(game: &mut Game, input: &InputFrame) {
     let Some(stage) = tunnel_stage(game) else {
         return;
     };
+    if game.world.level != u32::from(stage) * 4 {
+        return;
+    }
     let remaining = f64::from(tunnel_remaining(game, stage));
     let entity = game.world.entity_mut(id).unwrap();
     let mut amount = entity.value("donate");
@@ -348,6 +370,7 @@ fn complete(game: &mut Game, door_id: u64) {
     };
     let object = door.object.clone();
     let leads_to = door.text.get("leadsTo").cloned().unwrap_or_default();
+    let door_center = Vec2::new(door.pos.x + 8., door.pos.y + 8.);
     if object == "oXMarket" {
         game.flags.insert("genBlackMarket".into());
     }
@@ -359,18 +382,26 @@ fn complete(game: &mut Game, door_id: u64) {
         game.flags.insert(format!("custom_level:{leads_to}"));
     }
     if let Some(id) = game.player.held {
-        let carried = game
-            .world
-            .entity(id)
-            .map(|e| (e.object.clone(), e.health, e.value("value")));
-        if let Some((object, health, value)) = carried {
+        let carried = game.world.entity(id).map(|e| {
+            (
+                e.object.clone(),
+                e.health,
+                e.value("value"),
+                e.value("heavy") > 0.,
+                e.value("armed") > 0.,
+                e.state,
+            )
+        });
+        if let Some((object, health, value, heavy, armed, state)) = carried {
             if object == "oDamsel" && health > 0 {
-                count(game, "damsels");
+                if state != 4 {
+                    count(game, "damsels");
+                }
                 game.flags.insert("damsel_rescued".into());
                 if let Some(e) = game.world.entity_mut(id) {
                     e.alive = false;
                 }
-            } else if object == "oGoldIdol" {
+            } else if matches!(object.as_str(), "oGoldIdol" | "oCrystalSkull") {
                 let multiplier = match game.world.area {
                     Area::Mines => 1,
                     Area::Jungle => 2,
@@ -380,15 +411,41 @@ fn complete(game: &mut Game, door_id: u64) {
                 game.player.money = game
                     .player
                     .money
-                    .saturating_add((value.max(5000.) as u32).saturating_mul(multiplier));
+                    .saturating_add((value.max(0.) as u32).saturating_mul(multiplier));
                 count(game, "idolsConverted");
+                count(
+                    game,
+                    if object == "oCrystalSkull" {
+                        "skulls"
+                    } else {
+                        "idols"
+                    },
+                );
+                game.sound("sndCoin", game.player.pos);
                 if let Some(e) = game.world.entity_mut(id) {
                     e.alive = false;
                 }
-            } else if !matches!(
-                object.as_str(),
-                "oRock" | "oPot" | "oSkull" | "oCrate" | "oChest"
-            ) {
+            } else if object == "oDamsel" || heavy {
+                if let Some(item) = game.world.entity_mut(id) {
+                    item.held = false;
+                }
+            } else if object == "oBomb" {
+                if !armed {
+                    game.player.bombs += 1;
+                    if let Some(item) = game.world.entity_mut(id) {
+                        item.alive = false;
+                        item.held = false;
+                    }
+                } else if let Some(item) = game.world.entity_mut(id) {
+                    item.held = false;
+                }
+            } else if matches!(object.as_str(), "oRopeThrow" | "oRope") {
+                game.player.ropes += 1;
+                if let Some(item) = game.world.entity_mut(id) {
+                    item.alive = false;
+                    item.held = false;
+                }
+            } else {
                 // Keep a carried weapon for root's level transition adapter.
                 game.flags.retain(|f| !f.starts_with("carry:"));
                 game.flags.insert(format!("carry:{object}"));
@@ -396,6 +453,21 @@ fn complete(game: &mut Game, door_id: u64) {
         }
         game.player.held = None;
     }
+    // Inventory selection temporarily hides the prior light item. Classic
+    // carries pickupItemType through a bomb/rope exit, rather than its instance id.
+    if let Some(stash) = game.player.data.remove("stash_id") {
+        let stash = stash as u64;
+        if let Some(item) = game.world.entity_mut(stash) {
+            item.data.remove("stashed");
+            item.held = true;
+            game.flags.retain(|flag| !flag.starts_with("carry:"));
+            game.flags.insert(format!("carry:{}", item.object));
+        }
+    }
+    game.player.pos = door_center;
+    game.player.previous_pos = door_center;
+    game.player.vel = Vec2::default();
+    game.flags.insert("render_discontinuity".into());
     let collect = game.data.remove("collect").unwrap_or(0.).max(0.) as u32;
     game.player.money = game.player.money.saturating_add(collect);
     if let Some(thief) = game.data.get_mut("thiefLevel") {
@@ -776,5 +848,167 @@ mod tests {
         g.world.level = 3;
         assert_eq!(donate_to_tunnel(&mut g, 100), 0);
         assert_eq!(g.player.money, 100000);
+    }
+    fn carried_exit(object: &str) -> (Game, u64) {
+        let mut g = Game::shell(3, RulesPreset::Classic);
+        g.world.spawn("oExit", Vec2::new(80., 48.));
+        for x in 0..g.world.width {
+            g.world.set_tile(x, 4, "oTemple");
+        }
+        g.player.pos = Vec2::new(85., 56.);
+        g.player.previous_pos = g.player.pos;
+        g.player.grounded = true;
+        let id = g.world.spawn(object, g.player.pos);
+        g.world.entity_mut(id).unwrap().held = true;
+        g.player.held = Some(id);
+        (g, id)
+    }
+    #[test]
+    fn actual_step_carries_light_items_but_drops_heavy_bodies_at_centered_exit() {
+        for object in ["oRock", "oSkull", "oShotgun", "oSceptre"] {
+            let (mut g, _) = carried_exit(object);
+            g.step(&InputFrame {
+                up: true,
+                ..Default::default()
+            });
+            assert_eq!(g.state, RunState::Transition);
+            assert_eq!(g.player.pos, Vec2::new(88., 56.));
+            assert!(g.flags.contains(&format!("carry:{object}")));
+            g.next_level();
+            let held = g.world.entity(g.player.held.unwrap()).unwrap();
+            assert_eq!(held.object, object);
+        }
+        for object in ["oCrate", "oChest", "oLampItem"] {
+            let (mut g, id) = carried_exit(object);
+            g.step(&InputFrame {
+                up: true,
+                ..Default::default()
+            });
+            assert_eq!(g.state, RunState::Transition);
+            assert!(!g.flags.iter().any(|f| f.starts_with("carry:")));
+            assert!(!g.world.entity(id).unwrap().held);
+        }
+    }
+    #[test]
+    fn actual_step_refunds_unarmed_bomb_and_rope_but_leaves_armed_bomb() {
+        for (object, bombs, ropes) in [("oBomb", 5, 4), ("oRopeThrow", 4, 5)] {
+            let (mut g, id) = carried_exit(object);
+            g.step(&InputFrame {
+                up: true,
+                ..Default::default()
+            });
+            assert_eq!(g.state, RunState::Transition);
+            assert_eq!((g.player.bombs, g.player.ropes), (bombs, ropes));
+            assert!(g.world.entity(id).is_none());
+            assert!(!g.flags.iter().any(|f| f.starts_with("carry:")));
+        }
+        let (mut g, id) = carried_exit("oBomb");
+        crate::items::explosives::arm_bomb(g.world.entity_mut(id).unwrap());
+        g.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        assert_eq!(g.player.bombs, 4);
+        assert!(!g.world.entity(id).unwrap().held);
+        assert!(!g.flags.contains("carry:oBomb"));
+    }
+    #[test]
+    fn actual_step_redeems_crystal_skull_and_rescues_held_damsel_once() {
+        let (mut g, id) = carried_exit("oCrystalSkull");
+        g.world.area = Area::Jungle;
+        g.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        assert_eq!(g.player.money, 30000);
+        assert!(g.world.entity(id).is_none());
+        let (mut g, _) = carried_exit("oDamsel");
+        g.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        assert_eq!(g.data["damsels"], 1.);
+        assert_eq!(g.player.health, 4);
+        g.next_level();
+        assert_eq!(g.player.health, 5);
+    }
+    #[test]
+    fn actual_step_inventory_bomb_exit_restores_stashed_weapon_without_stale_id() {
+        let (mut g, id) = carried_exit("oShotgun");
+        g.step(&InputFrame {
+            cycle_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(g.player.data["stash_id"], id as f64);
+        assert_eq!(g.player.bombs, 3);
+        let bomb = g.player.held.unwrap();
+        assert_eq!(g.world.entity(bomb).unwrap().object, "oBomb");
+        g.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        assert_eq!(g.state, RunState::Transition);
+        assert_eq!(g.player.bombs, 4);
+        assert!(!g.player.data.contains_key("stash_id"));
+        assert!(g.flags.contains("carry:oShotgun"));
+        g.next_level();
+        let held = g.world.entity(g.player.held.unwrap()).unwrap();
+        assert_eq!(held.object, "oShotgun");
+        assert_eq!(held.value("stashed"), 0.);
+        assert!(held.pos.distance(g.player.pos) < 1.);
+    }
+    #[test]
+    fn actual_step_udjat_alarm_holds_blink_and_alternates_source_sounds() {
+        let (mut g, _) = carried_exit("oRock");
+        g.player.pos = Vec2::new(88., 56.);
+        g.player.previous_pos = g.player.pos;
+        g.world.spawn("oXMarket", Vec2::new(92., 56.));
+        g.player.equipment.insert("UdjatEye".into());
+        g.step(&InputFrame::default());
+        assert!(!g.flags.contains("udjat_blink"));
+        for _ in 0..4 {
+            g.step(&InputFrame::default());
+        }
+        assert!(g.flags.contains("udjat_blink"));
+        assert!(
+            g.events
+                .iter()
+                .any(|e| matches!(e,GameEvent::Sound{name,..} if name=="sndBlink1"))
+        );
+        g.step(&InputFrame::default());
+        assert!(g.flags.contains("udjat_blink"));
+        for _ in 0..3 {
+            g.step(&InputFrame::default());
+        }
+        assert!(!g.flags.contains("udjat_blink"));
+        assert!(
+            g.events
+                .iter()
+                .any(|e| matches!(e,GameEvent::Sound{name,..} if name=="sndBlink2"))
+        );
+    }
+    #[test]
+    fn actual_step_gold_door_requires_held_sceptre_sprite_overlap() {
+        let mut g = Game::shell(2, RulesPreset::Classic);
+        for x in 0..g.world.width {
+            g.world.set_tile(x, 4, "oTemple");
+        }
+        g.player.pos = Vec2::new(67., 56.);
+        g.player.previous_pos = g.player.pos;
+        g.player.grounded = true;
+        g.player.equipment.insert("Crown".into());
+        let sceptre = g.world.spawn("oSceptre", g.player.pos);
+        g.player.held = Some(sceptre);
+        g.world.entity_mut(sceptre).unwrap().held = true;
+        let door = g.world.spawn("oGoldDoor", Vec2::new(80., 48.));
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(door).is_some());
+        assert!(g.world.entity(sceptre).is_some());
+        g.player.pos.x = 70.;
+        g.player.previous_pos = g.player.pos;
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(door).is_none());
+        assert!(g.world.entity(sceptre).is_none());
+        assert!(g.world.entities.iter().any(|e| e.object == "oXGold"));
     }
 }
