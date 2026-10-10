@@ -244,15 +244,8 @@ pub fn tick(game: &mut Game, _input: &InputFrame) {
     }
     parachute(game);
     let count = game.world.entities.len();
+    canopy_tick(game, count);
     for index in 0..count {
-        if game.world.entities[index].alive
-            && game.world.entities[index].object == "oLeaves"
-            && game.world.entities[index].value("leaves_initialized") == 0.0
-        {
-            let cemetery = game.flags.contains("cemetery") || game.flags.contains("cemetary");
-            let id = game.world.entities[index].id;
-            initialize_leaves(&mut game.world, id, cemetery);
-        }
         let mut e = game.world.entities[index].clone();
         if !e.alive {
             continue;
@@ -268,9 +261,8 @@ pub fn tick(game: &mut Game, _input: &InputFrame) {
                     e.pos.y -= 0.1;
                 }
             }
-            "oLeaves" | "oTreeBranch" => canopy(game, &mut e),
-            "oTree" => tree(game, &mut e, false),
-            "oTerrainMetadata" if e.value("tree_initialized") != 0.0 => tree(game, &mut e, true),
+            "oLeaves" | "oTreeBranch" | "oTree" => {}
+            "oTerrainMetadata" if e.value("tree_initialized") != 0.0 => {}
             "oPsychicCreateP" | "oPsychicCreate2" => psychic_create(game, &mut e),
             "oIceBottom" => ice_bottom(game, &mut e),
             "oFrozenCaveman" => frozen_caveman(game, &mut e),
@@ -328,6 +320,33 @@ pub fn tick(game: &mut Game, _input: &InputFrame) {
             _ => {}
         }
         game.world.entities[index] = e;
+    }
+}
+
+fn canopy_tick(game: &mut Game, count: usize) {
+    // Classic's Step dispatcher iterates object resources first, then each
+    // object's instances in creation order: Tree 585, Leaves 586, Branch 587.
+    // Stored Tree metadata occupies that instance's producer creation slot.
+    for object in ["oTree", "oLeaves", "oTreeBranch"] {
+        for index in 0..count {
+            let e = &game.world.entities[index];
+            let stored_tree = e.object == "oTerrainMetadata" && e.value("tree_initialized") != 0.0;
+            if !e.alive || (e.object != object && !(object == "oTree" && stored_tree)) {
+                continue;
+            }
+            if object == "oLeaves" && e.value("leaves_initialized") == 0.0 {
+                let id = e.id;
+                let cemetery = game.flags.contains("cemetery") || game.flags.contains("cemetary");
+                initialize_leaves(&mut game.world, id, cemetery);
+            }
+            let mut e = game.world.entities[index].clone();
+            if object == "oTree" {
+                tree(game, &mut e, stored_tree);
+            } else {
+                canopy(game, &mut e);
+            }
+            game.world.entities[index] = e;
+        }
     }
 }
 
@@ -1402,7 +1421,8 @@ mod tests {
         g.player.pos = Vec2::new(240.0, 40.0);
         g.world.set_tile(5, 9, "oBlock");
         let mut branch = 0;
-        // Source tree() creates the trunk bottom-to-top, interleaving branches.
+        // Source tree() creates the trunk bottom-to-top, interleaving births.
+        // Step still dispatches all Trees before Leaves and TreeBranches.
         for y in (4..=8).rev() {
             g.world.set_tile(5, y, "oTree");
             initialize_tree(&mut g.world, 5, y);
@@ -1438,16 +1458,44 @@ mod tests {
             .filter(|e| matches!(e.object.as_str(), "oRubble" | "oRubbleSmall" | "oLeaf"))
             .map(|e| e.object.as_str())
             .collect();
+        let first_leaf = output.iter().position(|&object| object == "oLeaf").unwrap();
         assert!(
-            output.windows(5).any(|w| w
-                == [
-                    "oRubble",
-                    "oRubbleSmall",
-                    "oRubbleSmall",
-                    "oLeaf",
-                    "oRubble"
-                ]),
-            "branch Destroy remains interleaved with Tree Destroy RNG/output"
+            output[first_leaf..].iter().all(|&object| object == "oLeaf"),
+            "Tree Destroy outputs precede the later Leaves/Branch Step phases"
+        );
+    }
+    #[test]
+    fn actual_canopy_step_uses_object_order_even_when_instance_births_are_reversed() {
+        let mut g = room();
+        g.world.spawn("oTreeBranch", Vec2::new(96.0, 80.0));
+        let leaves = g.world.spawn("oLeaves", Vec2::new(64.0, 80.0));
+        g.world.spawn("oTree", Vec2::new(80.0, 80.0));
+        initialize_leaves(&mut g.world, leaves, false);
+        g.step(&InputFrame::default());
+        let output: Vec<_> = g
+            .world
+            .entities
+            .iter()
+            .filter(|e| matches!(e.object.as_str(), "oRubble" | "oRubbleSmall" | "oLeaf"))
+            .collect();
+        assert_eq!(
+            output.iter().map(|e| e.object.as_str()).collect::<Vec<_>>(),
+            [
+                "oRubble",
+                "oRubbleSmall",
+                "oRubbleSmall",
+                "oLeaf",
+                "oLeaf",
+                "oLeaf"
+            ]
+        );
+        assert!(
+            output[3..5].iter().all(|e| e.pos.x <= 80.0),
+            "Leaves Step precedes Branch Step"
+        );
+        assert!(
+            output[5].pos.x >= 96.0,
+            "Branch emits the final Leaf despite being born first"
         );
     }
     #[test]
