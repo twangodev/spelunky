@@ -365,7 +365,11 @@ fn custom_tiles_retain_source_solid_platform_and_ladder_families() {
     let top = world
         .entities
         .iter()
-        .find(|e| e.object == "oTerrainMetadata" && e.pos == Vec2::new(32.0, 64.0))
+        .find(|e| {
+            e.object == "oTerrainMetadata"
+                && (e.pos.x / 16.0).floor() == 2.0
+                && (e.pos.y / 16.0).floor() == 4.0
+        })
         .unwrap();
     assert_eq!(top.text["terrain_sprite"], "sTreeTop");
     assert!(!top.solid);
@@ -581,4 +585,35 @@ fn imported_canopies_collapse_after_their_supporting_tree_is_removed() {
         game.step(&InputFrame::default());
     }
     assert!(game.player.pos.y > 80.0);
+}
+
+#[test]
+fn imported_tree_column_steps_in_authored_top_to_bottom_order() {
+    use spelunky_core::{Game, InputFrame, RulesPreset};
+    let mut level = Level::default();
+    for y in 3..=5 {
+        level.set_tile(4, y, '|').unwrap();
+    }
+    level.set_tile(4, 6, '1').unwrap();
+    let mut game = Game::new(1, RulesPreset::Classic);
+    game.load_custom(&level, "tree-order", "");
+    let trees: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|e| e.object == "oTerrainMetadata" && e.value("tree_initialized") != 0.0)
+        .collect();
+    assert_eq!(trees.len(), 3);
+    assert!(trees.windows(2).all(|pair| pair[0].pos.y < pair[1].pos.y));
+    game.step(&InputFrame::default());
+    game.world.set_tile(5, 7, "");
+    // Earlier instances see the lower segment before its own Step destroys
+    // it. Reversing grid iteration incorrectly removes the whole column in
+    // one tick and differs visibly from Classic custom-loader creation order.
+    for bottom in (4..=6).rev() {
+        game.step(&InputFrame::default());
+        for y in 4..=6 {
+            assert_eq!(game.world.tile(5, y).unwrap().object == "oTree", y < bottom);
+        }
+    }
 }

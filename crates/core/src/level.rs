@@ -211,6 +211,9 @@ impl Level {
                                     metadata.text.insert("terrain_sprite".into(), sprite.into());
                                 }
                             }
+                            if spawn.object == "oTree" {
+                                crate::world_events::initialize_tree(&mut world, tx, ty);
+                            }
                             continue;
                         }
                     }

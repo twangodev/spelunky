@@ -332,6 +332,35 @@ pub fn tick(game: &mut Game, _input: &InputFrame) {
     if let Some(timer) = game.data.get_mut("message_timer") {
         *timer = (*timer - 1.0).max(0.0);
     }
+    // Generated/imported producers register these at Create time. A stable
+    // grid-order fallback also supports raw World::set_tile fixtures/authors.
+    let mut registered_trees = vec![false; game.world.tiles.len()];
+    for e in &game.world.entities {
+        if e.alive && e.object == "oTerrainMetadata" && e.value("tree_initialized") != 0.0 {
+            let x = (e.pos.x / 16.0).floor() as usize;
+            let y = (e.pos.y / 16.0).floor() as usize;
+            if x < game.world.width && y < game.world.height {
+                registered_trees[y * game.world.width + x] = true;
+            }
+        }
+    }
+    let raw_trees: Vec<_> = game
+        .world
+        .tiles
+        .iter()
+        .enumerate()
+        .filter_map(|(i, tile)| {
+            if tile.object != "oTree" {
+                return None;
+            }
+            let x = i % game.world.width;
+            let y = i / game.world.width;
+            (!registered_trees[i]).then_some((x, y))
+        })
+        .collect();
+    for (x, y) in raw_trees {
+        initialize_tree(&mut game.world, x, y);
+    }
     parachute(game);
     let count = game.world.entities.len();
     for index in 0..count {
@@ -359,6 +388,8 @@ pub fn tick(game: &mut Game, _input: &InputFrame) {
                 }
             }
             "oLeaves" | "oTreeBranch" => canopy(game, &mut e),
+            "oTree" => tree(game, &mut e, false),
+            "oTerrainMetadata" if e.value("tree_initialized") != 0.0 => tree(game, &mut e, true),
             "oPsychicCreateP" | "oPsychicCreate2" => psychic_create(game, &mut e),
             "oIceBottom" => ice_bottom(game, &mut e),
             "oFrozenCaveman" => frozen_caveman(game, &mut e),
@@ -416,6 +447,67 @@ pub fn tick(game: &mut Game, _input: &InputFrame) {
             _ => {}
         }
         game.world.entities[index] = e;
+    }
+}
+
+/// Keep a stored Tree's Step at its source creation position among the room's
+/// instances. Reusing metadata preserves its stable id and cell-local fields.
+pub(crate) fn initialize_tree(world: &mut crate::World, x: usize, y: usize) -> u64 {
+    let pos = Vec2::new(x as f64 * 16.0 + 8.0, y as f64 * 16.0 + 8.0);
+    if let Some(index) = world.entities.iter().position(|e| {
+        e.alive
+            && e.object == "oTerrainMetadata"
+            && (e.pos.x / 16.0).floor() as usize == x
+            && (e.pos.y / 16.0).floor() as usize == y
+    }) {
+        if world.entities[index].value("tree_initialized") != 0.0 {
+            return world.entities[index].id;
+        }
+        let mut metadata = world.entities.remove(index);
+        metadata.pos = pos;
+        metadata.previous_pos = pos;
+        metadata.data.insert("tree_initialized".into(), 1.0);
+        let id = metadata.id;
+        world.entities.push(metadata);
+        return id;
+    }
+    let id = world.spawn("oTerrainMetadata", pos);
+    let metadata = world.entity_mut(id).unwrap();
+    metadata.sprite.clear();
+    metadata.data.insert("tree_initialized".into(), 1.0);
+    id
+}
+
+fn tree(game: &mut Game, e: &mut Entity, metadata: bool) {
+    let pos = if metadata {
+        Vec2::new(e.pos.x - 8.0, e.pos.y - 8.0)
+    } else {
+        e.pos
+    };
+    if pos.x <= game.camera.x - 16.0
+        || pos.x >= game.camera.x + VIEW_WIDTH + 16.0
+        || pos.y <= game.camera.y - 16.0
+        || pos.y >= game.camera.y + VIEW_HEIGHT + 16.0
+        || point_family(game, Vec2::new(pos.x, pos.y + 16.0), "oSolid")
+    {
+        return;
+    }
+    let destroyed = if metadata {
+        crate::items::explosives::destroy_unsupported_tree_tile(
+            game,
+            (pos.x / 16.0).floor() as usize,
+            (pos.y / 16.0).floor() as usize,
+        )
+    } else {
+        crate::items::explosives::destroy_unsupported_tree_instance(game, e.id)
+    };
+    if destroyed {
+        // Preserve the canonical callback's bookkeeping when the dispatcher
+        // writes its local clone back to storage.
+        if let Some(updated) = game.world.entities.iter().find(|other| other.id == e.id) {
+            *e = updated.clone();
+        }
+        e.alive = false;
     }
 }
 
@@ -1244,6 +1336,7 @@ mod tests {
     fn actual_tree_loss_collapses_both_directional_canopies_and_removes_support() {
         let mut g = room();
         g.world.set_tile(5, 5, "oTree");
+        g.world.set_tile(5, 6, "oBlock");
         let left = g.world.spawn("oLeaves", Vec2::new(64.0, 80.0));
         initialize_leaves(&mut g.world, left, false);
         let right = g.world.spawn("oLeaves", Vec2::new(96.0, 80.0));
@@ -1278,6 +1371,7 @@ mod tests {
         let mut g = room();
         for x in [4, 6] {
             g.world.set_tile(x, 5, "oTree");
+            g.world.set_tile(x, 6, "oBlock");
         }
         let top = g.world.spawn("oLeaves", Vec2::new(80.0, 80.0));
         initialize_leaves(&mut g.world, top, false);
@@ -1420,6 +1514,125 @@ mod tests {
         bone.vel = Vec2::new(7.0, -3.0);
         g.step(&InputFrame::default());
         assert_eq!(g.world.entity(bones[0]).unwrap().vel.x, 7.0);
+    }
+    #[test]
+    fn actual_generated_tree_order_collapses_trunk_and_canopy_in_the_blast_step() {
+        let mut g = room();
+        g.player.pos = Vec2::new(240.0, 40.0);
+        g.world.set_tile(5, 9, "oBlock");
+        let mut branch = 0;
+        // Source tree() creates the trunk bottom-to-top, interleaving branches.
+        for y in (4..=8).rev() {
+            g.world.set_tile(5, y, "oTree");
+            initialize_tree(&mut g.world, 5, y);
+            if y == 6 {
+                branch = g.world.spawn("oTreeBranch", Vec2::new(96.0, 96.0));
+            }
+        }
+        let leaves: Vec<_> = [64.0, 96.0]
+            .into_iter()
+            .map(|x| {
+                let id = g.world.spawn("oLeaves", Vec2::new(x, 64.0));
+                initialize_leaves(&mut g.world, id, false);
+                id
+            })
+            .collect();
+        g.world.spawn("oExplosion", Vec2::new(88.0, 136.0));
+        g.step(&InputFrame::default());
+        assert!((4..=8).all(|y| g.world.tile(5, y).unwrap().object.is_empty()));
+        assert!(g.world.entity(branch).is_none());
+        assert!(leaves.iter().all(|&id| g.world.entity(id).is_none()));
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oLeaf")
+                .count(),
+            5
+        );
+        let output: Vec<_> = g
+            .world
+            .entities
+            .iter()
+            .filter(|e| matches!(e.object.as_str(), "oRubble" | "oRubbleSmall" | "oLeaf"))
+            .map(|e| e.object.as_str())
+            .collect();
+        assert!(
+            output.windows(5).any(|w| w
+                == [
+                    "oRubble",
+                    "oRubbleSmall",
+                    "oRubbleSmall",
+                    "oLeaf",
+                    "oRubble"
+                ]),
+            "branch Destroy remains interleaved with Tree Destroy RNG/output"
+        );
+    }
+    #[test]
+    fn actual_authored_top_to_bottom_tree_order_cascades_once_per_source_step() {
+        let mut g = room();
+        g.player.pos = Vec2::new(240.0, 40.0);
+        g.world.set_tile(5, 9, "oBlock");
+        for y in 4..=8 {
+            g.world.set_tile(5, y, "oTree");
+            initialize_tree(&mut g.world, 5, y);
+        }
+        g.world.spawn("oExplosion", Vec2::new(88.0, 136.0));
+        for remaining in [2, 1, 0] {
+            g.step(&InputFrame::default());
+            assert_eq!(
+                (4..=8)
+                    .filter(|&y| g.world.tile(5, y).unwrap().object == "oTree")
+                    .count(),
+                remaining
+            );
+        }
+    }
+    #[test]
+    fn actual_dynamic_tree_order_uses_full_destroy_and_preserves_tree_tile() {
+        let mut g = room();
+        g.player.pos = Vec2::new(240.0, 40.0);
+        g.world.set_tile(5, 9, "oBlock");
+        let trees: Vec<_> = (4..=8)
+            .rev()
+            .map(|y| g.world.spawn("oTree", Vec2::new(80.0, f64::from(y) * 16.0)))
+            .collect();
+        let tile = g.world.spawn("oTreeTile", Vec2::new(160.0, 80.0));
+        g.world.spawn("oExplosion", Vec2::new(88.0, 136.0));
+        g.step(&InputFrame::default());
+        assert!(trees.iter().all(|&id| g.world.entity(id).is_none()));
+        assert!(g.world.entity(tile).is_some());
+        assert!(g.world.entities.iter().any(|e| e.object == "oRubbleSmall"));
+    }
+    #[test]
+    fn tree_create_reuses_metadata_and_keeps_the_creation_slot_idempotently() {
+        let mut g = room();
+        let metadata = g.world.spawn("oTerrainMetadata", Vec2::new(88.0, 88.0));
+        g.world
+            .entity_mut(metadata)
+            .unwrap()
+            .data
+            .insert("cleanDeath".into(), 1.0);
+        let earlier = g.world.spawn("oTreeBranch", Vec2::new(96.0, 80.0));
+        g.world.set_tile(5, 5, "oTree");
+        assert_eq!(initialize_tree(&mut g.world, 5, 5), metadata);
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oTerrainMetadata")
+                .count(),
+            1
+        );
+        assert_eq!(g.world.entity(metadata).unwrap().value("cleanDeath"), 1.0);
+        let order: Vec<_> = g.world.entities.iter().map(|e| e.id).collect();
+        assert_eq!(order, vec![earlier, metadata]);
+        assert_eq!(initialize_tree(&mut g.world, 5, 5), metadata);
+        assert_eq!(
+            g.world.entities.iter().map(|e| e.id).collect::<Vec<_>>(),
+            order
+        );
     }
     #[test]
     fn source_one_shot_animation_lifetimes() {

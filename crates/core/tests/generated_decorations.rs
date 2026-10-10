@@ -342,3 +342,41 @@ fn natural_casino_initializes_offscreen_dice_before_prize_generation() {
         "offscreen dice must remain source-deactivated; Create has already run"
     );
 }
+
+#[test]
+fn actual_generated_trees_have_source_order_metadata_before_first_step() {
+    let world = generation::generate(&mut Rng::new(0), 5, &flags(&[]));
+    let mut count = 0;
+    for (index, _) in world
+        .tiles
+        .iter()
+        .enumerate()
+        .filter(|(_, tile)| tile.object == "oTree")
+    {
+        let pos = Vec2::new(
+            (index % world.width) as f64 * 16.0 + 8.0,
+            (index / world.width) as f64 * 16.0 + 8.0,
+        );
+        let metadata: Vec<_> = world
+            .entities
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.object == "oTerrainMetadata" && e.pos == pos)
+            .collect();
+        assert_eq!(metadata.len(), 1);
+        assert_eq!(metadata[0].1.value("tree_initialized"), 1.0);
+        assert_eq!(metadata[0].1.age, 0);
+        if let Some((lower_index, _)) = world.entities.iter().enumerate().find(|(_, e)| {
+            e.object == "oTerrainMetadata"
+                && e.value("tree_initialized") != 0.0
+                && e.pos == Vec2::new(pos.x, pos.y + 16.0)
+        }) {
+            assert!(
+                lower_index < metadata[0].0,
+                "actual generated Tree creation is bottom to top"
+            );
+        }
+        count += 1;
+    }
+    assert!(count > 2, "fixture must exercise a real generated trunk");
+}

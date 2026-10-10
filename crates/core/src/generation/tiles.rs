@@ -819,6 +819,7 @@ fn ship(w: &mut World, x: usize, y: usize, p: Vec2, sprite: &str) {
 
 fn tree(w: &mut World, r: &mut Rng, x: usize, y: usize, p: Vec2) {
     w.set_tile(x, y, "oTree");
+    crate::world_events::initialize_tree(w, x, y);
     let mut ty = y as i32 - 1;
     let mut right = false;
     let mut left = false;
@@ -838,6 +839,7 @@ fn tree(w: &mut World, r: &mut Rng, x: usize, y: usize, p: Vec2) {
             break;
         }
         w.set_tile(x, ty as usize, "oTree");
+        crate::world_events::initialize_tree(w, x, ty as usize);
         if m < 4 {
             if r.range(5) < 3 && !right {
                 spawn(w, "oTreeBranch", Vec2::new(p.x + 16.0, ty as f64 * 16.0));
@@ -1018,6 +1020,101 @@ mod tests {
             false,
             false,
             "General",
+        );
+    }
+
+    #[test]
+    fn generated_tree_metadata_keeps_bottom_to_top_source_creation_order() {
+        let mut world = World::new(42, 34, Area::Jungle, 5);
+        tree(
+            &mut world,
+            &mut Rng::new(42),
+            10,
+            10,
+            Vec2::new(160.0, 160.0),
+        );
+        let trunks: Vec<_> = world
+            .entities
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.object == "oTerrainMetadata" && e.value("tree_initialized") != 0.0)
+            .collect();
+        assert!(
+            trunks.len() > 2,
+            "fixture must exercise interleaved trunk and branch creation"
+        );
+        assert!(world.entities.iter().any(|e| e.object == "oTreeBranch"));
+        for pair in trunks.windows(2) {
+            assert_eq!(pair[0].1.pos.y - pair[1].1.pos.y, 16.0);
+            assert!(pair[0].0 < pair[1].0);
+        }
+        for (index, branch) in world
+            .entities
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.object == "oTreeBranch")
+        {
+            let trunk = trunks
+                .iter()
+                .find(|(_, trunk)| trunk.pos.y == branch.pos.y + 8.0)
+                .unwrap();
+            assert!(
+                trunk.0 < index,
+                "Tree Step must precede its newly created branch"
+            );
+            if let Some(next) = trunks
+                .iter()
+                .find(|(_, next)| next.pos.y == trunk.1.pos.y - 16.0)
+            {
+                assert!(
+                    index < next.0,
+                    "branch belongs between consecutive source Tree creations"
+                );
+            }
+        }
+        let last_trunk = trunks.last().unwrap().0;
+        assert!(
+            world
+                .entities
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.object == "oLeaves")
+                .all(|(index, _)| index > last_trunk)
+        );
+    }
+
+    #[test]
+    fn tree_creation_reuses_cell_metadata_without_losing_fields_or_identity() {
+        let mut world = World::new(42, 34, Area::Jungle, 5);
+        let reused = world.spawn("oTerrainMetadata", Vec2::new(168.0, 168.0));
+        world
+            .entity_mut(reused)
+            .unwrap()
+            .data
+            .insert("author_marker".into(), 73.0);
+        let prior = world.spawn("oRock", Vec2::new(32.0, 32.0));
+        tree(
+            &mut world,
+            &mut Rng::new(42),
+            10,
+            10,
+            Vec2::new(160.0, 160.0),
+        );
+        assert_eq!(world.entities[0].id, prior);
+        assert_eq!(
+            world.entities[1].id, reused,
+            "reused metadata must move to the source Tree creation position"
+        );
+        let metadata = world.entity(reused).unwrap();
+        assert_eq!(metadata.value("author_marker"), 73.0);
+        assert_eq!(metadata.value("tree_initialized"), 1.0);
+        assert_eq!(
+            world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oTerrainMetadata" && e.pos == Vec2::new(168.0, 168.0))
+                .count(),
+            1
         );
     }
 
