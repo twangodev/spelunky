@@ -119,6 +119,9 @@ impl Game {
         self.player.animation = 0.0;
         self.player.data.clear();
         self.player.invincible = 0;
+        self.data
+            .insert("darkness".into(), if self.world.dark { 1.0 } else { 0.0 });
+        self.data.insert("darkness_lerp".into(), 0.0);
         self.data.retain(|key, _| {
             !key.starts_with("hazard:")
                 && !key.starts_with("hazard_entity:")
@@ -189,7 +192,9 @@ impl Game {
         self.level_tick += 1;
         enemies::olmec_intro_alarms(self);
         traps::pre_tick(self);
+        world_events::sample_light_distances(self);
         player::tick(self, input);
+        world_events::lighting_tick(self);
         // Inactive players retain world collisions and the hurt/dead physics
         // controller, but cannot perform inventory actions during the intro.
         let inactive_input = InputFrame::default();

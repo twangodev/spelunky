@@ -2,6 +2,142 @@
 //! All animation rates below are frames per original 30 Hz simulation tick.
 use crate::{Entity, Game, GameEvent, InputFrame, Rect, VIEW_HEIGHT, VIEW_WIDTH, Vec2, catalog};
 
+/// GameMaker's distance_to_object measures between inclusive bounding boxes.
+pub(crate) fn mask_distance(a: Rect, b: Rect) -> f64 {
+    if !a.is_valid() || !b.is_valid() {
+        return f64::INFINITY;
+    }
+    let dx = (a.x - (b.x + b.w - 1.0))
+        .max(b.x - (a.x + a.w - 1.0))
+        .max(0.0);
+    let dy = (a.y - (b.y + b.h - 1.0))
+        .max(b.y - (a.y + a.h - 1.0))
+        .max(0.0);
+    dx.hypot(dy)
+}
+
+struct LightSource {
+    mask: Rect,
+    animation: f64,
+    flare_distance: f64,
+}
+
+fn nearest_light_source(game: &Game, family: &str) -> Option<LightSource> {
+    let mut nearest = None;
+    let mut distance = f64::INFINITY;
+    for (index, tile) in game.world.tiles.iter().enumerate() {
+        if !catalog::is_a(&tile.object, family) {
+            continue;
+        }
+        let x = index % game.world.width;
+        let y = index / game.world.width;
+        let pos = Vec2::new(x as f64 * 16.0, y as f64 * 16.0);
+        let candidate_distance = pos.distance(game.player.pos);
+        if candidate_distance < distance {
+            let animation = game
+                .world
+                .entities
+                .iter()
+                .find(|e| {
+                    e.alive
+                        && e.object == "oTerrainMetadata"
+                        && (e.pos.x / 16.0).floor() as usize == x
+                        && (e.pos.y / 16.0).floor() as usize == y
+                })
+                .map_or(0.0, |e| e.animation);
+            nearest = Some(LightSource {
+                mask: game.world.tile_bounds(x as i32, y as i32),
+                animation,
+                flare_distance: 0.0,
+            });
+            distance = candidate_distance;
+        }
+    }
+    for e in game
+        .world
+        .entities
+        .iter()
+        .filter(|e| e.alive && catalog::is_a(&e.object, family))
+    {
+        let candidate_distance = e.pos.distance(game.player.pos);
+        if candidate_distance < distance {
+            nearest = Some(LightSource {
+                mask: e.sprite_bounds(),
+                animation: e.animation,
+                flare_distance: e.data.get("dist_to_player").copied().unwrap_or(0.0),
+            });
+            distance = candidate_distance;
+        }
+    }
+    nearest
+}
+
+/// oPlayer1 samples its light distances before character movement.
+pub(crate) fn sample_light_distances(game: &mut Game) {
+    let player = game.player.sprite_bounds();
+    let mut distance = 999.0_f64;
+    if let Some(source) = nearest_light_source(game, "oExplosion") {
+        distance = mask_distance(player, source.mask);
+        if source.animation <= 3.0 {
+            distance -= source.animation * 16.0;
+        } else {
+            distance += (source.animation - 3.0) * 16.0;
+        }
+    }
+    for (family, penalty) in [
+        ("oLava", 0.0),
+        ("oLamp", 0.0),
+        ("oLampItem", 0.0),
+        ("oFlareCrate", 0.0),
+        ("oTikiTorch", 48.0),
+        ("oArrowTrapLeftLit", 48.0),
+        ("oArrowTrapRightLit", 48.0),
+        ("oSpearTrapLit", 48.0),
+        ("oSmashTrapLit", 48.0),
+        ("oShotgunBlastLeft", 0.0),
+        ("oShotgunBlastRight", 0.0),
+    ] {
+        if let Some(source) = nearest_light_source(game, family) {
+            distance = distance.min(mask_distance(player, source.mask) + penalty);
+        }
+    }
+    game.player
+        .data
+        .insert("dist_to_nearest_light_source".into(), distance);
+}
+
+/// The later oLevel Step consumes the player/Flare caches without resampling.
+pub(crate) fn lighting_tick(game: &mut Game) {
+    if !game.world.dark || game.flags.contains("hub") {
+        return;
+    }
+    let mut distance = if game.player.has("Crown") {
+        0.0
+    } else {
+        nearest_light_source(game, "oFlare").map_or(160.0, |source| source.flare_distance)
+    };
+    let nearest = game
+        .player
+        .data
+        .get("dist_to_nearest_light_source")
+        .copied()
+        .unwrap_or(999.0);
+    if nearest < 200.0 && nearest < distance {
+        distance = nearest;
+    }
+    let mut darkness = if distance == 0.0 {
+        0.0
+    } else {
+        distance / 160.0
+    };
+    let lerp = game.data.get("darkness_lerp").copied().unwrap_or(0.0);
+    if lerp > 0.0 {
+        darkness = lerp;
+        game.data.insert("darkness_lerp".into(), lerp - 0.1);
+    }
+    game.data.insert("darkness".into(), darkness.min(0.9));
+}
+
 /// oGame's global fluid pass runs before instance activation and object Steps.
 /// Destroying a solid requests this pass; a quiet contained pool stays intact.
 pub(crate) fn fluid_tick(game: &mut Game) {
@@ -223,9 +359,10 @@ pub fn tick(game: &mut Game, _input: &InputFrame) {
             {
                 lava(game, &mut e, true)
             }
-            "oPoof" | "oSmokePuff" | "oBloodSpark" | "oBloodTrail" | "oLavaDrip" | "oBubble"
-            | "oSplash" | "oBurn" | "oLaserExplode" | "oFlameTrail" | "oYellowTrail"
-            | "oLaserTrail" => effect(game, &mut e),
+            "oPoof" | "oSmokePuff" | "oBloodSpark" | "oBloodTrail" | "oBubble" | "oSplash"
+            | "oBurn" | "oLaserExplode" | "oFlameTrail" | "oYellowTrail" | "oLaserTrail" => {
+                effect(game, &mut e)
+            }
             "oBones" | "oFakeBones" | "oParaUsed" => fallen_decoration(game, &mut e),
             "oParachute" => {
                 e.pos = Vec2::new(game.player.pos.x - 8.0, game.player.pos.y - 16.0);
@@ -253,10 +390,7 @@ pub fn tick(game: &mut Game, _input: &InputFrame) {
                 e.vel.y += 0.6;
                 if point_family(game, e.pos, "oBrick")
                     || point_family(game, e.pos, "oBlock")
-                    || e.pos.x < 0.0
-                    || e.pos.y < 0.0
-                    || e.pos.x >= game.world.width as f64 * 16.0
-                    || e.pos.y >= game.world.height as f64 * 16.0
+                    || outside_room(game, &e)
                 {
                     e.alive = false;
                 }
@@ -306,16 +440,8 @@ fn sign(game: &mut Game, e: &mut Entity) {
 fn light(e: &mut Entity) {
     let torch = e.object == "oTikiTorch";
     e.animation = (e.animation + 0.5) % if torch { 5.0 } else { 3.0 };
-    e.data.insert(
-        "light_radius".into(),
-        if e.object == "oLampRed" {
-            0.0
-        } else if torch {
-            32.0
-        } else {
-            96.0
-        },
-    );
+    e.data
+        .insert("light_radius".into(), if torch { 32.0 } else { 96.0 });
     e.data.insert("light_offset_x".into(), 8.0);
     e.data.insert("light_offset_y".into(), 8.0);
     if e.object == "oLampRed" {
@@ -563,6 +689,15 @@ fn outside(game: &Game, p: Vec2, margin: f64) -> bool {
         || p.y > game.camera.y + VIEW_HEIGHT + margin
 }
 
+fn outside_room(game: &Game, e: &Entity) -> bool {
+    let mask = e.sprite_bounds();
+    mask.is_valid()
+        && (mask.x + mask.w <= 0.0
+            || mask.y + mask.h <= 0.0
+            || mask.x >= game.world.width as f64 * 16.0
+            || mask.y >= game.world.height as f64 * 16.0)
+}
+
 fn rubble(game: &Game, e: &mut Entity) {
     if e.value("world_effect_initialized") == 0.0 {
         if e.object == "oLeaf" {
@@ -574,7 +709,12 @@ fn rubble(game: &Game, e: &mut Entity) {
     e.pos.y += e.vel.y;
     e.vel.y += if e.object == "oLeaf" { 0.01 } else { 0.6 };
     if e.object == "oLeaf" {
-        e.animation = (e.animation + 0.2) % 10.0;
+        e.animation = (e.animation + e.data.get("animation_speed").copied().unwrap_or(0.2)) % 10.0;
+    } else if e.object == "oLavaDrip" {
+        e.animation += e.data.get("animation_speed").copied().unwrap_or(0.4);
+        if e.animation + 1e-9 >= 5.0 {
+            e.alive = false;
+        }
     }
     if point_family(game, e.pos, "oWaterSwim") {
         if e.object == "oDrip" {
@@ -588,7 +728,10 @@ fn rubble(game: &Game, e: &mut Entity) {
     } else if point_family(game, e.pos, "oLava") {
         e.alive = false;
     }
-    if point_family(game, e.pos, "oSolid") || outside(game, e.pos, 32.0) {
+    if point_family(game, e.pos, "oSolid")
+        || outside(game, e.pos, 32.0)
+        || (e.object == "oRubbleDarkSmall" && outside_room(game, e))
+    {
         e.alive = false;
     }
 }
@@ -889,7 +1032,6 @@ mod tests {
                 e.value("light_radius"),
                 match e.object.as_str() {
                     "oTikiTorch" => 32.0,
-                    "oLampRed" => 0.0,
                     _ => 96.0,
                 }
             );
@@ -914,6 +1056,119 @@ mod tests {
             advance(&mut g);
             assert!(g.world.entity(id).is_none(), "{object}");
         }
+    }
+    #[test]
+    fn lava_drips_inherit_motion_gravity_and_solid_collision() {
+        let mut g = room();
+        let id = g.world.spawn("oLavaDrip", Vec2::new(80.0, 80.0));
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().pos.y, 80.0);
+        assert_eq!(g.world.entity(id).unwrap().vel.y, 0.6);
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().pos.y, 80.6);
+        assert_eq!(g.world.entity(id).unwrap().vel.y, 1.2);
+        assert_eq!(g.world.entity(id).unwrap().animation, 0.8);
+        g.world.set_tile(6, 5, "oBrick");
+        let blocked = g.world.spawn("oLavaDrip", Vec2::new(100.0, 84.0));
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(blocked).is_none());
+    }
+    #[test]
+    fn dark_rubble_outside_room_uses_complete_sprite_bounds() {
+        let mut g = room();
+        let outside = g.world.spawn("oRubbleDarkSmall", Vec2::new(-10.0, 80.0));
+        let partial = g.world.spawn("oRubbleDark", Vec2::new(-1.0, 80.0));
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(outside).is_none());
+        assert!(g.world.entity(partial).is_some());
+    }
+    #[test]
+    fn webbed_leaf_and_lava_drip_stop_animation_and_remain_caught() {
+        let mut g = room();
+        for x in 0..20 {
+            g.world.set_tile(x, 3, "oBrick");
+        }
+        g.world.spawn("oWeb", Vec2::new(76.0, 76.0));
+        let leaf = g.world.spawn("oLeaf", Vec2::new(80.0, 80.0));
+        let drip = g.world.spawn("oLavaDrip", Vec2::new(80.0, 80.0));
+        for _ in 0..20 {
+            g.step(&InputFrame::default());
+        }
+        assert_eq!(g.world.entity(leaf).unwrap().animation, 0.0);
+        assert_eq!(g.world.entity(drip).unwrap().animation, 0.0);
+    }
+    fn dark_room() -> Game {
+        let mut g = room();
+        for x in 0..20 {
+            g.world.set_tile(x, 3, "oBrick");
+        }
+        g.world.dark = true;
+        g.player.facing = -1;
+        g
+    }
+    #[test]
+    fn canonical_darkness_tracks_lamp_approach_and_source_family_inheritance() {
+        let mut g = dark_room();
+        g.world.spawn("oLampRed", Vec2::new(80.0, 32.0));
+        g.step(&InputFrame::default());
+        // StandLeft ends at x45; lamp frame zero starts at x82.
+        assert_eq!(g.data["darkness"], 37.0 / 160.0);
+        g.player.pos.x = 60.0;
+        g.step(&InputFrame::default());
+        assert_eq!(g.data["darkness"], 17.0 / 160.0);
+    }
+    #[test]
+    fn canonical_darkness_clamps_unlit_rooms_and_honors_crown_during_dead_simulation() {
+        let mut g = dark_room();
+        g.step(&InputFrame::default());
+        assert_eq!(g.data["darkness"], 0.9);
+        g.player.equipment.insert("Crown".into());
+        g.step(&InputFrame::default());
+        assert_eq!(g.data["darkness"], 0.0);
+        g.player.health = 0;
+        g.state = crate::RunState::Dead;
+        g.step(&InputFrame::default());
+        assert_eq!(g.data["darkness"], 0.0);
+    }
+    #[test]
+    fn canonical_darkness_keeps_source_explosion_flash_below_zero() {
+        let mut g = dark_room();
+        g.player.health = 100;
+        let id = g.world.spawn("oExplosion", g.player.pos);
+        let explosion = g.world.entity_mut(id).unwrap();
+        crate::items::init_entity(explosion);
+        explosion.animation = 3.0;
+        g.step(&InputFrame::default());
+        assert_eq!(g.data["darkness"], -48.0 / 160.0);
+    }
+    #[test]
+    fn canonical_darkness_consumes_flare_step_cache_after_player_repositioning() {
+        let mut g = dark_room();
+        let flare = g.world.spawn("oFlare", Vec2::new(80.0, 32.0));
+        g.step(&InputFrame::default());
+        assert_eq!(
+            g.data["darkness"], 0.0,
+            "Flare Create initializes its cache to zero"
+        );
+        let cached = g.world.entity(flare).unwrap().value("dist_to_player");
+        assert!(cached > 0.0);
+        g.player.pos.x = 200.0;
+        g.step(&InputFrame::default());
+        assert_eq!(g.data["darkness"], (cached / 160.0).min(0.9));
+        assert_eq!(g.data.get("darkness_lerp").copied().unwrap_or(0.0), 0.0);
+    }
+    #[test]
+    fn canonical_darkness_lerp_consumption_and_room_create_reset_follow_source() {
+        let mut g = dark_room();
+        g.player.equipment.insert("Crown".into());
+        g.data.insert("darkness_lerp".into(), 1.0);
+        for expected in [0.9, 0.9, 0.8] {
+            g.step(&InputFrame::default());
+            assert!((g.data["darkness"] - expected).abs() < 1e-9);
+        }
+        g.next_level();
+        assert_eq!(g.data["darkness_lerp"], 0.0);
+        assert_eq!(g.data["darkness"], if g.world.dark { 1.0 } else { 0.0 });
     }
     #[test]
     fn title_hint_hand_loops_source_frames_without_moving_or_expiring() {
