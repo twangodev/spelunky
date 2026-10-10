@@ -1,10 +1,35 @@
 use spelunky_core::{
-    Game, InputFrame, Rng, RulesPreset, Vec2, generation, hub::HubKind, level::Level,
+    Game, InputFrame, Rng, RulesPreset, Vec2, World, generation, hub::HubKind, level::Level,
 };
 use std::collections::BTreeSet;
 
 fn flags(names: &[&str]) -> BTreeSet<String> {
     names.iter().map(|name| (*name).into()).collect()
+}
+
+// Synchronous source Create callbacks consume RNG during generation. Select a
+// real generated forest by geometry, so unrelated corrected Create draws do
+// not turn the pre-Step tree/canopy assertions into empty fixtures.
+fn generated_forest_with_trunk_and_canopy(selected: &BTreeSet<String>) -> World {
+    for seed in 0..64 {
+        let world = generation::generate(&mut Rng::new(seed), 5, selected);
+        if world
+            .tiles
+            .iter()
+            .filter(|tile| tile.object == "oTree")
+            .count()
+            > 2
+            && world
+                .entities
+                .iter()
+                .filter(|entity| entity.object == "oLeaves")
+                .count()
+                >= 2
+        {
+            return world;
+        }
+    }
+    panic!("no real generated trunk and canopy in seeds 0..64 for {selected:?}");
 }
 
 #[test]
@@ -262,7 +287,7 @@ fn generated_canopies_run_source_create_before_first_step_including_cemetery() {
         } else {
             flags(&[])
         };
-        let world = generation::generate(&mut Rng::new(0), 5, &selected);
+        let world = generated_forest_with_trunk_and_canopy(&selected);
         let leaves: Vec<_> = world
             .entities
             .iter()
@@ -338,14 +363,36 @@ fn natural_casino_initializes_offscreen_dice_before_prize_generation() {
         vec![5, 4]
     );
     assert!(
-        dice.iter().all(|die| die.age == 0),
-        "offscreen dice must remain source-deactivated; Create has already run"
+        dice.iter().all(|die| die.age == 1 && !die.engine_active),
+        "fresh instances age before Level553 deactivates offscreen Dice773"
+    );
+    for _ in 0..2 {
+        game.step(&InputFrame::default());
+    }
+    let dice: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|e| e.object == "oDice")
+        .collect();
+    assert_eq!(dice.len(), 2);
+    assert!(
+        dice.iter().all(|die| die.age == 1
+            && !die.engine_active
+            && die.value("dice_create_initialized") == 1.0),
+        "later offscreen frames must freeze the already initialized dice"
+    );
+    assert_eq!(
+        dice.iter()
+            .map(|e| e.value("value") as u32)
+            .collect::<Vec<_>>(),
+        vec![5, 4]
     );
 }
 
 #[test]
 fn actual_generated_trees_have_source_order_metadata_before_first_step() {
-    let world = generation::generate(&mut Rng::new(0), 5, &flags(&[]));
+    let world = generated_forest_with_trunk_and_canopy(&flags(&[]));
     let mut count = 0;
     for (index, _) in world
         .tiles
