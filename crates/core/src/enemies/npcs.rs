@@ -80,7 +80,9 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
 }
 
 pub(super) fn animation_end(e: &mut Entity, sprite: &str) {
-    if e.object == "oDamsel" && e.state == 3 {
+    if e.object == "oGhost" && sprite == "sGhostDisappear" {
+        e.alive = false;
+    } else if e.object == "oDamsel" && e.state == 3 {
         e.state = 0;
         e.timer = 200;
     } else if e.object == "oDamsel" && e.state == 6 {
@@ -128,21 +130,75 @@ pub(super) fn tick_independent_events(game: &mut Game, e: &mut Entity) {
 
 fn destroy_emitter(game: &mut Game, e: &mut Entity) {
     e.alive = false;
-    for barrier in &mut game.world.entities {
-        if barrier.object == "oBarrier" {
-            barrier.alive = false;
-        }
+    destroyed(game, e);
+}
+
+/// Source Destroy events also run after collection, outside-room removal, and
+/// destruction by another system. Keep the callback idempotent across phases.
+pub(super) fn destroyed(game: &mut Game, e: &mut Entity) {
+    if e.alive || e.value("npc_destroyed") != 0.0 {
+        return;
     }
-    game.sound("sndSmallExplode", e.pos);
+    match e.object.as_str() {
+        "oBarrierEmitter" => {
+            e.data.insert("npc_destroyed".into(), 1.0);
+            for _ in 0..6 {
+                let pos = Vec2::new(
+                    e.pos.x + 2.0 + f64::from(game.rng.range(15)),
+                    e.pos.y + 2.0 + f64::from(game.rng.range(15)),
+                );
+                let id = game.world.spawn("oFlareSpark", pos);
+                let vy = f64::from(1 + game.rng.range(3));
+                game.world.entity_mut(id).unwrap().vel.y = vy;
+            }
+            for barrier in &mut game.world.entities {
+                if barrier.object == "oBarrier" {
+                    barrier.alive = false;
+                }
+            }
+            let shake = game.data.entry("shake".into()).or_default();
+            *shake = (*shake).max(10.0);
+            game.sound("sndSmallExplode", e.pos);
+        }
+        "oScarab" => {
+            e.data.insert("npc_destroyed".into(), 1.0);
+            // Destroy.xml spells this origin `other.x/y`; its binding during
+            // nested GM8 Collision destruction remains unverified. Preserve
+            // the actor origin here rather than assume the collecting player.
+            for _ in 0..3 {
+                let pos = Vec2::new(
+                    e.pos.x + 6.0 + f64::from(game.rng.range(5)),
+                    e.pos.y + 6.0 + f64::from(game.rng.range(5)),
+                );
+                game.world.spawn("oFlareSpark", pos);
+            }
+        }
+        _ => {}
+    }
+}
+
+pub(super) fn finish_destroy_events(game: &mut Game) {
+    let ids: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|e| {
+            !e.alive
+                && matches!(e.object.as_str(), "oBarrierEmitter" | "oScarab")
+                && e.value("npc_destroyed") == 0.0
+        })
+        .map(|e| e.id)
+        .collect();
+    for id in ids {
+        let index = game.world.entities.iter().position(|e| e.id == id).unwrap();
+        let mut e = game.world.entities.remove(index);
+        destroyed(game, &mut e);
+        game.world.entities.insert(index, e);
+    }
 }
 
 fn ghost(game: &mut Game, e: &mut Entity) {
     if e.state == 0 {
-        e.data
-            .insert("disappear".into(), e.value("disappear") + 0.2);
-        if e.value("disappear") >= 8.0 {
-            e.alive = false;
-        }
         return;
     }
     steer_toward(e, game.player.pos, 1.0);
@@ -193,6 +249,8 @@ fn ghost(game: &mut Game, e: &mut Entity) {
         game.sound("sndGhost", e.pos);
         e.state = 0;
         e.sprite = "sGhostDisappear".into();
+        e.animation = 0.0;
+        e.data.insert("animation_speed".into(), 0.2);
     }
 }
 
@@ -201,6 +259,7 @@ fn damsel(game: &mut Game, e: &mut Entity) {
         .insert("depth".into(), if e.held { 1.0 } else { 99.0 });
     if e.state == 4 {
         e.data.insert("depth".into(), 1000.0);
+        e.data.insert("invincible".into(), 1.0);
         return;
     }
     let swimming = super::inherited::point(&game.world, e.pos, "oWaterSwim");
@@ -277,10 +336,16 @@ fn damsel(game: &mut Game, e: &mut Entity) {
         e.vel = Vec2::default();
         e.pos = Vec2::new(exit.x + 8.0, exit.y + 8.0);
         e.previous_pos = e.pos;
-        e.sprite = "sDamselExit2".into();
+        e.sprite = if game.flags.contains("character_damsel") {
+            "sPExit"
+        } else {
+            "sDamselExit2"
+        }
+        .into();
         e.animation = 0.0;
         e.data.insert("inactive".into(), 1.0);
         e.data.insert("depth".into(), 1000.0);
+        e.data.insert("invincible".into(), 1.0);
         game.flags.insert("damsel_rescued".into());
         *game.data.entry("pending_damsel_kisses".into()).or_default() += 1.0;
         *game.data.entry("damsels".into()).or_default() += 1.0;
@@ -644,7 +709,20 @@ fn scarab(game: &mut Game, e: &mut Entity) {
     let (wall, ground) = move_body(&game.world, e, 0.0);
     if game.world.solid_at(e.pos.x + 8.0, e.pos.y + 8.0) {
         e.health = 0;
+    }
+    if e.health < 1 {
+        // The Step death burst is separate from its three-spark Destroy event.
+        for _ in 0..3 {
+            let pos = Vec2::new(
+                e.pos.x + 2.0 + f64::from(game.rng.range(15)),
+                e.pos.y + 2.0 + f64::from(game.rng.range(15)),
+            );
+            let id = game.world.spawn("oFlareSpark", pos);
+            let vy = f64::from(1 + game.rng.range(3));
+            game.world.entity_mut(id).unwrap().vel.y = vy;
+        }
         e.alive = false;
+        destroyed(game, e);
         return;
     }
     if wall {
@@ -687,6 +765,7 @@ fn scarab(game: &mut Game, e: &mut Entity) {
         });
         game.sound("sndCoin", e.pos);
         e.alive = false;
+        destroyed(game, e);
     }
 }
 
@@ -845,6 +924,43 @@ mod tests {
         assert_eq!(g.state, RunState::Dead);
     }
     #[test]
+    fn actual_step_ghost_disappears_after_full_fourteen_frame_animation() {
+        let mut g = actual_room();
+        for x in 0..30 {
+            g.world.set_tile(x, 9, "oBlock");
+        }
+        g.player.pos = Vec2::new(104.0, 136.0);
+        let id = g.world.spawn("oGhost", Vec2::new(96.0, 120.0));
+        g.step(&InputFrame::default());
+        let ghost = g.world.entity(id).unwrap();
+        assert_eq!(ghost.sprite, "sGhostDisappear");
+        assert_eq!(ghost.value("animation_speed"), 0.2);
+        assert_eq!(crate::catalog::sprite_frame_count(&ghost.sprite), 14);
+        for _ in 0..69 {
+            g.step(&InputFrame::default());
+            assert!(g.world.entity(id).is_some());
+        }
+        // Allow the final floating-point image_index addition to cross 14.
+        for _ in 0..2 {
+            g.step(&InputFrame::default());
+        }
+        assert!(g.world.entity(id).is_none());
+    }
+    #[test]
+    fn actual_step_rescued_damsel_is_invincible_during_exit_animation() {
+        let mut g = actual_room();
+        g.world.spawn("oExit", Vec2::new(96.0, 96.0));
+        let id = g.world.spawn("oDamsel", Vec2::new(104.0, 104.0));
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().state, 4);
+        assert_eq!(g.world.entity(id).unwrap().value("invincible"), 1.0);
+        g.world.spawn("oExplosion", Vec2::new(104.0, 104.0));
+        g.step(&InputFrame::default());
+        let damsel = g.world.entity(id).unwrap();
+        assert_eq!(damsel.state, 4);
+        assert_eq!(damsel.health, 4);
+    }
+    #[test]
     fn actual_step_damsel_requires_real_exit_and_finishes_exit_animation_once() {
         let mut g = actual_room();
         g.world.exit = Vec2::new(104.0, 104.0);
@@ -944,21 +1060,19 @@ mod tests {
         let mut g = Game::shell(1, RulesPreset::Classic);
         g.world.set_tile(5, 4, "oBlock");
         let id = g.world.spawn("oBarrierEmitter", Vec2::new(80.0, 80.0));
-        assert!(
-            g.world
-                .entities
-                .iter()
-                .any(|e| e.alive && e.object == "oBarrier")
-        );
+        assert!(g
+            .world
+            .entities
+            .iter()
+            .any(|e| e.alive && e.object == "oBarrier"));
         g.world.spawn("oBullet", Vec2::new(88.0, 88.0));
         g.step(&InputFrame::default());
         assert!(g.world.entity(id).is_none());
-        assert!(
-            !g.world
-                .entities
-                .iter()
-                .any(|e| e.alive && e.object == "oBarrier")
-        );
+        assert!(!g
+            .world
+            .entities
+            .iter()
+            .any(|e| e.alive && e.object == "oBarrier"));
     }
     #[test]
     fn actual_step_new_murderer_keeper_attacks_without_invented_patrol_wait() {
@@ -1086,6 +1200,15 @@ mod tests {
             g.step(&InputFrame::default());
             assert!(g.world.entity(emitter).is_none());
             assert_eq!(
+                g.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oFlareSpark")
+                    .count(),
+                6
+            );
+            assert_eq!(g.data["shake"], 10.0);
+            assert_eq!(
                 g.events
                     .iter()
                     .filter(|event| matches!(event,
@@ -1095,6 +1218,66 @@ mod tests {
                 1,
                 "supported={supported}, bullet={bullet}"
             );
+        }
+    }
+    #[test]
+    fn actual_step_late_explosion_runs_emitter_destroy_event_once() {
+        let mut g = actual_room();
+        g.world.set_tile(10, 4, "oBlock");
+        let emitter = g.world.spawn("oBarrierEmitter", Vec2::new(160.0, 80.0));
+        g.world.spawn("oExplosion", Vec2::new(160.0, 80.0));
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(emitter).is_none());
+        assert!(!g.world.entities.iter().any(|e| e.object == "oBarrier"));
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oFlareSpark")
+                .count(),
+            6
+        );
+        assert_eq!(g.data["shake"], 10.0);
+        g.step(&InputFrame::default());
+        assert!(!g.events.iter().any(|event| matches!(event,
+            GameEvent::Sound { name, .. } if name == "sndSmallExplode"
+        )));
+    }
+    #[test]
+    fn actual_step_scarab_destroy_bursts_distinguish_collection_and_death() {
+        for (collected, dead, expected_sparks) in
+            [(true, false, 3), (false, true, 6), (false, false, 3)]
+        {
+            let mut g = actual_room();
+            let pos = if collected {
+                Vec2::new(96.0, 120.0)
+            } else if dead {
+                Vec2::new(160.0, 80.0)
+            } else {
+                Vec2::new(-32.0, 80.0)
+            };
+            if collected {
+                g.player.pos = Vec2::new(104.0, 128.0);
+            }
+            let id = g.world.spawn("oScarab", pos);
+            if dead {
+                g.world.entity_mut(id).unwrap().health = 0;
+            }
+            g.step(&InputFrame::default());
+            assert!(
+                g.world.entity(id).is_none(),
+                "collected={collected}, dead={dead}"
+            );
+            assert_eq!(
+                g.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oFlareSpark")
+                    .count(),
+                expected_sparks,
+                "collected={collected}, dead={dead}"
+            );
+            assert_eq!(g.player.money, if collected { 4000 } else { 0 });
         }
     }
     #[test]

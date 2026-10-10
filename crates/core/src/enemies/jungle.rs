@@ -136,6 +136,20 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
 }
 
 pub(super) fn animation_end(e: &mut Entity, sprite: &str) {
+    if e.object == "oJaws" {
+        match sprite {
+            "sJawsTurnL" => e.sprite = "sJawsLeft".into(),
+            "sJawsTurnR" => {
+                e.sprite = "sJawsRight".into();
+                e.pos.x += 48.0;
+                e.previous_pos = e.pos;
+            }
+            _ => return,
+        }
+        e.state = 2;
+        e.timer = 40;
+        return;
+    }
     if e.object != "oManTrap" {
         return;
     }
@@ -632,8 +646,7 @@ fn jaws(game: &mut Game, e: &mut Entity) {
         }
     }
     let swimming = super::player_alive(game) && water(&game.world, game.player.pos);
-    let turn_before = e.value("jaws_turn_ticks") > 0.0;
-    let turn_serial = e.value("jaws_turn_serial");
+    let turn_before = matches!(e.sprite.as_str(), "sJawsTurnL" | "sJawsTurnR");
     match e.state {
         0 => {
             let probe = Vec2::new(
@@ -713,20 +726,7 @@ fn jaws(game: &mut Game, e: &mut Entity) {
             e.state = 0;
         }
     }
-    if turn_before && turn_serial == e.value("jaws_turn_serial") {
-        let remaining = (e.value("jaws_turn_ticks") - 1.0).max(0.0);
-        e.data.insert("jaws_turn_ticks".into(), remaining);
-        e.timer = remaining as u32;
-        if remaining == 0.0 {
-            if e.facing > 0 {
-                e.pos.x += 48.0;
-                e.previous_pos = e.pos;
-            }
-            e.state = 2;
-            e.timer = 40;
-        }
-    }
-    let turning = e.value("jaws_turn_ticks") > 0.0;
+    let turning = matches!(e.sprite.as_str(), "sJawsTurnL" | "sJawsTurnR");
     e.sprite = match (turning, e.facing < 0) {
         (true, true) => "sJawsTurnL",
         (true, false) => "sJawsTurnR",
@@ -744,12 +744,14 @@ fn jaws(game: &mut Game, e: &mut Entity) {
 fn begin_jaws_turn(e: &mut Entity) {
     e.state = 3;
     e.facing *= -1;
-    e.timer = 12;
     e.vel = Vec2::default();
     e.animation = 0.0;
-    e.data.insert("jaws_turn_ticks".into(), 12.0);
-    e.data
-        .insert("jaws_turn_serial".into(), e.value("jaws_turn_serial") + 1.0);
+    e.sprite = if e.facing < 0 {
+        "sJawsTurnL"
+    } else {
+        "sJawsTurnR"
+    }
+    .into();
     if e.facing < 0 {
         e.pos.x -= 48.0;
         e.previous_pos = e.pos;
@@ -934,6 +936,19 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
     if super::solid_mask(&game.world, e.bounds(), e.id) {
         e.pos.y -= 2.0;
     }
+    if e.state == 98 {
+        e.sprite = "sManTrapStunL".into();
+    } else if e.state < 96 {
+        e.sprite = "sManTrapLeft".into();
+    }
+}
+
+/// Collision events run independently of the viewport guard around ManTrap Step.
+/// The original events target parent families, including oShopkeeper2 children.
+pub(super) fn tick_independent_events(game: &mut Game, e: &mut Entity) {
+    if !e.alive || e.object != "oManTrap" || matches!(e.state, 97 | 98) {
+        return;
+    }
     // An awake trap eats rather than dealing ordinary contact damage. Spike
     // shoes permit the parent combat handler to resolve a stomp first.
     if !matches!(e.state, 97 | 98)
@@ -955,6 +970,9 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
         game.player.invincible = 9999;
         game.player.data.insert("hidden".into(), 1.0);
         if let Some(id) = game.player.held.take() {
+            if e.held {
+                e.held = false;
+            }
             if let Some(item) = game.world.entity_mut(id) {
                 item.held = false;
                 item.vel = Vec2::new(e.facing as f64 * 2.0, -4.0);
@@ -962,7 +980,14 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
         }
         game.sound("sndDie", game.player.pos);
     }
-    if !matches!(e.state, 97 | 98) {
+    if e.state == 97 {
+        return;
+    }
+    for (family, sprite) in [
+        ("oCaveman", "sManTrapEatCavemanL"),
+        ("oDamsel", "sManTrapEatDamselL"),
+        ("oShopkeeper", "sManTrapEatShopkeeperL"),
+    ] {
         let victim = game
             .world
             .entities
@@ -970,46 +995,60 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
             .find(|v| {
                 v.alive
                     && v.id != e.id
-                    && matches!(v.object.as_str(), "oCaveman" | "oDamsel" | "oShopkeeper")
+                    && crate::catalog::is_a(&v.object, family)
                     && event_bounds(v).intersects(event_bounds(e))
             })
             .map(|v| {
                 (
                     v.id,
-                    v.object.clone(),
-                    v.pos.x,
+                    v.pos,
+                    v.vel.x,
                     v.health,
-                    v.data.get("has_gun").copied().unwrap_or(1.0) > 0.0,
+                    v.held,
+                    v.data.get("has_gun").copied().unwrap_or(1.0) != 0.0,
                 )
             });
-        if let Some((id, kind, x, health, has_gun)) = victim {
-            eat(
-                e,
-                match kind.as_str() {
-                    "oDamsel" => "sManTrapEatDamselL",
-                    "oShopkeeper" => "sManTrapEatShopkeeperL",
-                    _ => "sManTrapEatCavemanL",
-                },
-                x,
-            );
-            if kind == "oShopkeeper" && health > 0 {
+        let Some((id, pos, velocity_x, health, held, has_gun)) = victim else {
+            continue;
+        };
+        eat(e, sprite, pos.x);
+        // NPC events compare instance origins; player contact compares x+8.
+        e.facing = if pos.x > e.pos.x { 1 } else { -1 };
+        if family == "oShopkeeper" {
+            if health > 0 {
                 e.data.insert("ate_shopkeeper".into(), 1.0);
             }
-            if let Some(v) = game.world.entity_mut(id) {
-                v.alive = false;
-            }
-            if game.player.held == Some(id) {
-                game.player.held = None;
-            }
-            if kind == "oShopkeeper" && has_gun {
-                game.world.spawn("oShotgun", e.pos);
+            if has_gun {
+                let gun = game
+                    .world
+                    .spawn("oShotgun", Vec2::new(pos.x + 8.0, pos.y + 8.0));
+                // Source creates the shotgun before drawing vertical, then
+                // horizontal launch velocity, both inclusive rand(4,6).
+                let vertical = f64::from(4 + game.rng.range(3));
+                let horizontal =
+                    f64::from(4 + game.rng.range(3)) * if velocity_x < 0.0 { -1.0 } else { 1.0 };
+                if let Some(gun) = game.world.entity_mut(gun) {
+                    gun.vel = Vec2::new(horizontal, vertical);
+                    gun.data.insert("cost".into(), 0.0);
+                    gun.data.insert("forSale".into(), 0.0);
+                    gun.data.insert("for_sale".into(), 0.0);
+                    // The gun is created by a Collision event after this
+                    // frame's oItem Step projectile checks have completed.
+                    gun.data
+                        .insert("released_by_enemy_tick".into(), game.tick as f64);
+                }
             }
         }
-    }
-    if e.state == 98 {
-        e.sprite = "sManTrapStunL".into();
-    } else if e.state < 96 {
-        e.sprite = "sManTrapLeft".into();
+        if let Some(victim) = game.world.entity_mut(id) {
+            victim.alive = false;
+            if family == "oShopkeeper" {
+                victim.data.insert("has_gun".into(), 0.0);
+            }
+        }
+        if family == "oDamsel" && held && game.player.held == Some(id) {
+            game.player.held = None;
+        }
+        break;
     }
 }
 
@@ -1128,9 +1167,8 @@ mod tests {
         tick(&mut game, &mut e);
         tick(&mut game, &mut e);
         assert_eq!(e.state, 3);
-        for _ in 0..12 {
-            tick(&mut game, &mut e);
-        }
+        let turn_sprite = e.sprite.clone();
+        animation_end(&mut e, &turn_sprite);
         assert_eq!(e.state, 2);
         assert_eq!(e.timer, 40);
     }
@@ -1287,11 +1325,14 @@ mod tests {
         tick(&mut game, &mut e);
         assert_eq!(e.state, 3);
         assert_eq!(e.pos.x, 48.0);
-        for _ in 0..12 {
-            tick(&mut game, &mut e);
-        }
+        let turn_sprite = e.sprite.clone();
+        animation_end(&mut e, &turn_sprite);
         assert_eq!(e.state, 2);
         assert_eq!(e.pos.x, 96.0);
+        // Animation End changes the sprite; the next Step updates the
+        // movement rectangle, exactly as the source event ordering does.
+        assert_eq!(e.bounds().x, 96.0);
+        tick(&mut game, &mut e);
         assert_eq!(e.bounds().x, 48.0);
     }
     #[test]
@@ -1385,12 +1426,138 @@ mod tests {
         tick(&mut game, &mut e);
         assert_eq!(e.pos.x, 19.0);
         assert_eq!(e.state, 1);
-        for _ in 0..11 {
-            tick(&mut game, &mut e);
-        }
+        let turn_sprite = e.sprite.clone();
+        animation_end(&mut e, &turn_sprite);
         assert_eq!(e.state, 2);
         assert_eq!(e.sprite, "sJawsRight");
         assert_eq!(e.timer, 40);
-        assert_eq!(e.pos.x, 100.0);
+        assert_eq!(e.pos.x, 67.0);
+    }
+    fn collision_room() -> Game {
+        let mut game = Game::shell(123, RulesPreset::Classic);
+        game.world = World::new(40, 30, Area::Jungle, 5);
+        game.player.pos = Vec2::new(40.0, 152.0);
+        for x in 0..40 {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        game
+    }
+
+    #[test]
+    fn game_step_mantrap_eats_npc_families_outside_ai_viewport() {
+        for (family, sprite) in [
+            ("oCaveman", "sManTrapEatCavemanL"),
+            ("oDamsel", "sManTrapEatDamselL"),
+            ("oShopkeeper", "sManTrapEatShopkeeperL"),
+            ("oShopkeeper2", "sManTrapEatShopkeeperL"),
+        ] {
+            let mut game = collision_room();
+            let trap = game.world.spawn("oManTrap", Vec2::new(370.0, 144.0));
+            let victim = game.world.spawn(family, Vec2::new(374.0, 144.0));
+            assert!(370.0 >= game.camera.x + crate::VIEW_WIDTH + 4.0);
+            game.step(&crate::InputFrame::default());
+            assert!(game.world.entity(victim).is_none(), "{family}");
+            let trap = game.world.entity(trap).unwrap();
+            assert_eq!(trap.pos, Vec2::new(370.0, 144.0), "AI remains frozen");
+            assert_eq!(trap.state, 97, "{family}");
+            assert_eq!(trap.sprite, sprite, "{family}");
+            assert_eq!(trap.facing, 1, "NPC compares origins, not center");
+        }
+    }
+
+    #[test]
+    fn game_step_mantrap_drops_inherited_keeper_gun_at_victim_origin_with_source_launch() {
+        let mut game = collision_room();
+        let trap = game.world.spawn("oManTrap", Vec2::new(370.0, 144.0));
+        let victim = game.world.spawn("oShopkeeper2", Vec2::new(374.0, 144.0));
+        game.world.entity_mut(victim).unwrap().vel.x = -2.0;
+        game.world
+            .entity_mut(victim)
+            .unwrap()
+            .data
+            .insert("has_gun".into(), 1.0);
+        let mut rng = game.rng.clone();
+        let expected_y = f64::from(4 + rng.range(3));
+        let expected_x = -f64::from(4 + rng.range(3));
+        game.step(&crate::InputFrame::default());
+        assert!(game.world.entity(victim).is_none());
+        assert_eq!(
+            game.world.entity(trap).unwrap().value("ate_shopkeeper"),
+            1.0
+        );
+        let guns: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.object == "oShotgun")
+            .collect();
+        assert_eq!(guns.len(), 1);
+        assert_eq!(guns[0].pos, Vec2::new(382.0, 152.0));
+        assert_eq!(guns[0].vel, Vec2::new(expected_x, expected_y));
+        assert_eq!(guns[0].value("cost"), 0.0);
+        assert_eq!(guns[0].value("for_sale"), 0.0);
+    }
+
+    #[test]
+    fn game_step_mantrap_player_collision_runs_outside_ai_viewport() {
+        let mut game = collision_room();
+        game.player.pos = Vec2::new(378.0, 152.0);
+        let trap = game.world.spawn("oManTrap", Vec2::new(370.0, 144.0));
+        assert!(370.0 >= game.camera.x + crate::VIEW_WIDTH + 4.0);
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.state, crate::RunState::Dead);
+        let trap = game.world.entity(trap).unwrap();
+        assert_eq!(trap.state, 97);
+        assert_eq!(trap.pos, Vec2::new(370.0, 144.0));
+    }
+
+    #[test]
+    fn game_step_newly_dropped_keeper_gun_does_not_interrupt_eating_in_same_collision_phase() {
+        let mut game = collision_room();
+        let trap = game.world.spawn("oManTrap", Vec2::new(144.0, 144.0));
+        let victim = game.world.spawn("oShopkeeper", Vec2::new(144.0, 144.0));
+        game.step(&crate::InputFrame::default());
+        assert!(game.world.entity(victim).is_none());
+        let trap = game.world.entity(trap).unwrap();
+        assert_eq!(trap.state, 97);
+        assert_eq!(trap.health, 3);
+        assert_eq!(trap.sprite, "sManTrapEatShopkeeperL");
+        assert!(game.world.entities.iter().any(|e| e.object == "oShotgun"));
+    }
+
+    #[test]
+    fn game_step_jaws_turn_animation_finishes_after_natural_camera_scroll_freezes_ai() {
+        let mut game = Game::shell(123, RulesPreset::Classic);
+        game.world = World::new(50, 30, Area::Jungle, 5);
+        game.player.pos = Vec2::new(228.0, 152.0);
+        game.camera = Vec2::new(100.0, 0.0);
+        for x in 0..50 {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        for x in 29..42 {
+            for y in 8..10 {
+                game.world.set_tile(x, y, "oWater");
+            }
+        }
+        let jaws = game.world.spawn("oJaws", Vec2::new(464.0, 128.0));
+        game.step(&crate::InputFrame {
+            left: true,
+            run: true,
+            ..Default::default()
+        });
+        assert_eq!(game.world.entity(jaws).unwrap().sprite, "sJawsTurnR");
+        for tick in 2..=13 {
+            game.step(&crate::InputFrame {
+                left: tick <= 5,
+                run: tick <= 5,
+                ..Default::default()
+            });
+        }
+        let jaws = game.world.entity(jaws).unwrap();
+        assert!(464.0 >= game.camera.x + crate::VIEW_WIDTH + 48.0);
+        assert_eq!(jaws.sprite, "sJawsRight");
+        assert_eq!(jaws.state, 2);
+        assert_eq!(jaws.timer, 40);
+        assert_eq!(jaws.pos, Vec2::new(512.0, 128.0));
     }
 }

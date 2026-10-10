@@ -137,12 +137,21 @@ fn countdown(e: &mut Entity, key: &str) {
     }
 }
 fn side(e: &Entity) -> &'static str {
-    if e.facing < 0 { "L" } else { "R" }
+    if e.facing < 0 {
+        "L"
+    } else {
+        "R"
+    }
 }
 fn spawn(game: &mut Game, object: &str, pos: Vec2) -> u64 {
     let id = game.world.spawn(object, pos);
     if let Some(e) = game.world.entity_mut(id) {
         super::init_entity(e);
+        if object == "oOlmecDebris" {
+            // Source instance_create finishes Create before the caller writes
+            // the directional velocities used by Olmec's intro alarms.
+            initialize_debris(&mut game.rng, e);
+        }
     }
     id
 }
@@ -887,21 +896,49 @@ fn slam(game: &mut Game, e: &mut Entity) {
     game.sound("sndSlam", e.pos);
     e.alive = false;
 }
-fn debris(game: &mut Game, e: &mut Entity) {
+fn initialize_debris(rng: &mut crate::Rng, e: &mut Entity) {
     if e.value("started") == 0.0 {
-        e.vel = Vec2::new(game.rng.unit() * 8.0 - 4.0, -1.0 - game.rng.unit() * 2.0);
+        e.vel = Vec2::new(rng.unit() * 4.0 - rng.unit() * 4.0, -1.0 - rng.unit() * 2.0);
         e.data.insert("started".into(), 1.0);
-        e.sprite = format!("sOlmecDebris{}", 2 + game.rng.range(2));
+        e.data.insert("gravity".into(), 0.6);
+        e.data.insert("invincible".into(), 1.0);
+        for (key, value) in [
+            ("collision_left", -4.0),
+            ("collision_top", -4.0),
+            ("collision_right", 4.0),
+            ("collision_bottom", 4.0),
+        ] {
+            e.data.insert(key.into(), value);
+        }
+        e.sprite = match rng.range(3) {
+            0 => "sOlmecDebris2",
+            1 => "sOlmecDebris3",
+            _ => "sOlmecDebris",
+        }
+        .into();
     }
-    let vy = e.vel.y;
-    let (_, landed) = move_body(&game.world, e, 0.6);
-    if landed {
-        if vy > 1.0 {
-            e.vel.y = -vy * 0.4;
-            e.vel.x *= 0.3;
+}
+fn debris(game: &mut Game, e: &mut Entity) {
+    initialize_debris(&mut game.rng, e);
+    // Unlike oDetritus, this object moves directly through other solids.
+    // Its only bounce probe is a bounding-box point against oTemple.
+    e.pos.x += e.vel.x;
+    e.pos.y += e.vel.y;
+    if e.vel.y < 6.0 {
+        e.vel.y += 0.6;
+    }
+    if super::inherited::point(&game.world, Vec2::new(e.pos.x, e.pos.y + 4.0), "oTemple") {
+        if e.vel.y > 1.0 {
+            e.vel.y *= -0.4;
         } else {
+            game.world.spawn("oSmokePuff", e.pos);
             e.alive = false;
         }
+        e.vel.x = if e.vel.x.abs() < 0.1 {
+            0.0
+        } else {
+            e.vel.x * 0.3
+        };
     }
     e.animation += 0.3;
 }
@@ -952,13 +989,18 @@ fn yellow_ball(game: &mut Game, e: &mut Entity) {
         );
         e.alive = false;
     }
-    if e.pos.x < 0.0
-        || e.pos.x > game.world.width as f64 * 16.0
-        || e.pos.y > game.world.height as f64 * 16.0
-    {
+    e.animation += 0.5;
+    // Outside Room is separate from collision/hatching and fires once the
+    // whole sprite leaves any room edge, including above the room.
+    let room = Rect::new(
+        0.0,
+        0.0,
+        game.world.width as f64 * 16.0,
+        game.world.height as f64 * 16.0,
+    );
+    if !e.sprite_bounds().intersects(room) {
         e.alive = false;
     }
-    e.animation += 0.5;
 }
 
 fn magma_man(game: &mut Game, e: &mut Entity) {
@@ -1191,13 +1233,11 @@ mod tests {
                 }
                 189 => {
                     assert_eq!(boss.sprite, "sOlmecStart2");
-                    assert!(
-                        !game
-                            .world
-                            .entities
-                            .iter()
-                            .any(|e| e.alive && e.object == "oHawkmanWorship")
-                    );
+                    assert!(!game
+                        .world
+                        .entities
+                        .iter()
+                        .any(|e| e.alive && e.object == "oHawkmanWorship"));
                     let cavemen: Vec<_> = game
                         .world
                         .entities
@@ -1205,11 +1245,9 @@ mod tests {
                         .filter(|e| e.alive && e.object == "oCavemanWorship")
                         .collect();
                     assert_eq!(cavemen.len(), 3);
-                    assert!(
-                        cavemen
-                            .iter()
-                            .all(|e| e.animation == 0.0 && e.value("animation_speed") == 0.0)
-                    );
+                    assert!(cavemen
+                        .iter()
+                        .all(|e| e.animation == 0.0 && e.value("animation_speed") == 0.0));
                 }
                 239 => assert_eq!(boss.sprite, "sOlmecStart3"),
                 289 => assert_eq!(boss.sprite, "sOlmec"),
@@ -1238,13 +1276,11 @@ mod tests {
                 scheduled_at = Some(tick);
             }
             if tick == 359 {
-                assert!(
-                    !game
-                        .world
-                        .entities
-                        .iter()
-                        .any(|e| e.alive && e.object == "oCavemanWorship")
-                );
+                assert!(!game
+                    .world
+                    .entities
+                    .iter()
+                    .any(|e| e.alive && e.object == "oCavemanWorship"));
                 assert_eq!(
                     game.world
                         .entities
@@ -1320,6 +1356,136 @@ mod tests {
             });
         }
         assert!(game.player.pos.x > before.x);
+    }
+    #[test]
+    fn actual_step_olmec_intro_debris_preserves_alarm_launches_inside_boss() {
+        let mut game = Game::new(42, RulesPreset::Classic);
+        while game.world.level < 16 {
+            game.next_level();
+        }
+        let mut previous_stage = 0.0;
+        for _ in 0..260 {
+            game.step(&crate::InputFrame::default());
+            let boss = game
+                .world
+                .entities
+                .iter()
+                .find(|e| e.object == "oOlmec")
+                .unwrap();
+            let stage = boss.value("intro_stage");
+            if stage > previous_stage && stage <= 2.0 {
+                let fragments: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oOlmecDebris" && e.age == 0)
+                    .collect();
+                assert_eq!(fragments.len(), 6, "intro stage {stage}");
+                for fragment in &fragments {
+                    let directional_speed = fragment.vel.x * if stage == 1.0 { 1.0 } else { -1.0 };
+                    assert!((1.0..=4.0).contains(&directional_speed));
+                    assert_eq!(
+                        directional_speed.fract(),
+                        0.0,
+                        "Create replaced alarm velocity"
+                    );
+                    assert!((-2.4..=-0.4).contains(&fragment.vel.y));
+                }
+                if stage == 1.0 {
+                    assert!(
+                        fragments
+                            .iter()
+                            .any(|e| e.sprite_bounds().intersects(boss.sprite_bounds())),
+                        "fragments must pass through the solid boss"
+                    );
+                } else {
+                    return;
+                }
+            }
+            previous_stage = stage;
+        }
+        panic!("natural intro did not reach the second debris alarm");
+    }
+    #[test]
+    fn actual_step_olmec_debris_moves_fractionally_and_bounces_only_on_temple() {
+        for object in ["oTemple", "oBlock"] {
+            let mut game = room();
+            game.world.set_tile(6, 10, object);
+            let id = spawn(&mut game, "oOlmecDebris", Vec2::new(100.0, 156.0));
+            game.world.entity_mut(id).unwrap().vel = Vec2::new(1.25, 0.75);
+            game.step(&crate::InputFrame::default());
+            let fragment = game.world.entity(id).unwrap();
+            assert_eq!(fragment.pos, Vec2::new(101.25, 156.75));
+            if object == "oTemple" {
+                assert_eq!(fragment.vel.x, 0.375);
+                assert!((fragment.vel.y + 0.54).abs() < 1e-9);
+            } else {
+                assert_eq!(fragment.vel.x, 1.25);
+                assert!((fragment.vel.y - 1.35).abs() < 1e-9);
+            }
+        }
+        let mut game = room();
+        let id = spawn(&mut game, "oOlmecDebris", Vec2::new(100.0, 156.0));
+        game.world.entity_mut(id).unwrap().vel = Vec2::default();
+        game.step(&crate::InputFrame::default());
+        assert!(game.world.entity(id).is_none());
+        assert!(game.world.entities.iter().any(|e| e.object == "oSmokePuff"));
+    }
+    #[test]
+    fn actual_step_yellow_ball_outside_room_uses_full_sprite_at_top_and_side() {
+        for above in [true, false] {
+            let mut game = Game::shell(42, RulesPreset::Classic);
+            game.world = World::new(40, 30, Area::Mines, 1);
+            game.flags.insert("custom".into());
+            for x in 0..40 {
+                game.world.set_tile(x, 10, "oBlock");
+            }
+            game.player.pos = if above {
+                Vec2::new(136.0, 152.0)
+            } else {
+                Vec2::new(620.0, 152.0)
+            };
+            if !above {
+                game.camera.x = 320.0;
+            }
+            let id = game.world.spawn(
+                "oYellowBall",
+                if above {
+                    Vec2::new(180.0, 8.0)
+                } else {
+                    Vec2::new(638.0, 100.0)
+                },
+            );
+            game.step(&crate::InputFrame::default());
+            let ball = game
+                .world
+                .entity(id)
+                .expect("partially outside sprite must remain active");
+            let room = Rect::new(0.0, 0.0, 640.0, 480.0);
+            assert!(ball.sprite_bounds().intersects(room));
+            if !above {
+                assert!(
+                    ball.pos.x > 640.0,
+                    "normal launch must cross the side by its origin first"
+                );
+            }
+            for _ in 0..10 {
+                game.step(&crate::InputFrame::default());
+                if game.world.entity(id).is_none() {
+                    break;
+                }
+            }
+            assert!(game.world.entity(id).is_none(), "above={above}");
+            assert!(
+                !game.world.entities.iter().any(|e| {
+                    matches!(
+                        e.object.as_str(),
+                        "oBat" | "oSpider" | "oSnake" | "oFrog" | "oFireFrog"
+                    )
+                }),
+                "Outside Room must not hatch an enemy"
+            );
+        }
     }
     fn room() -> Game {
         let mut g = Game::shell(9, RulesPreset::Classic);

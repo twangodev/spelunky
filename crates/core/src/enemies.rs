@@ -141,6 +141,7 @@ pub fn tick(game: &mut Game) {
         );
         if is_enemy(&e.object) && !e.sprite_bounds().intersects(room) {
             e.alive = false;
+            destroyed(game, &mut e);
             game.world
                 .entities
                 .insert(index.min(game.world.entities.len()), e);
@@ -171,6 +172,7 @@ pub fn tick(game: &mut Game) {
         let active = source_active(game, &e);
         inherited::tick(game, &mut e);
         if !e.alive {
+            destroyed(game, &mut e);
             game.world
                 .entities
                 .insert(index.min(game.world.entities.len()), e);
@@ -178,10 +180,13 @@ pub fn tick(game: &mut Game) {
         }
         if e.object == "oDamsel" && e.state == 4 {
             e.data.insert("depth".into(), 1000.0);
+            // Source protects Exit sprites before later collision events.
+            e.data.insert("invincible".into(), 1.0);
             e.animation += e.value("animation_speed");
             if e.animation >= if e.sprite == "sPExit" { 16.0 } else { 17.0 } {
                 e.alive = false;
             }
+            destroyed(game, &mut e);
             game.world
                 .entities
                 .insert(index.min(game.world.entities.len()), e);
@@ -251,6 +256,7 @@ pub fn tick(game: &mut Game) {
             npcs::animation_end(&mut e, &sprite);
         }
         npcs::tick_independent_events(game, &mut e);
+        jungle::tick_independent_events(game, &mut e);
         // Collision events use engine activation, independently of a child's
         // narrower viewport guard around its AI Step action.
         if e.alive && e.health > 0 {
@@ -265,9 +271,41 @@ pub fn tick(game: &mut Game) {
         if e.health <= 0 && (began_dead || !e.alive) {
             finish_death(game, &mut e);
         }
+        destroyed(game, &mut e);
         game.world
             .entities
             .insert(index.min(game.world.entities.len()), e);
+    }
+    finish_destroy_events(game);
+}
+
+/// Source Destroy runs even when a different system destroys an instance.
+/// Keep this idempotent because a callback may already run at its producer.
+fn destroyed(game: &mut Game, e: &mut Entity) {
+    if e.alive {
+        return;
+    }
+    npcs::destroyed(game, e);
+    if is_enemy(&e.object) && e.held {
+        game.player.held = None;
+        e.held = false;
+    }
+}
+
+pub(crate) fn finish_destroy_events(game: &mut Game) {
+    npcs::finish_destroy_events(game);
+    if game
+        .world
+        .entities
+        .iter()
+        .any(|e| !e.alive && is_enemy(&e.object) && e.held)
+    {
+        game.player.held = None;
+        for e in &mut game.world.entities {
+            if !e.alive && is_enemy(&e.object) {
+                e.held = false;
+            }
+        }
     }
 }
 
@@ -563,7 +601,17 @@ fn combat(game: &mut Game, e: &mut Entity) {
         } else {
             event_bounds(projectile)
         };
-        if !body.intersects(impact) {
+        // Monkey inherits the actual oEnemy Whip collision events, which use
+        // both sprite masks. Thrown-item collision_rectangle calls above
+        // explicitly request bounding boxes and retain that separate contract.
+        let overlaps = if e.object == "oMonkey"
+            && matches!(projectile.object.as_str(), "oWhip" | "oWhipPre")
+        {
+            projectile.event_intersects(e)
+        } else {
+            body.intersects(impact)
+        };
+        if !overlaps {
             continue;
         }
         if !(melee || fired || thrown)
@@ -1196,12 +1244,82 @@ mod tests {
         assert!(!game.flags.contains("shopkeepers_angry"));
         tick(&mut game);
         assert_eq!(game.data["stars_kills"], 99.0);
-        assert!(
-            !game
+        assert!(!game
+            .world
+            .entities
+            .iter()
+            .any(|e| matches!(e.object.as_str(), "oShotgun" | "oGoldNugget")));
+    }
+
+    #[test]
+    fn actual_step_held_enemy_destroy_releases_player_on_inherited_lava_path() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = World::new(30, 20, Area::Temple, 13);
+        game.player.pos = Vec2::new(136.0, 152.0);
+        game.world.set_tile(8, 10, "oBlock");
+        game.world.set_tile(8, 8, "oLava");
+        let id = game.world.spawn("oHawkman", Vec2::new(132.0, 140.0));
+        let hawk = game.world.entity_mut(id).unwrap();
+        hawk.held = true;
+        hawk.state = 98;
+        hawk.timer = 200;
+        game.player.held = Some(id);
+
+        game.step(&InputFrame::default());
+
+        assert!(game.world.entity(id).is_none());
+        assert_eq!(game.player.held, None);
+    }
+
+    #[test]
+    fn actual_step_held_enemy_corpse_keeps_hold_until_destroyed() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = World::new(30, 20, Area::Temple, 13);
+        game.player.pos = Vec2::new(136.0, 152.0);
+        game.world.set_tile(8, 10, "oBlock");
+        let id = game.world.spawn("oHawkman", Vec2::new(132.0, 140.0));
+        let hawk = game.world.entity_mut(id).unwrap();
+        hawk.held = true;
+        hawk.health = 0;
+        hawk.state = 99;
+        game.player.held = Some(id);
+
+        game.step(&InputFrame::default());
+
+        assert!(game.world.entity(id).is_some());
+        assert_eq!(game.player.held, Some(id));
+    }
+
+    #[test]
+    fn actual_step_monkey_whip_event_requires_shared_opaque_pixels() {
+        for (player_pos, expected_health) in
+            [(Vec2::new(64.0, 79.0), 1), (Vec2::new(66.0, 81.0), 0)]
+        {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            game.world = World::new(16, 12, Area::Jungle, 5);
+            game.player.pos = player_pos;
+            game.player.previous_pos = player_pos;
+            game.player.facing = 1;
+            game.player.attack_timer = 10;
+            game.player.data.insert("whip_elapsed".into(), 0.0);
+            let monkey = game.world.spawn("oMonkey", Vec2::new(80.0, 80.0));
+            game.world.entity_mut(monkey).unwrap().timer = 60;
+            let whip = game
                 .world
-                .entities
-                .iter()
-                .any(|e| matches!(e.object.as_str(), "oShotgun" | "oGoldNugget"))
-        );
+                .spawn("oWhip", Vec2::new(player_pos.x + 16.0, player_pos.y));
+            let entity = game.world.entity_mut(whip).unwrap();
+            entity.facing = 1;
+            entity.sprite = "sWhipRight".into();
+            entity.timer = 7;
+            entity.data.insert("damage".into(), 1.0);
+
+            game.step(&InputFrame::default());
+
+            let target = game.world.entity(monkey).unwrap();
+            let weapon = game.world.entity(whip).unwrap();
+            assert!(target.sprite_bounds().intersects(weapon.sprite_bounds()));
+            assert_eq!(weapon.event_intersects(target), expected_health == 0);
+            assert_eq!(target.health, expected_health);
+        }
     }
 }

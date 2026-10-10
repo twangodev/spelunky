@@ -586,6 +586,15 @@ fn ufo(game: &mut Game, e: &mut Entity) {
         }
         return;
     }
+    // Only SEARCH checks the character's swimming/dead flags. Its moveTo
+    // above still uses the previous velocity while this branch is skipped.
+    if e.state != 1
+        && (!super::player_alive(game)
+            || game.player.data.get("swimming").copied().unwrap_or(0.0) != 0.0)
+    {
+        phase(e, 0.5);
+        return;
+    }
     let limit = if e.state == 1 { 64.0 } else { 32.0 };
     let mut shift = e.value("shift");
     if e.value("shift_toggle") == 0.0 {
@@ -921,7 +930,9 @@ fn laser(game: &mut Game, e: &mut Entity) {
             enemy.health -= 3;
             enemy.vel = Vec2::new(-1.0, -6.0);
             if enemy.object == "oDamsel" {
-                enemy.state = 2;
+                // The source's unqualified status assignment belongs to the
+                // laser, not to the NPC receiving its velocity and damage.
+                e.state = 2;
             }
             e.alive = false;
             break;
@@ -967,12 +978,17 @@ fn psychic(game: &mut Game, e: &mut Entity) {
             && enemy.object != "oPsychicWave"
             && (crate::catalog::is_a(&enemy.object, "oEnemy") || enemy.object == "oDamsel")
             && enemy.sprite_bounds().intersects(e.sprite_bounds())
-            && enemy.value("invincible") == 0.0
         {
-            enemy.health -= 3;
-            enemy.vel = Vec2::new(-1.0, -6.0);
+            if enemy.value("invincible") == 0.0 {
+                enemy.health -= 3;
+                enemy.vel = Vec2::new(-1.0, -6.0);
+                if enemy.object == "oDamsel" {
+                    e.state = 2;
+                }
+            }
             if enemy.object == "oDamsel" {
-                enemy.state = 2;
+                // Unlike the laser event, this destruction is outside the
+                // source's invincibility guard.
                 e.alive = false;
                 break;
             }
@@ -1112,6 +1128,90 @@ mod tests {
         // The first rock need not remain overlapping during recovery.
         if let Some(rock) = g.world.entity_mut(id) {
             rock.alive = false;
+        }
+    }
+
+    #[test]
+    fn actual_step_laser_and_psychic_hit_damsel_without_changing_her_state() {
+        for object in ["oLaser", "oPsychicWave"] {
+            let mut g = boss_item_room();
+            let damsel = g.world.spawn("oDamsel", Vec2::new(136.0, 136.0));
+            let projectile = g.world.spawn(object, Vec2::new(138.0, 136.0));
+            g.step(&crate::InputFrame::default());
+            let target = g.world.entity(damsel).unwrap();
+            assert_eq!(target.health, 1, "{object}");
+            assert_eq!(target.state, 0, "{object}");
+            assert_eq!(target.vel, Vec2::new(-1.0, -6.0), "{object}");
+            assert!(g.world.entity(projectile).is_none(), "{object}");
+        }
+    }
+
+    #[test]
+    fn actual_step_rescued_damsel_blocks_damage_and_consumes_only_psychic_wave() {
+        for (object, consumed) in [("oLaser", false), ("oPsychicWave", true)] {
+            let mut g = boss_item_room();
+            let damsel = g.world.spawn("oDamsel", Vec2::new(136.0, 136.0));
+            g.world.spawn("oExit", Vec2::new(128.0, 128.0));
+            // Let the normal rescue enter its visible exit frames before the
+            // incoming projectile arrives. No NPC flags or state are injected.
+            for _ in 0..7 {
+                g.step(&crate::InputFrame::default());
+            }
+            let projectile = g.world.spawn(object, Vec2::new(138.0, 136.0));
+            assert!(
+                g.world
+                    .entity(projectile)
+                    .unwrap()
+                    .sprite_bounds()
+                    .intersects(g.world.entity(damsel).unwrap().sprite_bounds()),
+                "{object} must overlap the exit sprite"
+            );
+            g.step(&crate::InputFrame::default());
+            let target = g.world.entity(damsel).unwrap();
+            assert_eq!(target.state, 4, "{object}");
+            assert_eq!(target.health, 4, "{object}");
+            assert_eq!(g.world.entity(projectile).is_none(), consumed, "{object}");
+            for _ in 0..40 {
+                g.step(&crate::InputFrame::default());
+            }
+            assert!(g.world.entity(damsel).is_none(), "{object}");
+            assert_eq!(g.data["pending_damsel_kisses"], 1.0);
+        }
+    }
+
+    #[test]
+    fn actual_step_ufo_search_does_not_start_chasing_a_swimming_player() {
+        let mut g = boss_item_room();
+        for x in 1..5 {
+            for y in 7..10 {
+                g.world
+                    .spawn("oWaterSwim", Vec2::new((x * 16) as f64, (y * 16) as f64));
+            }
+        }
+        let id = g.world.spawn("oUFO", Vec2::new(200.0, 70.0));
+        for _ in 0..3 {
+            g.step(&crate::InputFrame::default());
+            assert_eq!(g.player.data["swimming"], 1.0);
+            let ufo = g.world.entity(id).unwrap();
+            assert_eq!(ufo.state, 0);
+            assert_eq!(ufo.vel, Vec2::default());
+            assert_eq!(ufo.pos, Vec2::new(200.0, 70.0));
+        }
+    }
+
+    #[test]
+    fn actual_step_ufo_search_does_not_start_chasing_after_natural_player_death() {
+        let mut g = boss_item_room();
+        g.world.spawn("oGhost", Vec2::new(32.0, 144.0));
+        g.step(&crate::InputFrame::default());
+        assert_eq!(g.player.state, PlayerState::Dead);
+        let id = g.world.spawn("oUFO", Vec2::new(200.0, 70.0));
+        for _ in 0..3 {
+            g.step(&crate::InputFrame::default());
+            let ufo = g.world.entity(id).unwrap();
+            assert_eq!(ufo.state, 0);
+            assert_eq!(ufo.vel, Vec2::default());
+            assert_eq!(ufo.pos, Vec2::new(200.0, 70.0));
         }
     }
 

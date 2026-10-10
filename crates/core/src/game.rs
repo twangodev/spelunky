@@ -233,6 +233,7 @@ impl Game {
                 self.sound("sndDie", self.player.pos);
             }
         }
+        enemies::finish_destroy_events(self);
         self.world.entities.retain(|e| e.alive);
         activation::finish(self, frozen);
         if self.level_tick == room_tick_before + 1
