@@ -186,6 +186,7 @@ pub fn tick(game: &mut Game) {
             if e.animation >= if e.sprite == "sPExit" { 16.0 } else { 17.0 } {
                 e.alive = false;
             }
+            psychic_player_events(game, &mut e);
             destroyed(game, &mut e);
             game.world
                 .entities
@@ -257,6 +258,8 @@ pub fn tick(game: &mut Game) {
         }
         npcs::tick_independent_events(game, &mut e);
         jungle::tick_independent_events(game, &mut e);
+        temple::tick_independent_events(game, &e);
+        psychic_player_events(game, &mut e);
         // Collision events use engine activation, independently of a child's
         // narrower viewport guard around its AI Step action.
         if e.alive && e.health > 0 {
@@ -305,6 +308,33 @@ pub(crate) fn finish_destroy_events(game: &mut Game) {
             if !e.alive && is_enemy(&e.object) {
                 e.held = false;
             }
+        }
+    }
+}
+
+/// oPsychicWaveP owns separate Collision events; its Enemy event preserves
+/// the target state and the wave, while its Damsel event always consumes it.
+fn psychic_player_events(game: &mut Game, target: &mut Entity) {
+    if !target.alive || (!is_enemy(&target.object) && target.object != "oDamsel") {
+        return;
+    }
+    let damsel = target.object == "oDamsel";
+    for wave in &mut game.world.entities {
+        if !wave.alive || wave.object != "oPsychicWaveP" || !wave.event_intersects(target) {
+            continue;
+        }
+        if damsel {
+            wave.alive = false;
+        }
+        if target.object == "oAlienBoss" || target.value("invincible") != 0.0 {
+            continue;
+        }
+        target.health -= 3;
+        // The source evaluates this random expression before overwriting xVel.
+        let _discarded_x = game.rng.range(3) as i32 - (1 + game.rng.range(2)) as i32;
+        target.vel = Vec2::new(-1.0, -6.0);
+        if damsel {
+            wave.state = 2;
         }
     }
 }
@@ -565,6 +595,7 @@ fn combat(game: &mut Game, e: &mut Entity) {
         if !projectile.alive
             || projectile.held
             || projectile.id == e.id
+            || projectile.object == "oPsychicWaveP"
             || projectile
                 .data
                 .get("released_by_enemy_tick")
@@ -576,8 +607,7 @@ fn combat(game: &mut Game, e: &mut Entity) {
             projectile.object.as_str(),
             "oWhip" | "oWhipPre" | "oSlash" | "oMachetePre" | "oMattockPre" | "oMattockHit"
         );
-        let fired = projectile.object == "oPsychicWaveP"
-            || (projectile.object == "oBullet" && projectile.value("safe") == 0.0);
+        let fired = projectile.object == "oBullet" && projectile.value("safe") == 0.0;
         let impact_speed = if projectile.object == "oDice" {
             3.0
         } else {
@@ -605,10 +635,7 @@ fn combat(game: &mut Game, e: &mut Entity) {
         // family and Damsel (inherited or overridden). Their pair-mask contract
         // is separate from explicit imprecise thrown-item rectangle queries.
         let event_pair = (is_enemy(&e.object) || e.object == "oDamsel")
-            && matches!(
-                projectile.object.as_str(),
-                "oWhip" | "oWhipPre" | "oBullet" | "oPsychicWaveP"
-            );
+            && matches!(projectile.object.as_str(), "oWhip" | "oWhipPre" | "oBullet");
         let overlaps = if event_pair {
             projectile.event_intersects(e)
         } else {
@@ -619,7 +646,6 @@ fn combat(game: &mut Game, e: &mut Entity) {
         }
         if !(melee || fired || thrown)
             || e.value("invincible") > 0.0
-            || (projectile.object == "oPsychicWaveP" && e.object == "oAlienBoss")
             || (!melee && !fired && e.value("hit_cooldown") > 0.0)
         {
             continue;
@@ -1111,9 +1137,9 @@ fn finish_death(game: &mut Game, e: &mut Entity) {
             && e.value("environmental_death") == 0.0
         {
             *game.data.entry("kills".into()).or_default() += 1.0;
-        }
-        if e.object == "oAlienEject" {
-            *game.data.entry("aliens".into()).or_default() += 1.0;
+            if let Some(category) = kill_category(&e.object) {
+                *game.data.entry(category.into()).or_default() += 1.0;
+            }
         }
         if matches!(e.object.as_str(), "oGiantSpider" | "oGiantSpiderHang") {
             let drop = Vec2::new(e.pos.x + 16.0, e.pos.y + 24.0);
@@ -1148,6 +1174,38 @@ fn finish_death(game: &mut Game, e: &mut Entity) {
     } else {
         e.alive = false;
     }
+}
+
+// Source child death handlers maintain the counters consumed by Transition.
+// Keep them in the same once-only credit branch as the campaign kill total.
+fn kill_category(object: &str) -> Option<&'static str> {
+    Some(match object {
+        "oBat" => "bats",
+        "oSnake" => "snakes",
+        "oSpider" | "oSpiderHang" => "spiders",
+        "oGiantSpider" | "oGiantSpiderHang" => "giantspiders",
+        "oCaveman" => "cavemen",
+        "oSkeleton" => "skeletons",
+        "oZombie" => "zombies",
+        "oVampire" => "vampires",
+        "oMonkey" => "monkeys",
+        "oFrog" => "frogs",
+        "oFireFrog" => "firefrogs",
+        "oManTrap" => "mantraps",
+        "oPiranha" => "piranhas",
+        "oDeadFish" => "deadfish",
+        "oJaws" => "megamouths",
+        "oYeti" => "yetis",
+        "oYetiKing" => "yetikings",
+        "oAlien" | "oAlienEject" => "aliens",
+        "oUFO" => "ufos",
+        "oAlienBoss" => "alienbosses",
+        "oHawkman" => "hawkmen",
+        "oShopkeeper" | "oShopkeeper2" => "shopkeepers",
+        "oTombLord" => "tomblords",
+        "oDamsel" => "damselsKilled",
+        _ => return None,
+    })
 }
 
 pub(super) fn in_stars(game: &Game) -> bool {
@@ -1247,11 +1305,13 @@ mod tests {
         assert!(!game.flags.contains("shopkeepers_angry"));
         tick(&mut game);
         assert_eq!(game.data["stars_kills"], 99.0);
-        assert!(!game
-            .world
-            .entities
-            .iter()
-            .any(|e| matches!(e.object.as_str(), "oShotgun" | "oGoldNugget")));
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|e| matches!(e.object.as_str(), "oShotgun" | "oGoldNugget"))
+        );
     }
 
     #[test]
@@ -1371,6 +1431,188 @@ mod tests {
             assert_eq!(mask.event_intersects(target), expected_health < 0);
             assert_eq!(target.health, expected_health);
             assert_eq!(game.world.entity(bullet).is_some(), expected_health == 1);
+        }
+    }
+
+    fn psychic_room() -> Game {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = World::new(40, 30, Area::Ice, 9);
+        game.player.pos = Vec2::new(40.0, 152.0);
+        for x in 0..40 {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        game
+    }
+
+    #[test]
+    fn actual_step_shotgun_kill_populates_transition_family_tally_once() {
+        let mut game = psychic_room();
+        game.player.pos = Vec2::new(80.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.facing = 1;
+        let snake = game.world.spawn("oSnake", Vec2::new(128.0, 144.0));
+        let shotgun = game.world.spawn("oShotgun", game.player.pos);
+        game.player.held = Some(shotgun);
+        game.world.entity_mut(shotgun).unwrap().held = true;
+        for tick in 0..30 {
+            game.step(&InputFrame {
+                attack: tick == 0,
+                attack_pressed: tick == 0,
+                ..Default::default()
+            });
+        }
+        assert!(game.world.entity(snake).is_none());
+        assert_eq!(game.data.get("kills"), Some(&1.0));
+        assert_eq!(game.data.get("snakes"), Some(&1.0));
+    }
+
+    #[test]
+    fn actual_step_retained_enemy_corpse_credits_family_only_once() {
+        let mut game = psychic_room();
+        let yeti = game.world.spawn("oYeti", Vec2::new(128.0, 144.0));
+        // A real fired projectile is lethal, while the source keeps the corpse.
+        for _ in 0..2 {
+            game.world.spawn("oBullet", Vec2::new(136.0, 152.0));
+        }
+        for _ in 0..20 {
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(game.world.entity(yeti).unwrap().state, 99);
+        assert_eq!(game.data.get("kills"), Some(&1.0));
+        assert_eq!(game.data.get("yetis"), Some(&1.0));
+    }
+
+    #[test]
+    fn actual_step_inherited_lava_death_has_no_family_tally() {
+        let mut game = psychic_room();
+        game.world.set_tile(8, 9, "oLava");
+        let snake = game.world.spawn("oSnake", Vec2::new(128.0, 130.0));
+        game.step(&InputFrame::default());
+        game.step(&InputFrame::default());
+        assert!(game.world.entity(snake).is_none());
+        assert_eq!(game.data.get("kills"), None);
+        assert_eq!(game.data.get("snakes"), None);
+    }
+
+    #[test]
+    fn actual_step_picked_up_sceptre_hits_yeti_without_inventing_stun() {
+        let mut game = psychic_room();
+        game.player.pos.x = 100.0;
+        game.player.facing = 1;
+        let sceptre = game.world.spawn("oSceptre", Vec2::new(102.0, 152.0));
+        let yeti = game.world.spawn("oYeti", Vec2::new(144.0, 144.0));
+        game.step(&InputFrame {
+            down: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.held, Some(sceptre));
+        game.step(&InputFrame::default());
+        let mut hit = false;
+        for tick in 3..30 {
+            game.step(&InputFrame {
+                attack: tick == 3,
+                attack_pressed: tick == 3,
+                ..Default::default()
+            });
+            let target = game.world.entity(yeti).unwrap();
+            if target.health < 5 {
+                assert_eq!(target.health, 2);
+                assert_eq!(target.state, 1);
+                assert_eq!(target.timer, 0);
+                assert_eq!(target.vel, Vec2::new(-1.0, -6.0));
+                assert!(
+                    game.world
+                        .entities
+                        .iter()
+                        .any(|e| e.object == "oPsychicWaveP")
+                );
+                hit = true;
+                break;
+            }
+        }
+        assert!(hit, "the naturally fired wave must reach the walking Yeti");
+    }
+
+    #[test]
+    fn actual_step_psychic_wave_repeats_enemy_contacts_and_discarded_rng() {
+        let mut game = psychic_room();
+        let lord = game.world.spawn("oTombLord", Vec2::new(128.0, 128.0));
+        game.world.entity_mut(lord).unwrap().timer = 100;
+        let wave = game.world.spawn("oPsychicWaveP", Vec2::new(140.0, 144.0));
+        let mut expected = game.rng.clone();
+        for hp in [17, 14] {
+            expected.range(3);
+            expected.range(2);
+            game.step(&InputFrame::default());
+            let target = game.world.entity(lord).unwrap();
+            assert_eq!(target.health, hp);
+            assert_eq!(target.state, 0);
+            assert_eq!(target.vel, Vec2::new(-1.0, -6.0));
+            assert!(game.world.entity(wave).unwrap().event_intersects(target));
+            assert_eq!(game.rng.clone().unit(), expected.clone().unit());
+        }
+    }
+
+    #[test]
+    fn actual_step_psychic_wave_damsel_collision_preserves_state_and_always_consumes() {
+        for invincible in [0.0, 1.0] {
+            let mut game = psychic_room();
+            let damsel = game.world.spawn("oDamsel", Vec2::new(136.0, 136.0));
+            game.world
+                .entity_mut(damsel)
+                .unwrap()
+                .data
+                .insert("invincible".into(), invincible);
+            let wave = game.world.spawn("oPsychicWaveP", Vec2::new(138.0, 136.0));
+
+            game.step(&InputFrame::default());
+
+            let target = game.world.entity(damsel).unwrap();
+            assert_eq!(target.health, if invincible == 0.0 { 1 } else { 4 });
+            assert_eq!(target.state, 0);
+            assert!(game.world.entity(wave).is_none());
+            if invincible == 0.0 {
+                assert_eq!(target.vel, Vec2::new(-1.0, -6.0));
+            }
+        }
+        let mut game = psychic_room();
+        let damsel = game.world.spawn("oDamsel", Vec2::new(136.0, 136.0));
+        game.world.spawn("oExit", Vec2::new(128.0, 128.0));
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(damsel).unwrap().state, 4);
+        // Exit frame zero has an empty source collision mask. Let the real
+        // exit animation reach its first opaque frame before testing contact.
+        game.step(&InputFrame::default());
+        game.step(&InputFrame::default());
+        let wave = game.world.spawn("oPsychicWaveP", Vec2::new(138.0, 136.0));
+
+        game.step(&InputFrame::default());
+
+        assert!(game.world.entity(wave).is_none());
+        assert_eq!(game.world.entity(damsel).unwrap().health, 4);
+        assert_eq!(game.world.entity(damsel).unwrap().state, 4);
+    }
+
+    #[test]
+    fn actual_step_psychic_wave_preserves_alien_boss_and_invincible_enemy() {
+        for object in ["oAlienBoss", "oTombLord"] {
+            let mut game = psychic_room();
+            let id = game.world.spawn(object, Vec2::new(128.0, 128.0));
+            let target = game.world.entity_mut(id).unwrap();
+            let hp = target.health;
+            target.timer = 100;
+            if object == "oTombLord" {
+                target.data.insert("invincible".into(), 1.0);
+            }
+            let wave = game.world.spawn("oPsychicWaveP", Vec2::new(140.0, 144.0));
+
+            game.step(&InputFrame::default());
+
+            let target = game.world.entity(id).unwrap();
+            assert!(game.world.entity(wave).unwrap().event_intersects(target));
+            assert_eq!(target.health, hp);
         }
     }
 }

@@ -279,11 +279,7 @@ fn floor_ahead(world: &World, e: &Entity, direction: i8) -> bool {
 }
 
 fn random_facing(game: &mut Game) -> i8 {
-    if game.rng.range(2) == 0 {
-        -1
-    } else {
-        1
-    }
+    if game.rng.range(2) == 0 { -1 } else { 1 }
 }
 
 fn snake(game: &mut Game, e: &mut Entity) {
@@ -915,11 +911,12 @@ mod tests {
         game.player.pos = Vec2::new(200.0, 200.0);
         tick(&mut game, &mut unsupported);
         assert!(!unsupported.alive);
-        assert!(game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.object == "oSpider" && e.pos == Vec2::new(96.0, 64.0)));
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .any(|e| e.object == "oSpider" && e.pos == Vec2::new(96.0, 64.0))
+        );
     }
 
     #[test]
@@ -1011,11 +1008,12 @@ mod tests {
         let id = game.world.spawn("oSpiderHang", Vec2::new(64.0, 64.0));
         super::super::tick(&mut game);
         assert!(game.world.entity(id).is_none());
-        assert!(game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.alive && e.object == "oSpider"));
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oSpider")
+        );
     }
 
     #[test]

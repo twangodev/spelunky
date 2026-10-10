@@ -848,12 +848,15 @@ fn hurt_player(game: &mut Game, amount: i32) {
 }
 
 fn hazard_hits_player(game: &Game, e: &Entity) -> bool {
-    e.sprite_bounds().intersects(Rect::new(
-        game.player.pos.x - 8.0,
-        game.player.pos.y - 8.0,
-        16.0,
-        16.0,
-    ))
+    // These contacts originate in oPlayer1's hurt block, which excludes all
+    // three exit sprites independently of its contact-invincibility timer.
+    !game.player.is_exiting()
+        && e.sprite_bounds().intersects(Rect::new(
+            game.player.pos.x - 8.0,
+            game.player.pos.y - 8.0,
+            16.0,
+            16.0,
+        ))
 }
 
 fn laser(game: &mut Game, e: &mut Entity) {
@@ -1212,6 +1215,101 @@ mod tests {
             assert_eq!(ufo.state, 0);
             assert_eq!(ufo.vel, Vec2::default());
             assert_eq!(ufo.pos, Vec2::new(200.0, 70.0));
+        }
+    }
+
+    #[test]
+    fn actual_door_exit_excludes_laser_and_psychic_hurt_for_all_characters() {
+        use crate::characters::{self, Character};
+        use crate::{GameEvent, InputFrame, RunState};
+        for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
+            let mut level = crate::level::Level::default();
+            level.set_tile(6, 7, '@').unwrap();
+            level.set_tile(7, 7, 'X').unwrap();
+            for x in 0..40 {
+                level.set_tile(x, 8, '1').unwrap();
+            }
+            let mut game = Game::shell(11, RulesPreset::Classic);
+            game.load_custom(&level, "ice-projectile-exit", "");
+            characters::apply(&mut game, character);
+            for _ in 0..8 {
+                game.step(&InputFrame::default());
+            }
+            let ordinary = game.clone();
+            for _ in 0..30 {
+                game.step(&InputFrame {
+                    right: true,
+                    up: true,
+                    ..Default::default()
+                });
+                if game.player.is_exiting() {
+                    break;
+                }
+            }
+            assert_eq!(game.state, RunState::Ending, "{character:?}");
+            assert!(game.player.is_exiting());
+            for (object, damage, stun) in [("oLaser", 3, 20), ("oPsychicWave", 1, 40)] {
+                for exiting in [false, true] {
+                    let mut target = if exiting {
+                        game.clone()
+                    } else {
+                        ordinary.clone()
+                    };
+                    let position = target.player.pos;
+                    let velocity = target.player.vel;
+                    let health = target.player.health;
+                    let offset = if object == "oPsychicWave" { 2.0 } else { 0.0 };
+                    let id = target
+                        .world
+                        .spawn(object, Vec2::new(position.x + offset, position.y));
+                    target.step(&InputFrame::default());
+                    if exiting {
+                        assert_eq!(target.player.health, health, "{character:?}/{object}");
+                        assert_eq!(target.player.pos, position);
+                        assert_eq!(target.player.vel, velocity);
+                        assert_eq!(target.player.stun, 0);
+                        assert!(target.player.is_exiting());
+                        assert_eq!(target.state, RunState::Ending);
+                        assert!(
+                            !target
+                                .events
+                                .contains(&GameEvent::Damage { amount: damage })
+                        );
+                        let projectile = target
+                            .world
+                            .entity(id)
+                            .expect("exit contact must not consume projectile");
+                        assert_eq!(projectile.age, 1);
+                        if object == "oLaser" {
+                            assert_eq!(projectile.vel.y, 0.6);
+                        } else {
+                            assert_eq!(projectile.animation, 0.25);
+                        }
+                    } else {
+                        assert_eq!(
+                            target.player.health,
+                            (health - damage).max(0),
+                            "{character:?}/{object}"
+                        );
+                        assert_eq!(
+                            target.player.state,
+                            if health <= damage {
+                                PlayerState::Dead
+                            } else {
+                                PlayerState::Stunned
+                            }
+                        );
+                        assert_eq!(target.player.stun, stun);
+                        assert_eq!(target.player.vel.y, -4.0);
+                        assert!(
+                            target
+                                .events
+                                .contains(&GameEvent::Damage { amount: damage })
+                        );
+                        assert_eq!(target.world.entity(id).is_none(), object == "oLaser");
+                    }
+                }
+            }
         }
     }
 

@@ -126,6 +126,39 @@ pub(super) fn animation_end(e: &mut Entity, sprite: &str) {
     }
 }
 
+pub(super) fn tick_independent_events(game: &mut Game, e: &Entity) {
+    // oMagmaMan remains dangerous throughout its grounded death animation.
+    // Its Character collision only guards the player's invincibility, not hp
+    // or the Magma Man's DEAD state.
+    if !e.alive
+        || e.object != "oMagmaMan"
+        || game.player.invincible != 0
+        || !super::touches_player(game, e)
+    {
+        return;
+    }
+    game.player.invincible = 30;
+    game.player.data.insert("blink".into(), 30.0);
+    game.player.state = crate::PlayerState::Stunned;
+    game.player.stun = 20;
+    game.player.data.insert("burning".into(), 100.0);
+    game.player.vel = Vec2::new(
+        if game.player.pos.x < e.pos.x {
+            -6.0
+        } else {
+            6.0
+        },
+        -4.0,
+    );
+    game.world.spawn("oBlood", game.player.pos);
+    if game.player.health > 0 {
+        game.player.health -= 2;
+        game.events.push(GameEvent::Damage { amount: 2 });
+    }
+    game.sound("sndHurt", game.player.pos);
+    game.sound("sndFlame", game.player.pos);
+}
+
 fn ground(world: &World, e: &Entity) -> bool {
     let b = e.bounds();
     super::solid_mask(world, Rect::new(b.x, b.y + b.h, b.w, 1.0), e.id)
@@ -707,9 +740,13 @@ fn olmec(game: &mut Game, e: &mut Entity) {
             Rect::new(e.pos.x, e.pos.y - 2.0, 65.0, 67.0).intersects(game.player.sprite_bounds()),
         ),
     );
-    // oPlayer1 Step's crushed check is origin-in-oSolid in every state;
+    // oPlayer1 Step's hurt block skips Exit sprites before checking oSolid;
     // touching the boss with a limb is not by itself lethal.
-    if olmec_rect(e).contains(game.player.pos) && !player_on_top && game.player.health > 0 {
+    if !game.player.is_exiting()
+        && olmec_rect(e).contains(game.player.pos)
+        && !player_on_top
+        && game.player.health > 0
+    {
         game.player.invincible = 0;
         game.damage_player(99);
     }
@@ -1142,8 +1179,9 @@ fn magma(game: &mut Game, e: &mut Entity) {
     ignite(game, e);
 }
 fn ignite(game: &mut Game, e: &Entity) {
-    // Parent handles ordinary contact; burning and bombs are specific magma mechanics.
-    if super::touches_player(game, e) && game.player.invincible == 0 {
+    // Magma Man's Character collision runs independently of its AI/death path.
+    // Airborne Magma retains its existing contact path here.
+    if e.object == "oMagma" && super::touches_player(game, e) && game.player.invincible == 0 {
         game.player.data.insert("burning".into(), 100.0);
         game.player.vel = Vec2::new(
             if game.player.pos.x < center(e).x {
@@ -1374,6 +1412,168 @@ mod tests {
             });
         }
         assert!(game.player.pos.x > before.x);
+    }
+    #[test]
+    fn actual_door_exit_excludes_olmec_crush_while_boss_keeps_moving() {
+        use crate::characters::{self, Character};
+        use crate::{InputFrame, RunState};
+        for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
+            let mut level = crate::level::Level::default();
+            level.set_tile(6, 7, '@').unwrap();
+            level.set_tile(7, 7, 'X').unwrap();
+            for x in 0..40 {
+                level.set_tile(x, 8, '1').unwrap();
+            }
+            let mut game = Game::shell(11, RulesPreset::Classic);
+            game.load_custom(&level, "olmec-exit", "");
+            characters::apply(&mut game, character);
+            for _ in 0..8 {
+                game.step(&InputFrame::default());
+            }
+            let mut ordinary = game.clone();
+            for _ in 0..30 {
+                game.step(&InputFrame {
+                    right: true,
+                    up: true,
+                    ..Default::default()
+                });
+                if game.player.is_exiting() {
+                    break;
+                }
+            }
+            assert_eq!(game.state, RunState::Ending);
+            assert!(game.player.is_exiting());
+            for exiting in [true, false] {
+                let target = if exiting { &mut game } else { &mut ordinary };
+                let health = target.player.health;
+                // Only the arriving active boss is controlled. The player's
+                // Exit sprite, inactivity and invincibility come from the real
+                // door/input path, with no player-state injection.
+                let pos = Vec2::new(target.player.pos.x - 32.0, target.player.pos.y - 32.0);
+                let id = spawn(target, "oOlmec", pos);
+                let boss = target.world.entity_mut(id).unwrap();
+                boss.state = 2;
+                boss.timer = 10;
+                boss.vel = Vec2::new(1.0, 0.0);
+                target.step(&InputFrame::default());
+                let boss = target.world.entity(id).unwrap();
+                assert_eq!(boss.age, 1);
+                assert_eq!(boss.pos.x, pos.x + 1.0);
+                assert!(olmec_rect(boss).contains(target.player.pos));
+                assert!((target.player.pos.y + 8.0 - pos.y).abs() >= 3.0);
+                if exiting {
+                    assert_eq!(target.player.health, health, "{character:?}");
+                    assert!(target.player.is_exiting(), "{character:?}");
+                    assert_eq!(target.state, RunState::Ending);
+                } else {
+                    assert!(target.player.health < health, "{character:?}");
+                    assert_eq!(target.state, RunState::Dead);
+                }
+            }
+        }
+    }
+    #[test]
+    fn actual_step_naturally_aged_magma_man_hurts_until_die_animation_finishes() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = World::new(40, 30, Area::Mines, 1);
+        game.flags.insert("custom".into());
+        game.player.pos = Vec2::new(32.0, 152.0);
+        for x in 0..40 {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        for y in 0..10 {
+            game.world.set_tile(4, y, "oBlock");
+            game.world.set_tile(16, y, "oBlock");
+        }
+        let id = game.world.spawn("oMagmaMan", Vec2::new(160.0, 144.0));
+        for _ in 0..198 {
+            game.step(&crate::InputFrame::default());
+            assert!(
+                game.world.entity(id).is_some(),
+                "bounded natural patrol must survive to its final life ticks"
+            );
+        }
+        assert_eq!(game.world.entity(id).unwrap().health, 2);
+        let touch = |game: &mut Game, invincible| {
+            let pos = game.world.entity(id).unwrap().pos;
+            game.player.pos = Vec2::new(pos.x + 8.0, pos.y + 8.0);
+            game.player.vel = Vec2::default();
+            game.player.state = crate::PlayerState::Standing;
+            game.player.invincible = invincible;
+        };
+        let assert_hit = |game: &Game| {
+            assert_eq!(game.player.health, 2);
+            assert_eq!(game.player.invincible, 30);
+            assert_eq!(game.player.data.get("blink"), Some(&30.0));
+            assert_eq!(game.player.stun, 20);
+            assert!(game.player.is_stunned());
+            assert_eq!(game.player.data.get("burning"), Some(&100.0));
+            assert_eq!(game.player.vel, Vec2::new(6.0, -4.0));
+            assert_eq!(
+                game.events
+                    .iter()
+                    .filter(|event| matches!(event, GameEvent::Damage { amount: 2 }))
+                    .count(),
+                1,
+                "independent contact and shared combat must not both deal damage"
+            );
+        };
+        let mut living = game.clone();
+        touch(&mut living, 0);
+        living.step(&crate::InputFrame::default());
+        assert_eq!(living.world.entity(id).unwrap().health, 1);
+        assert_hit(&living);
+
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().health, 1);
+        let mut immune = game.clone();
+        touch(&mut game, 0);
+        game.step(&crate::InputFrame::default());
+        let dying = game
+            .world
+            .entity(id)
+            .expect("hp0 changes sprite without destroying the instance");
+        assert_eq!((dying.health, dying.state, dying.animation), (0, 99, 0.5));
+        assert_eq!(dying.sprite, "sMagmaManDie");
+        assert_hit(&game);
+
+        touch(&mut immune, 2);
+        immune.step(&crate::InputFrame::default());
+        assert_eq!(immune.player.health, 4);
+        assert_eq!(immune.player.invincible, 1);
+        assert_eq!(immune.player.stun, 0);
+        assert_eq!(
+            immune.player.data.get("burning").copied().unwrap_or(0.0),
+            0.0
+        );
+        for _ in 0..23 {
+            immune.player.invincible = 999;
+            immune.step(&crate::InputFrame::default());
+        }
+        assert_eq!(immune.world.entity(id).unwrap().animation, 12.0);
+        let mut last_visible = immune.clone();
+        touch(&mut last_visible, 0);
+        last_visible.step(&crate::InputFrame::default());
+        assert_eq!(last_visible.world.entity(id).unwrap().animation, 12.5);
+        assert_hit(&last_visible);
+
+        touch(&mut immune, 999);
+        immune.step(&crate::InputFrame::default());
+        assert_eq!(immune.world.entity(id).unwrap().animation, 12.5);
+        touch(&mut immune, 0);
+        immune.step(&crate::InputFrame::default());
+        assert!(
+            immune.world.entity(id).is_none(),
+            "13-frame Die sprite ends after 26 half-frame advances"
+        );
+        assert_eq!(immune.player.health, 4);
+        assert_eq!(immune.player.stun, 0);
+        assert!(
+            !immune
+                .events
+                .iter()
+                .any(|event| matches!(event, GameEvent::Damage { .. }))
+        );
     }
     #[test]
     fn actual_step_olmec_create_emits_source_positions_headings_and_rng_order() {
