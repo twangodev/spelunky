@@ -7,7 +7,7 @@ use crate::{
 use spelunky_core::{
     catalog,
     editor::EditorState,
-    level::{LEVEL_HEIGHT, LEVEL_WIDTH, Level},
+    level::{Level, LEVEL_HEIGHT, LEVEL_WIDTH},
 };
 use winit::keyboard::KeyCode;
 
@@ -114,6 +114,10 @@ impl EditorUi {
 
     pub fn message(&mut self, value: String) {
         self.status = value;
+    }
+
+    pub fn level_name(&self) -> &str {
+        &self.name
     }
 
     pub fn key(&mut self, key: KeyCode, typed: Option<&str>, control: bool) -> EditorCommand {

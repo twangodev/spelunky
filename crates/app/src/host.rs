@@ -45,6 +45,65 @@ enum UserEvent {
     ImportError(String),
 }
 
+/// Presentation history becomes usable only after a tick in the current room.
+/// A frame sampled before a menu action must not advance a newly resumed game.
+struct HostTiming {
+    clock: FixedClock,
+    last_frame: f64,
+    generation: u64,
+    alpha: f64,
+    history_ready: bool,
+}
+impl Default for HostTiming {
+    fn default() -> Self {
+        Self {
+            clock: FixedClock::new(),
+            last_frame: 0.,
+            generation: 0,
+            alpha: 0.,
+            history_ready: false,
+        }
+    }
+}
+#[derive(Clone, Copy)]
+struct HostFrame {
+    elapsed: f64,
+    generation: u64,
+}
+impl HostTiming {
+    fn reset(&mut self, now: f64) {
+        self.clock.reset();
+        self.last_frame = now;
+        self.generation = self.generation.wrapping_add(1);
+        self.history_ready = false;
+    }
+    fn begin_frame(&mut self, now: f64) -> HostFrame {
+        let frame = HostFrame {
+            elapsed: (now - self.last_frame).max(0.),
+            generation: self.generation,
+        };
+        self.last_frame = now;
+        frame
+    }
+    fn advance(&mut self, frame: HostFrame) -> crate::timing::FrameStep {
+        let elapsed = if frame.generation == self.generation {
+            frame.elapsed
+        } else {
+            0.
+        };
+        let step = self.clock.advance(elapsed);
+        self.alpha = step.alpha;
+        step
+    }
+    fn alpha(&self) -> f64 {
+        if self.history_ready {
+            self.alpha
+        } else {
+            1.
+        }
+    }
+}
+
 pub fn run() -> Result<(), String> {
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()
@@ -80,7 +139,7 @@ struct App {
     input: InputState,
     audio: Audio,
     store: Store,
-    clock: FixedClock,
+    timing: HostTiming,
     game: Option<Game>,
     screen: Screen,
     settings_return: Screen,
@@ -93,9 +152,7 @@ struct App {
     recorded: bool,
     focused: bool,
     occluded: bool,
-    last_frame: f64,
     next_frame: f64,
-    alpha: f64,
     cursor: [f32; 2],
     mouse_left: bool,
     mouse_right: bool,
@@ -119,7 +176,7 @@ impl App {
             input,
             audio: Audio::new(),
             store,
-            clock: FixedClock::new(),
+            timing: HostTiming::default(),
             game: None,
             screen: Screen::Title,
             settings_return: Screen::Title,
@@ -132,9 +189,7 @@ impl App {
             recorded: false,
             focused: true,
             occluded: false,
-            last_frame: 0.,
             next_frame: 0.,
-            alpha: 0.,
             cursor: [0.; 2],
             mouse_left: false,
             mouse_right: false,
@@ -161,10 +216,13 @@ impl App {
     }
     fn reset_timing(&mut self) {
         self.donation_confirm = false;
-        self.clock.reset();
+        self.timing.reset(self.now());
         self.input.clear_gameplay();
-        self.last_frame = self.now();
-        self.alpha = 1.;
+    }
+    fn reset_room_timing(&mut self) {
+        self.donation_confirm = false;
+        self.timing.reset(self.now());
+        self.input.clear_edges();
     }
     fn screen(&mut self, screen: Screen) {
         self.screen = screen;
@@ -493,7 +551,7 @@ impl App {
         match spelunky_core::level::Level::parse(contents) {
             Ok(level) => {
                 let mut game = Game::new(wall_seed(), self.store.data.settings.rules);
-                game.load_custom(&level, name, "");
+                load_custom(&mut game, &level, name, "");
                 self.game = Some(game);
                 self.editor_play = editor;
                 self.recorded = false;
@@ -561,7 +619,7 @@ impl App {
             },
             EditorCommand::Play(level) => {
                 let mut game = Game::new(wall_seed(), self.store.data.settings.rules);
-                game.load_custom(&level, "editor-playtest", "");
+                load_custom(&mut game, &level, self.editor.level_name(), "");
                 self.game = Some(game);
                 self.editor_play = true;
                 self.recorded = false;
@@ -618,6 +676,13 @@ impl App {
         }
     }
     fn transition(&mut self) {
+        if self.game.as_ref().is_some_and(|game| {
+            capture_challenge_records(game, &mut self.store.data.challenge_records)
+        }) {
+            if let Err(error) = self.store.save() {
+                self.toast(error);
+            }
+        }
         let Some(game) = &mut self.game else {
             return;
         };
@@ -682,8 +747,8 @@ impl App {
             match contents.and_then(|s| spelunky_core::level::Level::parse(s).ok()) {
                 Some(level) => {
                     let previous = game.world.name.clone();
-                    game.load_custom(&level, &key, &previous);
-                    self.reset_timing()
+                    load_custom(game, &level, &key, &previous);
+                    self.reset_room_timing()
                 }
                 None => {
                     self.toast(format!("LINKED LEVEL MISSING: {target}"));
@@ -701,7 +766,7 @@ impl App {
                 self.screen(Screen::Donation);
             } else {
                 game.next_level();
-                self.reset_timing();
+                self.reset_room_timing();
             }
         }
     }
@@ -726,8 +791,7 @@ impl App {
     }
     fn update(&mut self) {
         let now = self.now();
-        let elapsed = (now - self.last_frame).max(0.);
-        self.last_frame = now;
+        let host_frame = self.timing.begin_frame(now);
         if self.focused && !self.occluded {
             self.input.update_gamepad();
         }
@@ -763,7 +827,7 @@ impl App {
             }
         }
         if self.screen == Screen::Donation && self.focused && !self.occluded {
-            let frame = self.clock.advance(elapsed);
+            let frame = self.timing.advance(host_frame);
             for _ in 0..frame.ticks {
                 let mut input = self.input.take_tick();
                 input.pay_pressed |= self.donation_confirm;
@@ -779,12 +843,12 @@ impl App {
             }
         }
         if self.screen == Screen::Playing && self.focused && !self.occluded {
-            let frame = self.clock.advance(elapsed);
-            self.alpha = frame.alpha;
+            let frame = self.timing.advance(host_frame);
             for _ in 0..frame.ticks {
                 let input = self.input.take_tick();
                 if let Some(game) = &mut self.game {
                     game.step(&input);
+                    self.timing.history_ready = true;
                     for event in &game.events {
                         match event {
                             GameEvent::Sound { name, pos } => self
@@ -828,20 +892,7 @@ impl App {
                 .data
                 .tunnel_remaining
                 .extend(donation_ui::progress(game));
-            if game.flags.contains("hub") {
-                for key in ["mini1", "mini2", "mini3"] {
-                    if let Some(value) = game.data.get(key).filter(|value| value.is_finite()) {
-                        let score = value.clamp(0., 99.) as u32;
-                        let best = self
-                            .store
-                            .data
-                            .challenge_records
-                            .entry(key.into())
-                            .or_default();
-                        *best = (*best).max(score);
-                    }
-                }
-            }
+            capture_challenge_records(game, &mut self.store.data.challenge_records);
             if game.flags.contains("hub") {
                 self.store
                     .data
@@ -906,7 +957,12 @@ impl App {
             self.game
                 .as_ref()
                 .map(|g| {
-                    scene::game_scene(g, self.alpha, self.store.data.settings.pixel_snap, atlas)
+                    scene::game_scene(
+                        g,
+                        self.timing.alpha(),
+                        self.store.data.settings.pixel_snap,
+                        atlas,
+                    )
                 })
                 .unwrap_or_default()
         } else {
@@ -1305,6 +1361,28 @@ impl App {
         }
         quads
     }
+    #[cfg(target_arch = "wasm32")]
+    fn publish_test_snapshot(&self) {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let enabled = js_sys::Reflect::get(&window, &"__SPELUNKY_TEST_MODE__".into())
+            .ok()
+            .and_then(|value| value.as_bool())
+            == Some(true);
+        if !enabled {
+            return;
+        }
+        let snapshot = test_snapshot(
+            self.screen,
+            self.game.as_ref(),
+            &self.timing,
+            self.store.data.settings.pixel_snap,
+        );
+        if let Ok(value) = js_sys::JSON::parse(&snapshot.to_string()) {
+            let _ = js_sys::Reflect::set(&window, &"__spelunkyTest".into(), &value);
+        }
+    }
     fn panel(&self, q: &mut Vec<DrawQuad>) {
         rect(q, [40., 35., 240., 165.], [0.025, 0.015, 0.015, 0.95]);
     }
@@ -1340,6 +1418,85 @@ impl App {
             self.editor_command(command);
         }
     }
+}
+#[cfg(any(test, target_arch = "wasm32"))]
+fn test_snapshot(
+    screen: Screen,
+    game: Option<&Game>,
+    timing: &HostTiming,
+    pixel_snap: bool,
+) -> serde_json::Value {
+    let Some(game) = game else {
+        return serde_json::json!({ "screen": format!("{screen:?}"), "player": null });
+    };
+    let alpha = if game.flags.contains("render_discontinuity") {
+        1.
+    } else {
+        timing.alpha()
+    };
+    let interpolate = |previous: spelunky_core::Vec2, current: spelunky_core::Vec2| {
+        if previous.distance(current) > 64. {
+            current
+        } else {
+            previous.lerp(current, alpha)
+        }
+    };
+    let player = &game.player;
+    let rendered = interpolate(player.previous_pos, player.pos);
+    let camera = interpolate(game.previous_camera, game.camera);
+    let screen_pos = spelunky_core::Vec2::new(rendered.x - camera.x, rendered.y - camera.y);
+    let screen_x = if pixel_snap {
+        screen_pos.x.round()
+    } else {
+        screen_pos.x
+    };
+    let screen_y = if pixel_snap {
+        screen_pos.y.round()
+    } else {
+        screen_pos.y
+    };
+    serde_json::json!({
+        "screen": format!("{screen:?}"), "state": format!("{:?}", game.state),
+        "tick": game.tick, "levelTick": game.level_tick, "alpha": alpha,
+        "player": {
+            "x": player.pos.x, "y": player.pos.y,
+            "previousX": player.previous_pos.x, "previousY": player.previous_pos.y,
+            "vx": player.vel.x, "vy": player.vel.y, "state": format!("{:?}", player.state),
+            "grounded": player.grounded, "sprite": player.sprite,
+        },
+        "rendered": { "x": rendered.x, "y": rendered.y, "screenX": screen_x, "screenY": screen_y },
+        "camera": {
+            "x": game.camera.x, "y": game.camera.y,
+            "previousX": game.previous_camera.x, "previousY": game.previous_camera.y,
+            "renderedX": camera.x, "renderedY": camera.y,
+        },
+    })
+}
+fn load_custom(game: &mut Game, level: &spelunky_core::level::Level, name: &str, previous: &str) {
+    // The editor accepts file names as links; source files traditionally use
+    // basenames. Resolve both forms without rewriting the stored document.
+    let mut runtime_level = level.clone();
+    for target in &mut runtime_level.exit_targets {
+        *target = level_name(target);
+    }
+    game.load_custom(&runtime_level, &level_name(name), &level_name(previous));
+}
+fn capture_challenge_records(
+    game: &Game,
+    records: &mut std::collections::BTreeMap<String, u32>,
+) -> bool {
+    let mut changed = false;
+    if game.flags.contains("hub") {
+        for key in ["mini1", "mini2", "mini3"] {
+            if let Some(value) = game.data.get(key).filter(|value| value.is_finite()) {
+                let score = value.clamp(0., 99.) as u32;
+                let best = records.entry(key.into()).or_default();
+                changed |= score > *best;
+                *best = (*best).max(score);
+            }
+        }
+    }
+    changed
 }
 fn persistent_flag(value: &str) -> bool {
     value.starts_with("shortcut_")
@@ -1425,7 +1582,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
         };
         self.window = Some(window.clone());
-        self.last_frame = self.now();
+        self.timing.reset(self.now());
         self.settings_changed();
         let atlas = match Atlas::load() {
             Ok(atlas) => atlas,
@@ -1570,6 +1727,8 @@ impl ApplicationHandler<UserEvent> for App {
                 let frame_started = self.now();
                 self.update();
                 let quads = self.draw();
+                #[cfg(target_arch = "wasm32")]
+                self.publish_test_snapshot();
                 if let Some(window) = &self.window {
                     window.pre_present_notify();
                 }
@@ -1637,6 +1796,121 @@ fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn browser_snapshot_is_read_only_and_tracks_effective_presentation() {
+        let mut game = Game::tutorial(42, spelunky_core::RulesPreset::Classic);
+        game.player.previous_pos = spelunky_core::Vec2::new(96., 98.);
+        game.player.pos = spelunky_core::Vec2::new(100., 100.);
+        game.previous_camera = spelunky_core::Vec2::new(80., 80.);
+        game.camera = spelunky_core::Vec2::new(84., 82.);
+        let hash = game.state_hash();
+        let mut timing = HostTiming {
+            alpha: 0.25,
+            history_ready: true,
+            ..HostTiming::default()
+        };
+        let snapshot = test_snapshot(Screen::Playing, Some(&game), &timing, false);
+        assert_eq!(snapshot["screen"], "Playing");
+        assert_eq!(snapshot["player"]["x"], 100.);
+        assert_eq!(snapshot["rendered"]["x"], 97.);
+        assert_eq!(snapshot["rendered"]["screenX"], 16.);
+        assert_eq!(snapshot["rendered"]["screenY"], 18.);
+        assert_eq!(game.state_hash(), hash);
+        timing.reset(10.);
+        let paused = test_snapshot(Screen::Pause, Some(&game), &timing, false);
+        assert_eq!(paused["alpha"], 1.);
+        assert_eq!(paused["rendered"]["x"], paused["player"]["x"]);
+        timing.history_ready = true;
+        game.flags.insert("render_discontinuity".into());
+        let teleported = test_snapshot(Screen::Playing, Some(&game), &timing, false);
+        assert_eq!(teleported["alpha"], 1.);
+        assert_eq!(teleported["rendered"]["x"], teleported["player"]["x"]);
+    }
+    #[test]
+    fn reset_keeps_current_snapshot_until_a_new_tick_at_high_refresh() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::tutorial(42, spelunky_core::RulesPreset::Classic);
+        game.player.previous_pos = game.player.pos;
+        game.player.pos.x += 4.;
+        let hash = game.state_hash();
+        let expected: Vec<_> = scene::game_scene(&game, 1., false, &atlas)
+            .iter()
+            .map(|quad| quad.rect)
+            .collect();
+        let mut timing = HostTiming::default();
+        timing.reset(10.);
+        for frame in 1..8 {
+            let stamp = timing.begin_frame(10. + f64::from(frame) / 240.);
+            assert_eq!(timing.advance(stamp).ticks, 0);
+            let actual: Vec<_> = scene::game_scene(&game, timing.alpha(), false, &atlas)
+                .iter()
+                .map(|quad| quad.rect)
+                .collect();
+            assert_eq!(actual, expected, "frame {frame} rewound the player");
+            assert_eq!(game.state_hash(), hash);
+        }
+        let stamp = timing.begin_frame(10. + 1. / 30.);
+        assert_eq!(timing.advance(stamp).ticks, 1);
+        game.step(&spelunky_core::InputFrame::default());
+        timing.history_ready = true;
+        assert!(timing.alpha() < 0.001);
+    }
+    #[test]
+    fn resuming_during_gamepad_poll_discards_pre_resume_elapsed() {
+        for pause in [0.25, 5., 120.] {
+            let mut timing = HostTiming::default();
+            timing.reset(1.);
+            let sampled_before_resume = timing.begin_frame(1. + pause);
+            timing.reset(1. + pause);
+            assert_eq!(timing.advance(sampled_before_resume).ticks, 0);
+            assert_eq!(timing.alpha(), 1.);
+            let next = timing.begin_frame(1. + pause + 1. / 240.);
+            assert_eq!(timing.advance(next).ticks, 0);
+            let first_tick = timing.begin_frame(1. + pause + 1. / 30.);
+            assert_eq!(timing.advance(first_tick).ticks, 1);
+        }
+    }
+    #[test]
+    fn custom_file_links_select_the_return_entrance_without_rewriting_documents() {
+        let mut level = spelunky_core::level::Level::default();
+        level.set_tile(1, 1, '@').unwrap();
+        level.set_tile(15, 10, '@').unwrap();
+        level.exit_targets = vec!["elsewhere".into(), "previous.lvl".into()];
+        let original = level.clone();
+        let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+        load_custom(&mut game, &level, "next.lvl", "previous");
+        assert_eq!(game.player.pos, spelunky_core::Vec2::new(264., 184.));
+        assert_eq!(game.player.previous_pos, game.player.pos);
+        assert_eq!(game.previous_camera, game.camera);
+        assert_eq!(game.world.name, "next");
+        assert_eq!(level, original);
+    }
+    #[test]
+    fn editor_playtest_uses_document_name_and_source_spawn_offset() {
+        let mut editor = EditorUi::new();
+        let EditorCommand::Play(level) = editor.key(KeyCode::F5, None, false) else {
+            panic!("F5 must play the current document");
+        };
+        let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+        load_custom(&mut game, &level, editor.level_name(), "");
+        assert_eq!(game.world.name, "custom");
+        assert_eq!(game.player.pos, spelunky_core::Vec2::new(56., 504.));
+        assert_eq!(game.player.previous_pos, game.player.pos);
+        assert_eq!(game.previous_camera, game.camera);
+    }
+    #[test]
+    fn challenge_score_is_captured_before_scores_room_clears_run_counters() {
+        let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+        game.flags.extend(["unlock_moon".into(), "hub".into()]);
+        game.load_hub(spelunky_core::hub::HubKind::Moon);
+        game.data.insert("mini2".into(), 12.);
+        let mut records = std::collections::BTreeMap::new();
+        records.insert("mini2".into(), 5);
+        assert!(capture_challenge_records(&game, &mut records));
+        game.load_hub(spelunky_core::hub::HubKind::Scores);
+        capture_challenge_records(&game, &mut records);
+        assert_eq!(records["mini2"], 12);
+    }
     #[test]
     fn pointer_letterbox_coordinates_match_renderer() {
         assert_eq!(logical_pointer(240., 0., 1920, 1080), [0., 0.]);

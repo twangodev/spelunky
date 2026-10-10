@@ -82,7 +82,8 @@ pub struct InputState {
     keys: HashSet<KeyCode>,
     bindings: BTreeMap<String, Vec<KeyCode>>,
     gamepad_actions: Actions,
-    held: Actions,
+    keyboard_held: Actions,
+    gamepad_held: Actions,
     frame: InputFrame,
     gamepad_ui: u8,
     ui_edges: Vec<UiButton>,
@@ -99,7 +100,8 @@ impl Default for InputState {
                 .map(|(_, name, key)| (name.to_string(), vec![*key]))
                 .collect(),
             gamepad_actions: Actions::default(),
-            held: Actions::default(),
+            keyboard_held: Actions::default(),
+            gamepad_held: Actions::default(),
             frame: InputFrame::default(),
             gamepad_ui: 0,
             ui_edges: Vec::new(),
@@ -153,6 +155,13 @@ impl InputState {
         frame
     }
 
+    /// Discard events at a continuous room transition while keeping physically
+    /// held controls and controller menu latches. No synthetic presses result.
+    pub fn clear_edges(&mut self) {
+        self.frame.clear_edges();
+        self.ui_edges.clear();
+    }
+
     pub fn clear(&mut self) {
         self.clear_gameplay();
         self.gamepad_ui = 0;
@@ -163,7 +172,8 @@ impl InputState {
     pub fn clear_gameplay(&mut self) {
         self.keys.clear();
         self.gamepad_actions = Actions::default();
-        self.held = Actions::default();
+        self.keyboard_held = Actions::default();
+        self.gamepad_held = Actions::default();
         self.frame = InputFrame::default();
         self.ui_edges.clear();
     }
@@ -174,18 +184,27 @@ impl InputState {
     }
 
     fn refresh(&mut self) {
-        let mut next = self.gamepad_actions;
+        let mut keyboard = Actions::default();
         for (action, name, _) in ACTIONS {
-            next.set(
+            keyboard.set(
                 action,
                 self.bindings
                     .get(name)
                     .is_some_and(|keys| keys.iter().any(|key| self.keys.contains(key))),
             );
         }
-        let pressed = |action| next.has(action) && !self.held.has(action);
+        let next = Actions(keyboard.0 | self.gamepad_actions.0);
+        // Classic's check*Pressed/Released scripts OR the keyboard and gamepad
+        // edges independently. A fresh press on one device must survive even
+        // when the other device already holds the same action.
+        let pressed = |action| {
+            (keyboard.has(action) && !self.keyboard_held.has(action))
+                || (self.gamepad_actions.has(action) && !self.gamepad_held.has(action))
+        };
         self.frame.jump_pressed |= pressed(Action::Jump);
-        self.frame.jump_released |= !next.has(Action::Jump) && self.held.has(Action::Jump);
+        self.frame.jump_released |= (!keyboard.has(Action::Jump)
+            && self.keyboard_held.has(Action::Jump))
+            || (!self.gamepad_actions.has(Action::Jump) && self.gamepad_held.has(Action::Jump));
         self.frame.attack_pressed |= pressed(Action::Attack);
         self.frame.bomb_pressed |= pressed(Action::Bomb);
         self.frame.rope_pressed |= pressed(Action::Rope);
@@ -200,7 +219,8 @@ impl InputState {
         self.frame.run = next.has(Action::Run);
         self.frame.jump = next.has(Action::Jump);
         self.frame.attack = next.has(Action::Attack);
-        self.held = next;
+        self.keyboard_held = keyboard;
+        self.gamepad_held = self.gamepad_actions;
     }
 
     fn accept_gamepads(&mut self, actions: Actions, ui: u8) {
@@ -593,15 +613,137 @@ mod tests {
     }
 
     #[test]
-    fn shared_action_is_held_until_both_devices_release() {
+    fn mixed_devices_preserve_independent_edges_and_combined_held_state() {
         let mut input = InputState::default();
         let mut actions = Actions::default();
         actions.set(Action::Jump, true);
         input.accept_gamepads(actions, 0);
         input.take_tick();
         input.key(KeyCode::KeyZ, true, false);
+        let tick = input.take_tick();
+        assert!(tick.jump && tick.jump_pressed && !tick.jump_released);
         input.accept_gamepads(Actions::default(), 0);
         let tick = input.take_tick();
-        assert!(tick.jump && !tick.jump_pressed && !tick.jump_released);
+        assert!(tick.jump && !tick.jump_pressed && tick.jump_released);
+        input.key(KeyCode::KeyZ, false, false);
+        let tick = input.take_tick();
+        assert!(!tick.jump && tick.jump_released);
+    }
+
+    #[test]
+    fn fast_repress_retains_fresh_edge_until_authoritative_tick_at_all_rates() {
+        for rate in [60, 120, 144, 240] {
+            let mut input = InputState::default();
+            let mut clock = crate::timing::FixedClock::new();
+            input.key(KeyCode::KeyZ, true, false);
+            assert!(input.take_tick().jump_pressed);
+            input.key(KeyCode::KeyZ, false, false);
+            input.key(KeyCode::KeyZ, true, false);
+            let mut consumed = false;
+            for _ in 0..rate {
+                let frame = clock.advance(1.0 / f64::from(rate));
+                for _ in 0..frame.ticks {
+                    let tick = input.take_tick();
+                    assert!(tick.jump);
+                    if !consumed {
+                        assert!(tick.jump_pressed && tick.jump_released, "{rate} Hz");
+                        consumed = true;
+                    } else {
+                        assert!(!tick.jump_pressed && !tick.jump_released);
+                    }
+                }
+            }
+            assert!(consumed);
+        }
+    }
+
+    #[test]
+    fn catch_up_ticks_consume_a_jump_edge_once_and_keep_held_jump() {
+        let mut input = InputState::default();
+        let mut clock = crate::timing::FixedClock::new();
+        input.key(KeyCode::KeyZ, true, false);
+        let frame = clock.advance(0.1);
+        assert_eq!(frame.ticks, 3);
+        for tick_index in 0..frame.ticks {
+            let tick = input.take_tick();
+            assert!(tick.jump);
+            assert_eq!(tick.jump_pressed, tick_index == 0);
+        }
+    }
+
+    #[test]
+    fn room_transition_clears_edges_but_preserves_held_controls() {
+        let mut input = InputState::default();
+        input.key(KeyCode::ArrowRight, true, false);
+        input.key(KeyCode::KeyZ, true, false);
+        let mut actions = Actions::default();
+        actions.set(Action::Attack, true);
+        input.accept_gamepads(actions, 1 << 6);
+        input.clear_edges();
+        let tick = input.take_tick();
+        assert!(tick.right && tick.jump && tick.attack);
+        assert!(!tick.jump_pressed && !tick.attack_pressed);
+        assert!(input.ui_pressed().is_empty());
+        input.accept_gamepads(actions, 1 << 6);
+        let tick = input.take_tick();
+        assert!(tick.right && tick.jump && tick.attack);
+        assert!(!tick.jump_pressed && !tick.attack_pressed);
+        assert!(input.ui_pressed().is_empty());
+        input.key(KeyCode::KeyZ, false, false);
+        assert!(input.take_tick().jump_released);
+    }
+
+    #[test]
+    fn host_fed_fast_repress_jumps_from_hanging_at_every_presentation_rate() {
+        use spelunky_core::{Area, Game, PlayerState, RulesPreset, Vec2, World};
+        let mut results = Vec::new();
+        for rate in [60, 120, 144, 240] {
+            let mut input = InputState::default();
+            let mut clock = crate::timing::FixedClock::new();
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            game.world = World::new(20, 20, Area::Mines, 1);
+            game.world.set_tile(6, 5, "oBlock");
+            game.player.pos = Vec2::new(92.0, 88.0);
+            game.player.previous_pos = game.player.pos;
+            game.player.state = PlayerState::Hanging;
+            input.key(KeyCode::KeyZ, true, false);
+            input.take_tick(); // The preceding jump press has already been used.
+            input.key(KeyCode::KeyZ, false, false);
+            input.key(KeyCode::KeyZ, true, false);
+            loop {
+                let frame = clock.advance(1.0 / f64::from(rate));
+                if frame.ticks == 0 {
+                    continue;
+                }
+                game.step(&input.take_tick());
+                break;
+            }
+            assert_eq!(game.player.state, PlayerState::Jumping, "{rate} Hz");
+            assert!(game.player.vel.y < 0.0, "{rate} Hz");
+            results.push((game.player.pos, game.player.vel));
+        }
+        assert!(results.windows(2).all(|pair| pair[0] == pair[1]));
+    }
+
+    #[test]
+    fn fresh_keyboard_jump_exits_climb_while_controller_jump_is_held() {
+        use spelunky_core::{Area, Game, PlayerState, RulesPreset, Vec2, World};
+        let mut input = InputState::default();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = World::new(20, 20, Area::Mines, 1);
+        for y in 4..=6 {
+            game.world.set_tile(5, y, "oLadder");
+        }
+        game.player.pos = Vec2::new(88.0, 88.0);
+        game.player.state = PlayerState::Climbing;
+        let mut actions = Actions::default();
+        actions.set(Action::Jump, true);
+        input.accept_gamepads(actions, 0);
+        input.take_tick();
+        input.key(KeyCode::ArrowRight, true, false);
+        input.key(KeyCode::KeyZ, true, false);
+        game.step(&input.take_tick());
+        assert_ne!(game.player.state, PlayerState::Climbing);
+        assert!(game.player.vel.x > 0.0 && game.player.vel.y < 0.0);
     }
 }
