@@ -35,49 +35,105 @@ fn bounds_at(p: &Player, pos: Vec2) -> Rect {
     let top = value(p, "collision_top", -8.0);
     Rect::new(pos.x - half, pos.y + top, half * 2.0, 8.0 - top)
 }
+#[cfg(test)]
 fn solid(w: &World, p: &Player, pos: Vec2) -> bool {
     let r = bounds_at(p, pos);
+    collision_rect(w, r, "oSolid")
+}
+
+fn collision_rect(w: &World, r: Rect, group: &str) -> bool {
     // GameMaker has no implicit room-edge collider. In particular, the Ice
     // Caves abyss must let the player leave the room and trigger falling death.
     let mut tile_collision = false;
     for y in (r.y / 16.0).floor() as i32..=((r.y + r.h - 0.001) / 16.0).floor() as i32 {
         for x in (r.x / 16.0).floor() as i32..=((r.x + r.w - 0.001) / 16.0).floor() as i32 {
-            tile_collision |= w.tile(x, y).is_some_and(Tile::is_solid);
+            tile_collision |= w.tile(x, y).is_some_and(|t| {
+                crate::catalog::is_a(&t.object, group)
+                    && crate::catalog::bounds(
+                        &t.object,
+                        Vec2::new(f64::from(x) * 16.0, f64::from(y) * 16.0),
+                    )
+                    .intersects(r)
+            });
         }
     }
     tile_collision
-        || w.entities
-            .iter()
-            .any(|e| e.alive && e.solid && !e.held && e.bounds().intersects(r))
+        || w.entities.iter().any(|e| {
+            e.alive
+                && !e.held
+                && (crate::catalog::is_a(&e.object, group) || (group == "oSolid" && e.solid))
+                && e.sprite_bounds().intersects(r)
+        })
+}
+
+#[derive(Clone, Copy)]
+enum Side {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+fn edge_rect(p: &Player, side: Side, distance: f64, move_probe: bool) -> Rect {
+    let r = bounds_at(p, p.pos);
+    let left = gm_round(r.x);
+    let right = gm_round(r.x + r.w - 1.0);
+    let top = gm_round(r.y + if move_probe { 5.0 } else { 0.0 });
+    let bottom = gm_round(r.y + r.h - 1.0);
+    match side {
+        Side::Left => Rect::new(gm_round(r.x - distance), top, 1.0, bottom - top + 1.0),
+        Side::Right => Rect::new(
+            gm_round(r.x + r.w + distance - 1.0),
+            top,
+            1.0,
+            bottom - top + 1.0,
+        ),
+        Side::Top => Rect::new(left, gm_round(r.y - distance), right - left + 1.0, 1.0),
+        Side::Bottom => Rect::new(
+            left,
+            gm_round(r.y + r.h + distance - 1.0),
+            right - left + 1.0,
+            1.0,
+        ),
+    }
+}
+
+fn edge(w: &World, p: &Player, side: Side, distance: f64) -> bool {
+    collision_rect(w, edge_rect(p, side, distance, false), "oSolid")
+}
+
+fn solid_point(w: &World, pos: Vec2) -> bool {
+    collision_rect(w, Rect::new(pos.x, pos.y, 0.001, 0.001), "oSolid")
 }
 fn object_at(w: &World, pos: Vec2, names: &[&str]) -> bool {
     w.tile((pos.x / 16.0).floor() as i32, (pos.y / 16.0).floor() as i32)
         .is_some_and(|t| names.contains(&t.object.as_str()))
-        || w.entities
-            .iter()
-            .any(|e| e.alive && names.contains(&e.object.as_str()) && e.bounds().contains(pos))
+        || w.entities.iter().any(|e| {
+            e.alive && names.contains(&e.object.as_str()) && e.sprite_bounds().contains(pos)
+        })
 }
 fn ladder_at(w: &World, pos: Vec2) -> Option<Vec2> {
+    ladder_match(w, pos, true)
+}
+fn ladder_segment_at(w: &World, pos: Vec2) -> Option<Vec2> {
+    ladder_match(w, pos, false)
+}
+fn ladder_match(w: &World, pos: Vec2, include_top: bool) -> Option<Vec2> {
     let tx = (pos.x / 16.0).floor() as i32;
     let ty = (pos.y / 16.0).floor() as i32;
-    if w.tile(tx, ty).is_some_and(Tile::is_ladder) {
+    if w.tile(tx, ty).is_some_and(|t| {
+        crate::catalog::is_a(&t.object, "oLadder")
+            || (include_top && crate::catalog::is_a(&t.object, "oLadderTop"))
+    }) {
         return Some(Vec2::new(f64::from(tx) * 16.0 + 8.0, f64::from(ty) * 16.0));
     }
     w.entities
         .iter()
         .find(|e| {
             e.alive
-                && matches!(
-                    e.object.as_str(),
-                    "oLadder"
-                        | "oLadderTop"
-                        | "oVine"
-                        | "oVineTop"
-                        | "oRope"
-                        | "oRopeTop"
-                        | "oRopeSegment"
-                )
-                && e.bounds().contains(pos)
+                && (crate::catalog::is_a(&e.object, "oLadder")
+                    || (include_top && crate::catalog::is_a(&e.object, "oLadderTop")))
+                && e.sprite_bounds().contains(pos)
         })
         .map(|e| Vec2::new(e.pos.x + 8.0, e.pos.y))
 }
@@ -88,33 +144,12 @@ fn platform(w: &World, p: &Player, pos: Vec2, dy: f64) -> bool {
     if dy <= 0.0 {
         return false;
     }
-    let r = bounds_at(p, pos);
-    let bottom = r.y + r.h;
-    let x0 = (r.x / 16.0).floor() as i32;
-    let x1 = ((r.x + r.w - 0.001) / 16.0).floor() as i32;
-    let row = ((bottom + dy) / 16.0).floor() as i32;
-    for x in x0..=x1 {
-        if w.tile(x, row)
-            .is_some_and(|t| crate::catalog::is_a(&t.object, "oPlatform"))
-        {
-            let top = f64::from(row) * 16.0;
-            if bottom <= top && bottom + dy > top {
-                return true;
-            }
-        }
-    }
-    w.entities.iter().any(|e| {
-        let b = e.bounds();
-        e.alive
-            && crate::catalog::is_a(&e.object, "oPlatform")
-            && r.x < b.x + b.w
-            && r.x + r.w > b.x
-            && bottom <= b.y
-            && bottom + dy > b.y
-    })
+    debug_assert_eq!(pos, p.pos);
+    !collision_rect(w, bounds_at(p, pos), "oPlatform")
+        && collision_rect(w, edge_rect(p, Side::Bottom, dy, false), "oPlatform")
 }
 fn below(w: &World, p: &Player) -> bool {
-    solid(w, p, Vec2::new(p.pos.x, p.pos.y + 1.0)) || platform(w, p, p.pos, 1.0)
+    edge(w, p, Side::Bottom, 1.0) || platform(w, p, p.pos, 1.0)
 }
 
 /// The original reciprocal/modulo rounding deliberately differs from a subpixel
@@ -140,28 +175,25 @@ fn move_by(w: &mut World, p: &mut Player, tick: u64, down: bool, movement: Vec2)
     let dy = displacement(movement.y, tick);
     for _ in 0..dx.unsigned_abs() {
         let next = Vec2::new(p.pos.x + f64::from(dx.signum()), p.pos.y);
-        if solid(w, p, next) {
-            // Moveable blocks are pushed one pixel at a time, only on the ground.
-            let target = bounds_at(p, next);
+        let probe = edge_rect(p, if dx > 0 { Side::Right } else { Side::Left }, 1.0, true);
+        if collision_rect(w, probe, "oSolid") {
+            // Source canPushMoveableSolids checks player ancestry, so a player's
+            // remaining airborne momentum can also push a block pixel by pixel.
+            let target = probe;
             let block = w.entities.iter().position(|e| {
                 e.alive
                     && e.solid
-                    && matches!(e.object.as_str(), "oPushBlock" | "oMoveableSolid")
-                    && e.bounds().intersects(target)
+                    && crate::catalog::is_a(&e.object, "oMoveableSolid")
+                    && e.sprite_bounds().intersects(target)
             });
             let pushed = block.is_some_and(|index| {
                 let destination = Vec2::new(
                     w.entities[index].pos.x + f64::from(dx.signum()),
                     w.entities[index].pos.y,
                 );
-                let old = w.entities[index].bounds();
+                let old = w.entities[index].sprite_bounds();
                 let rect = Rect::new(old.x + f64::from(dx.signum()), old.y, old.w, old.h);
-                if !grounded_state(p.state)
-                    || w.collides(rect)
-                    || w.entities.iter().enumerate().any(|(i, e)| {
-                        i != index && e.alive && e.solid && e.bounds().intersects(rect)
-                    })
-                {
+                if w.collides_except(rect, w.entities[index].id) {
                     return false;
                 }
                 w.entities[index].pos = destination;
@@ -175,7 +207,9 @@ fn move_by(w: &mut World, p: &mut Player, tick: u64, down: bool, movement: Vec2)
     }
     for _ in 0..dy.unsigned_abs() {
         let next = Vec2::new(p.pos.x, p.pos.y + f64::from(dy.signum()));
-        if solid(w, p, next) || (!down && platform(w, p, p.pos, f64::from(dy.signum()))) {
+        if edge(w, p, if dy > 0 { Side::Bottom } else { Side::Top }, 1.0)
+            || (!down && platform(w, p, p.pos, f64::from(dy.signum())))
+        {
             break;
         }
         p.pos = next;
@@ -275,15 +309,27 @@ fn apply_ball_tether(w: &World, p: &mut Player, input: &InputFrame, fall: &mut f
 /// Advance exactly one authoritative Classic tick. Presentation interpolation
 /// belongs to the host; this function never accepts a frame delta.
 pub fn tick(game: &mut Game, input: &InputFrame) {
+    let engine_time = game.engine_time();
     let damsel = game.flags.contains("character_damsel");
     let tunnelman = game.flags.contains("character_tunnelman");
     let p = &mut game.player;
     set(p, "character_damsel", f64::from(damsel));
     set(p, "character_tunnelman", f64::from(tunnelman));
-    p.previous_pos = p.pos;
     p.invincible = p.invincible.saturating_sub(1);
+    if p.stun > 0
+        && matches!(
+            p.sprite.as_str(),
+            "sStunL" | "sDamselStunL" | "sTunnelStunL"
+        )
+    {
+        p.stun -= 1;
+    }
     if p.health <= 0 || p.stun > 0 {
-        stunned_tick(&mut game.world, p, game.tick);
+        let impact = stunned_tick(&mut game.world, p, engine_time);
+        if impact {
+            game.events.push(GameEvent::Damage { amount: 1 });
+            game.sound("sndHurt", game.player.pos);
+        }
         return;
     }
     if value(p, "duck_to_hang", 0.0) > 0.0 {
@@ -306,13 +352,17 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let mut sound = None;
     let mut fall_damage = 0;
     let col_bot = below(w, p);
-    let col_left = solid(w, p, Vec2::new(p.pos.x - 1.0, p.pos.y));
-    let col_right = solid(w, p, Vec2::new(p.pos.x + 1.0, p.pos.y));
-    let col_top = solid(w, p, Vec2::new(p.pos.x, p.pos.y - 1.0));
+    let col_left = edge(w, p, Side::Left, 1.0);
+    let col_right = edge(w, p, Side::Right, 1.0);
+    let col_top = edge(w, p, Side::Top, 1.0);
+    let col_moveable_left =
+        collision_rect(w, edge_rect(p, Side::Left, 1.0, false), "oMoveableSolid");
+    let col_moveable_right =
+        collision_rect(w, edge_rect(p, Side::Right, 1.0, false), "oMoveableSolid");
     let in_water = water(w, p.pos);
     let in_web = object_at(w, p.pos, &["oWeb"]);
-    let water_above = water(w, Vec2::new(p.pos.x, p.pos.y - 9.0));
-    let water_surface = in_water && !water_above;
+    let water_jump = collision_rect(w, edge_rect(p, Side::Top, 1.0, false), "oWater");
+    let water_surface = in_water && !water(w, Vec2::new(p.pos.x, p.pos.y - 9.0));
     let was_grounded = grounded_state(p.state);
     let mut fall = value(p, "fall_timer", 0.0);
     let mut gravity = value(p, "gravity", 1.0);
@@ -336,7 +386,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         fall += 1.0;
         if has(p, &["Parachute", "parachute"])
             && fall > 14.0
-            && !w.solid_at(p.pos.x, p.pos.y + 32.0)
+            && !solid_point(w, Vec2::new(p.pos.x, p.pos.y + 32.0))
         {
             p.equipment.remove("Parachute");
             p.equipment.remove("parachute");
@@ -370,16 +420,15 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         game.player.vel.y = -3.0;
         set(&mut game.player, "bounced", 1.0);
         game.sound("sndThud", game.player.pos);
-        stunned_tick(&mut game.world, &mut game.player, game.tick);
+        let impact = stunned_tick(&mut game.world, &mut game.player, engine_time);
+        if impact {
+            game.events.push(GameEvent::Damage { amount: 1 });
+            game.sound("sndHurt", game.player.pos);
+        }
         return;
     }
     if was_grounded {
         fuel = 50.0;
-        cape = false;
-        jumped = false;
-    }
-    if input.jump_released && airborne(p.state) {
-        jumped = true;
     }
     if in_water && value(p, "swimming", 0.0) == 0.0 {
         sound = Some("sndSplash");
@@ -406,12 +455,26 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             ax += 0.5;
         }
         if input.left && !input.right {
-            if left_steps > 2.0 && (p.facing < 0 || p.vel.x.abs() < 0.1) {
+            if col_moveable_left {
+                if grounded_state(p.state) && p.state != PlayerState::Ducking {
+                    ax -= 1.0;
+                    let push = value(p, "push_timer", 0.0);
+                    set(p, "push_timer", push + 10.0);
+                }
+            } else if left_steps > 2.0 && (p.facing < 0 || p.vel.x.abs() < 0.1) {
                 ax -= 3.0;
             }
             p.facing = -1;
         } else if input.right && !input.left {
-            if right_steps > 2.0 && (p.facing > 0 || p.vel.x.abs() < 0.1) {
+            if col_moveable_right {
+                if grounded_state(p.state) && p.state != PlayerState::Ducking {
+                    ax += 1.0;
+                    let push = value(p, "push_timer", 0.0);
+                    set(p, "push_timer", push + 10.0);
+                }
+            } else if (right_steps > 2.0 || col_moveable_left)
+                && (p.facing > 0 || p.vel.x.abs() < 0.1)
+            {
                 ax += 3.0;
             }
             p.facing = 1;
@@ -441,13 +504,18 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     }
     let jump_pressed = input.jump_pressed
         || (game.rules == RulesPreset::Assisted && p.buffered_jump_ticks > 0 && col_bot);
-    let can_coyote = game.rules == RulesPreset::Assisted && p.coyote_ticks > 0;
+    let can_coyote = game.rules == RulesPreset::Assisted
+        && p.coyote_ticks > 0
+        && !matches!(
+            p.state,
+            PlayerState::Hanging | PlayerState::Climbing | PlayerState::Stunned | PlayerState::Dead
+        );
 
     if p.state == PlayerState::Climbing {
         cape = false;
         jumped = false;
         ladder_timer = 10.0;
-        if let Some(ladder) = ladder_at(w, p.pos) {
+        if let Some(ladder) = ladder_segment_at(w, p.pos) {
             p.pos.x = ladder.x;
         }
         if input.left {
@@ -468,6 +536,8 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             }
         }
         if jump_pressed && p.attack_timer == 0 {
+            p.buffered_jump_ticks = 0;
+            p.coyote_ticks = 0;
             p.vel.x = if input.left {
                 -4.0
             } else if input.right {
@@ -510,9 +580,16 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         p.vel.x = 0.0;
     }
 
+    if input.jump_released && airborne(p.state) {
+        jumped = true;
+    } else if grounded_state(p.state) {
+        cape = false;
+        jumped = false;
+    }
+
     let normal_jump =
         jump_pressed && (grounded_state(p.state) || can_coyote) && (fall == 0.0 || can_coyote);
-    if jump_pressed && (in_web || water_above) {
+    if jump_pressed && (in_web || water_jump) {
         ay -= 4.0;
         p.vel.y -= 3.0;
         ax += p.vel.x / 2.0;
@@ -608,14 +685,19 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         };
         if dir != 0.0 {
             let edge = Vec2::new(p.pos.x + dir * 9.0, p.pos.y - 5.0);
+            let upper_edge = Vec2::new(edge.x, p.pos.y - 6.0);
             let grip = has(p, &["Climbing Gloves", "Gloves", "gloves"]) && p.vel.y > 0.0;
-            if (w.solid_at(edge.x, edge.y)
+            if ((solid_point(w, edge) || solid_point(w, upper_edge))
                 && (grip
-                    || (!w.solid_at(edge.x, p.pos.y - 9.0) && !w.solid_at(p.pos.x, p.pos.y + 9.0))))
+                    || (!solid_point(w, Vec2::new(edge.x, p.pos.y - 9.0))
+                        && !solid_point(w, Vec2::new(p.pos.x, p.pos.y + 9.0)))))
                 || object_at(w, edge, &["oTree"])
+                || object_at(w, upper_edge, &["oTree"])
             {
                 p.state = PlayerState::Hanging;
+                p.pos.x = gm_round(p.pos.x);
                 p.pos.y = gm_round(p.pos.y / 8.0) * 8.0;
+                p.previous_pos = p.pos;
                 p.vel.y = 0.0;
                 ay = 0.0;
                 gravity = 0.0;
@@ -642,31 +724,40 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     if p.state == PlayerState::Hanging {
         cape = false;
         jumped = false;
-        ax = 0.0;
-        p.vel.x = 0.0;
         if jump_pressed {
+            p.buffered_jump_ticks = 0;
+            p.coyote_ticks = 0;
             gravity = 1.0;
-            if input.down || (p.facing > 0 && input.left) || (p.facing < 0 && input.right) {
+            if input.down {
                 p.state = PlayerState::Falling;
                 ay -= 1.0;
-                hang_count = if input.down && has(p, &["Climbing Gloves", "Gloves", "gloves"]) {
+                hang_count = if has(p, &["Climbing Gloves", "Gloves", "gloves"]) {
                     10.0
                 } else {
                     5.0
                 };
             } else {
-                p.state = PlayerState::Jumping;
-                ay -= 4.0;
-                p.pos.x -= f64::from(p.facing) * 2.0;
+                if (p.facing > 0 && input.left) || (p.facing < 0 && input.right) {
+                    p.state = PlayerState::Falling;
+                    ay -= 1.0;
+                } else {
+                    p.state = PlayerState::Jumping;
+                    ay -= 4.0;
+                    p.pos.x -= f64::from(p.facing) * 2.0;
+                }
                 hang_count = 3.0;
             }
-        } else if value(p, "hanging_arrow", 0.0) == 0.0
-            && !solid(
-                w,
-                p,
-                Vec2::new(p.pos.x + f64::from(p.facing) * 2.0, p.pos.y),
-            )
-        {
+        }
+        if !edge(
+            w,
+            p,
+            if p.facing > 0 {
+                Side::Right
+            } else {
+                Side::Left
+            },
+            2.0,
+        ) {
             gravity = 1.0;
             p.state = PlayerState::Falling;
             ay -= 1.0;
@@ -678,9 +769,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     }
 
     if input.down && grounded_state(p.state) && p.attack_timer == 0 {
-        if solid(w, p, Vec2::new(p.pos.x, p.pos.y + 1.0)) {
+        if edge(w, p, Side::Bottom, 1.0) {
             p.state = PlayerState::Ducking;
-        } else if let Some(ladder) = ladder_at(w, Vec2::new(p.pos.x, p.pos.y + 16.0)) {
+        } else if let Some(ladder) = ladder_segment_at(w, Vec2::new(p.pos.x, p.pos.y + 16.0)) {
             if (p.pos.x - ladder.x).abs() < 4.0 {
                 p.pos.x = ladder.x;
                 p.vel = Vec2::default();
@@ -726,7 +817,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         && ((input.up
             && (ladder_at(w, p.pos).is_some()
                 || (airborne(p.state)
-                    && ladder_at(w, Vec2::new(p.pos.x, p.pos.y - 8.0)).is_some())))
+                    && ladder_segment_at(w, Vec2::new(p.pos.x, p.pos.y - 8.0)).is_some())))
             || (input.down
                 && grounded_state(p.state)
                 && p.vel.x == 0.0
@@ -736,9 +827,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
                     &["oLadderTop", "oVineTop"],
                 )))
     {
-        if let Some(ladder) =
-            ladder_at(w, Vec2::new(p.pos.x, p.pos.y - 8.0)).or_else(|| ladder_at(w, p.pos))
-        {
+        if let Some(ladder) = ladder_segment_at(w, Vec2::new(p.pos.x, p.pos.y - 8.0)) {
             if (p.pos.x - ladder.x).abs() < 4.0 {
                 p.pos.x = ladder.x;
                 if ladder_at(w, p.pos).is_none() {
@@ -748,6 +837,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
                 ax = 0.0;
                 ay = 0.0;
                 p.state = PlayerState::Climbing;
+                p.previous_pos = p.pos;
             }
         }
     }
@@ -798,9 +888,13 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     }
     if p.state == PlayerState::Ducking
         && p.vel.x.abs() < 3.0
-        && w.solid_at(p.pos.x, p.pos.y + 9.0)
-        && ((p.facing < 0 && input.left && !w.solid_at(p.pos.x - 1.0, p.pos.y + 9.0))
-            || (p.facing > 0 && input.right && !w.solid_at(p.pos.x + 1.0, p.pos.y + 9.0)))
+        && solid_point(w, Vec2::new(p.pos.x, p.pos.y + 9.0))
+        && ((p.facing < 0
+            && input.left
+            && !solid_point(w, Vec2::new(p.pos.x - 1.0, p.pos.y + 9.0)))
+            || (p.facing > 0
+                && input.right
+                && !solid_point(w, Vec2::new(p.pos.x + 1.0, p.pos.y + 9.0))))
     {
         set(p, "duck_to_hang", 1.0);
         p.vel = Vec2::default();
@@ -829,7 +923,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     if p.vel.y.abs() < 0.1 {
         p.vel.y = 0.0;
     }
-    slope_move(w, p, game.tick, input.down, col_top);
+    slope_move(w, p, engine_time, input.down, col_top);
     p.grounded = below(w, p) && p.vel.y >= 0.0 && p.state != PlayerState::Climbing;
     if game.rules == RulesPreset::Assisted {
         if !col_bot {
@@ -891,16 +985,13 @@ fn duck_to_hang_tick(w: &World, p: &mut Player) {
     set(p, "fall_ticks", 0.0);
 }
 
-fn stunned_tick(w: &mut World, p: &mut Player, time: u64) {
-    p.stun = p.stun.saturating_sub(1);
+fn stunned_tick(w: &mut World, p: &mut Player, time: u64) -> bool {
     let bounced = value(p, "bounced", 0.0) > 0.0;
     p.vel.y += if bounced { 1.0 } else { 0.6 };
-    if p.vel.y < 0.0 && solid(w, p, Vec2::new(p.pos.x, p.pos.y - 1.0)) {
+    if p.vel.y < 0.0 && edge(w, p, Side::Top, 1.0) {
         p.vel.y *= -0.8;
     }
-    if solid(w, p, Vec2::new(p.pos.x - 1.0, p.pos.y))
-        || solid(w, p, Vec2::new(p.pos.x + 1.0, p.pos.y))
-    {
+    if edge(w, p, Side::Left, 1.0) || edge(w, p, Side::Right, 1.0) {
         p.vel.x *= -0.5;
     }
     if below(w, p) {
@@ -918,6 +1009,16 @@ fn stunned_tick(w: &mut World, p: &mut Player, time: u64) {
     p.vel.x = p.vel.x.clamp(-10.0, 10.0);
     p.vel.y = p.vel.y.clamp(-10.0, 10.0);
     move_player(w, p, time, false);
+    let impact = value(p, "wall_hurt", value(p, "wallHurt", 0.0)) > 0.0
+        && (edge(w, p, Side::Left, 1.0)
+            || edge(w, p, Side::Right, 1.0)
+            || edge(w, p, Side::Bottom, 1.0));
+    if impact {
+        p.health -= 1;
+        let remaining = value(p, "wall_hurt", value(p, "wallHurt", 0.0)) - 1.0;
+        set(p, "wall_hurt", remaining);
+        set(p, "wallHurt", remaining);
+    }
     p.grounded = below(w, p);
     p.state = if p.health <= 0 {
         PlayerState::Dead
@@ -944,16 +1045,29 @@ fn stunned_tick(w: &mut World, p: &mut Player, time: u64) {
     )
     .into();
     p.animation += 0.4;
+    impact
 }
 
 fn animate(p: &mut Player, input: &InputFrame, w: &World) {
+    // The engine restores its collision mask even while characterSprite skips
+    // a whipping character. Attack animation ownership must not skip this.
+    set(p, "collision_top", -8.0);
+    set(
+        p,
+        "collision_half_width",
+        if p.vel.x.abs() >= 4.0 && grounded_state(p.state) {
+            8.0
+        } else {
+            5.0
+        },
+    );
     if p.attack_timer > 0 {
         return;
     }
     let mut speed = 0.0;
     let name = match p.state {
         PlayerState::Standing => {
-            if !w.solid_at(p.pos.x - 2.0, p.pos.y + 9.0) {
+            if !solid_point(w, Vec2::new(p.pos.x - 2.0, p.pos.y + 9.0)) {
                 speed = 0.6;
                 "sWhoaLeft"
             } else {
@@ -1101,6 +1215,7 @@ mod tests {
     }
     fn step(g: &mut Game, i: InputFrame) {
         g.tick += 1;
+        g.level_tick += 1;
         tick(g, &i);
     }
     #[test]
@@ -1322,7 +1437,7 @@ mod tests {
             step(&mut g, InputFrame::default());
             assert_eq!(g.player.health, 20 - damage, "descending ticks={ticks}");
             if damage > 0 {
-                assert_eq!(g.player.stun, 59);
+                assert_eq!(g.player.stun, 60);
             }
         }
     }
@@ -1494,5 +1609,336 @@ mod tests {
             },
         );
         assert_eq!(g.player.vel.y, -4.0);
+    }
+    #[test]
+    fn actual_ledge_grab_can_jump_around_corner_and_land_above_both_sides() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for character in [
+                crate::characters::Character::Explorer,
+                crate::characters::Character::Damsel,
+                crate::characters::Character::TunnelMan,
+            ] {
+                for facing in [-1, 1] {
+                    let mut g = room(rules);
+                    crate::characters::apply(&mut g, character);
+                    // Reach the ledge after ordinary grounded play, which sets
+                    // Classic's walking speed limit before the airborne grab.
+                    g.step(&InputFrame::default());
+                    for y in 5..10 {
+                        g.world.set_tile(10, y, "oBlock");
+                    }
+                    g.player.pos = Vec2::new(if facing > 0 { 155.0 } else { 181.0 }, 86.0);
+                    g.player.previous_pos = g.player.pos;
+                    g.player.facing = facing;
+                    g.player.state = PlayerState::Falling;
+                    g.player.grounded = false;
+                    g.player.vel.y = 1.0;
+                    let toward = InputFrame {
+                        left: facing < 0,
+                        right: facing > 0,
+                        ..Default::default()
+                    };
+                    g.step(&toward);
+                    assert_eq!(
+                        g.player.state,
+                        PlayerState::Hanging,
+                        "{rules:?}/{character:?}/{facing}"
+                    );
+                    assert_eq!(g.player.pos.y, 88.0);
+                    g.step(&InputFrame {
+                        jump: true,
+                        jump_pressed: true,
+                        ..toward
+                    });
+                    assert_eq!(
+                        g.player.vel.y, -5.0,
+                        "ledge jump must include detached-support impulse"
+                    );
+                    assert_eq!(value(&g.player, "hang_count", 0.0), 4.0);
+                    let mut landed_above = false;
+                    for _ in 0..14 {
+                        g.step(&InputFrame {
+                            jump: true,
+                            ..toward
+                        });
+                        landed_above |= g.player.grounded
+                            && g.player.pos.y == 72.0
+                            && g.player.pos.x >= 155.0
+                            && g.player.pos.x <= 181.0;
+                    }
+                    assert!(
+                        landed_above,
+                        "failed ledge climb {rules:?}/{character:?}/{facing}: {:?} {:?}",
+                        g.player.pos, g.player.state
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn restored_falling_head_mask_can_escape_ceiling_overlap_without_false_landing() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for facing in [-1, 1] {
+                let mut g = room(rules);
+                for x in 0..20 {
+                    g.world.set_tile(x, 10, "");
+                }
+                g.world.set_tile(6, 9, "oBlock");
+                g.player.pos = Vec2::new(if facing > 0 { 94.0 } else { 113.0 }, 166.0);
+                g.player.state = PlayerState::Falling;
+                g.player.vel = Vec2::new(0.0, 2.0);
+                g.player.facing = facing;
+                set(&mut g.player, "collision_top", -8.0);
+                g.step(&InputFrame::default());
+                assert_eq!(g.player.pos.y, 169.0);
+                assert!(!g.player.grounded);
+                assert!(g.player.vel.y > 0.0);
+                assert!(!solid(&g.world, &g.player, g.player.pos));
+            }
+        }
+    }
+    #[test]
+    fn movement_head_band_can_skim_ledge_corner_in_both_directions() {
+        for facing in [-1, 1] {
+            let mut g = room(RulesPreset::Classic);
+            g.world.set_tile(6, 5, "oBlock");
+            g.player.pos = Vec2::new(if facing > 0 { 91.0 } else { 117.0 }, 100.0);
+            g.player.state = PlayerState::Jumping;
+            g.player.vel.y = -1.0;
+            g.player.facing = facing;
+            set(
+                &mut g.player,
+                if facing > 0 {
+                    "right_steps"
+                } else {
+                    "left_steps"
+                },
+                2.0,
+            );
+            let before = g.player.pos;
+            g.step(&InputFrame {
+                right: facing > 0,
+                left: facing < 0,
+                jump: true,
+                ..Default::default()
+            });
+            assert!((g.player.pos.x - before.x) * f64::from(facing) > 0.0);
+        }
+    }
+    #[test]
+    fn landing_clears_jetpack_release_latch_before_a_fresh_jump() {
+        let mut g = room(RulesPreset::Classic);
+        g.player.state = PlayerState::Falling;
+        g.player.equipment.insert("Jetpack".into());
+        set(&mut g.player, "jumped", 1.0);
+        set(&mut g.player, "jetpack_fuel", 10.0);
+        g.step(&InputFrame {
+            jump: true,
+            jump_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(value(&g.player, "jumped", -1.0), 0.0);
+        g.step(&InputFrame {
+            jump: true,
+            ..Default::default()
+        });
+        assert_eq!(value(&g.player, "jetpack_fuel", -1.0), 10.0);
+        assert!((g.player.vel.y + 3.9).abs() < 1e-12);
+    }
+    #[test]
+    fn source_dynamic_solid_ledges_grab_like_authored_tile_ledges() {
+        for facing in [-1, 1] {
+            let mut g = room(RulesPreset::Classic);
+            g.world.set_tile(6, 7, "oBlock");
+            g.world.spawn("oPushBlock", Vec2::new(96.0, 96.0));
+            g.player.pos = Vec2::new(if facing > 0 { 91.0 } else { 117.0 }, 101.0);
+            g.player.facing = facing;
+            g.player.state = PlayerState::Falling;
+            g.player.vel.y = 1.0;
+            g.step(&InputFrame {
+                left: facing < 0,
+                right: facing > 0,
+                ..Default::default()
+            });
+            assert_eq!(g.player.state, PlayerState::Hanging);
+            assert_eq!(g.player.pos.y, 104.0);
+            assert_eq!(
+                g.player.previous_pos, g.player.pos,
+                "snapped grab must reset interpolation"
+            );
+        }
+    }
+    #[test]
+    fn grabbing_and_jumping_away_uses_three_tick_lockout_not_down_jump_lockout() {
+        for down in [false, true] {
+            let mut g = room(RulesPreset::Classic);
+            g.world.set_tile(6, 6, "oBlock");
+            g.player.pos = Vec2::new(91.0, 101.0);
+            g.player.state = PlayerState::Falling;
+            g.player.vel.y = 1.0;
+            g.step(&InputFrame {
+                right: true,
+                ..Default::default()
+            });
+            assert_eq!(g.player.state, PlayerState::Hanging);
+            g.step(&InputFrame {
+                left: !down,
+                down,
+                jump: true,
+                jump_pressed: true,
+                ..Default::default()
+            });
+            assert_eq!(
+                value(&g.player, "hang_count", 0.0),
+                if down { 5.0 } else { 3.0 }
+            );
+            assert_eq!(g.player.vel.y, -1.0);
+        }
+    }
+    #[test]
+    fn moveable_block_accelerates_immediately_at_push_rate_and_stops_at_wall() {
+        let mut g = room(RulesPreset::Classic);
+        g.player.pos.x = 91.0;
+        let block = g.world.spawn("oPushBlock", Vec2::new(96.0, 144.0));
+        g.world.set_tile(8, 9, "oBlock");
+        let input = InputFrame {
+            right: true,
+            ..Default::default()
+        };
+        g.step(&input);
+        assert!((g.player.vel.x - 0.6).abs() < 1e-12);
+        assert_eq!(g.world.entity(block).unwrap().pos.x, 97.0);
+        for _ in 0..40 {
+            g.step(&input);
+        }
+        assert_eq!(g.world.entity(block).unwrap().pos.x, 112.0);
+        assert!(g.player.pos.x <= 107.0);
+    }
+    #[test]
+    fn player_can_push_an_ice_block_while_airborne_and_facing_away() {
+        let mut g = room(RulesPreset::Classic);
+        g.world.set_tile(6, 7, "oBlock");
+        g.world.set_tile(7, 7, "oBlock");
+        let block = g.world.spawn("oIceBlock", Vec2::new(96.0, 96.0));
+        g.player.pos = Vec2::new(91.0, 104.0);
+        g.player.state = PlayerState::Jumping;
+        g.player.vel = Vec2::new(6.0, -1.0);
+        g.step(&InputFrame {
+            left: true,
+            jump: true,
+            ..Default::default()
+        });
+        assert_eq!(g.player.facing, -1);
+        assert!(g.world.entity(block).unwrap().pos.x > 96.0);
+    }
+    #[test]
+    fn underwater_jump_uses_current_head_edge_mask_instead_of_fixed_center_point() {
+        let mut g = room(RulesPreset::Classic);
+        g.world.set_tile(5, 5, "oWaterSwim");
+        g.player.pos = Vec2::new(88.0, 88.0);
+        g.player.state = PlayerState::Falling;
+        g.player.vel.y = 1.0;
+        set(&mut g.player, "collision_top", -6.0);
+        g.step(&InputFrame {
+            jump: true,
+            jump_pressed: true,
+            ..Default::default()
+        });
+        assert!(g.player.vel.y < 0.0);
+        assert!(g.player.pos.y < 88.0);
+    }
+    #[test]
+    fn thrown_wall_injury_bypasses_hit_flash_and_is_consumed_once() {
+        let mut g = room(RulesPreset::Classic);
+        g.world.set_tile(6, 9, "oBlock");
+        g.player.pos = Vec2::new(91.0, 152.0);
+        g.player.vel = Vec2::new(6.0, -1.0);
+        g.player.stun = 20;
+        g.player.invincible = 60;
+        g.player.sprite = "sDieLR".into();
+        set(&mut g.player, "wall_hurt", 1.0);
+        g.step(&InputFrame::default());
+        assert_eq!(g.player.health, 3);
+        assert_eq!(value(&g.player, "wall_hurt", -1.0), 0.0);
+        assert!(g.events.contains(&GameEvent::Damage { amount: 1 }));
+        g.step(&InputFrame::default());
+        assert_eq!(g.player.health, 3);
+    }
+    #[test]
+    fn attack_animation_does_not_leave_falling_collision_mask_shrunk_next_tick() {
+        let mut g = room(RulesPreset::Classic);
+        g.player.pos = Vec2::new(80.0, 80.0);
+        g.player.state = PlayerState::Falling;
+        g.player.vel.y = 1.0;
+        g.player.attack_timer = 5;
+        set(&mut g.player, "collision_top", -6.0);
+        g.step(&InputFrame::default());
+        assert_eq!(value(&g.player, "collision_top", 0.0), -8.0);
+    }
+    #[test]
+    fn natural_grid_spawn_walk_fall_grab_release_repress_sequence_climbs_ledge() {
+        for facing in [-1, 1] {
+            let mut g = room(RulesPreset::Classic);
+            for x in 10..14 {
+                for y in 5..10 {
+                    g.world.set_tile(x, y, "oBlock");
+                }
+            }
+            g.world
+                .set_tile(if facing > 0 { 8 } else { 15 }, 5, "oBlock");
+            g.player.pos = Vec2::new(if facing > 0 { 136.0 } else { 248.0 }, 72.0);
+            g.player.state = PlayerState::Falling;
+            g.player.grounded = false;
+            let toward = InputFrame {
+                left: facing < 0,
+                right: facing > 0,
+                ..Default::default()
+            };
+            g.step(&InputFrame::default());
+            g.step(&InputFrame::default());
+            assert!(g.player.grounded);
+            let mut held = false;
+            let mut grabbed = false;
+            for _ in 0..60 {
+                let press = !held && !g.player.grounded;
+                if press {
+                    held = true;
+                }
+                g.step(&InputFrame {
+                    jump: held,
+                    jump_pressed: press,
+                    ..toward
+                });
+                if g.player.state == PlayerState::Hanging {
+                    grabbed = true;
+                    break;
+                }
+            }
+            assert!(grabbed, "natural walk/fall did not reach ledge {facing}");
+            assert_eq!(g.player.pos.y, 88.0);
+            g.step(&InputFrame {
+                jump_released: true,
+                ..toward
+            });
+            assert_eq!(g.player.state, PlayerState::Hanging);
+            g.step(&InputFrame {
+                jump: true,
+                jump_pressed: true,
+                ..toward
+            });
+            assert_eq!(g.player.vel.y, -5.0);
+            let mut landed = false;
+            for _ in 0..20 {
+                g.step(&InputFrame {
+                    jump: true,
+                    ..toward
+                });
+                landed |= g.player.grounded
+                    && g.player.pos.y == 72.0
+                    && g.player.pos.x > 155.0
+                    && g.player.pos.x < 229.0;
+            }
+            assert!(landed, "natural sequence did not land atop ledge {facing}");
+        }
     }
 }
