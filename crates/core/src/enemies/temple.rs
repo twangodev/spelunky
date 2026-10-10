@@ -404,18 +404,28 @@ fn olmec(game: &mut Game, e: &mut Entity) {
         game.player.pos.x += e.pos.x - old.x;
         game.player.pos.y += e.pos.y - old.y;
     }
-    let foot_y = ((e.pos.y + 64.0) / 16.0).floor() as i32;
-    let head_y = ((e.pos.y - 2.0) / 16.0).floor() as i32;
-    let tx = ((e.pos.x + 32.0) / 16.0).floor() as i32;
-    let lava = |world: &World, y| world.tile(tx, y).is_some_and(|t| t.object == "oLava");
-    if lava(&game.world, head_y) {
+    // Classic tests the left edge at the feet/head. Authored arenas store
+    // lava as water-family entities, while custom levels can also use tiles.
+    let lava = |world: &World, point: Vec2| {
+        world
+            .tile(
+                (point.x / 16.0).floor() as i32,
+                (point.y / 16.0).floor() as i32,
+            )
+            .is_some_and(|tile| tile.object == "oLava")
+            || world
+                .entities
+                .iter()
+                .any(|lava| lava.alive && lava.object == "oLava" && lava.bounds().contains(point))
+    };
+    if lava(&game.world, Vec2::new(e.pos.x, e.pos.y - 2.0)) {
         e.alive = false;
         game.flags.insert("olmec_dead".into());
         game.events
             .push(GameEvent::Message("Olmec has fallen!".into()));
         return;
     }
-    if lava(&game.world, foot_y) {
+    if lava(&game.world, Vec2::new(e.pos.x, e.pos.y + 64.0)) {
         e.state = 4;
     }
     if e.state != 5 && e.state != 4 {
@@ -524,7 +534,6 @@ fn olmec(game: &mut Game, e: &mut Entity) {
         }
         4 => {
             e.vel = Vec2::new(0.0, 0.1);
-            e.pos.y += 0.1;
             game.data.insert("shake".into(), 10.0);
         }
         5 => {

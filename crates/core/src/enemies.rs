@@ -121,7 +121,7 @@ pub fn tick(game: &mut Game) {
                 };
             }
         }
-        let active = e.object == "oGhost"
+        let active = matches!(e.object.as_str(), "oGhost" | "oOlmec")
             || (e.pos.x > game.camera.x - 36.0
                 && e.pos.x < game.camera.x + VIEW_WIDTH + 20.0
                 && e.pos.y > game.camera.y - 36.0

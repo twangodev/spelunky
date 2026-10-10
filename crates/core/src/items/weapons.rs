@@ -389,7 +389,14 @@ fn mattock_dig(game: &mut Game, e: &Entity) {
     if let Some(target) = target {
         match target {
             DigTarget::Tile(x, y) => {
-                if !game.world.tile(x, y).is_some_and(Tile::is_destructible) {
+                let center = Vec2::new(f64::from(x) * 16.0 + 8.0, f64::from(y) * 16.0 + 8.0);
+                let protected = game.world.entities.iter().any(|metadata| {
+                    metadata.alive
+                        && metadata.object == "oTerrainMetadata"
+                        && metadata.pos == center
+                        && metadata.value("invincible") != 0.0
+                });
+                if protected || !game.world.tile(x, y).is_some_and(Tile::is_destructible) {
                     return;
                 }
                 game.world.set_tile(x as usize, y as usize, "");
@@ -911,6 +918,41 @@ mod tests {
         mattock_dig(&mut game, &e);
         assert_eq!(game.world.tile(5, 5).unwrap().object, "");
     }
+    #[test]
+    fn held_and_innate_mattocks_preserve_invincible_boss_floor_metadata() {
+        for tunnel in [false, true] {
+            let mut game = Game::shell(3, RulesPreset::Classic);
+            if tunnel {
+                game.flags.insert("character_tunnelman".into());
+            }
+            game.world.set_tile(5, 5, "oTemple");
+            let metadata = game.world.spawn("oTerrainMetadata", Vec2::new(88.0, 88.0));
+            game.world
+                .entity_mut(metadata)
+                .unwrap()
+                .data
+                .insert("invincible".into(), 1.0);
+            let id = game.world.spawn("oMattockHit", Vec2::new(88.0, 88.0));
+            game.player.pos = Vec2::new(72.0, 88.0);
+            let hit = game.world.entity_mut(id).unwrap();
+            hit.timer = 0;
+            hit.data
+                .insert("character_mattock".into(), f64::from(tunnel));
+            tick(&mut game);
+            assert_eq!(game.world.tile(5, 5).unwrap().object, "oTemple");
+            assert!(game.world.entity(metadata).is_some());
+            // The same tile is normally diggable when its override is removed.
+            game.world
+                .entity_mut(metadata)
+                .unwrap()
+                .data
+                .insert("invincible".into(), 0.0);
+            let hit = Entity::new(999, "oMattockHit", Vec2::new(88.0, 88.0));
+            mattock_dig(&mut game, &hit);
+            assert_eq!(game.world.tile(5, 5).unwrap().object, "");
+        }
+    }
+
     #[test]
     fn projectile_damage_bypasses_contact_invulnerability() {
         let mut game = Game::shell(1, RulesPreset::Classic);

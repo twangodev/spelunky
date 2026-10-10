@@ -43,6 +43,49 @@ fn initialize_level(game: &mut Game) {
     }
 }
 
+/// oFinalBoss Step opens the authored right-hand door after lava kills Olmec.
+fn final_boss(game: &mut Game) {
+    if game.world.area != Area::Boss
+        || !game.flags.contains("olmec_dead")
+        || game.flags.contains("boss_door_open")
+    {
+        return;
+    }
+    let Some(index) =
+        game.world.entities.iter().position(|door| {
+            door.alive && door.object == "oEntrance" && door.value("boss_exit") > 0.
+        })
+    else {
+        return;
+    };
+    let position = game.world.entities[index].pos;
+    game.world.entities[index].alive = false;
+    game.world.spawn("oXEnd", position);
+    let (x, y) = ((position.x / 16.) as usize, (position.y / 16.) as usize + 1);
+    if !game
+        .world
+        .tile(x as i32, y as i32)
+        .is_some_and(|tile| tile.is_solid())
+    {
+        game.world.set_tile(x, y, "oTemple");
+    }
+    let center = Vec2::new(x as f64 * 16. + 8., y as f64 * 16. + 8.);
+    let metadata = game
+        .world
+        .entities
+        .iter()
+        .find(|e| e.alive && e.object == "oTerrainMetadata" && e.pos == center)
+        .map(|e| e.id)
+        .unwrap_or_else(|| game.world.spawn("oTerrainMetadata", center));
+    game.world
+        .entity_mut(metadata)
+        .unwrap()
+        .data
+        .insert("invincible".into(), 1.);
+    game.flags.insert("boss_door_open".into());
+    game.sound("sndThump", position);
+}
+
 fn revive(game: &mut Game) {
     if game.player.health > 0 || !game.player.equipment.remove("Ankh") {
         return;
@@ -326,6 +369,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         return;
     }
     initialize_level(game);
+    final_boss(game);
     revive(game);
     if game.player.health <= 0 {
         return;
@@ -491,5 +535,107 @@ mod tests {
             },
         );
         assert!(g.flags.contains("custom_level:next.lvl"));
+    }
+    #[test]
+    fn generated_olmec_lava_death_opens_protected_exit_and_wins() {
+        let mut g = Game::shell(17, RulesPreset::Classic);
+        g.world = crate::generation::generate(&mut g.rng, 16, &g.flags);
+        g.player.pos = g.world.exit;
+        g.player.previous_pos = g.player.pos;
+        g.update_camera();
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .any(|e| e.object == "oEntrance" && e.value("boss_exit") > 0.)
+        );
+        assert!(!g.world.entities.iter().any(|e| e.object == "oXEnd"));
+        // Standing at the closed, generated door cannot finish the campaign.
+        g.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        assert_eq!(g.state, RunState::Playing);
+        let lava = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oLava" && e.pos.x == 304. && e.pos.y == 768.)
+            .unwrap()
+            .pos;
+        assert_eq!(g.world.tile(19, 48).unwrap().object, "");
+        // Reproduce the excavated shaft a player makes through the generated
+        // underground rooms; keep the generated lava entities untouched.
+        for y in 44..48 {
+            for x in 19..23 {
+                g.world.set_tile(x, y, "");
+            }
+        }
+        let boss_id = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oOlmec")
+            .unwrap()
+            .id;
+        let boss = g.world.entity_mut(boss_id).unwrap();
+        // Start at the actual generated lava surface: feet enter first, then
+        // authoritative ticks must sink the boss until its head enters lava.
+        boss.pos = Vec2::new(lava.x, lava.y - 64.);
+        boss.previous_pos = boss.pos;
+        boss.state = 6;
+        boss.vel = Vec2::default();
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(boss_id).unwrap().state, 4);
+        assert!(!g.flags.contains("olmec_dead"));
+        for _ in 0..700 {
+            g.step(&InputFrame::default());
+            if g.flags.contains("olmec_dead") {
+                break;
+            }
+        }
+        assert!(
+            g.flags.contains("olmec_dead"),
+            "Olmec must finish drowning while the player waits at the exit: state={:?}, boss={:?}",
+            g.state,
+            g.world.entity(boss_id).map(|e| (e.pos, e.vel, e.state))
+        );
+        assert!(g.world.entity(boss_id).is_none());
+        let exit = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oXEnd")
+            .unwrap()
+            .pos;
+        assert_eq!(exit, Vec2::new(640., 544.));
+        assert!(g.world.tile(40, 35).unwrap().is_solid());
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .any(|e| e.object == "oTerrainMetadata"
+                    && e.pos == Vec2::new(648., 568.)
+                    && e.value("invincible") > 0.)
+        );
+        assert_eq!(g.state, RunState::Playing);
+        g.player.pos = Vec2::new(exit.x + 8., exit.y + 8.);
+        g.player.previous_pos = g.player.pos;
+        g.player.vel = Vec2::default();
+        g.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        assert!(g.player.grounded);
+        assert_eq!(g.state, RunState::Won);
+        assert!(g.events.contains(&GameEvent::Won));
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oXEnd")
+                .count(),
+            1
+        );
     }
 }
