@@ -335,6 +335,14 @@ pub fn tick(game: &mut Game, _input: &InputFrame) {
     parachute(game);
     let count = game.world.entities.len();
     for index in 0..count {
+        if game.world.entities[index].alive
+            && game.world.entities[index].object == "oLeaves"
+            && game.world.entities[index].value("leaves_initialized") == 0.0
+        {
+            let cemetery = game.flags.contains("cemetery") || game.flags.contains("cemetary");
+            let id = game.world.entities[index].id;
+            initialize_leaves(&mut game.world, id, cemetery);
+        }
         let mut e = game.world.entities[index].clone();
         if !e.alive {
             continue;
@@ -343,6 +351,15 @@ pub fn tick(game: &mut Game, _input: &InputFrame) {
             "oMsgSign" => sign(game, &mut e),
             "oLamp" | "oLampRed" | "oTikiTorch" => light(&mut e),
             "oHintHand" => e.animation = (e.animation + 0.5) % 5.0,
+            "oYellHelp" => {
+                if e.age >= 40 {
+                    e.alive = false;
+                } else {
+                    e.pos.y -= 0.1;
+                }
+            }
+            "oLeaves" | "oTreeBranch" => canopy(game, &mut e),
+            "oPsychicCreateP" | "oPsychicCreate2" => psychic_create(game, &mut e),
             "oIceBottom" => ice_bottom(game, &mut e),
             "oFrozenCaveman" => frozen_caveman(game, &mut e),
             "oBlood" | "oBone" => detritus(game, &mut e),
@@ -399,6 +416,150 @@ pub fn tick(game: &mut Game, _input: &InputFrame) {
             _ => {}
         }
         game.world.entities[index] = e;
+    }
+}
+
+/// Source Leaves Create runs synchronously in the tree generator. The runtime
+/// fallback also supports instances authored outside that producer.
+pub(crate) fn initialize_leaves(world: &mut crate::World, id: u64, cemetery: bool) {
+    let Some(e) = world.entity(id) else { return };
+    if e.value("leaves_initialized") != 0.0 {
+        return;
+    }
+    let left = Vec2::new(e.pos.x - 16.0, e.pos.y);
+    let right_sprite =
+        world_point_family(world, left, "oTree") || world_point_family(world, left, "oLeaves");
+    let sprite = match (cemetery, right_sprite) {
+        (false, false) => "sLeaves",
+        (false, true) => "sLeavesRight",
+        (true, false) => "sLeavesDead",
+        (true, true) => "sLeavesDeadR",
+    };
+    let e = world.entity_mut(id).unwrap();
+    e.sprite = sprite.into();
+    e.data.insert("sprite_set".into(), 0.0);
+    e.data.insert("leaves_initialized".into(), 1.0);
+}
+
+fn canopy(game: &mut Game, e: &mut Entity) {
+    let branch = e.object == "oTreeBranch";
+    let support = |x| {
+        let point = Vec2::new(x, e.pos.y);
+        point_family(game, point, "oTree") || (!branch && point_family(game, point, "oLeaves"))
+    };
+    let left = support(e.pos.x - 16.0);
+    let right = support(e.pos.x + 16.0);
+    // The source never changes spriteSet after Create.
+    if !branch && e.value("sprite_set") == 0.0 && left && right {
+        e.sprite = "sLeavesTop".into();
+    }
+    let inside_view = e.pos.x > game.camera.x - 16.0
+        && e.pos.x < game.camera.x + VIEW_WIDTH + 16.0
+        && e.pos.y > game.camera.y - 16.0
+        && e.pos.y < game.camera.y + VIEW_HEIGHT + 16.0;
+    if !inside_view {
+        return;
+    }
+    let unsupported = if branch {
+        !left && !right
+    } else {
+        match e.sprite.as_str() {
+            "sLeavesTop" => !left || !right,
+            "sLeaves" | "sLeavesDead" => !right,
+            "sLeavesRight" | "sLeavesDeadR" => !left,
+            _ => false,
+        }
+    };
+    if !unsupported {
+        return;
+    }
+    e.alive = false;
+    if matches!(
+        e.sprite.as_str(),
+        "sLeavesDead" | "sLeavesDeadR" | "sTreeBranchDeadL" | "sTreeBranchDeadR"
+    ) {
+        return;
+    }
+    for _ in 0..if branch { 1 } else { 2 } {
+        let x = e.pos.x + 8.0 + f64::from(game.rng.range(9)) - f64::from(game.rng.range(9));
+        let y = e.pos.y + 8.0 + f64::from(game.rng.range(9)) - f64::from(game.rng.range(9));
+        game.world.spawn("oLeaf", Vec2::new(x, y));
+    }
+}
+
+pub(crate) fn spawn_psychic_create_p(game: &mut Game, pos: Vec2, velocity: Vec2) -> u64 {
+    let id = game.world.spawn("oPsychicCreateP", pos);
+    let e = game.world.entity_mut(id).unwrap();
+    e.vel = velocity;
+    e.data.insert("psychic_initialized".into(), 1.0);
+    id
+}
+
+pub(crate) fn spawn_psychic_create_2(game: &mut Game, pos: Vec2, target: Vec2) -> u64 {
+    let id = game.world.spawn("oPsychicCreate2", pos);
+    let e = game.world.entity_mut(id).unwrap();
+    let angle = (target.y - pos.y).atan2(target.x - pos.x);
+    e.vel = Vec2::new(2.0 * angle.cos(), 2.0 * angle.sin());
+    e.data.insert("psychic_initialized".into(), 1.0);
+    id
+}
+
+fn initialize_psychic_create(game: &Game, e: &mut Entity) {
+    if e.value("psychic_initialized") != 0.0 {
+        return;
+    }
+    e.vel = Vec2::default();
+    if e.object == "oPsychicCreate2" {
+        if let Some(olmec) = game
+            .world
+            .entities
+            .iter()
+            .find(|o| o.alive && o.object == "oOlmec")
+        {
+            let dx = olmec.pos.x + 32.0 - e.pos.x;
+            let dy = olmec.pos.y + 16.0 - e.pos.y;
+            let angle = dy.atan2(dx);
+            e.vel = Vec2::new(2.0 * angle.cos(), 2.0 * angle.sin());
+        }
+    }
+    e.data.insert("psychic_initialized".into(), 1.0);
+}
+
+fn psychic_create(game: &Game, e: &mut Entity) {
+    initialize_psychic_create(game, e);
+    e.pos.x += e.vel.x;
+    e.pos.y += e.vel.y;
+    let player_effect = e.object == "oPsychicCreateP";
+    if player_effect && e.vel.y < 6.0 {
+        e.vel.y += 0.6;
+    }
+    if player_effect {
+        // These source sprites have unit scale and no rotation. Collision with
+        // oSolid is an event mask overlap, rather than a point query.
+        let mask = catalog::instance_mask(
+            &e.object,
+            &e.sprite,
+            e.pos,
+            e.animation,
+            Vec2::new(1.0, 1.0),
+            0.0,
+        );
+        let solid = game.world.tiles.iter().enumerate().any(|(i, tile)| {
+            catalog::is_a(&tile.object, "oSolid")
+                && mask.intersects_mask(&game.world.tile_collision_mask(
+                    (i % game.world.width) as i32,
+                    (i / game.world.width) as i32,
+                ))
+        }) || game.world.entities.iter().any(|other| {
+            other.alive && catalog::is_a(&other.object, "oSolid") && e.event_intersects(other)
+        });
+        if solid {
+            e.alive = false;
+        }
+    }
+    e.animation += if player_effect { 0.2 } else { 0.4 };
+    if e.animation + 1e-9 >= 6.0 {
+        e.alive = false;
     }
 }
 
@@ -519,8 +680,12 @@ fn lava(game: &mut Game, e: &mut Entity, terrain: bool) {
 }
 
 fn point_family(game: &Game, point: Vec2, family: &str) -> bool {
-    game.world.tiles_point(point, family)
-        || game.world.entities.iter().any(|e| {
+    world_point_family(&game.world, point, family)
+}
+
+fn world_point_family(world: &crate::World, point: Vec2, family: &str) -> bool {
+    world.tiles_point(point, family)
+        || world.entities.iter().any(|e| {
             e.alive && catalog::is_a(&e.object, family) && e.sprite_bounds().contains(point)
         })
 }
@@ -743,6 +908,17 @@ fn displacement(v: f64, tick: u64) -> i32 {
     (v.abs().floor() as i32 + i32::from(extra)) * if v < 0.0 { -1 } else { 1 }
 }
 
+/// Execute inherited/child Create before the producer's following RNG draws
+/// and velocity overrides. Capped-instance continuation remains unchanged.
+pub(crate) fn spawn_detritus(game: &mut Game, object: &str, pos: Vec2) -> u64 {
+    let id = game.world.spawn(object, pos);
+    let mut e = game.world.entity(id).unwrap().clone();
+    initialize_detritus(game, &mut e);
+    let index = game.world.entities.iter().position(|e| e.id == id).unwrap();
+    game.world.entities[index] = e;
+    id
+}
+
 pub(crate) fn initialize_detritus(game: &mut Game, e: &mut Entity) {
     if e.value("world_effect_initialized") == 0.0 {
         e.vel = Vec2::new(
@@ -948,7 +1124,8 @@ fn parachute(game: &mut Game) {
         .unwrap_or(0.0)
         != 0.0
         && game.player.health > 0
-        && game.player.stun == 0;
+        && game.player.state != crate::PlayerState::Dead
+        && !game.player.is_stunned();
     let existing: Vec<_> = game
         .world
         .entities
@@ -963,6 +1140,7 @@ fn parachute(game: &mut Game) {
         );
     }
     if !open {
+        game.player.data.insert("parachute_open".into(), 0.0);
         for id in existing {
             if let Some(e) = game.world.entity_mut(id) {
                 e.alive = false;
@@ -1037,6 +1215,211 @@ mod tests {
             );
         }
         assert_eq!(g.world.entities[1].value("red_light_range"), 96.0);
+    }
+    #[test]
+    fn actual_damsel_help_rises_and_expires_after_its_source_alarm() {
+        let mut g = room();
+        for x in 0..g.world.width {
+            g.world.set_tile(x, 9, "oBlock");
+        }
+        g.world.spawn("oDamsel", Vec2::new(120.0, 136.0));
+        let (id, initial_y) = (0..240)
+            .find_map(|_| {
+                g.step(&InputFrame::default());
+                g.world
+                    .entities
+                    .iter()
+                    .find_map(|e| (e.alive && e.object == "oYellHelp").then_some((e.id, e.pos.y)))
+            })
+            .expect("the ordinary Damsel idle/yell sequence emits help");
+        assert!((initial_y - 119.9).abs() < 1e-9);
+        for _ in 0..39 {
+            g.step(&InputFrame::default());
+        }
+        assert!((g.world.entity(id).unwrap().pos.y - (initial_y - 3.9)).abs() < 1e-9);
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(id).is_none());
+    }
+    #[test]
+    fn actual_tree_loss_collapses_both_directional_canopies_and_removes_support() {
+        let mut g = room();
+        g.world.set_tile(5, 5, "oTree");
+        let left = g.world.spawn("oLeaves", Vec2::new(64.0, 80.0));
+        initialize_leaves(&mut g.world, left, false);
+        let right = g.world.spawn("oLeaves", Vec2::new(96.0, 80.0));
+        initialize_leaves(&mut g.world, right, false);
+        assert_eq!(g.world.entity(left).unwrap().sprite, "sLeaves");
+        assert_eq!(g.world.entity(right).unwrap().sprite, "sLeavesRight");
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(left).is_some() && g.world.entity(right).is_some());
+        g.world.set_tile(5, 5, "");
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(left).is_none() && g.world.entity(right).is_none());
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oLeaf")
+                .count(),
+            4
+        );
+        g.player.pos = Vec2::new(72.0, 64.0);
+        g.player.vel = Vec2::new(0.0, 2.0);
+        for _ in 0..8 {
+            g.step(&InputFrame::default());
+        }
+        assert!(
+            g.player.pos.y > 80.0,
+            "unsupported canopy no longer catches the player"
+        );
+    }
+    #[test]
+    fn actual_top_canopy_requires_both_sides_and_dead_leaves_emit_no_debris() {
+        let mut g = room();
+        for x in [4, 6] {
+            g.world.set_tile(x, 5, "oTree");
+        }
+        let top = g.world.spawn("oLeaves", Vec2::new(80.0, 80.0));
+        initialize_leaves(&mut g.world, top, false);
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(top).unwrap().sprite, "sLeavesTop");
+        g.world.set_tile(4, 5, "");
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(top).is_none());
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oLeaf")
+                .count(),
+            2
+        );
+
+        let mut g = room();
+        g.world.set_tile(5, 5, "oTree");
+        let dead = g.world.spawn("oLeaves", Vec2::new(96.0, 80.0));
+        initialize_leaves(&mut g.world, dead, true);
+        assert_eq!(g.world.entity(dead).unwrap().sprite, "sLeavesDeadR");
+        g.world.set_tile(5, 5, "");
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(dead).is_none());
+        assert!(!g.world.entities.iter().any(|e| e.object == "oLeaf"));
+    }
+    #[test]
+    fn actual_blast_removes_unsupported_branch_but_preserves_tile_variants() {
+        let mut g = room();
+        g.player.pos = Vec2::new(240.0, 40.0);
+        g.world.set_tile(5, 5, "oTree");
+        let branch = g.world.spawn("oTreeBranch", Vec2::new(96.0, 80.0));
+        let branch_tile = g.world.spawn("oTreeBranchTile", Vec2::new(144.0, 80.0));
+        let leaves_tile = g.world.spawn("oLeavesTile", Vec2::new(176.0, 80.0));
+        g.world.spawn("oExplosion", Vec2::new(88.0, 88.0));
+        g.step(&InputFrame::default());
+        assert!(g.world.tile(5, 5).unwrap().object.is_empty());
+        assert!(g.world.entity(branch).is_none());
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oLeaf")
+                .count(),
+            1
+        );
+        assert!(g.world.entity(branch_tile).is_some());
+        assert!(g.world.entity(leaves_tile).is_some());
+    }
+    #[test]
+    fn actual_canopy_collapse_preserves_strict_view_boundary_and_dead_branches() {
+        let mut g = room();
+        g.world = World::new(50, 15, Area::Jungle, 5);
+        let edge = g
+            .world
+            .spawn("oTreeBranch", Vec2::new(VIEW_WIDTH + 16.0, 80.0));
+        let dead = g.world.spawn("oTreeBranch", Vec2::new(80.0, 80.0));
+        g.world.entity_mut(dead).unwrap().sprite = "sTreeBranchDeadL".into();
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(edge).is_some());
+        assert!(g.world.entity(dead).is_none());
+        assert!(!g.world.entities.iter().any(|e| e.object == "oLeaf"));
+        g.world.entity_mut(edge).unwrap().pos.x -= 1.0;
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(edge).is_none());
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oLeaf")
+                .count(),
+            1
+        );
+    }
+    #[test]
+    fn actual_psychic_player_effect_moves_collides_and_expires() {
+        let mut g = room();
+        let id = spawn_psychic_create_p(&mut g, Vec2::new(100.0, 80.0), Vec2::new(0.75, -2.0));
+        g.step(&InputFrame::default());
+        let e = g.world.entity(id).unwrap();
+        assert_eq!(e.pos, Vec2::new(100.75, 78.0));
+        assert!((e.vel.y + 1.4).abs() < 1e-9);
+        assert_eq!(e.animation, 0.2);
+        g.world.entity_mut(id).unwrap().vel.y = 5.8;
+        g.step(&InputFrame::default());
+        assert!((g.world.entity(id).unwrap().vel.y - 6.4).abs() < 1e-9);
+
+        let mut g = room();
+        let id = spawn_psychic_create_p(&mut g, Vec2::new(100.0, 40.0), Vec2::default());
+        for _ in 0..29 {
+            g.step(&InputFrame::default());
+        }
+        assert!(g.world.entity(id).is_some());
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(id).is_none());
+
+        let mut g = room();
+        g.world.set_tile(5, 5, "oBlock");
+        let id = spawn_psychic_create_p(&mut g, Vec2::new(79.0, 88.0), Vec2::default());
+        assert!(!g.world.tiles_point(Vec2::new(79.0, 88.0), "oSolid"));
+        g.step(&InputFrame::default());
+        assert!(
+            g.world.entity(id).is_none(),
+            "sprite event collision extends beyond the origin"
+        );
+    }
+    #[test]
+    fn actual_olmec_create_effect_keeps_its_creation_heading_and_expires() {
+        let mut g = room();
+        let olmec = g.world.spawn("oOlmec", Vec2::new(200.0, 80.0));
+        let id = spawn_psychic_create_2(&mut g, Vec2::new(100.0, 96.0), Vec2::new(232.0, 96.0));
+        assert_eq!(g.world.entity(id).unwrap().vel, Vec2::new(2.0, 0.0));
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().pos, Vec2::new(102.0, 96.0));
+        g.world.entity_mut(olmec).unwrap().pos = Vec2::new(100.0, 200.0);
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().pos, Vec2::new(104.0, 96.0));
+        for _ in 2..14 {
+            g.step(&InputFrame::default());
+        }
+        assert!(g.world.entity(id).is_some());
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(id).is_none());
+    }
+    #[test]
+    fn synchronous_bone_create_precedes_following_producer_draws_and_keeps_overrides() {
+        let mut g = room();
+        let mut source_draws = crate::Rng::new(1);
+        let mut bones = Vec::new();
+        for _ in 0..3 {
+            source_draws.unit();
+            source_draws.unit();
+            source_draws.unit();
+            source_draws.range(6);
+            bones.push(spawn_detritus(&mut g, "oBone", Vec2::new(80.0, 80.0)));
+        }
+        assert_eq!(g.rng.range(9), source_draws.range(9));
+        let bone = g.world.entity_mut(bones[0]).unwrap();
+        bone.vel = Vec2::new(7.0, -3.0);
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(bones[0]).unwrap().vel.x, 7.0);
     }
     #[test]
     fn source_one_shot_animation_lifetimes() {
@@ -1703,6 +2086,97 @@ mod tests {
                 .iter()
                 .any(|e| e.alive && e.object == "oParaUsed")
         );
+    }
+    #[test]
+    fn naturally_deployed_parachute_is_interrupted_by_yeti_zero_timer_and_timed_stun() {
+        let mut level = crate::level::Level::default();
+        level.set_tile(20, 2, '@').unwrap();
+        for x in 0..40 {
+            level.set_tile(x, 28, '1').unwrap();
+        }
+        let mut g = Game::shell(11, RulesPreset::Classic);
+        g.load_custom(&level, "parachute-throw", "");
+        let pickup = g.world.spawn(
+            "oParaPickup",
+            Vec2::new(g.player.pos.x, g.player.pos.y + 4.0),
+        );
+        g.world
+            .entity_mut(pickup)
+            .unwrap()
+            .data
+            .insert("cost".into(), 0.0);
+        g.step(&InputFrame {
+            down: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert!(g.player.has("Parachute"));
+        for _ in 0..100 {
+            g.step(&InputFrame::default());
+            if g.world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oParachute")
+            {
+                break;
+            }
+        }
+        assert!(!g.player.has("Parachute"));
+        assert_eq!(g.player.data["parachute_open"], 1.0);
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oParachute")
+        );
+
+        let mut timed = g.clone();
+        timed.player.stun = 20;
+        timed.step(&InputFrame::default());
+        assert!(timed.player.is_stunned());
+        assert_eq!(timed.player.data["parachute_open"], 0.0);
+        assert!(
+            !timed
+                .world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oParachute")
+        );
+
+        let p = g.player.pos;
+        g.world.spawn("oYeti", Vec2::new(p.x - 8.0, p.y - 14.0));
+        g.step(&InputFrame::default());
+        assert!(g.player.is_stunned());
+        assert_eq!(g.player.stun, 0, "source Yeti throw supplies no timer");
+        assert_eq!(g.player.data["parachute_open"], 0.0);
+        assert!(
+            !g.world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oParachute")
+        );
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oParaUsed")
+                .count(),
+            1
+        );
+        let mut long_fall = false;
+        for _ in 0..60 {
+            g.step(&InputFrame::default());
+            if g.player.data["fall_timer"] > 16.0 {
+                long_fall = true;
+                break;
+            }
+        }
+        assert!(
+            long_fall,
+            "interrupted parachute no longer resets descending ticks"
+        );
+        assert_eq!(g.player.data["wall_hurt"], 0.0);
     }
     #[test]
     fn moving_item_cuts_parachute_with_source_direction_condition() {
