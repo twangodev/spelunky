@@ -140,6 +140,12 @@ impl Game {
             items::init_entity(e);
             e.previous_pos = e.pos;
         }
+        // oPlayer1 Create disables its controller only in the authored rOlmec
+        // room. oOlmec Create starts the zero-border boss camera at Y=400.
+        if self.world.area == Area::Boss && !self.flags.contains("custom") {
+            self.player.data.insert("active".into(), 0.0);
+            self.camera = Vec2::new(0.0, 400.0);
+        }
         self.update_camera();
         self.previous_camera = self.camera;
     }
@@ -181,8 +187,17 @@ impl Game {
         }
         self.tick += 1;
         self.level_tick += 1;
+        enemies::olmec_intro_alarms(self);
         traps::pre_tick(self);
         player::tick(self, input);
+        // Inactive players retain world collisions and the hurt/dead physics
+        // controller, but cannot perform inventory actions during the intro.
+        let inactive_input = InputFrame::default();
+        let input = if self.player.data.get("active").copied().unwrap_or(1.0) != 0.0 {
+            input
+        } else {
+            &inactive_input
+        };
         // Classic's dedicated inventory keys are gated by isLevel(), while
         // attack and pickup remain available in the authored hub/challenges.
         let mut item_input = *input;
@@ -351,6 +366,22 @@ impl Game {
             self.camera = Vec2::default();
             return;
         }
+        let boss_room = self.world.area == Area::Boss && !self.flags.contains("custom");
+        if boss_room && self.player.data.get("active") == Some(&0.0) {
+            // Zero borders let the scripted pan persist while Olmec remains
+            // inside the view; follow him only when he leaves its edges.
+            if let Some(boss) = self
+                .world
+                .entities
+                .iter()
+                .find(|e| e.alive && e.object == "oOlmec")
+            {
+                self.camera.x = self.camera.x.clamp(boss.pos.x - VIEW_WIDTH, boss.pos.x);
+                self.camera.y = self.camera.y.clamp(boss.pos.y - VIEW_HEIGHT, boss.pos.y);
+            }
+            return;
+        }
+        let vertical_border = if boss_room { 64.0 } else { 96.0 };
         let relative = Vec2::new(
             self.player.pos.x - self.camera.x,
             self.player.pos.y - self.camera.y,
@@ -360,10 +391,10 @@ impl Game {
         } else if relative.x > VIEW_WIDTH - 128.0 {
             self.camera.x = self.player.pos.x - (VIEW_WIDTH - 128.0);
         }
-        if relative.y < 96.0 {
-            self.camera.y = self.player.pos.y - 96.0;
-        } else if relative.y > VIEW_HEIGHT - 96.0 {
-            self.camera.y = self.player.pos.y - (VIEW_HEIGHT - 96.0);
+        if relative.y < vertical_border {
+            self.camera.y = self.player.pos.y - vertical_border;
+        } else if relative.y > VIEW_HEIGHT - vertical_border {
+            self.camera.y = self.player.pos.y - (VIEW_HEIGHT - vertical_border);
         }
         self.camera.x = self
             .camera

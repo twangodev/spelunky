@@ -38,7 +38,7 @@ pub fn init(e: &mut Entity) {
             e.health = 1;
             e.solid = true;
             e.state = -1;
-            e.timer = 100;
+            e.timer = 0;
             e.sprite = "sOlmecStart1".into();
             e.data.insert("intro_stage".into(), 0.0);
             e.data.insert("invincible".into(), 1.0);
@@ -478,6 +478,148 @@ fn olmec_move(world: &World, e: &mut Entity) -> bool {
     }
     ceiling
 }
+
+/// Classic alarms precede player/object Step events. Keep the intro's alarm
+/// chain separate from Olmec's movement/counter states, especially Alarm 5,
+/// which restores player control before that frame's player Step.
+pub(crate) fn intro_alarms(game: &mut Game) {
+    let ids: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|e| e.alive && e.object == "oOlmec")
+        .map(|e| e.id)
+        .collect();
+    for id in ids {
+        let index = game.world.entities.iter().position(|e| e.id == id).unwrap();
+        let mut boss = game.world.entities.remove(index);
+        let mut ready = Vec::new();
+        for key in ["intro_alarm", "worship_alarm", "release_alarm"] {
+            let remaining = boss.value(key);
+            if remaining > 0.0 {
+                boss.data.insert(key.into(), remaining - 1.0);
+                if remaining <= 1.0 {
+                    ready.push(key);
+                }
+            }
+        }
+        for alarm in ready {
+            match alarm {
+                "intro_alarm" => {
+                    let stage = boss.value("intro_stage") as u32;
+                    boss.data.insert("intro_stage".into(), f64::from(stage + 1));
+                    if stage < 3 {
+                        boss.sprite = match stage {
+                            0 => "sOlmecStart2",
+                            1 => "sOlmecStart3",
+                            _ => "sOlmec",
+                        }
+                        .into();
+                        for _ in 0..if stage < 2 { 6 } else { 12 } {
+                            let (pos, velocity) = match stage {
+                                0 => (
+                                    Vec2::new(
+                                        boss.pos.x + 32.0 + f64::from(game.rng.range(33)),
+                                        boss.pos.y + f64::from(game.rng.range(33)),
+                                    ),
+                                    Vec2::new(
+                                        1.0 + f64::from(game.rng.range(4)),
+                                        -(1.0 + f64::from(game.rng.range(3))),
+                                    ),
+                                ),
+                                1 => (
+                                    Vec2::new(
+                                        boss.pos.x + f64::from(game.rng.range(33)),
+                                        boss.pos.y + f64::from(game.rng.range(33)),
+                                    ),
+                                    Vec2::new(
+                                        -(1.0 + f64::from(game.rng.range(4))),
+                                        -(1.0 + f64::from(game.rng.range(3))),
+                                    ),
+                                ),
+                                _ => (
+                                    Vec2::new(
+                                        boss.pos.x + f64::from(game.rng.range(65)),
+                                        boss.pos.y + 32.0 + f64::from(game.rng.range(33)),
+                                    ),
+                                    Vec2::new(
+                                        f64::from(game.rng.range(4)) - f64::from(game.rng.range(4)),
+                                        -(1.0 + f64::from(game.rng.range(3))),
+                                    ),
+                                ),
+                            };
+                            let debris = spawn(game, "oOlmecDebris", pos);
+                            game.world.entity_mut(debris).unwrap().vel = velocity;
+                        }
+                        game.sound("sndThump", boss.pos);
+                        boss.data.insert("intro_alarm".into(), 50.0);
+                        if stage == 0 {
+                            let worshippers: Vec<_> = game
+                                .world
+                                .entities
+                                .iter()
+                                .filter(|e| e.alive && e.object == "oHawkmanWorship")
+                                .map(|e| (e.id, e.pos))
+                                .collect();
+                            for (old_id, pos) in worshippers {
+                                game.world.entity_mut(old_id).unwrap().alive = false;
+                                let new_id = spawn(game, "oHawkman", pos);
+                                let hawk = game.world.entity_mut(new_id).unwrap();
+                                hawk.health = 1;
+                                hawk.state = 98;
+                                hawk.timer = 300;
+                                hawk.vel = Vec2::new(-3.0, -5.0);
+                            }
+                            for caveman in game
+                                .world
+                                .entities
+                                .iter_mut()
+                                .filter(|e| e.alive && e.object == "oCavemanWorship")
+                            {
+                                caveman.animation = 0.0;
+                                caveman.data.insert("animation_speed".into(), 0.0);
+                            }
+                        }
+                    } else {
+                        boss.state = 1;
+                        boss.timer = 0;
+                        boss.data.insert("toggle".into(), 0.0);
+                        boss.data.insert("worship_alarm".into(), 20.0);
+                        game.sound("sndBigJump", boss.pos);
+                        game.sound("sndAlert", boss.pos);
+                    }
+                }
+                "worship_alarm" => {
+                    let worshippers: Vec<_> = game
+                        .world
+                        .entities
+                        .iter()
+                        .filter(|e| e.alive && e.object == "oCavemanWorship")
+                        .map(|e| (e.id, e.pos))
+                        .collect();
+                    for (old_id, pos) in worshippers {
+                        game.world.entity_mut(old_id).unwrap().alive = false;
+                        let new_id = spawn(game, "oCaveman", pos);
+                        let caveman = game.world.entity_mut(new_id).unwrap();
+                        caveman.facing = 1;
+                        caveman.state = 2;
+                    }
+                }
+                "release_alarm" => {
+                    game.player.data.insert("active".into(), 1.0);
+                    game.camera.x = 0.0;
+                    boss.state = 0;
+                    boss.timer = 100;
+                }
+                _ => unreachable!(),
+            }
+        }
+        game.world
+            .entities
+            .insert(index.min(game.world.entities.len()), boss);
+    }
+}
+
 fn olmec(game: &mut Game, e: &mut Entity) {
     let old = e.pos;
     // Olmec has an additional raw-velocity carry in its own Step, after the
@@ -540,44 +682,19 @@ fn olmec(game: &mut Game, e: &mut Entity) {
     }
     match e.state {
         -1 => {
-            if e.timer > 0 {
-                e.timer -= 1;
+            if game.camera.x < 176.0 {
+                game.camera.x += 2.0;
             } else {
-                let stage = e.value("intro_stage") as u32;
-                e.data.insert("intro_stage".into(), (stage + 1) as f64);
-                e.timer = 50;
-                e.sprite = match stage {
-                    0 => "sOlmecStart2",
-                    1 => "sOlmecStart3",
-                    _ => "sOlmec",
-                }
-                .into();
-                for _ in 0..if stage < 2 { 6 } else { 12 } {
-                    let p = Vec2::new(
-                        e.pos.x + game.rng.unit() * 64.0,
-                        e.pos.y + game.rng.unit() * 32.0,
-                    );
-                    spawn(game, "oOlmecDebris", p);
-                }
-                game.sound("sndThump", e.pos);
-                if stage == 0 {
-                    for hawk in game
-                        .world
-                        .entities
-                        .iter_mut()
-                        .filter(|h| h.object == "oHawkmanWorship")
-                    {
-                        hawk.object = "oHawkman".into();
-                        hawk.health = 1;
-                        hawk.state = 98;
-                        hawk.timer = 300;
-                        hawk.vel = Vec2::new(-3.0, -5.0);
-                    }
-                }
-                if stage >= 3 {
-                    e.state = 0;
-                    e.timer = 100;
-                }
+                e.state = -2;
+                e.data.insert("intro_alarm".into(), 100.0);
+            }
+            if grounded {
+                e.vel.y = 0.0;
+            }
+        }
+        -2 => {
+            if grounded {
+                e.vel.y = 0.0;
             }
         }
         0 => {
@@ -630,9 +747,11 @@ fn olmec(game: &mut Game, e: &mut Entity) {
                             .insert("toggle".into(), if a > 0.0 { 1.0 } else { 0.0 });
                     }
                 }
-                if game.player.pos.y > e.pos.y
-                    && (game.player.pos.x - (e.pos.x + 32.0)).abs() < 32.0
-                    && e.vel.x > -1.0
+                let inactive = game.player.data.get("active") == Some(&0.0);
+                if (inactive && e.vel.y >= 0.0)
+                    || (game.player.pos.y > e.pos.y
+                        && (game.player.pos.x - (e.pos.x + 32.0)).abs() < 32.0
+                        && e.vel.x > -1.0)
                 {
                     e.state = 5;
                     e.timer = 20;
@@ -660,9 +779,14 @@ fn olmec(game: &mut Game, e: &mut Entity) {
                     e.data.insert("slammed".into(), 1.0);
                     game.data.insert("shake".into(), 5.0);
                 } else {
-                    e.state = if game.rng.chance(1, 2) { 0 } else { 7 };
+                    let idle = game.rng.chance(1, 2);
+                    let inactive = game.player.data.get("active") == Some(&0.0);
+                    e.state = if idle || inactive { 0 } else { 7 };
                     e.vel = Vec2::default();
                     e.timer = 60;
+                    if inactive {
+                        e.data.insert("release_alarm".into(), 50.0);
+                    }
                 }
             }
         }
@@ -969,6 +1093,181 @@ fn ignite(game: &mut Game, e: &Entity) {
 mod tests {
     use super::*;
     use crate::model::{Area, RulesPreset};
+    #[test]
+    fn natural_olmec_intro_locks_actions_pans_and_releases_after_slam_alarm() {
+        let mut game = Game::new(42, RulesPreset::Classic);
+        while game.world.level < 16 {
+            game.next_level();
+        }
+        let boss_id = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oOlmec")
+            .unwrap()
+            .id;
+        let start = game.player.pos;
+        let inventory = (game.player.bombs, game.player.ropes);
+        assert_eq!(start, Vec2::new(24.0, 552.0));
+        assert_eq!(game.camera, Vec2::new(0.0, 400.0));
+        assert_eq!(game.player.data.get("active"), Some(&0.0));
+        let controls = crate::InputFrame {
+            right: true,
+            jump: true,
+            jump_pressed: true,
+            bomb_pressed: true,
+            rope_pressed: true,
+            attack_pressed: true,
+            ..crate::InputFrame::default()
+        };
+        for tick in 1..=339 {
+            game.step(&controls);
+            assert_eq!(game.player.pos, start, "locked player, tick {tick}");
+            assert_eq!((game.player.bombs, game.player.ropes), inventory);
+            assert_eq!(game.player.health, 4);
+            let boss = game.world.entity(boss_id).unwrap();
+            match tick {
+                20 => assert_eq!(game.camera, Vec2::new(40.0, 400.0)),
+                88 => {
+                    assert_eq!(game.camera.x, 176.0);
+                    assert_eq!(boss.state, -1);
+                }
+                89 => {
+                    assert_eq!(boss.state, -2);
+                    assert_eq!(boss.value("intro_alarm"), 100.0);
+                }
+                189 => {
+                    assert_eq!(boss.sprite, "sOlmecStart2");
+                    assert!(
+                        !game
+                            .world
+                            .entities
+                            .iter()
+                            .any(|e| e.alive && e.object == "oHawkmanWorship")
+                    );
+                    let cavemen: Vec<_> = game
+                        .world
+                        .entities
+                        .iter()
+                        .filter(|e| e.alive && e.object == "oCavemanWorship")
+                        .collect();
+                    assert_eq!(cavemen.len(), 3);
+                    assert!(
+                        cavemen
+                            .iter()
+                            .all(|e| e.animation == 0.0 && e.value("animation_speed") == 0.0)
+                    );
+                }
+                239 => assert_eq!(boss.sprite, "sOlmecStart3"),
+                289 => assert_eq!(boss.sprite, "sOlmec"),
+                339 => {
+                    assert_eq!(boss.state, 1);
+                    assert!(boss.vel.y < 0.0);
+                }
+                _ => {}
+            }
+        }
+        let mut saw_prepare = false;
+        let mut saw_slam = false;
+        let mut scheduled_at = None;
+        let mut released_at = None;
+        for tick in 340..=600 {
+            // Hold ordinary Right through the natural introduction; never edit
+            // actor state, terrain, timers, or health to make it complete.
+            game.step(&crate::InputFrame {
+                right: true,
+                ..crate::InputFrame::default()
+            });
+            let boss = game.world.entity(boss_id).unwrap();
+            saw_prepare |= boss.state == 5;
+            saw_slam |= boss.state == 6;
+            if boss.value("release_alarm") == 50.0 {
+                scheduled_at = Some(tick);
+            }
+            if tick == 359 {
+                assert!(
+                    !game
+                        .world
+                        .entities
+                        .iter()
+                        .any(|e| e.alive && e.object == "oCavemanWorship")
+                );
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(|e| e.alive && e.object == "oCaveman")
+                        .count(),
+                    3
+                );
+            }
+            if game.player.data.get("active") == Some(&1.0) {
+                released_at = Some(tick);
+                assert_eq!(boss.state, 0);
+                assert_eq!(boss.timer, 99);
+                assert_eq!(game.camera, Vec2::new(0.0, 400.0));
+                break;
+            }
+            assert_eq!(game.player.pos, start, "locked player, tick {tick}");
+            assert_eq!(game.player.health, 4);
+        }
+        assert!(saw_prepare && saw_slam);
+        assert_eq!(released_at, scheduled_at.map(|tick| tick + 50));
+        assert!(released_at.is_some(), "natural intro must finish");
+        for _ in 0..20 {
+            game.step(&crate::InputFrame {
+                right: true,
+                ..crate::InputFrame::default()
+            });
+        }
+        assert!(game.player.pos.x > start.x + 20.0);
+        assert_eq!(game.player.health, 4);
+        game.step(&crate::InputFrame {
+            jump: true,
+            jump_pressed: true,
+            ..crate::InputFrame::default()
+        });
+        assert!(game.player.pos.y < start.y);
+        assert!(game.player.vel.y < 0.0);
+    }
+
+    #[test]
+    fn inactive_olmec_player_still_takes_lava_damage_and_runs_dead_physics() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.player.pos = Vec2::new(80.0, 80.0);
+        game.player.data.insert("active".into(), 0.0);
+        game.world.spawn("oLava", Vec2::new(72.0, 72.0));
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.state, crate::RunState::Dead);
+        let before = game.player.pos;
+        for _ in 0..3 {
+            game.step(&crate::InputFrame::default());
+        }
+        assert!(game.player.pos.y > before.y);
+    }
+
+    #[test]
+    fn leaving_olmec_room_clears_player_inactive_state_and_intro_alarms() {
+        let mut game = Game::new(42, RulesPreset::Classic);
+        while game.world.level < 16 {
+            game.next_level();
+        }
+        for _ in 0..100 {
+            game.step(&crate::InputFrame::default());
+        }
+        assert_eq!(game.player.data.get("active"), Some(&0.0));
+        game.load_hub(crate::hub::HubKind::Title);
+        assert_ne!(game.player.data.get("active"), Some(&0.0));
+        assert!(!game.world.entities.iter().any(|e| e.object == "oOlmec"));
+        let before = game.player.pos;
+        for _ in 0..20 {
+            game.step(&crate::InputFrame {
+                right: true,
+                ..crate::InputFrame::default()
+            });
+        }
+        assert!(game.player.pos.x > before.x);
+    }
     fn room() -> Game {
         let mut g = Game::shell(9, RulesPreset::Classic);
         g.world = World::new(24, 20, Area::Temple, 13);

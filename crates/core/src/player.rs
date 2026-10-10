@@ -378,7 +378,8 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         p.sprite.as_str(),
         "sStunL" | "sDamselStunL" | "sTunnelStunL"
     );
-    if p.stun > 0 && stationary_stun_pose {
+    let active = value(p, "active", 1.0) != 0.0;
+    if active && p.stun > 0 && stationary_stun_pose {
         p.stun -= 1;
     }
     // Throws can set Classic's independent `stunned` flag without adding any
@@ -410,6 +411,11 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             game.events.push(GameEvent::Damage { amount: 1 });
             game.sound("sndHurt", game.player.pos);
         }
+        return;
+    }
+    // oPlayer1 Step gates characterStepEvent on active, independently of
+    // environmental damage and the dead/stunned controller above.
+    if !active {
         return;
     }
     // Classic keeps its platform state STANDING while the separate `stunned`

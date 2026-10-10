@@ -1539,6 +1539,7 @@ fn game_music(game: &Game) -> &'static str {
             Some(1.) => "lush",
             Some(2.) => "ice",
             Some(3.) => "temple",
+            Some(4.) if game.player.data.get("active") == Some(&0.0) => "",
             Some(4.) => "boss",
             _ => "cave",
         }
@@ -1548,6 +1549,8 @@ fn game_music(game: &Game) -> &'static str {
             Area::Jungle => "lush",
             Area::Ice => "ice",
             Area::Temple => "temple",
+            // startMusic waits for Olmec Alarm 5 to restore player control.
+            Area::Boss if game.player.data.get("active") == Some(&0.0) => "",
             Area::Boss => "boss",
         }
     }
@@ -2352,6 +2355,24 @@ mod tests {
             game.state = RunState::Dead;
             assert_eq!(game_music(&game), "");
         }
+    }
+
+    #[test]
+    fn boss_music_waits_for_the_natural_intro_unlock() {
+        let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+        while game.world.level < 16 {
+            game.next_level();
+        }
+        assert_eq!(game_music(&game), "");
+        for _ in 0..600 {
+            game.step(&spelunky_core::InputFrame::default());
+            if game.player.data.get("active") == Some(&1.0) {
+                assert_eq!(game_music(&game), "boss");
+                return;
+            }
+            assert_eq!(game_music(&game), "");
+        }
+        panic!("Olmec intro never restored player control and boss music");
     }
 
     #[test]

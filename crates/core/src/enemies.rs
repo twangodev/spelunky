@@ -10,6 +10,8 @@ mod npcs;
 mod temple;
 mod undead;
 
+pub(crate) use temple::intro_alarms as olmec_intro_alarms;
+
 pub fn is_enemy(object: &str) -> bool {
     crate::catalog::is_a(object, "oEnemy")
 }
