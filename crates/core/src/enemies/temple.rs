@@ -1,7 +1,7 @@
 //! Temple enemies translated from Classic 1.1's individual object events.
 //! Instances retain the original GameMaker origins, including top-left boss origins.
 use super::{center, move_body};
-use crate::model::{Entity, Game, GameEvent, Rect, Tile, Vec2, World};
+use crate::model::{Entity, Game, GameEvent, Rect, Vec2, World};
 
 pub fn matches(object: &str) -> bool {
     matches!(
@@ -49,10 +49,16 @@ pub fn init(e: &mut Entity) {
         }
         "oMagmaMan" | "oMagma" => {
             e.health = 200;
-            e.data.insert("invincible".into(), 1.0);
+            // oMagmaMan Create sets invincible=0; its whip collision only
+            // plays a sound, but other projectile damage remains possible.
             e.data.insert("no_stomp".into(), 1.0);
             e.data.insert("no_whip".into(), 1.0);
             e.data.insert("contact_damage".into(), 2.0);
+            // Airborne oMagma inherits oDetritus, so oEnemy projectile collision
+            // handlers do not apply until it becomes oMagmaMan again.
+            if e.object == "oMagma" {
+                e.data.insert("invincible".into(), 1.0);
+            }
         }
         "oMagmaTrail" => {
             e.timer = 13;
@@ -111,20 +117,20 @@ fn spawn(game: &mut Game, object: &str, pos: Vec2) -> u64 {
     }
     id
 }
-fn line_of_sight(world: &World, a: Vec2, b: Vec2) -> bool {
-    let n = (a.distance(b) / 4.0).ceil().max(1.0) as usize;
-    (1..n).all(|i| {
-        !world.solid_at(
-            a.lerp(b, i as f64 / n as f64).x,
-            a.lerp(b, i as f64 / n as f64).y,
-        )
-    })
-}
 
 fn hawk(game: &mut Game, e: &mut Entity) {
     e.animation += if e.state == 2 { 1.0 } else { 0.5 };
     let (wall, landed) = move_body(&game.world, e, 0.6);
     let grounded = landed || ground(&game.world, e);
+    // oHawkman Step checks the lower corpse origin after moveTo, and the
+    // center for a live, unheld actor. This must not run before movement.
+    let crush_y = if e.state >= 98 { 12.0 } else { 8.0 };
+    if (e.state >= 98 || !e.held) && game.world.solid_at(e.pos.x + 8.0, e.pos.y + crush_y) {
+        e.health = 0;
+        e.alive = false;
+        game.sound("sndCavemanDie", e.pos);
+        return;
+    }
     if e.state >= 98 {
         if grounded {
             e.vel.x *= 0.8;
@@ -142,17 +148,20 @@ fn hawk(game: &mut Game, e: &mut Entity) {
         .into();
         return;
     }
-    countdown(e, "sight");
-    if e.value("sight") == 0.0 {
-        let d = game.player.pos.x - center(e).x;
-        if d * e.facing as f64 > 0.0
-            && d.abs() < 160.0
-            && (game.player.pos.y - center(e).y).abs() < 12.0
-            && line_of_sight(&game.world, center(e), game.player.pos)
-        {
-            e.state = 2;
+    if matches!(e.state, 0 | 1) {
+        // oHawkman Step creates the same moving oEnemySight instances as
+        // Caveman. Their collision event alerts nearby enemies as a group.
+        let timer = e.value("sight_timer");
+        if timer <= 0.0 {
+            let id = spawn(game, "oEnemySight", e.pos);
+            if let Some(sight) = game.world.entity_mut(id) {
+                sight.vel.x = f64::from(e.facing) * 10.0;
+                sight.data.insert("owner".into(), e.id as f64);
+            }
+            e.data.insert("sight_timer".into(), 5.0);
+        } else {
+            e.data.insert("sight_timer".into(), timer - 1.0);
         }
-        e.data.insert("sight".into(), 5.0);
     }
     match e.state {
         0 => {
@@ -203,15 +212,26 @@ fn hawk(game: &mut Game, e: &mut Entity) {
         }
         _ => {}
     }
-    e.sprite = if e.vel.x.abs() > 0.0 {
-        "sHawkRunLeft"
-    } else {
-        "sHawkLeft"
+    // oHawkman Step applies friction after choosing state velocity.
+    if e.vel.x > 0.0 {
+        e.vel.x -= 0.1;
+    } else if e.vel.x < 0.0 {
+        e.vel.x += 0.1;
     }
-    .into();
+    if e.vel.x.abs() < 0.5 {
+        e.vel.x = 0.0;
+    }
+    if e.state != 3 {
+        e.sprite = if e.vel.x.abs() > 0.0 {
+            "sHawkRunLeft"
+        } else {
+            "sHawkLeft"
+        }
+        .into();
+    }
     // Hawkman's source grab/throw is an explicit attack, rather than contact damage.
     if e.state < 3
-        && e.bounds().intersects(game.player.bounds())
+        && super::touches_player(game, e)
         && game.player.invincible == 0
         && !(game.player.vel.y > 0.0 && game.player.pos.y < e.pos.y + 5.0)
     {
@@ -227,8 +247,18 @@ fn hawk(game: &mut Game, e: &mut Entity) {
             e.timer = 14;
             e.vel.x = 0.0;
             e.sprite = "sHawkThrowL".into();
+            // Collision with oCharacter: the grabbed character moves to the
+            // opposite side of the Hawkman before being thrown.
+            game.player.pos = Vec2::new(e.pos.x + if e.facing > 0 { 0.0 } else { 16.0 }, e.pos.y);
             game.player.vel = Vec2::new(6.0 * e.facing as f64, -6.0);
             game.player.stun = 20;
+            game.player.data.insert("bounced".into(), 0.0);
+            if let Some(id) = game.player.held.take() {
+                if let Some(item) = game.world.entity_mut(id) {
+                    item.held = false;
+                    item.vel = game.player.vel;
+                }
+            }
             game.player.data.insert("wall_hurt".into(), 1.0);
         }
     }
@@ -237,9 +267,13 @@ fn hawk(game: &mut Game, e: &mut Entity) {
 fn tomb_lord(game: &mut Game, e: &mut Entity) {
     countdown(e, "attack_cooldown");
     let (wall, _) = move_body(&game.world, e, 0.6);
+    // oTombLord Step: the source center-in-solid death check follows moveTo.
+    if game.world.solid_at(e.pos.x + 16.0, e.pos.y + 16.0) {
+        e.health = 0;
+    }
     if e.health <= 0 {
         if game.world.level == 13 {
-            spawn(game, "oSceptre", e.pos);
+            spawn(game, "oSceptre", Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
         }
         for _ in 0..4 {
             spawn(game, "oBone", e.pos);
@@ -302,6 +336,8 @@ fn tomb_lord(game: &mut Game, e: &mut Entity) {
         }
         3 => {
             e.vel.x = 0.0;
+            // Step refreshes attackTimer throughout the attack animation.
+            e.data.insert("attack_cooldown".into(), 100.0);
             if (7.0..=12.0).contains(&e.animation) {
                 let pos = Vec2::new(
                     e.pos.x + if e.facing < 0 { 8.0 } else { 24.0 },
@@ -343,8 +379,13 @@ fn fly(game: &mut Game, e: &mut Entity) {
         game.sound("sndHit", e.pos);
         return;
     }
-    if e.bounds().intersects(game.player.bounds()) {
+    if super::touches_player(game, e) {
+        // oFly Collision with oCharacter has no invincibility guard and does
+        // not grant new invincibility. Several flies may hit during one volley.
+        let invincible = game.player.invincible;
+        game.player.invincible = 0;
         game.damage_player(2);
+        game.player.invincible = invincible;
         game.player.vel = Vec2::new(e.vel.x, -4.0);
         e.alive = false;
         return;
@@ -355,7 +396,7 @@ fn fly(game: &mut Game, e: &mut Entity) {
             && o.object != "oTombLord"
             && o.object != "oFly"
             && super::is_enemy(&o.object)
-            && o.bounds().intersects(e.bounds())
+            && o.sprite_bounds().intersects(e.sprite_bounds())
     }) {
         other.health -= 2;
         other.state = 98;
@@ -371,38 +412,67 @@ fn olmec_rect(e: &Entity) -> Rect {
 fn olmec_ground(world: &World, e: &Entity) -> bool {
     world.collides(Rect::new(e.pos.x + 2.0, e.pos.y + 64.0, 60.0, 1.0))
 }
-fn olmec_move(world: &World, e: &mut Entity) {
+fn olmec_move(world: &World, e: &mut Entity) -> bool {
+    // Platform Engine/moveTo.gml samples fractional displacement against the
+    // global simulation tick, never by accumulating fractional world positions.
+    fn displacement(v: f64, time: u64) -> i32 {
+        let f = v.abs().fract();
+        let extra = f > 0.0 && time.is_multiple_of((1.0 / f).round().max(1.0) as u64);
+        (v.abs().floor() as i32 + i32::from(extra)) * if v < 0.0 { -1 } else { 1 }
+    }
+    let mut ceiling = false;
     for horizontal in [true, false] {
         let v = if horizontal { e.vel.x } else { e.vel.y };
-        let n = v.abs().ceil().max(1.0) as usize;
-        for _ in 0..n {
+        let n = displacement(v, e.value("simulation_tick") as u64);
+        for _ in 0..n.unsigned_abs() {
             let old = e.pos;
             if horizontal {
-                e.pos.x += v / n as f64;
+                e.pos.x += f64::from(n.signum());
             } else {
-                e.pos.y += v / n as f64;
+                e.pos.y += f64::from(n.signum());
             }
-            if world.collides(olmec_rect(e)) {
+            let rect = olmec_rect(e);
+            if world.collides(rect)
+                || world.entities.iter().any(|o| {
+                    o.alive
+                        && o.id != e.id
+                        && (o.solid || crate::catalog::is_solid(&o.object))
+                        && o.sprite_bounds().intersects(rect)
+                })
+            {
                 e.pos = old;
                 if horizontal {
                     e.vel.x = 0.0;
-                } else {
-                    e.vel.y = 0.0;
+                } else if v < 0.0 {
+                    ceiling = true;
                 }
                 break;
             }
         }
     }
+    ceiling
 }
 fn olmec(game: &mut Game, e: &mut Entity) {
     let old = e.pos;
-    olmec_move(&game.world, e);
+    let ceiling = olmec_move(&game.world, e);
+    if ceiling {
+        spawn(game, "oOlmecSlam", Vec2::new(e.pos.x, e.pos.y - 16.0));
+        if e.vel.y < 0.0 {
+            e.vel.y = -e.vel.y * 0.8;
+        }
+    }
     let grounded = olmec_ground(&game.world, e);
     let player_on_top = (game.player.pos.y + 8.0 - old.y).abs() < 3.0
         && (game.player.pos.x - (old.x + 32.0)).abs() < 34.0;
     if player_on_top && e.state != 6 {
         game.player.pos.x += e.pos.x - old.x;
         game.player.pos.y += e.pos.y - old.y;
+    }
+    // oPlayer1 Step's crushed check is origin-in-oSolid in every state;
+    // touching the boss with a limb is not by itself lethal.
+    if olmec_rect(e).contains(game.player.pos) && !player_on_top && game.player.health > 0 {
+        game.player.invincible = 0;
+        game.damage_player(99);
     }
     // Classic tests the left edge at the feet/head. Authored arenas store
     // lava as water-family entities, while custom levels can also use tiles.
@@ -474,6 +544,7 @@ fn olmec(game: &mut Game, e: &mut Entity) {
             }
         }
         0 => {
+            e.data.insert("toggle".into(), 0.0);
             if grounded {
                 e.vel.y = 0.0;
             }
@@ -546,10 +617,6 @@ fn olmec(game: &mut Game, e: &mut Entity) {
             }
         }
         6 => {
-            if olmec_rect(e).intersects(game.player.bounds()) && !player_on_top {
-                game.player.invincible = 0;
-                game.damage_player(game.player.health.max(1));
-            }
             if grounded {
                 if e.value("slammed") == 0.0 {
                     spawn(game, "oOlmecSlam", Vec2::new(e.pos.x, e.pos.y + 64.0));
@@ -579,15 +646,28 @@ fn olmec(game: &mut Game, e: &mut Entity) {
 }
 
 fn slam(game: &mut Game, e: &mut Entity) {
-    // Source's 64-pixel-wide collision helper deletes only intersecting destructible terrain.
-    let rect = Rect::new(e.pos.x, e.pos.y, 64.0, 16.0);
+    // oOlmecSlam Collision with oSolid unconditionally destroys the touched
+    // instance. Its source sprite mask is x+2..=x+60, y..=y+7, not a full row.
+    let rect = e.bounds();
     let x0 = (rect.x / 16.0).floor() as i32;
+    let x1 = ((rect.x + rect.w - 0.001) / 16.0).floor() as i32;
     let y0 = (rect.y / 16.0).floor() as i32;
-    for y in y0..=y0 {
-        for x in x0..x0 + 4 {
-            if x >= 0 && y >= 0 && game.world.tile(x, y).is_some_and(Tile::is_destructible) {
+    let y1 = ((rect.y + rect.h - 0.001) / 16.0).floor() as i32;
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            if x >= 0 && y >= 0 && game.world.tile(x, y).is_some_and(|t| t.is_solid()) {
                 game.world.set_tile(x as usize, y as usize, "");
             }
+        }
+    }
+    for other in &mut game.world.entities {
+        if other.id != e.id
+            && other.object != "oOlmec"
+            && other.alive
+            && crate::catalog::is_solid(&other.object)
+            && other.sprite_bounds().intersects(rect)
+        {
+            other.alive = false;
         }
     }
     game.sound("sndSlam", e.pos);
@@ -652,7 +732,9 @@ fn yellow_ball(game: &mut Game, e: &mut Entity) {
 }
 
 fn magma_man(game: &mut Game, e: &mut Entity) {
-    e.health -= 1;
+    if e.health > 0 {
+        e.health -= 1;
+    }
     if e.health <= 0 || game.world.solid_at(e.pos.x + 8.0, e.pos.y + 8.0) {
         if e.state != 99 {
             e.animation = 0.0;
@@ -667,10 +749,9 @@ fn magma_man(game: &mut Game, e: &mut Entity) {
         return;
     }
     if !ground(&game.world, e) {
-        let id = spawn(game, "oMagma", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
-        if let Some(m) = game.world.entity_mut(id) {
-            m.health = e.health;
-        }
+        // Unlike the voluntary IDLE transformation below, the source falling
+        // branch creates a fresh 200-hp magma projectile without copying hp.
+        spawn(game, "oMagma", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
         e.alive = false;
         return;
     }
@@ -728,6 +809,9 @@ fn magma(game: &mut Game, e: &mut Entity) {
     if landed || ground(&game.world, e) {
         e.vel = Vec2::default();
         e.sprite = "sMagmaManCreate".into();
+        if e.value("create_timer") == 0.0 {
+            e.animation = 0.0;
+        }
         let t = e.value("create_timer") + 1.0;
         e.data.insert("create_timer".into(), t);
         if t >= 24.0 {
@@ -742,7 +826,13 @@ fn magma(game: &mut Game, e: &mut Entity) {
     }
     let x = (e.pos.x / 16.0).floor() as i32;
     let y = (e.pos.y / 16.0).floor() as i32;
-    if game.world.tile(x, y).is_some_and(|t| t.object == "oWater") {
+    if game.world.tile(x, y).is_some_and(|t| t.object == "oWater")
+        || game.world.entities.iter().any(|water| {
+            water.alive
+                && crate::catalog::is_a(&water.object, "oWater")
+                && water.sprite_bounds().intersects(e.sprite_bounds())
+        })
+    {
         e.alive = false;
         spawn(game, "oSmokePuff", e.pos);
     }
@@ -751,7 +841,7 @@ fn magma(game: &mut Game, e: &mut Entity) {
 }
 fn ignite(game: &mut Game, e: &Entity) {
     // Parent handles ordinary contact; burning and bombs are specific magma mechanics.
-    if e.bounds().intersects(game.player.bounds()) && game.player.invincible == 0 {
+    if super::touches_player(game, e) && game.player.invincible == 0 {
         game.player.data.insert("burning".into(), 100.0);
         game.player.vel = Vec2::new(
             if game.player.pos.x < center(e).x {
@@ -762,12 +852,11 @@ fn ignite(game: &mut Game, e: &Entity) {
             -4.0,
         );
     }
-    for bomb in game
-        .world
-        .entities
-        .iter_mut()
-        .filter(|b| b.object == "oBomb" && b.bounds().intersects(e.bounds()))
-    {
+    for bomb in game.world.entities.iter_mut().filter(|b| {
+        e.object == "oMagmaMan"
+            && b.object == "oBomb"
+            && b.sprite_bounds().intersects(e.sprite_bounds())
+    }) {
         if bomb.value("armed") == 0.0 {
             bomb.data.insert("armed".into(), 1.0);
             bomb.timer = 8 + game.rng.range(5);
@@ -795,7 +884,7 @@ fn ignite(game: &mut Game, e: &Entity) {
                     | "oOlmecDebris"
                     | "oYellowBall"
             )
-            && o.bounds().intersects(e.bounds())
+            && o.sprite_bounds().intersects(e.sprite_bounds())
     }) {
         other.health -= 2;
         other.vel = Vec2::new(if e.pos.x < other.pos.x { -3.0 } else { 3.0 }, -4.0);
@@ -821,6 +910,142 @@ mod tests {
         g
     }
     #[test]
+    fn hawk_stomp_wins_over_grab_in_integrated_combat() {
+        // oHawkman Collision with oCharacter: descending above y+5 stomps.
+        let mut g = room();
+        g.player.pos = Vec2::new(88.0, 148.0);
+        g.player.vel.y = 1.0;
+        let id = g.world.spawn("oHawkman", Vec2::new(80.0, 144.0));
+        super::super::tick(&mut g);
+        assert_eq!(g.player.health, 4);
+        assert_eq!(g.world.entity(id).unwrap().health, 3);
+        assert_eq!(g.world.entity(id).unwrap().state, 98);
+    }
+    #[test]
+    fn hawk_throw_preserves_sprite_and_drops_held_item() {
+        // oHawkman collision + animation-end events, seven frames at 0.5.
+        let mut g = room();
+        g.player.pos = Vec2::new(90.0, 152.0);
+        let held = g.world.spawn("oRopePile", g.player.pos);
+        g.world.entity_mut(held).unwrap().held = true;
+        g.player.held = Some(held);
+        let id = g.world.spawn("oHawkman", Vec2::new(80.0, 144.0));
+        super::super::tick(&mut g);
+        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.pos, Vec2::new(80.0, 144.0));
+        assert_eq!(g.player.held, None);
+        assert!(!g.world.entity(held).unwrap().held);
+        assert_eq!(g.world.entity(id).unwrap().sprite, "sHawkThrowL");
+        super::super::tick(&mut g);
+        assert_eq!(g.world.entity(id).unwrap().state, 3);
+        assert_eq!(g.world.entity(id).unwrap().sprite, "sHawkThrowL");
+    }
+    #[test]
+    fn source_olmec_move_quantizes_fractional_steps() {
+        // Scripts/Platform Engine/moveTo.gml: 0.25 moves on tick multiples of 4.
+        let world = World::new(24, 20, Area::Boss, 16);
+        let mut e = Entity::new(1, "oOlmec", Vec2::new(80.0, 80.0));
+        init(&mut e);
+        e.vel.x = 0.25;
+        e.data.insert("simulation_tick".into(), 3.0);
+        olmec_move(&world, &mut e);
+        assert_eq!(e.pos.x, 80.0);
+        e.data.insert("simulation_tick".into(), 4.0);
+        olmec_move(&world, &mut e);
+        assert_eq!(e.pos.x, 81.0);
+    }
+    #[test]
+    fn offset_slam_clears_every_intersecting_source_solid() {
+        // oOlmecSlam's source mask is [2,0,60,7]; offset origins can touch five columns.
+        let mut g = room();
+        let mut e = Entity::new(1, "oOlmecSlam", Vec2::new(107.0, 155.0));
+        init(&mut e);
+        tick(&mut g, &mut e);
+        for x in 6..=10 {
+            assert!(g.world.tile(x, 10).unwrap().object.is_empty());
+        }
+        assert_eq!(g.world.tile(11, 10).unwrap().object, "oTemple");
+    }
+    #[test]
+    fn source_fly_bypasses_and_preserves_player_invincibility() {
+        // oFly Collision with oCharacter deliberately has no invincible guard.
+        let mut g = room();
+        g.player.pos = Vec2::new(88.0, 120.0);
+        g.player.invincible = 27;
+        let mut e = Entity::new(1, "oFly", g.player.pos);
+        init(&mut e);
+        tick(&mut g, &mut e);
+        assert_eq!(g.player.health, 2);
+        assert_eq!(g.player.invincible, 27);
+        assert!(!e.alive);
+    }
+    #[test]
+    fn magma_extinguishes_in_authored_water_entities() {
+        // oMagma Collision with oWater; authored water is an entity rather than a tile.
+        let mut g = room();
+        g.world.spawn("oWaterSwim", Vec2::new(80.0, 80.0));
+        let mut e = Entity::new(100, "oMagma", Vec2::new(88.0, 88.0));
+        init(&mut e);
+        e.data.insert("started".into(), 1.0);
+        tick(&mut g, &mut e);
+        assert!(!e.alive);
+        assert!(g.world.entities.iter().any(|e| e.object == "oSmokePuff"));
+    }
+    #[test]
+    fn hawk_sight_uses_source_six_tick_counter_and_moving_instances() {
+        // oHawkman Step decrements a positive sightCounter, else creates and sets 5.
+        let mut g = room();
+        let mut e = Entity::new(100, "oHawkman", Vec2::new(80.0, 144.0));
+        init(&mut e);
+        e.timer = 100;
+        for _ in 0..7 {
+            tick(&mut g, &mut e);
+        }
+        let rays: Vec<_> = g
+            .world
+            .entities
+            .iter()
+            .filter(|o| o.object == "oEnemySight")
+            .collect();
+        assert_eq!(rays.len(), 2);
+        assert_eq!(rays[0].vel.x, 10.0);
+        assert_eq!(rays[0].value("owner"), 100.0);
+    }
+    #[test]
+    fn tomb_attack_refreshes_cooldown_until_animation_end() {
+        // oTombLord Step ATTACK assigns attackTimer=100 on every step.
+        let mut g = room();
+        let mut e = Entity::new(100, "oTombLord", Vec2::new(80.0, 128.0));
+        init(&mut e);
+        e.state = 3;
+        e.animation = 14.0;
+        e.data.insert("attack_cooldown".into(), 10.0);
+        tick(&mut g, &mut e);
+        assert_eq!(e.state, 0);
+        assert_eq!(e.value("attack_cooldown"), 100.0);
+    }
+    #[test]
+    fn temple_embedded_actor_checks_follow_source_points() {
+        let mut g = room();
+        g.world.set_tile(5, 9, "oTemple");
+        let mut hawk = Entity::new(100, "oHawkman", Vec2::new(80.0, 144.0));
+        init(&mut hawk);
+        tick(&mut g, &mut hawk);
+        assert!(!hawk.alive);
+        let mut tomb = Entity::new(101, "oTombLord", Vec2::new(80.0, 128.0));
+        init(&mut tomb);
+        g.world.set_tile(6, 9, "oTemple");
+        tick(&mut g, &mut tomb);
+        assert!(!tomb.alive);
+        let sceptre = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oSceptre")
+            .unwrap();
+        assert_eq!(sceptre.pos, Vec2::new(96.0, 144.0));
+    }
+    #[test]
     fn source_stats_match() {
         for (name, hp) in [("oHawkman", 4), ("oTombLord", 20), ("oMagmaMan", 200)] {
             let mut e = Entity::new(1, name, Vec2::new(50.0, 50.0));
@@ -831,7 +1056,7 @@ mod tests {
     #[test]
     fn tomb_attack_spawns_fly_with_source_velocity() {
         let mut g = room();
-        let mut e = Entity::new(1, "oTombLord", Vec2::new(80.0, 152.0));
+        let mut e = Entity::new(1, "oTombLord", Vec2::new(80.0, 128.0));
         init(&mut e);
         e.state = 3;
         e.animation = 7.0;
@@ -846,13 +1071,13 @@ mod tests {
         assert!((-2.5..=0.5).contains(&f.vel.y));
     }
     #[test]
-    fn slam_preserves_indestructible_tiles() {
+    fn slam_destroys_source_solid_family_even_when_bomb_proof() {
         let mut g = room();
         g.world.set_tile(7, 10, "oSolid");
         let mut e = Entity::new(1, "oOlmecSlam", Vec2::new(96.0, 160.0));
         init(&mut e);
         tick(&mut g, &mut e);
-        assert_eq!(g.world.tile(7, 10).unwrap().object, "oSolid");
+        assert!(g.world.tile(7, 10).unwrap().object.is_empty());
         assert!(g.world.tile(6, 10).unwrap().object.is_empty());
         assert!(g.world.tile(8, 10).unwrap().object.is_empty());
         assert!(!e.alive);
@@ -865,7 +1090,7 @@ mod tests {
         tick(&mut g, &mut e);
         assert!(!e.alive);
         assert_eq!(g.world.entities[0].object, "oMagma");
-        assert_eq!(g.world.entities[0].health, 199);
+        assert_eq!(g.world.entities[0].health, 200);
     }
     #[test]
     fn magma_arms_bomb_once_without_extending_fuse() {

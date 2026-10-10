@@ -1,6 +1,6 @@
 //! NPC/ghost behavior from oGhost, oDamsel, oShopkeeper and oScarab events.
 //! Shop purchase UI/dice/kissing-parlor economics belong to the economy system.
-use super::{bounds, center, in_stars, move_body, steer_toward};
+use super::{bounds, can_stomp, center, in_stars, move_body, steer_toward, touches_player};
 use crate::*;
 
 pub fn init(e: &mut Entity) {
@@ -137,6 +137,11 @@ fn damsel(game: &mut Game, e: &mut Entity) {
         return;
     }
     let (_, grounded) = move_body(&game.world, e, 0.6);
+    if e.value("invincible") == 0.0 && game.world.solid_at(e.pos.x, e.pos.y) {
+        e.health = 0;
+        e.alive = false;
+        return;
+    }
     if e.health > 0 && e.state != 2 && e.pos.distance(game.world.exit) < 12.0 {
         e.state = 4;
         e.vel = Vec2::default();
@@ -208,6 +213,14 @@ fn damsel(game: &mut Game, e: &mut Entity) {
 
 fn shopkeeper(game: &mut Game, e: &mut Entity) {
     let (wall, grounded) = move_body(&game.world, e, 0.6);
+    if game.world.solid_at(
+        e.pos.x + 8.0,
+        e.pos.y + if e.state >= 98 { 12.0 } else { 8.0 },
+    ) {
+        e.health = 0;
+        e.alive = false;
+        return;
+    }
     if e.health <= 0 {
         e.state = 99;
         if !in_stars(game) && e.value("death_gold") == 0.0 {
@@ -387,15 +400,28 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
         {
             e.vel.y = -f64::from(7 + game.rng.range(2));
         }
-        if e.bounds().intersects(game.player.bounds())
+        if touches_player(game, e)
+            && (game.player.pos.x - (e.pos.x + 8.0)).abs() <= 8.0
+            && !can_stomp(game, e)
             && game.player.invincible == 0
             && game.player.stun == 0
         {
-            if !game.world.solid_at(e.pos.x, e.pos.y - 12.0) {
+            if !game.world.solid_at(e.pos.x + 8.0, e.pos.y - 4.0) {
                 e.state = 3;
                 e.animation = 0.0;
+                e.facing = if game.player.pos.x > e.pos.x + 8.0 {
+                    1
+                } else {
+                    -1
+                };
+                e.vel.x = 0.0;
+                game.player.pos =
+                    Vec2::new(e.pos.x + if e.facing > 0 { 0.0 } else { 16.0 }, e.pos.y);
+                game.player.previous_pos = game.player.pos;
                 game.player.vel = Vec2::new(f64::from(e.facing) * 6.0, -6.0);
-                game.player.stun = 20;
+                game.player.stun = 30;
+                game.player.state = PlayerState::Stunned;
+                game.player.data.insert("bounced".into(), 0.0);
                 game.player.data.insert("wall_hurt".into(), 1.0);
                 if let Some(id) = game.player.held.take() {
                     if let Some(held) = game.world.entity_mut(id) {
@@ -403,15 +429,35 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
                         held.vel = game.player.vel;
                     }
                 }
+            } else {
+                game.player.health -= 1;
+                game.player.invincible = 30;
+                game.player.vel.x = if game.player.pos.x < e.pos.x {
+                    -6.0
+                } else {
+                    6.0
+                };
+                game.events.push(GameEvent::Damage { amount: 1 });
+                game.sound("sndHurt", game.player.pos);
             }
         }
-        e.sprite = "sShopRunLeft".into();
+        e.sprite = if e.state == 3 {
+            "sShopThrowL"
+        } else {
+            "sShopRunLeft"
+        }
+        .into();
     }
 }
 
 fn scarab(game: &mut Game, e: &mut Entity) {
     let old = e.vel;
     let (wall, ground) = move_body(&game.world, e, 0.0);
+    if game.world.solid_at(e.pos.x + 8.0, e.pos.y + 8.0) {
+        e.health = 0;
+        e.alive = false;
+        return;
+    }
     if wall {
         e.vel.x = -old.x;
     }

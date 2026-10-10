@@ -56,25 +56,47 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
     }
 }
 
+/// The inherited enemy event pins held bodies to the player before Step.
+/// Keep that position while running the Vampire's recovery/death state machine.
+pub(super) fn tick_held(game: &mut Game, e: &mut Entity) {
+    let position = e.pos;
+    e.vel = Vec2::default();
+    tick(game, e);
+    if e.held {
+        e.pos = position;
+    }
+}
+
 fn random_facing(game: &mut Game) -> i8 {
     if game.rng.range(2) == 0 { -1 } else { 1 }
 }
+// Source collision helpers probe boundary lines, not the translated full body.
 fn side(world: &World, e: &Entity, direction: i8, distance: f64) -> bool {
     let r = bounds(e);
-    world.collides(Rect::new(
-        r.x + f64::from(direction) * distance,
-        r.y,
-        r.w,
-        r.h,
-    ))
+    let x = if direction < 0 {
+        r.x - distance
+    } else {
+        r.x + r.w + distance - 1.0
+    };
+    world.collides_except(Rect::new(x, r.y, 1.0, r.h), e.id)
 }
 fn bottom(world: &World, e: &Entity) -> bool {
     let r = bounds(e);
-    world.collides(Rect::new(r.x, r.y + 1.0, r.w, r.h))
+    world.collides_except(Rect::new(r.x, r.y + r.h, r.w, 1.0), e.id)
 }
 fn top(world: &World, e: &Entity) -> bool {
     let r = bounds(e);
-    world.collides(Rect::new(r.x, r.y - 1.0, r.w, r.h))
+    world.collides_except(Rect::new(r.x, r.y - 1.0, r.w, 1.0), e.id)
+}
+fn solid_at(world: &World, e: &Entity, x: f64, y: f64) -> bool {
+    world.solid_point_except(Vec2::new(x, y), e.id)
+}
+fn source_move(world: &World, e: &mut Entity, gravity: f64) {
+    // moveTo only moves; unlike move_body it does not zero vertical velocity.
+    // Step applies gravity afterward, and scrCheckCollisions needs the impact speed.
+    let y_velocity = e.vel.y;
+    move_body(world, e, 0.0);
+    e.vel.y = (y_velocity + gravity).min(10.0);
 }
 fn water(world: &World, p: Vec2) -> bool {
     world
@@ -85,6 +107,25 @@ fn water(world: &World, p: Vec2) -> bool {
                 && matches!(e.object.as_str(), "oWater" | "oWaterSwim" | "oWaterTop")
                 && e.bounds().contains(p)
         })
+}
+fn distance_to_player(game: &Game, e: &Entity) -> f64 {
+    // GM distance_to_object measures the gap between inclusive sprite bboxes,
+    // Vampire instead measures from its bbox to player.x-8, player.y-8.
+    let a = e.sprite_bounds();
+    let b = game.player.sprite_bounds();
+    let dx = (a.x - (b.x + b.w - 1.0))
+        .max(b.x - (a.x + a.w - 1.0))
+        .max(0.0);
+    let dy = (a.y - (b.y + b.h - 1.0))
+        .max(b.y - (a.y + a.h - 1.0))
+        .max(0.0);
+    dx.hypot(dy)
+}
+fn distance_to_point(e: &Entity, point: Vec2) -> f64 {
+    let r = e.sprite_bounds();
+    let dx = (r.x - point.x).max(point.x - (r.x + r.w - 1.0)).max(0.0);
+    let dy = (r.y - point.y).max(point.y - (r.y + r.h - 1.0)).max(0.0);
+    dx.hypot(dy)
 }
 fn player_available(game: &Game) -> bool {
     game.player.health > 0
@@ -126,8 +167,22 @@ fn create_blood(game: &mut Game, e: &Entity) {
     }
 }
 fn skeleton(game: &mut Game, e: &mut Entity) {
-    move_body(&game.world, e, 0.6);
-    if game.world.solid_at(e.pos.x + 8.0, e.pos.y + 8.0) {
+    let swimming = game
+        .world
+        .tile(
+            ((e.pos.x + 8.0) / 16.0).floor() as i32,
+            ((e.pos.y + 8.0) / 16.0).floor() as i32,
+        )
+        .is_some_and(|t| t.object == "oWaterSwim")
+        || game.world.entities.iter().any(|water| {
+            water.alive
+                && water.object == "oWaterSwim"
+                && water
+                    .bounds()
+                    .contains(Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0))
+        });
+    source_move(&game.world, e, if swimming { 0.2 } else { 0.6 });
+    if solid_at(&game.world, e, e.pos.x + 8.0, e.pos.y + 8.0) {
         e.health = 0;
     }
     if e.health < 1 {
@@ -151,7 +206,7 @@ fn skeleton(game: &mut Game, e: &mut Entity) {
         }
         e.vel.x = f64::from(e.facing);
     }
-    if game.world.collides(bounds(e)) {
+    if game.world.collides_except(bounds(e), e.id) {
         e.pos.y -= 2.0;
     }
     if e.state != 98 {
@@ -164,8 +219,8 @@ fn skeleton(game: &mut Game, e: &mut Entity) {
     }
 }
 fn zombie(game: &mut Game, e: &mut Entity) {
-    move_body(&game.world, e, 0.2);
-    if game.world.solid_at(e.pos.x + 8.0, e.pos.y + 8.0) {
+    source_move(&game.world, e, 0.2);
+    if solid_at(&game.world, e, e.pos.x + 8.0, e.pos.y + 8.0) {
         e.health = -999;
     }
     if e.health < 1 {
@@ -181,9 +236,7 @@ fn zombie(game: &mut Game, e: &mut Entity) {
         e.vel.x = 1.0;
     }
     let grounded = bottom(&game.world, e);
-    let distance = e
-        .pos
-        .distance(Vec2::new(game.player.pos.x - 8.0, game.player.pos.y - 8.0));
+    let distance = distance_to_player(game, e);
     match e.state {
         0 => {
             e.vel.x = 0.0;
@@ -245,12 +298,14 @@ fn vampire(game: &mut Game, e: &mut Entity) {
     } else {
         0.2
     };
-    move_body(&game.world, e, gravity);
+    source_move(&game.world, e, gravity);
     let grounded = bottom(&game.world, e);
     let ceiling = top(&game.world, e);
     let left = side(&game.world, e, -1, 1.0);
     let right = side(&game.world, e, 1, 1.0);
-    let crushed = game.world.solid_at(
+    let crushed = solid_at(
+        &game.world,
+        e,
         e.pos.x + 8.0,
         e.pos.y + if e.state >= 98 { 12.0 } else { 8.0 },
     );
@@ -279,13 +334,13 @@ fn vampire(game: &mut Game, e: &mut Entity) {
         e.data.insert("burning".into(), burning - 1.0);
     }
     let target = game.player.pos;
-    let distance = e.pos.distance(Vec2::new(target.x - 8.0, target.y - 8.0));
+    let distance = distance_to_point(e, Vec2::new(target.x - 8.0, target.y - 8.0));
     match e.state {
         0 => {
             e.data.insert("bounced".into(), 0.0);
             if grounded
-                && (game.world.solid_at(e.pos.x - 1.0, e.pos.y)
-                    || game.world.solid_at(e.pos.x + 16.0, e.pos.y))
+                && (solid_at(&game.world, e, e.pos.x - 1.0, e.pos.y)
+                    || solid_at(&game.world, e, e.pos.x + 16.0, e.pos.y))
             {
                 e.vel = Vec2::new(f64::from(e.facing), -6.0);
                 e.timer = e.timer.saturating_sub(10);
@@ -312,7 +367,7 @@ fn vampire(game: &mut Game, e: &mut Entity) {
             if grounded {
                 let stop = game.rng.chance(1, 100);
                 let ahead_x = e.pos.x + if e.facing < 0 { -1.0 } else { 16.0 };
-                if stop || !game.world.solid_at(ahead_x, e.pos.y + 16.0) {
+                if stop || !solid_at(&game.world, e, ahead_x, e.pos.y + 16.0) {
                     e.state = 0;
                     e.timer = 20 + game.rng.range(31);
                     e.vel.x = 0.0;
@@ -335,10 +390,12 @@ fn vampire(game: &mut Game, e: &mut Entity) {
                 } else {
                     e.state = 5;
                 }
-            } else if !game
-                .world
-                .solid_at(e.pos.x + f64::from(e.facing) * 8.0, e.pos.y + 16.0)
-            {
+            } else if !solid_at(
+                &game.world,
+                e,
+                e.pos.x + f64::from(e.facing) * 8.0,
+                e.pos.y + 16.0,
+            ) {
                 e.state = 5;
             }
             if (target.x - e.pos.x).abs() < 32.0
@@ -375,7 +432,7 @@ fn vampire(game: &mut Game, e: &mut Entity) {
             e.vel = Vec2::default();
             if player_available(game)
                 && ((distance < 90.0 && target.y > e.pos.y + 16.0)
-                    || !game.world.solid_at(e.pos.x + 8.0, e.pos.y - 1.0))
+                    || !solid_at(&game.world, e, e.pos.x + 8.0, e.pos.y - 1.0))
             {
                 e.state = 7;
                 game.sound("sndBat", e.pos);
@@ -383,7 +440,7 @@ fn vampire(game: &mut Game, e: &mut Entity) {
         }
         7 => {
             e.vel = Vec2::default();
-            let at_ceiling = game.world.solid_at(e.pos.x + 8.0, e.pos.y - 1.0);
+            let at_ceiling = solid_at(&game.world, e, e.pos.x + 8.0, e.pos.y - 1.0);
             if player_available(game) {
                 if distance < 160.0 {
                     let delta = Vec2::new(target.x - (e.pos.x + 8.0), target.y - (e.pos.y + 8.0));
@@ -465,6 +522,36 @@ fn vampire(game: &mut Game, e: &mut Entity) {
         // THROW is declared in the source but no Step branch assigns behavior.
         _ => {}
     }
+    if e.state >= 98 {
+        // scrCheckCollisions.gml: shorter corpse body, wall reflection, floor bounce
+        // and strong floor friction occur before the stationary DEAD transition.
+        e.data.insert("collision_left".into(), 2.0);
+        e.data.insert("collision_top".into(), 6.0);
+        e.data.insert("collision_right".into(), 14.0);
+        e.data.insert("collision_bottom".into(), 16.0);
+        if left && !right {
+            e.pos.x += 1.0;
+        } else if right {
+            e.pos.x -= 1.0;
+        }
+        if left || right {
+            e.vel.x *= -0.5;
+        }
+        if ceiling && !grounded {
+            e.pos.y += 1.0;
+        } else if grounded {
+            if e.vel.y > 1.0 {
+                e.vel.y *= -0.5;
+            } else if e.vel.y.abs() < 1.0 {
+                e.vel.y = 0.0;
+            }
+            if e.vel.x.abs() < 0.1 {
+                e.vel.x = 0.0;
+            } else if e.vel.x != 0.0 {
+                e.vel.x *= 0.3;
+            }
+        }
+    }
     if e.state >= 98 && e.vel.x == 0.0 && e.vel.y == 0.0 && e.health < 1 {
         e.state = 99;
     }
@@ -497,8 +584,16 @@ fn vampire(game: &mut Game, e: &mut Entity) {
         }
         .into();
     }
-    // Collision with oBlood: uncapped healing, including while stunned.
-    let body = bounds(e);
+}
+
+/// oVampire Collision with oBlood runs in the collision phase, after Step and
+/// combat, including when held or stunned. The source has no health cap/guard.
+pub(super) fn absorb_blood(game: &mut Game, e: &mut Entity) {
+    if !e.alive || e.object != "oVampire" {
+        return;
+    }
+    // Collision events use sprite bounds, separately from the shorter move body.
+    let body = e.sprite_bounds();
     for blood in &mut game.world.entities {
         if blood.alive && blood.object == "oBlood" && body.intersects(blood.bounds()) {
             e.health += 1;
@@ -586,6 +681,7 @@ mod tests {
         e.state = 6;
         let id = game.world.spawn("oBlood", Vec2::new(48.0, 48.0));
         tick(&mut game, &mut e);
+        absorb_blood(&mut game, &mut e);
         assert_eq!(e.health, 13);
         assert!(
             !game
@@ -604,5 +700,178 @@ mod tests {
         init(&mut e);
         create_blood(&mut game, &e);
         assert!(game.world.entities.is_empty());
+    }
+    #[test]
+    fn integrated_dead_vampire_bounces_before_disintegrating() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.player.pos = Vec2::new(200.0, 200.0);
+        for x in 0..12 {
+            game.world.set_tile(x, 4, "oSolid");
+        }
+        let id = game.world.spawn("oVampire", Vec2::new(40.0, 48.0));
+        let e = game.world.entity_mut(id).unwrap();
+        e.health = 0;
+        e.state = 98;
+        e.vel = Vec2::new(2.0, 8.0);
+        e.timer = 60;
+        crate::enemies::tick(&mut game);
+        let e = game.world.entity(id).unwrap();
+        assert_eq!(e.state, 98);
+        assert!((e.vel.y + 4.3).abs() < 1e-9);
+        assert!((e.vel.x - 0.5).abs() < 1e-9);
+        assert_eq!(e.value("collision_top"), 6.0);
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|e| e.object == "oCapePickup")
+        );
+        for time in 1..150 {
+            game.tick = time;
+            game.level_tick = time;
+            crate::enemies::tick(&mut game);
+            if game.world.entity(id).is_none() {
+                break;
+            }
+        }
+        assert!(game.world.entity(id).is_none());
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oCapePickup")
+                .count(),
+            1
+        );
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oBone")
+                .count(),
+            3
+        );
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oSkull")
+                .count(),
+            1
+        );
+    }
+    #[test]
+    fn integrated_zombie_jumps_from_dynamic_solid_and_recovers() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.player.pos = Vec2::new(80.0, 48.0);
+        game.world.spawn("oPushBlock", Vec2::new(32.0, 64.0));
+        let id = game.world.spawn("oZombie", Vec2::new(36.0, 48.0));
+        let e = game.world.entity_mut(id).unwrap();
+        e.state = 1;
+        crate::enemies::tick(&mut game);
+        let e = game.world.entity(id).unwrap();
+        assert_eq!(e.state, 1);
+        assert!(e.vel.y < 0.0);
+        assert!(matches!(e.vel.x, 1.0 | 3.0));
+        game.tick = 1;
+        game.level_tick = 1;
+        crate::enemies::tick(&mut game);
+        assert_eq!(game.world.entity(id).unwrap().state, 2);
+        let e = game.world.entity_mut(id).unwrap();
+        e.pos = Vec2::new(36.0, 48.0);
+        e.vel = Vec2::default();
+        game.tick = 2;
+        game.level_tick = 2;
+        crate::enemies::tick(&mut game);
+        let e = game.world.entity(id).unwrap();
+        assert_eq!(e.state, 0);
+        assert!((40..=100).contains(&e.timer));
+        assert_eq!(e.vel, Vec2::default());
+    }
+    #[test]
+    fn integrated_skeleton_reverses_at_dynamic_wall() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.player.pos = Vec2::new(200.0, 200.0);
+        for x in 0..12 {
+            game.world.set_tile(x, 4, "oSolid");
+        }
+        game.world.spawn("oPushBlock", Vec2::new(64.0, 48.0));
+        let id = game.world.spawn("oSkeleton", Vec2::new(50.0, 48.0));
+        let e = game.world.entity_mut(id).unwrap();
+        e.state = 1;
+        e.facing = 1;
+        e.data.insert("source_facing_pending".into(), 0.0);
+        crate::enemies::tick(&mut game);
+        let e = game.world.entity(id).unwrap();
+        assert_eq!(e.facing, -1);
+        assert_eq!(e.vel.x, -1.0);
+    }
+    #[test]
+    fn integrated_zombie_activation_uses_sprite_bbox_distance() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.player.pos = Vec2::new(120.0, 48.0);
+        let id = game.world.spawn("oZombie", Vec2::new(40.0, 40.0));
+        crate::enemies::tick(&mut game);
+        assert_eq!(game.world.entity(id).unwrap().state, 1);
+    }
+    #[test]
+    fn stunned_vampire_blood_collision_uses_sprite_not_shortened_move_bounds() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.player.pos = Vec2::new(200.0, 200.0);
+        let mut vampire = Entity::new(99, "oVampire", Vec2::new(40.0, 40.0));
+        crate::enemies::init_entity(&mut vampire);
+        vampire.state = 98;
+        vampire.sprite = "sVampireStunL".into();
+        vampire.data.insert("collision_top".into(), 6.0);
+        let blood = game.world.spawn("oBlood", Vec2::new(48.0, 40.0));
+        tick(&mut game, &mut vampire);
+        absorb_blood(&mut game, &mut vampire);
+        assert_eq!(vampire.health, 7);
+        assert!(game.world.entity(blood).is_none());
+    }
+    #[test]
+    fn integrated_vampire_attack_uses_bbox_distance_to_offset_player_point() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.player.pos = Vec2::new(150.0, 48.0);
+        let id = game.world.spawn("oVampire", Vec2::new(40.0, 40.0));
+        let e = game.world.entity_mut(id).unwrap();
+        e.timer = 20;
+        e.vel = Vec2::default();
+        crate::enemies::tick(&mut game);
+        assert_eq!(game.world.entity(id).unwrap().state, 2);
+    }
+    #[test]
+    fn held_vampire_recovers_on_tick_after_counter_reaches_zero() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        let mut e = Entity::new(99, "oVampire", Vec2::new(40.0, 40.0));
+        crate::enemies::init_entity(&mut e);
+        e.state = 98;
+        e.timer = 1;
+        e.held = true;
+        e.vel = Vec2::new(8.0, 8.0);
+        game.player.held = Some(e.id);
+        tick_held(&mut game, &mut e);
+        assert_eq!(e.state, 98);
+        assert_eq!(e.timer, 0);
+        assert!(e.held);
+        assert_eq!(e.pos, Vec2::new(40.0, 40.0));
+        assert_eq!(e.sprite, "sVampireHeldL");
+        tick_held(&mut game, &mut e);
+        assert_eq!(e.state, 0);
+        assert!(!e.held);
+        assert_eq!(game.player.held, None);
+    }
+    #[test]
+    fn collision_blood_can_revive_stunned_zero_health_vampire() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        let mut e = Entity::new(99, "oVampire", Vec2::new(40.0, 40.0));
+        crate::enemies::init_entity(&mut e);
+        e.state = 98;
+        e.health = 0;
+        e.held = true;
+        game.world.spawn("oBlood", Vec2::new(48.0, 48.0));
+        absorb_blood(&mut game, &mut e);
+        assert_eq!(e.health, 1);
     }
 }
