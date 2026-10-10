@@ -795,6 +795,7 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
         }
     }
     if !super::player_dead(game)
+        && !game.player.is_exiting()
         && hits(Rect::new(
             game.player.pos.x - 8.0,
             game.player.pos.y - 8.0,
@@ -2461,6 +2462,66 @@ mod destruction_callbacks {
 #[cfg(test)]
 mod literal_dark_and_arrow_destroy_regressions {
     use super::*;
+
+    #[test]
+    fn real_door_exit_suppresses_explosion_hurt_and_rng_for_every_character() {
+        use crate::characters::Character;
+        for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
+            for exit in [false, true] {
+                let mut game = Game::shell(7, RulesPreset::Classic);
+                crate::characters::apply(&mut game, character);
+                game.player.health = 30;
+                game.player.pos = Vec2::new(88.0, 88.0);
+                game.player.grounded = true;
+                game.player.state = PlayerState::Standing;
+                game.world.set_tile(5, 6, "oHardBlock");
+                game.world.spawn("oExit", Vec2::new(80.0, 80.0));
+                game.step(&InputFrame {
+                    up: exit,
+                    ..Default::default()
+                });
+                assert_eq!(game.player.is_exiting(), exit, "{character:?}");
+                assert_eq!(game.state == RunState::Ending, exit);
+                // Exercise the hurt handler after real door entry. The host's
+                // ending loop is separate from Game::step; checking only that
+                // host dispatch would leave this source sprite guard untested.
+                game.player.invincible = 999;
+                let before_velocity = game.player.vel;
+                let mut expected_rng = game.rng.clone();
+                if !exit {
+                    expected_rng.range(3);
+                }
+                game.events.clear();
+                game.world.spawn("oExplosion", game.player.pos);
+                tick(&mut game);
+                assert_eq!(
+                    game.player.health,
+                    if exit { 30 } else { 20 },
+                    "{character:?}/{exit}"
+                );
+                assert_eq!(
+                    game.events
+                        .iter()
+                        .filter(|event| matches!(event, GameEvent::Damage { amount: 10 }))
+                        .count(),
+                    usize::from(!exit)
+                );
+                if exit {
+                    assert_eq!(game.player.vel, before_velocity);
+                    assert_eq!(game.player.stun, 0);
+                    assert_eq!(game.player.data.get("burning").copied().unwrap_or(0.0), 0.0);
+                } else {
+                    assert_eq!(game.player.vel.y, -6.0);
+                    assert_eq!(game.player.stun, 100);
+                }
+                assert_eq!(
+                    game.rng.range(100_000),
+                    expected_rng.range(100_000),
+                    "{character:?}/{exit}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn game_step_dark_debris_preserves_literal_negative_rand_offsets_and_rng_order() {

@@ -565,7 +565,7 @@ pub(super) fn item_rotation(velocity: Vec2, stuck: bool, previous: f64) -> f64 {
 }
 
 fn hit_player(game: &mut Game, projectile: &mut Entity, damage: i32) {
-    if super::player_dead(game) {
+    if game.player.is_exiting() || super::player_dead(game) {
         return;
     }
     // Classic projectile damage bypasses contact-damage invulnerability.
@@ -582,7 +582,7 @@ fn hit_player(game: &mut Game, projectile: &mut Entity, damage: i32) {
 /// survive impact, and the Mitt catches an unsafe fast rock only with empty
 /// hands. Contact-damage invulnerability does not guard this source branch.
 fn rock_player_contact(game: &mut Game) {
-    if super::player_dead(game) || game.player.is_stunned() {
+    if game.player.is_exiting() || super::player_dead(game) || game.player.is_stunned() {
         return;
     }
     let query = Rect::new(game.player.pos.x - 8.0, game.player.pos.y - 8.0, 17.0, 17.0);
@@ -904,11 +904,7 @@ pub fn tick(game: &mut Game) {
                     game.sound("sndHit", e.pos);
                 }
                 let player_mask = game.player.sprite_bounds();
-                let exiting = matches!(
-                    game.player.sprite.as_str(),
-                    "sPExit" | "sDamselExit" | "sTunnelExit"
-                );
-                if e.alive && !exiting && e.sprite_bounds().intersects(player_mask) {
+                if e.alive && e.sprite_bounds().intersects(player_mask) {
                     hit_player(game, &mut e, 4);
                 }
             }
@@ -1311,11 +1307,12 @@ mod tests {
         }
         assert!(!game.world.entities.iter().any(|e| e.object == "oSlash"));
         tick(&mut game);
-        assert!(game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.object == "oSlash" && e.alive && e.value("damage") == 2.0));
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .any(|e| e.object == "oSlash" && e.alive && e.value("damage") == 2.0)
+        );
     }
     #[test]
     fn mattock_requires_ground_and_only_slows_the_onset_tick() {
@@ -1332,17 +1329,20 @@ mod tests {
         for _ in 0..3 {
             tick(&mut game);
         }
-        assert!(!game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.object == "oMattockHit"));
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|e| e.object == "oMattockHit")
+        );
         tick(&mut game);
-        assert!(game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.object == "oMattockHit" && e.alive));
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .any(|e| e.object == "oMattockHit" && e.alive)
+        );
     }
     #[test]
     fn bomb_arrow_requires_but_does_not_consume_bomb_and_preserves_cooked_fuse() {
@@ -1408,11 +1408,12 @@ mod tests {
         assert!(!game.world.entities.iter().any(|e| e.object == "oExplosion"));
         pre_tick(&mut game);
         tick(&mut game);
-        assert!(game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.object == "oExplosion" && e.pos == game.player.pos));
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .any(|e| e.object == "oExplosion" && e.pos == game.player.pos)
+        );
         assert_eq!(game.player.data["bow_bomb_armed"], 0.0);
     }
 
@@ -2160,5 +2161,105 @@ mod tests {
             assert!(particles.iter().all(|particle| particle.id < wave.id));
             assert_eq!(game.rng.next_u64(), expected.next_u64());
         }
+    }
+
+    #[test]
+    fn game_step_real_exit_protects_all_characters_from_arrows_rocks_and_bullets() {
+        for character in [
+            crate::characters::Character::Explorer,
+            crate::characters::Character::Damsel,
+            crate::characters::Character::TunnelMan,
+        ] {
+            for object in ["oArrow", "oRock", "oBullet"] {
+                let (mut game, _) = flat_room("oMachete");
+                crate::characters::apply(&mut game, character);
+                game.world.spawn("oExit", Vec2::new(72.0, 144.0));
+                game.step(&InputFrame {
+                    up: true,
+                    ..Default::default()
+                });
+                assert!(
+                    game.player.is_exiting(),
+                    "fixture must enter a real exit: {character:?}"
+                );
+                let health = game.player.health;
+                let pos = game.player.pos;
+                let id = game.world.spawn(object, Vec2::new(pos.x - 18.0, pos.y));
+                game.world.entity_mut(id).unwrap().vel.x =
+                    if object == "oBullet" { 12.0 } else { 8.0 };
+                let mut rng = game.rng.clone();
+                game.step(&InputFrame::default());
+                assert_eq!(game.player.health, health, "{character:?} {object}");
+                assert_eq!(game.player.stun, 0, "{character:?} {object}");
+                assert_eq!(game.player.vel, Vec2::default(), "{character:?} {object}");
+                assert!(
+                    game.world.entity(id).is_some(),
+                    "exit collision must not consume {object}"
+                );
+                assert!(!game.events.iter().any(|event| match event {
+                    GameEvent::Damage { .. } => true,
+                    GameEvent::Sound { name, .. } => matches!(name.as_str(), "sndHurt" | "sndHit"),
+                    _ => false,
+                }));
+                assert_eq!(game.rng.next_u64(), rng.next_u64());
+            }
+        }
+    }
+
+    #[test]
+    fn game_step_non_exit_projectiles_still_hurt_all_characters() {
+        for character in [
+            crate::characters::Character::Explorer,
+            crate::characters::Character::Damsel,
+            crate::characters::Character::TunnelMan,
+        ] {
+            for object in ["oArrow", "oRock", "oBullet"] {
+                let (mut game, _) = flat_room("oMachete");
+                crate::characters::apply(&mut game, character);
+                let health = game.player.health;
+                let pos = game.player.pos;
+                let id = game.world.spawn(object, Vec2::new(pos.x - 18.0, pos.y));
+                game.world.entity_mut(id).unwrap().vel.x =
+                    if object == "oBullet" { 12.0 } else { 8.0 };
+                game.step(&InputFrame::default());
+                let amount = if object == "oBullet" { 4 } else { 2 };
+                assert_eq!(
+                    game.player.health,
+                    (health - amount).max(0),
+                    "{character:?} {object}"
+                );
+                assert_eq!(game.player.stun, 20, "{character:?} {object}");
+                assert!(game.events.contains(&GameEvent::Damage { amount }));
+            }
+        }
+    }
+
+    #[test]
+    fn game_step_real_exit_skips_mitt_catch_as_well_as_rock_damage() {
+        let (mut game, weapon) = flat_room("oMachete");
+        game.world.entity_mut(weapon).unwrap().alive = false;
+        game.player.held = None;
+        game.world.spawn("oMitt", Vec2::new(80.0, 156.0));
+        game.step(&InputFrame {
+            down: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert!(game.player.has("Mitt"));
+        game.world.spawn("oExit", Vec2::new(72.0, 144.0));
+        game.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        assert!(game.player.is_exiting());
+        let rock = game.world.spawn(
+            "oRock",
+            Vec2::new(game.player.pos.x - 18.0, game.player.pos.y),
+        );
+        game.world.entity_mut(rock).unwrap().vel.x = 8.0;
+        game.step(&InputFrame::default());
+        assert_eq!(game.player.health, 4);
+        assert!(game.player.held.is_none());
+        assert!(!game.world.entity(rock).unwrap().held);
     }
 }
