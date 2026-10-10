@@ -164,14 +164,9 @@ impl Level {
 
     /// A linked entrance leading back to the preceding level takes precedence.
     pub fn to_world_from(&self, previous_level: Option<&str>) -> World {
-        let area = match self.music.to_uppercase().as_str() {
-            "LUSH" | "JUNGLE" => Area::Jungle,
-            "ICE" => Area::Ice,
-            "TEMPLE" => Area::Temple,
-            "BOSS" => Area::Boss,
-            _ => Area::Mines,
-        };
-        let mut world = World::new(42, 34, area, 1);
+        // rLoadLevel starts at levelType 0. Its music field selects a track
+        // in startMusic; it never selects campaign area rules or backgrounds.
+        let mut world = World::new(42, 34, Area::Mines, 1);
         world.entrance = Vec2::new(24.0, 24.0);
         world.name = "Custom level".into();
         for y in 0..world.height {
@@ -195,16 +190,29 @@ impl Level {
                     if terrain {
                         let tx = (pos.x / 16.0) as usize;
                         let ty = (pos.y / 16.0) as usize;
-                        if tx > 0 && ty > 0 && tx + 1 < world.width && ty + 1 < world.height {
+                        // Compound symbols create real overlapping instances:
+                        // a Jaws pool must coexist with a later brick, branch,
+                        // ladder, or the room's authored hard border. A storage
+                        // cell can hold only one instance, so retain subsequent
+                        // instances in the entity list instead of replacing or
+                        // silently discarding either collision family.
+                        if tx > 0
+                            && ty > 0
+                            && tx + 1 < world.width
+                            && ty + 1 < world.height
+                            && world
+                                .tile(tx as i32, ty as i32)
+                                .is_some_and(|t| t.object.is_empty())
+                        {
                             world.set_tile(tx, ty, spawn.object);
-                        }
-                        if let Some(sprite) = spawn.sprite {
-                            let id = world.spawn("oTerrainMetadata", pos);
-                            if let Some(metadata) = world.entity_mut(id) {
-                                metadata.text.insert("terrain_sprite".into(), sprite.into());
+                            if let Some(sprite) = spawn.sprite {
+                                let id = world.spawn("oTerrainMetadata", pos);
+                                if let Some(metadata) = world.entity_mut(id) {
+                                    metadata.text.insert("terrain_sprite".into(), sprite.into());
+                                }
                             }
+                            continue;
                         }
-                        continue;
                     }
                     // instance_create runs Create events before scrCreateTileObj's
                     // state/sprite/free-item overrides. Use the same initializer path
@@ -291,9 +299,10 @@ fn parse_count(text: &str, name: &str) -> Result<usize, String> {
         .trim()
         .parse()
         .map_err(|_| format!("Invalid {name} count"))?;
-    if count > LEVEL_WIDTH * LEVEL_HEIGHT {
-        return Err(format!("{name} count exceeds map capacity"));
-    }
+    // Classic permits unused records. Their count can exceed the number of
+    // cells, especially after editing an imported file while preserving its
+    // extra records. read_records bounds the count by the already size-limited
+    // input before allocating anything.
     Ok(count)
 }
 fn read_records(

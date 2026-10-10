@@ -159,6 +159,46 @@ fn all_source_tile_creations_match_catalog_in_order() {
             .map(|spawn| (spawn.object, spawn.offset.x, spawn.offset.y))
             .collect();
         assert_eq!(actual, expected, "tile {symbol:?}");
+        let spawns = tile_spawns(symbol);
+        for (index, spawn) in spawns.iter().enumerate() {
+            // In this script `obj` always names the most recently created
+            // instance. Compare its post-Create overrides as well as the
+            // direct creations; offsets alone miss broken free pickups.
+            let is_last = index + 1 == spawns.len();
+            let sprite = body
+                .split_once("obj.sprite_index = ")
+                .map(|(_, tail)| tail.split(';').next().unwrap().trim());
+            assert_eq!(
+                spawn.sprite,
+                sprite.filter(|_| is_last),
+                "sprite {symbol:?}"
+            );
+            let state = body
+                .split_once("obj.status = ")
+                .map(|(_, tail)| {
+                    tail.split(';')
+                        .next()
+                        .unwrap()
+                        .trim()
+                        .parse::<i32>()
+                        .unwrap()
+                })
+                .unwrap_or(0);
+            assert_eq!(
+                spawn.state,
+                if is_last { state } else { 0 },
+                "status {symbol:?}"
+            );
+            assert_eq!(
+                spawn.free_item,
+                is_last && body.contains("obj.cost = 0;") && body.contains("obj.forSale = false;"),
+                "free pickup {symbol:?}"
+            );
+        }
+        assert!(
+            EditorState::default().palette.contains(&symbol),
+            "palette {symbol:?}"
+        );
         checked += 1;
     }
     assert_eq!(checked, 84);
@@ -295,7 +335,7 @@ fn custom_tiles_retain_source_solid_platform_and_ladder_families() {
         level.set_tile(x, 3, tile).unwrap();
     }
     let world = level.to_world();
-    assert_eq!(world.area, spelunky_core::Area::Jungle);
+    assert_eq!(world.area, spelunky_core::Area::Mines);
     for (x, object, group) in [
         (1, "oTree", "oSolid"),
         (2, "oTree", "oSolid"),
@@ -358,4 +398,127 @@ fn editing_keeps_unrelated_and_unused_custom_text_records() {
     editor.set_tile(3, 3, '1').unwrap();
     assert!(editor.level.exit_targets.is_empty());
     assert!(editor.level.signs.is_empty());
+}
+
+#[test]
+fn compound_pool_keeps_overlapping_platform_and_water_in_actual_game_step() {
+    use spelunky_core::{Game, InputFrame, RulesPreset, Vec2};
+    let mut level = Level::default();
+    level.set_tile(4, 4, '{').unwrap();
+    level.set_tile(6, 4, 'q').unwrap();
+    let mut game = Game::new(1, RulesPreset::Classic);
+    game.load_custom(&level, "pool", "");
+    // The authored pool and branch are both present at (112,80). Removing
+    // the fish isolates the environment interaction from enemy damage.
+    game.world.entities.retain(|e| e.object != "oJaws");
+    assert!(
+        game.world
+            .entities
+            .iter()
+            .any(|e| { e.object == "oTreeBranch" && e.pos == Vec2::new(112.0, 80.0) })
+    );
+    game.player.pos = Vec2::new(120.0, 84.0);
+    game.player.previous_pos = game.player.pos;
+    game.step(&InputFrame::default());
+    assert_eq!(game.player.data.get("swimming"), Some(&1.0));
+}
+
+#[test]
+fn compound_pool_preserves_hard_border_and_instances_beyond_it() {
+    use spelunky_core::Vec2;
+    let mut level = Level::default();
+    level.set_tile(39, 31, '{').unwrap();
+    let world = level.to_world();
+    assert_eq!(world.tile(41, 32).unwrap().object, "oHardBlock");
+    assert_eq!(world.tile(40, 33).unwrap().object, "oHardBlock");
+    assert!(
+        world
+            .entities
+            .iter()
+            .any(|e| { e.object == "oWaterSwim" && e.pos == Vec2::new(656.0, 512.0) })
+    );
+    assert!(
+        world
+            .entities
+            .iter()
+            .any(|e| { e.object == "oWaterSwim" && e.pos == Vec2::new(688.0, 528.0) })
+    );
+    assert!(world.solid_point_except(Vec2::new(660.0, 516.0), 0));
+}
+
+#[test]
+fn custom_border_matches_every_authored_source_room_instance() {
+    use std::collections::BTreeSet;
+    let source = include_str!("../../../references/classic-1.1/Rooms/rLoadLevel.xml");
+    let expected: BTreeSet<_> = source
+        .split("<instance id=")
+        .skip(1)
+        .filter(|instance| instance.contains("<object>oHardBlock</object>"))
+        .map(|instance| {
+            let position = instance.split_once("<position x=\"").unwrap().1;
+            let (x, tail) = position.split_once('"').unwrap();
+            let y = tail
+                .split_once("y=\"")
+                .unwrap()
+                .1
+                .split('"')
+                .next()
+                .unwrap();
+            (
+                x.parse::<usize>().unwrap() / 16,
+                y.parse::<usize>().unwrap() / 16,
+            )
+        })
+        .collect();
+    let world = Level::default().to_world();
+    let actual: BTreeSet<_> = (0..world.height)
+        .flat_map(|y| (0..world.width).map(move |x| (x, y)))
+        .filter(|&(x, y)| world.tile(x as i32, y as i32).unwrap().object == "oHardBlock")
+        .collect();
+    assert_eq!(expected.len(), 148);
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn custom_music_does_not_select_campaign_area_rules() {
+    use spelunky_core::{Area, Game, InputFrame, RulesPreset};
+    for music in ["CAVE", "LUSH", "ICE", "TEMPLE", "BOSS"] {
+        let level = Level {
+            music: music.into(),
+            ..Level::default()
+        };
+        let mut game = Game::new(1, RulesPreset::Classic);
+        game.load_custom(&level, "music", "");
+        assert_eq!(game.world.area, Area::Mines, "{music}");
+        assert_eq!(game.world.level, 1);
+        assert_eq!(level.music, music);
+        // Boss music previously selected Area::Boss and Ankh revival put
+        // the player at Olmec's (24,552), below this 544-pixel custom room.
+        let entrance = game.world.entrance;
+        game.player.equipment.insert("Ankh".into());
+        game.player.health = 0;
+        game.step(&InputFrame::default());
+        assert_eq!(game.player.health, 4, "revive with {music}");
+        assert_eq!(game.player.pos, entrance, "revive position with {music}");
+    }
+}
+
+#[test]
+fn editing_an_import_with_unused_records_still_exports_a_readable_level() {
+    let level = Level {
+        exit_targets: (0..1280).map(|i| format!("unused door {i}")).collect(),
+        signs: (0..1280).map(|i| format!("unused sign {i}")).collect(),
+        ..Level::default()
+    };
+    let imported = Level::parse(&level.to_text()).unwrap();
+    let mut editor = EditorState::new(imported);
+    editor.set_tile(2, 2, 'X').unwrap();
+    editor.set_tile(3, 2, 'I').unwrap();
+    assert_eq!(editor.level.exit_targets.len(), 1281);
+    assert_eq!(editor.level.signs.len(), 1281);
+    assert_eq!(Level::parse(&editor.level.to_text()).unwrap(), editor.level);
+    assert!(editor.undo());
+    assert_eq!(editor.level.signs, level.signs);
+    assert!(editor.redo());
+    assert_eq!(Level::parse(&editor.level.to_text()).unwrap(), editor.level);
 }
