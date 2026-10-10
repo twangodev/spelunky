@@ -851,10 +851,7 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
         } else if entity.object == "oMagmaMan" {
             entity.alive = false;
             for _ in 0..2 {
-                magma_spawns.push((
-                    Vec2::new(entity.pos.x + 8.0, entity.pos.y - 4.0),
-                    -(1.0 + f64::from(game.rng.range(3))),
-                ));
+                magma_spawns.push(Vec2::new(entity.pos.x + 8.0, entity.pos.y - 4.0));
             }
         } else if (crate::enemies::is_enemy(&entity.object) || entity.object == "oDamsel")
             && entity.value("invincible") == 0.0
@@ -929,13 +926,42 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
             }
         }
     }
-    for (pos, velocity_y) in magma_spawns {
-        let id = game.world.spawn("oMagma", pos);
-        game.world.entity_mut(id).unwrap().vel.y = velocity_y;
+    for pos in magma_spawns {
+        // instance_create completes the four random oMagma Create draws
+        // before this caller's override, then repeats for the next fragment.
+        let id = crate::world_events::spawn_detritus(game, "oMagma", pos);
+        let velocity_y = -(1.0 + f64::from(game.rng.range(3)));
+        // A parent detritus cap may mark the fresh instance dead. Preserve
+        // existing cap continuation while still applying the caller's write.
+        if let Some(magma) = game
+            .world
+            .entities
+            .iter_mut()
+            .find(|entity| entity.id == id)
+        {
+            magma.vel.y = velocity_y;
+        }
     }
 }
 
 pub(super) fn destroy_terrain(game: &mut Game, x: usize, y: usize) {
+    destroy_terrain_impl(game, x, y, true);
+}
+
+/// oTree Step destroys itself on lost support, regardless of invincibility.
+/// The caller owns its source viewport, support point, and instance order.
+pub(crate) fn destroy_unsupported_tree_tile(game: &mut Game, x: usize, y: usize) -> bool {
+    if !game
+        .world
+        .tile(x as i32, y as i32)
+        .is_some_and(|tile| crate::catalog::is_a(&tile.object, "oTree"))
+    {
+        return false;
+    }
+    destroy_terrain_impl(game, x, y, false)
+}
+
+fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibility: bool) -> bool {
     let object = game.world.tiles[y * game.world.width + x].object.clone();
     let center = Vec2::new(x as f64 * 16.0 + 8.0, y as f64 * 16.0 + 8.0);
     let metadata = game
@@ -944,11 +970,12 @@ pub(super) fn destroy_terrain(game: &mut Game, x: usize, y: usize) {
         .iter()
         .find(|entity| entity.alive && entity.object == "oTerrainMetadata" && entity.pos == center)
         .cloned();
-    if metadata
-        .as_ref()
-        .is_some_and(|metadata| metadata.value("invincible") != 0.0)
+    if respect_invincibility
+        && metadata
+            .as_ref()
+            .is_some_and(|metadata| metadata.value("invincible") != 0.0)
     {
-        return;
+        return false;
     }
     game.world.set_tile(x, y, "");
     let mut source = Entity::new(0, &object, Vec2::new(center.x - 8.0, center.y - 8.0));
@@ -1030,6 +1057,7 @@ pub(super) fn destroy_terrain(game: &mut Game, x: usize, y: usize) {
             caveman.data.insert("invincible".into(), 20.0);
         }
     }
+    true
 }
 
 // Resolve the nearest source Destroy event, rather than applying a parent's
@@ -1319,6 +1347,22 @@ fn solid_parent_destroy(game: &mut Game, pos: Vec2, shop_wall: bool) {
 /// Execute gameplay Destroy effects once for an independently stored solid.
 /// Used by explosions and mattocks; target invincibility is respected here.
 pub(crate) fn destroy_solid_instance(game: &mut Game, id: u64) -> bool {
+    destroy_solid_instance_impl(game, id, true)
+}
+
+/// oTree's own lost-support destruction bypasses the attack immunity guard.
+pub(crate) fn destroy_unsupported_tree_instance(game: &mut Game, id: u64) -> bool {
+    if !game
+        .world
+        .entity(id)
+        .is_some_and(|entity| crate::catalog::is_a(&entity.object, "oTree"))
+    {
+        return false;
+    }
+    destroy_solid_instance_impl(game, id, false)
+}
+
+fn destroy_solid_instance_impl(game: &mut Game, id: u64, respect_invincibility: bool) -> bool {
     let Some(entity) = game
         .world
         .entities
@@ -1330,7 +1374,7 @@ pub(crate) fn destroy_solid_instance(game: &mut Game, id: u64) -> bool {
     };
     if !crate::catalog::is_a(&entity.object, "oSolid")
         || entity.value("destroy_done") != 0.0
-        || entity.value("invincible") != 0.0
+        || (respect_invincibility && entity.value("invincible") != 0.0)
         || entity.object == "oHardBlock"
     {
         return false;
@@ -1375,6 +1419,104 @@ mod tests {
         let mut g = Game::shell(7, RulesPreset::Classic);
         g.player.pos = Vec2::new(160.0, 160.0);
         g
+    }
+
+    #[test]
+    fn magma_explosion_finishes_each_create_before_its_launch_override() {
+        for seed in [1, 2, 7, 11] {
+            let mut g = Game::shell(seed, RulesPreset::Classic);
+            g.player.pos = Vec2::new(200.0, 200.0);
+            let man = g.world.spawn("oMagmaMan", Vec2::new(80.0, 80.0));
+            g.world.spawn("oExplosion", Vec2::new(88.0, 88.0));
+            let mut source_rng = g.rng.clone();
+            let mut launches = Vec::new();
+            for _ in 0..2 {
+                let vx = source_rng.unit() * 4.0 - source_rng.unit() * 4.0;
+                let _create_vy = -1.0 - source_rng.unit() * 2.0;
+                let gravity = f64::from(1 + source_rng.range(6)) * 0.1;
+                let vy = -f64::from(1 + source_rng.range(3));
+                launches.push((Vec2::new(vx, vy), gravity));
+            }
+            tick(&mut g);
+            assert!(g.world.entity(man).is_none());
+            let magma: Vec<_> = g
+                .world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oMagma")
+                .map(|e| {
+                    (
+                        e.id,
+                        e.vel,
+                        e.value("gravity"),
+                        e.value("world_effect_initialized"),
+                    )
+                })
+                .collect();
+            assert_eq!(magma.len(), 2);
+            for ((_, vel, gravity, initialized), (expected_vel, expected_gravity)) in
+                magma.iter().zip(&launches)
+            {
+                assert_eq!(vel, expected_vel, "seed {seed}");
+                assert_eq!(gravity, expected_gravity, "seed {seed}");
+                assert_eq!(*initialized, 1.0);
+            }
+            assert_eq!(
+                g.rng.clone().range(100000),
+                source_rng.range(100000),
+                "seed {seed}"
+            );
+            g.step(&InputFrame::default());
+            for ((id, _, _, _), (velocity, gravity)) in magma.iter().zip(&launches) {
+                let e = g.world.entity(*id).unwrap();
+                assert_eq!(e.pos.y, 76.0 + velocity.y, "seed {seed}");
+                assert!(
+                    (e.vel.y - (velocity.y + gravity)).abs() < 1e-9,
+                    "seed {seed}"
+                );
+                assert_eq!(e.vel.x, velocity.x, "seed {seed}");
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_tree_callbacks_bypass_only_the_tree_attack_immunity() {
+        let mut g = game();
+        g.world.set_tile(5, 5, "oTree");
+        let metadata = g.world.spawn("oTerrainMetadata", Vec2::new(88.0, 88.0));
+        g.world
+            .entity_mut(metadata)
+            .unwrap()
+            .data
+            .insert("invincible".into(), 1.0);
+        destroy_terrain(&mut g, 5, 5);
+        assert_eq!(g.world.tile(5, 5).unwrap().object, "oTree");
+        assert!(destroy_unsupported_tree_tile(&mut g, 5, 5));
+        assert!(g.world.tile(5, 5).unwrap().object.is_empty());
+        assert!(g.world.entity(metadata).is_none());
+        assert!(!destroy_unsupported_tree_tile(&mut g, 5, 5));
+        let tree = g.world.spawn("oTree", Vec2::new(112.0, 80.0));
+        g.world
+            .entity_mut(tree)
+            .unwrap()
+            .data
+            .insert("invincible".into(), 1.0);
+        assert!(!destroy_solid_instance(&mut g, tree));
+        assert!(destroy_unsupported_tree_instance(&mut g, tree));
+        assert!(!destroy_unsupported_tree_instance(&mut g, tree));
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.alive && matches!(e.object.as_str(), "oRubble" | "oRubbleSmall"))
+                .count(),
+            6
+        );
+        g.world.set_tile(8, 5, "oBrick");
+        assert!(!destroy_unsupported_tree_tile(&mut g, 8, 5));
+        let brick = g.world.spawn("oBrick", Vec2::new(144.0, 80.0));
+        assert!(!destroy_unsupported_tree_instance(&mut g, brick));
+        assert!(g.world.entity(brick).is_some());
     }
 
     #[test]
