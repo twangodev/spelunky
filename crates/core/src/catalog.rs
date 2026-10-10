@@ -299,11 +299,15 @@ impl CollisionMask {
     }
 
     fn pixel(&self, x: i32, y: i32) -> bool {
+        let image_x = self.origin[0] + if self.scale.x > 0.0 { x } else { -x };
+        let image_y = self.origin[1] + if self.scale.y > 0.0 { y } else { -y };
+        self.image_pixel(image_x, image_y)
+    }
+
+    fn image_pixel(&self, image_x: i32, image_y: i32) -> bool {
         let Some(frame) = self.frame else {
             return false;
         };
-        let image_x = self.origin[0] + if self.scale.x > 0.0 { x } else { -x };
-        let image_y = self.origin[1] + if self.scale.y > 0.0 { y } else { -y };
         if self.rectangle {
             // GM8 materializes rectangle masks as boolean pixels filling the
             // selected mask's inclusive bounds, regardless of image alpha.
@@ -373,17 +377,46 @@ impl CollisionMask {
     }
 
     fn event_geometry(&self) -> Option<(Rect, Vec2)> {
-        if self.angle != 0.0
-            || self.scale.x.abs() != 1.0
-            || self.scale.y.abs() != 1.0
+        // The only source nonunit collision transform is oArrowTrapTest's
+        // positive integral X stretch. Its Y scale and angle remain 1 and 0.
+        let horizontal_stretch = self.angle == 0.0
+            && self.scale.x >= 1.0
+            && self.scale.x.fract() == 0.0
+            && self.scale.y == 1.0;
+        if !self.angle.is_finite()
+            || (!horizontal_stretch && (self.scale.x.abs() != 1.0 || self.scale.y.abs() != 1.0))
             || !self.pos.x.is_finite()
             || !self.pos.y.is_finite()
-            || ((self.pos.x.fract() != 0.0 || self.pos.y.fract() != 0.0)
-                && self.scale != Vec2::new(1.0, 1.0))
+            || ((self.angle != 0.0 || self.pos.x.fract() != 0.0 || self.pos.y.fract() != 0.0)
+                && self.scale != Vec2::new(1.0, 1.0)
+                && !horizontal_stretch)
         {
             return None;
         }
         let [left, top, right, bottom] = self.event_bounds?;
+        if self.angle != 0.0 {
+            // Canonical 0x4AAAC1..0x4AADBF transforms the aggregate source
+            // sprite envelope's inclusive endpoints, then rounds each extreme
+            // independently. Its positive GML angle is our negative screen
+            // angle. The instance origin is rounded separately for sampling.
+            let x0 = f64::from(left.min(right) - self.origin[0]);
+            let x1 = f64::from(left.max(right) - self.origin[0]);
+            let y0 = f64::from(top.min(bottom) - self.origin[1]);
+            let y1 = f64::from(top.max(bottom) - self.origin[1]);
+            let (sin, cos) = (-self.angle).sin_cos();
+            let left = (self.pos.x + (cos * x0).min(cos * x1) + (sin * y0).min(sin * y1))
+                .round_ties_even();
+            let right = (self.pos.x + (cos * x0).max(cos * x1) + (sin * y0).max(sin * y1))
+                .round_ties_even();
+            let top = (self.pos.y + (cos * y0).min(cos * y1) - (sin * x0).max(sin * x1))
+                .round_ties_even();
+            let bottom = (self.pos.y + (cos * y0).max(cos * y1) - (sin * x0).min(sin * x1))
+                .round_ties_even();
+            return Some((
+                Rect::new(left, top, right - left + 1.0, bottom - top + 1.0),
+                Vec2::new(self.pos.x.round_ties_even(), self.pos.y.round_ties_even()),
+            ));
+        }
         // Canonical GM8 rounds each translated inclusive bbox edge before
         // broad-phase rejection, and rounds the instance origin independently
         // for pixel indexing. Rounding the origin alone differs at .5 ties.
@@ -403,8 +436,10 @@ impl CollisionMask {
 
     /// Collision-event overlap of the two loaded source masks, including
     /// rectangle/precise pairs. Explicit shape-query precision is unchanged.
-    /// Fractional placement is verified for positive unit scale and no rotation;
-    /// fractional mirrors and other transforms retain their bbox fallback.
+    /// Positive unit-scale rotations use canonical inverse pixel sampling.
+    /// Source detectors' unrotated positive integral X stretches use the
+    /// canonical inverse scale sampler. Other nonunit scales, rotated mirrors
+    /// and fractional mirrors retain their bbox fallback.
     pub fn intersects_mask(&self, other: &Self) -> bool {
         if !(self.precise || self.rectangle) || !(other.precise || other.rectangle) {
             return self.bounds.intersects(other.bounds);
@@ -421,16 +456,54 @@ impl CollisionMask {
         let top = bounds.y.max(other_bounds.y) as i32;
         let right = (bounds.x + bounds.w).min(other_bounds.x + other_bounds.w) as i32;
         let bottom = (bounds.y + bounds.h).min(other_bounds.y + other_bounds.h) as i32;
+        let (sin, cos) = if self.angle == 0.0 {
+            (0.0, 1.0)
+        } else {
+            self.angle.sin_cos()
+        };
+        let (other_sin, other_cos) = if other.angle == 0.0 {
+            (0.0, 1.0)
+        } else {
+            other.angle.sin_cos()
+        };
         for y in top..bottom {
             for x in left..right {
-                if self.pixel(x - pos.x as i32, y - pos.y as i32)
-                    && other.pixel(x - other_pos.x as i32, y - other_pos.y as i32)
+                if self.event_pixel(x - pos.x as i32, y - pos.y as i32, sin, cos)
+                    && other.event_pixel(
+                        x - other_pos.x as i32,
+                        y - other_pos.y as i32,
+                        other_sin,
+                        other_cos,
+                    )
                 {
                     return true;
                 }
             }
         }
         false
+    }
+
+    fn event_pixel(&self, x: i32, y: i32, sin: f64, cos: f64) -> bool {
+        if self.angle == 0.0 {
+            if self.scale.x > 1.0 {
+                // Canonical 0x48A6E6..0x48A78D divides the integer world
+                // offset from the independently rounded instance origin,
+                // adds the sprite origin, then floors before both mask tests.
+                let image_x =
+                    (f64::from(x) / self.scale.x + f64::from(self.origin[0])).floor() as i32;
+                let image_y = y + self.origin[1];
+                return self.image_pixel(image_x, image_y);
+            }
+            return self.pixel(x, y);
+        }
+        // Canonical 0x48A88A..0x48A987 samples each world pixel inversely,
+        // flooring after rotation and sprite-origin addition. This branch is
+        // restricted above to the source Arrow/FishBone's positive unit scale.
+        let image_x =
+            (f64::from(x) * cos + f64::from(y) * sin + f64::from(self.origin[0])).floor() as i32;
+        let image_y =
+            (f64::from(y) * cos - f64::from(x) * sin + f64::from(self.origin[1])).floor() as i32;
+        self.image_pixel(image_x, image_y)
     }
 }
 
@@ -863,6 +936,123 @@ mod tests {
         assert!(frame0.bounds().intersects(spark.bounds()));
         assert!(!frame0.intersects_mask(&spark));
         assert!(frame1.intersects_mask(&spark));
+    }
+
+    #[test]
+    fn stretched_detector_events_inverse_sample_both_masks_and_round_edges() {
+        let unit = Vec2::new(1.0, 1.0);
+        for scale in [1.0, 2.0, 5.0, 6.0] {
+            let detector = instance_mask(
+                "oArrowTrapTest",
+                "sRed",
+                Vec2::new(96.0, 80.0),
+                0.0,
+                Vec2::new(scale, 1.0),
+                0.0,
+            );
+            assert_eq!(
+                detector.event_geometry(),
+                Some((
+                    Rect::new(96.0, 81.0, 16.0 * scale, 14.0),
+                    Vec2::new(96.0, 80.0)
+                )),
+            );
+            for (rock_x, hit) in [(93.0, false), (94.0, true)] {
+                // Only the Rock's lower-right corner reaches the detector in
+                // the first case; its next bottom-row pixel is opaque.
+                let rock = instance_mask("oRock", "sRock", Vec2::new(rock_x, 78.0), 0.0, unit, 0.0);
+                assert!(detector.bounds().intersects(rock.bounds()));
+                assert_eq!(detector.intersects_mask(&rock), hit);
+                assert_eq!(rock.intersects_mask(&detector), hit);
+                assert!(detector.intersects(rock.bounds(), CollisionPrecision::BoundingBox));
+            }
+        }
+        let fractional = instance_mask(
+            "oArrowTrapTest",
+            "sRed",
+            Vec2::new(97.5, 80.5),
+            0.0,
+            Vec2::new(2.0, 1.0),
+            0.0,
+        );
+        assert_eq!(
+            fractional.event_geometry(),
+            Some((Rect::new(98.0, 82.0, 31.0, 13.0), Vec2::new(98.0, 80.0))),
+        );
+        // Canonical origin rounding would permit image pixel15 at world129,
+        // but the independently rounded aggregate bbox ends at128. The bbox
+        // must reject it before the inverse scale sampler is consulted.
+        for (spark_x, hit) in [(129.0, true), (130.0, false)] {
+            let spark = instance_mask(
+                "oFlareSpark",
+                "sFlareSpark",
+                Vec2::new(spark_x, 83.0),
+                3.0,
+                unit,
+                0.0,
+            );
+            assert_eq!(fractional.intersects_mask(&spark), hit);
+            assert_eq!(spark.intersects_mask(&fractional), hit);
+        }
+    }
+
+    #[test]
+    fn rotated_events_inverse_sample_alpha_with_independently_rounded_bounds() {
+        let unit = Vec2::new(1.0, 1.0);
+        let angle = -0.2_f64.atan();
+        let arrow = instance_mask(
+            "oArrow",
+            "sArrowRight",
+            Vec2::new(100.0, 100.0),
+            0.0,
+            unit,
+            angle,
+        );
+        // Golden values from canonical 0x4AAAC1..0x4AADBF and the standalone
+        // source-bit oracle: integer inclusive bbox [96,98,104,104].
+        assert_eq!(
+            arrow.event_geometry(),
+            Some((Rect::new(96.0, 98.0, 9.0, 7.0), Vec2::new(100.0, 100.0))),
+        );
+        for (pos, bounds, origin) in [
+            (
+                Vec2::new(100.5, 100.5),
+                Rect::new(96.0, 99.0, 9.0, 6.0),
+                Vec2::new(100.0, 100.0),
+            ),
+            (
+                Vec2::new(-100.5, -100.5),
+                Rect::new(-105.0, -102.0, 9.0, 6.0),
+                Vec2::new(-100.0, -100.0),
+            ),
+        ] {
+            let fractional = instance_mask("oArrow", "sArrowRight", pos, 0.0, unit, angle);
+            assert_eq!(fractional.event_geometry(), Some((bounds, origin)));
+        }
+        for (pos, expected) in [
+            (Vec2::new(94.0, 95.0), false),
+            (Vec2::new(105.0, 95.0), false),
+            (Vec2::new(100.0, 100.0), true),
+            (Vec2::new(94.0, 105.0), true),
+        ] {
+            let web = instance_mask("oWebBall", "sWebBall", pos, 0.0, unit, 0.0);
+            assert!(arrow.bounds().intersects(web.bounds()));
+            assert_eq!(arrow.intersects_mask(&web), expected, "WebBall at {pos:?}");
+            assert_eq!(web.intersects_mask(&arrow), expected);
+            // Source precision-zero queries and the explicit rotated shape
+            // query fallback retain their established rectangular behavior.
+            assert!(arrow.intersects(web.bounds(), CollisionPrecision::BoundingBox));
+            assert!(arrow.intersects(web.bounds(), CollisionPrecision::Precise));
+        }
+        let mirrored = instance_mask(
+            "oArrow",
+            "sArrowRight",
+            arrow.pos,
+            0.0,
+            Vec2::new(-1.0, 1.0),
+            angle,
+        );
+        assert!(mirrored.event_geometry().is_none());
     }
 
     #[test]
