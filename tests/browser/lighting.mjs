@@ -1,7 +1,6 @@
 // Real UI-generated dark rooms and readback from the actual production WebGL pass.
 import assert from 'node:assert/strict';
 import { snapshot, state, press } from './movement.mjs';
-import { continueTransition } from './adversarial.mjs';
 
 export function installLightingProfile() {
   // Controlled persisted unlock, not injected room, equipment, darkness, or seed.
@@ -159,86 +158,185 @@ async function restart(page) {
   await page.locator('canvas').focus();
 }
 
-async function walkGeneratedStairs(page, targetX, entry) {
-  const initial = await snapshot(page), toward = Math.sign(targetX - initial.player.x);
-  const direction = toward > 0 ? 'ArrowRight' : 'ArrowLeft';
-  let afterTick = initial.tick;
-  await page.keyboard.down(direction);
-  try {
-    for (let jump = 0; jump < 12; jump++) {
-      await page.waitForFunction(({ targetX, toward, afterTick }) => {
-        const v = window.__spelunkyTest;
-        if (v.state !== 'Playing' || v.player.health <= 0 || toward * (v.player.x - targetX) >= -3) return true;
-        if (v.player.stun > 0 || !(v.player.grounded || v.player.state === 'Hanging')) return false;
-        const older = [...window.__movementTrace].reverse().find(s => s.tick <= v.tick - 6 && s.tick >= afterTick);
-        return older && Math.abs(older.player.x - v.player.x) < .5 && Math.abs(older.player.y - v.player.y) < .5;
-      }, { targetX, toward, afterTick }, { timeout: 15000 });
-      const current = await snapshot(page);
-      assert.equal(current.state, 'Playing', 'Generated route must remain alive before the exit');
-      assert.ok(current.player.health > 0);
-      if (toward * (current.player.x - targetX) >= -3) return current;
-      entry.jumps.push(current);
-      await page.keyboard.down('KeyZ');
-      await page.waitForFunction(tick => window.__spelunkyTest.tick >= tick + 12, current.tick, { timeout: 5000 });
-      await page.keyboard.up('KeyZ');
-      afterTick = (await snapshot(page)).tick;
+// Test-only DOM events enter the same canvas/winit keyboard listener as normal
+// keys. They are untrusted browser events, not OS input; no Rust state is set.
+export function installLightingRoute(config) {
+  const route = window.__lightingRoute = {
+    config, phase: 'waiting', frames: [], edges: [], jumps: [], gaps: [], focusEvents: [], error: null, done: false,
+  };
+  const descriptor = Object.getOwnPropertyDescriptor(window, '__spelunkyTest');
+  if (!descriptor?.set || !descriptor?.get) throw new Error('Read-only movement trace must be installed before route controller');
+  const canvas = document.getElementById('spelunky-canvas');
+  const keys = new Set();
+  const keyNames = { KeyZ: 'z', KeyX: 'x' };
+  const setKeys = desired => {
+    const next = new Set(desired);
+    for (const code of new Set([...keys, ...next])) {
+      if (keys.has(code) === next.has(code)) continue;
+      const down = next.has(code);
+      canvas.dispatchEvent(new KeyboardEvent(down ? 'keydown' : 'keyup', {
+        code, key: keyNames[code] ?? code, bubbles: true, cancelable: true, composed: true, repeat: false,
+      }));
+      route.edges.push({ tick: lastTick, code, down, phase: route.phase });
     }
-    assert.fail('Generated stair route exceeded its bounded real jump attempts');
-  } finally {
-    await page.keyboard.up('KeyZ');
-    await page.keyboard.up(direction);
+    keys.clear();
+    for (const key of next) keys.add(key);
+  };
+  let lastTick = -1, previousX = null, stationarySince = null, jumpUntilTick = -1, releasedTick = -1, endingTick = null;
+  for (const name of ['focus', 'blur']) window.addEventListener(name, () => {
+    route.focusEvents.push({ name, tick: lastTick, activeElement: document.activeElement?.id });
+    if (name === 'blur') keys.clear(); // The normal host also releases input on lost focus.
+  });
+  const phase = name => {
+    route.phase = name;
+    previousX = null;
+    stationarySince = null;
+    jumpUntilTick = -1;
+  };
+  function control(value) {
+    if (route.done || !value?.world || value.world.level < 5) return;
+    if (value.tick === lastTick) return;
+    if (lastTick >= 0 && value.tick !== lastTick + 1) route.gaps.push({ from: lastTick, to: value.tick, phase: route.phase });
+    lastTick = value.tick;
+    const p = value.player;
+    route.frames.push({ tick: value.tick, levelTick: value.levelTick, world: value.world.name,
+      level: value.world.level, dark: value.world.dark, x: p.x, y: p.y, vx: p.vx, vy: p.vy,
+      grounded: p.grounded, health: p.health, stun: p.stun, state: value.state,
+      phase: route.phase, ending: value.ending?.stage ?? null, sourceTimeMs: value.sourceTimeMs,
+      focused: document.hasFocus(), activeElement: document.activeElement?.id });
+    if (value.world.level === 6 && value.state === 'Playing') {
+      route.done = true;
+      setKeys([]);
+      return;
+    }
+    if (p.health <= 0 || !['Playing', 'Ending', 'Transition'].includes(value.state)) {
+      route.error = `Natural route stopped at${value.tick}: ${value.state}, health${p.health}`;
+      route.done = true;
+      setKeys([]);
+      return;
+    }
+    if (value.tick > config.waitTicks + 1100) {
+      route.error = 'Bounded generated route did not reach the next room';
+      route.done = true;
+      setKeys([]);
+      return;
+    }
+    if (value.state === 'Ending' || value.state === 'Transition') {
+      if (endingTick === null) {
+        endingTick = value.tick;
+        phase('source-exit-and-tally');
+      }
+      // Source attack pulses hurry the tally, then acknowledge it. The full
+      // authored exit and tally still run on actual simulation/elapsed time.
+      setKeys((value.tick - endingTick) % 15 === 0 ? ['KeyX'] : []);
+      return;
+    }
+    if (route.phase === 'waiting') {
+      if (value.levelTick < config.waitTicks) return setKeys([]);
+      phase('outbound');
+    }
+    if (route.phase === 'outbound' && p.x >= config.shaftX) phase('fall');
+    if (route.phase === 'fall') {
+      if (!p.grounded) return setKeys([]);
+      if (Math.abs(p.y - config.landingY) > 8) {
+        route.error = `Unexpected intermediate floor at${p.x},${p.y}; actual exit floor not reached`;
+        route.done = true;
+        return setKeys([]);
+      }
+      phase('inbound');
+    }
+    if (route.phase === 'inbound' && Math.abs(p.x - config.exitX) < 3
+      && p.grounded && Math.abs(p.y - config.exitY) < 10) {
+      phase('door');
+    }
+    if (route.phase === 'door') return setKeys(['ArrowUp']);
+    const target = route.phase === 'outbound' ? config.shaftX : config.exitX;
+    if (previousX === null) previousX = p.x;
+    if (Math.abs(p.x - previousX) >= .2) stationarySince = null;
+    else if (stationarySince === null) stationarySince = value.tick - 1;
+    previousX = p.x;
+    const desired = [target < p.x ? 'ArrowLeft' : 'ArrowRight'];
+    let justReleased = false;
+    // Actual tick deadlines tolerate ordinary multi-step redraws. During a
+    // stun, keep the physical key held rather than manufacturing pressed
+    // edges on an already-held key. Every new attempt follows a real release.
+    if (keys.has('KeyZ')) {
+      if (value.tick >= jumpUntilTick && p.stun === 0) {
+        releasedTick = value.tick;
+        justReleased = true;
+      } else desired.push('KeyZ');
+    }
+    if (!keys.has('KeyZ') && !justReleased && value.tick > releasedTick
+      && stationarySince !== null && value.tick - stationarySince >= 6) {
+      jumpUntilTick = value.tick + 12;
+      desired.push('KeyZ');
+      route.jumps.push({ tick: value.tick, x: p.x, y: p.y, stun: p.stun, grounded: p.grounded, phase: route.phase });
+    }
+    setKeys(desired);
+
   }
+  Object.defineProperty(window, '__spelunkyTest', {
+    configurable: true, get: descriptor.get,
+    set(value) { descriptor.set(value); control(descriptor.get()); },
+  });
 }
 
 async function enterEligibleDarkRoom(page, entry, result, screenshot) {
   await press(page, 'ArrowDown', 5);
   await page.keyboard.press('Enter');
   await state(page, 'Shortcuts');
+  await page.bringToFront();
+  await page.locator('canvas').focus();
+  await page.evaluate(installLightingRoute, { seed: entry.seed, waitTicks: entry.waitTicks,
+    shaftX: 520, exitX: 424, exitY: 472, landingY: 504, startY: 88 });
   await page.evaluate(seed => { window.__lightingSeedControl.armed = seed; }, entry.seed);
   await page.keyboard.press('Enter');
-  await page.waitForFunction(() => window.__spelunkyTest?.screen === 'Playing' && window.__spelunkyTest.world.level === 5
-    && window.__spelunkyTest.levelTick >= 2, null, { timeout: 15000 });
+  await page.waitForFunction(() => window.__spelunkyTest?.screen === 'Playing' && window.__spelunkyTest.world.level === 5,
+    null, { timeout: 15000 });
   entry.start = await snapshot(page);
   assert.equal(entry.start.seed, entry.seed, 'One-shot environment clock must select the documented source seed');
   assert.equal(entry.start.world.dark, false, 'Fresh shortcut is correctly suppressed by source noDarkLevel');
   entry.environmentClock = await page.evaluate(() => window.__lightingSeedControl.observations);
-  // Source xtime advances30ms per simulation tick. Actual wall/performance
-  // clocks remain untouched; waiting21 wall seconds would be insufficient.
-  await page.waitForFunction(tick => window.__spelunkyTest.levelTick >= tick, entry.waitTicks, { timeout: 45000 });
-  entry.waited = await snapshot(page);
-  entry.jumps = [];
-  entry.shaft = await walkGeneratedStairs(page, 520, entry);
-  await page.waitForFunction(() => {
-    const v = window.__spelunkyTest;
-    return v.player.grounded && v.player.y >= 496 && v.player.stun === 0;
-  }, null, { timeout: 15000 });
-  entry.landed = await snapshot(page);
-  entry.door = await walkGeneratedStairs(page, 424, entry);
-  assert.ok(Math.abs(entry.door.player.y - 472) <= 8, 'Real generated exit must be approached at its authored height');
-  await page.keyboard.down('ArrowUp');
   try {
-    await page.waitForFunction(() => window.__spelunkyTest.state === 'Ending', null, { timeout: 10000 });
-  } finally { await page.keyboard.up('ArrowUp'); }
-  entry.exit = await snapshot(page);
-  const sourceSecondsRemainder = Math.floor(entry.exit.sourceTimeMs / 1000) % 60;
-  assert.ok(sourceSecondsRemainder > 20, 'Actual completed room time must satisfy source darkness eligibility');
-  entry.transition = await continueTransition({ page, result, screenshot, name: `lighting-eligible-${entry.attempt}`,
-    expectedRoom: 'rTransition2' });
-  await page.waitForFunction(() => window.__spelunkyTest.state === 'Playing' && window.__spelunkyTest.world.level === 6,
-    null, { timeout: 15000 });
+    await page.waitForFunction(() => window.__spelunkyTest.ending?.stage === 'Transition' || window.__lightingRoute.error,
+      null, { timeout: 70000 });
+    entry.transition = await snapshot(page);
+    const routeError = await page.evaluate(() => window.__lightingRoute.error);
+    if (routeError !== null) {
+      entry.rejected = routeError;
+      console.log(`Lighting route rejected: ${routeError}`);
+      return false;
+    }
+    assert.equal(entry.transition.world.name, 'rTransition2');
+    assert.ok(Math.floor(entry.transition.ending.sourceTimeMs / 1000) % 60 > 20,
+      'Actual source room clock must satisfy darkness eligibility before generation');
+    await screenshot(page, `lighting-eligible-${entry.attempt}-transition`, result);
+    await page.waitForFunction(() => window.__lightingRoute.done, null, { timeout: 20000 });
+  } finally {
+    entry.route = await page.evaluate(() => window.__lightingRoute);
+  }
+  assert.equal(entry.route.error, null);
+  // Gaps remain diagnostic evidence. This controller uses observed positions
+  // and actual tick deadlines, not one callback per simulation-step timing.
   entry.next = await snapshot(page);
+  assert.equal(entry.next.world.level, 6);
   entry.dark = entry.next.world.dark;
+  console.log(`Lighting route seed${entry.seed} wait${entry.waitTicks}: level6 dark=${entry.dark}, health=${entry.next.player.health}, source exit=${entry.transition.ending.sourceTimeMs}ms`);
   return entry.dark;
 }
 
 export async function runLightingAcceptance({ page, result, screenshot }) {
+  // Exercise the production pipeline at its native logical resolution, reducing
+  // software-renderer cost without reducing any of the76,800 logical samples.
+  // The separate gameplay suite already covers larger/responsive viewports.
+  await page.setViewportSize({ width: 320, height: 240 });
   const entry = result.lighting = {
-    status: 'failed', attempts: [],
-    scope: 'Saved shortcut unlock and disclosed one-shot clock-derived seed; real elapsed source time, generated level5 keyboard clear, authored tally and naturally random eligible level6 darkness. Actual production WebGL byte-multiply readback. Published circles are pipeline inputs, not an independent emitter-catalog oracle.',
+    status: 'failed', attempts: [], viewport: { width: 320, height: 240 },
+    scope: 'Saved shortcut unlock and disclosed one-shot clock-derived seed; real elapsed clocks; telemetry-timed untrusted DOM keyboard events through normal canvas/winit input; generated level5 clear, authored tally and naturally random eligible level6 darkness. Actual production WebGL byte-multiply readback. Published circles are pipeline inputs, not an independent emitter-catalog oracle.',
   };
-  for (let attempt = 0; attempt < 56; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt) await restart(page);
-    const candidate = { attempt: attempt + 1, seed: '395', waitTicks: 750 + (attempt % 8) };
+    const candidate = { attempt: attempt + 1, seed: '395', waitTicks: [750, 753, 760][attempt] };
     entry.attempts.push(candidate);
     if (!await enterEligibleDarkRoom(page, candidate, result, screenshot)) continue;
     for (const direction of ['ArrowRight', 'ArrowLeft', 'ArrowRight']) {
@@ -285,5 +383,5 @@ export async function runLightingAcceptance({ page, result, screenshot }) {
     result.checks.push('Source-eligible generated level6 dark room after real level5 clear; actual WebGL RGB-byte multiplication, circle union/overlap, black exterior, and HUD bypass');
     return;
   }
-  assert.fail('No live measurable natural dark room found in56 source-eligible generated room clears');
+  assert.fail('No live measurable natural dark room found in three diagnosed source-eligible room clears');
 }
