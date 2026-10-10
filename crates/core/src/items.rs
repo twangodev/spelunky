@@ -626,6 +626,19 @@ fn lava_at(game: &Game, rect: Rect) -> bool {
             .any(|e| e.alive && e.object == "oLava" && rect.intersects(e.bounds()))
 }
 
+/// Collision edge scripts pass precise=true to collision_line. Keep their
+/// target-mask query separate from explicit source bounding-box rectangles.
+fn solid_edge(world: &World, probe: Rect, excluded: u64) -> bool {
+    world.tiles_collide_precision(probe, "oSolid", CollisionPrecision::Precise)
+        || world.entities.iter().any(|target| {
+            target.id != excluded
+                && target.alive
+                && target.solid
+                && !target.held
+                && target.mask_intersects(probe, CollisionPrecision::Precise)
+        })
+}
+
 fn body_contact(world: &World, entity: &Entity, dx: i8, dy: i8) -> bool {
     let bounds = body_bounds(entity, entity.pos);
     let probe = if dx < 0 {
@@ -657,7 +670,7 @@ fn body_contact(world: &World, entity: &Entity, dx: i8, dy: i8) -> bool {
             1.0,
         )
     };
-    world.collides_except(probe, entity.id)
+    solid_edge(world, probe, entity.id)
 }
 
 fn body_horizontal_move_contact(world: &World, entity: &Entity, dx: i8) -> bool {
@@ -671,7 +684,8 @@ fn body_horizontal_move_contact(world: &World, entity: &Entity, dx: i8) -> bool 
     };
     let top = (bounds.y + 5.0).round_ties_even();
     let bottom = (bounds.y + bounds.h - 1.0).round_ties_even();
-    world.collides_except(
+    solid_edge(
+        world,
         Rect::new(
             x.round_ties_even(),
             top.min(bottom),
@@ -836,7 +850,8 @@ fn tick_bodies(game: &mut Game) {
         }
         if fragile && entity.vel.y.abs() < 1.0 {
             let bounds = body_bounds(&entity, entity.pos);
-            if game.world.collides_except(
+            if solid_edge(
+                &game.world,
                 Rect::new(
                     bounds.x.round_ties_even(),
                     (bounds.y + bounds.h - 1.0).round_ties_even(),
@@ -1085,6 +1100,65 @@ mod tests {
         let rock = game.world.entity(rock).unwrap();
         assert_eq!(rock.pos, Vec2::new(104.0, 104.0));
         assert_eq!(rock.vel, Vec2::default());
+    }
+
+    #[test]
+    fn source_edge_queries_use_darkfall_alpha_and_ignore_leaves_platforms() {
+        for dynamic in [false, true] {
+            let mut game = game();
+            if dynamic {
+                game.world.spawn("oDarkFall", Vec2::new(80.0, 80.0));
+            } else {
+                game.world.set_tile(5, 5, "oDarkFall");
+            }
+            // DarkFall's source-image pixel (0,0) is transparent inside its
+            // AUTO mask rectangle, while adjacent pixel (1,0) is opaque.
+            let clear = Rect::new(80.0, 80.0, 1.0, 1.0);
+            assert!(game.world.collides_except(clear, 0), "{dynamic}");
+            assert!(!solid_edge(&game.world, clear, 0), "{dynamic}");
+            assert!(solid_edge(&game.world, Rect::new(81.0, 80.0, 1.0, 1.0), 0));
+
+            let mut game = Game::shell(7, RulesPreset::Classic);
+            if dynamic {
+                game.world.spawn("oLeaves", Vec2::new(80.0, 80.0));
+            } else {
+                game.world.set_tile(5, 5, "oLeaves");
+            }
+            // Leaves inherits oPlatform, not oSolid: an item's oSolid edge
+            // query ignores both its transparent and opaque source pixels.
+            for x in [80.0, 85.0] {
+                assert!(!solid_edge(&game.world, Rect::new(x, 95.0, 1.0, 1.0), 0));
+            }
+        }
+    }
+
+    #[test]
+    fn game_step_item_passes_transparent_source_terrain_corners() {
+        for (object, y, velocity, expected_y) in [
+            ("oDarkFall", 76.0, 1.0, 77.0),
+            ("oLeaves", 100.0, -1.0, 99.0),
+        ] {
+            for dynamic in [false, true] {
+                let mut game = game();
+                game.player.pos = Vec2::new(200.0, 200.0);
+                if dynamic {
+                    game.world.spawn(object, Vec2::new(80.0, 80.0));
+                } else {
+                    game.world.set_tile(5, 5, object);
+                }
+                let rock = game.world.spawn("oRock", Vec2::new(77.0, y));
+                game.world.entity_mut(rock).unwrap().vel.y = velocity;
+                game.step(&InputFrame::default());
+                // Only x=80 of the item's top/bottom line overlaps the
+                // terrain. DarkFall alpha permits one pixel; Leaves must
+                // remain excluded from the oSolid family altogether.
+                assert_eq!(
+                    game.world.entity(rock).unwrap().pos.y,
+                    expected_y,
+                    "{object}/{dynamic}"
+                );
+            }
+        }
     }
 
     #[test]

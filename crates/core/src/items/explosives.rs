@@ -220,7 +220,8 @@ pub fn use_rope(game: &mut Game, input: &InputFrame) {
     let pos = game.player.pos;
     let player_bounds = game.player.bounds();
     if !input.down
-        && game.world.collides_except(
+        && super::solid_edge(
+            &game.world,
             Rect::new(player_bounds.x, player_bounds.y - 1.0, player_bounds.w, 1.0),
             0,
         )
@@ -508,7 +509,7 @@ fn projectile_motion(world: &World, entity: &mut Entity, sticky: bool) -> bool {
                 1.0,
             )
         };
-        world.collides_except(rect, entity.id)
+        super::solid_edge(world, rect, entity.id)
     };
     if world.solid_at_except(entity.pos.x, entity.pos.y, entity.id) {
         let (top, bottom, left, right) = (
@@ -548,7 +549,7 @@ fn projectile_motion(world: &World, entity: &mut Entity, sticky: bool) -> bool {
             (bounds.y + bounds.h - 1.0).round_ties_even() - (bounds.y + 5.0).round_ties_even()
                 + 1.0,
         );
-        if world.collides_except(probe, entity.id) {
+        if super::solid_edge(world, probe, entity.id) {
             break;
         }
         entity.pos = next;
@@ -566,7 +567,7 @@ fn projectile_motion(world: &World, entity: &mut Entity, sticky: bool) -> bool {
             bounds.w,
             1.0,
         );
-        if world.collides_except(probe, entity.id) {
+        if super::solid_edge(world, probe, entity.id) {
             break;
         }
         entity.pos = next;
@@ -686,7 +687,8 @@ fn tick_rope(game: &mut Game, rope: &mut Entity) {
         let count = rope.value("fall_count") + 1.0;
         rope.data.insert("fall_count".into(), count);
         if count > 16.0
-            || game.world.collides_except(
+            || super::solid_edge(
+                &game.world,
                 Rect::new(rope.pos.x - 4.0, rope.pos.y + 4.0, 8.0, 1.0),
                 rope.id,
             )

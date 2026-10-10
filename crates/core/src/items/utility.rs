@@ -281,7 +281,7 @@ pub fn tick(game: &mut Game) {
                         entity.value("bboxRight") - entity.value("bboxLeft"),
                         1.0,
                     );
-                    if solid_rect(game, below) {
+                    if super::solid_edge(&game.world, below, entity.id) {
                         entity.sprite = format!("sDice{}", entity.value("value") as u32);
                         if entity.value("rolling") != 0.0 && entity.vel.y == 0.0 {
                             if entity.value("rolled") != 0.0 {
