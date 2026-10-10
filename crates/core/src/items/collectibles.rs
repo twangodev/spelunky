@@ -412,7 +412,7 @@ pub(crate) fn collision(game: &mut Game, id: u64, other: crate::dispatcher::Inst
     }
 }
 
-/// Returns true when the attack edge was consumed by a container or equipment.
+/// Returns true when the attack edge was consumed by a container.
 pub fn interact(game: &mut Game, input: &InputFrame) -> bool {
     if !input.attack_pressed || super::player_dead(game) || game.player.is_stunned() {
         return false;
@@ -474,36 +474,6 @@ pub fn interact(game: &mut Game, input: &InputFrame) -> bool {
             }
             game.sound("sndPickup", pos);
             return true;
-        }
-    }
-    if input.down && game.player.held.is_none() {
-        let reach = Rect::new(game.player.pos.x - 8., game.player.pos.y, 17., 9.);
-        // Respect the nearest item so an equipment pickup cannot reach through
-        // another ordinary item selected by the normal holding system.
-        let pickup = game
-            .world
-            .entities
-            .iter()
-            .filter(|e| {
-                e.alive
-                    && !e.held
-                    && super::is_item(&e.object)
-                    && treasure_value(&e.object).is_none()
-                    && reach.intersects(bounds(e))
-            })
-            .min_by(|a, b| {
-                a.pos
-                    .distance(game.player.pos)
-                    .total_cmp(&b.pos.distance(game.player.pos))
-            })
-            .filter(|e| {
-                equipment(&e.object).is_some()
-                    && e.value("forSale") <= 0.
-                    && !origin_is_solid(game, e)
-            })
-            .map(|e| e.id);
-        if let Some(id) = pickup {
-            return grant(game, id);
         }
     }
     false
@@ -739,14 +709,17 @@ mod tests {
         let cape = g.spawn("oCapePickup", pos);
         tick(&mut g);
         assert!(g.world.entity(cape).is_some());
-        assert!(interact(
-            &mut g,
-            &InputFrame {
-                down: true,
-                attack_pressed: true,
-                ..Default::default()
-            }
-        ));
+        g.world
+            .entity_mut(cape)
+            .unwrap()
+            .data
+            .insert("cost".into(), 0.0);
+        g.step(&InputFrame {
+            down: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
         assert!(g.player.has("Cape"));
         assert!(!g.player.has("Jetpack"));
         assert!(
@@ -763,14 +736,13 @@ mod tests {
         let pos = g.player.pos;
         let rock = g.spawn("oRock", Vec2::new(pos.x, pos.y + 1.));
         g.spawn("oCapePickup", Vec2::new(pos.x, pos.y + 5.));
-        assert!(!interact(
-            &mut g,
-            &InputFrame {
-                down: true,
-                attack_pressed: true,
-                ..Default::default()
-            }
-        ));
+        g.step(&InputFrame {
+            down: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(g.player.held, Some(rock));
         assert!(!g.player.has("Cape"));
         assert!(g.world.entity(rock).is_some());
     }

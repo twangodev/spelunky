@@ -529,6 +529,15 @@ fn pick_up(game: &mut Game) {
         game.player.held = Some(id);
         utility::on_pickup(game, id);
         crate::traps::altar::idol_pickup(game, id);
+        // Source scrStealItem consumes equipment only after this single
+        // parent-item selection has made it the held item.
+        if game
+            .world
+            .entity(id)
+            .is_some_and(|item| item.value("cost") == 0.0)
+        {
+            collectibles::grant(game, id);
+        }
     }
 }
 
@@ -1322,6 +1331,48 @@ mod tests {
             attack_pressed: true,
             ..InputFrame::default()
         }
+    }
+
+    #[test]
+    fn game_step_equipment_grant_follows_the_one_parent_pickup_selection() {
+        for (rock_position, expected_cape) in [
+            (Vec2::new(72.0, 64.0), false),
+            (Vec2::new(96.0, 64.0), true),
+        ] {
+            let mut game = pickup_query_fixture();
+            let rock = game.spawn("oRock", rock_position);
+            let cape = game.spawn("oCapePickup", Vec2::new(80.0, 76.0));
+            let pickup = game.world.entity_mut(cape).unwrap();
+            pickup.data.insert("cost".into(), 0.0);
+            pickup.data.insert("forSale".into(), 0.0);
+            game.step(&pickup_query_input());
+            assert_eq!(game.player.has("Cape"), expected_cape);
+            assert_eq!(
+                game.player.held,
+                if expected_cape { None } else { Some(rock) }
+            );
+            assert_eq!(game.world.entity(cape).is_none(), expected_cape);
+            assert_eq!(game.events.iter().filter(|event|matches!(event,GameEvent::Collected{object,..}if object=="oCapePickup")).count(),usize::from(expected_cape));
+        }
+    }
+
+    #[test]
+    fn game_step_nearer_unpickable_parent_item_blocks_equipment_grant() {
+        let mut game = pickup_query_fixture();
+        let rock = game.spawn("oRock", Vec2::new(72.0, 64.0));
+        game.world
+            .entity_mut(rock)
+            .unwrap()
+            .data
+            .insert("canPickUp".into(), 0.0);
+        let cape = game.spawn("oCapePickup", Vec2::new(80.0, 76.0));
+        let pickup = game.world.entity_mut(cape).unwrap();
+        pickup.data.insert("cost".into(), 0.0);
+        pickup.data.insert("forSale".into(), 0.0);
+        game.step(&pickup_query_input());
+        assert_eq!(game.player.held, None);
+        assert!(!game.player.has("Cape"));
+        assert!(game.world.entity(cape).is_some());
     }
 
     #[test]

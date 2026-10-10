@@ -2494,7 +2494,10 @@ mod tests {
         let (mut game, weapon) = flat_room("oMachete");
         game.world.entity_mut(weapon).unwrap().alive = false;
         game.player.held = None;
-        game.world.spawn("oMitt", Vec2::new(80.0, 156.0));
+        let mitt = game.spawn("oMitt", Vec2::new(80.0, 156.0));
+        // Its inherited source Step clears the default price before pickup.
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(mitt).unwrap().value("cost"), 0.0);
         game.step(&InputFrame {
             down: true,
             attack_pressed: true,
