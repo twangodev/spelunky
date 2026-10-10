@@ -44,9 +44,7 @@ pub(super) fn stamp_at(
         }
         // Positions are source instance origins; render/collision applies each sprite's origin.
         let p = Vec2::new(tx as f64 * 16.0, ty as f64 * 16.0);
-        let occupied = world
-            .tile(tx as i32, ty as i32)
-            .is_some_and(|t| t.is_solid());
+        let occupied = solid_point(world, p);
         match symbol {
             b'1' | b'2' => {
                 if symbol == b'2' && !rng.chance(1, 2) {
@@ -89,7 +87,7 @@ pub(super) fn stamp_at(
                     (_, _, b'L') => "oLadderOrange",
                     _ => "oLadderTop",
                 };
-                world.set_tile(tx, ty, object);
+                climbable(world, tx, ty, object, p);
             }
             b'7' => {
                 if (world.area == Area::Ice && !yeti) || rng.chance(1, 3) {
@@ -208,7 +206,7 @@ pub(super) fn stamp_at(
                     Area::Jungle => "sLushSmooth",
                     Area::Ice => "sDarkSmooth",
                     Area::Temple => "sTemple",
-                    _ => "sBrickSmooth",
+                    _ => "sCaveSmooth",
                 };
                 world
                     .entity_mut(id)
@@ -329,8 +327,8 @@ fn jungle(
         b's' => {
             spawn(w, "oSpikes", p);
         }
-        b'G' if market => w.set_tile(x, y, "oLadderOrange"),
-        b'H' if market => w.set_tile(x, y, "oLadderTop"),
+        b'G' if market => climbable(w, x, y, "oLadderOrange", p),
+        b'H' if market => climbable(w, x, y, "oLadderTop", p),
         b'c' => {
             spawn(w, "oChest", p);
         }
@@ -474,10 +472,17 @@ fn ice(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2, yeti: boo
         }
         b'M' if !occupied => {
             for (dx, object) in [(0, "oMoai"), (1, "oMoai2"), (2, "oMoai3")] {
-                w.set_tile(x + dx, y, object);
+                let id = spawn(w, object, offset(p, dx as f64 * 16.0, 0.0));
+                w.entity_mut(id)
+                    .unwrap()
+                    .data
+                    .insert("invincible".into(), 1.0);
             }
             let id = spawn(w, "oMoaiInside", offset(p, 16.0, 16.0));
-            w.entity_mut(id).unwrap().solid = true;
+            w.entity_mut(id)
+                .unwrap()
+                .data
+                .insert("invincible".into(), 1.0);
             spawn(w, "oThinIce", offset(p, 16.0, 32.0));
             let id = spawn(w, "oExit", offset(p, 16.0, 48.0));
             w.entity_mut(id)
@@ -672,18 +677,40 @@ fn spawn(w: &mut World, object: &str, p: Vec2) -> u64 {
     if !sprite.is_empty() {
         e.sprite = sprite.into();
     }
-    e.solid = matches!(
-        object,
-        "oPushBlock"
-            | "oTrapBlock"
-            | "oCeilingTrap"
-            | "oThwompTrap"
-            | "oTempleFake"
-            | "oThinIce"
-            | "oDarkFall"
-            | "oTreeBranch"
-    );
+    // Entity::new derives collision membership from the original parent chain.
+    // In particular, oTreeBranch is a one-way oPlatform and oTempleFake is
+    // decoration while its door remains; neither belongs to the oSolid family.
+    if object == "oDarkFall" {
+        for (key, value) in [
+            ("collision_left", 0.0),
+            ("collision_top", 0.0),
+            ("collision_right", 16.0),
+            ("collision_bottom", 8.0),
+        ] {
+            e.data.insert(key.into(), value);
+        }
+    }
     id
+}
+
+/// The source collision_point query includes previously created solid
+/// instances, including moving blocks and the full four-tile Moai side masks.
+/// Room edges themselves have no implicit source collision surface.
+fn solid_point(world: &World, point: Vec2) -> bool {
+    world.solid_point_except(point, 0)
+}
+
+fn climbable(world: &mut World, x: usize, y: usize, object: &str, point: Vec2) {
+    // GameMaker can place a ladder atop an already created door support. Keep
+    // both collision layers rather than replacing the support with a ladder.
+    if world
+        .tile(x as i32, y as i32)
+        .is_some_and(|tile| tile.is_solid())
+    {
+        spawn(world, object, point);
+    } else {
+        world.set_tile(x, y, object);
+    }
 }
 fn free_item(w: &mut World, object: &str, p: Vec2) {
     let id = spawn(w, object, p);
@@ -769,10 +796,12 @@ fn tree(w: &mut World, r: &mut Rng, x: usize, y: usize, p: Vec2) {
         if r.range(m + 1) > 2 {
             break;
         }
-        if [-1, 0, 1]
-            .iter()
-            .any(|dx| w.tile(x as i32 + dx, ty - 1).is_none_or(|t| t.is_solid()))
-        {
+        if [-1, 0, 1].iter().any(|dx| {
+            solid_point(
+                w,
+                Vec2::new((x as i32 + dx) as f64 * 16.0, (ty - 1) as f64 * 16.0),
+            )
+        }) {
             break;
         }
         if ty < 0 {
@@ -1110,5 +1139,152 @@ mod tests {
             2
         );
         assert!(w.tiles.iter().any(|t| t.object == "oXocBlock"));
+    }
+
+    #[test]
+    fn all_seven_source_decoders_preserve_ladder_and_platform_families() {
+        for (area, name, ladder, top) in [
+            (Area::Mines, "", "oLadderOrange", "oLadderTop"),
+            (Area::Jungle, "", "oVine", "oVineTop"),
+            (Area::Ice, "", "oVine", "oVine"),
+            (Area::Temple, "", "oLadderOrange", "oLadderTop"),
+            (Area::Boss, "", "oVine", "oVineTop"),
+            (Area::Ice, "Yeti Lair", "oLadderOrange", "oLadderTop"),
+            (Area::Jungle, "Black Market", "oVine", "oVineTop"),
+        ] {
+            let mut w = World::new(42, 55, area, 1);
+            w.name = name.into();
+            room(&mut w, "LP");
+            assert_eq!(w.tile(1, 1).unwrap().object, ladder, "{area:?} {name}");
+            assert_eq!(w.tile(2, 1).unwrap().object, top, "{area:?} {name}");
+            assert!(!w.tile(1, 1).unwrap().is_solid());
+            assert!(!w.tile(2, 1).unwrap().is_solid());
+            assert!(w.tile(1, 1).unwrap().is_ladder());
+            assert!(w.tile(2, 1).unwrap().is_ladder());
+            assert_eq!(crate::catalog::is_a(top, "oPlatform"), top == "oLadderTop");
+        }
+    }
+
+    #[test]
+    fn source_collision_point_counts_dynamic_solids_but_ignores_platforms() {
+        for (object, should_block) in [
+            ("oPushBlock", true),
+            ("oTrapBlock", true),
+            ("oCeilingTrap", true),
+            ("oTreeBranch", false),
+            ("oLeaves", false),
+            ("oTempleFake", false),
+        ] {
+            let mut w = World::new(42, 34, Area::Mines, 1);
+            spawn(&mut w, object, Vec2::new(16.0, 16.0));
+            room(&mut w, "1");
+            assert_eq!(
+                w.tile(1, 1).unwrap().object.is_empty(),
+                should_block,
+                "{object}"
+            );
+        }
+    }
+
+    #[test]
+    fn ladder_stamping_keeps_the_original_door_support_collision_layer() {
+        let mut w = World::new(42, 34, Area::Mines, 1);
+        let mut template = vec![b'0'; 80];
+        template[0] = b'9';
+        template[10] = b'L';
+        room(&mut w, std::str::from_utf8(&template).unwrap());
+        assert_eq!(w.tile(1, 2).unwrap().object, "oBrick");
+        let ladder = w
+            .entities
+            .iter()
+            .find(|e| e.object == "oLadderOrange")
+            .unwrap();
+        assert_eq!(ladder.pos, Vec2::new(16.0, 32.0));
+        assert!(!ladder.solid);
+    }
+
+    #[test]
+    fn moai_side_masks_span_four_rows_and_suppress_overlapping_terrain() {
+        let mut w = World::new(42, 34, Area::Ice, 10);
+        room(&mut w, "M");
+        let left = w.entities.iter().find(|e| e.object == "oMoai").unwrap();
+        assert_eq!(
+            left.bounds(),
+            crate::model::Rect::new(16.0, 16.0, 16.0, 64.0)
+        );
+        assert!(left.solid);
+        assert_eq!(left.value("invincible"), 1.0);
+        for row in 1..=4 {
+            stamp_at(
+                &mut w,
+                &mut Rng::new(0),
+                "1",
+                1,
+                row,
+                false,
+                false,
+                "General",
+            );
+            assert!(w.tile(1, row as i32).unwrap().object.is_empty());
+        }
+        assert_eq!(
+            w.entities
+                .iter()
+                .filter(|e| matches!(
+                    e.object.as_str(),
+                    "oMoai" | "oMoai2" | "oMoai3" | "oMoaiInside"
+                ))
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn generated_tree_branch_is_jump_through_and_supports_falling_player() {
+        use crate::model::{Game, InputFrame, PlayerState, RulesPreset};
+        let mut game = Game::shell(0, RulesPreset::Classic);
+        game.world = World::new(20, 20, Area::Jungle, 5);
+        let id = spawn(&mut game.world, "oTreeBranch", Vec2::new(80.0, 128.0));
+        assert!(!game.world.entity(id).unwrap().solid);
+        game.player.pos = Vec2::new(88.0, 148.0);
+        game.player.state = PlayerState::Jumping;
+        game.player.vel.y = -6.0;
+        game.tick = 1;
+        crate::player::tick(&mut game, &InputFrame::default());
+        assert!(
+            game.player.pos.y < 148.0,
+            "a branch must not block upward movement"
+        );
+        assert!(game.player.vel.y < 0.0);
+        game.player.pos = Vec2::new(88.0, 118.0);
+        game.player.state = PlayerState::Falling;
+        game.player.vel.y = 3.0;
+        game.tick += 1;
+        crate::player::tick(&mut game, &InputFrame::default());
+        assert_eq!(
+            game.player.pos.y, 120.0,
+            "falling must land on the platform top"
+        );
+    }
+
+    #[test]
+    fn falling_ice_and_spike_masks_use_source_origin_and_collision_bounds() {
+        let mut w = World::new(42, 34, Area::Ice, 9);
+        room(&mut w, "f7");
+        let falling = w.entities.iter().find(|e| e.object == "oDarkFall").unwrap();
+        assert_eq!(
+            falling.bounds(),
+            crate::model::Rect::new(16.0, 16.0, 16.0, 8.0)
+        );
+        // collision_point uses the sprite's inclusive mask, independent of the
+        // eight-pixel custom rectangle used to move the falling block.
+        assert!(!falling.bounds().contains(Vec2::new(16.0, 24.0)));
+        assert!(solid_point(&w, Vec2::new(16.0, 24.0)));
+        let spikes = w.entities.iter().find(|e| e.object == "oSpikes").unwrap();
+        assert_eq!(
+            spikes.bounds(),
+            crate::model::Rect::new(32.0, 19.0, 16.0, 13.0)
+        );
+        assert!(!spikes.solid);
     }
 }

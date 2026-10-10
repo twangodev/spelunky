@@ -13,6 +13,9 @@ mod special;
 mod terrain;
 #[path = "generation/tiles.rs"]
 mod tiles;
+#[cfg(test)]
+#[path = "generation/traversal.rs"]
+mod traversal;
 
 #[derive(Deserialize)]
 struct Archive {
@@ -554,7 +557,10 @@ pub fn generate(rng: &mut Rng, level: u32, flags: &BTreeSet<String>) -> World {
     let height = if area == Area::Boss {
         55
     } else if area == Area::Ice {
-        41
+        // Ice uses rLevel2 (608 px); rLevel3 is the 672 px Jungle lake.
+        // The source creates a dark floor at y=640 outside the Ice room,
+        // below its y>room_height+16 falling-death threshold.
+        38
     } else if has(&selected, "lake") {
         42
     } else {
@@ -594,7 +600,9 @@ pub fn generate(rng: &mut Rng, level: u32, flags: &BTreeSet<String>) -> World {
     }
     for x in 0..42 {
         world.set_tile(x, 0, "oSolid");
-        world.set_tile(x, height - 1, "oSolid");
+        if area != Area::Ice {
+            world.set_tile(x, height - 1, "oSolid");
+        }
     }
     let script_name = match area {
         Area::Mines => "scrRoomGen",
@@ -723,9 +731,9 @@ mod tests {
         for (flag, level, height, object) in [
             ("black_market", 5, 34, "oAnkh"),
             ("lake", 5, 42, "oJaws"),
-            ("alien_ship", 9, 41, "oAlienBoss"),
-            ("yeti_lair", 9, 41, "oIce"),
-            ("moai", 9, 41, "oMoai"),
+            ("alien_ship", 9, 38, "oAlienBoss"),
+            ("yeti_lair", 9, 38, "oIce"),
+            ("moai", 9, 38, "oMoai"),
             ("city_of_gold", 14, 34, "oXocBlock"),
             ("sacrifice_pit", 13, 34, "oDamsel"),
         ] {
@@ -737,6 +745,56 @@ mod tests {
                     || world.tiles.iter().any(|t| t.object == object),
                 "missing {object} in {flag}"
             );
+        }
+    }
+    #[test]
+    fn generated_room_extents_match_the_source_room_routes_and_ice_abyss() {
+        // oTransition Step routes Ice to rLevel2 and lake to rLevel3. Their
+        // similar names must not turn the Ice abyss into a lake-sized room.
+        let ordinary = include_str!("../../../references/classic-1.1/Rooms/rLevel.xml");
+        let ice = include_str!("../../../references/classic-1.1/Rooms/rLevel2.xml");
+        let lake = include_str!("../../../references/classic-1.1/Rooms/rLevel3.xml");
+        let boss = include_str!("../../../references/classic-1.1/Rooms/rOlmec.xml");
+        for (level, flags, source) in [
+            (1, BTreeSet::new(), ordinary),
+            (5, BTreeSet::from(["black_market".into()]), ordinary),
+            (9, BTreeSet::new(), ice),
+            (5, BTreeSet::from(["lake".into()]), lake),
+            (16, BTreeSet::new(), boss),
+        ] {
+            let size = source
+                .split("<size ")
+                .nth(1)
+                .unwrap()
+                .split("/>")
+                .next()
+                .unwrap();
+            let source_height = size
+                .split("height=\"")
+                .nth(1)
+                .unwrap()
+                .split('"')
+                .next()
+                .unwrap()
+                .parse::<usize>()
+                .unwrap();
+            let world = generate(&mut Rng::new(0), level, &flags);
+            assert_eq!(
+                world.height * 16,
+                source_height,
+                "source room for level {level}"
+            );
+            if world.area == Area::Ice {
+                for x in 1..world.width - 1 {
+                    assert!(
+                        !world
+                            .tile(x as i32, world.height as i32 - 1)
+                            .unwrap()
+                            .is_solid(),
+                        "Ice room bottom is an abyss, not an invincible floor"
+                    );
+                }
+            }
         }
     }
     #[test]
