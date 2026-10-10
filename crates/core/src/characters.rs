@@ -94,7 +94,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         != 0.0;
     if selected(game) != Character::TunnelMan
         || game.player.health <= 0
-        || game.player.stun > 0
+        // oPlayer1 Step's item/innate attack branch checks the independent
+        // stunned flag, including enemy throws that assign no timer.
+        || game.player.is_stunned()
         || game.player.held.is_some()
     {
         if active {
@@ -279,5 +281,75 @@ mod tests {
         tick(&mut game, &InputFrame::default());
         assert_eq!(game.player.attack_timer, 0);
         assert!(game.world.entities.iter().all(|e| !e.alive));
+    }
+
+    #[test]
+    fn actual_yeti_zero_timer_throw_blocks_innate_attack_until_recovery() {
+        let mut level = crate::level::Level::default();
+        level.set_tile(6, 7, '@').unwrap();
+        for x in 0..40 {
+            level.set_tile(x, 8, '1').unwrap();
+        }
+        let mut game = Game::shell(11, RulesPreset::Classic);
+        game.load_custom(&level, "tunnel-throw", "");
+        apply(&mut game, Character::TunnelMan);
+        for _ in 0..8 {
+            game.step(&InputFrame::default());
+        }
+        assert!(game.player.grounded);
+        assert_eq!(game.player.health, 2);
+        let attack = InputFrame {
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        };
+        let mut ordinary = game.clone();
+        ordinary.step(&attack);
+        assert_eq!(ordinary.player.attack_timer, 11);
+        assert!(ordinary.world.entities.iter().any(|e| {
+            e.alive && e.object == "oMattockPre" && e.value("character_mattock") != 0.
+        }));
+
+        // The room entrance, character selection, and actual enemy collision
+        // establish the complete state. No health, stun, or position is edited.
+        let p = game.player.pos;
+        game.world.spawn("oYeti", Vec2::new(p.x - 8., p.y - 8.));
+        game.step(&InputFrame::default());
+        assert!(game.player.is_stunned());
+        assert_eq!(game.player.stun, 0);
+        let mut recovered = false;
+        let neutral = InputFrame::default();
+        for tick in 0..120 {
+            game.step(if tick % 2 == 0 { &attack } else { &neutral });
+            if !game.player.is_stunned() {
+                recovered = true;
+                break;
+            }
+            assert_eq!(game.player.stun, 0);
+            assert_eq!(game.player.attack_timer, 0);
+            assert!(!game.player.data.contains_key("character_attack_active"));
+            assert!(
+                !game
+                    .world
+                    .entities
+                    .iter()
+                    .any(|e| { e.alive && e.value("character_mattock") != 0. })
+            );
+        }
+        assert!(recovered, "the live Yeti throw must naturally recover");
+        assert!(game.player.health > 0);
+        for _ in 0..60 {
+            if game.player.grounded && game.player.vel.y == 0. {
+                break;
+            }
+            game.step(&neutral);
+        }
+        assert!(game.player.grounded);
+        assert_eq!(game.player.vel.y, 0.);
+        game.step(&attack);
+        assert_eq!(game.player.attack_timer, 11);
+        assert!(game.world.entities.iter().any(|e| {
+            e.alive && e.object == "oMattockPre" && e.value("character_mattock") != 0.
+        }));
     }
 }

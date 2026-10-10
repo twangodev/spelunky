@@ -122,7 +122,7 @@ fn environment(game: &mut Game) {
             && h.object == "oSpikes"
             && Rect::new(pos.x - 4.0, pos.y - 4.0, 9.0, 13.0).intersects(current_rect(game, h))
             && game.player.vel.y > 0.0
-            && (fall > 4.0 || game.player.stun > 0)
+            && (fall > 4.0 || game.player.is_stunned())
         {
             spikes_applied = true;
             if game.player.health > 0 {
@@ -571,6 +571,79 @@ mod tests {
         g.player.data.insert("fall_ticks".into(), 5.0);
         tick(&mut g);
         assert!(g.player.health <= 0);
+    }
+    #[test]
+    fn actual_yeti_zero_timer_throw_is_impaled_on_its_first_descending_overlap() {
+        // oPlayer1 Step: colSpikes && yVel > 0 && (fallTimer > 4 || stunned).
+        // The Yeti sets the independent stunned flag without adding a timer.
+        let mut level = crate::level::Level::default();
+        level.set_tile(20, 7, '@').unwrap();
+        for x in 0..40 {
+            level.set_tile(x, 8, '1').unwrap();
+        }
+        let mut game = Game::shell(11, RulesPreset::Classic);
+        game.load_custom(&level, "zero-timer-spikes", "");
+        for _ in 0..8 {
+            game.step(&crate::InputFrame::default());
+        }
+        assert!(game.player.grounded);
+        assert_eq!(game.player.health, 4);
+        let spikes = game.world.spawn("oSpikes", Vec2::new(288.0, 96.0));
+        let pos = game.player.pos;
+        let yeti = game
+            .world
+            .spawn("oYeti", Vec2::new(pos.x - 8.0, pos.y - 8.0));
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.player.stun, 0);
+        assert!(
+            game.player.is_stunned(),
+            "the live Yeti must actually throw"
+        );
+        assert_eq!(game.player.health, 4);
+        for _ in 0..12 {
+            game.step(&crate::InputFrame::default());
+            if game.state == crate::RunState::Dead {
+                break;
+            }
+        }
+        assert_eq!(game.state, crate::RunState::Dead);
+        assert_eq!(game.player.stun, 0);
+        assert!(game.player.data["fall_ticks"] <= 4.0);
+        assert_eq!(game.world.entity(spikes).unwrap().sprite, "sSpikesBlood");
+        assert!(
+            game.world.entity(yeti).is_some(),
+            "the hazard remains alive"
+        );
+    }
+    #[test]
+    fn actual_nonstunned_descent_survives_spikes_until_fall_exceeds_four_ticks() {
+        let mut level = crate::level::Level::default();
+        level.set_tile(20, 2, '@').unwrap();
+        for x in 0..40 {
+            level.set_tile(x, 28, '1').unwrap();
+        }
+        let mut game = Game::shell(11, RulesPreset::Classic);
+        game.load_custom(&level, "ordinary-fall-spikes", "");
+        let pos = game.player.pos;
+        game.world
+            .spawn("oSpikes", Vec2::new(pos.x - 8.0, pos.y + 8.0));
+        let mut survived_four = false;
+        for _ in 0..12 {
+            game.step(&crate::InputFrame::default());
+            let fall = game.player.data["fall_ticks"];
+            if fall <= 4.0 {
+                assert_eq!(game.state, crate::RunState::Playing);
+                assert_eq!(game.player.health, 4);
+                assert!(!game.player.is_stunned());
+                survived_four |= fall == 4.0;
+            } else {
+                assert_eq!(fall, 5.0);
+                assert_eq!(game.state, crate::RunState::Dead);
+                assert!(survived_four);
+                return;
+            }
+        }
+        panic!("ordinary descent must reach the live spikes after four ticks");
     }
     #[test]
     fn lava_bypasses_damage_immunity() {
