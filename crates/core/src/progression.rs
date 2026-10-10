@@ -3,6 +3,143 @@
 use crate::model::{
     Area, Game, GameEvent, InputFrame, PlayerState, Rect, RunState, VIEW_HEIGHT, VIEW_WIDTH, Vec2,
 };
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GameOverDestination {
+    Editor,
+    CustomLevels,
+    Scores,
+}
+
+/// oGame's authoritative reveal and score counter. Rendering never advances it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameOverState {
+    pub draw_status: u8,
+    pub money_count: u32,
+    pub acknowledged: bool,
+    pub destination: Option<GameOverDestination>,
+}
+impl Default for GameOverState {
+    fn default() -> Self {
+        Self {
+            draw_status: 0,
+            money_count: 0,
+            acknowledged: false,
+            destination: None,
+        }
+    }
+}
+
+/// Alarm callback after the canonical dispatcher has decremented Game.alarms.
+pub(crate) fn game_alarm(game: &mut Game, index: usize) {
+    match index {
+        0 => {
+            if game.game_over.draw_status < 3 {
+                game.game_over.draw_status = 2;
+            }
+            game.alarms[1] = 50;
+        }
+        1 if game.game_over.draw_status < 3 => game.game_over.draw_status = 3,
+        2 => {
+            let on = !game.flags.remove("udjat_blink");
+            if on {
+                game.flags.insert("udjat_blink".into());
+            }
+            if game.player.has("UdjatEye") {
+                game.sound(if on { "sndBlink1" } else { "sndBlink2" }, game.player.pos);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// oGame Step (resource318) observes the independent dead flag before Player319.
+pub(crate) fn game_step(game: &mut Game, _input: &InputFrame) {
+    let market = game
+        .world
+        .entities
+        .iter()
+        .filter(|e| e.alive && e.object == "oXMarket")
+        .map(|e| sprite_gap(e.sprite_bounds(), game.player.sprite_bounds()))
+        .min_by(f64::total_cmp);
+    if let Some(distance) = market {
+        // The canonical alarm setter converts its real value using x87's
+        // default nearest-even integer mode, rather than truncating it.
+        let distance = distance.max(4.).round_ties_even() as i32;
+        if game.alarms[2] < 1 || distance < game.alarms[2] {
+            game.alarms[2] = distance;
+        }
+    } else {
+        game.flags.remove("udjat_blink");
+    }
+    if game.state == RunState::Dead {
+        let reveal = &mut game.game_over;
+        if reveal.draw_status == 0 {
+            reveal.draw_status = 1;
+            game.alarms[0] = 50;
+        }
+        if reveal.draw_status > 2 {
+            let difference = game.player.money.saturating_sub(reveal.money_count);
+            reveal.money_count = reveal.money_count.saturating_add(if difference > 1000 {
+                1000
+            } else if difference > 100 {
+                100
+            } else {
+                difference
+            });
+        }
+    }
+    if game.is_level() {
+        ghost(game);
+    }
+}
+
+/// Player Step's Game Over action. A reveal skip and acknowledgment are separate
+/// input edges; lifetime level deaths are counted only by the latter.
+pub fn acknowledge_game_over(game: &mut Game, input: &InputFrame) -> bool {
+    if game.state != RunState::Dead
+        || game.game_over.acknowledged
+        || !(input.attack_pressed || input.start_pressed)
+    {
+        return false;
+    }
+    if game.game_over.draw_status < 3 || game.game_over.money_count < game.player.money {
+        game.game_over.draw_status = 3;
+        game.game_over.money_count = game.player.money;
+        return false;
+    }
+    if crate::statistics::is_real_level(game) {
+        let level = game
+            .data
+            .get("next_level")
+            .copied()
+            .unwrap_or(game.world.level as f64);
+        if level >= 1. && level <= 16. {
+            game.lifetime_stats.level_death(level as usize - 1);
+        }
+    }
+    let destination = if game.flags.contains("editor_test") {
+        GameOverDestination::Editor
+    } else if game.flags.contains("custom") || game.flags.contains("custom_level") {
+        GameOverDestination::CustomLevels
+    } else {
+        for (flag, start) in [("hub_sun", 1), ("hub_moon", 2), ("hub_stars", 3)] {
+            if game.flags.contains(flag) {
+                game.flags.insert(format!("scores_start:{start}"));
+                break;
+            }
+        }
+        game.flags.insert("reset_run_on_hub".into());
+        GameOverDestination::Scores
+    };
+    game.flags
+        .retain(|flag| !flag.starts_with("previous_custom_level:"));
+    game.game_over.acknowledged = true;
+    game.game_over.destination = Some(destination);
+    game.state = RunState::Transition;
+    true
+}
 
 fn sprite_gap(a: Rect, b: Rect) -> f64 {
     let x = (a.x - b.x - b.w + 1.).max(b.x - a.x - a.w + 1.).max(0.);
@@ -22,20 +159,6 @@ pub(crate) fn initialize_level(game: &mut Game) {
     game.data.insert("progression_initialized".into(), 1.);
     game.data
         .insert("progression_level".into(), game.world.level as f64);
-    // The Ankh branch activates oEntrance before selecting its first instance.
-    // Cache that room-Create anchor while every entrance is still accessible;
-    // ordinary activation need not expose distant doors during other queries.
-    if let Some(entrance) = game
-        .world
-        .entities
-        .iter()
-        .find(|e| e.alive && e.object == "oEntrance")
-    {
-        game.data
-            .insert("progression_entrance_x".into(), entrance.pos.x + 8.);
-        game.data
-            .insert("progression_entrance_y".into(), entrance.pos.y + 8.);
-    }
     game.flags.remove("ghost_exists");
     game.flags.remove("ghost_warning");
     game.flags.remove("udjat_blink");
@@ -72,7 +195,7 @@ pub(crate) fn initialize_level(game: &mut Game) {
 }
 
 /// oFinalBoss Step opens the authored right-hand door after lava kills Olmec.
-fn final_boss(game: &mut Game) {
+pub(crate) fn final_boss_step(game: &mut Game) {
     if game.world.area != Area::Boss
         || !game.flags.contains("olmec_dead")
         || game.flags.contains("boss_door_open")
@@ -131,16 +254,24 @@ fn revive(game: &mut Game) {
         if game.world.area == Area::Boss {
             Vec2::new(24., 552.)
         } else {
-            game.data
-                .get("progression_entrance_x")
-                .zip(game.data.get("progression_entrance_y"))
-                .map(|(&x, &y)| Vec2::new(x, y))
-                .or_else(|| {
-                    game.world
-                        .entities
-                        .iter()
-                        .find(|e| e.alive && e.object == "oEntrance")
-                        .map(|e| Vec2::new(e.pos.x + 8., e.pos.y + 8.))
+            // Activation can rebuild source descendant arrays after depth
+            // ordering changes. Query the current array, not a room-Create
+            // snapshot or the custom level's selected return entrance.
+            crate::dispatcher::activate_object(game, "oEntrance");
+            crate::dispatcher::descendant_instances(game, "oEntrance")
+                .into_iter()
+                .find(|instance| match instance {
+                    crate::dispatcher::Instance::Entity(id) => game.world.entity(*id).is_some(),
+                    crate::dispatcher::Instance::Terrain(index) => game
+                        .world
+                        .tiles
+                        .get(*index)
+                        .is_some_and(|tile| !tile.object.is_empty()),
+                    crate::dispatcher::Instance::Player => false,
+                })
+                .map(|instance| {
+                    let pos = instance.position(game);
+                    Vec2::new(pos.x + 8., pos.y + 8.)
                 })
                 .unwrap_or(game.world.entrance)
         }
@@ -161,6 +292,7 @@ fn revive(game: &mut Game) {
     game.player.invincible = 60;
     game.player.data.insert("blink".into(), 60.);
     game.player.data.insert("active".into(), 1.);
+    game.player.data.remove("hidden");
     // Revival resets death, not the separate stun flag or its countdown.
     // A fatal explosion therefore retains its source 100-tick stun.
     if game.player.state == PlayerState::Dead {
@@ -189,12 +321,10 @@ fn revive(game: &mut Game) {
     game.previous_camera = game.camera;
     game.flags.insert("render_discontinuity".into());
     game.sound("sndTeleport", destination);
-    game.events.push(GameEvent::Message(
-        "THE ANKH SHATTERS! YOU HAVE BEEN REVIVED!".into(),
-    ));
+    crate::enemies::shop_dialogue::say(game, "THE ANKH SHATTERS!", "YOU HAVE BEEN REVIVED!", 150);
 }
 
-fn secrets(game: &mut Game) {
+pub(crate) fn gold_door_collision(game: &mut Game) {
     // The Gold Door consumes a held sceptre only when the Hedjet is owned.
     if let Some(id) = game.player.held {
         let sceptre = game
@@ -216,45 +346,15 @@ fn secrets(game: &mut Game) {
                     game.player.held = None;
                     game.world.spawn("oXGold", door_pos);
                     game.sound("sndChestOpen", door_pos);
-                } else if !game.flags.contains("gold_door_hint") {
-                    game.flags.insert("gold_door_hint".into());
-                    game.events.push(GameEvent::Message(
-                        "THE SCEPTRE FITS... BUT NOTHING IS HAPPENING!".into(),
-                    ));
+                } else {
+                    crate::enemies::shop_dialogue::say(
+                        game,
+                        "THE SCEPTRE FITS...",
+                        "BUT NOTHING IS HAPPENING!",
+                        100,
+                    );
                 }
             }
-        }
-    }
-    // Source eye alarm depends on distance, with a four-tick minimum.
-    if game.player.has("UdjatEye") {
-        let distance = game
-            .world
-            .entities
-            .iter()
-            .filter(|e| e.alive && e.object == "oXMarket")
-            .map(|e| sprite_gap(e.sprite_bounds(), game.player.sprite_bounds()))
-            .min_by(f64::total_cmp);
-        if let Some(distance) = distance {
-            let counter = game.data.entry("udjat_blink_counter".into()).or_default();
-            if *counter <= 0. {
-                // First Step schedules alarm 2; shortening an existing alarm
-                // does not fire it early. Its blink state lasts until next fire.
-                *counter = distance.max(4.);
-            } else {
-                *counter -= 1.;
-                if *counter <= 0. {
-                    *counter = distance.max(4.);
-                    let on = !game.flags.remove("udjat_blink");
-                    if on {
-                        game.flags.insert("udjat_blink".into());
-                    }
-                    game.sound(if on { "sndBlink1" } else { "sndBlink2" }, game.player.pos);
-                } else if *counter > distance.max(4.) {
-                    *counter = distance.max(4.);
-                }
-            }
-        } else {
-            game.flags.remove("udjat_blink");
         }
     }
 }
@@ -266,15 +366,19 @@ fn ghost(game: &mut Game) {
     if game.world.level <= 1
         || game.world.area == Area::Boss
         || game.flags.contains("custom_level")
+        || game.flags.contains("custom")
         || game.player.has("Crown")
-        || game.player.health <= 0
+        || matches!(game.player.sprite.as_str(), "sPExit" | "sDamselExit")
     {
         return;
     }
     if elapsed > 120000. && game.flags.insert("ghost_warning".into()) {
-        game.events.push(GameEvent::Message(
-            "A CHILL RUNS UP YOUR SPINE... LET'S GET OUT OF HERE!".into(),
-        ));
+        crate::enemies::shop_dialogue::say(
+            game,
+            "A CHILL RUNS UP YOUR SPINE...",
+            "LET'S GET OUT OF HERE!",
+            200,
+        );
     }
     if elapsed > 150000. && !game.flags.contains("ghost_exists") {
         let x = if game.player.pos.x > game.world.width as f64 * 8. {
@@ -314,7 +418,7 @@ fn tunnel_remaining(game: &Game, stage: u8) -> u32 {
         .get(&format!("tunnel{stage}_remaining"))
         .copied()
         .unwrap_or(f64::from(cost))
-        .clamp(0., f64::from(cost)) as u32
+        .clamp(0., f64::from(cost + 1)) as u32
 }
 
 /// Inspect the source transition's offer without advancing the ended level.
@@ -345,6 +449,11 @@ pub fn tunnel_offer(game: &Game) -> Option<TunnelOffer> {
 
 pub(crate) fn apply_donation(game: &mut Game, stage: u8, requested: u32) -> u32 {
     let remaining = tunnel_remaining(game, stage);
+    // max+1 is the source's first-encounter marker, consumed by room Create
+    // without spawning Tunnel Man. It is profile state, not a payable dollar.
+    if remaining > u32::from(stage) * 100000 {
+        return 0;
+    }
     let amount = requested.min(remaining).min(game.player.money);
     if amount == 0 {
         return 0;
@@ -449,6 +558,10 @@ fn rescue_held_damsel(game: &mut Game, id: u64, door_center: Vec2) {
     count(game, "damsels");
     count(game, "xdamsels");
     count(game, "pending_damsel_kisses");
+    if crate::statistics::is_real_level(game) {
+        game.lifetime_stats
+            .increment(crate::statistics::LifetimeCounter::DamselsSavedTotal);
+    }
     game.flags.insert("damsel_rescued".into());
     game.sound("sndSteps", door_center);
 }
@@ -473,8 +586,10 @@ fn redeem_held_idol(game: &mut Game, id: u64, immediate: bool) {
         let counter = game.data.entry("collectCounter".into()).or_default();
         *counter = (*counter + 20.).min(100.);
     }
-    if !game.flags.contains("custom_level") && !game.flags.contains("tutorial") {
+    if crate::statistics::is_real_level(game) {
         count(game, "idolsConverted");
+        game.lifetime_stats
+            .increment(crate::statistics::LifetimeCounter::IdolsConverted);
     }
     count(game, if crystal { "skulls" } else { "idols" });
     if let Some(idol) = game.world.entity_mut(id) {
@@ -635,50 +750,20 @@ fn complete(game: &mut Game, door_id: u64) {
     crate::ending::begin_exit(game, kind);
 }
 
-pub fn tick(game: &mut Game, input: &InputFrame) {
-    if game.state == RunState::Ending
-        && game.ending.as_ref().is_some_and(|ending| {
-            ending.stage == crate::ending::EndingStage::Exit
-                && ending.kind != crate::ending::EndingKind::TitleCredits
-        })
-    {
-        // Source lava precedes the exit-sprite hurt exclusion. Its Ankh branch
-        // still runs afterward and restores life without clearing pExit/art.
-        revive(game);
-        return;
-    }
-    if !matches!(game.state, RunState::Playing | RunState::Dead) {
-        return;
-    }
-    if game.flags.contains("hub") {
-        // Player Step explicitly includes these challenge rooms in its Ankh
-        // branch, while Title and Highscores remain outside that branch.
-        if ["hub_sun", "hub_moon", "hub_stars"]
-            .iter()
-            .any(|flag| game.flags.contains(*flag))
-        {
-            revive(game);
-        }
-        return;
-    }
-    initialize_level(game);
-    final_boss(game);
+/// Player Step775–984: portal actions and Game Over precede its hurt block.
+pub(crate) fn player_actions(game: &mut Game, input: &InputFrame) {
     if game.state == RunState::Dead {
+        acknowledge_game_over(game, input);
         return;
     }
-    revive(game);
-    if game.player.health <= 0 || game.player.state == PlayerState::Dead {
+    if game.state != RunState::Playing || !game.is_level() {
         return;
     }
-    secrets(game);
-    ghost(game);
-    donate(game, input);
     if !(input.up || input.exit_pressed)
         || !game.player.grounded
         || game.player.is_stunned()
         || game.player.attack_timer > 0
     {
-        deposit_at_exit(game);
         return;
     }
     let door = game
@@ -694,15 +779,142 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         .map(|e| e.id);
     if let Some(id) = door {
         complete(game, id);
-    } else {
+    }
+}
+
+/// Player Step1933: revival is after ordered hurt and before the dead latch.
+pub(crate) fn player_revival(game: &mut Game) {
+    if game.is_level()
+        || ["hub_sun", "hub_moon", "hub_stars"]
+            .iter()
+            .any(|flag| game.flags.contains(*flag))
+    {
+        revive(game);
+    }
+}
+
+/// Player Step2199: touching an ordinary exit deposits a remaining held item.
+pub(crate) fn player_deposits(game: &mut Game) {
+    if game.is_level() {
         deposit_at_exit(game);
     }
+}
+
+pub(crate) fn tunnel_step(game: &mut Game, input: &InputFrame) {
+    donate(game, input);
+}
+
+/// Compatibility adapter for direct system callers. Game's authoritative
+/// dispatcher calls the source event slices at their original boundaries.
+pub fn tick(game: &mut Game, input: &InputFrame) {
+    initialize_level(game);
+    game_step(game, input);
+    final_boss_step(game);
+    player_actions(game, input);
+    player_revival(game);
+    player_deposits(game);
+    gold_door_collision(game);
+    tunnel_step(game, input);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::RulesPreset;
+    fn game_over_blast_fixture(flags: &[&str]) -> Game {
+        let mut game = Game::shell(123, RulesPreset::Classic);
+        game.flags
+            .extend(flags.iter().map(|flag| (*flag).to_owned()));
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 3, "oBlock");
+        }
+        game.player.pos = Vec2::new(40., 40.);
+        game.player.previous_pos = game.player.pos;
+        game.player.money = 1000;
+        game.world.spawn("oExplosion", game.player.pos);
+        game.step(&InputFrame::default());
+        assert_eq!(game.state, RunState::Dead);
+        assert_eq!(game.lifetime_stats.level_deaths, [0; 16]);
+        game
+    }
+
+    #[test]
+    fn real_fatal_blast_game_over_waits_for_reveal_count_and_explicit_acknowledgment() {
+        let mut game = game_over_blast_fixture(&[]);
+        game.step(&InputFrame::default());
+        assert_eq!(game.game_over.draw_status, 1);
+        assert_eq!(game.alarms[0], 50);
+        for _ in 0..50 {
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(game.game_over.draw_status, 2);
+        assert_eq!(game.alarms[1], 49, "Alarm1 ticks after Alarm0 schedules it");
+        for _ in 0..49 {
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(game.game_over.draw_status, 3);
+        assert_eq!(
+            game.game_over.money_count, 100,
+            "exactly1000 uses the100 tier"
+        );
+        for _ in 0..120 {
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(
+            game.state,
+            RunState::Dead,
+            "reveal readiness never routes by itself"
+        );
+        assert_eq!(game.game_over.money_count, 1000);
+        assert_eq!(game.lifetime_stats.level_deaths, [0; 16]);
+        game.step(&InputFrame {
+            start_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            game.game_over.destination,
+            Some(GameOverDestination::Scores)
+        );
+        assert_eq!(game.lifetime_stats.level_deaths[0], 1);
+        assert_eq!(game.state, RunState::Transition);
+        game.step(&InputFrame {
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(game.lifetime_stats.level_deaths[0], 1);
+    }
+
+    #[test]
+    fn real_game_over_skip_and_ack_are_distinct_edges_with_source_routing_and_stat_gate() {
+        for (flags, destination, counted) in [
+            (&[][..], GameOverDestination::Scores, true),
+            (&["tutorial"][..], GameOverDestination::Scores, false),
+            (&["custom"][..], GameOverDestination::CustomLevels, false),
+            (
+                &["editor_test", "custom"][..],
+                GameOverDestination::Editor,
+                false,
+            ),
+        ] {
+            let mut game = game_over_blast_fixture(flags);
+            game.step(&InputFrame {
+                attack_pressed: true,
+                ..Default::default()
+            });
+            assert_eq!(game.state, RunState::Dead);
+            assert_eq!(game.game_over.draw_status, 3);
+            assert_eq!(game.game_over.money_count, game.player.money);
+            assert!(game.game_over.destination.is_none());
+            assert_eq!(game.lifetime_stats.level_deaths, [0; 16]);
+            game.step(&InputFrame::default());
+            game.step(&InputFrame {
+                start_pressed: true,
+                ..Default::default()
+            });
+            assert_eq!(game.game_over.destination, Some(destination));
+            assert_eq!(game.lifetime_stats.level_deaths[0], u64::from(counted));
+        }
+    }
     fn game(level: u32) -> Game {
         let mut g = Game::shell(1, RulesPreset::Classic);
         g.world.level = level;
@@ -1417,7 +1629,7 @@ mod tests {
         assert_eq!(g.state, RunState::Playing);
         assert_eq!(g.player.health, 4);
         assert_eq!(g.player.pos, g.world.entrance);
-        assert_eq!(g.player.data["blink"], 60.);
+        assert_eq!(g.player.data["blink"], 59.);
         assert_eq!(g.player.data["fall_timer"], 0.);
         assert_eq!(g.player.data["fall_ticks"], 0.);
         for id in [ball, chain] {
@@ -1438,6 +1650,45 @@ mod tests {
         );
     }
     #[test]
+    fn ankh_uses_current_entrance_array_after_real_membership_rebuild() {
+        let mut g = Game::shell(7, RulesPreset::Classic);
+        g.world = crate::World::new(80, 40, Area::Mines, 1);
+        g.world.name = "fixture".into();
+        g.player.pos = Vec2::new(40., 72.);
+        g.player.previous_pos = g.player.pos;
+        for x in 0..80 {
+            g.world.set_tile(x, 5, "oBrick");
+        }
+        let first = g.spawn("oEntrance", Vec2::new(24., 48.));
+        let current = g.spawn("oEntrance", Vec2::new(240., 48.));
+        g.world
+            .entity_mut(first)
+            .unwrap()
+            .data
+            .insert("depth".into(), 0.);
+        g.world
+            .entity_mut(current)
+            .unwrap()
+            .data
+            .insert("depth".into(), 100.);
+        g.spawn("oPoof", Vec2::new(600., 64.));
+        g.step(&InputFrame::default());
+        crate::dispatcher::activate_object(&mut g, "oPoof");
+        assert_eq!(
+            crate::dispatcher::descendant_instances(&g, "oEntrance")[0],
+            crate::dispatcher::Instance::Entity(current)
+        );
+        // Controlled fatal state isolates the source's current-array lookup;
+        // the preceding depth sort and activation are actual engine phases.
+        g.player.health = 0;
+        g.player.equipment.insert("Ankh".into());
+        g.step(&InputFrame::default());
+        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.pos, Vec2::new(248., 56.));
+        assert!(!g.player.has("Ankh"));
+    }
+
+    #[test]
     fn actual_step_fatal_explosion_ankh_preserves_stun_and_sets_blink() {
         let mut g = Game::shell(5, RulesPreset::Classic);
         g.world.entrance = Vec2::new(88., 56.);
@@ -1450,8 +1701,8 @@ mod tests {
         assert_eq!(g.state, RunState::Playing);
         assert_eq!(g.player.health, 4);
         assert_eq!(g.player.pos, g.world.entrance);
-        assert_eq!(g.player.invincible, 60);
-        assert_eq!(g.player.data["blink"], 60.);
+        assert_eq!(g.player.invincible, 59);
+        assert_eq!(g.player.data["blink"], 59.);
         assert_eq!(
             g.player.stun, 100,
             "Ankh must preserve the explosion's independent stun"
@@ -1495,14 +1746,15 @@ mod tests {
         // avoids repeated damage after revival and retains the real hurt path.
         let blast = g.world.spawn("oExplosion", g.player.pos);
         crate::items::init_entity(g.world.entity_mut(blast).unwrap());
-        g.world.entity_mut(blast).unwrap().timer = 1;
+        // Explosion lifetime is its source Animation End, not timer.
+        g.world.entity_mut(blast).unwrap().animation = 9.6;
         g.step(&InputFrame::default());
         assert_eq!(g.state, RunState::Playing);
         assert_eq!(g.player.health, 4);
         assert!(!g.player.has("Ankh"));
         assert_eq!(g.player.data["active"], 1.);
         assert_eq!(g.player.stun, 100);
-        assert_eq!(g.player.data["blink"], 60.);
+        assert_eq!(g.player.data["blink"], 59.);
         for _ in 0..200 {
             g.step(&InputFrame::default());
         }
@@ -1575,8 +1827,8 @@ mod tests {
             assert_eq!(g.player.health, 4);
             assert!(!g.player.has("Ankh"));
             assert_eq!(g.player.data["active"], 1.);
-            assert_eq!(g.player.data["blink"], 60.);
-            assert_eq!(g.player.invincible, 60);
+            assert_eq!(g.player.data["blink"], 59.);
+            assert_eq!(g.player.invincible, 59);
             assert_eq!(g.player.pos, g.world.entrance);
             assert_eq!(g.player.sprite, sprite);
             assert_eq!(g.player.animation, phase + 0.5);
@@ -1636,15 +1888,16 @@ mod tests {
             let time = g.data.get("time").copied();
             let blast = g.world.spawn("oExplosion", g.player.pos);
             crate::items::init_entity(g.world.entity_mut(blast).unwrap());
-            g.world.entity_mut(blast).unwrap().timer = 1;
+            // Explosion lifetime is its source Animation End, not timer.
+            g.world.entity_mut(blast).unwrap().animation = 9.6;
             g.step(&InputFrame::default());
             if kind.challenge() {
                 assert_eq!(g.state, RunState::Playing, "{kind:?}");
                 assert_eq!(g.player.health, 4);
                 assert!(!g.player.has("Ankh"));
                 assert_eq!(g.player.pos, g.world.entrance);
-                assert_eq!(g.player.invincible, 60);
-                assert_eq!(g.player.data["blink"], 60.);
+                assert_eq!(g.player.invincible, 59);
+                assert_eq!(g.player.data["blink"], 59.);
                 assert_eq!(
                     g.events
                         .iter()

@@ -7,10 +7,11 @@ mod ice;
 mod inherited;
 mod jungle;
 mod npcs;
+pub(crate) mod shop_dialogue;
 mod temple;
 mod undead;
 
-pub(crate) use temple::intro_alarms as olmec_intro_alarms;
+use crate::dispatcher::Instance;
 
 pub fn is_enemy(object: &str) -> bool {
     crate::catalog::is_a(object, "oEnemy")
@@ -18,6 +19,7 @@ pub fn is_enemy(object: &str) -> bool {
 
 /// Create events execute at instance creation, including outside AI viewports.
 pub(crate) fn on_spawn(world: &mut World, id: u64) {
+    caves::on_spawn(world, id);
     let Some(emitter) = world.entity(id).filter(|e| e.object == "oBarrierEmitter") else {
         return;
     };
@@ -62,6 +64,8 @@ pub fn init_entity(e: &mut Entity) {
         e.data.insert("heavy".into(), 1.0);
     }
     e.data.insert("stun_time".into(), 200.0);
+    e.data.entry("counts_as_kill".into()).or_insert(1.0);
+    e.data.entry("blood_left".into()).or_insert(4.0);
     if caves::matches(&e.object) {
         caves::init(e);
     } else if jungle::matches(&e.object) {
@@ -113,6 +117,207 @@ pub fn init_entity(e: &mut Entity) {
     }
 }
 
+/// Source engine dispatches one instance per event phase.
+pub(crate) fn handles(object: &str) -> bool {
+    is_actor(object)
+}
+
+fn with_actor(game: &mut Game, id: u64, action: impl FnOnce(&mut Game, &mut Entity)) {
+    with_actor_inner(game, id, false, action);
+}
+fn with_actor_inner(
+    game: &mut Game,
+    id: u64,
+    tombstone: bool,
+    action: impl FnOnce(&mut Game, &mut Entity),
+) {
+    let Some(index) = game
+        .world
+        .entities
+        .iter()
+        .position(|e| e.id == id && (tombstone || e.alive))
+    else {
+        return;
+    };
+    let mut actor = game.world.entities.remove(index);
+    init_entity(&mut actor);
+    action(game, &mut actor);
+    destroyed(game, &mut actor);
+    game.world
+        .entities
+        .insert(index.min(game.world.entities.len()), actor);
+}
+
+pub(crate) fn step_instance(game: &mut Game, id: u64) {
+    with_actor(game, id, |game, e| {
+        e.data
+            .insert("simulation_tick".into(), game.engine_time() as f64);
+        inherited::tick(game, e);
+        if !e.alive {
+            return;
+        }
+        if e.object == "oDamsel" && e.state == 4 {
+            npcs::tick(game, e);
+            return;
+        }
+        if source_active(game, e) && e.value("inactive") == 0. {
+            if caves::matches(&e.object) {
+                caves::tick(game, e);
+            } else if jungle::matches(&e.object) {
+                jungle::tick(game, e);
+            } else if ice::matches(&e.object) {
+                ice::tick(game, e);
+            } else if temple::matches(&e.object) {
+                temple::tick(game, e);
+            } else if undead::matches(&e.object) {
+                undead::tick(game, e);
+            } else {
+                npcs::tick(game, e);
+            }
+        }
+        if e.alive {
+            caves::tick_independent_events(game, e);
+        }
+    });
+}
+
+/// Context-dependent Create runs synchronously from Game::spawn and once on
+/// authored/generated room bootstrap; fixed World Create already ran on insertion.
+pub(crate) fn create_instance(game: &mut Game, id: u64) {
+    if !game
+        .world
+        .entity(id)
+        .is_some_and(|e| handles(&e.object) && e.value("enemy_context_created") == 0.)
+    {
+        return;
+    }
+    with_actor(game, id, |game, e| {
+        e.data.insert("enemy_context_created".into(), 1.);
+        caves::create(game, e);
+        jungle::create(game, e);
+        ice::create(game, e);
+        npcs::create(game, e);
+        undead::create(game, e);
+    });
+}
+
+pub(crate) fn draw_instance(game: &mut Game, id: u64) {
+    with_actor(game, id, |game, e| {
+        npcs::draw(game, e);
+        if matches!(
+            e.object.as_str(),
+            "oPDummy" | "oPDummy2" | "oPDummy3" | "oPDummy6"
+        ) {
+            e.data.insert(
+                "image_xscale".into(),
+                if e.object == "oPDummy6" || e.facing > 0 {
+                    -1.
+                } else {
+                    1.
+                },
+            );
+        }
+    });
+}
+
+pub(crate) fn builtin_motion(_game: &mut Game, _id: u64) {}
+pub(crate) fn outside_room(game: &mut Game, id: u64) {
+    with_actor(game, id, |_game, e| {
+        if is_enemy(&e.object) || e.object == "oYellowBall" {
+            e.alive = false;
+        }
+        ice::outside_room_event(e);
+    });
+}
+pub(crate) fn animation_end(game: &mut Game, id: u64) {
+    with_actor_inner(game, id, true, |game, e| {
+        let sprite = e.sprite.clone();
+        caves::animation_end(game, e);
+        jungle::animation_end(game, e, &sprite);
+        ice::animation_end(game, e, &sprite);
+        temple::animation_end(game, e, &sprite);
+        npcs::animation_end(e, &sprite);
+    });
+}
+pub(crate) fn alarm(game: &mut Game, id: u64, index: u8) {
+    with_actor(game, id, |game, e| {
+        caves::alarm(game, e, index);
+        jungle::alarm(game, e, index);
+        ice::alarm(game, e, index);
+        temple::alarm(game, e, index);
+        undead::alarm(game, e, index);
+        npcs::alarm(game, e, index);
+    });
+}
+pub(crate) fn collision(game: &mut Game, id: u64, other: Instance) {
+    with_actor_inner(game, id, true, |game, e| {
+        let handled = caves::collision(game, e, other)
+            || jungle::collision(game, e, other)
+            || ice::collision(game, e, other)
+            || temple::collision(game, e, other)
+            || undead::collision(game, e, other)
+            || npcs::collision(game, e, other);
+        if handled {
+            return;
+        }
+        match other {
+            Instance::Player => base_character_collision(game, e),
+            Instance::Entity(other_id) => {
+                let Some(projectile) = game.world.entity(other_id).cloned() else {
+                    return;
+                };
+                if matches!(projectile.object.as_str(), "oWhip" | "oWhipPre")
+                    && crate::dispatcher::collision_owner(&e.object, &projectile.object)
+                        == Some("oEnemy")
+                {
+                    e.health -= projectile.data.get("damage").copied().unwrap_or(1.) as i32;
+                    set_counts_as_kill(e, true);
+                    if e.value("blood_left") > 0. {
+                        let b = e.sprite_bounds();
+                        create_blood(
+                            game,
+                            e,
+                            Vec2::new(e.pos.x + b.w / 2., e.pos.y + b.h / 2.),
+                            1,
+                        );
+                        if e.health < 0 {
+                            e.data
+                                .insert("blood_left".into(), e.value("blood_left") - 1.);
+                        }
+                    }
+                    game.sound("sndHit", e.pos);
+                    return;
+                }
+                if !matches!(
+                    projectile.object.as_str(),
+                    "oWhip" | "oWhipPre" | "oSlash" | "oMachetePre" | "oMattockPre" | "oMattockHit"
+                ) || e.value("invincible") > 0.
+                {
+                    return;
+                }
+                let pre = matches!(
+                    projectile.object.as_str(),
+                    "oWhipPre" | "oMachetePre" | "oMattockPre"
+                );
+                let machete = matches!(projectile.object.as_str(), "oSlash" | "oMachetePre");
+                let damage = projectile.value("damage").max(1.) as i32;
+                apply_melee(
+                    game,
+                    e,
+                    damage,
+                    projectile.pos,
+                    pre,
+                    machete,
+                    projectile.value("puncture") > 0.,
+                );
+            }
+            _ => {}
+        }
+    });
+}
+
+/// Compatibility for direct family tests; production uses the event dispatcher.
+#[cfg(test)]
 pub fn tick(game: &mut Game) {
     let ids: Vec<_> = game
         .world
@@ -122,164 +327,8 @@ pub fn tick(game: &mut Game) {
         .map(|e| e.id)
         .collect();
     for id in ids {
-        let Some(index) = game
-            .world
-            .entities
-            .iter()
-            .position(|e| e.id == id && e.alive)
-        else {
-            continue;
-        };
-        // Removing the current actor makes independent spawning deterministic and avoids aliasing.
-        let mut e = game.world.entities.remove(index);
-        init_entity(&mut e);
-        let room = Rect::new(
-            0.0,
-            0.0,
-            game.world.width as f64 * 16.0,
-            game.world.height as f64 * 16.0,
-        );
-        if is_enemy(&e.object) && !e.sprite_bounds().intersects(room) {
-            e.alive = false;
-            destroyed(game, &mut e);
-            game.world
-                .entities
-                .insert(index.min(game.world.entities.len()), e);
-            continue;
-        }
-        e.data
-            .insert("simulation_tick".into(), game.engine_time() as f64);
-        ice::tick_independent_animation(&mut e);
-        let began_dead = e.health <= 0;
-        if e.held
-            && e.object != "oVampire"
-            && e.object != "oManTrap"
-            && e.state == 98
-            && e.health > 0
-        {
-            if e.timer > 0 {
-                e.timer -= 1;
-            } else {
-                e.held = false;
-                game.player.held = game.player.held.filter(|held| *held != e.id);
-                e.state = if matches!(e.object.as_str(), "oShopkeeper" | "oShopkeeper2") {
-                    2
-                } else {
-                    0
-                };
-            }
-        }
-        let active = source_active(game, &e);
-        inherited::tick(game, &mut e);
-        if !e.alive {
-            destroyed(game, &mut e);
-            game.world
-                .entities
-                .insert(index.min(game.world.entities.len()), e);
-            continue;
-        }
-        if e.object == "oDamsel" && e.state == 4 {
-            e.data.insert("depth".into(), 1000.0);
-            // Source protects Exit sprites before later collision events.
-            e.data.insert("invincible".into(), 1.0);
-            e.animation += e.value("animation_speed");
-            if e.animation >= if e.sprite == "sPExit" { 16.0 } else { 17.0 } {
-                e.alive = false;
-            }
-            psychic_player_events(game, &mut e);
-            destroyed(game, &mut e);
-            game.world
-                .entities
-                .insert(index.min(game.world.entities.len()), e);
-            continue;
-        }
-        // Sprite clocks and Animation End events belong to engine activation,
-        // independently of narrower Step guards or held-body AI suppression.
-        let clocked = caves::matches(&e.object)
-            || jungle::matches(&e.object)
-            || undead::matches(&e.object)
-            || matches!(
-                e.object.as_str(),
-                "oDamsel"
-                    | "oShopkeeper"
-                    | "oShopkeeper2"
-                    | "oGhost"
-                    | "oScarab"
-                    | "oYetiKing"
-                    | "oTombLord"
-            );
-        let mut ended_sprite = None;
-        if clocked {
-            let count = crate::catalog::sprite_frame_count(&e.sprite);
-            let speed = e.value("animation_speed");
-            e.animation += speed;
-            if e.object == "oYetiKing" {
-                e.data.insert("phase".into(), e.animation);
-            }
-            if count > 0 && speed > 0.0 && e.animation >= count as f64 {
-                ended_sprite = Some(e.sprite.clone());
-            }
-        }
-        if !active {
-            caves::tick_inactive_alarm(game, &mut e);
-        }
-        if active
-            && (!e.held || matches!(e.object.as_str(), "oManTrap" | "oDamsel"))
-            && e.value("inactive") == 0.0
-        {
-            if e.value("hit_cooldown") > 0.0 {
-                e.data
-                    .insert("hit_cooldown".into(), e.value("hit_cooldown") - 1.0);
-            }
-            if caves::matches(&e.object) {
-                caves::tick(game, &mut e);
-            } else if jungle::matches(&e.object) {
-                jungle::tick(game, &mut e);
-            } else if ice::matches(&e.object) {
-                ice::tick(game, &mut e);
-            } else if temple::matches(&e.object) {
-                temple::tick(game, &mut e);
-            } else if undead::matches(&e.object) {
-                undead::tick(game, &mut e);
-            } else {
-                npcs::tick(game, &mut e);
-            }
-        }
-        if let Some(sprite) = ended_sprite.filter(|sprite| *sprite == e.sprite) {
-            let count = crate::catalog::sprite_frame_count(&sprite);
-            e.animation = e.animation.rem_euclid(count as f64);
-            if e.object == "oYetiKing" {
-                e.data.insert("phase".into(), e.animation);
-            }
-            ice::animation_end(&mut e, &sprite);
-            temple::animation_end(&mut e, &sprite);
-            jungle::animation_end(&mut e, &sprite);
-            npcs::animation_end(&mut e, &sprite);
-        }
-        npcs::tick_independent_events(game, &mut e);
-        jungle::tick_independent_events(game, &mut e);
-        temple::tick_independent_events(game, &e);
-        psychic_player_events(game, &mut e);
-        // Collision events use engine activation, independently of a child's
-        // narrower viewport guard around its AI Step action.
-        if e.alive && e.health > 0 {
-            combat(game, &mut e);
-        }
-        if e.held && e.object == "oVampire" {
-            undead::tick_held(game, &mut e);
-        }
-        if e.alive && e.object == "oVampire" {
-            undead::absorb_blood(game, &mut e);
-        }
-        if e.health <= 0 && (began_dead || !e.alive) {
-            finish_death(game, &mut e);
-        }
-        destroyed(game, &mut e);
-        game.world
-            .entities
-            .insert(index.min(game.world.entities.len()), e);
+        step_instance(game, id);
     }
-    finish_destroy_events(game);
 }
 
 /// Source Destroy runs even when a different system destroys an instance.
@@ -314,27 +363,200 @@ pub(crate) fn finish_destroy_events(game: &mut Game) {
 
 /// oPsychicWaveP owns separate Collision events; its Enemy event preserves
 /// the target state and the wave, while its Damsel event always consumes it.
-fn psychic_player_events(game: &mut Game, target: &mut Entity) {
-    if !target.alive || (!is_enemy(&target.object) && target.object != "oDamsel") {
+pub(crate) fn projectile_collision(game: &mut Game, projectile_id: u64, target_id: u64) {
+    let Some(projectile) = game.world.entity(projectile_id).cloned() else {
+        return;
+    };
+    with_actor(game, target_id, |game, target| {
+        if !is_enemy(&target.object) && target.object != "oDamsel" {
+            return;
+        }
+        let damsel = target.object == "oDamsel";
+        if projectile.object == "oPsychicWaveP" {
+            if damsel {
+                if let Some(wave) = game.world.entity_mut(projectile_id) {
+                    wave.alive = false;
+                }
+            }
+            if target.object == "oAlienBoss" || target.value("invincible") != 0. {
+                return;
+            }
+            target.health -= 3;
+            let _discarded = game.rng.range(3) as i32 - (1 + game.rng.range(2)) as i32;
+            target.vel = Vec2::new(-1., -6.);
+            if damsel {
+                if let Some(wave) = game
+                    .world
+                    .entities
+                    .iter_mut()
+                    .find(|w| w.id == projectile_id)
+                {
+                    wave.state = 2;
+                }
+            }
+        } else if projectile.object == "oBullet"
+            && (if damsel {
+                target.value("invincible") == 0.
+            } else {
+                projectile.value("safe") == 0.
+            })
+        {
+            if damsel && target.value("blood_left") > 0. {
+                let b = target.sprite_bounds();
+                create_blood(
+                    game,
+                    target,
+                    Vec2::new(target.pos.x + b.w / 2., target.pos.y + b.h / 2.),
+                    1,
+                );
+                if target.health < 0 {
+                    target
+                        .data
+                        .insert("blood_left".into(), target.value("blood_left") - 1.);
+                }
+            }
+            target.health -= 4;
+            target.data.insert("assaulted".into(), 1.);
+            target.vel = if matches!(target.object.as_str(), "oYetiKing" | "oTombLord") {
+                Vec2::new(projectile.vel.x * 0.5, -2.)
+            } else {
+                Vec2::new(projectile.vel.x, -4.)
+            };
+            if matches!(
+                target.object.as_str(),
+                "oCaveman" | "oYeti" | "oHawkman" | "oShopkeeper" | "oShopkeeper2"
+            ) && target.state != 99
+            {
+                target.state = 98;
+                target.timer = 20;
+            }
+            if damsel {
+                target.state = 2;
+                target.timer = 120;
+                target.vel = Vec2::new(projectile.vel.x * 0.3, -6.);
+                target.held = false;
+                game.player.held = game.player.held.filter(|id| *id != target.id);
+            }
+            if !damsel && target.value("blood_left") > 0. {
+                let b = target.sprite_bounds();
+                create_blood(
+                    game,
+                    target,
+                    Vec2::new(target.pos.x + b.w / 2., target.pos.y + b.h / 2.),
+                    1,
+                );
+                if target.health < 0 {
+                    target
+                        .data
+                        .insert("blood_left".into(), target.value("blood_left") - 1.);
+                }
+            }
+            if let Some(bullet) = game.world.entity_mut(projectile_id) {
+                bullet.alive = false;
+            }
+            game.sound(if damsel { "sndDamsel" } else { "sndHit" }, target.pos);
+        }
+    });
+}
+
+pub(crate) fn player_hurt(game: &mut Game) {
+    ice::player_hurt(game);
+}
+
+/// Explicit imprecise rectangle queries in the inherited item Step.
+pub(crate) fn item_step_impacts(game: &mut Game, item_id: u64) {
+    let Some(item) = game.world.entity(item_id).cloned() else {
+        return;
+    };
+    let fragile = matches!(item.object.as_str(), "oJar" | "oSkull");
+    let speed = if item.object == "oDice" { 3. } else { 2. };
+    if item.held
+        || (item.vel.x.abs() <= speed && item.vel.y.abs() <= speed)
+        || (item.object == "oBomb" && item.value("sticky") > 0.)
+    {
         return;
     }
-    let damsel = target.object == "oDamsel";
-    for wave in &mut game.world.entities {
-        if !wave.alive || wave.object != "oPsychicWaveP" || !wave.event_intersects(target) {
-            continue;
-        }
-        if damsel {
-            wave.alive = false;
-        }
-        if target.object == "oAlienBoss" || target.value("invincible") != 0.0 {
-            continue;
-        }
-        target.health -= 3;
-        // The source evaluates this random expression before overwriting xVel.
-        let _discarded_x = game.rng.range(3) as i32 - (1 + game.rng.range(2)) as i32;
-        target.vel = Vec2::new(-1.0, -6.0);
-        if damsel {
-            wave.state = 2;
+    let radius = if fragile { 3. } else { 2. };
+    let area = Rect::new(
+        item.pos.x - radius,
+        item.pos.y - radius,
+        2. * radius + 1.,
+        2. * radius + 1.,
+    );
+    let overlaps_enemy = game.world.entities.iter().any(|e| {
+        e.alive && e.id != item_id && is_enemy(&e.object) && e.sprite_bounds().intersects(area)
+    });
+    let enemy = if overlaps_enemy {
+        game.world
+            .entities
+            .iter()
+            .filter(|e| e.alive && e.id != item_id && is_enemy(&e.object))
+            .min_by(|a, b| {
+                a.pos
+                    .distance(item.pos)
+                    .total_cmp(&b.pos.distance(item.pos))
+            })
+            .map(|e| e.id)
+    } else {
+        None
+    };
+    let damsel = game
+        .world
+        .entities
+        .iter()
+        .find(|e| {
+            e.alive
+                && e.id != item_id
+                && e.object == "oDamsel"
+                && e.sprite_bounds().intersects(area)
+        })
+        .map(|e| e.id);
+    let mut broke = false;
+    for target_id in enemy.into_iter().chain(damsel) {
+        with_actor(game, target_id, |game, e| {
+            if e.value("invincible") != 0. || (!fragile && e.object == "oMagmaMan") {
+                return;
+            }
+            if e.object == "oDamsel"
+                && (e.state == 99
+                    || e.value("hit_cooldown") > 0.
+                    || (e.held && item.value("safe") > 0.))
+            {
+                return;
+            }
+            apply_item_hit(game, e, &item.object, item.vel, fragile);
+            if fragile {
+                broke = true;
+            }
+            if matches!(item.object.as_str(), "oArrow" | "oFishBone") {
+                if let Some(projectile) = game.world.entities.iter_mut().find(|e| e.id == item_id) {
+                    projectile.alive = false;
+                }
+            }
+            if item.object == "oArrow" && item.value("bomb_arrow") > 0. {
+                game.spawn("oExplosion", item.pos);
+            }
+        });
+    }
+    if broke {
+        crate::items::break_item(game, item_id);
+    }
+}
+
+pub(super) fn create_blood(game: &mut Game, e: &Entity, pos: Vec2, count: u32) {
+    if e.value("bloodless") != 0. {
+        return;
+    }
+    for _ in 0..count {
+        if game
+            .world
+            .entities
+            .iter()
+            .filter(|other| other.alive && crate::catalog::is_a(&other.object, "oDetritus"))
+            .count()
+            < 16
+        {
+            crate::world_events::spawn_detritus(game, "oBlood", pos);
         }
     }
 }
@@ -376,7 +598,7 @@ pub(super) fn touches_player(game: &Game, e: &Entity) -> bool {
 }
 
 pub(super) fn player_alive(game: &Game) -> bool {
-    game.player.health > 0 && game.player.state != PlayerState::Dead && game.state != RunState::Dead
+    game.player.state != PlayerState::Dead && game.state != RunState::Dead
 }
 
 fn contact_gate(e: &Entity) -> (f64, f64, f64) {
@@ -384,7 +606,7 @@ fn contact_gate(e: &Entity) -> (f64, f64, f64) {
         "oCaveman" | "oVampire" | "oYeti" | "oHawkman" | "oShopkeeper" | "oShopkeeper2"
         | "oManTrap" => (8.0, 8.0, 5.0),
         "oMonkey" => (8.0, 4.0, 2.0),
-        "oGiantSpider" | "oGiantSpiderHang" => (16.0, 16.0, 16.0),
+        "oGiantSpider" => (16.0, 16.0, 16.0),
         "oTombLord" | "oYetiKing" => (16.0, 16.0, 8.0),
         "oAlienBoss" => (16.0, f64::INFINITY, 8.0),
         _ => (8.0, 12.0, 8.0),
@@ -544,252 +766,8 @@ pub(super) fn drop_from_throw(game: &mut Game) {
     }
 }
 
-fn combat(game: &mut Game, e: &mut Entity) {
-    if matches!(
-        e.object.as_str(),
-        "oGhost"
-            | "oScarab"
-            | "oOlmec"
-            | "oOlmecSlam"
-            | "oMagmaTrail"
-            | "oYellowBall"
-            | "oFly"
-            | "oLaser"
-            | "oPsychicWave"
-            | "oPsychicCreate"
-            | "oAlienEject"
-            | "oUFOCrash"
-            | "oOlmecDebris"
-            | "oCavemanWorship"
-            | "oHawkmanWorship"
-            | "oEnemySight"
-            | "oBarrier"
-            | "oBarrierEmitter"
-    ) {
-        return;
-    }
-    let body = event_bounds(e);
-    let mut item_targets: Vec<_> = game
-        .world
-        .entities
-        .iter()
-        .filter(|other| other.alive && (is_enemy(&other.object) || other.object == "oDamsel"))
-        .map(|other| (other.id, other.pos, other.object == "oDamsel"))
-        .collect();
-    item_targets.push((e.id, e.pos, e.object == "oDamsel"));
-    let mut hits = Vec::new();
-    let mut item_hits = Vec::new();
-    let mut impact_explosions = Vec::new();
-    let mut fragile_breaks = Vec::new();
-    let active_item_steps: Vec<_> = game
-        .world
-        .entities
-        .iter()
-        .filter(|item| {
-            matches!(item.object.as_str(), "oJar" | "oSkull" | "oRope")
-                || crate::items::item_body_active(game, item)
-        })
-        .map(|item| item.id)
-        .collect();
-    for projectile in &mut game.world.entities {
-        if !projectile.alive
-            || projectile.held
-            || projectile.id == e.id
-            || projectile.object == "oPsychicWaveP"
-            || projectile
-                .data
-                .get("released_by_enemy_tick")
-                .is_some_and(|tick| *tick == game.tick as f64)
-        {
-            continue;
-        }
-        let melee = matches!(
-            projectile.object.as_str(),
-            "oWhip" | "oWhipPre" | "oSlash" | "oMachetePre" | "oMattockPre" | "oMattockHit"
-        );
-        let fired = projectile.object == "oBullet" && projectile.value("safe") == 0.0;
-        let impact_speed = if projectile.object == "oDice" {
-            3.0
-        } else {
-            2.0
-        };
-        let item_step_active = active_item_steps.contains(&projectile.id);
-        let thrown = crate::catalog::is_a(&projectile.object, "oItem")
-            && item_step_active
-            && (projectile.vel.x.abs() > impact_speed || projectile.vel.y.abs() > impact_speed)
-            && !matches!(projectile.object.as_str(), "oBall" | "oBall2")
-            && !(projectile.object == "oBomb" && projectile.value("sticky") > 0.0);
-        let fragile = matches!(projectile.object.as_str(), "oJar" | "oSkull");
-        let radius = if fragile { 3.0 } else { 2.0 };
-        let impact = if thrown {
-            Rect::new(
-                projectile.pos.x - radius,
-                projectile.pos.y - radius,
-                radius * 2.0 + 1.0,
-                radius * 2.0 + 1.0,
-            )
-        } else {
-            event_bounds(projectile)
-        };
-        // These objects have actual Collision events against the oEnemy
-        // family and Damsel (inherited or overridden). Their pair-mask contract
-        // is separate from explicit imprecise thrown-item rectangle queries.
-        let event_pair = (is_enemy(&e.object) || e.object == "oDamsel")
-            && matches!(projectile.object.as_str(), "oWhip" | "oWhipPre" | "oBullet");
-        let overlaps = if event_pair {
-            projectile.event_intersects(e)
-        } else {
-            body.intersects(impact)
-        };
-        if !overlaps {
-            continue;
-        }
-        if !(melee || fired || thrown)
-            || e.value("invincible") > 0.0
-            || (!melee && !fired && e.value("hit_cooldown") > 0.0)
-        {
-            continue;
-        }
-        if thrown && !melee && !fired {
-            if !is_enemy(&e.object) && e.object != "oDamsel" {
-                continue;
-            }
-            let nearest = item_targets
-                .iter()
-                .filter(|(_, _, damsel)| *damsel == (e.object == "oDamsel"))
-                .min_by(|(_, a, _), (_, b, _)| {
-                    a.distance(projectile.pos)
-                        .total_cmp(&b.distance(projectile.pos))
-                });
-            if nearest.is_some_and(|(id, _, _)| *id != e.id) {
-                continue;
-            }
-            if !fragile && e.object == "oMagmaMan" {
-                continue;
-            }
-            if e.object == "oDamsel"
-                && (e.state == 99
-                    || e.value("hit_cooldown") > 0.0
-                    || (e.held && projectile.value("safe") > 0.0))
-            {
-                continue;
-            }
-            item_hits.push((projectile.object.clone(), projectile.vel, fragile));
-            if fragile {
-                fragile_breaks.push(projectile.id);
-            }
-            if projectile.object == "oArrow" && projectile.value("bomb_arrow") > 0.0 {
-                impact_explosions.push(projectile.pos);
-            }
-            if matches!(projectile.object.as_str(), "oArrow" | "oFishBone") {
-                projectile.alive = false;
-            }
-            continue;
-        }
-        let key = format!("hit_{}", e.id);
-        if projectile.value(&key) > 0.0 {
-            continue;
-        }
-        let damage = if projectile.object == "oBullet" {
-            4
-        } else if projectile.value("damage") > 0.0 {
-            projectile.value("damage") as i32
-        } else {
-            1
-        };
-        hits.push((
-            damage,
-            projectile.pos,
-            melee,
-            projectile.object == "oBullet",
-            projectile.vel,
-            projectile.id,
-            matches!(
-                projectile.object.as_str(),
-                "oWhipPre" | "oMachetePre" | "oMattockPre"
-            ),
-            matches!(projectile.object.as_str(), "oSlash" | "oMachetePre"),
-            projectile.value("puncture") > 0.0,
-        ));
-        if projectile.object == "oArrow" && projectile.value("bomb_arrow") > 0.0 {
-            impact_explosions.push(projectile.pos);
-        }
-        if fragile {
-            fragile_breaks.push(projectile.id);
-        } else if matches!(
-            projectile.object.as_str(),
-            "oBullet" | "oArrow" | "oFishBone"
-        ) {
-            projectile.alive = false;
-        }
-    }
-    for pos in impact_explosions {
-        game.world.spawn("oExplosion", pos);
-        game.sound("sndExplosion", pos);
-    }
-    for (object, velocity, fragile) in item_hits {
-        apply_item_hit(game, e, &object, velocity, fragile);
-    }
-    for (damage, pos, melee, bullet, velocity, projectile_id, pre, machete, puncture) in hits {
-        if melee {
-            if apply_melee(game, e, damage, pos, pre, machete, puncture) {
-                if let Some(projectile) = game
-                    .world
-                    .entities
-                    .iter_mut()
-                    .find(|p| p.id == projectile_id)
-                {
-                    projectile.data.insert(format!("hit_{}", e.id), 1.0);
-                }
-            }
-            continue;
-        }
-        let x = pos.x;
-        e.health -= damage;
-        e.data.insert("assaulted".into(), 1.0);
-        if e.health <= 0 {
-            e.data.insert("killed_by_player".into(), 1.0);
-        }
-        game.sound("sndHit", e.pos);
-        if body_enemy(&e.object) && (e.state < 98 || !melee) {
-            e.state = 98;
-            e.timer = e.value("stun_time") as u32;
-            e.vel.y = -3.0;
-            e.vel.x = if x < e.pos.x { 2.0 } else { -2.0 };
-        }
-        if bullet {
-            e.vel = if matches!(e.object.as_str(), "oYetiKing" | "oTombLord") {
-                Vec2::new(velocity.x * 0.5, -2.0)
-            } else {
-                Vec2::new(velocity.x, -4.0)
-            };
-            if matches!(
-                e.object.as_str(),
-                "oCaveman" | "oYeti" | "oHawkman" | "oShopkeeper" | "oShopkeeper2"
-            ) {
-                e.state = 98;
-                e.timer = 20;
-            }
-        }
-        if e.object == "oGiantSpider" {
-            e.data.insert("hit_cooldown".into(), 10.0);
-        }
-        if e.object == "oTombLord" {
-            e.data.insert("hit_cooldown".into(), 20.0);
-        }
-        if matches!(e.object.as_str(), "oShopkeeper" | "oShopkeeper2") && !in_stars(game) {
-            game.flags.insert("shopkeepers_angry".into());
-        }
-        if e.object == "oDamsel" {
-            e.state = 2;
-            e.timer = 120;
-            e.vel.y = -3.0;
-        }
-    }
-    for id in fragile_breaks {
-        crate::items::break_item(game, id);
-    }
-    if e.health <= 0 || e.state >= 98 || e.object == "oDamsel" {
+fn base_character_collision(game: &mut Game, e: &mut Entity) {
+    if e.object == "oDamsel" {
         return;
     }
     if !touches_player(game, e) {
@@ -819,8 +797,6 @@ fn combat(game: &mut Game, e: &mut Entity) {
             multiplier * if spiked { 3 } else { 1 }
         };
         e.health -= damage;
-        e.data.insert("counts_as_kill".into(), 1.0);
-        e.data.remove("environmental_death");
         if e.health <= 0 {
             e.data.insert("killed_by_player".into(), 1.0);
         }
@@ -842,12 +818,35 @@ fn combat(game: &mut Game, e: &mut Entity) {
         "oYeti" | "oManTrap" | "oMonkey" | "oHawkman" | "oShopkeeper" | "oShopkeeper2"
     ) && game.player.invincible == 0
     {
-        let damage = if e.value("contact_damage") > 0.0 {
-            e.value("contact_damage") as i32
-        } else {
-            1
-        };
-        game.player.health -= damage;
+        let damage = 1;
+        let prior_health = game.player.health;
+        if prior_health > 0 {
+            game.player.health -= damage;
+        }
+        if prior_health > 0 && game.player.health <= 0 && crate::statistics::is_real_level(game) {
+            use crate::statistics::EnemyDeath;
+            let cause = match e.object.as_str() {
+                "oBat" => Some(EnemyDeath::Bat),
+                "oSnake" => Some(EnemyDeath::Snake),
+                "oSpider" | "oSpiderHang" => Some(EnemyDeath::Spider),
+                "oGiantSpider" | "oGiantSpiderHang" => Some(EnemyDeath::GiantSpider),
+                "oCaveman" => Some(EnemyDeath::Caveman),
+                "oSkeleton" => Some(EnemyDeath::Skeleton),
+                "oZombie" => Some(EnemyDeath::Zombie),
+                "oVampire" => Some(EnemyDeath::Vampire),
+                "oFrog" => Some(EnemyDeath::Frog),
+                "oFireFrog" => Some(EnemyDeath::FireFrog),
+                "oPiranha" => Some(EnemyDeath::Piranha),
+                // Jaws Create uses "Mega Mouth", while the inherited event
+                // compares "Megamouth". Preserve the original unmatched row.
+                "oAlien" => Some(EnemyDeath::Alien),
+                "oUFO" => Some(EnemyDeath::Ufo),
+                _ => None,
+            };
+            if let Some(cause) = cause {
+                game.lifetime_stats.enemy_death(cause);
+            }
+        }
         game.events.push(GameEvent::Damage { amount: damage });
         game.sound("sndHurt", game.player.pos);
         game.player.invincible = 30;
@@ -857,19 +856,6 @@ fn combat(game: &mut Game, e: &mut Entity) {
         } else {
             6.0
         };
-        if matches!(
-            e.object.as_str(),
-            "oCaveman"
-                | "oVampire"
-                | "oGiantSpider"
-                | "oGiantSpiderHang"
-                | "oYetiKing"
-                | "oTombLord"
-                | "oAlienBoss"
-        ) && game.player.pos.y < e.pos.y
-        {
-            game.player.vel.y = -6.0;
-        }
         if e.object == "oMagmaMan" || e.object == "oMagma" {
             game.player.vel.y = -4.0;
             game.player.stun = 20;
@@ -938,20 +924,23 @@ fn apply_item_hit(game: &mut Game, e: &mut Entity, object: &str, velocity: Vec2,
             }
             "oAlienBoss" if e.state != 99 && e.sprite != "sAlienBossHurt" => {
                 e.health -= 1;
-                e.sprite = "sAlienBossHurt".into();
+                e.set_sprite("sAlienBossHurt");
                 e.data.insert("animation_speed".into(), 0.8);
                 hit = true;
             }
             "oUFO" => {
                 let pos = Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0);
-                game.world.spawn("oExplosion", pos);
-                if game.rng.range(3) == 0 {
-                    game.world.spawn("oAlienEject", pos);
-                }
+                game.spawn("oExplosion", pos);
                 game.sound("sndExplosion", pos);
+                if game.rng.range(3) == 0 {
+                    game.spawn("oAlienEject", pos);
+                }
                 e.health = 0;
+                record_death(game, e);
                 e.alive = false;
-                hit = true;
+                // This source branch plays its own explosion sounds, without
+                // the ordinary item-hit sound below.
+                return;
             }
             "oCaveman" | "oManTrap" | "oVampire" | "oYeti" | "oHawkman" | "oShopkeeper"
             | "oShopkeeper2" | "oGiantSpider" | "oTombLord" | "oAlienBoss" => {}
@@ -998,6 +987,7 @@ fn apply_melee(
                 return false;
             }
             e.data.insert("hit_cooldown".into(), 10.0);
+            e.alarms[0] = 10;
             if !(if pre { machete } else { puncture }) {
                 actual = 0;
                 stun = false;
@@ -1009,6 +999,7 @@ fn apply_melee(
                 return false;
             }
             e.data.insert("hit_cooldown".into(), 10.0);
+            e.alarms[0] = 10;
             actual = if machete { damage } else { 0 };
             stun = false;
             bump = true;
@@ -1044,7 +1035,14 @@ fn apply_melee(
                 actual = 0;
             }
         }
-        "oMagmaMan" if !pre => return false,
+        "oMagmaMan" if !pre => {
+            if e.value("whipped") == 0. {
+                game.sound("sndHit", e.pos);
+                e.data.insert("whipped".into(), 1.);
+                e.alarms[0] = 10;
+            }
+            return false;
+        }
         _ => {
             if e.value("no_whip") > 0.0 {
                 return false;
@@ -1054,8 +1052,7 @@ fn apply_melee(
     e.health -= actual;
     e.data.insert("assaulted".into(), 1.0);
     if actual > 0 {
-        e.data.insert("counts_as_kill".into(), 1.0);
-        e.data.remove("environmental_death");
+        set_counts_as_kill(e, true);
     }
     if e.health <= 0 {
         e.data.insert("killed_by_player".into(), 1.0);
@@ -1078,17 +1075,6 @@ fn apply_melee(
     if matches!(e.object.as_str(), "oShopkeeper" | "oShopkeeper2") && !in_stars(game) {
         game.flags.insert("shopkeepers_angry".into());
     }
-    if e.object == "oUFO" {
-        game.world
-            .spawn("oExplosion", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
-        if game.rng.range(3) == 0 {
-            game.world
-                .spawn("oAlienEject", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
-        }
-        game.sound("sndExplosion", e.pos);
-        e.health = 0;
-        e.alive = false;
-    }
     game.sound("sndHit", e.pos);
     true
 }
@@ -1106,73 +1092,111 @@ fn body_enemy(object: &str) -> bool {
     )
 }
 
-fn finish_death(game: &mut Game, e: &mut Entity) {
-    if e.object == "oVampire" && e.alive {
+/// Child Step handlers call this at their literal source death-credit branch.
+/// It never changes status, destroys a corpse, or creates death loot.
+pub(super) fn record_death(game: &mut Game, e: &mut Entity) {
+    use crate::statistics::{EnemyKill, LifetimeCounter};
+    if e.value("death_recorded") != 0.0 {
         return;
     }
-    if e.object == "oMagmaMan" && e.alive {
+    e.data.insert("death_recorded".into(), 1.0);
+    e.data.insert("dead".into(), 1.0);
+    if matches!(e.object.as_str(), "oScarab" | "oMagmaMan" | "oMagma") {
         return;
     }
-    if matches!(
-        e.object.as_str(),
-        "oFly"
-            | "oLaser"
-            | "oPsychicWave"
-            | "oPsychicCreate"
-            | "oOlmecSlam"
-            | "oOlmecDebris"
-            | "oYellowBall"
-            | "oMagmaTrail"
-            | "oUFOCrash"
-    ) {
-        e.alive = false;
+    let keeper = matches!(e.object.as_str(), "oShopkeeper" | "oShopkeeper2");
+    if keeper && in_stars(game) {
+        let kills = game.data.entry("stars_kills".into()).or_default();
+        *kills = (*kills + 1.0).min(99.0);
         return;
     }
-    if e.value("death_recorded") == 0.0 {
-        e.data.insert("death_recorded".into(), 1.0);
-        if matches!(e.object.as_str(), "oShopkeeper" | "oShopkeeper2") && in_stars(game) {
-            let kills = game.data.entry("stars_kills".into()).or_default();
-            *kills = (*kills + 1.0).min(99.0);
-        } else if !matches!(e.object.as_str(), "oScarab" | "oMagmaMan")
-            && e.value("environmental_death") == 0.0
-        {
-            *game.data.entry("kills".into()).or_default() += 1.0;
-            if let Some(category) = kill_category(&e.object) {
-                *game.data.entry(category.into()).or_default() += 1.0;
-            }
+    if !keeper && e.object != "oSpiderHang" && e.object != "oOlmec" && !counts_as_kill(e) {
+        return;
+    }
+    *game.data.entry("kills".into()).or_default() += 1.0;
+    if let Some(category) = kill_category(&e.object) {
+        *game.data.entry(category.into()).or_default() += 1.0;
+    }
+    let real = crate::statistics::is_real_level(game);
+    if e.object == "oMonkey" {
+        if real {
+            game.lifetime_stats
+                .increment(LifetimeCounter::TotalMonkeyKills);
         }
-        if matches!(e.object.as_str(), "oGiantSpider" | "oGiantSpiderHang") {
-            let drop = Vec2::new(e.pos.x + 16.0, e.pos.y + 24.0);
-            game.world.spawn("oPaste", drop);
-            let count = 1 + game.rng.range(3);
-            for _ in 0..count {
-                let gem = match game.rng.range(3) {
-                    0 => "oEmeraldBig",
-                    1 => "oSapphireBig",
-                    _ => "oRubyBig",
-                };
-                game.world.spawn(gem, drop);
-            }
-        }
-        if e.object == "oVampire" {
-            game.world
-                .spawn("oCapePickup", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
-        }
-        if matches!(e.object.as_str(), "oShopkeeper" | "oShopkeeper2") && !in_stars(game) {
-            game.flags.insert("murderer".into());
-            game.flags.insert("shopkeepers_angry".into());
+    } else if let Some(kind) = match e.object.as_str() {
+        "oBat" => Some(EnemyKill::Bat),
+        "oSnake" => Some(EnemyKill::Snake),
+        "oSpider" | "oSpiderHang" => Some(EnemyKill::Spider),
+        "oGiantSpider" | "oGiantSpiderHang" => Some(EnemyKill::GiantSpider),
+        "oCaveman" => Some(EnemyKill::Caveman),
+        "oSkeleton" => Some(EnemyKill::Skeleton),
+        "oZombie" => Some(EnemyKill::Zombie),
+        "oVampire" => Some(EnemyKill::Vampire),
+        "oFrog" => Some(EnemyKill::Frog),
+        "oFireFrog" => Some(EnemyKill::FireFrog),
+        "oManTrap" => Some(EnemyKill::ManTrap),
+        "oPiranha" | "oDeadFish" => Some(EnemyKill::Piranha),
+        "oJaws" => Some(EnemyKill::Jaws),
+        "oYeti" => Some(EnemyKill::Yeti),
+        "oYetiKing" => Some(EnemyKill::YetiKing),
+        "oAlien" | "oAlienEject" => Some(EnemyKill::Alien),
+        "oUFO" => Some(EnemyKill::Ufo),
+        "oAlienBoss" => Some(EnemyKill::AlienBoss),
+        "oHawkman" => Some(EnemyKill::Hawkman),
+        "oShopkeeper" | "oShopkeeper2" => Some(EnemyKill::Shopkeeper),
+        "oTombLord" => Some(EnemyKill::TombLord),
+        "oOlmec" => Some(EnemyKill::Olmec),
+        _ => None,
+    } {
+        if real || matches!(kind, EnemyKill::YetiKing | EnemyKill::Olmec) {
+            game.lifetime_stats.enemy_kill(kind);
         }
     }
-    if e.object == "oAlienBoss" && e.alive {
-        return;
+    if keeper {
+        game.flags.insert("murderer".into());
+        game.flags.insert("shopkeepers_angry".into());
     }
-    if e.object == "oShopkeeper2" {
-        return;
-    }
-    if body_enemy(&e.object) && e.object != "oVampire" || e.object == "oDamsel" {
-        e.state = 99;
+}
+
+pub(super) fn counts_as_kill(e: &Entity) -> bool {
+    e.data.get("counts_as_kill").copied().unwrap_or(1.0) >= 0.5
+        && e.value("environmental_death") == 0.0
+}
+
+pub(super) fn set_counts_as_kill(e: &mut Entity, value: bool) {
+    e.data.insert("counts_as_kill".into(), f64::from(value));
+    if value {
+        e.data.remove("environmental_death");
     } else {
-        e.alive = false;
+        e.data.insert("environmental_death".into(), 1.0);
+    }
+}
+
+pub(super) fn record_keeper_crush(game: &mut Game, e: &mut Entity) {
+    if e.value("death_recorded") == 0.0 && e.health > 0 {
+        *game.data.entry("kills".into()).or_default() += 1.0;
+        *game.data.entry("shopkeepers".into()).or_default() += 1.0;
+        if crate::statistics::is_real_level(game) {
+            game.lifetime_stats
+                .enemy_kill(crate::statistics::EnemyKill::Shopkeeper);
+        }
+    }
+    e.data.insert("death_recorded".into(), 1.0);
+    e.data.insert("dead".into(), 1.0);
+    game.flags.insert("murderer".into());
+}
+
+pub(super) fn record_damsel_death(game: &mut Game, e: &mut Entity, run_credit: bool) {
+    if e.value("death_recorded") != 0.0 || e.value("dead") != 0.0 {
+        return;
+    }
+    e.data.insert("death_recorded".into(), 1.0);
+    e.data.insert("dead".into(), 1.0);
+    game.lifetime_stats
+        .increment(crate::statistics::LifetimeCounter::DamselsKilledTotal);
+    if run_credit {
+        *game.data.entry("kills".into()).or_default() += 1.0;
+        *game.data.entry("damselsKilled".into()).or_default() += 1.0;
     }
 }
 
@@ -1216,6 +1240,76 @@ pub(super) fn in_stars(game: &Game) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn actual_step_item_ufo_death_runs_explosion_and_eject_create_immediately() {
+        for seed in 0..64 {
+            let mut game = Game::shell(seed, RulesPreset::Classic);
+            game.world = World::new(30, 20, Area::Ice, 9);
+            game.player.pos = Vec2::new(240., 184.);
+            game.player.previous_pos = game.player.pos;
+            for x in 0..30 {
+                game.world.set_tile(x, 12, "oBrick");
+            }
+            let ufo = game.spawn("oUFO", Vec2::new(80., 80.));
+            let arrow = game.spawn("oArrow", Vec2::new(83., 88.));
+            let item = game.world.entity_mut(arrow).unwrap();
+            item.vel = Vec2::new(3., 0.);
+            item.data.insert("gravity".into(), 0.);
+            let mut expected_rng = game.rng.clone();
+            if expected_rng.range(3) != 0 {
+                continue;
+            }
+            let expected_facing = if expected_rng.range(2) == 0 { -1 } else { 1 };
+
+            game.step(&InputFrame::default());
+
+            assert!(game.world.entity(ufo).is_none());
+            let explosion = game
+                .world
+                .entities
+                .iter()
+                .find(|e| e.object == "oExplosion")
+                .unwrap();
+            assert_eq!(explosion.value("announced"), 1.);
+            assert_eq!(explosion.age, 0, "earlier resource has no newborn Step");
+            let eject = game
+                .world
+                .entities
+                .iter()
+                .find(|e| e.object == "oAlienEject")
+                .unwrap();
+            assert_eq!(eject.value("ice_context_created"), 1.);
+            assert_eq!(eject.facing, expected_facing);
+            assert_eq!(
+                eject.pos,
+                Vec2::new(88., 82.),
+                "later resource runs its newborn Step"
+            );
+            assert_eq!(game.rng.range(10000), expected_rng.range(10000));
+            let sounds: Vec<_> = game
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    GameEvent::Sound { name, .. } => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                sounds
+                    .iter()
+                    .filter(|name| **name == "sndExplosion")
+                    .count(),
+                2
+            );
+            assert!(!sounds.contains(&"sndHit"));
+            assert_eq!(
+                game.lifetime_stats.enemy_kills[crate::statistics::EnemyKill::Ufo as usize],
+                1
+            );
+            return;
+        }
+        panic!("fixture seeds must include an ejecting UFO");
+    }
+    #[test]
     fn classic_fraction_uses_global_tick() {
         let world = World::new(20, 20, Area::Mines, 1);
         let mut e = Entity::new(1, "oSnake", Vec2::new(50.0, 50.0));
@@ -1244,35 +1338,174 @@ mod tests {
         assert_eq!(game.world.entity(id).unwrap().vel, Vec2::default());
     }
     #[test]
-    fn whip_hits_each_actor_once() {
+    fn actual_step_later_collision_uses_dead_latch_instead_of_current_hp() {
         let mut game = Game::shell(1, RulesPreset::Classic);
-        game.player.pos = Vec2::new(100.0, 100.0);
-        let mut e = Entity::new(99, "oCaveman", Vec2::new(50.0, 50.0));
-        init_entity(&mut e);
-        game.world.spawn("oWhip", e.pos);
-        combat(&mut game, &mut e);
-        assert_eq!(e.health, 2);
-        combat(&mut game, &mut e);
-        assert_eq!(e.health, 2);
+        game.world = World::new(20, 16, Area::Mines, 1);
+        game.player.pos = Vec2::new(136., 144.);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Falling;
+        game.player.health = 1;
+        game.spawn("oCaveman", Vec2::new(128., 136.));
+        let snake = game.spawn("oSnake", Vec2::new(128., 144.));
+        game.step(&InputFrame::default());
+        // Caveman325 kills first; Snake552 still sees not-other.dead until
+        // Player319 runs on the next frame, and accepts the falling stomp.
+        assert_eq!(game.player.health, 0);
+        assert_eq!(game.state, RunState::Playing);
+        assert_eq!(game.world.entity(snake).unwrap().health, 0);
+        assert_eq!(
+            game.lifetime_stats.enemy_deaths[crate::statistics::EnemyDeath::Caveman as usize],
+            1
+        );
+        game.step(&InputFrame::default());
+        assert_eq!(game.state, RunState::Dead);
+        assert_eq!(
+            game.lifetime_stats.enemy_kills[crate::statistics::EnemyKill::Snake as usize],
+            1
+        );
     }
+
     #[test]
-    fn shotgun_pellets_damage_independently_in_one_tick() {
+    fn actual_step_inherited_ufo_whip_waits_for_own_next_step_death() {
         let mut game = Game::shell(1, RulesPreset::Classic);
-        game.player.pos = Vec2::new(200.0, 200.0);
-        let mut target = Entity::new(99, "oShopkeeper", Vec2::new(50.0, 50.0));
-        init_entity(&mut target);
-        for _ in 0..6 {
-            let id = game.world.spawn("oBullet", Vec2::new(58.0, 58.0));
-            let bullet = game.world.entity_mut(id).unwrap();
-            bullet.data.insert("owner_player".into(), 1.0);
-            bullet.data.insert("damage".into(), 4.0);
-            bullet.vel.x = 8.0;
-        }
-        combat(&mut game, &mut target);
-        assert_eq!(target.health, -4);
-        assert_eq!(target.timer, 20);
-        assert!(game.world.entities.iter().all(|e| !e.alive));
+        game.world = World::new(20, 16, Area::Ice, 9);
+        game.player.pos = Vec2::new(66., 81.);
+        game.player.previous_pos = game.player.pos;
+        game.player.facing = 1;
+        game.player.attack_timer = 10;
+        game.player.data.insert("whip_elapsed".into(), 0.);
+        let ufo = game.spawn("oUFO", Vec2::new(80., 80.));
+        let whip = game.spawn("oWhip", Vec2::new(82., 82.));
+        let weapon = game.world.entity_mut(whip).unwrap();
+        weapon.set_sprite("sWhipRight");
+        weapon.facing = 1;
+        weapon.timer = 7;
+        weapon.data.insert("damage".into(), 1.);
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(ufo).unwrap().health, 0);
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|e| matches!(e.object.as_str(), "oExplosion" | "oUFOCrash"))
+        );
+        assert_eq!(game.data.get("kills"), None);
+        game.step(&InputFrame::default());
+        assert!(game.world.entity(ufo).is_none());
+        assert!(game.world.entities.iter().any(|e| e.object == "oUFOCrash"));
+        assert_eq!(
+            game.lifetime_stats.enemy_kills[crate::statistics::EnemyKill::Ufo as usize],
+            1
+        );
     }
+
+    #[test]
+    fn actual_step_whip_restores_generic_credit_but_nonpuncture_yeti_keeps_it_false() {
+        for (object, restores) in [("oFrog", true), ("oYeti", false)] {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            game.world = World::new(20, 16, Area::Jungle, 5);
+            game.player.pos = Vec2::new(66., 81.);
+            game.player.previous_pos = game.player.pos;
+            game.player.facing = 1;
+            game.player.attack_timer = 10;
+            game.player.data.insert("whip_elapsed".into(), 0.);
+            let target = game.spawn(object, Vec2::new(80., 80.));
+            set_counts_as_kill(game.world.entity_mut(target).unwrap(), false);
+            let whip = game.spawn("oWhip", Vec2::new(82., 82.));
+            let weapon = game.world.entity_mut(whip).unwrap();
+            weapon.set_sprite("sWhipRight");
+            weapon.facing = 1;
+            weapon.timer = 7;
+            weapon.data.insert("damage".into(), 1.);
+            game.step(&InputFrame::default());
+            let victim = game.world.entity(target).unwrap();
+            assert_eq!(counts_as_kill(victim), restores, "{object}");
+            if object == "oFrog" {
+                assert_eq!(victim.health, 0);
+            } else {
+                assert_eq!(victim.health, 5);
+                assert_eq!(victim.value("hit_cooldown"), 10.);
+            }
+        }
+    }
+
+    #[test]
+    fn actual_step_magma_man_whip_uses_own_sound_alarm_without_damage() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = World::new(20, 16, Area::Temple, 13);
+        game.player.pos = Vec2::new(66., 81.);
+        game.player.previous_pos = game.player.pos;
+        game.player.facing = 1;
+        game.player.attack_timer = 10;
+        game.player.data.insert("whip_elapsed".into(), 0.);
+        game.world.set_tile(5, 6, "oBlock");
+        let man = game.spawn("oMagmaMan", Vec2::new(80., 80.));
+        game.world.entity_mut(man).unwrap().timer = 20;
+        let whip = game.spawn("oWhip", Vec2::new(82., 82.));
+        let weapon = game.world.entity_mut(whip).unwrap();
+        weapon.set_sprite("sWhipRight");
+        weapon.facing = 1;
+        weapon.timer = 7;
+        game.step(&InputFrame::default());
+        let target = game.world.entity(man).unwrap();
+        assert_eq!(target.health, 199);
+        assert_eq!(target.value("whipped"), 1.);
+        assert_eq!(target.alarms[0], 10);
+        assert!(
+            game.events
+                .iter()
+                .any(|event| matches!(event,GameEvent::Sound{name,..} if name=="sndHit"))
+        );
+    }
+
+    #[test]
+    fn actual_step_bullet_damsel_uses_own_safe_and_velocity_contract() {
+        let mut game = psychic_room();
+        let damsel = game.spawn("oDamsel", Vec2::new(136., 152.));
+        let bullet = game.spawn("oBullet", Vec2::new(128., 152.));
+        let projectile = game.world.entity_mut(bullet).unwrap();
+        projectile.vel.x = 8.;
+        projectile.data.insert("safe".into(), 1.);
+        game.step(&InputFrame::default());
+        let victim = game.world.entity(damsel).unwrap();
+        assert_eq!(victim.health, 0);
+        assert_eq!(victim.state, 2);
+        assert_eq!(victim.timer, 120);
+        assert_eq!(victim.vel, Vec2::new(2.4, -6.));
+        assert!(game.world.entity(bullet).is_none());
+        assert_eq!(game.data.get("kills"), None);
+        assert_eq!(game.lifetime_stats.damsels_killed_total, 0);
+    }
+
+    #[test]
+    fn actual_step_generic_contact_counts_only_literal_lethal_real_room_hit() {
+        for custom in [false, true] {
+            let mut game = psychic_room();
+            if custom {
+                game.flags.insert("custom_level".into());
+            }
+            game.player.pos = Vec2::new(136., 152.);
+            game.player.previous_pos = game.player.pos;
+            game.player.health = 1;
+            game.spawn("oSnake", Vec2::new(128., 144.));
+            game.step(&InputFrame::default());
+            assert_eq!(game.player.health, 0);
+            assert_eq!(
+                game.lifetime_stats.enemy_deaths[crate::statistics::EnemyDeath::Snake as usize],
+                u64::from(!custom)
+            );
+            // Automatic Collision follows the source Player's own Step.
+            assert_eq!(game.state, RunState::Playing);
+            game.step(&InputFrame::default());
+            assert_eq!(game.state, RunState::Dead);
+            assert_eq!(
+                game.lifetime_stats.enemy_deaths[crate::statistics::EnemyDeath::Snake as usize],
+                u64::from(!custom)
+            );
+        }
+    }
+
     #[test]
     fn movement_collides_with_source_dynamic_solids() {
         let mut world = World::new(20, 20, Area::Mines, 1);
@@ -1472,12 +1705,19 @@ mod tests {
         let yeti = game.world.spawn("oYeti", Vec2::new(128.0, 144.0));
         // A real fired projectile is lethal, while the source keeps the corpse.
         for _ in 0..2 {
-            game.world.spawn("oBullet", Vec2::new(136.0, 152.0));
+            game.world.spawn("oBullet", Vec2::new(136.0, 150.0));
         }
-        for _ in 0..20 {
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(yeti).unwrap().state, 98);
+        assert_eq!(game.data.get("kills"), None);
+        for _ in 0..180 {
             game.step(&InputFrame::default());
+            if game.world.entity(yeti).unwrap().state == 99 {
+                break;
+            }
         }
         assert_eq!(game.world.entity(yeti).unwrap().state, 99);
+        game.step(&InputFrame::default());
         assert_eq!(game.data.get("kills"), Some(&1.0));
         assert_eq!(game.data.get("yetis"), Some(&1.0));
     }

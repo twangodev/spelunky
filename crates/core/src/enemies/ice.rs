@@ -1,7 +1,7 @@
 //! Ice enemies translated from Classic 1.1 Create/Step/Animation end events.
 //! Positions retain the original GameMaker sprite origins and source offsets.
-//! Limitations: rectangular masks, approximate shared movement resolution,
-//! and omitted blood/fire trails and dynamic gold/tile-layer effects.
+//! The engine owns automatic collision, alarms, and sprite playback phases.
+//! Decorative blood and dynamic tile-layer effects remain approximate.
 //! Source contains no oAlienUFO object; this module does not invent that alias.
 use super::move_body;
 use crate::{Entity, Game, GameEvent, PlayerState, Rect, Vec2};
@@ -30,15 +30,20 @@ pub fn init(e: &mut Entity) {
         _ => 1,
     };
     e.state = 0;
-    e.data.insert("phase".into(), 0.0);
-    e.data.insert("animation_speed".into(), 0.5);
+    e.set_image_speed(match e.object.as_str() {
+        "oAlienEject" => 0.6,
+        "oPsychicCreate" => 0.4,
+        "oPsychicWave" | "oYetiKing" | "oAlienBoss" => 0.25,
+        "oLaser" | "oUFOCrash" => 1.0,
+        _ => 0.5,
+    });
     if matches!(e.object.as_str(), "oYetiKing" | "oAlienBoss") {
         e.data.insert(
             "size_width".into(),
             if e.object == "oYetiKing" { 20.0 } else { 32.0 },
         );
         e.data.insert("size_height".into(), 32.0);
-        e.data.insert("animation_speed".into(), 0.25);
+        e.set_image_speed(0.25);
     }
     if e.object == "oYetiKing" {
         e.data.insert("contact_damage".into(), 2.0);
@@ -49,11 +54,20 @@ pub fn init(e: &mut Entity) {
             e.data.insert("psychic_recover".into(), 100.0);
         }
         "oYeti" | "oYetiKing" | "oAlien" => e.vel.x = 2.5,
-        "oAlienEject" => e.vel.y = -6.0,
+        "oAlienEject" => {
+            e.vel.y = -6.0;
+            e.data.insert("counts_as_kill".into(), 1.0);
+        }
         "oUFO" => {
             e.data.insert("shift_toggle".into(), -1.0);
         }
         _ => {}
+    }
+    if e.object == "oUFOCrash" {
+        e.alarms[0] = 3;
+    }
+    if e.object == "oLaser" {
+        e.alarms[0] = 1;
     }
     if e.object == "oAlienEject" {
         e.data.insert("drift_unset".into(), 1.0);
@@ -66,7 +80,7 @@ pub fn init(e: &mut Entity) {
             e.data.insert(key.into(), value);
         }
     }
-    e.sprite = match e.object.as_str() {
+    let sprite = match e.object.as_str() {
         "oYeti" => "sYetiLeft",
         "oYetiKing" => "sYetiKingRight",
         "oAlienBoss" => "sAlienBoss",
@@ -77,8 +91,59 @@ pub fn init(e: &mut Entity) {
         "oLaser" => "sLaser",
         "oUFO" => "sUFO",
         _ => "sAlien",
+    };
+    e.set_sprite(sprite);
+}
+
+/// Context-dependent Create code, called synchronously before caller writes.
+pub(super) fn create(game: &mut Game, e: &mut Entity) {
+    if e.value("ice_context_created") != 0.0 {
+        return;
     }
-    .into();
+    match e.object.as_str() {
+        "oUFO" => {
+            e.data
+                .insert("shift_toggle".into(), f64::from(game.rng.range(2)));
+        }
+        "oAlienEject" => {
+            e.facing = if game.rng.range(2) == 0 { -1 } else { 1 };
+            e.data.remove("drift_unset");
+        }
+        "oPsychicCreate" => {
+            let supplied = e
+                .data
+                .get("create_target_x")
+                .copied()
+                .zip(e.data.get("create_target_y").copied());
+            let target = supplied.map(|(x, y)| Vec2::new(x, y)).or_else(|| {
+                game.world
+                    .entities
+                    .iter()
+                    .find(|boss| boss.alive && boss.engine_active && boss.object == "oAlienBoss")
+                    .map(|boss| Vec2::new(boss.pos.x + 16.0, boss.pos.y + 16.0))
+            });
+            if let Some(target) = target {
+                let delta = Vec2::new(target.x - e.pos.x, target.y - e.pos.y);
+                // point_direction at coincident points is zero degrees.
+                let angle = delta.y.atan2(delta.x);
+                e.vel = Vec2::new(2.0 * angle.cos(), 2.0 * angle.sin());
+            }
+        }
+        _ => {}
+    }
+    e.data.insert("ice_context_created".into(), 1.0);
+}
+
+fn spawn_psychic_create(game: &mut Game, pos: Vec2, target: Vec2) -> u64 {
+    // The calling Boss is detached while its event runs. Supply that source
+    // origin before Create instead of letting the callback query stale state.
+    let id = game.world.spawn("oPsychicCreate", pos);
+    if let Some(effect) = game.world.entity_mut(id) {
+        effect.data.insert("create_target_x".into(), target.x);
+        effect.data.insert("create_target_y".into(), target.y);
+    }
+    crate::dispatcher::create(game, id);
+    id
 }
 
 fn counter(e: &mut Entity, key: &str) -> f64 {
@@ -87,17 +152,10 @@ fn counter(e: &mut Entity, key: &str) -> f64 {
     value
 }
 
-fn phase(e: &mut Entity, speed: f64) -> f64 {
-    let value = e.value("phase") + speed;
-    e.data.insert("phase".into(), value);
-    e.animation = value;
-    value
-}
-
 fn enter(e: &mut Entity, state: i32) {
+    // Source status writes do not restart sprite playback. Only explicit
+    // image_index writes at attack entry reset the animation.
     e.state = state;
-    e.animation = 0.0;
-    e.data.insert("phase".into(), 0.0);
 }
 
 fn distance_to_player(game: &Game, e: &Entity) -> f64 {
@@ -108,49 +166,48 @@ fn distance_to_player(game: &Game, e: &Entity) -> f64 {
     dx.hypot(dy)
 }
 
-/// Image playback and Animation End are independent of the viewport guard
-/// around Alien Boss Step. Item hits retain the current image index.
-pub(super) fn tick_independent_animation(e: &mut Entity) {
-    if e.object != "oAlienBoss" {
-        return;
-    }
-    e.data.insert("boss_animation_advanced".into(), 0.0);
-    if e.sprite != "sAlienBossHurt" {
-        return;
-    }
-    e.data.insert("animation_speed".into(), 0.8);
-    let frame = e.animation.rem_euclid(5.0) + 0.8;
-    e.animation = frame.rem_euclid(5.0);
-    e.data.insert("phase".into(), e.animation);
-    e.data.insert("boss_animation_advanced".into(), 1.0);
-    if frame >= 5.0 {
-        e.sprite = "sAlienBoss".into();
-    }
-}
-
-pub(super) fn animation_end(e: &mut Entity, ended_sprite: &str) {
-    if e.object != "oYetiKing" {
-        return;
-    }
-    match ended_sprite {
-        "sYetiKingTurnR" => {
+pub(super) fn animation_end(game: &mut Game, e: &mut Entity, ended_sprite: &str) {
+    match (e.object.as_str(), ended_sprite) {
+        ("oYeti", "sYetiThrowL") => {
+            e.state = 0;
+            e.set_sprite("sYetiLeft");
+        }
+        ("oYetiKing", "sYetiKingTurnR") => {
             e.facing = 1;
             e.state = 1;
         }
-        "sYetiKingTurnL" => {
+        ("oYetiKing", "sYetiKingTurnL") => {
             e.facing = -1;
             e.state = 1;
         }
-        "sYetiKingYellL" | "sYetiKingYellR" => {
+        ("oYetiKing", "sYetiKingYellL" | "sYetiKingYellR") => {
             e.state = 0;
             e.data.insert("counter".into(), 30.0);
-            e.data.insert("animation_speed".into(), 0.25);
+            e.set_image_speed(0.25);
         }
+        ("oAlienBoss", "sAlienBossDie") => {
+            e.set_sprite("sAlienBossDead");
+            for emitter in &mut game.world.entities {
+                if emitter.object == "oBarrierEmitter" {
+                    emitter.alive = false;
+                }
+            }
+        }
+        ("oAlienBoss", "sAlienBossHurt") => e.set_sprite("sAlienBoss"),
+        ("oUFO", "sUFOBlast") => {
+            e.state = 1;
+            e.set_sprite("sUFO");
+        }
+        ("oAlienEject", "sAlienDeploy") => e.set_sprite("sAlienParachute"),
+        ("oPsychicWave" | "oPsychicCreate", _) => e.alive = false,
         _ => {}
     }
 }
 
 pub fn tick(game: &mut Game, e: &mut Entity) {
+    if e.value("ice_context_created") == 0.0 {
+        create(game, e);
+    }
     match e.object.as_str() {
         "oYeti" => yeti(game, e),
         "oYetiKing" => king(game, e),
@@ -162,15 +219,8 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
         "oLaser" => laser(game, e),
         "oPsychicWave" => psychic(game, e),
         "oPsychicCreate" => {
-            let delta = Vec2::new(e.value("target_x") - e.pos.x, e.value("target_y") - e.pos.y);
-            let distance = delta.x.hypot(delta.y);
-            if distance > 0.0 {
-                e.pos.x += delta.x / distance * 2.0;
-                e.pos.y += delta.y / distance * 2.0;
-            }
-            if phase(e, 0.4) >= 6.0 {
-                e.alive = false;
-            }
+            e.pos.x += e.vel.x;
+            e.pos.y += e.vel.y;
         }
         _ => {}
     }
@@ -179,86 +229,80 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
 fn yeti(game: &mut Game, e: &mut Entity) {
     let impact_y = (e.vel.y + super::inherited::gravity(e, 0.6)).min(10.0);
     let (wall, floor) = move_body(&game.world, e, 0.6);
-    let crush_y = if e.state >= 98 || e.health <= 0 {
-        12.0
-    } else {
-        8.0
-    };
-    if game
-        .world
-        .solid_point_except(Vec2::new(e.pos.x + 8.0, e.pos.y + crush_y), e.id)
+    if e.state != 99 && e.state != 98 && e.health < 1 {
+        e.state = 99;
+    }
+    let crush_y = if e.state >= 98 { 12.0 } else { 8.0 };
+    if (e.state >= 98 || !e.held)
+        && game
+            .world
+            .solid_point_except(Vec2::new(e.pos.x + 8.0, e.pos.y + crush_y), e.id)
     {
-        e.health = 0;
+        // This source destruction bypasses DEAD and its kill-credit block.
         e.alive = false;
         game.sound("sndCavemanDie", e.pos);
         return;
     }
-    if e.health < 1 {
-        settle_yeti(e, wall, floor, impact_y);
-        e.state = 99;
-        e.sprite = "sYetiDeadL".into();
-        if e.value("death_sound") == 0.0 {
+    if e.state == 99 {
+        if e.value("dead") == 0.0 {
+            super::record_death(game, e);
             game.sound("sndCavemanDie", e.pos);
-            e.data.insert("death_sound".into(), 1.0);
+            e.data.insert("dead".into(), 1.0);
+        }
+        e.set_sprite("sYetiDeadL");
+        if e.vel.x > 0.0 || e.vel.y > 0.0 {
+            e.state = 98;
+        }
+        settle_yeti(e, wall, floor, impact_y);
+        if e.vel.x == 0.0 && e.vel.y == 0.0 && e.health < 1 {
+            e.state = 99;
+        }
+        return;
+    }
+    if e.state == 98 {
+        if e.vel.x == 0.0 && e.health > 0 {
+            e.set_sprite("sYetiStunL");
+        } else if e.value("bounced") != 0.0 {
+            e.set_sprite(if e.vel.y < 0.0 {
+                "sYetiBounceL"
+            } else {
+                "sYetiFallL"
+            });
+        } else {
+            e.set_sprite(if e.vel.x.abs() > 0.0 {
+                "sYetiDieLL"
+            } else {
+                "sYetiDieLR"
+            });
+        }
+        if floor && e.vel.x == 0.0 && e.health > 0 {
+            if e.timer > 0 {
+                e.timer -= 1;
+            } else {
+                enter(e, 0);
+            }
+        }
+        settle_yeti(e, wall, floor, impact_y);
+        if e.vel.x == 0.0 && e.vel.y == 0.0 && e.health < 1 {
+            e.state = 99;
+        }
+        if e.held {
+            e.set_sprite(if e.health > 0 {
+                "sYetiHeldL"
+            } else {
+                "sYetiDHeldL"
+            });
         }
         return;
     }
     if e.held {
-        e.sprite = "sYetiHeldL".into();
-        return;
-    }
-    if e.state == 98 {
-        settle_yeti(e, wall, floor, impact_y);
-        e.sprite = "sYetiStunL".into();
-        if floor {
-            e.timer = e.timer.saturating_sub(1);
-            if e.timer == 0 {
-                enter(e, 0);
-            }
-        }
+        e.set_sprite("sYetiHeldL");
         return;
     }
     if e.state == 3 {
         e.vel.x = 0.0;
-        e.sprite = "sYetiThrowL".into();
-        if phase(e, 0.5) >= 7.0 {
-            enter(e, 0);
-        }
+        e.set_sprite("sYetiThrowL");
         return;
-    }
-    // Yeti grabs and throws; contact itself causes no immediate damage except
-    // when there is insufficient headroom, matching its collision event.
-    if e.sprite_bounds().intersects(game.player.sprite_bounds())
-        && (game.player.pos.x - (e.pos.x + 8.0)).abs() <= 8.0
-        && game.player.invincible == 0
-        && !super::can_stomp(game, e)
-    {
-        if game.world.solid_at(e.pos.x + 8.0, e.pos.y - 4.0) {
-            hurt_player(game, 1);
-            game.player.invincible = 30;
-            game.player.data.insert("blink".into(), 30.0);
-            game.player.vel.x = if game.player.pos.x < e.pos.x {
-                -6.0
-            } else {
-                6.0
-            };
-        } else {
-            e.facing = if game.player.pos.x > e.pos.x + 8.0 {
-                1
-            } else {
-                -1
-            };
-            game.player.pos = Vec2::new(e.pos.x + if e.facing > 0 { 0.0 } else { 16.0 }, e.pos.y);
-            game.player.previous_pos = game.player.pos;
-            enter(e, 3);
-            game.player.vel = Vec2::new(f64::from(e.facing) * 6.0, -6.0);
-            game.player.state = PlayerState::Stunned;
-            game.player.data.insert("wall_hurt".into(), 1.0);
-            game.player.data.insert("bounced".into(), 0.0);
-            super::drop_from_throw(game);
-            e.sprite = "sYetiThrowL".into();
-            return;
-        }
     }
     match e.state {
         0 => {
@@ -303,6 +347,7 @@ fn yeti(game: &mut Game, e: &mut Entity) {
             }
         }
         2 => {
+            e.set_image_speed(1.0);
             if wall {
                 e.facing = -e.facing;
             }
@@ -313,7 +358,7 @@ fn yeti(game: &mut Game, e: &mut Entity) {
     // Source Yeti sight rays alert cavemen and hawkmen via oEnemySight. The
     // source sight collision does not place the Yeti itself in ATTACK.
     if e.value("sight") == 0.0 && matches!(e.state, 0 | 1) {
-        let id = game.world.spawn("oEnemySight", e.pos);
+        let id = game.spawn("oEnemySight", e.pos);
         if let Some(sight) = game.world.entity_mut(id) {
             sight.vel.x = f64::from(e.facing) * 10.0;
             sight.data.insert("owner".into(), e.id as f64);
@@ -331,13 +376,12 @@ fn yeti(game: &mut Game, e: &mut Entity) {
         e.vel.x = 0.0;
     }
     if e.state != 3 {
-        e.sprite = if e.vel.x == 0.0 {
+        let sprite = if e.vel.x == 0.0 {
             "sYetiLeft"
         } else {
             "sYetiRunLeft"
-        }
-        .into();
-        phase(e, if e.state == 2 { 1.0 } else { 0.5 });
+        };
+        e.set_sprite(sprite);
     }
 }
 
@@ -390,6 +434,7 @@ fn alien(game: &mut Game, e: &mut Entity) {
         e.health = 0;
     }
     if e.health < 1 {
+        super::record_death(game, e);
         e.alive = false;
         return;
     }
@@ -432,7 +477,6 @@ fn alien(game: &mut Game, e: &mut Entity) {
                 .insert("counter".into(), f64::from(20 + game.rng.range(31)));
         }
     }
-    phase(e, 0.5);
 }
 
 fn king(game: &mut Game, e: &mut Entity) {
@@ -454,18 +498,18 @@ fn king(game: &mut Game, e: &mut Entity) {
             } else {
                 "oRopePile"
             };
-            let id = game
-                .world
-                .spawn(item, Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
+            let id = game.spawn(item, Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
             let vx = f64::from(game.rng.range(4)) - f64::from(game.rng.range(4));
             let vy = -f64::from(1 + game.rng.range(2));
             if let Some(loot) = game.world.entity_mut(id) {
                 loot.vel = Vec2::new(vx, vy);
             }
         }
+        super::record_death(game, e);
         e.alive = false;
         return;
     }
+    counter(e, "hit_cooldown");
     counter(e, "attack_timer");
     if matches!(e.state, 0 | 1) {
         counter(e, "counter");
@@ -490,6 +534,7 @@ fn king(game: &mut Game, e: &mut Entity) {
             } else if dx * f64::from(e.facing) > 0.0 && dy < 32.0 && e.value("attack_timer") == 0.0
             {
                 enter(e, 3);
+                e.animation = 0.0;
                 e.vel.x = 0.0;
             } else {
                 e.vel.x = f64::from(e.facing);
@@ -501,7 +546,7 @@ fn king(game: &mut Game, e: &mut Entity) {
         3 => {
             e.vel.x = 0.0;
             e.data.insert("attack_timer".into(), 100.0);
-            e.data.insert("animation_speed".into(), 0.5);
+            e.set_image_speed(0.5);
             let frame = e.animation;
             if (7.0..=12.0).contains(&frame) {
                 if frame == 7.0 {
@@ -525,8 +570,7 @@ fn king(game: &mut Game, e: &mut Entity) {
                 }
                 for (x, y, pos) in falling {
                     game.world.set_tile(x, y, "");
-                    game.world
-                        .spawn("oIceBlock", Vec2::new(pos.x - 8.0, pos.y - 8.0));
+                    game.spawn("oIceBlock", Vec2::new(pos.x - 8.0, pos.y - 8.0));
                 }
                 for ice in &mut game.world.entities {
                     if ice.object == "oThinIce" {
@@ -538,7 +582,7 @@ fn king(game: &mut Game, e: &mut Entity) {
         }
         _ => {}
     }
-    e.sprite = match (e.state, e.facing < 0) {
+    let sprite = match (e.state, e.facing < 0) {
         (2, true) => "sYetiKingTurnR",
         (2, false) => "sYetiKingTurnL",
         (3, true) => "sYetiKingYellL",
@@ -547,42 +591,35 @@ fn king(game: &mut Game, e: &mut Entity) {
         (1, false) => "sYetiKingWalkR",
         (_, true) => "sYetiKingLeft",
         _ => "sYetiKingRight",
-    }
-    .into();
+    };
+    e.set_sprite(sprite);
     if super::solid_mask(&game.world, e.bounds(), e.id) {
         e.pos.y -= 2.0;
     }
 }
 
 fn ufo(game: &mut Game, e: &mut Entity) {
-    if e.value("shift_toggle") < 0.0 {
-        e.data
-            .insert("shift_toggle".into(), f64::from(game.rng.range(2)));
-    }
-    if e.health < 1 {
-        game.world.spawn("oUFOCrash", e.pos);
-        e.alive = false;
-        return;
-    }
     let previous_y = e.vel.y;
     let (wall, _) = move_body(&game.world, e, 0.0);
     e.vel.y = previous_y;
+    if e.health < 1 {
+        game.spawn("oUFOCrash", e.pos);
+        super::record_death(game, e);
+        e.alive = false;
+        return;
+    }
+
     if e.pos.distance(game.player.pos) < 160.0 && e.value("alerted") == 0.0 {
         e.data.insert("alerted".into(), 1.0);
         game.sound("sndAlien", e.pos);
     }
     if e.state == 2 {
         e.vel = Vec2::default();
-        e.sprite = "sUFOBlast".into();
-        let frame = phase(e, 0.5);
+        e.set_sprite("sUFOBlast");
+        let frame = e.animation;
         if frame == 16.0 {
-            game.world
-                .spawn("oLaser", Vec2::new(e.pos.x + 8.0, e.pos.y + 16.0));
+            game.spawn("oLaser", Vec2::new(e.pos.x + 8.0, e.pos.y + 16.0));
             game.sound("sndLaser", e.pos);
-        }
-        if frame >= 20.0 {
-            enter(e, 1);
-            e.sprite = "sUFO".into();
         }
         return;
     }
@@ -592,7 +629,6 @@ fn ufo(game: &mut Game, e: &mut Entity) {
         && (!super::player_alive(game)
             || game.player.data.get("swimming").copied().unwrap_or(0.0) != 0.0)
     {
-        phase(e, 0.5);
         return;
     }
     let limit = if e.state == 1 { 64.0 } else { 32.0 };
@@ -635,7 +671,6 @@ fn ufo(game: &mut Game, e: &mut Entity) {
         }
         e.vel.y = next;
     }
-    phase(e, 0.5);
 }
 
 fn boss(game: &mut Game, e: &mut Entity) {
@@ -648,21 +683,20 @@ fn boss(game: &mut Game, e: &mut Entity) {
     }
     if e.health < 1 && e.state != 99 {
         enter(e, 99);
-        e.sprite = "sAlienBossDie".into();
+        e.set_sprite("sAlienBossDie");
         for _ in 0..4 {
             let name = match game.rng.range(3) {
                 0 => "oEmeraldBig",
                 1 => "oSapphireBig",
                 _ => "oRubyBig",
             };
-            let id = game
-                .world
-                .spawn(name, Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
+            let id = game.spawn(name, Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
             let vx = f64::from(game.rng.range(4)) - f64::from(game.rng.range(4));
             if let Some(gem) = game.world.entity_mut(id) {
                 gem.vel = Vec2::new(vx, -2.0);
             }
         }
+        super::record_death(game, e);
     }
     e.vel.x = (e.vel.x.abs() - 0.1).max(0.0) * e.vel.x.signum();
     if e.vel.x.abs() < 0.5 || e.state == 0 {
@@ -679,15 +713,10 @@ fn boss(game: &mut Game, e: &mut Entity) {
     if super::solid_mask(&game.world, e.bounds(), e.id) {
         e.pos.y -= 2.0;
     }
+    if e.sprite != "sAlienBossHurt" {
+        e.set_image_speed(0.25);
+    }
     if e.state == 99 {
-        if phase(e, 0.25) >= 9.0 {
-            e.sprite = "sAlienBossDead".into();
-            for emitter in &mut game.world.entities {
-                if emitter.object == "oBarrierEmitter" {
-                    emitter.alive = false;
-                }
-            }
-        }
         return;
     }
     let recovered = e.value("psychic_recover") == 0.0;
@@ -704,33 +733,15 @@ fn boss(game: &mut Game, e: &mut Entity) {
                 e.pos.x + 16.0 + f64::from(game.rng.range(33)) - f64::from(game.rng.range(33)),
                 e.pos.y + 16.0 + f64::from(game.rng.range(33)) - f64::from(game.rng.range(33)),
             );
-            let id = game.world.spawn("oPsychicCreate", pos);
-            if let Some(effect) = game.world.entity_mut(id) {
-                effect.data.insert("target_x".into(), e.pos.x + 16.0);
-                effect.data.insert("target_y".into(), e.pos.y + 16.0);
-            }
+            spawn_psychic_create(game, pos, Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
         }
-        game.world
-            .spawn("oPsychicWave", Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
+        game.spawn("oPsychicWave", Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
         e.data.insert("psychic_recover".into(), 100.0);
         game.sound("sndPsychic", e.pos);
-    }
-    if e.sprite != "sAlienBossHurt" {
-        e.data.insert("animation_speed".into(), 0.25);
-        if e.value("boss_animation_advanced") == 0.0 {
-            // sAlienBoss has four frames. Keeping its current image bounded
-            // preserves the image index when oItem changes the hurt sprite.
-            e.animation = phase(e, 0.25).rem_euclid(4.0);
-            e.data.insert("phase".into(), e.animation);
-        }
     }
 }
 
 fn eject(game: &mut Game, e: &mut Entity) {
-    if e.value("drift_unset") > 0.0 {
-        e.facing = if game.rng.range(2) == 0 { -1 } else { 1 };
-        e.data.insert("drift_unset".into(), 0.0);
-    }
     // Eject Step uses raw x/y motion rather than the platform moveTo solver.
     e.pos.x += e.vel.x;
     e.pos.y += e.vel.y;
@@ -741,7 +752,7 @@ fn eject(game: &mut Game, e: &mut Entity) {
         if e.vel.y >= 0.0 || super::solid_mask(&game.world, top, e.id) {
             enter(e, 2);
             e.vel.y = 0.0;
-            e.sprite = "sAlienDeploy".into();
+            e.set_sprite("sAlienDeploy");
         }
     } else {
         e.vel.x = 0.0;
@@ -750,8 +761,7 @@ fn eject(game: &mut Game, e: &mut Entity) {
             .world
             .solid_point_except(Vec2::new(e.pos.x, e.pos.y + 6.0), e.id)
         {
-            game.world
-                .spawn("oAlien", Vec2::new(e.pos.x - 8.0, e.pos.y - 12.0));
+            game.spawn("oAlien", Vec2::new(e.pos.x - 8.0, e.pos.y - 12.0));
             e.alive = false;
             return;
         }
@@ -762,78 +772,14 @@ fn eject(game: &mut Game, e: &mut Entity) {
         {
             e.facing = 0;
         }
-        if phase(e, 0.6) >= 6.0 {
-            e.sprite = "sAlienParachute".into();
-        }
-    }
-    if game.world.entities.iter().any(|web| {
-        web.alive && web.object == "oWeb" && web.sprite_bounds().intersects(e.sprite_bounds())
-    }) {
-        game.world
-            .spawn("oAlien", Vec2::new(e.pos.x - 8.0, e.pos.y - 12.0));
-        e.alive = false;
-        return;
-    }
-    if e.sprite_bounds().intersects(game.player.sprite_bounds()) {
-        if game.player.health > 0
-            && matches!(
-                game.player.state,
-                PlayerState::Jumping | PlayerState::Falling
-            )
-            && game.player.pos.y < e.pos.y - 3.0
-            && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
-        {
-            game.player.vel.y = -6.0 - 0.2 * game.player.vel.y;
-            game.player.data.insert("fall_timer".into(), 0.0);
-            e.health = 0;
-            e.alive = false;
-            game.sound("sndHit", e.pos);
-            return;
-        } else if game.player.invincible == 0 {
-            hurt_player(game, 1);
-            game.player.invincible = 30;
-            game.player.data.insert("blink".into(), 30.0);
-            game.player.vel.x = if game.player.pos.x < e.pos.x {
-                -6.0
-            } else {
-                6.0
-            };
-            if game.player.pos.y < e.pos.y {
-                game.player.vel.y = -6.0;
-            }
-        }
-    }
-    if outside_room(game, e) {
-        e.alive = false;
     }
 }
 
-fn outside_room(game: &Game, e: &Entity) -> bool {
-    let b = e.sprite_bounds();
-    b.x + b.w < 0.0
-        || b.y + b.h < 0.0
-        || b.x > game.world.width as f64 * 16.0
-        || b.y > game.world.height as f64 * 16.0
-}
-
-fn crash(game: &mut Game, e: &mut Entity) {
+fn crash(_game: &mut Game, e: &mut Entity) {
     e.pos.x += e.vel.x;
     e.pos.y += e.vel.y;
     if e.vel.y < 6.0 {
         e.vel.y += 0.6;
-    }
-    if game.world.collides_except(e.sprite_bounds(), e.id)
-        || game.world.entities.iter().any(|other| {
-            other.alive
-                && other.id != e.id
-                && crate::catalog::is_a(&other.object, "oEnemy")
-                && other.sprite_bounds().intersects(e.sprite_bounds())
-        })
-    {
-        game.world
-            .spawn("oExplosion", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
-        game.sound("sndExplosion", e.pos);
-        e.alive = false;
     }
 }
 
@@ -847,102 +793,11 @@ fn hurt_player(game: &mut Game, amount: i32) {
     game.sound("sndHurt", game.player.pos);
 }
 
-fn hazard_hits_player(game: &Game, e: &Entity) -> bool {
-    // These contacts originate in oPlayer1's hurt block, which excludes all
-    // three exit sprites independently of its contact-invincibility timer.
-    !game.player.is_exiting()
-        && e.sprite_bounds().intersects(Rect::new(
-            game.player.pos.x - 8.0,
-            game.player.pos.y - 8.0,
-            16.0,
-            16.0,
-        ))
-}
-
-fn laser(game: &mut Game, e: &mut Entity) {
+fn laser(_game: &mut Game, e: &mut Entity) {
     e.pos.y += e.vel.y;
     e.vel.y += 0.6;
     if e.vel.y > 4.0 {
         e.vel.y = 0.0;
-    }
-    // The Collision with oSolid event uses the laser's full mask, including
-    // tile edges and moving solid instances, rather than just its origin.
-    let body = e.sprite_bounds();
-    let x0 = (body.x / 16.0).floor() as i32;
-    let y0 = (body.y / 16.0).floor() as i32;
-    let x1 = ((body.x + body.w - 0.001) / 16.0).floor() as i32;
-    let y1 = ((body.y + body.h - 0.001) / 16.0).floor() as i32;
-    for y in y0..=y1 {
-        for x in x0..=x1 {
-            if let Some(tile) = game.world.tile(x, y) {
-                if tile.is_solid() {
-                    if tile.is_destructible() {
-                        game.world.set_tile(x as usize, y as usize, "");
-                    }
-                    game.world.spawn("oLaserExplode", e.pos);
-                    e.alive = false;
-                    return;
-                }
-            }
-        }
-    }
-    let hit = game.world.entities.iter().position(|solid| {
-        solid.id != e.id && solid.alive && solid.solid && solid.sprite_bounds().intersects(body)
-    });
-    if let Some(index) = hit {
-        let solid = &mut game.world.entities[index];
-        if solid.value("invincible") == 0.0 && crate::Tile::new(&solid.object).is_destructible() {
-            solid.alive = false;
-        }
-        game.world.spawn("oLaserExplode", e.pos);
-        e.alive = false;
-        return;
-    }
-    if body.x + body.w < 0.0
-        || body.y + body.h < 0.0
-        || body.x > game.world.width as f64 * 16.0
-        || body.y > game.world.height as f64 * 16.0
-    {
-        e.alive = false;
-        return;
-    }
-    if hazard_hits_player(game, e) {
-        hurt_player(game, 3);
-        game.player.stun = 20;
-        game.player.state = PlayerState::Stunned;
-        game.player.vel = Vec2::new(
-            if e.pos.x < game.player.pos.x {
-                2.0
-            } else {
-                -2.0
-            },
-            -4.0,
-        );
-        game.world.spawn("oLaserExplode", e.pos);
-        e.alive = false;
-        return;
-    }
-    for enemy in &mut game.world.entities {
-        if enemy.alive
-            && enemy.object != "oUFO"
-            && enemy.object != "oLaser"
-            && (crate::catalog::is_a(&enemy.object, "oEnemy") || enemy.object == "oDamsel")
-            && enemy.sprite_bounds().intersects(e.sprite_bounds())
-            && enemy.value("invincible") == 0.0
-        {
-            enemy.health -= 3;
-            enemy.vel = Vec2::new(-1.0, -6.0);
-            if enemy.object == "oDamsel" {
-                // The source's unqualified status assignment belongs to the
-                // laser, not to the NPC receiving its velocity and damage.
-                e.state = 2;
-            }
-            e.alive = false;
-            break;
-        }
-    }
-    if !e.alive {
-        game.world.spawn("oLaserExplode", e.pos);
     }
 }
 
@@ -954,48 +809,410 @@ fn psychic(game: &mut Game, e: &mut Entity) {
         e.pos.x += dx / distance * 2.0;
         e.pos.y += dy / distance * 2.0;
     }
-    if phase(e, 0.25) >= 17.0 || outside_room(game, e) {
-        e.alive = false;
+}
+
+/// Literal late oPlayer1 Step queries: first test an imprecise rectangle,
+/// then affect the nearest active instance, which need not be that overlap.
+pub(super) fn player_hurt(game: &mut Game) {
+    if game.player.is_exiting()
+        || game.player.health < -99
+        || game.player.data.get("visible").copied().unwrap_or(1.0) == 0.0
+    {
         return;
     }
-    if hazard_hits_player(game, e)
-        && game.player.stun == 0
-        && game.player.state != PlayerState::Stunned
-        && super::player_alive(game)
-    {
-        hurt_player(game, 1);
-        game.player.stun = 40;
-        game.player.state = PlayerState::Stunned;
-        game.player.vel = Vec2::new(
-            if e.pos.x < game.player.pos.x {
-                2.0
-            } else {
-                -2.0
-            },
-            -4.0,
-        );
-    }
-    for enemy in &mut game.world.entities {
-        if enemy.alive
-            && enemy.object != "oAlienBoss"
-            && enemy.object != "oPsychicWave"
-            && (crate::catalog::is_a(&enemy.object, "oEnemy") || enemy.object == "oDamsel")
-            && enemy.sprite_bounds().intersects(e.sprite_bounds())
+    for (object, damage, stun, cause) in [
+        ("oLaser", 3, 20, crate::statistics::EnemyDeath::Ufo),
+        (
+            "oPsychicWave",
+            1,
+            40,
+            crate::statistics::EnemyDeath::AlienBoss,
+        ),
+    ] {
+        if object == "oPsychicWave"
+            && (game.player.stun > 0
+                || game.player.state == PlayerState::Stunned
+                || !super::player_alive(game))
         {
-            if enemy.value("invincible") == 0.0 {
-                enemy.health -= 3;
-                enemy.vel = Vec2::new(-1.0, -6.0);
-                if enemy.object == "oDamsel" {
-                    e.state = 2;
-                }
-            }
-            if enemy.object == "oDamsel" {
-                // Unlike the laser event, this destruction is outside the
-                // source's invincibility guard.
-                e.alive = false;
-                break;
+            continue;
+        }
+        let query = Rect::new(game.player.pos.x - 8.0, game.player.pos.y - 8.0, 16.0, 16.0);
+        if !game.world.entities.iter().any(|entity| {
+            entity.alive
+                && entity.engine_active
+                && entity.object == object
+                && entity.sprite_bounds().intersects(query)
+        }) {
+            continue;
+        }
+        let Some(target) = game
+            .world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive && entity.engine_active && entity.object == object)
+            .min_by(|a, b| {
+                a.pos
+                    .distance(game.player.pos)
+                    .total_cmp(&b.pos.distance(game.player.pos))
+            })
+        else {
+            continue;
+        };
+        let (id, pos) = (target.id, target.pos);
+        hurt_player_cause(game, damage, cause);
+        game.player.vel = Vec2::new(if pos.x < game.player.pos.x { 2.0 } else { -2.0 }, -4.0);
+        game.player.stun = stun;
+        game.player.state = PlayerState::Stunned;
+        if object == "oLaser" {
+            crate::world_events::spawn_effect(game, "oLaserExplode", pos);
+            if let Some(target) = game
+                .world
+                .entities
+                .iter_mut()
+                .find(|entity| entity.id == id)
+            {
+                target.alive = false;
             }
         }
+    }
+}
+
+/// Direct source Collision handlers. Pair precision and event ordering are
+/// supplied by the dispatcher; this callback never scans for another pair.
+pub(super) fn collision(
+    game: &mut Game,
+    e: &mut Entity,
+    other: crate::dispatcher::Instance,
+) -> bool {
+    use crate::dispatcher::Instance;
+    match other {
+        Instance::Player => match e.object.as_str() {
+            "oYeti" => {
+                yeti_player_collision(game, e);
+                true
+            }
+            "oYetiKing" | "oAlienBoss" => {
+                giant_player_collision(game, e);
+                true
+            }
+            "oAlienEject" => {
+                eject_player_collision(game, e);
+                true
+            }
+            _ => false,
+        },
+        Instance::Terrain(index) => {
+            let solid = game
+                .world
+                .tiles
+                .get(index)
+                .is_some_and(|tile| crate::catalog::is_a(&tile.object, "oSolid"));
+            if !solid {
+                return false;
+            }
+            match e.object.as_str() {
+                "oUFOCrash" => {
+                    crash_impact(game, e);
+                    true
+                }
+                "oLaser" => {
+                    // Source checks the solid instance's invincibility. Tile
+                    // destructibility mirrors that flag for terrain objects.
+                    if game.world.tiles[index].is_destructible() {
+                        let pos = other.position(game);
+                        remove_embedded_gold(game, pos);
+                        game.world
+                            .set_tile(index % game.world.width, index / game.world.width, "");
+                    }
+                    laser_impact(game, e);
+                    true
+                }
+                _ => false,
+            }
+        }
+        Instance::Entity(id) => {
+            let Some(target) = game.world.entities.iter().find(|target| target.id == id) else {
+                return false;
+            };
+            let object = target.object.clone();
+            let solid = crate::catalog::is_a(&object, "oSolid");
+            let enemy = crate::catalog::is_a(&object, "oEnemy");
+            match e.object.as_str() {
+                "oAlienEject" if object == "oWeb" => {
+                    game.spawn("oAlien", Vec2::new(e.pos.x - 8.0, e.pos.y - 12.0));
+                    e.alive = false;
+                    true
+                }
+                "oUFOCrash" if solid || enemy => {
+                    crash_impact(game, e);
+                    true
+                }
+                "oLaser" if solid => {
+                    if target.value("invincible") == 0.0 {
+                        let pos = target.pos;
+                        remove_embedded_gold(game, pos);
+                        if let Some(target) = game
+                            .world
+                            .entities
+                            .iter_mut()
+                            .find(|target| target.id == id)
+                        {
+                            target.alive = false;
+                        }
+                    }
+                    laser_impact(game, e);
+                    true
+                }
+                "oLaser" | "oPsychicWave" if enemy || object == "oDamsel" => {
+                    let laser = e.object == "oLaser";
+                    let damsel = object == "oDamsel";
+                    let excluded = if laser {
+                        object == "oUFO"
+                    } else {
+                        object == "oAlienBoss"
+                    };
+                    let vulnerable = !excluded && target.value("invincible") == 0.0;
+                    if vulnerable {
+                        // Both original handlers consume these two draws even
+                        // though the following xVel=-1 overwrites their result.
+                        let _ = game.rng.range(3);
+                        let _ = game.rng.range(2);
+                        if let Some(target) = game
+                            .world
+                            .entities
+                            .iter_mut()
+                            .find(|target| target.id == id)
+                        {
+                            target.health -= 3;
+                            target.vel = Vec2::new(-1.0, -6.0);
+                        }
+                        if damsel {
+                            e.state = 2;
+                        }
+                        if laser {
+                            laser_impact(game, e);
+                        }
+                    }
+                    if !laser && damsel {
+                        e.alive = false;
+                    }
+                    true
+                }
+                _ => false,
+            }
+        }
+    }
+}
+
+fn remove_embedded_gold(game: &mut Game, pos: Vec2) {
+    for object in ["oGold", "oGoldBig"] {
+        if let Some(gold) =
+            game.world.entities.iter_mut().find(|gold| {
+                gold.alive && gold.object == object && gold.sprite_bounds().contains(pos)
+            })
+        {
+            gold.alive = false;
+        }
+    }
+}
+
+fn laser_impact(game: &mut Game, e: &mut Entity) {
+    crate::world_events::spawn_effect(game, "oLaserExplode", e.pos);
+    e.alive = false;
+}
+
+fn crash_impact(game: &mut Game, e: &mut Entity) {
+    game.spawn("oExplosion", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
+    game.sound("sndExplosion", e.pos);
+    e.alive = false;
+}
+
+fn hurt_player_cause(game: &mut Game, amount: i32, cause: crate::statistics::EnemyDeath) {
+    let had_life = game.player.health > 0;
+    hurt_player(game, amount);
+    if had_life && game.player.health <= 0 && crate::statistics::is_real_level(game) {
+        game.lifetime_stats.enemy_death(cause);
+    }
+}
+
+fn yeti_player_collision(game: &mut Game, e: &mut Entity) {
+    if (game.player.pos.x - (e.pos.x + 8.0)).abs() > 8.0 {
+        return;
+    }
+    if super::player_alive(game)
+        && game.player.stun == 0
+        && game.player.state != PlayerState::Stunned
+        && matches!(
+            game.player.state,
+            PlayerState::Jumping | PlayerState::Falling
+        )
+        && game.player.pos.y < e.pos.y + 5.0
+        && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
+    {
+        if e.state < 98 {
+            let damage =
+                (game.player.data.get("fall_timer").copied().unwrap_or(0.0) / 16.0).ceil() as i32;
+            e.health -= damage * if game.player.has("spike_shoes") { 3 } else { 1 };
+            game.player.vel.y = -6.0 - 0.2 * game.player.vel.y;
+            game.player.data.insert("fall_timer".into(), 0.0);
+            e.state = 98;
+            e.timer = e.value("stun_time") as u32;
+            e.vel.y = -6.0;
+            e.vel.x += if game.player.pos.x < e.pos.x + 8.0 {
+                1.0
+            } else {
+                -1.0
+            };
+            e.set_image_speed(0.5);
+            // Unlike inherited stomps, Yeti's override does not set countsAsKill.
+            game.sound("sndHit", e.pos);
+        }
+        return;
+    }
+    if game.player.invincible == 0 && e.state < 98 {
+        if game.world.solid_at(e.pos.x + 8.0, e.pos.y - 4.0) {
+            hurt_player_cause(game, 1, crate::statistics::EnemyDeath::Yeti);
+            game.player.invincible = 30;
+            game.player.data.insert("blink".into(), 30.0);
+            game.player.vel.x = if game.player.pos.x < e.pos.x {
+                -6.0
+            } else {
+                6.0
+            };
+        } else if e.state != 3 {
+            e.facing = if game.player.pos.x > e.pos.x + 8.0 {
+                1
+            } else {
+                -1
+            };
+            game.player.pos = Vec2::new(e.pos.x + if e.facing > 0 { 0.0 } else { 16.0 }, e.pos.y);
+            game.player.previous_pos = game.player.pos;
+            enter(e, 3);
+            game.player.vel = Vec2::new(f64::from(e.facing) * 6.0, -6.0);
+            game.player.state = PlayerState::Stunned;
+            game.player.data.insert("wall_hurt".into(), 1.0);
+            game.player.data.insert("bounced".into(), 0.0);
+            super::drop_from_throw(game);
+            e.set_sprite("sYetiThrowL");
+            return;
+        }
+    }
+}
+
+fn giant_player_collision(game: &mut Game, e: &mut Entity) {
+    let king = e.object == "oYetiKing";
+    if king && (game.player.pos.x - (e.pos.x + 16.0)).abs() > 16.0 {
+        return;
+    }
+    if super::player_alive(game)
+        && matches!(
+            game.player.state,
+            PlayerState::Jumping | PlayerState::Falling
+        )
+        && game.player.pos.y < e.pos.y + 8.0
+        && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
+    {
+        let fall = game.player.data.get("fall_timer").copied().unwrap_or(0.0) / 16.0;
+        let damage = if king {
+            fall.ceil()
+        } else {
+            fall.floor() + 1.0
+        } as i32;
+        e.health -= damage * if game.player.has("spike_shoes") { 3 } else { 1 };
+        super::set_counts_as_kill(e, true);
+        game.player.vel.y = -6.0 - 0.2 * game.player.vel.y;
+        game.player.data.insert("fall_timer".into(), 0.0);
+        game.sound("sndHit", e.pos);
+    } else if game.player.invincible == 0 && (king || e.state != 99) {
+        game.player.invincible = 30;
+        game.player.data.insert("blink".into(), 30.0);
+        if game.player.pos.y < e.pos.y {
+            game.player.vel.y = -6.0;
+        }
+        game.player.vel.x = if game.player.pos.x < e.pos.x {
+            -6.0
+        } else {
+            6.0
+        };
+        if !king || crate::statistics::is_real_level(game) {
+            hurt_player_cause(
+                game,
+                if king { 2 } else { 1 },
+                if king {
+                    crate::statistics::EnemyDeath::YetiKing
+                } else {
+                    crate::statistics::EnemyDeath::AlienBoss
+                },
+            );
+        } else {
+            game.sound("sndHurt", game.player.pos);
+        }
+    }
+}
+
+fn eject_player_collision(game: &mut Game, e: &mut Entity) {
+    if super::player_alive(game)
+        && matches!(
+            game.player.state,
+            PlayerState::Jumping | PlayerState::Falling
+        )
+        && game.player.pos.y < e.pos.y - 3.0
+        && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
+    {
+        game.player.vel.y = -6.0 - 0.2 * game.player.vel.y;
+        game.player.data.insert("fall_timer".into(), 0.0);
+        super::record_death(game, e);
+        e.alive = false;
+        game.sound("sndHit", e.pos);
+    } else if game.player.invincible == 0 {
+        game.player.invincible = 30;
+        game.player.data.insert("blink".into(), 30.0);
+        if game.player.pos.y < e.pos.y {
+            game.player.vel.y = -6.0;
+        }
+        game.player.vel.x = if game.player.pos.x < e.pos.x {
+            -6.0
+        } else {
+            6.0
+        };
+        // AlienEject's override subtracts life without an enemyDeaths write.
+        hurt_player(game, 1);
+    }
+}
+
+pub(super) fn alarm(game: &mut Game, e: &mut Entity, index: u8) {
+    if index != 0 {
+        return;
+    }
+    match e.object.as_str() {
+        "oYeti" => {
+            e.data.insert("hit_cooldown".into(), 0.0);
+            e.data.insert("whipped".into(), 0.0);
+        }
+        "oUFOCrash" => {
+            let object = if game.rng.range(2) == 0 {
+                "oFlameTrail"
+            } else {
+                "oBurn"
+            };
+            let pos = Vec2::new(
+                e.pos.x + f64::from(game.rng.range(17)),
+                e.pos.y + f64::from(game.rng.range(17)),
+            );
+            crate::world_events::spawn_effect(game, object, pos);
+            e.alarms[0] = 3;
+        }
+        "oLaser" => {
+            crate::world_events::spawn_effect(game, "oLaserTrail", e.pos);
+            e.alarms[0] = 1;
+        }
+        _ => {}
+    }
+}
+
+pub(super) fn outside_room_event(e: &mut Entity) {
+    if matches!(e.object.as_str(), "oAlienEject" | "oLaser" | "oPsychicWave") {
+        e.alive = false;
     }
 }
 
@@ -1009,6 +1226,42 @@ mod tests {
         g.player.pos = Vec2::new(100.0, 100.0);
         g
     }
+    fn source_frame(game: &mut Game, entity: &mut Entity) {
+        tick(game, entity);
+        let sprite = entity.sprite.clone();
+        let frames = crate::catalog::sprite_frame_count(&sprite);
+        let speed = entity.image_speed();
+        if crate::animation::advance(&mut entity.animation, speed, frames) {
+            animation_end(game, entity, &sprite);
+        }
+    }
+
+    #[test]
+    fn source_stomp_restores_prior_false_credit_only_for_king_and_boss() {
+        for (object, center_x, restores) in [
+            ("oYeti", 8.0, false),
+            ("oYetiKing", 16.0, true),
+            ("oAlienBoss", 16.0, true),
+        ] {
+            let mut g = game();
+            let mut enemy = Entity::new(1, object, Vec2::new(96.0, 96.0));
+            init(&mut enemy);
+            super::super::set_counts_as_kill(&mut enemy, false);
+            // Imported saves may retain this legacy alias of the source flag.
+            enemy.data.insert("environmental_death".into(), 1.0);
+            g.player.pos = Vec2::new(enemy.pos.x + center_x, enemy.pos.y);
+            g.player.state = PlayerState::Falling;
+            g.player.data.insert("fall_timer".into(), 16.0);
+            assert!(collision(
+                &mut g,
+                &mut enemy,
+                crate::dispatcher::Instance::Player
+            ));
+            assert_eq!(super::super::counts_as_kill(&enemy), restores, "{object}");
+            assert_eq!(enemy.value("environmental_death") == 0.0, restores);
+        }
+    }
+
     #[test]
     fn source_health_values() {
         for (name, hp) in [
@@ -1029,7 +1282,7 @@ mod tests {
         init(&mut e);
         e.state = 2;
         for _ in 0..40 {
-            tick(&mut g, &mut e);
+            source_frame(&mut g, &mut e);
         }
         assert_eq!(
             g.world
@@ -1078,6 +1331,11 @@ mod tests {
         let mut e = Entity::new(1, "oLaser", Vec2::new(72.0, 72.0));
         init(&mut e);
         tick(&mut g, &mut e);
+        assert!(collision(
+            &mut g,
+            &mut e,
+            crate::dispatcher::Instance::Terrain(4 + 4 * 20)
+        ));
         assert!(!e.alive);
         assert!(!g.world.tile(4, 4).unwrap().is_solid());
     }
@@ -1087,12 +1345,15 @@ mod tests {
         let mut g = game();
         let mut e = Entity::new(1, "oPsychicWave", g.player.pos);
         init(&mut e);
-        tick(&mut g, &mut e);
+        g.world.entities.push(e.clone());
+        player_hurt(&mut g);
+        g.world.entities.clear();
+        source_frame(&mut g, &mut e);
         assert_eq!(g.player.health, 3);
         assert_eq!(g.player.stun, 40);
         assert!(e.alive);
         for _ in 1..68 {
-            tick(&mut g, &mut e);
+            source_frame(&mut g, &mut e);
         }
         assert!(!e.alive);
     }
@@ -1105,10 +1366,17 @@ mod tests {
         init(&mut e);
         e.health = 0;
         for _ in 0..36 {
-            tick(&mut g, &mut e);
+            source_frame(&mut g, &mut e);
         }
         assert_eq!(e.sprite, "sAlienBossDead");
-        assert!(g.world.entity(id).is_none());
+        assert!(
+            !g.world
+                .entities
+                .iter()
+                .find(|entity| entity.id == id)
+                .unwrap()
+                .alive
+        );
     }
 
     fn boss_item_room() -> Game {
@@ -1132,6 +1400,188 @@ mod tests {
         if let Some(rock) = g.world.entity_mut(id) {
             rock.alive = false;
         }
+    }
+
+    #[test]
+    fn actual_step_king_whip_cooldown_expires_and_accepts_a_second_attack() {
+        let mut g = boss_item_room();
+        g.world.set_tile(5, 9, "oBlock");
+        g.world.set_tile(8, 8, "oBlock");
+        g.world.set_tile(8, 9, "oBlock");
+        g.player.pos = Vec2::new(88.0, 136.0);
+        let king = g.spawn("oYetiKing", Vec2::new(96.0, 128.0));
+        for _ in 0..40 {
+            g.step(&crate::InputFrame::default());
+        }
+        assert_eq!(g.world.entity(king).unwrap().facing, -1);
+        let attack = crate::InputFrame {
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        };
+        for attack_number in 0..2 {
+            g.step(&attack);
+            let mut hit = false;
+            for _ in 0..20 {
+                g.step(&crate::InputFrame::default());
+                if g.world.entity(king).unwrap().value("hit_cooldown") > 0.0 {
+                    hit = true;
+                    break;
+                }
+            }
+            assert!(
+                hit,
+                "natural whip attack {attack_number} must contact the King's head"
+            );
+            assert_eq!(
+                g.world.entity(king).unwrap().health,
+                30,
+                "a normal whip sets the cooldown without puncture damage"
+            );
+            for _ in 0..30 {
+                g.step(&crate::InputFrame::default());
+                if g.world.entity(king).unwrap().value("hit_cooldown") == 0.0
+                    && g.player.attack_timer == 0
+                {
+                    break;
+                }
+            }
+            assert_eq!(g.world.entity(king).unwrap().value("hit_cooldown"), 0.0);
+            assert_eq!(g.player.attack_timer, 0);
+        }
+    }
+    #[test]
+    fn actual_step_ejected_alien_finishes_deployment_after_natural_scroll_outside_ai_guard() {
+        let mut g = boss_item_room();
+        g.player.pos.x = 208.0;
+        g.update_camera();
+        let left = crate::InputFrame {
+            left: true,
+            run: true,
+            ..Default::default()
+        };
+        while g.player.pos.x > 152.0 {
+            g.step(&left);
+        }
+        assert_eq!(g.camera.x, 16.0);
+        let id = g.spawn("oAlienEject", Vec2::new(335.0, 70.0));
+        for _ in 0..16 {
+            g.step(&crate::InputFrame::default());
+            if g.world.entity(id).unwrap().sprite == "sAlienDeploy" {
+                break;
+            }
+        }
+        assert_eq!(g.world.entity(id).unwrap().sprite, "sAlienDeploy");
+        let mut parachute = false;
+        for _ in 0..20 {
+            g.step(&left);
+            let alien = g.world.entity(id).unwrap();
+            if alien.sprite == "sAlienParachute" {
+                assert_eq!(alien.state, 2);
+                assert!(
+                    alien.pos.x > g.camera.x + crate::VIEW_WIDTH + 4.0,
+                    "natural scroll must cross the narrower Step guard first"
+                );
+                parachute = true;
+                break;
+            }
+        }
+        assert!(parachute);
+    }
+
+    #[test]
+    fn actual_step_psychic_create_keeps_its_create_heading_through_the_target() {
+        let mut g = boss_item_room();
+        g.spawn("oAlienBoss", Vec2::new(128.0, 128.0));
+        let effect = g.spawn("oPsychicCreate", Vec2::new(144.0, 140.0));
+        assert!(
+            (g.world.entity(effect).unwrap().vel.y - 2.0).abs() < 1e-9,
+            "context Create must capture heading synchronously"
+        );
+        for _ in 0..3 {
+            g.step(&crate::InputFrame::default());
+        }
+        let effect = g.world.entity(effect).unwrap();
+        assert!((effect.pos.x - 144.0).abs() < 1e-9);
+        assert!(
+            (effect.pos.y - 146.0).abs() < 1e-9,
+            "source motion continues past the captured target"
+        );
+        assert!((effect.animation - 1.2).abs() < 1e-9);
+    }
+
+    #[test]
+    fn actual_step_player_laser_query_hurts_once_and_records_ufo_death() {
+        let mut g = boss_item_room();
+        crate::characters::apply(&mut g, crate::characters::Character::TunnelMan);
+        let pos = g.player.pos;
+        g.world.spawn("oLaser", pos);
+        g.world.spawn("oLaser", Vec2::new(pos.x + 1.0, pos.y));
+        g.step(&crate::InputFrame::default());
+        assert_eq!(g.player.health, 0);
+        assert_eq!(
+            g.events
+                .iter()
+                .filter(|event| **event == GameEvent::Damage { amount: 3 })
+                .count(),
+            1
+        );
+        assert_eq!(
+            g.lifetime_stats.enemy_deaths[crate::statistics::EnemyDeath::Ufo as usize],
+            1
+        );
+        assert_eq!(g.lifetime_stats.enemy_deaths.iter().sum::<u64>(), 1);
+    }
+
+    #[test]
+    fn actual_step_lethally_shot_yeti_is_credited_only_after_stunned_corpse_settles() {
+        let mut g = boss_item_room();
+        let yeti = g.world.spawn("oYeti", Vec2::new(96.0, 144.0));
+        for _ in 0..2 {
+            g.world.spawn("oBullet", Vec2::new(104.0, 150.0));
+        }
+        g.step(&crate::InputFrame::default());
+        let body = g.world.entity(yeti).unwrap();
+        assert!(body.health < 1, "both source bullet pairs must hit");
+        assert_eq!(body.state, 98);
+        assert_eq!(body.value("death_recorded"), 0.0);
+        assert_eq!(g.data.get("kills"), None);
+        let mut credited = false;
+        for _ in 0..180 {
+            let previous_state = g.world.entity(yeti).unwrap().state;
+            g.step(&crate::InputFrame::default());
+            if g.data.get("kills").copied().unwrap_or(0.0) != 0.0 {
+                assert_eq!(previous_state, 99, "credit belongs to the next DEAD Step");
+                assert_eq!(g.data["kills"], 1.0);
+                assert_eq!(g.data["yetis"], 1.0);
+                assert_eq!(
+                    g.lifetime_stats.enemy_kills[crate::statistics::EnemyKill::Yeti as usize],
+                    1
+                );
+                credited = true;
+                break;
+            }
+        }
+        assert!(credited, "the natural corpse trajectory must settle");
+        for _ in 0..20 {
+            g.step(&crate::InputFrame::default());
+        }
+        assert_eq!(g.data["kills"], 1.0);
+    }
+
+    #[test]
+    fn actual_step_yeti_source_crush_destroys_without_death_credit() {
+        let mut g = boss_item_room();
+        g.world.set_tile(6, 9, "oBlock");
+        let yeti = g.world.spawn("oYeti", Vec2::new(96.0, 144.0));
+        g.step(&crate::InputFrame::default());
+        assert!(g.world.entity(yeti).is_none());
+        assert_eq!(g.data.get("kills"), None);
+        assert_eq!(g.data.get("yetis"), None);
+        assert_eq!(
+            g.lifetime_stats.enemy_kills[crate::statistics::EnemyKill::Yeti as usize],
+            0
+        );
     }
 
     #[test]
@@ -1206,6 +1656,10 @@ mod tests {
     fn actual_step_ufo_search_does_not_start_chasing_after_natural_player_death() {
         let mut g = boss_item_room();
         g.world.spawn("oGhost", Vec2::new(32.0, 144.0));
+        g.step(&crate::InputFrame::default());
+        assert!(g.player.health < 1);
+        // Ghost's automatic Collision happens after Player Step; the source
+        // dead flag is established by the following character event.
         g.step(&crate::InputFrame::default());
         assert_eq!(g.player.state, PlayerState::Dead);
         let id = g.world.spawn("oUFO", Vec2::new(200.0, 70.0));
@@ -1325,13 +1779,13 @@ mod tests {
         }
         let boss = g.world.entity(id).unwrap();
         assert_eq!(boss.sprite, "sAlienBossHurt");
-        assert!((boss.animation - 4.25).abs() < 1e-9);
+        assert!((boss.animation - 4.8).abs() < 1e-9);
         assert_eq!(boss.value("animation_speed"), 0.8);
         g.step(&crate::InputFrame::default());
         let boss = g.world.entity(id).unwrap();
         assert_eq!(boss.sprite, "sAlienBoss");
-        assert!((boss.animation - 0.05).abs() < 1e-9);
-        assert_eq!(boss.value("animation_speed"), 0.25);
+        assert!((boss.animation - 0.6).abs() < 1e-9);
+        assert_eq!(boss.value("animation_speed"), 0.8);
         throw_boss_rock(&mut g, 128.0);
         assert_eq!(g.world.entity(id).unwrap().health, 8);
     }
@@ -1344,8 +1798,8 @@ mod tests {
             g.step(&crate::InputFrame::default());
         }
         throw_boss_rock(&mut g, 128.0);
-        assert!((g.world.entity(id).unwrap().animation - 2.25).abs() < 1e-9);
-        for _ in 0..3 {
+        assert!((g.world.entity(id).unwrap().animation - 2.8).abs() < 1e-9);
+        for _ in 0..2 {
             g.step(&crate::InputFrame::default());
         }
         assert_eq!(g.world.entity(id).unwrap().sprite, "sAlienBossHurt");
@@ -1457,10 +1911,9 @@ mod tests {
         g.player.pos = Vec2::new(72.0, 65.0);
         g.player.state = PlayerState::Jumping;
         g.player.vel.y = -1.0;
-        g.player.data.insert("fall_timer".into(), 16.0);
-        crate::enemies::tick(&mut g);
+        g.step(&crate::InputFrame::default());
         let yeti = g.world.entity(id).unwrap();
-        assert_eq!(yeti.health, 4);
+        assert_eq!(yeti.health, 5);
         assert_eq!(yeti.state, 98);
         assert_eq!(g.player.stun, 0);
         assert_eq!(g.player.pos, Vec2::new(72.0, 65.0));
@@ -1473,7 +1926,7 @@ mod tests {
         g.world.entity_mut(id).unwrap().vel = Vec2::default();
         g.player.pos = Vec2::new(85.0, 72.0);
         g.player.state = PlayerState::Standing;
-        crate::enemies::tick(&mut g);
+        g.step(&crate::InputFrame::default());
         assert_eq!(g.player.health, 4);
         assert_eq!(g.player.stun, 0);
         assert_ne!(g.world.entity(id).unwrap().state, 3);
@@ -1484,9 +1937,9 @@ mod tests {
         let mut g = game();
         g.player.invincible = 20;
         let id = g.world.spawn("oLaser", Vec2::new(110.0, 100.0));
-        crate::enemies::tick(&mut g);
+        g.step(&crate::InputFrame::default());
         assert_eq!(g.player.health, 1);
-        assert_eq!(g.player.invincible, 20);
+        assert_eq!(g.player.invincible, 19);
         assert_eq!(g.player.stun, 20);
         assert_eq!(g.player.vel, Vec2::new(-2.0, -4.0));
         assert!(g.world.entity(id).is_none());
@@ -1497,10 +1950,10 @@ mod tests {
         let mut g = game();
         g.player.invincible = 20;
         g.world.spawn("oPsychicWave", g.player.pos);
-        crate::enemies::tick(&mut g);
+        g.step(&crate::InputFrame::default());
         assert_eq!(g.player.health, 3);
         assert_eq!(g.player.stun, 40);
-        crate::enemies::tick(&mut g);
+        g.step(&crate::InputFrame::default());
         assert_eq!(g.player.health, 3);
     }
 
@@ -1510,7 +1963,7 @@ mod tests {
         g.player.pos = Vec2::new(200.0, 200.0);
         g.world.set_tile(4, 4, "oIce");
         let id = g.world.spawn("oLaser", Vec2::new(62.0, 72.0));
-        crate::enemies::tick(&mut g);
+        g.step(&crate::InputFrame::default());
         assert!(g.world.entity(id).is_none());
         assert!(!g.world.tile(4, 4).unwrap().is_solid());
     }
@@ -1521,7 +1974,7 @@ mod tests {
         g.player.pos = Vec2::new(200.0, 200.0);
         let block = g.world.spawn("oPushBlock", Vec2::new(64.0, 64.0));
         let laser = g.world.spawn("oLaser", Vec2::new(62.0, 72.0));
-        crate::enemies::tick(&mut g);
+        g.step(&crate::InputFrame::default());
         assert!(g.world.entity(block).is_none());
         assert!(g.world.entity(laser).is_none());
     }
@@ -1534,7 +1987,7 @@ mod tests {
         g.world.entity_mut(id).unwrap().vel = Vec2::default();
         g.player.pos = Vec2::new(72.0, 72.0);
         g.player.state = PlayerState::Standing;
-        crate::enemies::tick(&mut g);
+        g.step(&crate::InputFrame::default());
         assert_eq!(g.player.health, 3);
         assert_eq!(g.player.invincible, 30);
         assert_eq!(g.player.stun, 0);
@@ -1549,7 +2002,7 @@ mod tests {
         let yeti = g.world.entity_mut(id).unwrap();
         yeti.state = 1;
         yeti.vel = Vec2::default();
-        crate::enemies::tick(&mut g);
+        g.step(&crate::InputFrame::default());
         assert_ne!(g.world.entity(id).unwrap().state, 2);
         assert_eq!(
             g.world
@@ -1572,7 +2025,7 @@ mod tests {
         let yeti = g.world.entity_mut(id).unwrap();
         yeti.health = 0;
         yeti.vel = Vec2::new(4.0, 3.0);
-        crate::enemies::tick(&mut g);
+        g.step(&crate::InputFrame::default());
         let yeti = g.world.entity(id).unwrap();
         assert!((yeti.vel.x - 1.1).abs() < 1e-9);
         assert!((yeti.vel.y + 1.8).abs() < 1e-9);
@@ -1586,7 +2039,7 @@ mod tests {
         let alien = g.world.entity_mut(id).unwrap();
         alien.state = 2;
         alien.vel = Vec2::default();
-        crate::enemies::tick(&mut g);
+        g.step(&crate::InputFrame::default());
         assert_eq!(g.player.health, 3);
         assert_eq!(g.player.invincible, 30);
         assert_eq!(g.player.stun, 0);
@@ -1601,7 +2054,7 @@ mod tests {
         alien.state = 2;
         alien.vel = Vec2::default();
         g.world.spawn("oWeb", Vec2::new(96.0, 96.0));
-        crate::enemies::tick(&mut g);
+        g.step(&crate::InputFrame::default());
         assert!(g.world.entity(id).is_none());
         let alien = g
             .world
@@ -1619,7 +2072,7 @@ mod tests {
         g.player.pos = Vec2::new(200.0, 200.0);
         g.world.set_tile(4, 4, "oBlock");
         let id = g.world.spawn("oAlienBoss", Vec2::new(52.0, 52.0));
-        crate::enemies::tick(&mut g);
+        g.step(&crate::InputFrame::default());
         assert_eq!(g.world.entity(id).unwrap().health, 10);
     }
 
@@ -1629,17 +2082,16 @@ mod tests {
         g.player.pos = Vec2::new(200.0, 200.0);
         let id = g.world.spawn("oAlien", Vec2::new(50.0, 50.0));
         g.world.entity_mut(id).unwrap().vel.y = 12.0;
-        crate::enemies::tick(&mut g);
+        g.step(&crate::InputFrame::default());
         assert!((g.world.entity(id).unwrap().vel.y - 12.6).abs() < 1e-9);
     }
 
     #[test]
     fn integrated_boss_applies_gravity_before_source_move_to() {
         let mut g = game();
-        g.level_tick = 1; // source room clock 2 emits a fractional 0.6 step
         g.player.pos = Vec2::new(200.0, 200.0);
         let id = g.world.spawn("oAlienBoss", Vec2::new(50.0, 50.0));
-        crate::enemies::tick(&mut g);
+        g.step(&crate::InputFrame::default());
         assert_eq!(g.world.entity(id).unwrap().pos.y, 51.0);
     }
 
@@ -1649,7 +2101,7 @@ mod tests {
         g.world.set_tile(3, 2, "oBlock");
         let id = g.world.spawn("oUFO", Vec2::new(50.0, 46.0));
         g.world.entity_mut(id).unwrap().vel.y = -2.0;
-        crate::enemies::tick(&mut g);
+        g.step(&crate::InputFrame::default());
         let ufo = g.world.entity(id).unwrap();
         assert_eq!(ufo.health, 1);
         assert_eq!(ufo.pos.y, 46.0);

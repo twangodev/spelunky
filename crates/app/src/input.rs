@@ -82,6 +82,7 @@ pub struct InputState {
     keys: HashSet<KeyCode>,
     bindings: BTreeMap<String, Vec<KeyCode>>,
     gamepad_actions: Actions,
+    gamepad_connected: bool,
     blocked_gamepad_actions: Actions,
     keyboard_held: Actions,
     gamepad_held: Actions,
@@ -102,6 +103,7 @@ impl Default for InputState {
                 .map(|(_, name, key)| (name.to_string(), vec![*key]))
                 .collect(),
             gamepad_actions: Actions::default(),
+            gamepad_connected: false,
             blocked_gamepad_actions: Actions::default(),
             keyboard_held: Actions::default(),
             gamepad_held: Actions::default(),
@@ -151,6 +153,55 @@ impl InputState {
             }
         }
         self.clear();
+    }
+
+    /// Source prompts select controller mode (`global.gamepadOn`), not the
+    /// most recently used device. This port enables supported connected pads
+    /// automatically, and labels their fixed mappings by physical position.
+    pub fn action_label(&self, action: &str) -> String {
+        if self.gamepad_connected {
+            let label = match action {
+                "left" => Some("LEFT"),
+                "right" => Some("RIGHT"),
+                "up" | "exit" => Some("UP"),
+                "down" => Some("DOWN"),
+                "jump" => Some("SOUTH BUTTON"),
+                "attack" => Some("WEST BUTTON"),
+                "bomb" => Some("LEFT TRIGGER"),
+                "rope" => Some("RIGHT TRIGGER"),
+                "run" => Some("LEFT SHOULDER"),
+                "cycle" => Some("RIGHT SHOULDER"),
+                "flare" => Some("NORTH BUTTON"),
+                "pay" => Some("SELECT"),
+                "pause" => Some("START"),
+                _ => None,
+            };
+            if let Some(label) = label {
+                return label.into();
+            }
+        }
+        let Some(key) = self.bindings.get(action).and_then(|keys| keys.first()) else {
+            return "UNBOUND".into();
+        };
+        use KeyCode::*;
+        match key {
+            ArrowUp => "UP ARR".into(),
+            ArrowDown => "DOWN ARR".into(),
+            ArrowLeft => "LEFT ARR".into(),
+            ArrowRight => "RIGHT ARR".into(),
+            ShiftLeft | ShiftRight => "SHIFT".into(),
+            ControlLeft | ControlRight => "CTRL".into(),
+            AltLeft | AltRight => "ALT".into(),
+            Space => "SPACE".into(),
+            Enter => "ENTER".into(),
+            _ => {
+                let name = format!("{key:?}");
+                name.strip_prefix("Key")
+                    .or_else(|| name.strip_prefix("Digit"))
+                    .unwrap_or(&name)
+                    .to_ascii_uppercase()
+            }
+        }
     }
 
     pub fn take_tick(&mut self) -> InputFrame {
@@ -264,29 +315,34 @@ impl InputState {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn update_gamepad(&mut self) {
         let Some(mut gilrs) = self.gilrs.take() else {
+            self.gamepad_connected = false;
             self.accept_gamepads(Actions::default(), 0);
             return;
         };
         // Sampling after every queued event preserves a press/release pair that
         // arrives between two presentation frames.
         while gilrs.next_event().is_some() {
-            let (actions, ui) = Self::native_gamepads(&gilrs);
+            let (actions, ui, connected) = Self::native_gamepads(&gilrs);
+            self.gamepad_connected = connected;
             self.accept_gamepads(actions, ui);
         }
-        let (actions, ui) = Self::native_gamepads(&gilrs);
+        let (actions, ui, connected) = Self::native_gamepads(&gilrs);
+        self.gamepad_connected = connected;
         self.accept_gamepads(actions, ui);
         self.gilrs = Some(gilrs);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn native_gamepads(gilrs: &gilrs::Gilrs) -> (Actions, u8) {
+    fn native_gamepads(gilrs: &gilrs::Gilrs) -> (Actions, u8, bool) {
         use gilrs::{Axis, Button};
         let mut actions = Actions::default();
         let mut ui = 0;
+        let mut connected = false;
         for (_, pad) in gilrs.gamepads() {
             if !pad.is_connected() {
                 continue;
             }
+            connected = true;
             let x = pad.value(Axis::LeftStickX);
             let y = pad.value(Axis::LeftStickY);
             let left = x < -DEAD_ZONE || pad.is_pressed(Button::DPadLeft);
@@ -323,7 +379,7 @@ impl InputState {
                 }
             }
         }
-        (actions, ui)
+        (actions, ui, connected)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -331,6 +387,7 @@ impl InputState {
         use wasm_bindgen::JsCast;
         let mut actions = Actions::default();
         let mut ui = 0;
+        let mut connected = false;
         if let Some(pads) =
             web_sys::window().and_then(|window| window.navigator().get_gamepads().ok())
         {
@@ -342,6 +399,7 @@ impl InputState {
                 if !pad.connected() || pad.mapping() != web_sys::GamepadMappingType::Standard {
                     continue;
                 }
+                connected = true;
                 let buttons = pad.buttons();
                 let button = |index| {
                     buttons
@@ -379,6 +437,7 @@ impl InputState {
                 }
             }
         }
+        self.gamepad_connected = connected;
         self.accept_gamepads(actions, ui);
     }
 }
@@ -490,6 +549,45 @@ fn parse_key(name: &str) -> Option<KeyCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn action_labels_use_validated_primary_bindings_and_show_unbound_actions() {
+        let mut input = InputState::default();
+        assert_eq!(input.action_label("attack"), "X");
+        assert_eq!(input.action_label("pay"), "P");
+        input.set_bindings(&BTreeMap::from([
+            ("attack".into(), "Invalid, KeyJ, KeyX".into()),
+            ("pay".into(), "".into()),
+            ("jump".into(), "ShiftRight".into()),
+        ]));
+        assert_eq!(input.action_label("attack"), "J");
+        assert_eq!(input.action_label("pay"), "UNBOUND");
+        assert_eq!(input.action_label("jump"), "SHIFT");
+        assert_eq!(input.action_label("up"), "UP ARR");
+        assert_eq!(input.action_label("missing"), "UNBOUND");
+        input.set_bindings(&BTreeMap::from([("attack".into(), "Invalid".into())]));
+        assert_eq!(input.action_label("attack"), "X");
+    }
+
+    #[test]
+    fn connected_controller_selects_prompts_without_a_button_or_last_device_rule() {
+        let mut input = InputState::default();
+        input.set_bindings(&BTreeMap::from([
+            ("attack".into(), "KeyJ".into()),
+            ("pay".into(), "".into()),
+        ]));
+        input.gamepad_connected = true;
+        assert_eq!(input.take_tick(), InputFrame::default());
+        assert_eq!(input.action_label("attack"), "WEST BUTTON");
+        assert_eq!(input.action_label("pay"), "SELECT");
+        input.key(KeyCode::KeyJ, true, false);
+        assert_eq!(input.action_label("attack"), "WEST BUTTON");
+        input.clear_gameplay();
+        assert_eq!(input.action_label("attack"), "WEST BUTTON");
+        input.gamepad_connected = false;
+        assert_eq!(input.action_label("attack"), "J");
+        assert_eq!(input.action_label("pay"), "UNBOUND");
+    }
 
     #[test]
     fn short_press_survives_until_tick_and_edges_are_consumed_once() {

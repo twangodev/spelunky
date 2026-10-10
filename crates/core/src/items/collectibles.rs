@@ -82,7 +82,7 @@ pub fn init_entity(entity: &mut Entity) {
     }
     entity.data.insert("collectibles_initialized".into(), 1.);
     if entity.object == "oFlareCrate" {
-        entity.data.entry("flare_spark_timer".into()).or_insert(1.);
+        entity.alarms[0] = 1;
     }
     let (left, top, right, bottom) = match entity.object.as_str() {
         "oGoldChunk" | "oEmerald" | "oSapphire" | "oRuby" => (-2., -2., 2., 2.),
@@ -115,6 +115,14 @@ pub fn init_entity(entity: &mut Entity) {
             .or_insert(f64::from(value));
         // oTreasure inherits oDrawnSprite, not oItem; it cannot be carried.
         entity.data.insert("canPickUp".into(), 0.);
+        let gold = entity.object.starts_with("oGold");
+        entity
+            .data
+            .entry("canCollect".into())
+            .or_insert(if gold { 1. } else { 0. });
+        if !gold {
+            entity.alarms[0] = 20;
+        }
     }
     let cost = match entity.object.as_str() {
         "oBombBag" | "oRopePile" => 2500.,
@@ -152,7 +160,7 @@ fn origin_is_solid(game: &Game, entity: &Entity) -> bool {
 }
 
 fn spawn(game: &mut Game, object: &str, pos: Vec2, vel: Vec2) -> u64 {
-    let id = game.world.spawn(object, pos);
+    let id = game.spawn(object, pos);
     let entity = game.world.entity_mut(id).expect("new entity");
     init_entity(entity);
     entity.vel = vel;
@@ -228,14 +236,25 @@ pub fn grant(game: &mut Game, id: u64) -> bool {
     if game.player.held == Some(id) {
         game.player.held = None;
     }
+    let second = match object.as_str() {
+        "oUdjatEye" => "YOU FEEL AWAKENED.",
+        "oAnkh" => "YOU FEEL PROTECTED.",
+        "oCrown" => "IT GLOWS A BRILLIANT WHITE.",
+        "oKapala" => "IT THIRSTS FOR BLOOD...",
+        "oParaPickup" => "IT WILL DEPLOY AUTOMATICALLY.",
+        "oSpectacles" => "YOUR EYESIGHT SEEMS IMPROVED...",
+        "oSpringShoes" => "YOU FEEL BOUNCY.",
+        "oJordans" => "YOU FEEL LIGHT ON YOUR FEET.",
+        _ => "",
+    };
     game.sound("sndPickup", pos);
     game.events.push(GameEvent::Collected { object, value: 0 });
-    game.events.push(GameEvent::Message(message.into()));
+    crate::enemies::shop_dialogue::say(game, message, second, 120);
     true
 }
 
-/// Advance treasure collection and held-key unlocking. Does not move items.
-pub fn tick(game: &mut Game) {
+/// Source oPlayer1 collection/countup block. Automatic collisions run later.
+pub fn player_step(game: &mut Game) {
     for entity in &mut game.world.entities {
         init_entity(entity);
     }
@@ -255,59 +274,33 @@ pub fn tick(game: &mut Game) {
             .insert("collect".into(), pending - f64::from(amount));
     }
 
-    // Only large gems are transformed into diamonds by the ghost.
-    let ghosts: Vec<_> = game
-        .world
-        .entities
-        .iter()
-        .filter(|e| e.alive && e.object == "oGhost")
-        .map(bounds)
-        .collect();
-    let transformed: Vec<_> = game
-        .world
-        .entities
-        .iter()
-        .filter(|e| {
-            e.alive
-                && matches!(
-                    e.object.as_str(),
-                    "oEmeraldBig" | "oSapphireBig" | "oRubyBig"
-                )
-                && ghosts.iter().any(|b| bounds(e).intersects(*b))
-        })
-        .map(|e| (e.id, e.pos))
-        .collect();
-    for (id, pos) in transformed {
-        game.world.entity_mut(id).unwrap().alive = false;
-        spawn(game, "oDiamond", pos, Vec2::default());
-    }
-
     if super::player_dead(game) || game.player.is_stunned() {
         return;
     }
     let contact = Rect::new(game.player.pos.x - 8., game.player.pos.y - 8., 17., 17.);
-    // The original collects at most one nearest treasure each simulation tick.
-    let treasure = game
-        .world
-        .entities
-        .iter()
-        .filter(|e| e.alive && treasure_value(&e.object).is_some() && contact.intersects(bounds(e)))
-        .min_by(|a, b| {
-            a.pos
-                .distance(game.player.pos)
-                .total_cmp(&b.pos.distance(game.player.pos))
+    // Source first tests contact with any treasure, then independently selects
+    // instance_nearest across the whole treasure family (not only the hits).
+    let touching_treasure =
+        game.world.entities.iter().any(|e| {
+            e.alive && treasure_value(&e.object).is_some() && contact.intersects(bounds(e))
+        });
+    let treasure = touching_treasure
+        .then(|| {
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.alive && treasure_value(&e.object).is_some())
+                .min_by(|a, b| {
+                    a.pos
+                        .distance(game.player.pos)
+                        .total_cmp(&b.pos.distance(game.player.pos))
+                })
+                .map(|e| e.id)
         })
-        .map(|e| e.id);
+        .flatten();
     if let Some(id) = treasure {
         let e = game.world.entity(id).unwrap();
-        let delayed = !e.object.starts_with("oGold");
-        let collect_delay = e.value("collect_delay").max(0.) as u32;
-        let can_collect = e.age >= collect_delay
-            && e.data
-                .get("canCollect")
-                .map_or(!delayed || e.age >= 20, |v| {
-                    *v > 0. || (collect_delay > 0 && e.age >= collect_delay)
-                });
+        let can_collect = e.value("canCollect") > 0.;
         if can_collect {
             let base = e.value("value") as u32;
             let area = match game.world.area {
@@ -344,37 +337,78 @@ pub fn tick(game: &mut Game) {
             .world
             .entities
             .iter()
-            .find(|e| {
-                e.alive
-                    && !e.held
-                    && e.object == object
-                    && e.value("forSale") <= 0.
-                    && contact.intersects(bounds(e))
-                    && !origin_is_solid(game, e)
-            })
+            .find(|e| e.alive && e.object == object && contact.intersects(bounds(e)))
+            .filter(|e| !e.held && e.value("forSale") <= 0. && !origin_is_solid(game, e))
             .map(|e| e.id);
         if let Some(id) = id {
             grant(game, id);
         }
     }
-    if let Some(key_id) = game.player.held {
-        if let Some(key) = game.world.entity(key_id).filter(|e| e.object == "oKey") {
-            let key_bounds = bounds(key);
-            let chest = game
-                .world
-                .entities
-                .iter()
-                .find(|e| e.alive && e.object == "oLockedChest" && bounds(e).intersects(key_bounds))
-                .map(|e| (e.id, e.pos));
-            if let Some((id, pos)) = chest {
-                game.world.entity_mut(key_id).unwrap().alive = false;
-                game.world.entity_mut(id).unwrap().alive = false;
-                game.player.held = None;
-                let vx = game.rng.range(4) as f64 - game.rng.range(4) as f64;
-                spawn(game, "oUdjatEye", pos, Vec2::new(vx, -2.));
-                game.sound("sndChestOpen", pos);
-            }
+}
+
+/// Legacy callers retain Player Step behavior, with no automatic event scan.
+pub fn tick(game: &mut Game) {
+    player_step(game);
+}
+
+pub(crate) fn handles(object: &str) -> bool {
+    is_collectible(object)
+}
+
+pub(crate) fn step_instance(_game: &mut Game, _id: u64) {}
+pub(crate) fn builtin_motion(_game: &mut Game, _id: u64) {}
+pub(crate) fn animation_end(_game: &mut Game, _id: u64) {}
+
+pub(crate) fn alarm(game: &mut Game, id: u64, alarm: u8) {
+    if alarm != 0 {
+        return;
+    }
+    if let Some(entity) = game.world.entity_mut(id) {
+        if treasure_value(&entity.object).is_some()
+            && entity.object != "oGoldChunk"
+            && entity.object != "oGoldBar"
+            && entity.object != "oGoldBars"
+        {
+            entity.data.insert("canCollect".into(), 1.);
         }
+    }
+}
+
+pub(crate) fn collision(game: &mut Game, id: u64, other: crate::dispatcher::Instance) {
+    let crate::dispatcher::Instance::Entity(other_id) = other else {
+        return;
+    };
+    let Some(entity) = game.world.entity(id) else {
+        return;
+    };
+    let object = entity.object.clone();
+    let pos = entity.pos;
+    let sprite = entity.sprite.clone();
+    let Some(other) = game.world.entity(other_id) else {
+        return;
+    };
+    if matches!(object.as_str(), "oEmeraldBig" | "oSapphireBig" | "oRubyBig")
+        && other.object == "oGhost"
+    {
+        spawn(game, "oDiamond", pos, Vec2::default());
+        game.world.entity_mut(id).unwrap().alive = false;
+    } else if object == "oLockedChest"
+        && sprite == "sLockedChest"
+        && other.object == "oKey"
+        && other.held
+    {
+        let key = game.world.entity_mut(other_id).unwrap();
+        key.held = false;
+        key.alive = false;
+        game.player.held = None;
+        let chest = game.world.entity_mut(id).unwrap();
+        chest.set_sprite("sLockedChestOpen");
+        game.sound("sndChestOpen", pos);
+        let vx = game.rng.range(4) as f64 - game.rng.range(4) as f64;
+        spawn(game, "oUdjatEye", pos, Vec2::new(vx, -2.));
+        spawn(game, "oPoof", pos, Vec2::new(-0.4, 0.));
+        spawn(game, "oPoof", pos, Vec2::new(0.4, 0.));
+        game.world.entity_mut(id).unwrap().alive = false;
     }
 }
 
@@ -387,38 +421,58 @@ pub fn interact(game: &mut Game, input: &InputFrame) -> bool {
         init_entity(entity);
     }
     if input.up {
+        // Player Step checks Chest before Crate, and counts the point-hit even
+        // when the chest is already open. An open chest leaves Attack pressed
+        // for the subsequent source branches.
+        let chest = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.alive && e.object == "oChest" && bounds(e).contains(game.player.pos))
+            .map(|e| (e.id, e.pos, e.sprite == "sChest"));
+        if let Some((id, pos, closed)) = chest {
+            if crate::statistics::is_real_level(game) {
+                game.lifetime_stats
+                    .increment(crate::statistics::LifetimeCounter::TotalChests);
+                *game.data.entry("totalChests".into()).or_default() += 1.;
+            }
+            if closed {
+                open_chest(game, id, pos);
+                return true;
+            }
+        }
         let container = game
             .world
             .entities
             .iter()
-            .find(|e| {
+            .filter(|e| {
                 e.alive
-                    && e.state == 0
-                    && matches!(e.object.as_str(), "oChest" | "oCrate" | "oFlareCrate")
+                    && matches!(e.object.as_str(), "oCrate" | "oFlareCrate")
                     && bounds(e).contains(game.player.pos)
             })
+            .min_by_key(|e| (u8::from(e.object == "oFlareCrate"), e.id))
             .map(|e| (e.id, e.object.clone(), e.pos));
         if let Some((id, object, pos)) = container {
-            if object == "oChest" {
-                open_chest(game, id, pos);
-            } else {
-                game.world.entity_mut(id).unwrap().alive = false;
-                if game.player.held == Some(id) {
-                    game.player.held = None;
-                }
-                if object == "oFlareCrate" {
-                    for _ in 0..3 {
-                        let vx = game.rng.range(4) as f64 - game.rng.range(4) as f64;
-                        let vy = -f64::from(game.rng.range(3) + 1);
-                        spawn(game, "oFlare", pos, Vec2::new(vx, vy));
-                    }
-                } else {
-                    let loot = crate_loot(game);
-                    spawn(game, loot, pos, Vec2::default());
-                    *game.data.entry("totalCrates".into()).or_default() += 1.;
-                }
-                game.sound("sndPickup", pos);
+            if object == "oCrate" && crate::statistics::is_real_level(game) {
+                game.lifetime_stats
+                    .increment(crate::statistics::LifetimeCounter::TotalCrates);
+                *game.data.entry("totalCrates".into()).or_default() += 1.;
             }
+            game.world.entity_mut(id).unwrap().alive = false;
+            if game.player.held == Some(id) {
+                game.player.held = None;
+            }
+            if object == "oFlareCrate" {
+                for _ in 0..3 {
+                    let vx = game.rng.range(4) as f64 - game.rng.range(4) as f64;
+                    let vy = -f64::from(game.rng.range(3) + 1);
+                    spawn(game, "oFlare", pos, Vec2::new(vx, vy));
+                }
+            } else {
+                let loot = crate_loot(game);
+                spawn(game, loot, pos, Vec2::default());
+            }
+            game.sound("sndPickup", pos);
             return true;
         }
     }
@@ -489,14 +543,18 @@ fn crate_loot(game: &mut Game) -> &'static str {
 
 fn open_chest(game: &mut Game, id: u64, pos: Vec2) {
     let chest = game.world.entity_mut(id).unwrap();
-    chest.sprite = "sChestOpen".into();
+    chest.set_sprite("sChestOpen");
     chest.state = 1;
-    *game.data.entry("totalChests".into()).or_default() += 1.;
     if game.rng.range(12) == 0 && game.world.level > 0 {
         let vx = game.rng.range(4) as f64 - game.rng.range(4) as f64;
         let bomb = spawn(game, "oBomb", pos, Vec2::new(vx, -2.));
         let e = game.world.entity_mut(bomb).unwrap();
-        super::explosives::arm_bomb(e);
+        // Chest traps bypass ordinary arming: no Alarm0 delay or slow flash.
+        super::explosives::init_entity(e);
+        e.data.insert("armed".into(), 1.);
+        e.set_sprite("sBombArmed");
+        e.set_image_speed(1.);
+        e.alarms[1] = 40;
         e.timer = 40;
         game.sound("sndTrap", pos);
     } else {
@@ -548,7 +606,7 @@ mod tests {
             }
             let lifetime_key = format!("collected:{object}");
             g.data.insert(lifetime_key.clone(), 9.);
-            let id = g.world.spawn(object, g.player.pos);
+            let id = g.spawn(object, g.player.pos);
             for _ in 0..20 {
                 g.step(&InputFrame::default());
             }
@@ -577,7 +635,7 @@ mod tests {
         for x in 0..g.world.width {
             g.world.set_tile(x, 3, "oBlock");
         }
-        let gold = g.world.spawn("oGoldChunk", g.player.pos);
+        let gold = g.spawn("oGoldChunk", g.player.pos);
         g.step(&InputFrame::default());
         assert!(g.world.entity(gold).is_none());
         assert_eq!(g.data["collect"], 125.);
@@ -606,8 +664,8 @@ mod tests {
         g.player.state = crate::PlayerState::Stunned;
         g.player.stun = 0;
         let pos = g.player.pos;
-        let gold = g.world.spawn("oGoldChunk", pos);
-        let chest = g.world.spawn("oChest", pos);
+        let gold = g.spawn("oGoldChunk", pos);
+        let chest = g.spawn("oChest", pos);
         g.step(&InputFrame {
             up: true,
             attack_pressed: true,
@@ -625,10 +683,10 @@ mod tests {
         let mut g = game();
         g.world.area = Area::Jungle;
         let pos = g.player.pos;
-        let id = g.world.spawn("oEmeraldBig", pos);
+        let id = g.spawn("oEmeraldBig", pos);
         tick(&mut g);
         assert!(g.world.entity(id).is_some());
-        g.world.entity_mut(id).unwrap().age = 20;
+        alarm(&mut g, id, 0);
         tick(&mut g);
         assert!(g.world.entity(id).is_none());
         assert_eq!(g.player.money, 0);
@@ -650,7 +708,7 @@ mod tests {
     fn shop_stock_and_embedded_supplies_are_not_automatically_collected() {
         let mut g = game();
         let pos = g.player.pos;
-        let stock = g.world.spawn("oBombBag", pos);
+        let stock = g.spawn("oBombBag", pos);
         g.world
             .entity_mut(stock)
             .unwrap()
@@ -678,7 +736,7 @@ mod tests {
         let mut g = game();
         let pos = g.player.pos;
         g.player.equipment.insert("Jetpack".into());
-        let cape = g.world.spawn("oCapePickup", pos);
+        let cape = g.spawn("oCapePickup", pos);
         tick(&mut g);
         assert!(g.world.entity(cape).is_some());
         assert!(interact(
@@ -703,8 +761,8 @@ mod tests {
     fn equipment_pickup_does_not_reach_through_nearer_item() {
         let mut g = game();
         let pos = g.player.pos;
-        let rock = g.world.spawn("oRock", Vec2::new(pos.x, pos.y + 1.));
-        g.world.spawn("oCapePickup", Vec2::new(pos.x, pos.y + 5.));
+        let rock = g.spawn("oRock", Vec2::new(pos.x, pos.y + 1.));
+        g.spawn("oCapePickup", Vec2::new(pos.x, pos.y + 5.));
         assert!(!interact(
             &mut g,
             &InputFrame {
@@ -721,14 +779,14 @@ mod tests {
     fn held_key_opens_locked_chest_once() {
         let mut g = game();
         let pos = g.player.pos;
-        let key = g.world.spawn("oKey", pos);
-        let chest = g.world.spawn("oLockedChest", pos);
+        let key = g.spawn("oKey", pos);
+        let chest = g.spawn("oLockedChest", pos);
         tick(&mut g);
         assert!(g.world.entity(chest).is_some());
         g.player.held = Some(key);
         g.world.entity_mut(key).unwrap().held = true;
-        tick(&mut g);
-        tick(&mut g);
+        collision(&mut g, chest, crate::dispatcher::Instance::Entity(key));
+        collision(&mut g, chest, crate::dispatcher::Instance::Entity(key));
         assert!(g.world.entity(key).is_none());
         assert!(g.world.entity(chest).is_none());
         assert_eq!(
@@ -745,7 +803,7 @@ mod tests {
     fn container_requires_up_attack_and_cannot_open_twice() {
         let mut g = game();
         let pos = g.player.pos;
-        let chest = g.world.spawn("oChest", pos);
+        let chest = g.spawn("oChest", pos);
         assert!(!interact(
             &mut g,
             &InputFrame {
@@ -761,7 +819,8 @@ mod tests {
         assert!(interact(&mut g, &input));
         assert_eq!(g.world.entity(chest).unwrap().state, 1);
         assert!(!interact(&mut g, &input));
-        assert_eq!(g.data["totalChests"], 1.);
+        assert_eq!(g.data["totalChests"], 2.);
+        assert_eq!(g.lifetime_stats.total_chests, 2);
     }
 
     #[test]
@@ -771,7 +830,7 @@ mod tests {
             .unwrap();
         let mut g = Game::shell(seed, RulesPreset::Classic);
         let pos = g.player.pos;
-        g.world.spawn("oChest", pos);
+        g.spawn("oChest", pos);
         assert!(interact(
             &mut g,
             &InputFrame {
@@ -789,9 +848,12 @@ mod tests {
         let bomb_id = bomb.id;
         assert_eq!(bomb.value("armed"), 1.);
         assert_eq!(bomb.timer, 40);
+        assert_eq!(bomb.alarms[0], -1);
+        assert_eq!(bomb.alarms[1], 40);
+        assert_eq!(bomb.image_speed(), 1.);
         assert_eq!(bomb.sprite, "sBombArmed");
         for _ in 0..39 {
-            super::super::tick(&mut g, &InputFrame::default());
+            g.step(&InputFrame::default());
         }
         assert!(g.world.entity(bomb_id).is_some());
         assert!(
@@ -799,7 +861,7 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, GameEvent::Explosion { .. }))
         );
-        super::super::tick(&mut g, &InputFrame::default());
+        g.step(&InputFrame::default());
         assert!(g.world.entity(bomb_id).is_none());
         assert_eq!(
             g.events
@@ -813,7 +875,7 @@ mod tests {
     #[test]
     fn ghost_only_upgrades_large_gems() {
         let mut g = game();
-        let ghost = g.world.spawn("oGhost", Vec2::new(100., 100.));
+        let ghost = g.spawn("oGhost", Vec2::new(100., 100.));
         // The source ghost's origin is outside its [4, 0, 12, 16] mask;
         // equal instance origins merely touch a large gem's right edge.
         let ghost_bounds = g.world.entity(ghost).unwrap().bounds();
@@ -821,10 +883,11 @@ mod tests {
             ghost_bounds.x + ghost_bounds.w / 2.,
             ghost_bounds.y + ghost_bounds.h / 2.,
         );
-        let large = g.world.spawn("oRubyBig", pos);
-        let small = g.world.spawn("oRuby", pos);
-        let outside = g.world.spawn("oEmeraldBig", Vec2::new(pos.x + 40., pos.y));
-        tick(&mut g);
+        let large = g.spawn("oRubyBig", pos);
+        let small = g.spawn("oRuby", pos);
+        let outside = g.spawn("oEmeraldBig", Vec2::new(pos.x + 40., pos.y));
+        collision(&mut g, large, crate::dispatcher::Instance::Entity(ghost));
+        collision(&mut g, small, crate::dispatcher::Instance::Entity(ghost));
         assert!(g.world.entity(large).is_none());
         assert!(g.world.entity(small).is_some());
         assert!(g.world.entity(outside).is_some());
@@ -849,8 +912,8 @@ mod tests {
     #[test]
     fn game_step_does_not_collect_supplies_embedded_in_dynamic_solid() {
         let mut g = floor_game();
-        let block = g.world.spawn("oPushBlock", Vec2::new(48., 32.));
-        let bag = g.world.spawn("oBombBag", Vec2::new(54., 40.));
+        let block = g.spawn("oPushBlock", Vec2::new(48., 32.));
+        let bag = g.spawn("oBombBag", Vec2::new(54., 40.));
         g.step(&InputFrame::default());
         assert_eq!(g.player.bombs, 4);
         assert!(g.world.entity(bag).is_some());
@@ -866,25 +929,26 @@ mod tests {
         g.flags.insert("tutorial".into());
         // sCrate extends two pixels above its instance origin, unlike the
         // movement rectangle's zero top offset.
-        let crate_id = g.world.spawn("oCrate", Vec2::new(40., 42.));
+        let crate_id = g.spawn("oCrate", Vec2::new(40., 42.));
         g.step(&InputFrame {
             up: true,
             attack_pressed: true,
             ..Default::default()
         });
         assert!(g.world.entity(crate_id).is_none());
-        assert_eq!(g.data["totalCrates"], 1.);
+        assert_eq!(g.data.get("totalCrates").copied().unwrap_or(0.), 0.);
+        assert_eq!(g.lifetime_stats.total_crates, 0);
     }
 
     #[test]
     fn game_step_held_key_uses_source_mask_overlap() {
         let mut g = floor_game();
-        let key = g.world.spawn("oKey", g.player.pos);
+        let key = g.spawn("oKey", g.player.pos);
         g.player.held = Some(key);
         g.world.entity_mut(key).unwrap().held = true;
         // Key is attached at x44: its sprite right edge overlaps this chest,
         // while the narrower movement rectangles remain separated.
-        let chest = g.world.spawn("oLockedChest", Vec2::new(55., 40.));
+        let chest = g.spawn("oLockedChest", Vec2::new(55., 40.));
         g.step(&InputFrame::default());
         assert!(g.world.entity(key).is_none());
         assert!(g.world.entity(chest).is_none());
@@ -899,9 +963,10 @@ mod tests {
     #[test]
     fn game_step_monkey_gold_waits_for_twenty_tick_collection_alarm() {
         let mut g = floor_game();
-        let nugget = g.world.spawn("oGoldNugget", g.player.pos);
+        let nugget = g.spawn("oGoldNugget", g.player.pos);
         let e = g.world.entity_mut(nugget).unwrap();
-        e.data.insert("collect_delay".into(), 20.);
+        init_entity(e);
+        e.alarms[0] = 20;
         e.data.insert("canCollect".into(), 0.);
         for _ in 0..19 {
             g.step(&InputFrame::default());
@@ -911,5 +976,181 @@ mod tests {
         g.step(&InputFrame::default());
         assert!(g.world.entity(nugget).is_none());
         assert_eq!(g.data["collect"], 500.);
+    }
+    #[test]
+    fn real_level_container_stats_count_open_chest_retry_and_preserve_lifetime() {
+        let input = InputFrame {
+            up: true,
+            attack_pressed: true,
+            ..InputFrame::default()
+        };
+        for context in [
+            "rLevel",
+            "rLevel2",
+            "rLevel3",
+            "rOlmec",
+            "rLoadLevel",
+            "rTutorial",
+            "rMainMenu",
+        ] {
+            let mut g = floor_game();
+            g.world.name = context.into();
+            g.lifetime_stats.total_chests = 7;
+            let chest = g.spawn("oChest", g.player.pos);
+            g.step(&input);
+            assert_eq!(
+                g.world.entity(chest).unwrap().sprite,
+                "sChestOpen",
+                "{context}"
+            );
+            let produced = g
+                .world
+                .entities
+                .iter()
+                .filter(|e| treasure_value(&e.object).is_some() || e.object == "oBomb")
+                .count();
+            g.step(&input);
+            assert_eq!(
+                g.world
+                    .entities
+                    .iter()
+                    .filter(|e| treasure_value(&e.object).is_some() || e.object == "oBomb")
+                    .count(),
+                produced,
+                "{context}: retry spawned loot"
+            );
+            let expected = if matches!(context, "rLevel" | "rLevel2" | "rLevel3" | "rOlmec") {
+                9
+            } else {
+                7
+            };
+            assert_eq!(g.lifetime_stats.total_chests, expected, "{context}");
+        }
+    }
+
+    #[test]
+    fn crate_stats_exclude_flare_crates_and_non_gameplay_contexts() {
+        for (object, flag, expected) in [
+            ("oCrate", "", 1),
+            ("oFlareCrate", "", 0),
+            ("oCrate", "tutorial", 0),
+            ("oCrate", "custom_level", 0),
+            ("oCrate", "hub", 0),
+        ] {
+            let mut g = floor_game();
+            if !flag.is_empty() {
+                g.flags.insert(flag.into());
+            }
+            let id = g.spawn(object, g.player.pos);
+            g.step(&InputFrame {
+                up: true,
+                attack_pressed: true,
+                ..InputFrame::default()
+            });
+            assert!(g.world.entity(id).is_none(), "{object} {flag}");
+            assert_eq!(g.lifetime_stats.total_crates, expected, "{object} {flag}");
+        }
+    }
+
+    #[test]
+    fn locked_chest_collision_runs_while_player_is_stunned_and_spawns_source_poofs() {
+        let mut g = floor_game();
+        let chest = g.spawn("oLockedChest", g.player.pos);
+        let key = g.spawn("oKey", g.player.pos);
+        g.world.entity_mut(key).unwrap().held = true;
+        g.player.held = Some(key);
+        g.player.state = crate::PlayerState::Stunned;
+        collision(&mut g, chest, crate::dispatcher::Instance::Entity(key));
+        assert!(g.world.entity(chest).is_none());
+        assert!(g.world.entity(key).is_none());
+        assert_eq!(g.player.held, None);
+        let velocities: Vec<_> = g
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.alive && e.object == "oPoof")
+            .map(|e| e.vel.x)
+            .collect();
+        assert_eq!(velocities, vec![-0.4, 0.4]);
+    }
+    #[test]
+    fn game_step_treasure_contact_selects_nearest_even_outside_contact_mask() {
+        let mut g = floor_game();
+        let far = g.spawn("oGoldBars", Vec2::new(55., 40.));
+        let near = g.spawn("oGoldChunk", Vec2::new(51., 40.));
+        let contact = Rect::new(32., 32., 17., 17.);
+        assert!(contact.intersects(g.world.entity(far).unwrap().sprite_bounds()));
+        assert!(!contact.intersects(g.world.entity(near).unwrap().sprite_bounds()));
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(near).is_none());
+        assert!(g.world.entity(far).is_some());
+        assert_eq!(g.data["collect"], 100.);
+    }
+
+    #[test]
+    fn game_step_supply_first_collision_blocks_later_eligible_supply() {
+        let mut g = floor_game();
+        let first = g.spawn("oBombBag", g.player.pos);
+        g.world
+            .entity_mut(first)
+            .unwrap()
+            .data
+            .insert("forSale".into(), 1.);
+        let second = g.spawn("oBombBag", g.player.pos);
+        g.step(&InputFrame::default());
+        assert_eq!(g.player.bombs, 4);
+        assert!(g.world.entity(first).is_some());
+        assert!(g.world.entity(second).is_some());
+        g.world
+            .entity_mut(first)
+            .unwrap()
+            .data
+            .insert("forSale".into(), 0.);
+        g.step(&InputFrame::default());
+        assert_eq!(g.player.bombs, 7);
+        assert!(g.world.entity(first).is_none());
+        assert!(g.world.entity(second).is_some());
+    }
+    #[test]
+    fn free_supply_and_equipment_grants_emit_source_two_line_dialogue() {
+        for (object, first, second) in [
+            ("oBombBag", "YOU GOT 3 MORE BOMBS!", ""),
+            ("oUdjatEye", "YOU GOT THE UDJAT EYE!", "YOU FEEL AWAKENED."),
+            ("oAnkh", "YOU GOT THE ANKH!", "YOU FEEL PROTECTED."),
+            (
+                "oCrown",
+                "YOU GOT THE HEDJET!",
+                "IT GLOWS A BRILLIANT WHITE.",
+            ),
+            ("oKapala", "YOU GOT THE KAPALA!", "IT THIRSTS FOR BLOOD..."),
+            (
+                "oParaPickup",
+                "YOU GOT A PARACHUTE!",
+                "IT WILL DEPLOY AUTOMATICALLY.",
+            ),
+            (
+                "oSpectacles",
+                "YOU GOT SPECTACLES!",
+                "YOUR EYESIGHT SEEMS IMPROVED...",
+            ),
+            ("oSpringShoes", "YOU GOT SPRING SHOES!", "YOU FEEL BOUNCY."),
+            (
+                "oJordans",
+                "YOU GOT JORDANS!",
+                "YOU FEEL LIGHT ON YOUR FEET.",
+            ),
+        ] {
+            let mut g = game();
+            let id = g.spawn(object, g.player.pos);
+            assert!(grant(&mut g, id));
+            assert!(
+                g.events
+                    .iter()
+                    .any(|event| matches!(event, GameEvent::Dialogue(message)
+                if message.first == first && message.second == second && message.ticks == 120)),
+                "{object}"
+            );
+            assert_eq!(g.data["message_timer"], 120., "{object}");
+        }
     }
 }

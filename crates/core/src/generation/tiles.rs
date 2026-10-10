@@ -99,7 +99,7 @@ pub(super) fn stamp_at(
                     spawn(world, "oPushBlock", p);
                 }
             }
-            b'x' if world.area != Area::Boss => altar(world, p, true),
+            b'x' if world.area != Area::Boss => altar(world, rng, p, true),
             b'I' => {
                 let dy = if world.area == Area::Boss {
                     rng.range(1);
@@ -282,7 +282,7 @@ fn ground(area: Area, yeti: bool, certain: bool, rng: &mut Rng) -> &'static str 
 
 fn mines(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2) {
     match c {
-        b'A' => altar(w, p, false),
+        b'A' => altar(w, r, p, false),
         b'a' => {
             spawn(w, "oChest", p);
         }
@@ -421,7 +421,7 @@ fn ice(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2, yeti: boo
             b't' if !occupied => {
                 spawn(w, "oThinIce", p);
             }
-            b'A' => altar(w, p, false),
+            b'A' => altar(w, r, p, false),
             b'a' => {
                 spawn(w, "oChest", p);
             }
@@ -768,7 +768,7 @@ fn decoration(w: &mut World, bg: &str, p: Vec2) -> u64 {
     e.data.insert("decoration".into(), 1.0);
     id
 }
-fn altar(w: &mut World, p: Vec2, sacrifice: bool) {
+fn altar(w: &mut World, r: &mut Rng, p: Vec2, sacrifice: bool) {
     let (left, right) = if sacrifice {
         ("oSacAltarLeft", "oSacAltarRight")
     } else {
@@ -780,7 +780,8 @@ fn altar(w: &mut World, p: Vec2, sacrifice: bool) {
     }
     if sacrifice {
         decoration(w, "bgKaliBody", offset(p, -16.0, -48.0));
-        spawn(w, "oKaliHead", offset(p, 16.0, -64.0));
+        let head = spawn(w, "oKaliHead", offset(p, 16.0, -64.0));
+        crate::traps::initialize_kali_head(w, r, head);
     }
 }
 
@@ -1116,6 +1117,61 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn kali_create_draws_before_following_prize_in_normal_area_alphabets() {
+        for (area, name) in [
+            (Area::Mines, "Mines"),
+            (Area::Jungle, "Jungle"),
+            (Area::Ice, "Ice Caves"),
+            (Area::Temple, "Temple"),
+        ] {
+            // Each source scrRoomGen* creates the head synchronously for x;
+            // its Create rand(1,3) precedes q's unused rand(1,6) and item roll.
+            for seed in [1, 42, 123, 2026] {
+                let mut world = World::new(42, 34, area, 2);
+                world.name = name.into();
+                let mut actual = Rng::new(seed);
+                let mut source = actual.clone();
+                let sprite = format!("sKaliHead{}", source.range(3) + 1);
+                source.range(6);
+                let prize = high_end(&mut source);
+                stamp(
+                    &mut world,
+                    &mut actual,
+                    &format!("xq{:0<78}", ""),
+                    0,
+                    0,
+                    false,
+                    false,
+                    "Craps",
+                );
+                let head = world
+                    .entities
+                    .iter()
+                    .find(|e| e.object == "oKaliHead")
+                    .unwrap();
+                assert_eq!(head.sprite, sprite, "{name}, seed {seed}");
+                assert_eq!(head.value("kali_create_initialized"), 1.0);
+                let head_id = head.id;
+                let generated_prize = world
+                    .entities
+                    .iter()
+                    .find(|e| e.value("inDiceHouse") != 0.0)
+                    .unwrap();
+                assert_eq!(generated_prize.object, prize, "{name}, seed {seed}");
+                // The later dispatcher Create must retain this birth-time
+                // choice and consume no additional generation RNG draw.
+                crate::traps::initialize_kali_head(&mut world, &mut actual, head_id);
+                assert_eq!(
+                    actual.range(100000),
+                    source.range(100000),
+                    "{name}, seed {seed}"
+                );
+                assert_eq!(world.entity(head_id).unwrap().sprite, sprite);
+            }
+        }
     }
 
     #[test]

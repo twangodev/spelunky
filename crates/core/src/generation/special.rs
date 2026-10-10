@@ -204,6 +204,7 @@ fn boss_arena(world: &mut World) {
             "oEntrance"
                 | "oExit"
                 | "oOlmec"
+                | "oFinalBoss"
                 | "oCavemanWorship"
                 | "oHawkmanWorship"
                 | "oLava"
@@ -247,6 +248,9 @@ fn boss_arena(world: &mut World) {
             entity.data.insert("boss_exit".into(), 1.0);
         }
     }
+    // rOlmec instance128448: its Step opens the end portal after Olmec dies.
+    // It remains an actual resource580 controller, after Olmec559.
+    world.spawn("oFinalBoss", Vec2::new(48., 0.));
 }
 
 #[cfg(test)]
@@ -342,6 +346,14 @@ mod tests {
                 .any(|entity| entity.object == "oOlmec" && entity.pos == Vec2::new(304.0, 496.0))
         );
         assert!(!world.entities.iter().any(|entity| entity.object == "oExit"));
+        assert_eq!(
+            world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oFinalBoss" && e.pos == Vec2::new(48., 0.))
+                .count(),
+            1
+        );
         assert!(
             world
                 .entities

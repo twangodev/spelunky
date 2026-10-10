@@ -1,6 +1,8 @@
 //! Platform-independent Classic simulation. Coordinates are original game pixels.
 pub mod activation;
+pub mod animation;
 pub mod catalog;
+pub mod dispatcher;
 pub mod economy;
 pub mod editor;
 pub mod ending;
@@ -21,3 +23,5 @@ pub mod world_events;
 
 pub mod characters;
 pub mod hub;
+pub mod opening;
+pub mod statistics;

@@ -2,13 +2,17 @@
 //!
 //! Reference: oSacAltarLeft, oEnemy/oDamsel sacrifice steps, scrGetFavorMsg,
 //! and the Gold Idol pickup branch of oPlayer1 Step (Classic 1.1).
-use crate::model::{Area, Game, GameEvent, Rect, Vec2};
+#[cfg(test)]
+use crate::model::Rect;
+use crate::model::{Area, Game, GameEvent, Vec2};
 
+#[cfg(test)]
 pub(super) fn tick(game: &mut Game) {
     altars(game);
     idols(game);
 }
 
+#[cfg(test)]
 fn altars(game: &mut Game) {
     let mut defiled = false;
     let mut surfaces = Vec::new();
@@ -151,7 +155,7 @@ fn altars(game: &mut Game) {
         if !devoured {
             *favor += amount;
         }
-        game.world.spawn("oFlame", pos);
+        game.spawn("oFlame", pos);
         game.sound("sndSmallExplode", pos);
         game.data.insert("shake".into(), 10.0);
         game.events.push(GameEvent::Message(if devoured {
@@ -161,6 +165,132 @@ fn altars(game: &mut Game) {
         }));
         reward(game, altar, pos.y);
     }
+}
+
+/// The altar itself only checks support. Sacrifice countdowns belong to each
+/// donor's inherited enemy/Damsel Step, never a global altar scan.
+pub(super) fn step_instance(game: &mut Game, instance: crate::dispatcher::Instance) {
+    let pos = instance.position(game);
+    if pos.x > game.camera.x - 20.
+        && pos.x < game.camera.x + 324.
+        && pos.y > game.camera.y - 20.
+        && pos.y < game.camera.y + 244.
+        && !game.world.solid_at(pos.x, pos.y + 16.)
+    {
+        match instance {
+            crate::dispatcher::Instance::Entity(id) => {
+                crate::items::explosives::destroy_solid_self(game, id);
+            }
+            crate::dispatcher::Instance::Terrain(index) => {
+                crate::items::explosives::destroy_terrain_self(
+                    game,
+                    index % game.world.width,
+                    index / game.world.width,
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Called synchronously by the actual altar Destroy body, including tiles.
+pub(crate) fn destroyed(game: &mut Game, source: &crate::Entity) {
+    if !game.flags.contains("altar_defile_cascade")
+        && source.data.get("defile").copied().unwrap_or(1.) != 0.
+        && source.value("altar_defiled") == 0.
+    {
+        punish(game);
+    }
+}
+
+/// Source oEnemy Step 145 and oDamsel Step337 own this countdown.
+pub(crate) fn offering_entity(game: &mut Game, entity: &mut crate::Entity) {
+    if !entity.alive {
+        return;
+    }
+    let Some(base_favor) = sacrifice_value(&entity.object) else {
+        return;
+    };
+    let damsel = entity.object == "oDamsel";
+    let status = entity
+        .data
+        .get("status")
+        .copied()
+        .unwrap_or(entity.state as f64);
+    if if damsel {
+        status != 2. && status != 99.
+    } else {
+        status < 98.
+    } {
+        return;
+    }
+    if entity.held || entity.vel.x != 0. || entity.vel.y != 0. {
+        entity.data.insert("sacrifice_count".into(), 20.);
+        return;
+    }
+    let feet = if damsel {
+        Vec2::new(entity.pos.x, entity.pos.y + 8.)
+    } else {
+        Vec2::new(entity.pos.x + 8., entity.pos.y + 16.)
+    };
+    let altar = game
+        .world
+        .entities
+        .iter()
+        .find(|e| {
+            e.alive
+                && crate::catalog::is_a(&e.object, "oSacAltarLeft")
+                && e.sprite_bounds().contains(feet)
+        })
+        .map(|e| e.pos)
+        .or_else(|| {
+            let x = (feet.x / 16.).floor() as i32;
+            let y = (feet.y / 16.).floor() as i32;
+            game.world
+                .tile(x, y)
+                .filter(|t| crate::catalog::is_a(&t.object, "oSacAltarLeft"))
+                .map(|_| Vec2::new(f64::from(x) * 16., f64::from(y) * 16.))
+        });
+    let Some(altar) = altar else {
+        return;
+    };
+    let count = entity.data.get("sacrifice_count").copied().unwrap_or(20.);
+    if count > 0. {
+        entity.data.insert("sacrifice_count".into(), count - 1.);
+        return;
+    }
+    let favor = entity.data.get("favor").copied().unwrap_or(base_favor);
+    let amount = if damsel || status == 98. {
+        favor
+    } else {
+        favor / 2.
+    };
+    let pos = if damsel {
+        entity.pos
+    } else {
+        Vec2::new(entity.pos.x + 8., entity.pos.y + 8.)
+    };
+    let prior = game.data.get("favor").copied().unwrap_or(0.);
+    let devoured = prior <= -8.;
+    if !devoured {
+        *game.data.entry("favor".into()).or_default() += amount;
+    }
+    if prior < 0. && !devoured && favor > 0. {
+        entity.data.insert("favor".into(), 0.);
+    }
+    entity.alive = false;
+    game.spawn("oFlame", pos);
+    game.sound("sndSmallExplode", pos);
+    game.data.insert("shake".into(), 10.);
+    game.events.push(GameEvent::Message(
+        if devoured {
+            "KALI DEVOURS THE SACRIFICE!"
+        } else {
+            "KALI ACCEPTS THE SACRIFICE!"
+        }
+        .into(),
+    ));
+    reward(game, altar, entity.pos.y);
 }
 
 fn sacrifice_value(object: &str) -> Option<f64> {
@@ -260,7 +390,7 @@ fn reward(game: &mut Game, altar: Vec2, offering_y: f64) {
 }
 
 fn spawn_gift(game: &mut Game, object: &str, pos: Vec2) {
-    let id = game.world.spawn(object, pos);
+    let id = game.spawn(object, pos);
     if let Some(gift) = game.world.entity_mut(id) {
         gift.data.insert("cost".into(), 0.0);
         gift.data.insert("forSale".into(), 0.0);
@@ -275,51 +405,64 @@ fn punish(game: &mut Game) {
     game.events.push(GameEvent::Message(
         "YOU DARE DEFILE MY ALTAR? I WILL PUNISH YOU!".into(),
     ));
-    for entity in &mut game.world.entities {
-        if matches!(entity.object.as_str(), "oSacAltarLeft" | "oSacAltarRight") {
-            entity.alive = false;
-            entity.data.insert("altar_defiled".into(), 1.0);
-        }
-    }
-    for tile in &mut game.world.tiles {
-        if matches!(tile.object.as_str(), "oSacAltarLeft" | "oSacAltarRight") {
-            tile.object.clear();
-        }
-    }
-    game.data.retain(|key, _| !key.starts_with("altar_tile:"));
     if count == 1 {
-        game.world.spawn("oBall", game.player.pos);
+        game.spawn("oBall", game.player.pos);
         for link in 1..=4 {
-            let id = game.world.spawn("oChain", game.player.pos);
+            let id = game.spawn("oChain", game.player.pos);
             game.world
                 .entity_mut(id)
                 .unwrap()
                 .data
-                .insert("link_val".into(), link as f64);
+                .insert("linkVal".into(), link as f64);
         }
     } else if count >= 2 && !(game.world.dark && ghost_exists(game)) {
         game.world.dark = true;
         spawn_ghost(game);
     } else {
-        let origins: Vec<_> = game
-            .world
-            .entities
-            .iter()
-            .filter(|e| e.alive && e.object == "oKaliHead")
-            .map(|e| e.pos)
-            .collect();
-        for pos in origins {
-            for _ in 0..6 {
-                let id = game.world.spawn("oSpider", pos);
-                let velocity = Vec2::new(
-                    game.rng.range(4) as f64 - game.rng.range(4) as f64,
-                    -(1.0 + game.rng.range(3) as f64),
-                );
-                game.world.entity_mut(id).unwrap().vel = velocity;
+        for entity in &mut game.world.entities {
+            if entity.alive && entity.object == "oKaliHead" {
+                entity.alarms[0] = 1;
             }
-            game.sound("sndThump", pos);
+        }
+        for tile in &mut game.world.tiles {
+            if tile.object == "oKaliHead" {
+                tile.alarms[0] = 1;
+            }
         }
     }
+    // Source with(oSacAltarLeft) includes its Right child. Each remaining
+    // altar runs its normal Destroy body/rubble with defile disabled.
+    let ids: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|e| e.alive && crate::catalog::is_a(&e.object, "oSacAltarLeft"))
+        .map(|e| e.id)
+        .collect();
+    let tiles: Vec<_> = game
+        .world
+        .tiles
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| crate::catalog::is_a(&t.object, "oSacAltarLeft"))
+        .map(|(index, _)| index)
+        .collect();
+    game.flags.insert("altar_defile_cascade".into());
+    for id in ids {
+        if let Some(entity) = game.world.entity_mut(id) {
+            entity.data.insert("defile".into(), 0.);
+        }
+        crate::items::explosives::destroy_solid_self(game, id);
+    }
+    for index in tiles {
+        crate::items::explosives::destroy_terrain_self(
+            game,
+            index % game.world.width,
+            index / game.world.width,
+        );
+    }
+    game.flags.remove("altar_defile_cascade");
+    game.data.retain(|key, _| !key.starts_with("altar_tile:"));
 }
 
 fn ghost_exists(game: &Game) -> bool {
@@ -336,115 +479,174 @@ fn spawn_ghost(game: &mut Game) {
         } else {
             game.camera.x - 32.0
         };
-        game.world
-            .spawn("oGhost", Vec2::new(x, game.camera.y + 120.0));
+        game.spawn("oGhost", Vec2::new(x, game.camera.y + 120.0));
         game.flags.insert("ghost_exists".into());
     }
 }
 
-fn idols(game: &mut Game) {
-    let mut triggers = Vec::new();
-    let mut unsupported = Vec::new();
-    for entity in &game.world.entities {
-        if !entity.alive || !matches!(entity.object.as_str(), "oGoldIdol" | "oCrystalSkull") {
-            continue;
-        }
-        let trigger = entity.data.get("trigger").copied().unwrap_or(1.0) != 0.0;
-        if entity.value("idol_trap_triggered") != 0.0 || !trigger {
-            continue;
-        }
-        // Source oPlayer1 pickup runs the trap; oGoldIdol's own Step only
-        // consumes the trigger/stat if its supporting floor disappeared.
-        if entity.held || game.player.held == Some(entity.id) {
-            triggers.push((entity.id, entity.pos, entity.object == "oCrystalSkull"));
-        } else if !game.world.solid_at(entity.pos.x, entity.pos.y + 5.0) {
-            unsupported.push(entity.id);
-        }
+/// oPlayer1 Step 1264-1323: invoked once by a successful pickup.
+/// Jungle and Ice deliberately retain their trigger, permitting another pickup.
+pub(crate) fn idol_pickup(game: &mut Game, id: u64) {
+    let Some(entity) = game.world.entity(id) else {
+        return;
+    };
+    if !crate::catalog::is_a(&entity.object, "oGoldIdol")
+        || entity.data.get("trigger").copied().unwrap_or(1.) == 0.
+        || game.is_load_level()
+    {
+        return;
     }
-    for id in unsupported {
-        if let Some(entity) = game.world.entity_mut(id) {
-            entity.data.insert("trigger".into(), 0.0);
-            entity.data.insert("idol_trap_triggered".into(), 1.0);
-        }
-        *game.data.entry("idols_grabbed".into()).or_default() += 1.0;
-    }
-    for (id, pos, skull) in triggers {
-        if let Some(entity) = game.world.entity_mut(id) {
-            entity.data.insert("trigger".into(), 0.0);
-            entity.data.insert("idol_trap_triggered".into(), 1.0);
-        }
-        *game.data.entry("idols_grabbed".into()).or_default() += 1.0;
-        match game.world.area {
-            Area::Mines => {
-                if let Some(entity) = game
-                    .world
-                    .entities
-                    .iter_mut()
-                    .filter(|e| e.alive && e.object == "oGiantTikiHead")
-                    .min_by(|a, b| a.pos.distance(pos).total_cmp(&b.pos.distance(pos)))
-                {
-                    entity.data.insert("idol_alarm".into(), 100.0);
-                }
-                game.data.insert("shake".into(), 100.0);
+    let pos = entity.pos;
+    *game.data.entry("idols_grabbed".into()).or_default() += 1.;
+    game.lifetime_stats
+        .increment(crate::statistics::LifetimeCounter::IdolsGrabbed);
+    let character_masks: Vec<_> = std::iter::once(game.player.sprite_bounds())
+        .chain(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.alive && crate::catalog::is_a(&e.object, "oCharacter"))
+                .map(crate::Entity::sprite_bounds),
+        )
+        .collect();
+    let near_character = |entity: &crate::Entity| {
+        character_masks
+            .iter()
+            .any(|mask| crate::world_events::mask_distance(entity.sprite_bounds(), *mask) < 90.)
+    };
+    match game.world.area {
+        Area::Mines => {
+            if let Some(entity) = game
+                .world
+                .entities
+                .iter_mut()
+                .filter(|e| e.alive && e.object == "oGiantTikiHead")
+                .min_by(|a, b| {
+                    a.pos
+                        .distance(Vec2::new(game.player.pos.x, game.player.pos.y - 64.))
+                        .total_cmp(
+                            &b.pos
+                                .distance(Vec2::new(game.player.pos.x, game.player.pos.y - 64.)),
+                        )
+                })
+            {
+                entity.alarms[0] = 100;
             }
-            Area::Jungle => {
-                if skull || game.flags.contains("cemetery") || game.flags.contains("cemetary") {
-                    spawn_ghost(game);
+            game.data.insert("shake".into(), 100.0);
+        }
+        Area::Jungle => {
+            if game.flags.contains("cemetery") || game.flags.contains("cemetary") {
+                spawn_ghost(game);
+            }
+            for entity in &mut game.world.entities {
+                if entity.alive && entity.object == "oTrapBlock" && near_character(entity) {
+                    entity.data.insert("dying".into(), 1.0);
                 }
+            }
+        }
+        Area::Temple | Area::Boss => {
+            let ceiling = game
+                .world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oCeilingTrap");
+            if ceiling {
                 for entity in &mut game.world.entities {
-                    if entity.alive
-                        && entity.object == "oTrapBlock"
-                        && entity.pos.distance(game.player.pos) < 90.0
-                    {
-                        entity.data.insert("dying".into(), 1.0);
+                    if entity.alive && entity.object == "oCeilingTrap" {
+                        entity.state = 1;
+                        entity.vel.y = 0.5;
                     }
                 }
-            }
-            Area::Temple | Area::Boss => {
-                let ceiling = game
+                for target in [
+                    Vec2::new(game.player.pos.x - 64.0, game.player.pos.y - 64.0),
+                    Vec2::new(game.player.pos.x + 64.0, game.player.pos.y - 64.0),
+                ] {
+                    if let Some(door) = game
+                        .world
+                        .entities
+                        .iter_mut()
+                        .filter(|e| e.alive && e.object == "oDoor")
+                        .min_by(|a, b| a.pos.distance(target).total_cmp(&b.pos.distance(target)))
+                    {
+                        door.state = 1;
+                        door.vel.y = 1.0;
+                    }
+                }
+                game.data.insert("shake".into(), 20.0);
+            } else {
+                let ids: Vec<_> = game
                     .world
                     .entities
                     .iter()
-                    .any(|e| e.alive && e.object == "oCeilingTrap");
-                if ceiling {
-                    for entity in &mut game.world.entities {
-                        if entity.alive && entity.object == "oCeilingTrap" {
-                            entity.state = 1;
-                            entity.vel.y = 0.5;
-                        }
-                    }
-                    for target in [
-                        Vec2::new(pos.x - 64.0, pos.y - 64.0),
-                        Vec2::new(pos.x + 64.0, pos.y - 64.0),
-                    ] {
-                        if let Some(door) = game
-                            .world
-                            .entities
-                            .iter_mut()
-                            .filter(|e| e.alive && e.object == "oDoor")
-                            .min_by(|a, b| {
-                                a.pos.distance(target).total_cmp(&b.pos.distance(target))
-                            })
-                        {
-                            door.state = 1;
-                            door.vel.y = 1.0;
-                        }
-                    }
-                    game.data.insert("shake".into(), 20.0);
-                } else {
-                    for entity in &mut game.world.entities {
-                        if entity.alive
-                            && entity.object == "oTrapBlock"
-                            && entity.pos.distance(game.player.pos) < 90.0
-                        {
-                            entity.alive = false;
-                        }
-                    }
-                    game.sound("sndThump", pos);
-                    game.data.insert("shake".into(), 10.0);
+                    .filter(|entity| {
+                        entity.alive && entity.object == "oTrapBlock" && near_character(entity)
+                    })
+                    .map(|entity| entity.id)
+                    .collect();
+                for id in ids {
+                    crate::items::explosives::destroy_solid_self(game, id);
                 }
+                game.sound("sndThump", pos);
+                game.data.insert("shake".into(), 10.0);
             }
-            Area::Ice => {}
+        }
+        Area::Ice => {}
+    }
+    if matches!(game.world.area, Area::Mines | Area::Temple | Area::Boss) {
+        if let Some(entity) = game.world.entity_mut(id) {
+            entity.data.insert("trigger".into(), 0.);
+        }
+    }
+}
+
+/// GoldIdol Step runs after its inherited item body, whose colBot is retained
+/// while held. Its narrow viewport and unsupported trigger are independent of
+/// the player's pickup branch and have no isRealLevel gate.
+pub(crate) fn idol_step(game: &mut Game, id: u64) {
+    let Some(entity) = game.world.entity(id) else {
+        return;
+    };
+    let pos = entity.pos;
+    if pos.x <= game.camera.x - 8.
+        || pos.x >= game.camera.x + 328.
+        || pos.y <= game.camera.y - 8.
+        || pos.y >= game.camera.y + 248.
+        || entity.value("colBot") != 0.
+        || entity.data.get("trigger").copied().unwrap_or(1.) == 0.
+    {
+        return;
+    }
+    game.world
+        .entity_mut(id)
+        .unwrap()
+        .data
+        .insert("trigger".into(), 0.);
+    *game.data.entry("idols_grabbed".into()).or_default() += 1.;
+    game.lifetime_stats
+        .increment(crate::statistics::LifetimeCounter::IdolsGrabbed);
+}
+
+#[cfg(test)]
+fn idols(game: &mut Game) {
+    let ids: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|e| e.alive && crate::catalog::is_a(&e.object, "oGoldIdol"))
+        .map(|e| (e.id, e.held || game.player.held == Some(e.id)))
+        .collect();
+    for (id, held) in ids {
+        if held {
+            idol_pickup(game, id);
+        } else {
+            let pos = game.world.entity(id).unwrap().pos;
+            let col_bot = game.world.solid_at(pos.x, pos.y + 5.);
+            game.world
+                .entity_mut(id)
+                .unwrap()
+                .data
+                .insert("colBot".into(), f64::from(col_bot));
+            idol_step(game, id);
         }
     }
 }
@@ -550,6 +752,245 @@ mod tests {
     }
 
     #[test]
+    fn actual_unsupported_altar_runs_every_destroy_body_and_defers_kali_alarm() {
+        for supported in [false, true] {
+            let mut level = crate::level::Level::default();
+            level.set_tile(6, 7, '@').unwrap();
+            for x in 0..40 {
+                level.set_tile(x, 8, '1').unwrap();
+            }
+            let mut game = Game::shell(17, RulesPreset::Classic);
+            game.load_custom(&level, "altar-destroy", "");
+            // Controlled arriving source objects; the player remains at its
+            // authored entrance and every event runs through Game.step.
+            let left = game.spawn("oSacAltarLeft", Vec2::new(64., 64.));
+            let right = game.spawn("oSacAltarRight", Vec2::new(80., 64.));
+            game.world.set_tile(6, 4, "oSacAltarLeft");
+            let head = game.spawn("oKaliHead", Vec2::new(96., 32.));
+            if supported {
+                for x in 4..=6 {
+                    game.world.set_tile(x, 5, "oBlock");
+                }
+            }
+            game.step(&crate::InputFrame::default());
+            if supported {
+                assert!(game.world.entity(left).is_some());
+                assert!(game.world.entity(right).is_some());
+                assert_eq!(game.data.get("favor"), None);
+                assert_eq!(game.world.entity(head).unwrap().alarms[0], -1);
+                continue;
+            }
+            assert!(game.world.entity(left).is_none());
+            assert!(game.world.entity(right).is_none());
+            assert!(game.world.tile(6, 4).unwrap().object.is_empty());
+            assert_eq!(game.data["favor"], -16.);
+            assert_eq!(game.data["kali_punish"], 1.);
+            assert_eq!(game.world.entity(head).unwrap().alarms[0], 1);
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| matches!(e.sprite.as_str(), "sRubbleTan" | "sRubbleTanSmall"))
+                    .count(),
+                9,
+                "all three altar Destroy bodies emit their three pieces"
+            );
+            assert!(!game.world.entities.iter().any(|e| e.object == "oSpider"));
+            game.step(&crate::InputFrame::default());
+            assert_eq!(game.world.entity(head).unwrap().alarms[0], 0);
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oSpider")
+                    .count(),
+                6
+            );
+            assert_eq!(game.data["favor"], -16.);
+            assert_eq!(game.data["kali_punish"], 1.);
+        }
+    }
+
+    #[test]
+    fn idol_pickup_events_keep_jungle_and_ice_triggers_but_clear_mines_and_temple() {
+        // Controlled source event entries verify the literal branch contract;
+        // this does not claim a naturally reachable repeated-pickup route.
+        for area in [
+            Area::Mines,
+            Area::Jungle,
+            Area::Ice,
+            Area::Temple,
+            Area::Boss,
+        ] {
+            let mut game = Game::shell(17, RulesPreset::Classic);
+            game.world.area = area;
+            let id = game.spawn("oGoldIdol", game.player.pos);
+            idol_pickup(&mut game, id);
+            let retained = matches!(area, Area::Jungle | Area::Ice);
+            assert_eq!(
+                game.world.entity(id).unwrap().value("trigger") != 0.,
+                retained,
+                "{area:?}"
+            );
+            idol_pickup(&mut game, id);
+            assert_eq!(
+                game.lifetime_stats.idols_grabbed,
+                if retained { 2 } else { 1 },
+                "{area:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn actual_supported_idol_pickup_counts_once_and_custom_room_excludes_pickup_counter() {
+        for custom in [false, true] {
+            let mut game = if custom {
+                let mut level = crate::level::Level::default();
+                level.set_tile(6, 7, '@').unwrap();
+                for x in 0..40 {
+                    level.set_tile(x, 8, '1').unwrap();
+                }
+                let mut game = Game::shell(17, RulesPreset::Classic);
+                game.load_custom(&level, "idol-pickup", "");
+                game
+            } else {
+                Game::new(42, RulesPreset::Classic)
+            };
+            for _ in 0..8 {
+                game.step(&crate::InputFrame::default());
+            }
+            let p = game.player.pos;
+            let id = game.spawn("oGoldIdol", Vec2::new(p.x, p.y + 4.));
+            game.step(&crate::InputFrame::default());
+            assert_eq!(game.world.entity(id).unwrap().value("colBot"), 1.);
+            game.step(&crate::InputFrame {
+                down: true,
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            assert_eq!(game.player.held, Some(id));
+            assert_eq!(game.lifetime_stats.idols_grabbed, u64::from(!custom));
+            assert_eq!(
+                game.world.entity(id).unwrap().value("trigger") != 0.,
+                custom
+            );
+        }
+    }
+
+    #[test]
+    fn actual_idol_pickup_runs_temple_destroy_and_jungle_source_delay() {
+        for area in [Area::Jungle, Area::Temple] {
+            for pick_up in [false, true] {
+                let mut level = crate::level::Level::default();
+                level.set_tile(6, 7, '@').unwrap();
+                for x in 0..40 {
+                    level.set_tile(x, 8, '1').unwrap();
+                }
+                let mut game = Game::shell(42, RulesPreset::Classic);
+                game.load_custom(&level, "idol-collapse", "");
+                for _ in 0..8 {
+                    game.step(&crate::InputFrame::default());
+                }
+                // Controlled source levelType and arriving items isolate the
+                // pickup branches; no claim of a natural campaign room route.
+                game.world.area = area;
+                game.flags.remove("custom");
+                game.flags.remove("custom_level");
+                let p = game.player.pos;
+                let idol = game.spawn("oGoldIdol", Vec2::new(p.x, p.y + 4.));
+                game.step(&crate::InputFrame::default());
+                assert_eq!(game.world.entity(idol).unwrap().value("colBot"), 1.);
+                game.step(&crate::InputFrame {
+                    down: true,
+                    ..Default::default()
+                });
+                let player_mask = game.player.sprite_bounds();
+                let right_edge = player_mask.x + player_mask.w - 1.;
+                let block = game.spawn("oTrapBlock", Vec2::new(p.x + 32., p.y - 8.));
+                game.world
+                    .entity_mut(block)
+                    .unwrap()
+                    .data
+                    .insert("deathTimer".into(), 2.);
+                let near_edge = game.spawn("oTrapBlock", Vec2::new(right_edge + 89., p.y - 8.));
+                // Keep the radius control away from fresh near-block rubble.
+                let far_edge = game.spawn("oTrapBlock", Vec2::new(player_mask.x - 105., p.y - 8.));
+                assert_eq!(
+                    crate::world_events::mask_distance(
+                        game.world.entity(far_edge).unwrap().sprite_bounds(),
+                        player_mask
+                    ),
+                    90.
+                );
+                let input = if pick_up {
+                    crate::InputFrame {
+                        down: true,
+                        attack: true,
+                        attack_pressed: true,
+                        ..Default::default()
+                    }
+                } else {
+                    crate::InputFrame::default()
+                };
+                game.step(&input);
+                if pick_up {
+                    assert_eq!(game.player.held, Some(idol));
+                    if area == Area::Jungle {
+                        assert!(game.world.entity(near_edge).is_none());
+                        assert_eq!(
+                            game.world
+                                .entities
+                                .iter()
+                                .filter(|e| matches!(
+                                    e.sprite.as_str(),
+                                    "sRubbleTan" | "sRubbleTanSmall"
+                                ))
+                                .count(),
+                            3,
+                            "zero-delay edge block emits its source rubble immediately"
+                        );
+                        let entity = game
+                            .world
+                            .entity(block)
+                            .expect("source delay keeps first tick alive");
+                        assert_eq!(entity.value("dying"), 1.);
+                        assert_eq!(entity.value("deathTimer"), 1.);
+                        game.step(&crate::InputFrame::default());
+                        assert_eq!(game.world.entity(block).unwrap().value("deathTimer"), 0.);
+                        game.step(&crate::InputFrame::default());
+                        assert!(game.events.iter().any(
+                            |e| matches!(e, GameEvent::Sound { name, .. } if name == "sndThump")
+                        ));
+                    }
+                    assert!(game.world.entity(block).is_none());
+                    assert!(game.world.entity(near_edge).is_none());
+                    assert_eq!(game.world.entity(far_edge).unwrap().value("dying"), 0.);
+                    assert_eq!(
+                        game.world
+                            .entities
+                            .iter()
+                            .filter(|e| matches!(
+                                e.sprite.as_str(),
+                                "sRubbleTan" | "sRubbleTanSmall"
+                            ))
+                            .count(),
+                        6,
+                        "{area:?}"
+                    );
+                } else {
+                    for _ in 0..3 {
+                        game.step(&crate::InputFrame::default());
+                    }
+                    let entity = game.world.entity(block).unwrap();
+                    assert_eq!(entity.value("dying"), 0.);
+                    assert_eq!(entity.value("deathTimer"), 2.);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn held_idol_triggers_once_without_moving_item() {
         let mut game = Game::shell(2, RulesPreset::Classic);
         let head = game.world.spawn("oGiantTikiHead", Vec2::new(100.0, 50.0));
@@ -557,7 +998,7 @@ mod tests {
         game.world.entity_mut(id).unwrap().held = true;
         tick(&mut game);
         tick(&mut game);
-        assert_eq!(game.world.entity(head).unwrap().value("idol_alarm"), 100.0);
+        assert_eq!(game.world.entity(head).unwrap().alarms[0], 100);
         assert_eq!(game.data["idols_grabbed"], 1.0);
         assert_eq!(game.world.entity(id).unwrap().pos, Vec2::new(100.0, 100.0));
     }
@@ -569,12 +1010,12 @@ mod tests {
         let idol = game.world.spawn("oGoldIdol", Vec2::new(100.0, 100.0));
         tick(&mut game);
         assert_eq!(game.data["idols_grabbed"], 1.0);
-        assert_eq!(game.world.entity(head).unwrap().value("idol_alarm"), 0.0);
+        assert_eq!(game.world.entity(head).unwrap().alarms[0], -1);
         assert_eq!(game.world.entity(idol).unwrap().value("trigger"), 0.0);
         game.world.entity_mut(idol).unwrap().held = true;
         tick(&mut game);
         assert_eq!(game.data["idols_grabbed"], 1.0);
-        assert_eq!(game.world.entity(head).unwrap().value("idol_alarm"), 0.0);
+        assert_eq!(game.world.entity(head).unwrap().alarms[0], -1);
     }
 
     #[test]

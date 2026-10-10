@@ -12,12 +12,13 @@ pub fn init_entity(entity: &mut Entity) {
     entity.data.insert("utility_initialized".into(), 1.0);
     let image_speed = match entity.object.as_str() {
         "oFlareCrate" => Some(0.2),
+        "oFlareSpark" => Some(0.4),
         // None of these Create events overrides GameMaker's default speed.
         "oTeleporter" | "oLampItem" | "oLampRedItem" | "oBasketball" | "oDice" => Some(1.0),
         _ => None,
     };
     if let Some(speed) = image_speed {
-        entity.data.entry("image_speed".into()).or_insert(speed);
+        entity.set_image_speed(speed);
     }
     let movement_bounds = match entity.object.as_str() {
         "oDice" => Some((-6.0, 0.0, 6.0, 8.0)),
@@ -142,7 +143,7 @@ pub fn use_utility(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
             origin.x - 4.0 + f64::from(game.rng.range(9)),
             origin.y - 4.0 + f64::from(game.rng.range(9)),
         );
-        let id = game.world.spawn("oFlareSpark", pos);
+        let id = game.spawn("oFlareSpark", pos);
         init_entity(game.world.entity_mut(id).unwrap());
     }
     game.player.pos = target;
@@ -180,15 +181,6 @@ pub fn use_utility(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
         enemy.alive = false;
     }
     game.sound("sndTeleport", target);
-    // oPlayer1's crushed check follows item use in the same Step event. The
-    // three retries can still leave the player embedded; invulnerability does
-    // not protect against that failure, and no additional destination search is
-    // permitted. The game controller owns final death/Ankh handling.
-    if solid_rect(game, Rect::new(target.x, target.y, 0.001, 0.001)) {
-        game.player.health -= 99;
-        game.player.vel.y = -3.0;
-        game.events.push(GameEvent::Damage { amount: 99 });
-    }
     true
 }
 
@@ -212,147 +204,169 @@ fn solid_rect(game: &Game, rect: Rect) -> bool {
     })
 }
 
-/// The trap subsystem owns idol pickup triggers and the once-only idol count.
+/// The trap subsystem owns the source idol pickup and Step producers.
 pub fn on_pickup(_game: &mut Game, _id: u64) {}
 
-/// Alarm 0 precedes the crate's own movement and held-item attachment. The
-/// host scheduler invokes this before item actions; the water Step stays below.
-pub fn pre_tick(game: &mut Game) {
-    let mut sparks = Vec::new();
-    for entity in &mut game.world.entities {
-        if !entity.alive || entity.object != "oFlareCrate" {
-            continue;
-        }
-        let remaining = entity.value("flare_spark_timer") - 1.0;
-        if remaining <= 0.0 {
-            sparks.push(Vec2::new(
-                entity.pos.x + f64::from(game.rng.range(4)) - f64::from(game.rng.range(4)),
-                entity.pos.y - 4.0 + f64::from(game.rng.range(4)) - f64::from(game.rng.range(4)),
-            ));
-            entity.data.insert("flare_spark_timer".into(), 2.0);
-        } else {
-            entity.data.insert("flare_spark_timer".into(), remaining);
-        }
+/// Utility object event families handled by this module. Generic oItem body
+/// movement is dispatched by the parent before these child Step handlers.
+pub(crate) fn handles(object: &str) -> bool {
+    matches!(
+        object,
+        "oFlareCrate"
+            | "oDice"
+            | "oBasketball"
+            | "oFlareSpark"
+            | "oTeleporter"
+            | "oLampItem"
+            | "oLampRedItem"
+    )
+}
+
+pub(crate) fn alarm(game: &mut Game, id: u64, alarm: u8) {
+    if alarm != 0 {
+        return;
     }
-    for pos in sparks {
-        let id = game.world.spawn("oFlareSpark", pos);
-        init_entity(game.world.entity_mut(id).unwrap());
+    let Some(origin) = game
+        .world
+        .entity(id)
+        .filter(|e| e.object == "oFlareCrate")
+        .map(|e| e.pos)
+    else {
+        return;
+    };
+    let pos = Vec2::new(
+        origin.x + f64::from(game.rng.range(4)) - f64::from(game.rng.range(4)),
+        origin.y - 4.0 + f64::from(game.rng.range(4)) - f64::from(game.rng.range(4)),
+    );
+    let spark = game.spawn("oFlareSpark", pos);
+    init_entity(game.world.entity_mut(spark).unwrap());
+    if let Some(entity) = game.world.entity_mut(id) {
+        entity.alarms[0] = 2;
     }
 }
 
-pub fn tick(game: &mut Game) {
-    for index in 0..game.world.entities.len() {
-        if !game.world.entities[index].alive {
-            continue;
-        }
-        init_entity(&mut game.world.entities[index]);
-        let mut entity = game.world.entities[index].clone();
-        match entity.object.as_str() {
-            "oFlareCrate" => {
-                let water = game
-                    .world
-                    .tile(
-                        (entity.pos.x / TILE_SIZE).floor() as i32,
-                        (entity.pos.y / TILE_SIZE).floor() as i32,
-                    )
-                    .is_some_and(|tile| crate::catalog::is_a(&tile.object, "oWater"))
-                    || game.world.entities.iter().any(|water| {
-                        water.alive
-                            && crate::catalog::is_a(&water.object, "oWater")
-                            && water.sprite_bounds().contains(entity.pos)
-                    });
-                if water {
-                    game.world.spawn("oSplash", entity.pos);
-                    game.world.spawn("oPoof", entity.pos);
-                    game.sound("sndSplash", entity.pos);
-                    entity.alive = false;
-                    entity.held = false;
-                    if game.player.held == Some(entity.id) {
-                        game.player.held = None;
-                    }
+pub(crate) fn animation_end(game: &mut Game, id: u64) {
+    if let Some(entity) = game.world.entity_mut(id)
+        && entity.object == "oFlareSpark"
+    {
+        entity.alive = false;
+    }
+}
+
+pub(crate) fn builtin_motion(_game: &mut Game, _id: u64) {}
+
+pub(crate) fn collision(_game: &mut Game, _id: u64, _other: crate::dispatcher::Instance) {}
+
+// Retained for callers migrating to the source dispatcher; alarm countdowns
+// belong exclusively to its outer alarm-number pass.
+pub fn pre_tick(_game: &mut Game) {}
+
+pub(crate) fn step_instance(game: &mut Game, id: u64) {
+    let Some(index) = game
+        .world
+        .entities
+        .iter()
+        .position(|e| e.id == id && e.alive)
+    else {
+        return;
+    };
+    if !handles(&game.world.entities[index].object) {
+        return;
+    }
+    init_entity(&mut game.world.entities[index]);
+    let mut entity = game.world.entities[index].clone();
+    match entity.object.as_str() {
+        "oFlareCrate" => {
+            let water = game
+                .world
+                .tile(
+                    (entity.pos.x / TILE_SIZE).floor() as i32,
+                    (entity.pos.y / TILE_SIZE).floor() as i32,
+                )
+                .is_some_and(|tile| crate::catalog::is_a(&tile.object, "oWater"))
+                || game.world.entities.iter().any(|water| {
+                    water.alive
+                        && crate::catalog::is_a(&water.object, "oWater")
+                        && water.sprite_bounds().contains(entity.pos)
+                });
+            if water {
+                game.spawn("oSplash", entity.pos);
+                game.spawn("oPoof", entity.pos);
+                game.sound("sndSplash", entity.pos);
+                entity.alive = false;
+                entity.held = false;
+                if game.player.held == Some(entity.id) {
+                    game.player.held = None;
                 }
             }
-            "oDice" => {
-                if entity.value("value") == 0.0 {
-                    // Compatibility for directly authored/test instances;
-                    // generated dice have already run Create synchronously.
-                    initialize_dice(&mut game.rng, &mut entity);
+        }
+        "oDice" => {
+            if entity.value("value") == 0.0 {
+                // Compatibility for directly authored/test instances;
+                // generated dice have already run Create synchronously.
+                initialize_dice(&mut game.rng, &mut entity);
+            }
+            if entity.vel.x.abs() > 2.0 || entity.vel.y.abs() > 2.0 {
+                crate::animation::assign(&mut entity.sprite, &mut entity.animation, "sDiceRoll");
+                entity
+                    .data
+                    .insert("value".into(), f64::from(1 + game.rng.range(6)));
+                if game.player.data.get("bet").copied().unwrap_or(0.0) > 0.0 {
+                    entity.data.insert("rolling".into(), 1.0);
                 }
-                if entity.vel.x.abs() > 2.0 || entity.vel.y.abs() > 2.0 {
-                    entity.sprite = "sDiceRoll".into();
-                    entity
-                        .data
-                        .insert("value".into(), f64::from(1 + game.rng.range(6)));
-                    if game.player.data.get("bet").copied().unwrap_or(0.0) > 0.0 {
-                        entity.data.insert("rolling".into(), 1.0);
-                    }
-                } else {
-                    // isCollisionBottom(1) is a single line at bb, not a
-                    // translated body that can also hit an adjacent wall.
-                    let below = Rect::new(
-                        (entity.pos.x + entity.value("bboxLeft")).round_ties_even(),
-                        (entity.pos.y + entity.value("bboxBottom")).round_ties_even(),
-                        entity.value("bboxRight") - entity.value("bboxLeft"),
-                        1.0,
-                    );
-                    if super::solid_edge(&game.world, below, entity.id) {
-                        entity.sprite = format!("sDice{}", entity.value("value") as u32);
-                        if entity.value("rolling") != 0.0 && entity.vel.y == 0.0 {
-                            if entity.value("rolled") != 0.0 {
-                                game.flags.insert("shopkeepers_angry".into());
-                            }
-                            entity.data.insert("rolled".into(), 1.0);
-                            entity.data.insert("rolling".into(), 0.0);
+            } else {
+                // isCollisionBottom(1) is a single line at bb, not a
+                // translated body that can also hit an adjacent wall.
+                let below = Rect::new(
+                    (entity.pos.x + entity.value("bboxLeft")).round_ties_even(),
+                    (entity.pos.y + entity.value("bboxBottom")).round_ties_even(),
+                    entity.value("bboxRight") - entity.value("bboxLeft"),
+                    1.0,
+                );
+                if super::solid_edge(&game.world, below, entity.id) {
+                    let sprite = format!("sDice{}", entity.value("value") as u32);
+                    crate::animation::assign(&mut entity.sprite, &mut entity.animation, &sprite);
+                    if entity.value("rolling") != 0.0 && entity.vel.y == 0.0 {
+                        if entity.value("rolled") != 0.0 {
+                            game.flags.insert("shopkeepers_angry".into());
                         }
+                        entity.data.insert("rolled".into(), 1.0);
+                        entity.data.insert("rolling".into(), 0.0);
                     }
                 }
             }
-            "oBasketball" => {
-                entity.sprite =
-                    if entity.held && game.world.solid_at(entity.pos.x, entity.pos.y + 6.0) {
-                        "sDribble"
-                    } else {
-                        "sBasketball"
-                    }
-                    .into();
-            }
-            "oFlareSpark" => {
-                entity.pos.y += entity.vel.y;
-                entity.animation += 0.4;
-                // Five source frames at image_speed .4, destroyed on animation
-                // end or collision. No acceleration is applied by Step.
-                if entity.animation >= 5.0
-                    || solid_rect(game, Rect::new(entity.pos.x, entity.pos.y, 0.001, 0.001))
-                {
-                    entity.alive = false;
-                }
-            }
-            _ => {}
         }
-        if entity.alive
-            && matches!(
-                entity.object.as_str(),
-                "oFlareCrate"
-                    | "oTeleporter"
-                    | "oLampItem"
-                    | "oLampRedItem"
-                    | "oBasketball"
-                    | "oDice"
-            )
-        {
-            // Automatic image advancement is independent of the parent Step's
-            // view gate and of rendering frequency. Sprite selection above
-            // retains image_index, then the current sprite wraps its frames.
-            let frames = match entity.sprite.as_str() {
-                "sFlareCrate" | "sLampItem" | "sLampRedItem" | "sDribble" => 3.0,
-                "sTeleporter" => 16.0,
-                "sDiceRoll" => 6.0,
-                // Basketball and each settled dice face have one frame.
-                _ => 1.0,
+        "oBasketball" => {
+            let sprite = if entity.held && game.world.solid_at(entity.pos.x, entity.pos.y + 6.0) {
+                "sDribble"
+            } else {
+                "sBasketball"
             };
-            entity.animation = (entity.animation + entity.value("image_speed")).rem_euclid(frames);
+            crate::animation::assign(&mut entity.sprite, &mut entity.animation, sprite);
         }
-        game.world.entities[index] = entity;
+        "oFlareSpark" => {
+            entity.pos.y += entity.vel.y;
+            // Animation End is dispatched by the shared endframe pass.
+            if solid_rect(game, Rect::new(entity.pos.x, entity.pos.y, 0.001, 0.001)) {
+                entity.alive = false;
+            }
+        }
+        _ => {}
+    }
+    game.world.entities[index] = entity;
+}
+
+/// Compatibility batch wrapper; production dispatches one source instance.
+pub fn tick(game: &mut Game) {
+    let ids: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|e| e.alive && handles(&e.object))
+        .map(|e| e.id)
+        .collect();
+    for id in ids {
+        step_instance(game, id);
     }
 }
 
@@ -363,7 +377,7 @@ mod tests {
     fn held_teleporter(seed: u64) -> (Game, u64) {
         let mut game = Game::shell(seed, RulesPreset::Classic);
         game.player.pos = Vec2::new(160.0, 160.0);
-        let id = game.world.spawn("oTeleporter", game.player.pos);
+        let id = game.spawn("oTeleporter", game.player.pos);
         game.world.entity_mut(id).unwrap().held = true;
         game.player.held = Some(id);
         (game, id)
@@ -407,7 +421,7 @@ mod tests {
             }
             // Beyond the parent's view+16 movement gate but still inside
             // oLevel's wider view+96 active-instance region.
-            let id = game.world.spawn(object, Vec2::new(360.0, 144.0));
+            let id = game.spawn(object, Vec2::new(360.0, 144.0));
             for tick in 1..=30 {
                 game.step(&InputFrame::default());
                 let entity = game.world.entity(id).unwrap();
@@ -425,7 +439,7 @@ mod tests {
     #[test]
     fn rolling_dice_and_held_dribble_use_the_current_sprite_frame_count() {
         let mut game = Game::shell(7, RulesPreset::Classic);
-        let die = game.world.spawn("oDice", Vec2::new(96.0, 64.0));
+        let die = game.spawn("oDice", Vec2::new(96.0, 64.0));
         game.world.entity_mut(die).unwrap().vel.x = 4.0;
         for tick in 1..=10 {
             game.step(&InputFrame::default());
@@ -441,7 +455,7 @@ mod tests {
         game.player.pos = Vec2::new(104.0, 152.0);
         game.player.state = PlayerState::Standing;
         game.player.grounded = true;
-        let ball = game.world.spawn("oBasketball", game.player.pos);
+        let ball = game.spawn("oBasketball", game.player.pos);
         game.world.entity_mut(ball).unwrap().held = true;
         game.player.held = Some(ball);
         for tick in 1..=7 {
@@ -455,7 +469,7 @@ mod tests {
     #[test]
     fn flare_crate_emits_on_first_step_then_every_other_step() {
         let mut game = Game::shell(7, RulesPreset::Classic);
-        let id = game.world.spawn("oFlareCrate", Vec2::new(96.0, 64.0));
+        let id = game.spawn("oFlareCrate", Vec2::new(96.0, 64.0));
         let mut counts = Vec::new();
         for _ in 0..6 {
             game.step(&InputFrame::default());
@@ -474,7 +488,7 @@ mod tests {
     #[test]
     fn flare_crate_alarm_emits_before_the_crate_moves() {
         let mut game = Game::shell(7, RulesPreset::Classic);
-        let id = game.world.spawn("oFlareCrate", Vec2::new(96.0, 64.0));
+        let id = game.spawn("oFlareCrate", Vec2::new(96.0, 64.0));
         game.world.entity_mut(id).unwrap().vel.x = 20.0;
         game.step(&InputFrame::default());
         assert_eq!(game.world.entity(id).unwrap().pos.x, 116.0);
@@ -492,7 +506,7 @@ mod tests {
         for water in ["oWater", "oWaterSwim"] {
             let mut game = Game::shell(7, RulesPreset::Classic);
             game.world.set_tile(2, 2, water);
-            let id = game.world.spawn("oFlareCrate", game.player.pos);
+            let id = game.spawn("oFlareCrate", game.player.pos);
             game.world.entity_mut(id).unwrap().held = true;
             game.player.held = Some(id);
             game.step(&InputFrame::default());
@@ -513,7 +527,7 @@ mod tests {
             for x in 0..game.world.width {
                 game.world.set_tile(x, 6, "oBlock");
             }
-            let id = game.world.spawn(object, Vec2::new(104.0, 72.0));
+            let id = game.spawn(object, Vec2::new(104.0, 72.0));
             for _ in 0..100 {
                 game.step(&InputFrame::default());
             }
@@ -527,7 +541,7 @@ mod tests {
     fn unsupported_die_cannot_finish_a_roll_against_a_side_wall() {
         let mut game = Game::shell(7, RulesPreset::Classic);
         game.world.set_tile(6, 5, "oBlock");
-        let id = game.world.spawn("oDice", Vec2::new(91.0, 88.0));
+        let id = game.spawn("oDice", Vec2::new(91.0, 88.0));
         let die = game.world.entity_mut(id).unwrap();
         die.sprite = "sDiceRoll".into();
         die.data.insert("value".into(), 3.0);
@@ -600,8 +614,9 @@ mod tests {
         }
         use_utility(&mut game, id, &InputFrame::default());
         assert_eq!(game.player.pos, Vec2::new(160.0 + distance, 112.0));
-        assert_eq!(game.player.health, -95);
-        assert!(game.events.contains(&GameEvent::Damage { amount: 99 }));
+        // Item use itself does not run the later Player Hurt block.
+        assert_eq!(game.player.health, 4);
+        assert!(!game.events.contains(&GameEvent::Damage { amount: 99 }));
     }
 
     #[test]
@@ -609,13 +624,13 @@ mod tests {
         let (mut game, id) = held_teleporter(11);
         let distance = 16.0 * f64::from(4 + game.rng.clone().range(5));
         let pos = Vec2::new(160.0 + distance, 160.0);
-        let snake = game.world.spawn("oSnake", pos);
+        let snake = game.spawn("oSnake", pos);
         game.world
             .entity_mut(snake)
             .unwrap()
             .data
             .insert("invincible".into(), 1.0);
-        let second = game.world.spawn("oSnake", pos);
+        let second = game.spawn("oSnake", pos);
         use_utility(&mut game, id, &InputFrame::default());
         assert!(game.world.entity(snake).is_none());
         assert!(game.world.entity(second).is_some());
@@ -719,9 +734,9 @@ mod tests {
     #[test]
     fn utility_defaults_follow_source_and_dice_faces_are_seeded() {
         let mut game = Game::shell(7, RulesPreset::Classic);
-        let ball = game.world.spawn("oBasketball", Vec2::new(80.0, 80.0));
-        let die = game.world.spawn("oDice", Vec2::new(80.0, 80.0));
-        let lamp = game.world.spawn("oLampItem", Vec2::new(80.0, 80.0));
+        let ball = game.spawn("oBasketball", Vec2::new(80.0, 80.0));
+        let die = game.spawn("oDice", Vec2::new(80.0, 80.0));
+        let lamp = game.spawn("oLampItem", Vec2::new(80.0, 80.0));
         tick(&mut game);
         assert_eq!(game.world.entity(ball).unwrap().value("bounceFactor"), 0.7);
         assert_eq!(
@@ -752,19 +767,19 @@ mod tests {
             .map(|e| (e.id, e.pos))
             .collect();
         assert_eq!(sparks.len(), 3);
-        tick(&mut game);
+        game.step(&InputFrame::default());
         for (id, origin) in &sparks {
             assert!((game.world.entity(*id).unwrap().pos.y - (origin.y - 0.1)).abs() < 1e-8);
         }
         for _ in 1..12 {
-            tick(&mut game);
+            game.step(&InputFrame::default());
         }
         assert!(
             sparks
                 .iter()
                 .all(|(id, _)| game.world.entity(*id).is_some())
         );
-        tick(&mut game);
+        game.step(&InputFrame::default());
         assert!(
             sparks
                 .iter()

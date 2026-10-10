@@ -93,10 +93,16 @@ fn spawn(world: &mut World, name: &str, x: i32, y: i32) {
         "oPiranha" | "oDeadFish" => Vec2::new(4.0, 4.0),
         _ => Vec2::default(),
     };
-    world.spawn(
+    let id = world.spawn(
         name,
         Vec2::new(x as f64 * 16.0 + offset.x, y as f64 * 16.0 + offset.y),
     );
+    if name == "oDamsel" {
+        // scrTreasureGen clears the price after the Damsel Create event.
+        let damsel = world.entity_mut(id).unwrap();
+        damsel.data.insert("cost".into(), 0.0);
+        damsel.data.insert("for_sale".into(), 0.0);
+    }
 }
 fn exists(world: &World, name: &str) -> bool {
     world.entities.iter().any(|e| e.alive && e.object == name)

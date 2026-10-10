@@ -1,6 +1,8 @@
 //! Shop policy from scrShopkeeperAnger, oItem Step and oPlayer1 Step.
 //! Original shop membership is a 160×128 room, not distance to the keeper.
-use crate::model::{Game, GameEvent, InputFrame, Rect, RunState, Vec2};
+use crate::enemies::shop_dialogue::say;
+use crate::model::{Entity, Game, InputFrame, Rect, RunState, Vec2};
+use crate::statistics::{LifetimeCounter, is_real_level};
 
 fn room(pos: Vec2) -> (i32, i32) {
     (
@@ -11,7 +13,7 @@ fn room(pos: Vec2) -> (i32, i32) {
 fn in_shop(game: &Game, pos: Vec2) -> bool {
     game.world.entities.iter().any(|e| {
         e.alive
-            && e.object == "oShopkeeper"
+            && crate::catalog::is_a(&e.object, "oShopkeeper")
             && (
                 e.data
                     .get("shop_room_x")
@@ -29,9 +31,10 @@ fn rect_distance(a: Rect, b: Rect) -> f64 {
     let y = (a.y - b.y - b.h + 1.).max(b.y - a.y - a.h + 1.).max(0.);
     x.hypot(y)
 }
-fn count(game: &mut Game, key: &str) {
-    if !game.flags.contains("custom_level") && !game.flags.contains("tutorial") {
+fn count(game: &mut Game, key: &str, counter: LifetimeCounter) {
+    if is_real_level(game) {
         *game.data.entry(key.into()).or_default() += 1.;
+        game.lifetime_stats.increment(counter);
     }
 }
 
@@ -42,7 +45,7 @@ pub fn anger(game: &mut Game, pos: Vec2, reason: &str) {
         .entities
         .iter()
         .enumerate()
-        .filter(|(_, e)| e.alive && e.health > 0 && e.object == "oShopkeeper")
+        .filter(|(_, e)| e.alive && e.health > 0 && crate::catalog::is_a(&e.object, "oShopkeeper"))
         .min_by(|(_, a), (_, b)| a.pos.distance(pos).total_cmp(&b.pos.distance(pos)))
         .map(|(i, _)| i);
     let Some(index) = nearest else {
@@ -58,12 +61,12 @@ pub fn anger(game: &mut Game, pos: Vec2, reason: &str) {
     let thief = game.data.entry("thiefLevel".into()).or_default();
     *thief += if *thief > 0. { 3. } else { 2. };
     game.flags.insert("wanted".into());
-    game.events
-        .push(GameEvent::Message(if game.flags.contains("murderer") {
-            "YOU'LL PAY FOR YOUR CRIMES!".into()
-        } else {
-            reason.into()
-        }));
+    let message = if game.flags.contains("murderer") {
+        "YOU'LL PAY FOR YOUR CRIMES!"
+    } else {
+        reason
+    };
+    say(game, message, "", 80);
 }
 
 fn clear_sale(game: &mut Game, id: u64) {
@@ -82,9 +85,11 @@ fn acquire_sale_damsel(game: &mut Game, id: u64) -> bool {
         return false;
     }
     *game.data.entry("damselsBought".into()).or_default() += 1.;
+    // scrStealItem tracks Damsel acquisition without an isRealLevel gate.
+    game.lifetime_stats
+        .increment(LifetimeCounter::DamselsBought);
     game.sound("sndPickup", game.player.pos);
-    game.events
-        .push(GameEvent::Message("YOU MUST BE IN LOVE!".into()));
+    say(game, "YOU MUST BE IN LOVE!", "", 120);
     true
 }
 
@@ -92,7 +97,7 @@ fn craps_keeper(game: &Game) -> bool {
     game.world.entities.iter().any(|e| {
         e.alive
             && e.health > 0
-            && e.object == "oShopkeeper"
+            && crate::catalog::is_a(&e.object, "oShopkeeper")
             && e.text.get("style").is_some_and(|style| style == "Craps")
             && (
                 e.data
@@ -132,15 +137,7 @@ fn high_end_prize(game: &mut Game) -> &'static str {
 
 fn settle_dice(game: &mut Game) {
     let bet = game.player.data.get("bet").copied().unwrap_or(0.);
-    if bet <= 0.
-        || !game.world.entities.iter().any(|e| {
-            e.alive
-                && e.health > 0
-                && e.object == "oShopkeeper"
-                && e.text.get("style").is_some_and(|style| style == "Craps")
-                && e.state == 0
-        })
-    {
+    if bet <= 0. {
         return;
     }
     let dice: Vec<_> = game
@@ -155,7 +152,7 @@ fn settle_dice(game: &mut Game) {
     }
     let total = dice.iter().map(|(_, _, value)| *value as u32).sum::<u32>();
     if total == 7 {
-        count(game, "diceGamesWon");
+        count(game, "diceGamesWon", LifetimeCounter::DiceGamesWon);
         let prizes: Vec<_> = game
             .world
             .entities
@@ -177,28 +174,110 @@ fn settle_dice(game: &mut Game) {
                 .data
                 .insert("inDiceHouse".into(), 1.);
         }
-        game.events.push(GameEvent::Message(
-            "YOU ROLLED A SEVEN! YOU WIN A PRIZE!".into(),
-        ));
+        say(game, "YOU ROLLED A SEVEN!", "YOU WIN A PRIZE!", 200);
     } else if total > 7 {
-        count(game, "diceGamesWon");
+        count(game, "diceGamesWon", LifetimeCounter::DiceGamesWon);
         *game.data.entry("collect".into()).or_default() += bet * 2.;
         let counter = game.data.entry("collectCounter".into()).or_default();
         *counter = (*counter + 20.).min(100.);
-        game.events.push(GameEvent::Message(format!(
-            "YOU ROLLED A {total}! CONGRATULATIONS! YOU WIN!"
-        )));
+        say(
+            game,
+            format!("YOU ROLLED A {total}!"),
+            "CONGRATULATIONS! YOU WIN!",
+            200,
+        );
     } else {
-        count(game, "diceGamesLost");
-        game.events.push(GameEvent::Message(format!(
-            "YOU ROLLED A {total}! I'M SORRY, BUT YOU LOSE!"
-        )));
+        count(game, "diceGamesLost", LifetimeCounter::DiceGamesLost);
+        say(
+            game,
+            format!("YOU ROLLED A {total}!"),
+            "I'M SORRY, BUT YOU LOSE!",
+            200,
+        );
     }
     game.player.data.insert("bet".into(), 0.);
     for (id, _, _) in dice {
         if let Some(die) = game.world.entity_mut(id) {
             die.data.insert("rolled".into(), 0.);
         }
+    }
+}
+
+pub(crate) fn keeper_step(game: &mut Game, keeper: &Entity) {
+    if keeper.alive
+        && keeper.health > 0
+        && keeper.state == 0
+        && keeper
+            .text
+            .get("style")
+            .is_some_and(|style| style == "Craps")
+    {
+        settle_dice(game);
+    }
+}
+
+/// oItem's inherited Step checks its pre-attachment position and camera gate.
+pub(crate) fn item_step(game: &mut Game, item: &mut Entity) {
+    if !(item.pos.x > game.camera.x - 16.
+        && item.pos.x < game.camera.x + 336.
+        && item.pos.y > game.camera.y - 16.
+        && item.pos.y < game.camera.y + 256.)
+        && item.object != "oRope"
+        && item.object != "oRopeThrow"
+    {
+        return;
+    }
+    let keeper_exists = game
+        .world
+        .entities
+        .iter()
+        .any(|keeper| keeper.alive && crate::catalog::is_a(&keeper.object, "oShopkeeper"));
+    let wanted =
+        game.flags.contains("murderer") || game.data.get("thiefLevel").copied().unwrap_or(0.) > 0.;
+    if (!keeper_exists || wanted) && item.value("cost") > 0. {
+        count(game, "itemsStolen", LifetimeCounter::ItemsStolen);
+        item.data.insert("cost".into(), 0.);
+        item.data.insert("forSale".into(), 0.);
+    }
+    if game.is_level() {
+        if item.value("cost") > 0. && item.value("forSale") > 0. && !in_shop(game, item.pos) {
+            count(game, "itemsStolen", LifetimeCounter::ItemsStolen);
+            anger(game, item.pos, "COME BACK HERE, THIEF!");
+            item.data.insert("cost".into(), 0.);
+        }
+    } else {
+        item.data.insert("cost".into(), 0.);
+    }
+}
+
+/// Player Step580 runs before doors and its later inventory/pay actions.
+pub(crate) fn player_held_step(game: &mut Game) {
+    let Some(id) = game.player.held else {
+        return;
+    };
+    if !game
+        .world
+        .entity(id)
+        .is_some_and(|item| item.value("cost") > 0.)
+    {
+        return;
+    }
+    if game.is_level() && in_shop(game, game.player.pos) {
+        return;
+    }
+    let damsel = acquire_sale_damsel(game, id);
+    clear_sale(game, id);
+    if game.is_level()
+        && game
+            .world
+            .entities
+            .iter()
+            .any(|keeper| keeper.alive && crate::catalog::is_a(&keeper.object, "oShopkeeper"))
+    {
+        anger(game, game.player.pos, "COME BACK HERE, THIEF!");
+    }
+    if !damsel {
+        crate::items::collectibles::grant(game, id);
     }
 }
 
@@ -209,7 +288,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     // Source membership uses immutable roomPath entries, not the keeper's
     // following/patrol position. Retain each keeper's original shop room.
     for keeper in &mut game.world.entities {
-        if keeper.object == "oShopkeeper" {
+        if crate::catalog::is_a(&keeper.object, "oShopkeeper") {
             let (x, y) = room(keeper.pos);
             keeper
                 .data
@@ -221,14 +300,24 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
                 .or_insert(f64::from(y));
         }
     }
-    settle_dice(game);
+    if game.world.entities.iter().any(|keeper| {
+        keeper.alive
+            && keeper.health > 0
+            && keeper.state == 0
+            && keeper
+                .text
+                .get("style")
+                .is_some_and(|style| style == "Craps")
+    }) {
+        settle_dice(game);
+    }
     // A keeper struck by another subsystem reports anger through its state.
     let assaults: Vec<Vec2> = game
         .world
         .entities
         .iter()
         .filter(|e| {
-            e.object == "oShopkeeper"
+            crate::catalog::is_a(&e.object, "oShopkeeper")
                 && e.alive
                 && e.value("angered") == 0.
                 && (e.value("angry") > 0. || e.value("assaulted") > 0.)
@@ -245,7 +334,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         .world
         .entities
         .iter()
-        .any(|e| e.object == "oShopkeeper" && e.value("killed_by_player") > 0.)
+        .any(|e| crate::catalog::is_a(&e.object, "oShopkeeper") && e.value("killed_by_player") > 0.)
     {
         game.flags.insert("murderer".into());
         game.flags.insert("wanted".into());
@@ -256,7 +345,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         .world
         .entities
         .iter()
-        .any(|e| e.alive && e.health > 0 && e.object == "oShopkeeper");
+        .any(|e| e.alive && e.health > 0 && crate::catalog::is_a(&e.object, "oShopkeeper"));
     let stock: Vec<_> = game
         .world
         .entities
@@ -280,11 +369,11 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         }
         if wanted || !keepers_exist {
             clear_sale(game, id);
-            count(game, "itemsStolen");
+            count(game, "itemsStolen", LifetimeCounter::ItemsStolen);
         } else if !in_shop(game, pos) {
             anger(game, pos, "COME BACK HERE, THIEF!");
             clear_sale(game, id);
-            count(game, "itemsStolen");
+            count(game, "itemsStolen", LifetimeCounter::ItemsStolen);
         }
     }
     if let Some(id) = game.player.held {
@@ -296,9 +385,17 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             crate::items::collectibles::grant(game, id);
         }
     }
+    player_pay_step(game, input);
+}
+
+/// Player Step1400, after inventory actions and before its hurt block.
+pub(crate) fn player_pay_step(game: &mut Game, input: &InputFrame) {
+    let wanted =
+        game.flags.contains("murderer") || game.data.get("thiefLevel").copied().unwrap_or(0.) > 0.;
     if !input.pay_pressed
+        || !game.is_level()
+        || game.player.data.get("active").copied().unwrap_or(1.) == 0.
         || game.state == RunState::Dead
-        || game.player.health <= 0
         || game.player.state == crate::model::PlayerState::Dead
         || game.player.is_stunned()
         || !in_shop(game, game.player.pos)
@@ -318,18 +415,18 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
                 item.held = false;
             }
             game.player.held = None;
-            game.events
-                .push(GameEvent::Message("YOU HAVEN'T GOT ENOUGH MONEY!".into()));
+            say(game, "YOU HAVEN'T GOT ENOUGH MONEY!", "", 80);
             return;
         }
         if price > 0 {
             let damsel = acquire_sale_damsel(game, id);
             game.player.money -= price;
             clear_sale(game, id);
-            count(game, "itemsBought");
+            count(game, "itemsBought", LifetimeCounter::ItemsBought);
             if !damsel {
                 crate::items::collectibles::grant(game, id);
             }
+            game.data.insert("message_timer".into(), 80.);
             return;
         }
     }
@@ -340,26 +437,21 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         let bet = game.player.data.get("bet").copied().unwrap_or(0.);
         let cost = 1000_u32.saturating_add(game.world.level.saturating_mul(500));
         if bet > 0. {
-            game.events.push(GameEvent::Message(
-                "ONE BET AT A TIME! PLEASE ROLL THE DICE!".into(),
-            ));
+            say(game, "ONE BET AT A TIME!", "PLEASE ROLL THE DICE!", 200);
         } else if game.player.money >= cost {
             game.player.money -= cost;
             game.player.data.insert("bet".into(), cost as f64);
-            count(game, "diceGamesPlayed");
-            game.events.push(GameEvent::Message(format!(
-                "YOU BET ${cost}! NOW ROLL THE DICE!"
-            )));
+            count(game, "diceGamesPlayed", LifetimeCounter::DiceGamesPlayed);
+            say(game, format!("YOU BET ${cost}!"), "NOW ROLL THE DICE!", 200);
         } else {
-            game.events
-                .push(GameEvent::Message(format!("YOU NEED ${cost} TO BET!")));
+            say(game, format!("YOU NEED ${cost} TO BET!"), "", 200);
         }
         return;
     }
     if !game.world.entities.iter().any(|keeper| {
         keeper.alive
             && keeper.health > 0
-            && keeper.object == "oShopkeeper"
+            && crate::catalog::is_a(&keeper.object, "oShopkeeper")
             && keeper
                 .text
                 .get("style")
@@ -392,7 +484,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         if game.player.money >= cost {
             game.player.money -= cost;
             game.player.health += 1;
-            count(game, "kissesBought");
+            count(game, "kissesBought", LifetimeCounter::KissesBought);
             let damsel_character = game.flags.contains("character_damsel");
             let damsel = game.world.entity_mut(id).expect("kiss target");
             damsel.state = 6;
@@ -404,17 +496,23 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             }
             .into();
             // The NPC animation emits sndKiss and the heart at frame 7.
-            game.events.push(GameEvent::Message(
+            say(
+                game,
                 if damsel_character {
                     "NOW AIN'T HE SWEET!"
                 } else {
                     "NOW AIN'T SHE SWEET!"
-                }
-                .into(),
-            ));
+                },
+                "",
+                200,
+            );
         } else {
-            game.events
-                .push(GameEvent::Message(format!("YOU NEED ${cost}!")));
+            say(
+                game,
+                format!("YOU NEED ${cost}!"),
+                "GET OUTTA HERE, DEADBEAT!",
+                200,
+            );
         }
     }
 }
@@ -422,7 +520,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{RulesPreset, Vec2};
+    use crate::model::{GameEvent, RulesPreset, Vec2};
     fn shop() -> (Game, u64) {
         let mut game = Game::shell(1, RulesPreset::Classic);
         game.player.pos = Vec2::new(40., 40.);
@@ -526,6 +624,9 @@ mod tests {
         assert_eq!(g.data["collect"], 3000.);
         assert_eq!(g.player.data["bet"], 0.);
         assert_eq!(g.data["diceGamesWon"], 1.);
+        assert_eq!(g.lifetime_stats.dice_games_won, 1);
+        tick(&mut g, &InputFrame::default());
+        assert_eq!(g.lifetime_stats.dice_games_won, 1);
     }
     #[test]
     fn dice_seven_releases_prize_and_replenishes_display() {
@@ -640,9 +741,11 @@ mod tests {
         assert_eq!(g.player.held, Some(id));
         assert_eq!(g.data["damselsBought"], 1.);
         assert_eq!(g.data["itemsBought"], 1.);
+        assert_eq!(g.lifetime_stats.items_bought, 1);
+        assert_eq!(g.lifetime_stats.damsels_bought, 1);
         assert_eq!(g.world.entity(id).unwrap().value("cost"), 0.);
         assert!(g.events.iter().any(|event| matches!(event,
-            GameEvent::Message(message) if message == "YOU MUST BE IN LOVE!")));
+            GameEvent::Dialogue(message) if message.first == "YOU MUST BE IN LOVE!" && message.second.is_empty() && message.ticks == 120)));
     }
 
     #[test]
@@ -658,6 +761,7 @@ mod tests {
             });
             assert_eq!(g.player.health, expected_health, "shop style {style}");
             if style == "Kissing" {
+                assert_eq!(g.lifetime_stats.kisses_bought, 1);
                 assert_eq!(g.world.entity(id).unwrap().state, 6);
                 assert_eq!(g.world.entity(id).unwrap().sprite, "sDamselKissL");
                 assert!(
@@ -681,6 +785,7 @@ mod tests {
         });
         assert_eq!(g.player.bombs, 7);
         assert!(!g.data.contains_key("itemsBought"));
+        assert_eq!(g.lifetime_stats.items_bought, 0);
     }
 
     #[test]
