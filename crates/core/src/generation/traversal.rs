@@ -57,22 +57,26 @@ fn traverse(seed: u64, level: u32, actions: &[u8]) {
 
 #[test]
 fn generated_mines_are_traversed_from_the_entrance_with_ordinary_jumps() {
+    // Recorded controller route through the source-ordered seed-zero layout.
     traverse(
         0,
         1,
         &[
-            2, 3, 1, 3, 0, 1, 2, 2, 1, 1, 1, 1, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1,
+            6, 7, 9, 3, 3, 1, 1, 1, 1, 0, 2, 9, 6, 1, 1, 1, 1, 1, 0, 9, 3, 2, 2, 1, 9, 1, 1, 1, 3,
+            2, 0, 2, 1, 2, 1, 9, 7, 1, 2, 1, 0, 1, 1, 1, 3, 3, 1, 2, 9, 1,
         ],
     );
 }
 
 #[test]
 fn generated_ice_islands_are_traversed_without_an_artificial_bottom_floor() {
+    // Recorded controller route through the source-ordered seed-zero layout.
     traverse(
         0,
         9,
         &[
-            1, 3, 3, 9, 1, 2, 0, 0, 1, 0, 2, 1, 1, 3, 9, 3, 1, 1, 3, 1, 1, 9, 1, 5, 1, 3, 2,
+            6, 3, 1, 1, 1, 1, 0, 1, 0, 1, 0, 2, 2, 2, 4, 1, 3, 1, 9, 3, 3, 1, 0, 0, 3, 1, 1, 1, 3,
+            3, 9, 6, 2, 2,
         ],
     );
 }

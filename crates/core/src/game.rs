@@ -643,7 +643,10 @@ mod tests {
                     for x in 0..level::LEVEL_WIDTH {
                         first.set_tile(x, 8, '1').unwrap();
                     }
-                    let mut game = Game::shell(7, rules);
+                    // This seed's generated second-room entrance has room to
+                    // jump right; a low ceiling would test geometry instead
+                    // of whether completing Exit restores the controller.
+                    let mut game = Game::shell(1, rules);
                     characters::apply(&mut game, character);
                     game.load_custom(&first, "first", "");
                     if !custom {
