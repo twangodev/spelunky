@@ -179,9 +179,13 @@ mod backend {
         gain: f32,
         target: f32,
     }
+    struct Effect {
+        name: &'static str,
+        sink: SpatialSink,
+    }
     pub struct Audio {
         stream: Option<OutputStream>,
-        effects: Vec<SpatialSink>,
+        effects: Vec<Effect>,
         tracks: Vec<Track>,
         current: Option<&'static str>,
         music_volume: f32,
@@ -215,31 +219,51 @@ mod backend {
         }
         pub fn unlock(&mut self) {}
         pub fn play(&mut self, name: &str, position: f32) {
+            let Some(mixer) = self.stream.as_ref().map(|stream| stream.mixer().clone()) else {
+                return;
+            };
+            self.play_with_mixer(&mixer, name, position, false);
+        }
+        /// Source `SS_IsSoundPlaying` gate, based on actual mixer completion.
+        /// Normal `play` remains free to overlap the same sound.
+        pub fn play_if_idle(&mut self, name: &str, position: f32) {
+            let Some(mixer) = self.stream.as_ref().map(|stream| stream.mixer().clone()) else {
+                return;
+            };
+            self.play_with_mixer(&mixer, name, position, true);
+        }
+        fn play_with_mixer(
+            &mut self,
+            mixer: &rodio::mixer::Mixer,
+            name: &str,
+            position: f32,
+            only_if_idle: bool,
+        ) {
             if self.paused {
                 return;
             }
-            self.effects.retain(|sink| !sink.empty());
-            let Some(stream) = &self.stream else {
+            self.effects.retain(|effect| !effect.sink.empty());
+            let Some((name, bytes)) = asset(name) else {
                 return;
             };
-            let Some((_, bytes)) = asset(name) else {
+            if only_if_idle && self.effects.iter().any(|effect| effect.name == name) {
                 return;
-            };
+            }
             let Ok(source) = Decoder::try_from(Cursor::new(bytes)) else {
                 return;
             };
             if self.effects.len() >= MAX_EFFECTS {
-                self.effects.remove(0).stop();
+                self.effects.remove(0).sink.stop();
             }
             let sink = SpatialSink::connect_new(
-                stream.mixer(),
+                mixer,
                 [pan(position), 0.0, 0.0],
                 [-1.0, 0.0, 0.0],
                 [1.0, 0.0, 0.0],
             );
             sink.set_volume(self.effects_volume);
             sink.append(source);
-            self.effects.push(sink);
+            self.effects.push(Effect { name, sink });
         }
         /// Empty name fades the current music out. Repeating a name does not restart it.
         pub fn music(&mut self, name: &str) {
@@ -296,8 +320,8 @@ mod backend {
             for track in &self.tracks {
                 track.sink.set_volume(track.gain * self.music_volume);
             }
-            for sink in &self.effects {
-                sink.set_volume(self.effects_volume);
+            for effect in &self.effects {
+                effect.sink.set_volume(self.effects_volume);
             }
         }
         pub fn pause(&mut self, paused: bool) {
@@ -310,11 +334,11 @@ mod backend {
                     track.sink.play();
                 }
             }
-            for sink in &self.effects {
+            for effect in &self.effects {
                 if paused {
-                    sink.pause();
+                    effect.sink.pause();
                 } else {
-                    sink.play();
+                    effect.sink.play();
                 }
             }
         }
@@ -322,7 +346,7 @@ mod backend {
             let now = Instant::now();
             let delta = now.duration_since(self.last_update).as_secs_f64();
             self.last_update = now;
-            self.effects.retain(|sink| !sink.empty());
+            self.effects.retain(|effect| !effect.sink.empty());
             if self.paused {
                 return;
             }
@@ -380,7 +404,10 @@ mod backend {
                 );
                 let mut audio = Audio {
                     stream: None, // No host audio device is required for this test.
-                    effects: vec![effect],
+                    effects: vec![Effect {
+                        name: "flame",
+                        sink: effect,
+                    }],
                     tracks,
                     current: Some("title"),
                     music_volume: 0.4,
@@ -405,8 +432,49 @@ mod backend {
                 // Rodio applies stop controls on its next audio processing
                 // block. Both infinite sources must end, with no 350 ms fade.
                 assert!(output.by_ref().take(2048).count() < 2048);
-                assert!(effects_output.by_ref().take(4096).any(|sample| sample > 0.0));
+                assert!(
+                    effects_output
+                        .by_ref()
+                        .take(4096)
+                        .any(|sample| sample > 0.0)
+                );
             }
+        }
+        #[test]
+        fn idle_gate_uses_clip_completion_and_aliases_while_normal_play_overlaps() {
+            let (mixer, mut output) = rodio::mixer::mixer(2, 44_100);
+            let mut audio = Audio {
+                stream: None,
+                effects: Vec::new(),
+                tracks: Vec::new(),
+                current: None,
+                music_volume: 0.65,
+                effects_volume: 0.8,
+                paused: false,
+                last_update: Instant::now(),
+            };
+            audio.play_with_mixer(&mixer, "sndFlame", 0.0, true);
+            assert_eq!(audio.effects.len(), 1);
+            for alias in ["flame", "FLAME.wav", "global.sndFlame", "sndFlame"] {
+                audio.play_with_mixer(&mixer, alias, 0.0, true);
+                assert_eq!(audio.effects.len(), 1, "duplicate {alias}");
+            }
+            audio.play_with_mixer(&mixer, "global.sndFlame", 0.0, false);
+            assert_eq!(audio.effects.len(), 2, "normal playback must still overlap");
+            assert!(output.by_ref().take(4096).any(|sample| sample.abs() > 1e-8));
+            // Consume decoded audio until the mixer reports actual completion;
+            // no simulation-tick duration or fixed retrigger interval is used.
+            for _ in 0..88_200 {
+                output.next();
+                if audio.effects.iter().all(|effect| effect.sink.empty()) {
+                    break;
+                }
+            }
+            assert!(audio.effects.iter().all(|effect| effect.sink.empty()));
+            audio.play_with_mixer(&mixer, "flame.wav", 0.0, true);
+            assert_eq!(audio.effects.len(), 1);
+            assert_eq!(audio.effects[0].name, "flame");
+            assert!(output.by_ref().take(4096).any(|sample| sample.abs() > 1e-8));
         }
     }
 }
@@ -433,6 +501,7 @@ mod backend {
         failed: HashSet<&'static str>,
     }
     struct Effect {
+        name: &'static str,
         source: AudioBufferSourceNode,
         gain: GainNode,
         panner: StereoPannerNode,
@@ -546,6 +615,26 @@ mod backend {
             }
             self.queued.push_back((name, pan(position)));
         }
+        /// Gate on the audio clock and pending playback, so asynchronous decode
+        /// cannot turn repeated per-tick requests into a burst of duplicates.
+        pub fn play_if_idle(&mut self, name: &str, position: f32) {
+            let Some((name, _)) = asset(name) else {
+                return;
+            };
+            let now = self
+                .context
+                .as_ref()
+                .map_or(0.0, AudioContext::current_time);
+            if self.queued.iter().any(|(queued, _)| *queued == name)
+                || self
+                    .effects
+                    .iter()
+                    .any(|effect| effect.name == name && effect.end > now)
+            {
+                return;
+            }
+            self.play(name, position);
+        }
         pub fn music(&mut self, name: &str) {
             if name.is_empty() {
                 self.requested_music = None;
@@ -638,6 +727,7 @@ mod backend {
                 let _ = old.panner.disconnect();
             }
             self.effects.push(Effect {
+                name,
                 source,
                 gain,
                 panner,
