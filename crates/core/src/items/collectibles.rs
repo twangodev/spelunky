@@ -228,7 +228,12 @@ pub fn tick(game: &mut Game) {
         game.data.insert("collectCounter".into(), counter - 1.);
     } else if pending > 0. {
         let amount = pending.min(100.) as u32;
+        let previous_money = game.player.money;
         game.player.money = game.player.money.saturating_add(amount);
+        // oPlayer1 snapshots money immediately before this countup and adds
+        // its resulting delta to the current level's earnings (global.xmoney).
+        *game.data.entry("xmoney".into()).or_default() +=
+            f64::from(game.player.money - previous_money);
         game.data
             .insert("collect".into(), pending - f64::from(amount));
     }
@@ -495,6 +500,39 @@ mod tests {
     use crate::model::RulesPreset;
     fn game() -> Game {
         Game::shell(7, RulesPreset::Classic)
+    }
+
+    #[test]
+    fn treasure_countup_records_actual_level_earnings_after_the_delay() {
+        let mut g = game();
+        g.world.area = Area::Jungle;
+        g.world.level = 5;
+        g.player.money = 1000;
+        g.data.insert("xmoney".into(), 25.);
+        for x in 0..g.world.width {
+            g.world.set_tile(x, 3, "oBlock");
+        }
+        let gold = g.world.spawn("oGoldChunk", g.player.pos);
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(gold).is_none());
+        assert_eq!(g.data["collect"], 125.);
+        assert_eq!(g.player.money, 1000);
+        assert_eq!(g.data["xmoney"], 25.);
+        for _ in 0..20 {
+            g.step(&InputFrame::default());
+        }
+        assert_eq!(g.player.money, 1000);
+        assert_eq!(g.data["xmoney"], 25.);
+        g.step(&InputFrame::default());
+        assert_eq!(g.player.money, 1100);
+        assert_eq!(g.data["xmoney"], 125.);
+        assert_eq!(g.data["collect"], 25.);
+        g.step(&InputFrame::default());
+        assert_eq!(g.player.money, 1125);
+        assert_eq!(g.data["xmoney"], 150.);
+        assert_eq!(g.data["collect"], 0.);
+        g.step(&InputFrame::default());
+        assert_eq!(g.data["xmoney"], 150.);
     }
 
     #[test]
