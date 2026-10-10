@@ -218,7 +218,15 @@ impl Player {
     /// Current source sprite mask for collision events, separate from the
     /// platform engine's custom rectangle returned by `bounds()`.
     pub fn sprite_bounds(&self) -> Rect {
-        self.collision_mask().bounds()
+        let (scale, angle) = self.collision_transform();
+        crate::catalog::instance_sprite_bounds(
+            "oPlayer1",
+            &self.sprite,
+            self.pos,
+            self.animation,
+            scale,
+            angle,
+        )
     }
     pub fn mask_contains(&self, point: Vec2, precision: CollisionPrecision) -> bool {
         self.collision_mask().contains(point, precision)
@@ -227,6 +235,17 @@ impl Player {
         self.collision_mask().intersects(rect, precision)
     }
     pub(crate) fn collision_mask(&self) -> crate::catalog::CollisionMask {
+        let (scale, angle) = self.collision_transform();
+        crate::catalog::instance_mask(
+            "oPlayer1",
+            &self.sprite,
+            self.pos,
+            self.animation,
+            scale,
+            angle,
+        )
+    }
+    fn collision_transform(&self) -> (Vec2, f64) {
         let xscale = self
             .data
             .get("image_xscale")
@@ -239,14 +258,7 @@ impl Player {
             .copied()
             .unwrap_or(0.0)
             .to_radians();
-        crate::catalog::instance_mask(
-            "oPlayer1",
-            &self.sprite,
-            self.pos,
-            self.animation,
-            Vec2::new(xscale, yscale),
-            angle,
-        )
+        (Vec2::new(xscale, yscale), angle)
     }
     pub fn bounds(&self) -> Rect {
         let half = self
@@ -301,7 +313,15 @@ impl Entity {
     /// Collision-event mask from the current sprite/object mask. Movement
     /// overrides in `data["collision_*"]` deliberately do not affect this.
     pub fn sprite_bounds(&self) -> Rect {
-        self.collision_mask().bounds()
+        let (scale, angle) = self.collision_transform();
+        crate::catalog::instance_sprite_bounds(
+            &self.object,
+            &self.sprite,
+            self.pos,
+            self.animation,
+            scale,
+            angle,
+        )
     }
     pub fn mask_contains(&self, point: Vec2, precision: CollisionPrecision) -> bool {
         self.collision_mask().contains(point, precision)
@@ -316,6 +336,17 @@ impl Entity {
             .intersects_mask(&other.collision_mask())
     }
     pub(crate) fn collision_mask(&self) -> crate::catalog::CollisionMask {
+        let (scale, angle) = self.collision_transform();
+        crate::catalog::instance_mask(
+            &self.object,
+            &self.sprite,
+            self.pos,
+            self.animation,
+            scale,
+            angle,
+        )
+    }
+    fn collision_transform(&self) -> (Vec2, f64) {
         // Source image_xscale is an instance property. Damsel/dummy Draw
         // writes it after Collision; a Step-facing change cannot alter it yet.
         let default_xscale = 1.0;
@@ -336,14 +367,7 @@ impl Entity {
                     0.0
                 }
             });
-        crate::catalog::instance_mask(
-            &self.object,
-            &self.sprite,
-            self.pos,
-            self.animation,
-            Vec2::new(xscale, yscale),
-            angle,
-        )
+        (Vec2::new(xscale, yscale), angle)
     }
     pub fn new(id: u64, object: impl Into<String>, pos: Vec2) -> Self {
         let object = object.into();
@@ -952,6 +976,149 @@ impl Game {
 #[cfg(test)]
 mod geometry_tests {
     use super::*;
+
+    // Preserve the pre-optimization argument extraction independently from
+    // collision_transform(), so a changed default cannot make both paths agree.
+    fn original_entity_bounds(e: &Entity) -> Rect {
+        let xscale = e.data.get("image_xscale").copied().unwrap_or(1.0);
+        let yscale = e.data.get("image_yscale").copied().unwrap_or(1.0);
+        let angle = e
+            .data
+            .get("image_angle")
+            .map(|angle| -angle.to_radians())
+            .unwrap_or_else(|| {
+                if matches!(e.object.as_str(), "oArrow" | "oFishBone") {
+                    e.value("rotation")
+                } else {
+                    0.0
+                }
+            });
+        crate::catalog::instance_mask(
+            &e.object,
+            &e.sprite,
+            e.pos,
+            e.animation,
+            Vec2::new(xscale, yscale),
+            angle,
+        )
+        .bounds()
+    }
+
+    fn original_player_bounds(p: &Player) -> Rect {
+        let xscale = p
+            .data
+            .get("image_xscale")
+            .copied()
+            .unwrap_or(if p.facing > 0 { -1.0 } else { 1.0 });
+        let yscale = p.data.get("image_yscale").copied().unwrap_or(1.0);
+        let angle = -p
+            .data
+            .get("image_angle")
+            .copied()
+            .unwrap_or(0.0)
+            .to_radians();
+        crate::catalog::instance_mask(
+            "oPlayer1",
+            &p.sprite,
+            p.pos,
+            p.animation,
+            Vec2::new(xscale, yscale),
+            angle,
+        )
+        .bounds()
+    }
+
+    fn assert_bounds_bits(actual: Rect, expected: Rect, context: &str) {
+        let bits = |r: Rect| [r.x.to_bits(), r.y.to_bits(), r.w.to_bits(), r.h.to_bits()];
+        assert_eq!(bits(actual), bits(expected), "{context}");
+    }
+
+    fn bounds_transform_cases() -> Vec<(Vec2, BTreeMap<String, f64>)> {
+        [
+            (Vec2::new(32.0, 48.0), vec![]),
+            (Vec2::new(32.5, -48.5), vec![]),
+            (Vec2::new(-0.0, 0.0), vec![]),
+            (Vec2::new(32.0, 48.0), vec![("image_xscale", -1.0)]),
+            (Vec2::new(32.0, 48.0), vec![("image_yscale", -1.0)]),
+            (Vec2::new(32.5, -48.5), vec![("image_xscale", 4.0)]),
+            (
+                Vec2::new(32.0, 48.0),
+                vec![("image_xscale", 2.0), ("image_yscale", 3.0)],
+            ),
+            (Vec2::new(32.5, -48.5), vec![("image_angle", 90.0)]),
+            (Vec2::new(32.0, 48.0), vec![("image_angle", 1.5)]),
+            (Vec2::new(32.0, 48.0), vec![("rotation", 0.75)]),
+            (
+                Vec2::new(32.0, 48.0),
+                vec![("rotation", 0.75), ("image_angle", -45.0)],
+            ),
+            (Vec2::new(32.0, 48.0), vec![("image_xscale", 0.0)]),
+            (Vec2::new(32.0, 48.0), vec![("image_yscale", 0.0)]),
+            (Vec2::new(32.0, 48.0), vec![("image_xscale", f64::NAN)]),
+            (Vec2::new(32.0, 48.0), vec![("image_angle", f64::NAN)]),
+            (Vec2::new(f64::NAN, 48.0), vec![]),
+            (Vec2::new(32.0, f64::INFINITY), vec![]),
+        ]
+        .into_iter()
+        .map(|(pos, data)| {
+            (
+                pos,
+                data.into_iter()
+                    .map(|(key, value)| (key.into(), value))
+                    .collect(),
+            )
+        })
+        .collect()
+    }
+
+    #[test]
+    fn bounds_only_path_matches_original_masks_for_every_object_and_transform() {
+        let cases = bounds_transform_cases();
+        for name in crate::catalog::object_names().chain(["missing", ""]) {
+            let mut e = Entity::new(1, name, Vec2::default());
+            for (pos, data) in &cases {
+                e.pos = *pos;
+                e.data = data.clone();
+                for animation in [0.0, -0.0, 2.75, -0.5, f64::NAN, f64::INFINITY] {
+                    e.animation = animation;
+                    let expected = original_entity_bounds(&e);
+                    assert_bounds_bits(e.sprite_bounds(), expected, name);
+                    assert_bounds_bits(e.collision_mask().bounds(), expected, name);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bounds_only_path_matches_original_current_frames_and_player_facing() {
+        let atlas: serde_json::Value =
+            serde_json::from_str(include_str!("../../../assets/atlas.json")).unwrap();
+        let sprites = atlas["sprites"].as_object().unwrap();
+        let cases = bounds_transform_cases();
+        let mut e = Entity::new(1, "oSnake", Vec2::default());
+        let mut p = Player::default();
+        for sprite in sprites.keys().map(String::as_str).chain(["missing", ""]) {
+            e.sprite = sprite.into();
+            p.sprite = sprite.into();
+            for frame in 0..crate::catalog::sprite_frame_count(sprite).max(1) {
+                for (pos, data) in &cases {
+                    e.pos = *pos;
+                    e.data = data.clone();
+                    e.animation = frame as f64 + 0.5;
+                    assert_bounds_bits(e.sprite_bounds(), original_entity_bounds(&e), sprite);
+                    p.pos = *pos;
+                    p.data = data.clone();
+                    p.animation = e.animation;
+                    for facing in [-1, 0, 1] {
+                        p.facing = facing;
+                        let expected = original_player_bounds(&p);
+                        assert_bounds_bits(p.sprite_bounds(), expected, sprite);
+                        assert_bounds_bits(p.collision_mask().bounds(), expected, sprite);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn collision_events_use_current_sprite_not_movement_override() {
