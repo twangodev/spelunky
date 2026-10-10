@@ -1,7 +1,7 @@
 //! Source resource dispatch and independent engine activation membership.
 use crate::{Entity, Game, InputFrame, Rect, Tile, Vec2, catalog};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 mod collision_events;
 pub(crate) fn collision_owner(this: &str, other: &str) -> Option<&'static str> {
     collision_events::owner(this, other)
@@ -151,11 +151,36 @@ fn metadata_index(game: &Game, e: &Entity) -> Option<usize> {
         .then_some(y as usize * game.world.width + x as usize)
 }
 fn rebuild_resources(game: &mut Game) {
+    // Activation has already restored storage and applied this call's flags.
+    // Index that exact state locally; never retain an index across callbacks,
+    // storage partitioning, births, or later activation calls.
+    let entity_resources: HashMap<_, _> = game
+        .world
+        .entities
+        .iter()
+        .map(|e| {
+            let object = if e.alive {
+                metadata_index(game, e)
+                    .and_then(|i| game.world.tiles.get(i))
+                    .map(|t| t.object.as_str())
+                    .filter(|object| matches!(*object, "oTree" | "oLava"))
+                    .unwrap_or(&e.object)
+            } else {
+                &e.object
+            };
+            (e.id, catalog::object(object).map_or(i32::MAX, |o| o.id))
+        })
+        .collect();
     let mut map: BTreeMap<i32, Vec<Instance>> = BTreeMap::new();
     for &instance in &game.dispatcher.active_order {
-        map.entry(resource(game, instance))
-            .or_default()
-            .push(instance);
+        let key = match instance {
+            Instance::Entity(id) => entity_resources
+                .get(&id)
+                .copied()
+                .unwrap_or_else(|| resource(game, instance)),
+            _ => resource(game, instance),
+        };
+        map.entry(key).or_default().push(instance);
     }
     game.dispatcher.resource_order = map;
     game.dispatcher.registration_order = game.dispatcher.active_order.clone();
@@ -314,16 +339,35 @@ fn partition(game: &mut Game) {
     }
 }
 fn update_membership(game: &mut Game) {
+    // A membership operation may immediately rebuild source arrays. Resolve
+    // identities once from its freshly mutated flags, preserving all list
+    // traversal and append/compact order below.
+    let active_entities: HashSet<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|e| e.engine_active)
+        .map(|e| e.id)
+        .collect();
+    let player_active = game.player.engine_active;
+    let tiles = &game.world.tiles;
+    let active_now = |instance: Instance| match instance {
+        Instance::Player => player_active,
+        Instance::Entity(id) => active_entities.contains(&id),
+        Instance::Terrain(i) => tiles
+            .get(i)
+            .is_some_and(|t| t.engine_active && !t.object.is_empty()),
+    };
     let changed = game
         .dispatcher
         .active_order
         .iter()
-        .any(|i| !is_active(game, *i))
+        .any(|i| !active_now(*i))
         || game
             .dispatcher
             .inactive_order
             .iter()
-            .any(|i| is_active(game, *i));
+            .any(|i| active_now(*i));
     if !changed {
         partition(game);
         return;
@@ -332,7 +376,7 @@ fn update_membership(game: &mut Game) {
     let mut inactive = Vec::new();
     // GM appends reactivated instances before compacting newly deactivated ones.
     for i in std::mem::take(&mut game.dispatcher.active_order) {
-        if is_active(game, i) {
+        if active_now(i) {
             active.push(i)
         } else {
             inactive.push(i)
@@ -340,7 +384,7 @@ fn update_membership(game: &mut Game) {
     }
     let mut old_inactive = std::mem::take(&mut game.dispatcher.inactive_order);
     old_inactive.retain(|i| {
-        if is_active(game, *i) {
+        if active_now(*i) {
             active.push(*i);
             false
         } else {
