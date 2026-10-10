@@ -421,6 +421,21 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
         let position = entity_position(game, entity, alpha);
         let [x, y] = screen(position, position, camera, alpha, pixel_snap);
         let mut layer = Vec::with_capacity(1);
+        if entity.object == "oHintHand" && (game.player.pos.x - (entity.pos.x + 8.0)).abs() < 8.0 {
+            // oHintHand Draw uses room coordinates, centered in the right
+            // 320-pixel title view. Camera translation keeps the text attached
+            // to that source view while walking between the title screens.
+            let message = "PRESS UP TO ENTER!";
+            let text_x = 320.0 + ((320.0 - message.len() as f64 * 8.0) / 2.0).ceil();
+            let [text_x, text_y] = screen(
+                Vec2::new(text_x, 216.0),
+                Vec2::new(text_x, 216.0),
+                camera,
+                alpha,
+                pixel_snap,
+            );
+            text(&mut layer, atlas, message, text_x, text_y, 1.0, WHITE);
+        }
         if entity.object == "oGenerationDecoration" {
             let region = if name == "bgAlienShip" {
                 atlas.region(
@@ -1122,6 +1137,63 @@ fn hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas) {
 mod tests {
     use super::*;
     use spelunky_core::RulesPreset;
+
+    #[test]
+    fn authored_title_hint_uses_source_animation_and_strict_world_proximity_prompt() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.flags.insert("first_time".into());
+        game.flags.insert("title_start:1".into());
+        game.load_hub(spelunky_core::hub::HubKind::Title);
+        let hand = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oHintHand")
+            .expect("first-time authored title creates original hint")
+            .id;
+        assert_eq!(
+            game.world.entity(hand).unwrap().pos,
+            Vec2::new(384.0, 144.0)
+        );
+        for step in 1..=10 {
+            game.step(&spelunky_core::InputFrame::default());
+            let hand = game.world.entity(hand).unwrap();
+            let frame = atlas.sprite("sHintPoint", f64::from(step) * 0.5).unwrap();
+            let quad = game_scene(&game, 1.0, false, &atlas)
+                .into_iter()
+                .find(|q| q.uv == frame.uv)
+                .expect("source half-frame animation");
+            assert_eq!(quad.rect, [64.0, 144.0, 16.0, 16.0]);
+            assert_eq!(hand.sprite, "sHintPoint");
+        }
+        let prompt_uv = atlas
+            .sprite("sFontSmall", f64::from('P' as u32 - 32))
+            .unwrap()
+            .uv;
+        for (player_x, visible) in [
+            (384.0, false),
+            (384.01, true),
+            (392.0, true),
+            (399.99, true),
+            (400.0, false),
+        ] {
+            game.player.pos.x = player_x;
+            game.player.previous_pos = game.player.pos;
+            for (camera_x, expected_x) in [(320.0, 88.0), (312.0, 96.0)] {
+                game.camera.x = camera_x;
+                game.previous_camera = game.camera;
+                let quads = game_scene(&game, 0.5, false, &atlas);
+                assert_eq!(
+                    quads
+                        .iter()
+                        .any(|q| q.uv == prompt_uv && q.rect[..2] == [expected_x, 216.0]),
+                    visible,
+                    "strict source x test at {player_x}, camera {camera_x}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn jaws_keeps_complete_body_at_source_damage_stages_and_directions() {

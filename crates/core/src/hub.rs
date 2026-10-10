@@ -82,6 +82,28 @@ pub fn world(kind: HubKind, unlocks: &BTreeSet<String>) -> World {
     if kind == HubKind::Title {
         // oTitle Create: initial completed-intro spawn and Tunnel Man shortcuts.
         world.spawn("oFlare", Vec2::new(600.0, 188.0));
+        // This port enters the completed-intro spawn (source titleStart=2).
+        // Fresh storage alone enables the source onboarding hand and barriers.
+        if unlocks.contains("first_time") {
+            let title_start = unlocks
+                .iter()
+                .find_map(|flag| {
+                    flag.strip_prefix("title_start:")
+                        .and_then(|value| value.parse::<u8>().ok())
+                })
+                .unwrap_or(2);
+            if matches!(title_start, 1..=3) {
+                let hand = world.spawn("oHintHand", Vec2::new(384.0, 144.0));
+                world
+                    .entity_mut(hand)
+                    .unwrap()
+                    .data
+                    .insert("animation_speed".into(), 0.5);
+            }
+            for (x, y) in [(320.0, 160.0), (336.0, 160.0), (336.0, 176.0)] {
+                add_instance(&mut world, "oBrick", Vec2::new(x, y), false);
+            }
+        }
         // Source tunnel1/tunnel2 are remaining donation balances, not stage
         // booleans. Stage two resets tunnel1 for stage three. Monotonic unlock
         // flags therefore map to ladder, level-nine door, level-thirteen door.
@@ -659,6 +681,10 @@ fn activate_portal(game: &mut Game) {
     let destination = match portal.as_str() {
         "oXScores" => "scores",
         "oXTutorial" => "tutorial",
+        "oXStart" if game.flags.remove("first_time") => {
+            game.flags.insert("onboarding_consumed".into());
+            "tutorial"
+        }
         "oXTitle" => "title",
         "oXShortcut5" => "shortcut5",
         "oXShortcut9" => "shortcut9",
@@ -701,6 +727,13 @@ fn activate_portal(game: &mut Game) {
         }
         _ => "campaign",
     };
+    if destination == "tutorial" {
+        // Both xSTART's first-use branch and xTUTORIAL use these inventory
+        // values. Only the former consumes the firstTime sentinel.
+        game.world.level = 0;
+        game.player.bombs = 0;
+        game.player.ropes = 2;
+    }
     if destination == "scores" {
         let start = if game.flags.contains("hub_sun") {
             1
@@ -1914,5 +1947,89 @@ mod tests {
         assert_eq!(g.player.health, 4);
         assert_eq!(g.player.money, 0);
         assert!(g.player.equipment.is_empty());
+    }
+    #[test]
+    fn fresh_title_has_source_hint_and_barriers_then_walks_to_first_start_tutorial() {
+        let mut g = Game::shell(3, RulesPreset::Classic);
+        assert!(
+            !g.flags.contains("first_time"),
+            "raw core shell has no profile policy"
+        );
+        g.flags.insert("first_time".into());
+        g.load_hub(HubKind::Title);
+        let hands: Vec<_> = g
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.object == "oHintHand")
+            .collect();
+        assert_eq!(hands.len(), 1);
+        assert_eq!(hands[0].pos, Vec2::new(384., 144.));
+        for (x, y) in [(20, 10), (21, 10), (21, 11)] {
+            assert_eq!(g.world.tile(x, y).unwrap().object, "oBrick");
+        }
+        // Reach the authored start door by actual controller steps from the
+        // source completed-intro position rather than teleporting into it.
+        for _ in 0..150 {
+            if g.player.pos.x <= 394. {
+                break;
+            }
+            g.step(&InputFrame {
+                left: true,
+                ..Default::default()
+            });
+        }
+        assert!(
+            (384. ..400.).contains(&g.player.pos.x),
+            "player must reach start door"
+        );
+        g.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        assert!(g.flags.contains("hub_destination:tutorial"));
+        assert!(g.flags.contains("onboarding_consumed"));
+        assert!(!g.flags.contains("first_time"));
+        assert_eq!((g.world.level, g.player.bombs, g.player.ropes), (0, 0, 2));
+        g.load_hub(HubKind::Title);
+        assert!(!g.world.entities.iter().any(|e| e.object == "oHintHand"));
+        assert_eq!(g.world.tile(21, 11).unwrap().object, "");
+    }
+
+    #[test]
+    fn manual_authored_tutorial_does_not_consume_first_time() {
+        let mut g = Game::shell(4, RulesPreset::Classic);
+        g.flags.insert("first_time".into());
+        g.load_hub(HubKind::Title);
+        let portal = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oXTutorial")
+            .unwrap()
+            .pos;
+        // The fresh-profile barrier covers this door in the authored title.
+        // Isolate the portal policy without weakening the geometry assertion
+        // in the natural first-start test above.
+        g.world.set_tile(21, 11, "");
+        g.player.pos = Vec2::new(portal.x + 8., portal.y + 8.);
+        g.player.previous_pos = g.player.pos;
+        g.player.vel = Vec2::default();
+        g.player.grounded = true;
+        g.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        assert!(g.flags.contains("hub_destination:tutorial"));
+        assert!(g.flags.contains("first_time"));
+        assert!(!g.flags.contains("onboarding_consumed"));
+        assert_eq!((g.player.bombs, g.player.ropes), (0, 2));
+    }
+    #[test]
+    fn explicit_unskipped_intro_has_barriers_but_no_early_hint_hand() {
+        let flags = BTreeSet::from(["first_time".into(), "title_start:0".into()]);
+        let title = world(HubKind::Title, &flags);
+        assert!(!title.entities.iter().any(|e| e.object == "oHintHand"));
+        assert_eq!(title.tile(21, 11).unwrap().object, "oBrick");
     }
 }

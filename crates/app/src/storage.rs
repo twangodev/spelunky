@@ -71,6 +71,10 @@ pub struct Record {
 #[serde(default)]
 pub struct SaveData {
     pub version: u32,
+    /// Source firstTime is a runtime sentinel for newly initialized storage.
+    /// An existing save starts with it false, even before a completed run.
+    #[serde(skip)]
+    pub first_time: bool,
     pub settings: Settings,
     pub records: Vec<Record>,
     /// Source minigame bests: mini1 = Sun survival seconds, mini2 = Moon archery
@@ -90,6 +94,7 @@ impl Default for SaveData {
     fn default() -> Self {
         Self {
             version: SAVE_VERSION,
+            first_time: true,
             settings: Settings::default(),
             records: Vec::new(),
             challenge_records: BTreeMap::new(),
@@ -120,6 +125,9 @@ impl SaveData {
             serde_json::from_value(value).map_err(|error| format!("Invalid save data: {error}"))?;
         // Version zero used the same fields without a required schema marker.
         data.version = SAVE_VERSION;
+        // Classic initializes storage on its first launch. Later launches do
+        // not repeat the firstTime tutorial gate, regardless of score values.
+        data.first_time = false;
         // Newly introduced actions receive defaults; existing remaps and
         // deliberately empty (unbound) actions remain intact.
         for (action, keys) in Settings::default().bindings {
@@ -187,7 +195,10 @@ impl Store {
                 overwrite_blocked: false,
             },
             Err(error) => Self {
-                data: SaveData::default(),
+                data: SaveData {
+                    first_time: false,
+                    ..SaveData::default()
+                },
                 warning: Some(format!(
                     "{error}. Existing save is preserved; reset explicitly to replace it."
                 )),
@@ -309,6 +320,39 @@ fn write(json: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_missing_storage_initializes_the_runtime_first_time_sentinel() {
+        let fresh = Store::from_read(Ok(None));
+        assert!(fresh.data.first_time);
+        let json = fresh.data.to_json().unwrap();
+        assert!(!json.contains("first_time"));
+        let restarted = Store::from_read(Ok(Some(json)));
+        assert!(!restarted.data.first_time);
+        assert!(restarted.data.records.is_empty());
+        assert!(restarted.data.unlocks.is_empty());
+        for existing in [
+            "{}",
+            r#"{"version":0}"#,
+            r#"{"version":1,"first_time":true}"#,
+        ] {
+            assert!(!SaveData::from_json(existing).unwrap().first_time);
+        }
+    }
+
+    #[test]
+    fn unreadable_storage_does_not_install_fresh_profile_onboarding() {
+        for result in [
+            Ok(Some("invalid".into())),
+            Ok(Some(r#"{"version":99}"#.into())),
+            Err("Storage access denied".into()),
+        ] {
+            let store = Store::from_read(result);
+            assert!(!store.data.first_time);
+            assert!(store.overwrite_blocked);
+            assert!(store.warning.is_some());
+        }
+    }
 
     #[test]
     fn current_save_round_trip_preserves_records_rules_and_levels() {

@@ -704,6 +704,7 @@ impl App {
         let Some(game) = &mut self.game else {
             return;
         };
+        consume_onboarding(game, &mut self.store.data);
         if let Some(destination) = game
             .flags
             .iter()
@@ -928,6 +929,9 @@ impl App {
                     }
                 }
             }
+        }
+        if let Some(game) = &mut self.game {
+            consume_onboarding(game, &mut self.store.data);
         }
         if let Some(game) = &self.game {
             let previous = self.store.data.unlocks.clone();
@@ -1556,6 +1560,9 @@ fn hydrate_run(game: &mut Game, data: &crate::storage::SaveData) {
             .filter(|flag| persistent_flag(flag))
             .cloned(),
     );
+    if data.first_time {
+        game.flags.insert("first_time".into());
+    }
     let character = if game.flags.contains("character_damsel")
         && game.flags.contains("unlock_damsel")
     {
@@ -1568,7 +1575,14 @@ fn hydrate_run(game: &mut Game, data: &crate::storage::SaveData) {
     };
     spelunky_core::characters::apply(game, character);
 }
+fn consume_onboarding(game: &mut Game, data: &mut crate::storage::SaveData) {
+    if game.flags.remove("onboarding_consumed") {
+        data.first_time = false;
+    }
+}
 fn prepare_tutorial_return(game: &mut Game) {
+    game.flags.remove("first_time");
+    game.flags.insert("onboarding_consumed".into());
     game.flags.insert("title_start:3".into());
     game.flags.insert("reset_run_on_title".into());
 }
@@ -2205,6 +2219,41 @@ mod tests {
             spelunky_core::characters::Character::TunnelMan
         );
         assert_eq!(game.state, RunState::Playing);
+    }
+
+    #[test]
+    fn onboarding_is_hydrated_without_overriding_explicit_campaign_or_tutorial_choices() {
+        let mut save = crate::storage::SaveData::default();
+        for tutorial in [false, true] {
+            let mut game = if tutorial {
+                Game::tutorial(42, save.settings.rules)
+            } else {
+                Game::new(42, save.settings.rules)
+            };
+            hydrate_run(&mut game, &save);
+            assert_eq!(game.flags.contains("tutorial"), tutorial);
+            assert!(game.flags.contains("first_time"));
+            consume_onboarding(&mut game, &mut save);
+            assert!(
+                save.first_time,
+                "an explicit start does not consume firstTime"
+            );
+            game.flags.remove("first_time");
+            game.flags.insert("onboarding_consumed".into());
+            consume_onboarding(&mut game, &mut save);
+            assert!(!save.first_time);
+            assert!(!game.flags.contains("onboarding_consumed"));
+            save.first_time = true;
+        }
+        let mut completed = Game::tutorial(42, save.settings.rules);
+        hydrate_run(&mut completed, &save);
+        prepare_tutorial_return(&mut completed);
+        consume_onboarding(&mut completed, &mut save);
+        assert!(!save.first_time);
+        assert!(!completed.flags.contains("first_time"));
+        let mut next = Game::new(43, save.settings.rules);
+        hydrate_run(&mut next, &save);
+        assert!(!next.flags.contains("first_time"));
     }
     #[test]
     fn custom_file_links_select_the_return_entrance_without_rewriting_documents() {

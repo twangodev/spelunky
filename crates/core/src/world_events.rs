@@ -206,6 +206,7 @@ pub fn tick(game: &mut Game, _input: &InputFrame) {
         match e.object.as_str() {
             "oMsgSign" => sign(game, &mut e),
             "oLamp" | "oLampRed" | "oTikiTorch" => light(&mut e),
+            "oHintHand" => e.animation = (e.animation + 0.5) % 5.0,
             "oIceBottom" => ice_bottom(game, &mut e),
             "oFrozenCaveman" => frozen_caveman(game, &mut e),
             "oBlood" | "oBone" => detritus(game, &mut e),
@@ -912,6 +913,23 @@ mod tests {
             }
             advance(&mut g);
             assert!(g.world.entity(id).is_none(), "{object}");
+        }
+    }
+    #[test]
+    fn title_hint_hand_loops_source_frames_without_moving_or_expiring() {
+        let mut g = room();
+        g.flags.insert("hub".into());
+        for x in 0..20 {
+            g.world.set_tile(x, 3, "oBrick");
+        }
+        let pos = Vec2::new(88.0, 80.0);
+        let id = g.world.spawn("oHintHand", pos);
+        for step in 1..=20 {
+            g.step(&InputFrame::default());
+            let hand = g.world.entity(id).unwrap();
+            assert_eq!(hand.pos, pos);
+            assert_eq!(hand.animation, (f64::from(step) * 0.5) % 5.0);
+            assert_eq!(hand.sprite, "sHintPoint");
         }
     }
     fn contained_pool(object: &str, tiles: bool) -> Game {
