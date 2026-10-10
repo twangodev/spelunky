@@ -115,7 +115,15 @@ fn edge(w: &World, p: &Player, side: Side, distance: f64) -> bool {
 }
 
 fn solid_point(w: &World, pos: Vec2) -> bool {
-    collision_rect(w, Rect::new(pos.x, pos.y, 0.001, 0.001), "oSolid")
+    // A literal collision_point has no area: a point just left of a wall must
+    // stay outside, even when a tiny rectangle would overlap the wall.
+    w.tiles_point(pos, "oSolid")
+        || w.entities.iter().any(|e| {
+            e.alive
+                && !e.held
+                && (crate::catalog::is_a(&e.object, "oSolid") || e.solid)
+                && e.mask_contains(pos, CollisionPrecision::BoundingBox)
+        })
 }
 fn object_at(w: &World, pos: Vec2, names: &[&str]) -> bool {
     w.tile((pos.x / 16.0).floor() as i32, (pos.y / 16.0).floor() as i32)
@@ -1637,6 +1645,90 @@ fn character_sprite<'a>(p: &Player, name: &'a str) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn game_step_sinking_block_still_accepts_player_ledge_grab() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.player.pos = Vec2::new(11.0, 73.0);
+        game.player.state = PlayerState::Falling;
+        game.world.spawn("oLava", Vec2::new(16.0, 96.0));
+        let id = game.world.spawn("oPushBlock", Vec2::new(16.0, 80.0));
+        // Adjacent grid-authored rows: ordinary gravity first drops the block
+        // into the lava, then its own Step begins the fractional sinking.
+        for _ in 0..5 {
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(game.player.pos, Vec2::new(11.0, 88.0));
+        assert_eq!(game.player.state, PlayerState::Falling);
+        assert!((game.world.entity(id).unwrap().pos.y - 83.2).abs() < 1e-10);
+        // At the real controller's next ledge probe, (x+9,y-5)=(20,83)
+        // lies in the canonical integer bbox but above the float sprite bbox.
+        game.step(&InputFrame {
+            right: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.state, PlayerState::Hanging);
+        assert_eq!(game.player.pos, Vec2::new(11.0, 88.0));
+        assert_eq!(game.player.previous_pos, game.player.pos);
+        assert!((game.world.entity(id).unwrap().pos.y - 83.25).abs() < 1e-10);
+        assert_eq!(game.player.health, 4);
+    }
+
+    #[test]
+    fn literal_solid_point_does_not_inflate_query_by_one_thousandth() {
+        for dynamic in [false, true] {
+            let mut world = World::new(8, 8, Area::Mines, 1);
+            if dynamic {
+                world.spawn("oPushBlock", Vec2::new(16.0, 80.0));
+            } else {
+                world.set_tile(1, 5, "oBlock");
+            }
+            assert!(
+                !solid_point(&world, Vec2::new(15.9995, 88.0)),
+                "dynamic={dynamic}"
+            );
+            assert!(
+                solid_point(&world, Vec2::new(16.0, 88.0)),
+                "dynamic={dynamic}"
+            );
+            assert!(
+                !solid_point(&world, Vec2::new(32.0, 88.0)),
+                "dynamic={dynamic}"
+            );
+        }
+    }
+
+    #[test]
+    fn game_step_lava_sinking_block_uses_integer_point_bbox_and_smooth_position() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.player.pos = Vec2::new(64.0, 40.0);
+        game.world.spawn("oLava", Vec2::new(16.0, 80.0));
+        // The first global gravity pass moves the integer-authored block down
+        // one pixel; its source Step then sinks it by .05 on each real tick.
+        let id = game.world.spawn("oPushBlock", Vec2::new(16.0, 79.0));
+        for _ in 0..5 {
+            game.step(&InputFrame::default());
+        }
+        let block = game.world.entity(id).unwrap();
+        assert!((block.pos.y - 80.25).abs() < 1e-10, "{:?}", block.pos);
+        assert!((block.sprite_bounds().y - 80.25).abs() < 1e-10);
+        for (point, expected) in [
+            (Vec2::new(24.0, 80.1), true),
+            (Vec2::new(24.0, 96.1), false),
+            (Vec2::new(15.9995, 88.0), false),
+        ] {
+            assert_eq!(
+                solid_point(&game.world, point),
+                expected,
+                "player point {point:?}"
+            );
+            assert_eq!(
+                game.world.solid_point_except(point, 0),
+                expected,
+                "world point {point:?}"
+            );
+        }
+    }
 
     #[test]
     fn natural_yeti_throw_keeps_source_standing_trait_for_long_fall_injury() {

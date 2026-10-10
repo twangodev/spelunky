@@ -717,7 +717,7 @@ impl World {
                     && e.alive
                     && e.solid
                     && !e.held
-                    && e.sprite_bounds().contains(Vec2::new(x, y))
+                    && e.mask_contains(Vec2::new(x, y), CollisionPrecision::BoundingBox)
             })
     }
     /// Tile-only rectangle query. Use collides_except for dynamic solids too.
@@ -1368,7 +1368,9 @@ mod geometry_tests {
             .text
             .insert("terrain_sprite".into(), "sLavaTop".into());
         assert_eq!(world.tile_bounds(5, 5).y, 81.0);
-        assert!(!world.tiles_point(Vec2::new(80.0, 80.0), "oSolid"));
+        // collision_point uses the aggregate cached integer bbox even when
+        // this frame's visual/rectangle bounds begin one pixel lower.
+        assert!(world.tiles_point(Vec2::new(80.0, 80.0), "oSolid"));
         world.entity_mut(id).unwrap().animation = 1.0;
         assert_eq!(world.tile_bounds(5, 5).y, 80.0);
         assert!(world.tiles_point(Vec2::new(80.0, 80.0), "oSolid"));

@@ -334,8 +334,21 @@ impl CollisionMask {
             .is_some_and(|byte| byte & (1 << (image_x as usize % 8)) != 0)
     }
 
+    /// collision_point uses the cached aggregate integer bbox, unlike smooth
+    /// sprite geometry or the explicit rectangle query rasterizer. Reuse the
+    /// independently verified bbox updater for its supported transforms only.
+    fn point_bounds(&self) -> Rect {
+        if self.frame.is_none() {
+            return self.bounds;
+        }
+        self.event_geometry()
+            .map_or(self.bounds, |(bounds, _)| bounds)
+    }
+
     pub fn contains(&self, point: Vec2, precision: CollisionPrecision) -> bool {
-        if !self.bounds.contains(point) {
+        // Canonical 0x4AC73F compares the ORIGINAL doubles to integer bbox
+        // edges. Rounding the query first would admit points just outside it.
+        if !self.point_bounds().contains(point) {
             return false;
         }
         if precision == CollisionPrecision::BoundingBox
@@ -627,6 +640,41 @@ mod tests {
             current = &def.parent;
         }
         false
+    }
+
+    #[test]
+    fn collision_point_uses_aggregate_integer_bounds_without_rounding_query() {
+        let mask = instance_mask(
+            "oPushBlock",
+            "sBlock",
+            Vec2::new(16.0, 80.25),
+            0.0,
+            Vec2::new(1.0, 1.0),
+            0.0,
+        );
+        // Canonical collision_point passes raw doubles into the cached integer
+        // bbox predicate: L <= x < R+1, T <= y < B+1 (0x4AC73F).
+        assert!(mask.contains(Vec2::new(24.0, 80.1), CollisionPrecision::BoundingBox));
+        assert!(!mask.contains(Vec2::new(24.0, 96.1), CollisionPrecision::BoundingBox));
+        assert!(!mask.contains(Vec2::new(15.9995, 88.0), CollisionPrecision::BoundingBox));
+        assert_eq!(
+            mask.bounds(),
+            Rect::new(16.0, 80.25, 16.0, 16.0),
+            "smooth sprite geometry remains fractional"
+        );
+        let lava = instance_mask(
+            "oLava",
+            "sLavaTop",
+            Vec2::new(80.0, 80.0),
+            0.0,
+            Vec2::new(1.0, 1.0),
+            0.0,
+        );
+        assert_eq!(lava.bounds().y, 81.0);
+        assert!(
+            lava.contains(Vec2::new(80.0, 80.0), CollisionPrecision::BoundingBox),
+            "point broadphase uses aggregate sprite bbox, independent of current subimage"
+        );
     }
 
     #[test]
