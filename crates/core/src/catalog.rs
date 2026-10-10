@@ -50,18 +50,31 @@ pub fn object(name: &str) -> Option<&'static ObjectDef> {
 
 /// True for the named object itself and for all descendants of `parent`.
 pub fn is_a(name: &str, parent: &str) -> bool {
-    let mut current = name;
-    // The bound also keeps malformed metadata from hanging a game loop.
-    for _ in 0..catalog().objects.len() {
-        let Some(def) = object(current) else {
-            return false;
-        };
-        if def.name == parent {
-            return true;
-        }
-        current = &def.parent;
-    }
-    false
+    static ANCESTORS: OnceLock<BTreeMap<&'static str, Vec<&'static str>>> = OnceLock::new();
+    ANCESTORS
+        .get_or_init(|| ancestry(&catalog().objects))
+        .get(name)
+        .is_some_and(|ancestors| ancestors.contains(&parent))
+}
+
+/// Cache only bundled objects, never query strings. Use the original walk's
+/// lookup keys, compared names and iteration bound even for malformed metadata.
+fn ancestry(objects: &BTreeMap<String, ObjectDef>) -> BTreeMap<&str, Vec<&str>> {
+    objects
+        .keys()
+        .map(|name| {
+            let mut ancestors = Vec::new();
+            let mut current = name.as_str();
+            for _ in 0..objects.len() {
+                let Some(def) = objects.get(current) else {
+                    break;
+                };
+                ancestors.push(def.name.as_str());
+                current = &def.parent;
+            }
+            (name.as_str(), ancestors)
+        })
+        .collect()
 }
 
 /// Classic tests collisions against the oSolid family, including moving blocks.
@@ -504,6 +517,88 @@ pub fn bounds(name: &str, pos: Vec2) -> Rect {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    fn original_is_a(objects: &BTreeMap<String, ObjectDef>, name: &str, parent: &str) -> bool {
+        let mut current = name;
+        for _ in 0..objects.len() {
+            let Some(def) = objects.get(current) else {
+                return false;
+            };
+            if def.name == parent {
+                return true;
+            }
+            current = &def.parent;
+        }
+        false
+    }
+
+    #[test]
+    fn cached_ancestry_matches_original_for_every_object_pair_and_unknowns() {
+        let objects = &catalog().objects;
+        let mut names: Vec<_> = objects.keys().map(String::as_str).collect();
+        names.extend(["", "missing", "oNotInTheCatalog"]);
+        for name in &names {
+            for parent in &names {
+                assert_eq!(
+                    is_a(name, parent),
+                    original_is_a(objects, name, parent),
+                    "{name:?} -> {parent:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cached_ancestry_preserves_cycles_dangling_parents_and_distinct_names() {
+        let mut objects = BTreeMap::new();
+        for (key, name, parent) in [
+            ("a", "a", "b"),
+            ("b", "b", "a"),
+            ("self", "self", "self"),
+            ("leaf", "display_name", "dangling"),
+            ("tail", "tail", "leaf"),
+        ] {
+            let mut def = object("oBlock").unwrap().clone();
+            def.name = name.into();
+            def.parent = parent.into();
+            objects.insert(key.into(), def);
+        }
+        let cached = ancestry(&objects);
+        assert_eq!(cached.len(), objects.len());
+        assert_eq!(cached["a"], ["a", "b", "a", "b", "a"]);
+        assert_eq!(cached["self"].len(), objects.len());
+        assert_eq!(cached["leaf"], ["display_name"]);
+        for name in [
+            "a",
+            "b",
+            "self",
+            "leaf",
+            "tail",
+            "display_name",
+            "dangling",
+            "",
+        ] {
+            for parent in [
+                "a",
+                "b",
+                "self",
+                "leaf",
+                "tail",
+                "display_name",
+                "dangling",
+                "",
+            ] {
+                assert_eq!(
+                    cached
+                        .get(name)
+                        .is_some_and(|ancestors| ancestors.contains(&parent)),
+                    original_is_a(&objects, name, parent),
+                    "{name:?} -> {parent:?}"
+                );
+            }
+        }
+        assert!(ancestry(&BTreeMap::new()).is_empty());
+    }
 
     #[test]
     fn gameplay_solidity_follows_source_hierarchy() {
