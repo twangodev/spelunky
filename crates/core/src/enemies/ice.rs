@@ -1790,9 +1790,11 @@ mod tests {
                         assert_eq!(target.player.stun, 0);
                         assert!(target.player.is_exiting());
                         assert_eq!(target.state, RunState::Ending);
-                        assert!(!target
-                            .events
-                            .contains(&GameEvent::Damage { amount: damage }));
+                        assert!(
+                            !target
+                                .events
+                                .contains(&GameEvent::Damage { amount: damage })
+                        );
                         let projectile = target
                             .world
                             .entity(id)
@@ -1819,9 +1821,11 @@ mod tests {
                         );
                         assert_eq!(target.player.stun, stun);
                         assert_eq!(target.player.vel.y, -4.0);
-                        assert!(target
-                            .events
-                            .contains(&GameEvent::Damage { amount: damage }));
+                        assert!(
+                            target
+                                .events
+                                .contains(&GameEvent::Damage { amount: damage })
+                        );
                         assert_eq!(target.world.entity(id).is_none(), object == "oLaser");
                     }
                 }

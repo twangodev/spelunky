@@ -1337,11 +1337,13 @@ mod tests {
             .unwrap();
         assert_eq!(frog.state, 2);
         assert_eq!(frog.health, 1);
-        assert!(!game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.object == "oFireFrogBomb"));
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|e| e.object == "oFireFrogBomb")
+        );
     }
 
     #[test]
