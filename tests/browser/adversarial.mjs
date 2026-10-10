@@ -77,14 +77,14 @@ export async function walkThroughNextDoor(page) {
   return snapshot(page);
 }
 
-export async function continueTransition({ page, result, screenshot, name }) {
+export async function continueTransition({ page, result, screenshot, name, expectedRoom = 'rTransition1' }) {
   const entry = { exit: await snapshot(page) };
   await page.waitForFunction(() => window.__spelunkyTest?.state === 'Ending'
     && window.__spelunkyTest.ending?.kind === 'Transition'
     && window.__spelunkyTest.ending?.stage === 'Transition', null, { timeout: 15000 });
   entry.scene = await snapshot(page);
   assert.equal(entry.scene.screen, 'Playing');
-  assert.equal(entry.scene.world.name, 'rTransition1');
+  assert.equal(entry.scene.world.name, expectedRoom);
   assert.equal(entry.scene.ending.recordReady, false);
   await screenshot(page, `${name}-transition`, result);
   await page.keyboard.press('Enter'); // Source hurry-up action, not a room mutation.

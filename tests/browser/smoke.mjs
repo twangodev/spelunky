@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { installMovementTrace, runMovementAcceptance } from './movement.mjs';
 import { runAdversarialAcceptance, runOnboardingAcceptance } from './adversarial.mjs';
-import { installLightingProfile, installLightingProbe, runLightingAcceptance } from './lighting.mjs';
+import { installLightingProfile, installLightingSeedControl, installLightingProbe, runLightingAcceptance } from './lighting.mjs';
 import { runCinematicAcceptance } from './cinematics.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -36,7 +36,8 @@ const report = {
   scope: 'Automated browser engine acceptance, optionally using a virtual display; no physical 240 Hz display or Safari application validation.',
   engines: [],
 };
-assert.ok(['full', 'adversarial', 'movement', 'onboarding', 'lighting', 'cinematics'].includes(report.suite), 'BROWSER_SUITE must be full, adversarial, movement, onboarding, lighting, or cinematics');
+assert.ok(['full', 'gameplay', 'adversarial', 'movement', 'onboarding', 'lighting', 'cinematics'].includes(report.suite), 'BROWSER_SUITE must be full, gameplay, adversarial, movement, onboarding, lighting, or cinematics');
+if (report.suite === 'gameplay') report.deferredChecks = ['Source-valid natural dark-room WebGL pixel acceptance runs separately; gameplay success does not imply lighting acceptance.'];
 await mkdir(artifacts, { recursive: true });
 await access(tools);
 report.bundle = {
@@ -196,6 +197,7 @@ try {
       await context.addInitScript(installMovementTrace);
       if (report.suite === 'lighting') {
         await context.addInitScript(installLightingProfile);
+        await context.addInitScript(installLightingSeedControl);
         await context.addInitScript(installLightingProbe);
       }
       const page = await context.newPage();
@@ -216,7 +218,7 @@ try {
       const title = await screenshot(page, 'title', result);
       result.checks.push('Wasm startup and real WebGL 2 draw calls');
 
-      if (report.suite !== 'full') {
+      if (!['full', 'gameplay'].includes(report.suite)) {
         if (report.suite === 'adversarial') await runAdversarialAcceptance({ page, result, screenshot });
         else if (report.suite === 'movement') await runMovementAcceptance({ page, result, screenshot });
         else if (report.suite === 'onboarding') await runOnboardingAcceptance({ page, result, screenshot });
@@ -365,23 +367,26 @@ try {
       assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
       await onboarding.close();
 
-      const lighting = await browser.newContext({ viewport: { width: 960, height: 720 } });
-      await lighting.addInitScript(instrument);
-      await lighting.addInitScript(installMovementTrace);
-      await lighting.addInitScript(installLightingProfile);
-      await lighting.addInitScript(installLightingProbe);
-      const lightingPage = await lighting.newPage();
-      activePage = lightingPage;
-      lightingPage.on('pageerror', error => result.errors.push(String(error)));
-      lightingPage.on('console', message => {
-        if (message.type() === 'error') result.consoleErrors.push(message.text());
-        if (message.type() === 'warning') result.warnings.push(message.text());
-      });
-      await ready(lightingPage);
-      await runLightingAcceptance({ page: lightingPage, result, screenshot });
-      assert.deepEqual(result.errors, []);
-      assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
-      await lighting.close();
+      if (report.suite === 'full') {
+        const lighting = await browser.newContext({ viewport: { width: 960, height: 720 } });
+        await lighting.addInitScript(instrument);
+        await lighting.addInitScript(installMovementTrace);
+        await lighting.addInitScript(installLightingProfile);
+        await lighting.addInitScript(installLightingSeedControl);
+        await lighting.addInitScript(installLightingProbe);
+        const lightingPage = await lighting.newPage();
+        activePage = lightingPage;
+        lightingPage.on('pageerror', error => result.errors.push(String(error)));
+        lightingPage.on('console', message => {
+          if (message.type() === 'error') result.consoleErrors.push(message.text());
+          if (message.type() === 'warning') result.warnings.push(message.text());
+        });
+        await ready(lightingPage);
+        await runLightingAcceptance({ page: lightingPage, result, screenshot });
+        assert.deepEqual(result.errors, []);
+        assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
+        await lighting.close();
+      }
 
       // Failure paths run in fresh storage, separate from the happy-path session.
       const corrupt = await browser.newContext();
