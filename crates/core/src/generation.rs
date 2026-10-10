@@ -71,6 +71,9 @@ struct Path {
 }
 fn room_path(rng: &mut Rng, area: Area, level: u32, flags: &mut BTreeSet<String>) -> Path {
     let start = rng.range(4) as usize;
+    // scrLevelGen draws this candidate even outside Temple and before the
+    // Black Market early return; a successful sacrifice pit reuses it.
+    let mut pit = rng.range(4) as usize;
     let mut path = Path {
         rooms: [[0; 4]; 5],
         start,
@@ -94,7 +97,6 @@ fn room_path(rng: &mut Rng, area: Area, level: u32, flags: &mut BTreeSet<String>
     path.rooms[y][x] = 1;
     // The source creates a sacrifice shaft before constructing the main path.
     if area == Area::Temple && (has(flags, "sacrifice_pit") || rng.chance(1, 8)) {
-        let mut pit = rng.range(4) as usize;
         while pit == start {
             pit = rng.range(4) as usize;
         }
@@ -171,19 +173,24 @@ fn room_path(rng: &mut Rng, area: Area, level: u32, flags: &mut BTreeSet<String>
     }
     if area == Area::Ice {
         let forced_other = has(flags, "alien_ship") || has(flags, "yeti_lair");
-        let moai = has(flags, "moai")
-            || (!forced_other
-                && !has(flags, "made_moai")
-                && match level {
+        // Explicit destination flags are port overrides. Ordinarily the
+        // entire Moai eligibility block excludes the alien/yeti else-if chain,
+        // including when this level's Moai chance fails.
+        if has(flags, "moai") || (!forced_other && !has(flags, "made_moai")) {
+            let moai = has(flags, "moai")
+                || match level {
                     9 => rng.chance(1, 4),
                     10 => rng.chance(1, 3),
                     11 => rng.chance(1, 2),
                     12 => true,
                     _ => false,
-                });
-        if moai {
-            path.rooms[rand(rng, 1, 2) as usize][rng.range(4) as usize] = 6;
-            flags.insert("moai".into());
+                };
+            if moai {
+                let col = rng.range(4) as usize;
+                let row = rand(rng, 1, 2) as usize;
+                path.rooms[row][col] = 6;
+                flags.insert("moai".into());
+            }
         } else if has(flags, "alien_ship") || (!has(flags, "yeti_lair") && rng.chance(1, 10)) {
             let col = rng.range(3) as usize;
             let row = rand(rng, 1, 2) as usize;
@@ -201,7 +208,9 @@ fn room_path(rng: &mut Rng, area: Area, level: u32, flags: &mut BTreeSet<String>
             flags.insert("yeti_lair".into());
         }
     }
-    if level > 1 && rand(rng, 1, level) <= 2 && !has(flags, "made_black_market") {
+    // The port also uses this path builder for synthetic tutorial level 0;
+    // canonical scrTutorialGen never calls the campaign rand(1, currLevel).
+    if level != 0 && rand(rng, 1, level) <= 2 && level > 1 && !has(flags, "made_black_market") {
         let mut candidates = Vec::new();
         for row in 0..4 {
             for col in 0..4 {
@@ -808,6 +817,294 @@ pub fn initialize_custom_terrain(world: &mut World, rng: &mut Rng) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Independent column-major transcription of scrLevelGen.gml. This uses
+    // only the RNG primitive, not room_path/rand/has or its candidate builder.
+    fn source_room_path(
+        rng: &mut Rng,
+        area: Area,
+        level: u32,
+        made_moai: bool,
+        made_market: bool,
+    ) -> (Path, BTreeSet<String>) {
+        let mut rooms = [[0_u8; 5]; 4];
+        let start = rng.range(4) as usize;
+        let mut n = rng.range(4) as usize;
+        let (mut x, mut y) = (start, 0_usize);
+        let mut end = start;
+        let mut selected = BTreeSet::new();
+        if made_moai {
+            selected.insert("made_moai".into());
+        }
+        if made_market {
+            selected.insert("made_black_market".into());
+        }
+        rooms[x][y] = 1;
+        if area == Area::Temple && 1 + rng.range(8) == 1 {
+            while n == x {
+                n = rng.range(4) as usize;
+            }
+            rooms[n] = [7, 8, 8, 9, 0];
+            selected.insert("sacrifice_pit".into());
+        }
+        while y < 4 {
+            let draw = match x {
+                0 => 3 + rng.range(3),
+                3 => 5 + rng.range(3),
+                _ => 1 + rng.range(5),
+            };
+            let (previous_x, previous_y) = (x, y);
+            if draw < 3 || draw > 5 {
+                if x > 0 && rooms[x - 1][y] == 0 {
+                    x -= 1;
+                }
+            } else if draw == 3 || draw == 4 {
+                if x < 3 && rooms[x + 1][y] == 0 {
+                    x += 1;
+                }
+            }
+            if draw == 5 {
+                y += 1;
+                if y < 4 {
+                    rooms[previous_x][previous_y] = 2;
+                    rooms[x][y] = 3;
+                } else {
+                    end = x;
+                }
+            } else {
+                rooms[x][y] = 1;
+            }
+        }
+        if area == Area::Mines {
+            'snake: for row in 0..2 {
+                for col in 0..4 {
+                    if rooms[col][row] == 0
+                        && rooms[col][row + 1] == 0
+                        && rooms[col][row + 2] == 0
+                        && 1 + rng.range(8) == 1
+                    {
+                        rooms[col][row] = 7;
+                        rooms[col][row + 1] = 8;
+                        if row == 0 && rooms[col][3] == 0 {
+                            rooms[col][2] = 8;
+                            rooms[col][3] = 9;
+                        } else {
+                            rooms[col][row + 2] = 9;
+                        }
+                        selected.insert("snake_pit".into());
+                        break 'snake;
+                    }
+                }
+            }
+        }
+        if !made_moai && area == Area::Ice {
+            let placed = match level {
+                9 => 1 + rng.range(4) == 1,
+                10 => 1 + rng.range(3) == 1,
+                11 => 1 + rng.range(2) == 1,
+                12 => true,
+                _ => false,
+            };
+            if placed {
+                let col = rng.range(4) as usize;
+                let row = 1 + rng.range(2) as usize;
+                rooms[col][row] = 6;
+                selected.insert("moai".into());
+            }
+        } else if area == Area::Ice && 1 + rng.range(10) == 1 {
+            let col = rng.range(3) as usize;
+            let row = 1 + rng.range(2) as usize;
+            for i in col..4 {
+                rooms[i][row] = if i == col {
+                    7
+                } else if i == 3 {
+                    9
+                } else {
+                    8
+                };
+            }
+            selected.insert("alien_ship".into());
+        } else if area == Area::Ice && 1 + rng.range(6) == 1 {
+            selected.insert("yeti_lair".into());
+        }
+        let shop_draw = 1 + rng.range(level);
+        if shop_draw <= 2 && level > 1 && !made_market {
+            let mut possibilities = [[0_u8; 4]; 4];
+            let mut count = 0;
+            for row in 0..4 {
+                for col in 0..4 {
+                    if rooms[col][row] == 0 {
+                        if col < 3 {
+                            if rooms[col + 1][row] == 1 || rooms[col + 1][row] == 2 {
+                                possibilities[col][row] = 4;
+                                count += 1;
+                            }
+                        } else if rooms[col - 1][row] == 1 || rooms[col - 1][row] == 2 {
+                            possibilities[col][row] = 5;
+                            count += 1;
+                        }
+                    }
+                }
+            }
+            if count > 0 {
+                let mut choice = rng.range(count);
+                'shop: for row in 0..4 {
+                    for col in 0..4 {
+                        if possibilities[col][row] != 0 {
+                            if choice == 0 {
+                                rooms[col][row] = possibilities[col][row];
+                                break 'shop;
+                            }
+                            choice -= 1;
+                        }
+                    }
+                }
+            }
+        }
+        (
+            Path {
+                rooms: std::array::from_fn(|row| std::array::from_fn(|col| rooms[col][row])),
+                start,
+                end,
+            },
+            selected,
+        )
+    }
+
+    #[test]
+    fn source_room_path_matches_literal_branch_draw_order_and_next_rng() {
+        for seed in 0..128 {
+            for level in [1, 2, 5, 9, 10, 11, 12, 13, 14] {
+                for made_moai in [false, true] {
+                    for made_market in [false, true] {
+                        let mut expected_rng = Rng::new(seed);
+                        let (expected, expected_flags) = source_room_path(
+                            &mut expected_rng,
+                            Area::for_level(level),
+                            level,
+                            made_moai,
+                            made_market,
+                        );
+                        let mut selected = BTreeSet::new();
+                        if made_moai {
+                            selected.insert("made_moai".into());
+                        }
+                        if made_market {
+                            selected.insert("made_black_market".into());
+                        }
+                        let mut actual_rng = Rng::new(seed);
+                        let actual = room_path(
+                            &mut actual_rng,
+                            Area::for_level(level),
+                            level,
+                            &mut selected,
+                        );
+                        assert_eq!(
+                            actual.rooms, expected.rooms,
+                            "seed{seed} level{level} madeMoai{made_moai} madeMarket{made_market}"
+                        );
+                        assert_eq!((actual.start, actual.end), (expected.start, expected.end));
+                        assert_eq!(selected, expected_flags);
+                        assert_eq!(
+                            actual_rng.next_u64(),
+                            expected_rng.next_u64(),
+                            "next RNG seed{seed} level{level} madeMoai{made_moai} madeMarket{made_market}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn source_black_market_return_consumes_both_initial_draws() {
+        for seed in 0..32 {
+            let mut expected = Rng::new(seed);
+            expected.range(4); // startRoomX
+            expected.range(4); // n, before the Black Market return
+            let mut actual = Rng::new(seed);
+            let mut flags = BTreeSet::from(["black_market".into()]);
+            let path = room_path(&mut actual, Area::Jungle, 5, &mut flags);
+            assert_eq!((path.start, path.end), (0, 3));
+            assert_eq!(actual.next_u64(), expected.next_u64(), "seed{seed}");
+        }
+    }
+
+    #[test]
+    fn source_moai_eligibility_does_not_fall_through_to_other_ice_events() {
+        for level in 9..=12 {
+            let mut placed = false;
+            let mut absent = false;
+            for seed in 0..128 {
+                let mut selected = BTreeSet::new();
+                room_path(&mut Rng::new(seed), Area::Ice, level, &mut selected);
+                placed |= selected.contains("moai");
+                absent |= !selected.contains("moai");
+                assert!(!selected.contains("alien_ship") && !selected.contains("yeti_lair"));
+            }
+            assert!(placed);
+            assert_eq!(absent, level != 12);
+        }
+    }
+
+    #[test]
+    fn source_path_choices_reach_actual_natural_generation() {
+        for (level, made, feature) in [
+            (9, false, "moai"),
+            (9, false, "ordinary"),
+            (12, false, "moai"),
+            (9, true, "alien_ship"),
+            (9, true, "yeti_lair"),
+            (13, false, "sacrifice_pit"),
+        ] {
+            let seed = (0..128)
+                .find(|seed| {
+                    let (_, selected) = source_room_path(
+                        &mut Rng::new(*seed),
+                        Area::for_level(level),
+                        level,
+                        made,
+                        false,
+                    );
+                    if feature == "ordinary" {
+                        !selected.contains("moai")
+                    } else {
+                        selected.contains(feature)
+                    }
+                })
+                .expect("bounded natural source event fixture");
+            let flags = if made {
+                BTreeSet::from(["made_moai".into()])
+            } else {
+                BTreeSet::new()
+            };
+            let world = generate(&mut Rng::new(seed), level, &flags);
+            let has_object = |object| world.entities.iter().any(|e| e.object == object);
+            match feature {
+                "moai" => assert!(has_object("oMoai"), "seed{seed} level{level}"),
+                "ordinary" => {
+                    assert!(!has_object("oMoai") && !has_object("oAlienBoss"));
+                    assert_eq!(world.name, "Ice Caves");
+                }
+                "alien_ship" => {
+                    assert!(has_object("oAlienBoss"));
+                    assert_eq!(world.name, "Alien Ship");
+                }
+                "yeti_lair" => assert_eq!(world.name, "Yeti Lair"),
+                "sacrifice_pit" => assert_eq!(world.name, "Sacrifice Pit"),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn synthetic_level_zero_and_authored_tutorial_remain_valid() {
+        let path = room_path(&mut Rng::new(0), Area::Mines, 0, &mut BTreeSet::new());
+        assert!(path.start < 4 && path.end < 4);
+        let world = tutorial();
+        assert_eq!((world.width, world.height), (42, 19));
+        assert!(world.entities.iter().any(|e| e.object == "oExit"));
+    }
     #[test]
     fn campaign_perimeters_have_concrete_source_masks_and_invincible_metadata() {
         let source = include_str!(
