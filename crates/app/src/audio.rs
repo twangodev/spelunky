@@ -282,6 +282,14 @@ mod backend {
             });
             self.current = Some(name);
         }
+        /// Source `stopAllMusic`: stop every track immediately, including any
+        /// outgoing crossfade. Effects, pause state, and volume are unaffected.
+        pub fn stop_music(&mut self) {
+            self.current = None;
+            for track in self.tracks.drain(..) {
+                track.sink.stop();
+            }
+        }
         pub fn set_volumes(&mut self, music: f32, effects: f32) {
             self.music_volume = volume(music);
             self.effects_volume = volume(effects);
@@ -334,6 +342,71 @@ mod backend {
                 }
                 keep
             });
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn explicit_stop_ends_all_mixer_tracks_without_fading_or_stopping_effects() {
+            for paused in [false, true] {
+                let (mixer, mut output) = rodio::mixer::mixer(1, 44_100);
+                let tracks = [1.0, 0.0]
+                    .into_iter()
+                    .map(|target| {
+                        let sink = Sink::connect_new(&mixer);
+                        sink.append(
+                            rodio::buffer::SamplesBuffer::new(1, 44_100, vec![0.25; 1024])
+                                .repeat_infinite(),
+                        );
+                        Track {
+                            sink,
+                            gain: 1.0,
+                            target,
+                        }
+                    })
+                    .collect();
+                let (effects_mixer, mut effects_output) = rodio::mixer::mixer(2, 44_100);
+                let effect = SpatialSink::connect_new(
+                    &effects_mixer,
+                    [0.0, 0.0, 0.0],
+                    [-1.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                );
+                effect.append(
+                    rodio::buffer::SamplesBuffer::new(2, 44_100, vec![0.1; 1024]).repeat_infinite(),
+                );
+                let mut audio = Audio {
+                    stream: None, // No host audio device is required for this test.
+                    effects: vec![effect],
+                    tracks,
+                    current: Some("title"),
+                    music_volume: 0.4,
+                    effects_volume: 0.7,
+                    paused: false,
+                    last_update: Instant::now(),
+                };
+                assert!(output.by_ref().take(512).any(|sample| sample > 0.0));
+                audio.music("");
+                assert_eq!(audio.tracks.len(), 2);
+                assert!(output.by_ref().take(512).any(|sample| sample > 0.0));
+                audio.pause(paused);
+                audio.stop_music();
+                assert!(audio.tracks.is_empty());
+                assert_eq!(audio.current, None);
+                assert_eq!(audio.paused, paused);
+                assert_eq!((audio.music_volume, audio.effects_volume), (0.4, 0.7));
+                assert_eq!(audio.effects.len(), 1);
+                audio.stop_music(); // Idempotent even after an already silent boundary.
+                audio.pause(false);
+                audio.update();
+                // Rodio applies stop controls on its next audio processing
+                // block. Both infinite sources must end, with no 350 ms fade.
+                assert!(output.by_ref().take(2048).count() < 2048);
+                assert!(effects_output.by_ref().take(4096).any(|sample| sample > 0.0));
+            }
         }
     }
 }
@@ -483,6 +556,19 @@ mod backend {
             } else if let Some((name, _)) = asset(name) {
                 self.requested_music = Some(name);
                 self.decode(name);
+            }
+        }
+        /// Source `stopAllMusic`, without waiting for a presentation-driven
+        /// fade. Clearing the request prevents a pending decode from restarting
+        /// music after this boundary.
+        pub fn stop_music(&mut self) {
+            self.requested_music = None;
+            self.current_music = None;
+            for track in self.tracks.drain(..) {
+                track.gain_node.gain().set_value(0.0);
+                let _ = AudioScheduledSourceNode::stop(track.source.unchecked_ref());
+                let _ = track.source.disconnect();
+                let _ = track.gain_node.disconnect();
             }
         }
         pub fn set_volumes(&mut self, music: f32, effects: f32) {
