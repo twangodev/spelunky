@@ -114,7 +114,7 @@ fn liquid(game: &Game, pos: Vec2, name: &str) -> bool {
             .world
             .entities
             .iter()
-            .any(|e| e.alive && e.object == name && e.bounds().contains(pos))
+            .any(|e| e.alive && e.object == name && e.sprite_bounds().contains(pos))
 }
 fn item_physics(game: &Game, ball: &mut Entity) {
     let active = ball.pos.x > game.camera.x - 16.0
@@ -157,7 +157,7 @@ fn item_physics(game: &Game, ball: &mut Entity) {
         return;
     }
     for (horizontal, v) in [(true, ball.vel.x), (false, ball.vel.y)] {
-        let d = displacement(v, game.tick);
+        let d = displacement(v, game.engine_time());
         for _ in 0..d.unsigned_abs() {
             let p = Vec2::new(
                 ball.pos.x
@@ -240,7 +240,7 @@ fn item_physics(game: &Game, ball: &mut Entity) {
         .world
         .entities
         .iter()
-        .any(|e| e.alive && e.object == "oLava" && e.bounds().intersects(lava));
+        .any(|e| e.alive && e.object == "oLava" && e.sprite_bounds().intersects(lava));
     ball.data
         .insert("gravity".into(), if in_lava { 0.0 } else { 0.6 });
     if in_lava {
@@ -362,7 +362,7 @@ fn impact(game: &mut Game, ball: &Entity) {
     for target in &mut game.world.entities {
         if !target.alive
             || target.id == ball.id
-            || !strike.intersects(target.bounds())
+            || !strike.intersects(target.sprite_bounds())
             || target.value("invincible") != 0.0
             || target.object == "oMagmaMan"
         {

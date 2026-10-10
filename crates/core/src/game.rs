@@ -122,8 +122,17 @@ impl Game {
         }
         self.tick += 1;
         self.level_tick += 1;
+        traps::pre_tick(self);
         player::tick(self, input);
-        items::tick(self, input);
+        // Classic's dedicated inventory keys are gated by isLevel(), while
+        // attack and pickup remain available in the authored hub/challenges.
+        let mut item_input = *input;
+        if self.flags.contains("hub") {
+            item_input.cycle_pressed = false;
+            item_input.bomb_pressed = false;
+            item_input.rope_pressed = false;
+        }
+        items::tick(self, &item_input);
         enemies::tick(self);
         traps::tick(self);
         world_events::tick(self, input);

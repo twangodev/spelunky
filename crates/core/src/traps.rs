@@ -9,6 +9,11 @@ mod curses;
 #[path = "traps/moving.rs"]
 mod moving;
 
+/// Global platform movement runs before player input, as in oGame Step.
+pub fn pre_tick(game: &mut Game) {
+    moving::pre_tick(game);
+}
+
 pub fn tick(game: &mut Game) {
     if game.player.health <= 0 {
         return;
@@ -128,7 +133,7 @@ fn environment(game: &mut Game) {
             .world
             .entities
             .iter()
-            .any(|e| e.alive && e.object == "oMagmaMan" && e.bounds().intersects(r));
+            .any(|e| e.alive && e.object == "oMagmaMan" && e.sprite_bounds().intersects(r));
         if wet || magma {
             remove_hazard(game, web);
             continue;
@@ -136,7 +141,7 @@ fn environment(game: &mut Game) {
         for e in &mut game.world.entities {
             if e.alive
                 && !e.held
-                && e.bounds().intersects(r)
+                && e.sprite_bounds().intersects(r)
                 && movable(e)
                 && !matches!(
                     e.object.as_str(),
@@ -250,14 +255,14 @@ fn detectors(game: &mut Game) {
                 };
                 let activated = repeat
                     || (game.player.vel.x != 0.0 || game.player.vel.y != 0.0)
-                        && area.intersects(game.player.bounds())
+                        && area.intersects(game.player.sprite_bounds())
                     || game.world.entities.iter().any(|e| {
                         e.alive
                             && e.id != h.id.unwrap_or(0)
                             && (movable(e)
                                 || matches!(e.object.as_str(), "oBoulder" | "oPushBlock"))
                             && (e.vel.x != 0.0 || e.vel.y != 0.0)
-                            && area.intersects(e.bounds())
+                            && area.intersects(e.sprite_bounds())
                     });
                 if activated {
                     let pos = Vec2::new(h.pos.x + if right { 18.0 } else { -2.0 }, h.pos.y + 4.0);
@@ -319,7 +324,7 @@ fn detectors(game: &mut Game) {
             "oSpearsLeft" => {
                 if let Some(id) = h.id {
                     let mut damage = None;
-                    let overlaps = rect(&h).intersects(game.player.bounds());
+                    let overlaps = rect(&h).intersects(game.player.sprite_bounds());
                     if let Some(e) = game.world.entity_mut(id) {
                         e.animation += 1.0;
                         if e.animation >= 20.0 && e.animation < 24.0 && overlaps {
