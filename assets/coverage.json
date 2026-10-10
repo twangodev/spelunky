@@ -5702,7 +5702,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 382,
+          "line": 390,
           "module": "crates/core/src/game.rs"
         },
         {
@@ -6457,7 +6457,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 385,
+          "line": 393,
           "module": "crates/core/src/game.rs"
         }
       ],
@@ -10973,7 +10973,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 388,
+          "line": 396,
           "module": "crates/core/src/game.rs"
         },
         {
