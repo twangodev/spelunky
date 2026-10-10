@@ -528,17 +528,32 @@ fn damsel(game: &mut Game, e: &mut Entity) {
             e.data.insert("gravity".into(), 0.0);
         }
         let spear_area = Rect::new(e.pos.x - 3.0, e.pos.y - 3.0, 7.0, 7.0);
-        let spear = game
-            .world
-            .entities
-            .iter()
-            .filter(|s| {
-                s.alive
-                    && crate::catalog::is_a(&s.object, "oSpearsLeft")
-                    && s.sprite_bounds().intersects(spear_area)
+        crate::dispatcher::register_instances(game);
+        let spears: Vec<_> = crate::dispatcher::descendant_instances(game, "oSpearsLeft")
+            .into_iter()
+            .filter_map(|instance| match instance {
+                crate::dispatcher::Instance::Entity(id) => game.world.entity(id),
+                _ => None,
             })
-            .min_by(|a, b| a.pos.distance(e.pos).total_cmp(&b.pos.distance(e.pos)))
-            .map(|s| (s.pos, s.animation));
+            .filter(|s| s.engine_active)
+            .collect();
+        let mut spear = None;
+        if spears
+            .iter()
+            .any(|s| s.sprite_bounds().intersects(spear_area))
+        {
+            // Source rectangle contact gates a separate instance_nearest
+            // query over the entire active family. Equal distances retain
+            // the first instance in the current array.
+            let mut nearest_distance = f64::INFINITY;
+            for candidate in spears {
+                let distance = candidate.pos.distance(e.pos);
+                if distance < nearest_distance {
+                    nearest_distance = distance;
+                    spear = Some((candidate.pos, candidate.animation));
+                }
+            }
+        }
         if let Some((pos, _)) =
             spear.filter(|(_, frame)| *frame >= 19.0 && *frame < 28.0 && (e.state != 2 || grounded))
         {
@@ -1175,6 +1190,91 @@ fn barrier_item_collision(game: &mut Game, id: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn actual_step_damsel_spear_gate_selects_nearest_from_the_whole_family() {
+        for (two_traps, damsel_x, reverse_storage, expected_x_velocity) in [
+            (false, 122.0, false, 2.8),
+            (true, 122.0, false, -2.8),
+            (true, 120.0, false, 2.8),
+            (true, 120.0, true, 2.8),
+        ] {
+            let mut game = Game::shell(7, RulesPreset::Classic);
+            for x in 0..game.world.width {
+                game.world.set_tile(x, 10, "oBlock");
+            }
+            game.player.pos = Vec2::new(32.0, 152.0);
+            game.player.previous_pos = game.player.pos;
+            game.player.grounded = true;
+            game.world.set_tile(8, 9, "oSpearTrapTop");
+            if two_traps {
+                game.world.set_tile(9, 9, "oSpearTrapTop");
+            }
+            let id = game.spawn("oDamsel", Vec2::new(damsel_x, 152.0));
+            for _ in 0..19 {
+                game.step(&InputFrame::default());
+                assert_eq!(game.world.entity(id).unwrap().health, 4);
+            }
+            let damsel = game.world.entity(id).unwrap();
+            let area = Rect::new(damsel.pos.x - 3.0, damsel.pos.y - 3.0, 7.0, 7.0);
+            let spears: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|e| e.alive && crate::catalog::is_a(&e.object, "oSpearsLeft"))
+                .collect();
+            assert_eq!(spears.len(), if two_traps { 2 } else { 1 });
+            assert!(spears.iter().all(|s| s.animation == 19.0));
+            assert!(spears.iter().any(|s| s.sprite_bounds().intersects(area)));
+            if two_traps && damsel_x == 122.0 {
+                let nearest = spears
+                    .iter()
+                    .min_by(|a, b| {
+                        a.pos
+                            .distance(damsel.pos)
+                            .total_cmp(&b.pos.distance(damsel.pos))
+                    })
+                    .unwrap();
+                assert_eq!(nearest.pos, Vec2::new(128.0, 144.0));
+                assert!(!nearest.sprite_bounds().intersects(area));
+            } else if two_traps {
+                assert_eq!(
+                    spears[0].pos.distance(damsel.pos),
+                    spears[1].pos.distance(damsel.pos)
+                );
+                let first = crate::dispatcher::descendant_instances(&game, "oSpearsLeft")
+                    .into_iter()
+                    .find_map(|instance| match instance {
+                        crate::dispatcher::Instance::Entity(id) => game.world.entity(id),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(first.pos, Vec2::new(112.0, 144.0));
+            }
+            if reverse_storage {
+                // Storage is independent of the source parent array. The
+                // equal-distance result must retain its registered order.
+                game.world.entities.reverse();
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .find(|e| e.object == "oSpearsLeft")
+                        .unwrap()
+                        .pos,
+                    Vec2::new(128.0, 144.0)
+                );
+            }
+
+            game.step(&InputFrame::default());
+
+            let damsel = game.world.entity(id).unwrap();
+            assert_eq!(damsel.health, 2);
+            assert_eq!(damsel.state, 2);
+            assert_eq!(damsel.vel.y, -6.0);
+            assert!((damsel.vel.x - expected_x_velocity).abs() < 1e-9);
+        }
+    }
 
     #[test]
     fn damsel_draw_mutates_scale_and_only_positive_cost_icon_frame() {
