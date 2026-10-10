@@ -17,16 +17,42 @@ impl Game {
     }
 
     pub fn load_custom(&mut self, level: &level::Level, name: &str, previous: &str) {
+        self.load_custom_room(level, name, previous, true);
+    }
+
+    /// Linked custom rooms preserve the run's inventory, as scrLoadLevel(-1)
+    /// does, while restoring the light item selected by the exit handler.
+    pub fn continue_custom(&mut self, level: &level::Level, name: &str, previous: &str) {
+        let carry = self.take_transition_carry();
+        let kisses = self.take_pending_kisses();
+        self.load_custom_room(level, name, previous, false);
+        self.apply_kisses(kisses);
+        self.restore_transition_carry(carry);
+    }
+
+    fn load_custom_room(
+        &mut self,
+        level: &level::Level,
+        name: &str,
+        previous: &str,
+        initialize_inventory: bool,
+    ) {
         self.world = level.to_world();
+        generation::initialize_custom_terrain(&mut self.world, &mut self.rng);
         self.world.name = name.to_owned();
+        self.flags.retain(|flag| {
+            flag != "hub" && !flag.starts_with("hub_") && !flag.starts_with("hub_destination:")
+        });
         self.flags.insert("custom".into());
         self.flags.insert("custom_level".into());
         self.flags.remove("tutorial");
         self.flags
             .retain(|f| !f.starts_with("custom_level:") && !f.starts_with("default_next_custom:"));
-        self.player.health = level.starting_life.clamp(1, 99);
-        self.player.bombs = level.starting_bombs.clamp(0, 99);
-        self.player.ropes = level.starting_ropes.clamp(0, 99);
+        if initialize_inventory {
+            self.player.health = level.starting_life.clamp(1, 99);
+            self.player.bombs = level.starting_bombs.clamp(0, 99);
+            self.player.ropes = level.starting_ropes.clamp(0, 99);
+        }
         self.world.entrance = self
             .world
             .entities
@@ -54,6 +80,9 @@ impl Game {
     }
 
     pub fn load_hub(&mut self, kind: hub::HubKind) {
+        if self.state == RunState::Dead || self.player.state == PlayerState::Dead {
+            self.flags.insert("reset_run_on_hub".into());
+        }
         self.flags.retain(|flag| {
             !flag.starts_with("hub_")
                 && !flag.starts_with("hub_destination:")
@@ -91,7 +120,17 @@ impl Game {
         self.player.data.clear();
         self.player.invincible = 0;
         self.data.retain(|key, _| {
-            !key.starts_with("hazard:") && !key.starts_with("altar:") && !key.starts_with("tile:")
+            !key.starts_with("hazard:")
+                && !key.starts_with("hazard_entity:")
+                && !key.starts_with("altar:")
+                && !key.starts_with("altar_tile:")
+                && !key.starts_with("tile:")
+                && key != "death_ticks"
+                && key != "water_counter"
+                && key != "water_loop_safety"
+                && key != "progression_initialized"
+                && key != "progression_entrance_x"
+                && key != "progression_entrance_y"
         });
         self.level_tick = 0;
         self.state = RunState::Playing;
@@ -107,13 +146,33 @@ impl Game {
 
     /// Advance exactly one original 1/30-second tick. Rendering never calls RNG.
     pub fn step(&mut self, input: &InputFrame) {
-        if self.state != RunState::Playing {
+        if !matches!(self.state, RunState::Playing | RunState::Dead) {
             return;
+        }
+        let was_dead = self.state == RunState::Dead;
+        if was_dead {
+            let ticks = self.data.entry("death_ticks".into()).or_default();
+            *ticks = if input.attack_pressed {
+                100.0
+            } else {
+                *ticks + 1.0
+            };
         }
         self.events.clear();
         self.flags.remove("render_discontinuity");
         self.player.previous_pos = self.player.pos;
         self.previous_camera = self.camera;
+        world_events::fluid_tick(self);
+        progression::initialize_level(self);
+        let solids_before: Vec<_> = self
+            .world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive && catalog::is_a(&entity.object, "oSolid"))
+            .map(|entity| entity.id)
+            .collect();
+        let room_tick_before = self.level_tick;
+        let frozen = activation::begin(self);
         for e in &mut self.world.entities {
             enemies::init_entity(e);
             items::init_entity(e);
@@ -136,20 +195,32 @@ impl Game {
         enemies::tick(self);
         traps::tick(self);
         world_events::tick(self, input);
+        items::explosives::end_tick(self);
         hub::tick(self, input);
         if self.player.pos.y > self.world.height as f64 * 16.0 + 16.0 {
             self.player.health = 0;
         }
         economy::tick(self, input);
         progression::tick(self, input);
-        if self.player.health <= 0 {
-            self.player.health = 0;
+        if self.player.health <= 0 || was_dead {
+            self.player.health = self.player.health.max(0);
             self.player.state = PlayerState::Dead;
             self.state = RunState::Dead;
-            self.events.push(GameEvent::Died);
-            self.sound("sndDie", self.player.pos);
+            if !was_dead {
+                self.data.insert("death_ticks".into(), 0.0);
+                self.events.push(GameEvent::Died);
+                self.sound("sndDie", self.player.pos);
+            }
         }
         self.world.entities.retain(|e| e.alive);
+        activation::finish(self, frozen);
+        if self.level_tick == room_tick_before + 1
+            && solids_before
+                .iter()
+                .any(|id| self.world.entity(*id).is_none())
+        {
+            self.world.fluid_dirty = true;
+        }
         self.update_camera();
     }
 
@@ -159,19 +230,8 @@ impl Game {
             self.events.push(GameEvent::Won);
             return;
         }
-        let carry = self
-            .flags
-            .iter()
-            .find_map(|f| f.strip_prefix("carry:").map(str::to_owned));
-        let carried = carry.as_ref().and_then(|name| {
-            self.world
-                .entities
-                .iter()
-                .find(|e| e.object == *name && e.held)
-                .cloned()
-        });
-        self.flags.retain(|f| !f.starts_with("carry:"));
-        let rescued = self.flags.remove("damsel_rescued");
+        let carry = self.take_transition_carry();
+        let kisses = self.take_pending_kisses();
         let next = self
             .data
             .remove("next_level")
@@ -220,11 +280,46 @@ impl Game {
             }
         }
         self.reset_position();
-        if rescued {
-            self.player.health = (self.player.health + 1).min(99);
+        self.apply_kisses(kisses);
+        self.restore_transition_carry(carry);
+        if !self.flags.contains("wanted") && !self.flags.contains("murderer") {
+            self.flags.remove("shopkeepers_angry");
+        }
+    }
+
+    fn take_pending_kisses(&mut self) -> i32 {
+        let rescued = self.flags.remove("damsel_rescued");
+        self.data
+            .remove("pending_damsel_kisses")
+            .map(|count| count.clamp(0.0, 99.0) as i32)
+            .unwrap_or(i32::from(rescued))
+    }
+
+    fn apply_kisses(&mut self, kisses: i32) {
+        if kisses > 0 {
+            self.player.health = (self.player.health + kisses).min(99);
             self.sound("sndKiss", self.player.pos);
         }
-        if let Some(object) = carry {
+    }
+
+    fn take_transition_carry(&mut self) -> Option<(String, Option<Entity>)> {
+        let carry = self
+            .flags
+            .iter()
+            .find_map(|f| f.strip_prefix("carry:").map(str::to_owned));
+        let carried = carry.as_ref().and_then(|name| {
+            self.world
+                .entities
+                .iter()
+                .find(|e| e.object == *name && e.held)
+                .cloned()
+        });
+        self.flags.retain(|f| !f.starts_with("carry:"));
+        carry.map(|object| (object, carried))
+    }
+
+    fn restore_transition_carry(&mut self, carry: Option<(String, Option<Entity>)>) {
+        if let Some((object, carried)) = carry {
             let id = self.world.spawn(object, self.player.pos);
             if let Some(mut item) = carried {
                 item.id = id;
@@ -238,9 +333,6 @@ impl Game {
                 item.held = true;
             }
             self.player.held = Some(id);
-        }
-        if !self.flags.contains("wanted") && !self.flags.contains("murderer") {
-            self.flags.remove("shopkeepers_angry");
         }
     }
 
@@ -389,5 +481,158 @@ mod tests {
         assert_eq!(held.object, "oShotgun");
         assert_eq!(held.value("ammo"), 17.0);
         assert!(held.held);
+    }
+
+    #[test]
+    fn linked_custom_exit_preserves_resources_and_the_carried_weapon() {
+        let mut level = level::Level::default();
+        level.set_tile(3, 3, '@').unwrap();
+        level.set_tile(5, 3, 'X').unwrap();
+        for x in 0..level::LEVEL_WIDTH {
+            level.set_tile(x, 4, '1').unwrap();
+        }
+        let mut game = Game::shell(9, RulesPreset::Classic);
+        game.load_custom(&level, "first", "");
+        game.player.pos = Vec2::new(104.0, 72.0);
+        game.player.health = 2;
+        game.player.bombs = 1;
+        game.player.ropes = 0;
+        game.player.money = 700;
+        game.player.equipment.insert("Cape".into());
+        let id = game.world.spawn("oShotgun", game.player.pos);
+        let gun = game.world.entity_mut(id).unwrap();
+        gun.held = true;
+        gun.data.insert("ammo".into(), 11.0);
+        game.player.held = Some(id);
+        for _ in 0..3 {
+            game.step(&InputFrame {
+                up: true,
+                ..InputFrame::default()
+            });
+        }
+        assert_eq!(game.state, RunState::Transition);
+        assert!(game.flags.contains("carry:oShotgun"));
+        let mut next = level.clone();
+        next.starting_life = 99;
+        next.starting_bombs = 99;
+        next.starting_ropes = 99;
+        game.continue_custom(&next, "second", "first");
+        assert_eq!(
+            (game.player.health, game.player.bombs, game.player.ropes),
+            (2, 1, 0)
+        );
+        assert_eq!(game.player.money, 700);
+        assert!(game.player.has("Cape"));
+        let carried = game.world.entity(game.player.held.unwrap()).unwrap();
+        assert_eq!(carried.object, "oShotgun");
+        assert_eq!(carried.value("ammo"), 11.0);
+        assert!(!game.flags.contains("carry:oShotgun"));
+    }
+
+    #[test]
+    fn linked_rooms_do_not_reuse_an_old_entity_traps_fired_state() {
+        let mut level = level::Level::default();
+        level.set_tile(4, 4, '@').unwrap();
+        level.set_tile(2, 4, '>').unwrap();
+        for x in 0..level::LEVEL_WIDTH {
+            level.set_tile(x, 5, '1').unwrap();
+        }
+        let mut game = Game::shell(10, RulesPreset::Classic);
+        game.load_custom(&level, "first", "");
+        game.player.vel.x = 1.0;
+        game.step(&InputFrame::default());
+        let fired_key = game
+            .data
+            .iter()
+            .find_map(|(key, value)| {
+                (key.starts_with("hazard_entity:") && key.ends_with(":fired") && *value == 1.0)
+                    .then(|| key.clone())
+            })
+            .expect("first room's aligned arrow trap fires");
+        game.continue_custom(&level, "second", "first");
+        assert!(!game.data.contains_key(&fired_key));
+        game.player.vel.x = 1.0;
+        game.step(&InputFrame::default());
+        assert_eq!(game.data.get(&fired_key), Some(&1.0));
+    }
+
+    #[test]
+    fn linked_custom_continuation_consumes_each_rescued_damsels_kiss_once() {
+        let mut level = level::Level::default();
+        level.set_tile(3, 3, '@').unwrap();
+        level.set_tile(5, 3, 'X').unwrap();
+        for x in 0..level::LEVEL_WIDTH {
+            level.set_tile(x, 4, '1').unwrap();
+        }
+        let mut game = Game::shell(11, RulesPreset::Classic);
+        game.load_custom(&level, "first", "");
+        game.player.pos = Vec2::new(104.0, 72.0);
+        game.player.health = 2;
+        for _ in 0..2 {
+            let damsel = game.world.spawn("oDamsel", game.player.pos);
+            game.world.entity_mut(damsel).unwrap().held = true;
+            game.player.held = Some(damsel);
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(game.data["pending_damsel_kisses"], 2.0);
+        game.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        assert_eq!(game.state, RunState::Transition);
+        game.continue_custom(&level, "second", "first");
+        assert_eq!(game.player.health, 4);
+        assert!(!game.data.contains_key("pending_damsel_kisses"));
+        game.continue_custom(&level, "third", "second");
+        assert_eq!(game.player.health, 4);
+    }
+
+    #[test]
+    fn lethal_contact_keeps_corpse_physics_and_actor_clocks_running() {
+        let mut game = flat_game();
+        game.player.health = 1;
+        let arrow = game.world.spawn("oArrow", Vec2::new(24.0, 40.0));
+        game.world.entity_mut(arrow).unwrap().vel.x = 8.0;
+        let rock = game.world.spawn("oRock", Vec2::new(160.0, 24.0));
+        for _ in 0..4 {
+            game.step(&InputFrame::default());
+            if game.state == RunState::Dead {
+                break;
+            }
+        }
+        assert_eq!(game.state, RunState::Dead);
+        assert_eq!(
+            game.events
+                .iter()
+                .filter(|event| matches!(event, GameEvent::Died))
+                .count(),
+            1
+        );
+        let dead_pos = game.player.pos;
+        let age = game.world.entity(rock).unwrap().age;
+        let tick = game.tick;
+        for _ in 0..8 {
+            game.step(&InputFrame::default());
+            assert!(
+                !game
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, GameEvent::Died))
+            );
+            assert!(
+                !game.events.iter().any(
+                    |event| matches!(event, GameEvent::Sound { name, .. } if name == "sndDie")
+                )
+            );
+        }
+        assert_ne!(game.player.pos, dead_pos);
+        assert_eq!(game.world.entity(rock).unwrap().age, age + 8);
+        assert_eq!(game.tick, tick + 8);
+        assert_eq!(game.data.get("death_ticks"), Some(&8.0));
+        game.step(&InputFrame {
+            attack_pressed: true,
+            ..InputFrame::default()
+        });
+        assert_eq!(game.data.get("death_ticks"), Some(&100.0));
     }
 }
