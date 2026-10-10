@@ -1,6 +1,6 @@
 //! Classic hazards translated from object event code. Static hazard positions are
 //! GameMaker instance origins (usually tile top-left), not actor centers.
-use crate::model::{Entity, Game, GameEvent, PlayerState, Rect, Vec2};
+use crate::model::{CollisionPrecision, Entity, Game, GameEvent, PlayerState, Rect, Vec2};
 
 #[path = "traps/altar.rs"]
 mod altar;
@@ -120,6 +120,7 @@ fn environment(game: &mut Game) {
         let fall = game.player.data.get("fall_ticks").copied().unwrap_or(0.0);
         if !spikes_applied
             && h.object == "oSpikes"
+            && !game.player.is_exiting()
             && Rect::new(pos.x - 4.0, pos.y - 4.0, 9.0, 13.0).intersects(current_rect(game, h))
             && game.player.vel.y > 0.0
             && (fall > 4.0 || game.player.is_stunned())
@@ -240,6 +241,23 @@ fn detector(game: &Game, h: &Hazard, right: bool) -> Rect {
         Rect::new(x, h.pos.y, ((h.pos.x - 1.0 - x) / 16.0).ceil() * 16.0, 16.0)
     }
 }
+
+fn detector_occupied_bounds(area: Rect) -> Rect {
+    // Alarm 1 creates oArrowTrapTest at this origin and stretches sRed in X.
+    // Its source mask fills every column, but only rows 1..14. Keep the
+    // cached creation span separate from the occupied mask, including its
+    // sprite origin and GM8's independently rounded inclusive bbox edges.
+    let sprite = crate::catalog::sprite_def("sRed").expect("source detector sprite");
+    let [left, top, right, bottom] = sprite.bounds;
+    let [ox, oy] = sprite.origin;
+    let scale = area.w / 16.0;
+    let x0 = (area.x + f64::from(left - ox) * scale).round_ties_even();
+    let x1 = (area.x + f64::from(right - ox + 1) * scale - 1.0).round_ties_even();
+    let y0 = (area.y + f64::from(top - oy)).round_ties_even();
+    let y1 = (area.y + f64::from(bottom - oy)).round_ties_even();
+    Rect::new(x0, y0, x1 - x0 + 1.0, y1 - y0 + 1.0)
+}
+
 fn detectors(game: &mut Game) {
     for h in hazards(game) {
         match h.object.as_str() {
@@ -281,20 +299,23 @@ fn detectors(game: &mut Game) {
                         .insert(format!("{}:range_width", h.data_key), area.w);
                     area
                 };
+                let occupied = detector_occupied_bounds(area);
                 let duck_to_hang = matches!(
                     game.player.sprite.as_str(),
                     "sDuckToHangL" | "sDamselDtHL" | "sTunnelDtHL"
                 ) && game.player.animation > 6.0;
                 let activated = repeat
                     || (game.player.vel.x != 0.0 || game.player.vel.y != 0.0 || duck_to_hang)
-                        && area.intersects(game.player.sprite_bounds())
+                        && game
+                            .player
+                            .mask_intersects(occupied, CollisionPrecision::Precise)
                     || game.world.entities.iter().any(|e| {
                         e.alive
                             && e.id != h.id.unwrap_or(0)
                             && (movable(e)
                                 || matches!(e.object.as_str(), "oBoulder" | "oPushBlock"))
                             && (e.vel.x != 0.0 || e.vel.y != 0.0)
-                            && area.intersects(e.sprite_bounds())
+                            && e.mask_intersects(occupied, CollisionPrecision::Precise)
                     });
                 if activated {
                     let pos = Vec2::new(h.pos.x + if right { 18.0 } else { -2.0 }, h.pos.y + 4.0);
@@ -371,7 +392,7 @@ fn detectors(game: &mut Game) {
                         .world
                         .entity(id)
                         .is_some_and(|e| e.animation >= 20.0 && e.animation < 24.0 && overlaps);
-                    if damaging && game.player.health > 0 {
+                    if damaging && game.player.health > 0 && !game.player.is_exiting() {
                         // oPlayer1 Step intentionally bypasses both ordinary
                         // damage immunity and stun. Every active frame can hit.
                         game.player.health -= 4;
@@ -520,6 +541,62 @@ mod tests {
         g.player.vel.x = 1.0;
         tick(&mut g);
         assert!(!g.world.entities.iter().any(|e| e.object == "oArrow"));
+    }
+    #[test]
+    fn scaled_arrow_detector_uses_source_opaque_rows_and_actor_pixels() {
+        let mask = crate::catalog::instance_mask(
+            "oArrowTrapTest",
+            "sRed",
+            Vec2::default(),
+            0.0,
+            Vec2::new(1.0, 1.0),
+            0.0,
+        );
+        // The scaled detector is exactly a filled horizontal band; this is
+        // source mask data, not a guess from its visible color or image size.
+        for y in 0..16 {
+            for x in 0..16 {
+                assert_eq!(
+                    mask.contains(
+                        Vec2::new(f64::from(x), f64::from(y)),
+                        CollisionPrecision::Precise
+                    ),
+                    (1..=14).contains(&y),
+                    "source detector pixel ({x},{y})",
+                );
+            }
+        }
+        for scale in [1.0, 2.0, 5.0] {
+            assert_eq!(
+                detector_occupied_bounds(Rect::new(96.0, 80.0, 16.0 * scale, 16.0)),
+                Rect::new(96.0, 81.0, 16.0 * scale, 14.0),
+            );
+        }
+        for (trap, rock_x) in [("oArrowTrapLeft", 50.0), ("oArrowTrapRight", 104.0)] {
+            for (rock_y, should_fire) in [(77.0, false), (78.0, true), (97.0, true), (98.0, false)]
+            {
+                let mut game = room();
+                game.world = crate::World::new(20, 15, crate::Area::Mines, 1);
+                game.player.pos = Vec2::new(24.0, 184.0);
+                game.player.previous_pos = game.player.pos;
+                for x in 0..20 {
+                    game.world.set_tile(x, 12, "oBlock");
+                }
+                game.world.spawn(trap, Vec2::new(80.0, 80.0));
+                let rock = game.world.spawn("oRock", Vec2::new(rock_x, rock_y));
+                game.world.entity_mut(rock).unwrap().vel.x = 1.0;
+
+                game.step(&crate::InputFrame::default());
+
+                let rock = game.world.entity(rock).unwrap();
+                assert_eq!(rock.pos, Vec2::new(rock_x + 1.0, rock_y));
+                assert_eq!(
+                    game.world.entities.iter().any(|e| e.object == "oArrow"),
+                    should_fire,
+                    "{trap}, rock at y={rock_y}",
+                );
+            }
+        }
     }
     #[test]
     fn arrow_detector_ignores_moving_debris_but_accepts_items_and_moveable_solids() {
@@ -764,6 +841,86 @@ mod tests {
         assert_eq!(game.player.vel.y, -6.0);
         assert!((-6.0..=-4.0).contains(&game.player.vel.x));
         assert_eq!(game.world.entity(spear).unwrap().animation, 21.0);
+    }
+
+    fn authored_exit_room(character: crate::characters::Character, exit: bool) -> Game {
+        let mut level = crate::level::Level::default();
+        level.set_tile(6, 7, '@').unwrap();
+        level.set_tile(7, 7, 'X').unwrap();
+        for x in 0..40 {
+            level.set_tile(x, 8, '1').unwrap();
+        }
+        let mut game = Game::shell(11, RulesPreset::Classic);
+        crate::characters::apply(&mut game, character);
+        game.load_custom(&level, "exit-hazards", "");
+        for _ in 0..8 {
+            game.step(&crate::InputFrame::default());
+        }
+        if exit {
+            for _ in 0..16 {
+                game.step(&crate::InputFrame {
+                    right: true,
+                    up: true,
+                    ..Default::default()
+                });
+                if game.state == crate::RunState::Ending {
+                    break;
+                }
+            }
+            assert_eq!(game.state, crate::RunState::Ending);
+            assert!(game.player.is_exiting());
+        }
+        assert_eq!(game.player.health, 4);
+        game
+    }
+
+    #[test]
+    fn real_exit_sprites_ignore_active_spears_while_the_hazard_keeps_animating() {
+        use crate::characters::Character;
+        for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
+            for exit in [false, true] {
+                let mut game = authored_exit_room(character, exit);
+                let player_pos = game.player.pos;
+                let spear_pos = Vec2::new(player_pos.x - 8.0, player_pos.y - 8.0);
+                let trap = game
+                    .world
+                    .spawn("oSpearTrapTop", Vec2::new(spear_pos.x + 16.0, spear_pos.y));
+                game.data
+                    .insert(format!("hazard_entity:{trap}:cooldown"), 50.0);
+                let spear = game.world.spawn("oSpearsLeft", spear_pos);
+                game.world.entity_mut(spear).unwrap().animation = 20.0;
+                game.step(&crate::InputFrame::default());
+                assert_eq!(game.world.entity(spear).unwrap().animation, 21.0);
+                assert_eq!(
+                    game.data[&format!("hazard_entity:{trap}:cooldown")],
+                    49.0,
+                    "exit protection must leave the trap controller running"
+                );
+                if exit {
+                    assert_eq!(game.player.health, 4, "{character:?}");
+                    assert_eq!(game.player.pos, player_pos);
+                    assert!(game.player.is_exiting());
+                    assert_eq!(game.state, crate::RunState::Ending);
+                    assert!(!game.events.contains(&GameEvent::Damage { amount: 4 }));
+                } else {
+                    assert_eq!(game.player.health, 0, "ordinary player {character:?}");
+                    assert!(game.events.contains(&GameEvent::Damage { amount: 4 }));
+                    assert_eq!(game.state, crate::RunState::Dead);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn real_exit_animation_does_not_protect_from_the_outer_lava_check() {
+        let mut game = authored_exit_room(crate::characters::Character::Explorer, true);
+        let pos = game.player.pos;
+        game.world
+            .spawn("oLava", Vec2::new(pos.x - 8.0, pos.y - 8.0));
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.player.health, 0);
+        assert_eq!(game.state, crate::RunState::Dead);
+        assert!(game.events.contains(&GameEvent::Damage { amount: 99 }));
     }
 
     #[test]

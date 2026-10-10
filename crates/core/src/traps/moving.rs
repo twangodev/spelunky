@@ -263,6 +263,7 @@ fn smash(game: &mut Game, entity: &mut Entity) {
         }
     }
     if game.player.health > 0
+        && !game.player.is_exiting()
         && entity.sprite_bounds().intersects(Rect::new(
             game.player.pos.x - 6.0,
             game.player.pos.y - 6.0,
@@ -419,8 +420,9 @@ fn scheduled_delta(speed: f64, tick: u64) -> f64 {
 }
 
 fn trap_damage(game: &mut Game, amount: i32) {
-    // Classic solid/crusher kills are outside ordinary enemy invulnerability.
-    if game.player.health > 0 {
+    // oPlayer1 Step 1559-1782 excludes exit sprites from solid/crusher hurt,
+    // independently of the ordinary contact-damage invulnerability timer.
+    if game.player.health > 0 && !game.player.is_exiting() {
         game.player.health -= amount;
         game.events.push(GameEvent::Damage { amount });
         if game.player.health <= 0 {
@@ -1238,6 +1240,73 @@ mod tests {
         tick(&mut game);
         assert_eq!(game.player.health, -6);
         assert_eq!(game.player.state, PlayerState::Dead);
+    }
+
+    #[test]
+    fn actual_door_exit_excludes_crusher_hurt_without_freezing_traps() {
+        use crate::characters::{self, Character};
+        use crate::{InputFrame, RunState};
+        for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
+            for object in ["oSmashTrap", "oCeilingTrap", "oBoulder", "oPushBlock"] {
+                let mut level = crate::level::Level::default();
+                level.set_tile(6, 7, '@').unwrap();
+                level.set_tile(7, 7, 'X').unwrap();
+                for x in 0..40 {
+                    level.set_tile(x, 8, '1').unwrap();
+                }
+                let mut game = Game::shell(11, RulesPreset::Classic);
+                game.load_custom(&level, "crusher-exit", "");
+                characters::apply(&mut game, character);
+                for _ in 0..8 {
+                    game.step(&InputFrame::default());
+                }
+                let mut ordinary = game.clone();
+                for _ in 0..30 {
+                    game.step(&InputFrame {
+                        right: true,
+                        up: true,
+                        ..Default::default()
+                    });
+                    if game.player.is_exiting() {
+                        break;
+                    }
+                }
+                assert_eq!(game.state, RunState::Ending);
+                assert!(game.player.is_exiting());
+                for exiting in [true, false] {
+                    let target = if exiting { &mut game } else { &mut ordinary };
+                    let health = target.player.health;
+                    let velocity = target.player.vel;
+                    // An arriving, already active hazard is a controlled world
+                    // fixture. Exit onset itself uses the actual door/input
+                    // path, with no player state, health or velocity injection.
+                    let id = target.world.spawn(object, target.player.pos);
+                    let contact = Vec2::new(
+                        target.player.pos.x,
+                        target.player.pos.y - if object == "oCeilingTrap" { 8. } else { 0. },
+                    );
+                    let hazard = target.world.entity_mut(id).unwrap();
+                    let mask = hazard.sprite_bounds();
+                    hazard.pos.x += contact.x - (mask.x + mask.w / 2.);
+                    hazard.pos.y += contact.y - (mask.y + mask.h / 2.);
+                    if object == "oCeilingTrap" {
+                        hazard.state = 1;
+                    }
+                    let age = hazard.age;
+                    target.step(&InputFrame::default());
+                    assert!(target.world.entity(id).unwrap().age > age);
+                    if exiting {
+                        assert_eq!(target.player.health, health, "{character:?}/{object}");
+                        assert_eq!(target.player.vel, velocity, "{character:?}/{object}");
+                        assert!(target.player.is_exiting(), "{character:?}/{object}");
+                        assert_eq!(target.state, RunState::Ending);
+                    } else {
+                        assert!(target.player.health < health, "{character:?}/{object}");
+                        assert_eq!(target.state, RunState::Dead);
+                    }
+                }
+            }
+        }
     }
     #[test]
     fn moving_solid_fractional_speed_uses_global_tick_schedule() {
