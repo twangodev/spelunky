@@ -1,5 +1,5 @@
-//! Source-derived enemy state machines. Sprite collision remains an approximation:
-//! actors use rectangular bounds rather than the GM sprite masks.
+//! Source-derived enemy state machines. Explicit precise solid queries use source
+//! sprite masks; collision events and unvalidated transforms retain their limits.
 use crate::model::*;
 
 mod caves;
@@ -297,11 +297,24 @@ pub(super) fn can_stomp(game: &Game, e: &Entity) -> bool {
         && (e.object != "oManTrap" || spike || e.state == 97)
 }
 
+/// Source isCollision*/getIdCollision* helpers explicitly request precise masks.
+/// Direct collision_point(..., 0, ...) calls intentionally keep bbox queries.
+pub(super) fn solid_mask(world: &World, r: Rect, excluded: u64) -> bool {
+    world.tiles_collide_precision(r, "oSolid", crate::CollisionPrecision::Precise)
+        || world.entities.iter().any(|other| {
+            other.id != excluded
+                && other.alive
+                && other.solid
+                && !other.held
+                && other.mask_intersects(r, crate::CollisionPrecision::Precise)
+        })
+}
+
 /// Classic moveTo quantizes fractional speeds by global time, and resolves X first.
 /// Movable-solid pushing and one-way platforms are not represented here yet.
 pub(super) fn move_body(world: &World, e: &mut Entity, gravity: f64) -> (bool, bool) {
     fn collides(world: &World, e: &Entity, r: Rect) -> bool {
-        world.collides_except(r, e.id)
+        solid_mask(world, r, e.id)
     }
     fn displacement(v: f64, time: u64) -> i32 {
         let f = v.abs().fract();
@@ -363,10 +376,10 @@ pub(super) fn steer_toward(e: &mut Entity, target: Vec2, speed: f64) {
 /// stunned body, and retains its impact speed until applying the bounce.
 pub(super) fn settle_body(world: &World, e: &mut Entity, impact_y: f64) {
     let b = e.bounds();
-    let left = world.collides_except(Rect::new(b.x - 1.0, b.y, 1.0, b.h), e.id);
-    let right = world.collides_except(Rect::new(b.x + b.w, b.y, 1.0, b.h), e.id);
-    let top = world.collides_except(Rect::new(b.x, b.y - 1.0, b.w, 1.0), e.id);
-    let bottom = world.collides_except(Rect::new(b.x, b.y + b.h, b.w, 1.0), e.id);
+    let left = solid_mask(world, Rect::new(b.x - 1.0, b.y, 1.0, b.h), e.id);
+    let right = solid_mask(world, Rect::new(b.x + b.w, b.y, 1.0, b.h), e.id);
+    let top = solid_mask(world, Rect::new(b.x, b.y - 1.0, b.w, 1.0), e.id);
+    let bottom = solid_mask(world, Rect::new(b.x, b.y + b.h, b.w, 1.0), e.id);
     for (key, value) in [
         ("collision_left", 2.0),
         ("collision_top", 6.0),

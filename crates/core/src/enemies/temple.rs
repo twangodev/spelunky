@@ -105,7 +105,7 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
 
 fn ground(world: &World, e: &Entity) -> bool {
     let b = e.bounds();
-    world.collides_except(Rect::new(b.x, b.y + b.h, b.w, 1.0), e.id)
+    super::solid_mask(world, Rect::new(b.x, b.y + b.h, b.w, 1.0), e.id)
 }
 fn countdown(e: &mut Entity, key: &str) {
     let v = e.value(key);
@@ -272,7 +272,6 @@ fn hawk(game: &mut Game, e: &mut Entity) {
             game.player.pos = Vec2::new(e.pos.x + if e.facing > 0 { 0.0 } else { 16.0 }, e.pos.y);
             game.player.previous_pos = game.player.pos;
             game.player.vel = Vec2::new(6.0 * e.facing as f64, -6.0);
-            game.player.stun = 0;
             game.player.state = crate::PlayerState::Stunned;
             game.player.data.insert("bounced".into(), 0.0);
             super::drop_from_throw(game);
@@ -432,7 +431,11 @@ fn olmec_rect(e: &Entity) -> Rect {
     Rect::new(e.pos.x + 2.0, e.pos.y, 60.0, 64.0)
 }
 fn olmec_ground(world: &World, e: &Entity) -> bool {
-    world.collides(Rect::new(e.pos.x + 2.0, e.pos.y + 64.0, 60.0, 1.0))
+    super::solid_mask(
+        world,
+        Rect::new(e.pos.x + 2.0, e.pos.y + 64.0, 60.0, 1.0),
+        e.id,
+    )
 }
 fn olmec_move(world: &World, e: &mut Entity) -> bool {
     // Platform Engine/moveTo.gml samples fractional displacement against the
@@ -447,28 +450,29 @@ fn olmec_move(world: &World, e: &mut Entity) -> bool {
         let v = if horizontal { e.vel.x } else { e.vel.y };
         let n = displacement(v, e.value("simulation_tick") as u64);
         for _ in 0..n.unsigned_abs() {
-            let old = e.pos;
-            if horizontal {
-                e.pos.x += f64::from(n.signum());
+            let b = olmec_rect(e);
+            let edge = if horizontal {
+                Rect::new(
+                    if n < 0 { b.x - 1.0 } else { b.x + b.w },
+                    b.y + 5.0,
+                    1.0,
+                    b.h - 5.0,
+                )
             } else {
-                e.pos.y += f64::from(n.signum());
-            }
-            let rect = olmec_rect(e);
-            if world.collides(rect)
-                || world.entities.iter().any(|o| {
-                    o.alive
-                        && o.id != e.id
-                        && (o.solid || crate::catalog::is_solid(&o.object))
-                        && o.sprite_bounds().intersects(rect)
-                })
-            {
-                e.pos = old;
+                Rect::new(b.x, if n < 0 { b.y - 1.0 } else { b.y + b.h }, b.w, 1.0)
+            };
+            if super::solid_mask(world, edge, e.id) {
                 if horizontal {
                     e.vel.x = 0.0;
                 } else if v < 0.0 {
                     ceiling = true;
                 }
                 break;
+            }
+            if horizontal {
+                e.pos.x += f64::from(n.signum());
+            } else {
+                e.pos.y += f64::from(n.signum());
             }
         }
     }
@@ -480,8 +484,7 @@ fn olmec(game: &mut Game, e: &mut Entity) {
     // oGame moving-solid pass. This deliberately differs from moveTo's integer
     // displacement, and includes the source's persistent carryPlayer flag.
     if e.value("carryPlayer") != 0.0
-        || Rect::new(e.pos.x - 1.0, e.pos.y, 68.0, 63.0)
-            .intersects(game.player.sprite_bounds())
+        || Rect::new(e.pos.x - 1.0, e.pos.y, 68.0, 63.0).intersects(game.player.sprite_bounds())
     {
         game.player.pos.x += e.vel.x;
         game.player.pos.y += e.vel.y;
@@ -496,10 +499,12 @@ fn olmec(game: &mut Game, e: &mut Entity) {
     let grounded = olmec_ground(&game.world, e);
     let player_on_top = (game.player.pos.y + 8.0 - old.y).abs() < 3.0
         && (game.player.pos.x - (old.x + 32.0)).abs() < 34.0;
-    e.data.insert("carryPlayer".into(), f64::from(
-        Rect::new(e.pos.x, e.pos.y - 2.0, 65.0, 67.0)
-            .intersects(game.player.sprite_bounds()),
-    ));
+    e.data.insert(
+        "carryPlayer".into(),
+        f64::from(
+            Rect::new(e.pos.x, e.pos.y - 2.0, 65.0, 67.0).intersects(game.player.sprite_bounds()),
+        ),
+    );
     // oPlayer1 Step's crushed check is origin-in-oSolid in every state;
     // touching the boss with a limb is not by itself lethal.
     if olmec_rect(e).contains(game.player.pos) && !player_on_top && game.player.health > 0 {
@@ -804,7 +809,8 @@ fn magma_man(game: &mut Game, e: &mut Entity) {
         return;
     }
     let b = e.bounds();
-    let wall = game.world.collides_except(
+    let wall = super::solid_mask(
+        &game.world,
         Rect::new(
             if e.facing < 0 { b.x - 1.0 } else { b.x + b.w },
             b.y,
@@ -867,8 +873,14 @@ fn magma(game: &mut Game, e: &mut Entity) {
         spawn(game, "oMagmaTrail", e.pos);
     }
     crate::world_events::detritus(game, e);
-    if !e.alive { return; }
-    if game.world.collides_except(Rect::new(e.pos.x - 8.0, e.pos.y + 8.0, 16.0, 1.0), e.id) {
+    if !e.alive {
+        return;
+    }
+    if super::solid_mask(
+        &game.world,
+        Rect::new(e.pos.x - 8.0, e.pos.y + 8.0, 16.0, 1.0),
+        e.id,
+    ) {
         e.vel = Vec2::default();
         if e.value("dying") == 0.0 {
             e.sprite = "sMagmaManCreate".into();
@@ -879,13 +891,16 @@ fn magma(game: &mut Game, e: &mut Entity) {
     e.animation += 0.3;
     if e.value("dying") != 0.0 && e.animation + 1e-9 >= 7.0 {
         let id = spawn(game, "oMagmaMan", Vec2::new(e.pos.x - 8.0, e.pos.y - 8.0));
-        if let Some(m) = game.world.entity_mut(id) { m.health = e.health; }
+        if let Some(m) = game.world.entity_mut(id) {
+            m.health = e.health;
+        }
         e.alive = false;
         return;
     }
     if game.world.tiles_collide(e.sprite_bounds(), "oWater")
         || game.world.entities.iter().any(|water| {
-            water.alive && crate::catalog::is_a(&water.object, "oWater")
+            water.alive
+                && crate::catalog::is_a(&water.object, "oWater")
                 && water.sprite_bounds().intersects(e.sprite_bounds())
         })
     {
@@ -927,23 +942,27 @@ fn ignite(game: &mut Game, e: &Entity) {
             game.player.held = None;
         }
     }
-    let mut flames=Vec::new();
+    let mut flames = Vec::new();
     for other in game.world.entities.iter_mut().filter(|o| {
         o.alive
             && super::is_enemy(&o.object)
-            && o.object!="oMagmaMan"
+            && o.object != "oMagmaMan"
             && o.sprite_bounds().intersects(e.sprite_bounds())
     }) {
-        if other.state!=98 {flames.push(other.pos);}
+        if other.state != 98 {
+            flames.push(other.pos);
+        }
         other.health -= 2;
         other.vel = Vec2::new(if e.pos.x < other.pos.x { -3.0 } else { 3.0 }, -4.0);
         other.data.insert("burning".into(), 100.0);
-        if e.object=="oMagma" || !matches!(other.object.as_str(), "oTombLord" | "oYetiKing") {
+        if e.object == "oMagma" || !matches!(other.object.as_str(), "oTombLord" | "oYetiKing") {
             other.state = 98;
             other.timer = 50;
         }
     }
-    for pos in flames {game.sound("sndFlame",pos);}
+    for pos in flames {
+        game.sound("sndFlame", pos);
+    }
 }
 
 #[cfg(test)]

@@ -210,7 +210,6 @@ fn yeti(game: &mut Game, e: &mut Entity) {
             game.player.previous_pos = game.player.pos;
             enter(e, 3);
             game.player.vel = Vec2::new(f64::from(e.facing) * 6.0, -6.0);
-            game.player.stun = 0;
             game.player.state = PlayerState::Stunned;
             game.player.data.insert("wall_hurt".into(), 1.0);
             game.player.data.insert("bounced".into(), 0.0);
@@ -518,7 +517,7 @@ fn king(game: &mut Game, e: &mut Entity) {
     if e.state < 2 {
         phase(e, 0.25);
     }
-    if game.world.collides_except(e.bounds(), e.id) {
+    if super::solid_mask(&game.world, e.bounds(), e.id) {
         e.pos.y -= 2.0;
     }
 }
@@ -630,13 +629,13 @@ fn boss(game: &mut Game, e: &mut Entity) {
     }
     // Boss Step applies gravity before moveTo (the walkers do it after).
     e.vel.y = (e.vel.y + 0.6).min(10.0);
-    let mut feet = e.bounds();
-    feet.y += 1.0;
-    if game.world.collides_except(feet, e.id) {
+    let b = e.bounds();
+    let feet = Rect::new(b.x, b.y + b.h, b.w, 1.0);
+    if super::solid_mask(&game.world, feet, e.id) {
         e.vel.y = 0.0;
     }
     move_body(&game.world, e, 0.0);
-    if game.world.collides_except(e.bounds(), e.id) {
+    if super::solid_mask(&game.world, e.bounds(), e.id) {
         e.pos.y -= 2.0;
     }
     if e.state == 99 {
@@ -690,7 +689,7 @@ fn eject(game: &mut Game, e: &mut Entity) {
         e.vel.x = 0.0;
         e.vel.y += 0.5;
         let top = Rect::new(e.pos.x - 4.0, e.pos.y - 5.0, 8.0, 1.0);
-        if e.vel.y >= 0.0 || game.world.collides_except(top, e.id) {
+        if e.vel.y >= 0.0 || super::solid_mask(&game.world, top, e.id) {
             enter(e, 2);
             e.vel.y = 0.0;
             e.sprite = "sAlienDeploy".into();

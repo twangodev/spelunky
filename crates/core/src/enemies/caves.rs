@@ -1,7 +1,7 @@
 //! Cave enemy state machines translated from the Classic 1.1 event sources.
 //!
-//! Positions retain original GameMaker instance origins. Collision uses the
-//! shared source sprite rectangles rather than per-pixel masks. Moving sight
+//! Positions retain original GameMaker instance origins. Explicit solid edge
+//! helpers use precise source masks; contact events retain sprite bounds. Moving sight
 //! instances alert all nearby cavemen and hawkmen, as the source collision event
 //! does. New sight instances first move on the next dispatcher tick; GameMaker's
 //! within-frame instance scheduling has not been reproduced. Animation-end transitions use the
@@ -249,17 +249,18 @@ fn hanging_spider(game: &mut Game, e: &mut Entity, giant: bool) {
 
 fn bottom(world: &World, e: &Entity) -> bool {
     let r = bounds(e);
-    world.collides_except(Rect::new(r.x, r.y + r.h, r.w, 1.0), e.id)
+    super::solid_mask(world, Rect::new(r.x, r.y + r.h, r.w, 1.0), e.id)
 }
 
 fn top(world: &World, e: &Entity) -> bool {
     let r = bounds(e);
-    world.collides_except(Rect::new(r.x, r.y - 1.0, r.w, 1.0), e.id)
+    super::solid_mask(world, Rect::new(r.x, r.y - 1.0, r.w, 1.0), e.id)
 }
 
 fn side(world: &World, e: &Entity, direction: i8) -> bool {
     let r = bounds(e);
-    world.collides_except(
+    super::solid_mask(
+        world,
         Rect::new(
             if direction < 0 { r.x - 1.0 } else { r.x + r.w },
             r.y,
@@ -319,7 +320,7 @@ fn snake(game: &mut Game, e: &mut Entity) {
         }
     }
     e.sprite = "sSnakeWalkL".into();
-    if game.world.collides_except(e.bounds(), e.id) {
+    if super::solid_mask(&game.world, e.bounds(), e.id) {
         e.pos.y -= 2.0;
     }
     e.data.insert(

@@ -1,7 +1,7 @@
 //! Jungle behaviors translated from Classic 1.1 enemy events.
 //! Instances retain original GameMaker sprite origins; probes use collision centers.
 use super::{can_stomp, center, event_bounds, move_body, steer_toward, touches_player};
-use crate::model::{Area, Entity, Game, PlayerState, Vec2, World};
+use crate::model::{Area, Entity, Game, PlayerState, Rect, Vec2, World};
 
 pub fn matches(object: &str) -> bool {
     matches!(
@@ -71,10 +71,18 @@ fn countdown(e: &mut Entity, key: &str) {
 }
 
 fn collision_offset(world: &World, e: &Entity, dx: f64, dy: f64) -> bool {
-    let mut bounds = e.bounds();
-    bounds.x += dx;
-    bounds.y += dy;
-    world.collides_except(bounds, e.id)
+    let b = e.bounds();
+    // isCollisionLeft/Right/Top/Bottom check inclusive boundary lines.
+    let edge = if dx < 0.0 {
+        Rect::new(b.x + dx, b.y, 1.0, b.h)
+    } else if dx > 0.0 {
+        Rect::new(b.x + b.w + dx - 1.0, b.y, 1.0, b.h)
+    } else if dy < 0.0 {
+        Rect::new(b.x, b.y + dy, b.w, 1.0)
+    } else {
+        Rect::new(b.x, b.y + b.h + dy - 1.0, b.w, 1.0)
+    };
+    super::solid_mask(world, edge, e.id)
 }
 
 fn distance_to_player(game: &Game, e: &Entity) -> f64 {
@@ -921,7 +929,7 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
             e.vel.x = 0.0;
         }
     }
-    if game.world.collides_except(e.bounds(), e.id) {
+    if super::solid_mask(&game.world, e.bounds(), e.id) {
         e.pos.y -= 2.0;
     }
     // An awake trap eats rather than dealing ordinary contact damage. Spike

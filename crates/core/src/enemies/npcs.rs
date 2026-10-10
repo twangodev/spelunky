@@ -262,14 +262,13 @@ fn damsel(game: &mut Game, e: &mut Entity) {
         2 => {
             e.sprite = "sDamselStunL".into();
             let b = e.bounds();
-            let supported = game
-                .world
-                .collides_except(Rect::new(b.x, b.y + b.h + 1.0, b.w, 1.0), e.id)
-                || game.world.entities.iter().any(|web| {
-                    web.alive
-                        && web.object == "oWeb"
-                        && web.sprite_bounds().intersects(e.sprite_bounds())
-                });
+            let supported =
+                super::solid_mask(&game.world, Rect::new(b.x, b.y + b.h + 1.0, b.w, 1.0), e.id)
+                    || game.world.entities.iter().any(|web| {
+                        web.alive
+                            && web.object == "oWeb"
+                            && web.sprite_bounds().intersects(e.sprite_bounds())
+                    });
             if grounded || supported {
                 e.vel.x *= 0.7;
                 if e.vel.x.abs() < 0.5 {
@@ -509,9 +508,7 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
             && game.player.pos.y <= e.pos.y + 8.0
             && {
                 let b = e.bounds();
-                !game
-                    .world
-                    .collides_except(Rect::new(b.x, b.y - 4.0, b.w, 1.0), e.id)
+                !super::solid_mask(&game.world, Rect::new(b.x, b.y - 4.0, b.w, 1.0), e.id)
             }
         {
             e.vel.y = -f64::from(7 + game.rng.range(2));
@@ -521,6 +518,8 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
             && !can_stomp(game, e)
             && game.player.invincible == 0
             && game.player.stun == 0
+            && game.player.state != PlayerState::Stunned
+            && game.player.state != PlayerState::Dead
         {
             if !game.world.solid_at(e.pos.x + 8.0, e.pos.y - 4.0) {
                 e.state = 3;
@@ -535,7 +534,6 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
                     Vec2::new(e.pos.x + if e.facing > 0 { 0.0 } else { 16.0 }, e.pos.y);
                 game.player.previous_pos = game.player.pos;
                 game.player.vel = Vec2::new(f64::from(e.facing) * 6.0, -6.0);
-                game.player.stun = 0;
                 game.player.state = PlayerState::Stunned;
                 game.player.data.insert("bounced".into(), 0.0);
                 game.player.data.insert("wall_hurt".into(), 1.0);

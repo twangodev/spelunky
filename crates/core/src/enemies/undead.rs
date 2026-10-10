@@ -78,15 +78,15 @@ fn side(world: &World, e: &Entity, direction: i8, distance: f64) -> bool {
     } else {
         r.x + r.w + distance - 1.0
     };
-    world.collides_except(Rect::new(x, r.y, 1.0, r.h), e.id)
+    super::solid_mask(world, Rect::new(x, r.y, 1.0, r.h), e.id)
 }
 fn bottom(world: &World, e: &Entity) -> bool {
     let r = bounds(e);
-    world.collides_except(Rect::new(r.x, r.y + r.h, r.w, 1.0), e.id)
+    super::solid_mask(world, Rect::new(r.x, r.y + r.h, r.w, 1.0), e.id)
 }
 fn top(world: &World, e: &Entity) -> bool {
     let r = bounds(e);
-    world.collides_except(Rect::new(r.x, r.y - 1.0, r.w, 1.0), e.id)
+    super::solid_mask(world, Rect::new(r.x, r.y - 1.0, r.w, 1.0), e.id)
 }
 fn solid_at(world: &World, e: &Entity, x: f64, y: f64) -> bool {
     world.solid_point_except(Vec2::new(x, y), e.id)
@@ -211,7 +211,7 @@ fn skeleton(game: &mut Game, e: &mut Entity) {
         }
         e.vel.x = f64::from(e.facing);
     }
-    if game.world.collides_except(bounds(e), e.id) {
+    if super::solid_mask(&game.world, bounds(e), e.id) {
         e.pos.y -= 2.0;
     }
     if e.state != 98 {

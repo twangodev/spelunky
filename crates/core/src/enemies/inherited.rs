@@ -713,4 +713,110 @@ mod tests {
             assert_eq!(e.state == 98, object == "oMagma");
         }
     }
+    #[test]
+    fn actual_step_yeti_and_hawk_throws_preserve_existing_stun_timer() {
+        for object in ["oYeti", "oHawkman"] {
+            let mut g = room();
+            for x in 0..30 {
+                g.world.set_tile(x, 9, "oBlock");
+            }
+            g.player.pos = Vec2::new(136.0, 136.0);
+            g.player.state = PlayerState::Stunned;
+            g.player.stun = 20;
+            g.player.vel = Vec2::new(1.0, 0.0);
+            g.player.sprite = "sDieLR".into();
+            let id = g.world.spawn(object, Vec2::new(128.0, 128.0));
+            let e = g.world.entity_mut(id).unwrap();
+            e.vel = Vec2::default();
+            e.timer = 20;
+            g.step(&InputFrame::default());
+            assert_eq!(
+                g.world.entity(id).unwrap().state,
+                3,
+                "{object} must execute its actual throw"
+            );
+            assert_eq!(
+                g.player.stun, 20,
+                "{object} must preserve the preexisting timer"
+            );
+            assert_eq!(g.player.state, PlayerState::Stunned);
+            assert_eq!(g.player.vel.y, -6.0);
+        }
+    }
+    #[test]
+    fn actual_step_keeper_does_not_throw_zero_timer_stunned_player() {
+        let mut g = room();
+        for x in 0..30 {
+            g.world.set_tile(x, 9, "oBlock");
+        }
+        g.player.pos = Vec2::new(136.0, 136.0);
+        g.player.state = PlayerState::Stunned;
+        g.player.vel = Vec2::new(1.0, 0.0);
+        g.player.sprite = "sDieLR".into();
+        let id = g.world.spawn("oShopkeeper", Vec2::new(128.0, 128.0));
+        let e = g.world.entity_mut(id).unwrap();
+        e.vel = Vec2::default();
+        e.state = 2;
+        e.data.insert("has_gun".into(), 0.0);
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().state, 2);
+        assert_ne!(g.player.vel.y, -6.0);
+    }
+    #[test]
+    fn actual_step_dark_fall_edge_uses_precise_solid_mask() {
+        // Source getIdCollisionRight(1) uses precise=1. The DarkFall top
+        // row begins with a transparent pixel, followed by opaque pixels.
+        for dynamic in [false, true] {
+            for opaque in [false, true] {
+                let mut g = room();
+                if dynamic {
+                    g.world.spawn("oDarkFall", Vec2::new(80.0, 80.0));
+                } else {
+                    g.world.set_tile(5, 5, "oDarkFall");
+                }
+                let start_x = if opaque { 67.0 } else { 66.0 };
+                let id = g.world.spawn("oSnake", Vec2::new(start_x, 65.0));
+                let e = g.world.entity_mut(id).unwrap();
+                e.vel = Vec2::new(1.0, 0.0);
+                e.timer = 20;
+                g.step(&InputFrame::default());
+                assert_eq!(
+                    g.world.entity(id).unwrap().pos.x,
+                    start_x + if opaque { 0.0 } else { 1.0 },
+                    "dynamic={dynamic}, opaque={opaque}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn actual_step_leaves_underside_keeps_source_platform_family_filter() {
+        // Leaves' last row has transparent pixels 0..4, then opaque pixel5.
+        // A real Snake's upward edge reaches only that final terrain row.
+        // Both controls remain open: Leaves derives oPlatform, not oSolid.
+        for opaque in [false, true] {
+            let mut g = room();
+            g.world.set_tile(5, 5, "oLeaves");
+            let id = g
+                .world
+                .spawn("oSnake", Vec2::new(if opaque { 72.0 } else { 67.0 }, 96.0));
+            let e = g.world.entity_mut(id).unwrap();
+            e.vel = Vec2::new(0.0, -1.0);
+            e.timer = 20;
+            g.step(&InputFrame::default());
+            assert_eq!(g.world.entity(id).unwrap().pos.y, 95.0);
+        }
+    }
+    #[test]
+    fn actual_step_crush_point_keeps_source_nonprecise_flag() {
+        let mut g = room();
+        g.world.set_tile(5, 5, "oDarkFall");
+        let id = g.world.spawn("oSnake", Vec2::new(72.0, 72.0));
+        let e = g.world.entity_mut(id).unwrap();
+        e.vel = Vec2::default();
+        e.timer = 20;
+        // Snake's explicit collision_point(x+8,y+8,oSolid,0,0) sees
+        // the transparent top-left corner because its precision flag is 0.
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(id).is_none_or(|e| e.health <= 0));
+    }
 }
