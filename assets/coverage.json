@@ -8,9 +8,9 @@
     },
     "by_status": {
       "asset_only_unverified": 45,
-      "host_replacement_unverified": 139,
-      "no_direct_handler_found": 5,
-      "partial_handler_present": 229,
+      "host_replacement_unverified": 138,
+      "no_direct_handler_found": 4,
+      "partial_handler_present": 231,
       "partial_static_tile_adapter": 22,
       "source_abstraction": 13
     },
@@ -392,7 +392,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 247,
+          "line": 246,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -420,7 +420,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 247,
+          "line": 246,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -448,7 +448,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 247,
+          "line": 246,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -476,7 +476,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 247,
+          "line": 246,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -498,7 +498,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 247,
+          "line": 246,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -526,7 +526,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 247,
+          "line": 246,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -709,7 +709,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1125,
+          "line": 1158,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -827,7 +827,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 873,
+          "line": 906,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -877,7 +877,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 249,
+          "line": 250,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -965,7 +965,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 211,
+          "line": 212,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -988,22 +988,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 225,
+          "line": 226,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 451,
+          "line": 452,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 460,
+          "line": 461,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 479,
+          "line": 480,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -1024,12 +1024,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 225,
+          "line": 226,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 461,
+          "line": 462,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -1207,7 +1207,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 211,
+          "line": 212,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -1228,7 +1228,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 228,
+          "line": 229,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -1415,22 +1415,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 225,
+          "line": 226,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 452,
+          "line": 453,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 462,
+          "line": 463,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 479,
+          "line": 480,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -1476,22 +1476,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 225,
+          "line": 226,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 453,
+          "line": 454,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 466,
+          "line": 467,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 479,
+          "line": 480,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -2679,7 +2679,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 263,
+          "line": 264,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -3076,7 +3076,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 228,
+          "line": 229,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -3248,7 +3248,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 212,
+          "line": 213,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -3271,12 +3271,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 225,
+          "line": 226,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 468,
+          "line": 469,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -3506,7 +3506,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 210,
+          "line": 211,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -3758,7 +3758,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 444,
+          "line": 443,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -4266,7 +4266,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 249,
+          "line": 250,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -4306,8 +4306,19 @@
     },
     {
       "category": "gameplay",
-      "handlers": [],
-      "note": "No audited object dispatch exists; source gameplay behavior needs implementation or documented equivalent.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 209,
+          "module": "crates/core/src/world_events.rs"
+        },
+        {
+          "kind": "manually_reviewed_shared_behavior",
+          "line": 424,
+          "module": "crates/app/src/scene.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oHintHand",
       "parity_verified": false,
       "source_events": [
@@ -4316,7 +4327,7 @@
       ],
       "source_id": 760,
       "source_path": "Objects/Other/oHintHand.xml",
-      "status": "no_direct_handler_found"
+      "status": "partial_handler_present"
     },
     {
       "category": "gameplay",
@@ -4369,7 +4380,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 209,
+          "line": 210,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -4463,7 +4474,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 249,
+          "line": 250,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -4882,7 +4893,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 722,
+          "line": 737,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -4940,7 +4951,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 694,
+          "line": 709,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -5033,17 +5044,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 225,
+          "line": 226,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 454,
+          "line": 455,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 467,
+          "line": 468,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -5063,12 +5074,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 225,
+          "line": 226,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 470,
+          "line": 471,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -5093,7 +5104,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 213,
+          "line": 214,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -5114,17 +5125,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 225,
+          "line": 226,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 464,
+          "line": 465,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 263,
+          "line": 264,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -5195,7 +5206,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 263,
+          "line": 264,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -6816,7 +6827,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 228,
+          "line": 229,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -6841,7 +6852,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 229,
+          "line": 230,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -7102,17 +7113,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 225,
+          "line": 226,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 463,
+          "line": 464,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 474,
+          "line": 475,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -7354,7 +7365,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1043,
+          "line": 1076,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -7371,7 +7382,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1050,
+          "line": 1083,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -7624,7 +7635,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 263,
+          "line": 264,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -7641,7 +7652,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 250,
+          "line": 251,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -7662,7 +7673,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 263,
+          "line": 264,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -7681,7 +7692,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 263,
+          "line": 264,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -7701,7 +7712,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 263,
+          "line": 264,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -8498,7 +8509,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 249,
+          "line": 250,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -8588,17 +8599,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 225,
+          "line": 226,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 450,
+          "line": 451,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 478,
+          "line": 479,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -8695,7 +8706,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 318,
+          "line": 317,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -8722,7 +8733,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 318,
+          "line": 317,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -8778,7 +8789,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 318,
+          "line": 317,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -8805,7 +8816,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 348,
+          "line": 347,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -9036,12 +9047,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 225,
+          "line": 226,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 465,
+          "line": 466,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -9231,7 +9242,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1152,
+          "line": 1185,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10353,7 +10364,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 669,
+          "line": 695,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10370,7 +10381,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 669,
+          "line": 695,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10445,7 +10456,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 667,
+          "line": 693,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10462,7 +10473,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 660,
+          "line": 682,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10479,7 +10490,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 665,
+          "line": 691,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10496,7 +10507,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 663,
+          "line": 689,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10513,7 +10524,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 664,
+          "line": 690,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10530,7 +10541,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 668,
+          "line": 694,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10546,25 +10557,25 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "explicit_object_match_arm",
+          "line": 684,
+          "module": "crates/core/src/hub.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oXStart",
       "parity_verified": false,
       "source_events": [],
       "source_id": 549,
       "source_path": "Objects/Other/Title/oXStart.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "ui",
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 666,
+          "line": 692,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10581,7 +10592,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 662,
+          "line": 688,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10598,7 +10609,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 661,
+          "line": 683,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10689,12 +10700,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 225,
+          "line": 226,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 469,
+          "line": 470,
           "module": "crates/core/src/world_events.rs"
         }
       ],
