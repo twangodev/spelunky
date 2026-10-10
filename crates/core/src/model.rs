@@ -1047,4 +1047,35 @@ mod geometry_tests {
         assert!(entity.mask_contains(p, CollisionPrecision::BoundingBox));
         assert!(!entity.mask_contains(p, CollisionPrecision::Precise));
     }
+
+    #[test]
+    fn game_step_fractional_webball_events_preserve_transparent_and_opaque_contacts() {
+        // Canonical executable dispatch -> 0x4AD1A0 -> 0x48A4F0, independently
+        // evaluated with original Rock/WebBall mask bytes: all sixteen corner
+        // placements miss, and all sixteen interior controls hit.
+        for (rock_pos, expected_state) in [(72.0, 0), (76.0, 1)] {
+            for qx in [0.0, 0.25, 0.5, 0.75] {
+                for qy in [0.0, 0.25, 0.5, 0.75] {
+                    let mut game = Game::shell(1, RulesPreset::Classic);
+                    game.world = World::new(16, 12, Area::Mines, 1);
+                    game.player.pos = Vec2::new(24.0, 24.0);
+                    game.player.previous_pos = game.player.pos;
+                    game.world.spawn("oRock", Vec2::new(rock_pos, rock_pos));
+                    let id = game.world.spawn("oWebBall", Vec2::new(79.0 + qx, 82.0));
+                    let web = game.world.entity_mut(id).unwrap();
+                    web.vel = Vec2::new(1.0, -2.0 + qy);
+                    web.data.insert("life".into(), 50.0);
+
+                    game.step(&InputFrame::default());
+
+                    let web = game.world.entity(id).unwrap();
+                    assert_eq!(web.pos, Vec2::new(80.0 + qx, 80.0 + qy));
+                    assert_eq!(
+                        web.state, expected_state,
+                        "rock={rock_pos}, qx={qx}, qy={qy}"
+                    );
+                }
+            }
+        }
+    }
 }

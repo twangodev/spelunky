@@ -216,6 +216,9 @@ pub fn instance_sprite_bounds(
 /// independent from precise queries, exactly as Classic's `prec` arguments.
 pub struct CollisionMask {
     bounds: Rect,
+    /// Canonical fractional event placement is verified for single-frame
+    /// sprites. Multi-frame bbox loading still needs independent evidence.
+    fractional_event_bounds: Option<[i32; 4]>,
     frame: Option<&'static FrameBounds>,
     precise: bool,
     origin: [i32; 2],
@@ -242,6 +245,10 @@ pub fn instance_mask(
     });
     CollisionMask {
         bounds: instance_sprite_bounds(object, current_sprite, pos, animation, scale, angle),
+        fractional_event_bounds: frames
+            .filter(|frames| frames.frames.len() == 1)
+            .and_then(|_| sprite_def(sprite))
+            .map(|sprite| sprite.bounds),
         frame,
         precise: frames.is_some_and(|frames| frames.mask.shape == "PRECISE"),
         origin: sprite_def(sprite).map_or([0, 0], |sprite| sprite.origin),
@@ -332,29 +339,55 @@ impl CollisionMask {
         false
     }
 
-    /// Collision-event overlap between two instance masks. This deliberately
-    /// does not change explicit `prec=0` shape queries. Only pairs of precise
-    /// sprites with verified raster transforms use pixels; mixed mask kinds
-    /// and unsupported transforms retain the existing bounding-box behavior.
+    fn event_geometry(&self) -> Option<(Rect, Vec2)> {
+        if self.supports_precise_pixels() {
+            return Some((self.bounds, self.pos));
+        }
+        if self.angle != 0.0
+            || self.scale != Vec2::new(1.0, 1.0)
+            || !self.pos.x.is_finite()
+            || !self.pos.y.is_finite()
+        {
+            return None;
+        }
+        let [left, top, right, bottom] = self.fractional_event_bounds?;
+        // Canonical GM8 rounds each translated inclusive bbox edge before
+        // broad-phase rejection, and rounds the instance origin independently
+        // for pixel indexing. Rounding the origin alone differs at .5 ties.
+        let left = (self.pos.x + f64::from(left - self.origin[0])).round_ties_even();
+        let top = (self.pos.y + f64::from(top - self.origin[1])).round_ties_even();
+        let right = (self.pos.x + f64::from(right - self.origin[0])).round_ties_even();
+        let bottom = (self.pos.y + f64::from(bottom - self.origin[1])).round_ties_even();
+        Some((
+            Rect::new(left, top, right - left + 1.0, bottom - top + 1.0),
+            Vec2::new(self.pos.x.round_ties_even(), self.pos.y.round_ties_even()),
+        ))
+    }
+
+    /// Collision-event overlap between two precise instance masks. This does
+    /// not change explicit shape-query precision. Fractional placement is
+    /// verified only for single-frame, positive unit-scale, unrotated sprites;
+    /// mixed mask kinds and unsupported transforms retain their bbox fallback.
     pub fn intersects_mask(&self, other: &Self) -> bool {
-        if !self.bounds.intersects(other.bounds) {
+        if !self.precise || !other.precise {
+            return self.bounds.intersects(other.bounds);
+        }
+        let (Some((bounds, pos)), Some((other_bounds, other_pos))) =
+            (self.event_geometry(), other.event_geometry())
+        else {
+            return self.bounds.intersects(other.bounds);
+        };
+        if !bounds.intersects(other_bounds) {
             return false;
         }
-        if !self.precise
-            || !other.precise
-            || !self.supports_precise_pixels()
-            || !other.supports_precise_pixels()
-        {
-            return true;
-        }
-        let left = self.bounds.x.max(other.bounds.x) as i32;
-        let top = self.bounds.y.max(other.bounds.y) as i32;
-        let right = (self.bounds.x + self.bounds.w).min(other.bounds.x + other.bounds.w) as i32;
-        let bottom = (self.bounds.y + self.bounds.h).min(other.bounds.y + other.bounds.h) as i32;
+        let left = bounds.x.max(other_bounds.x) as i32;
+        let top = bounds.y.max(other_bounds.y) as i32;
+        let right = (bounds.x + bounds.w).min(other_bounds.x + other_bounds.w) as i32;
+        let bottom = (bounds.y + bounds.h).min(other_bounds.y + other_bounds.h) as i32;
         for y in top..bottom {
             for x in left..right {
-                if self.pixel(x - self.pos.x as i32, y - self.pos.y as i32)
-                    && other.pixel(x - other.pos.x as i32, y - other.pos.y as i32)
+                if self.pixel(x - pos.x as i32, y - pos.y as i32)
+                    && other.pixel(x - other_pos.x as i32, y - other_pos.y as i32)
                 {
                     return true;
                 }
@@ -739,8 +772,88 @@ mod tests {
             0.0,
         );
         assert!(!fractional.supports_precise_pixels());
-        assert!(fractional.intersects_mask(&corner));
+        assert!(!fractional.intersects_mask(&corner));
+        // The newly traced rounding belongs to Collision events only. The
+        // explicit point/rectangle query transform contract is unchanged.
+        assert!(fractional.intersects(corner.bounds(), CollisionPrecision::Precise));
+        let scaled = instance_mask(
+            "oWebBall",
+            "sWebBall",
+            Vec2::new(80.0, 80.25),
+            0.0,
+            Vec2::new(2.0, 2.0),
+            0.0,
+        );
+        assert!(scaled.intersects_mask(&corner));
+        let multiframe = instance_mask(
+            "oAlienBoss",
+            "sAlienBossDie",
+            Vec2::new(0.25, 0.0),
+            0.0,
+            unit,
+            0.0,
+        );
+        assert!(multiframe.event_geometry().is_none());
         assert!(web.intersects(corner.bounds(), CollisionPrecision::BoundingBox));
+    }
+
+    #[test]
+    fn fractional_events_round_translated_edges_and_origins_independently() {
+        let unit = Vec2::new(1.0, 1.0);
+        for (position, expected_left, expected_origin) in [
+            (80.25, 75.0, 80.0),
+            (80.5, 76.0, 80.0),
+            (80.75, 76.0, 81.0),
+            (81.5, 76.0, 82.0),
+            (-80.25, -85.0, -80.0),
+            (-80.5, -86.0, -80.0),
+            (-80.75, -86.0, -81.0),
+            (-81.5, -86.0, -82.0),
+        ] {
+            let web = instance_mask(
+                "oWebBall",
+                "sWebBall",
+                Vec2::new(position, position),
+                0.0,
+                unit,
+                0.0,
+            );
+            let (bounds, origin) = web.event_geometry().unwrap();
+            assert_eq!(bounds, Rect::new(expected_left, expected_left, 9.0, 9.0));
+            assert_eq!(origin, Vec2::new(expected_origin, expected_origin));
+        }
+        // Even-width source boxes can grow or shrink at translated .5 ties.
+        for (x, left, width) in [
+            (80.5, 76.0, 9.0),
+            (81.5, 78.0, 7.0),
+            (-80.5, -84.0, 7.0),
+            (-81.5, -86.0, 9.0),
+        ] {
+            let arrow = instance_mask("oArrow", "sArrowRight", Vec2::new(x, 80.0), 0.0, unit, 0.0);
+            let (bounds, _) = arrow.event_geometry().unwrap();
+            assert_eq!(bounds.x, left);
+            assert_eq!(bounds.w, width);
+        }
+        // Independently traced canonical bboxes are disjoint. Rounding only
+        // origins would instead put opaque pixels from these masks together.
+        let rock = instance_mask("oRock", "sRock", Vec2::new(71.5, 80.0), 0.0, unit, 0.0);
+        let web = instance_mask(
+            "oWebBall",
+            "sWebBall",
+            Vec2::new(80.5, 80.0),
+            0.0,
+            unit,
+            0.0,
+        );
+        assert_eq!(
+            rock.event_geometry().unwrap().0,
+            Rect::new(68.0, 77.0, 7.0, 7.0)
+        );
+        assert_eq!(
+            web.event_geometry().unwrap().0,
+            Rect::new(76.0, 75.0, 9.0, 9.0)
+        );
+        assert!(!rock.intersects_mask(&web));
     }
 
     #[test]
