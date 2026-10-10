@@ -111,7 +111,11 @@ pub fn init_entity(e: &mut Entity) {
             e.data.insert("damage".into(), 3.0);
         }
         "oWebBall" => {
-            e.data.entry("life".into()).or_insert(60.0);
+            // Entity initialization has no RNG access. The first weapon
+            // update supplies the source Create event's inclusive rand(20,100).
+            if !e.data.contains_key("life") {
+                e.data.insert("web_life_pending".into(), 1.0);
+            }
         }
         _ => {}
     }
@@ -130,7 +134,7 @@ pub fn use_weapon(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
     ) {
         return false;
     }
-    if input.down
+    if (input.down && object == "oBow")
         || game.player.state == PlayerState::Ducking
         || game
             .player
@@ -279,10 +283,11 @@ pub fn arm_bomb_arrow(game: &mut Game) -> bool {
     {
         return true;
     }
-    if game.player.bombs <= 0 || game.player.health <= 0 || game.player.stun > 0 {
+    if game.player.bombs <= 0 || super::player_dead(game) || game.player.is_stunned() {
         return true;
     }
-    game.player.bombs -= 1;
+    // Classic's bomb-arrow branch requires a bomb, but does not consume one.
+    // The decrement belongs to the separate dedicated bomb-throw branch.
     game.player.data.insert("bow_bomb_armed".into(), 1.0);
     game.player.data.insert("bow_bomb_fuse".into(), 80.0);
     true
@@ -329,7 +334,8 @@ fn fire_bow(game: &mut Game) {
     let e = game.world.entity_mut(id).unwrap();
     init_entity(e);
     owned(e, 1.0);
-    e.data.insert("safe".into(), 10.0);
+    e.data.insert("safe".into(), 1.0);
+    e.data.insert("safe_ticks".into(), 10.0);
     e.data.insert("thrown_by_player".into(), 1.0);
     e.vel.x = if facing < 0.0 {
         speed.min(-1.0)
@@ -345,6 +351,7 @@ fn fire_bow(game: &mut Game) {
     if bomb_arrow {
         e.data.insert("bomb_arrow".into(), 1.0);
         e.data.insert("bomb_arrow_fuse".into(), bomb_fuse);
+        e.data.insert("bomb_arrow_new_alarm".into(), 1.0);
         game.player.data.insert("bow_bomb_armed".into(), 0.0);
         game.player.data.remove("bow_bomb_fuse");
     }
@@ -392,40 +399,138 @@ fn move_projectile(game: &Game, e: &mut Entity) -> bool {
     false
 }
 
-fn move_item_projectile(game: &Game, e: &mut Entity, radius: f64) -> (bool, bool) {
-    let steps = e.vel.x.abs().max(e.vel.y.abs()).ceil().max(1.0) as u32;
-    let dx = e.vel.x / f64::from(steps);
-    let dy = e.vel.y / f64::from(steps);
-    let (mut wall, mut floor) = (false, false);
-    for _ in 0..steps {
-        if !wall {
-            let next = Vec2::new(e.pos.x + dx, e.pos.y);
-            if game.world.collides_except(
-                Rect::new(next.x - radius, next.y - radius, radius * 2.0, radius * 2.0),
-                e.id,
-            ) {
-                wall = true;
-            } else {
-                e.pos = next;
-            }
+/// oArrow and oFlare explicitly inherit oItem Step before their own code.
+/// Keep movement on the room's integer moveTo clock and preserve the original
+/// order of wall bounce, ground friction, arrow embedding and ceiling bounce.
+fn tick_item_body(game: &Game, e: &mut Entity) {
+    if e.held || !super::item_body_active(game, e) {
+        return;
+    }
+    let contact = |e: &Entity, x, y| super::body_contact(&game.world, e, x, y);
+    if game.world.solid_at_except(e.pos.x, e.pos.y, e.id) {
+        let (top, bottom, left, right) = (
+            contact(e, 0, -1),
+            contact(e, 0, 1),
+            contact(e, -1, 0),
+            contact(e, 1, 0),
+        );
+        if top && !bottom {
+            e.pos.y += 1.0;
+        } else if left && !right {
+            e.pos.x += 1.0;
+        } else if right && !left {
+            e.pos.x -= 1.0;
+        } else {
+            e.vel = Vec2::default();
         }
-        if !floor {
-            let next = Vec2::new(e.pos.x, e.pos.y + dy);
-            if game.world.collides_except(
-                Rect::new(next.x - radius, next.y - radius, radius * 2.0, radius * 2.0),
-                e.id,
-            ) {
-                floor = true;
-            } else {
-                e.pos = next;
+        return;
+    }
+    let dx = super::displacement(e.vel.x, game.engine_time());
+    let dy = super::displacement(e.vel.y, game.engine_time());
+    for _ in 0..dx.unsigned_abs() {
+        if super::body_horizontal_move_contact(&game.world, e, dx.signum() as i8) {
+            break;
+        }
+        e.pos.x += f64::from(dx.signum());
+    }
+    for _ in 0..dy.unsigned_abs() {
+        if contact(e, 0, dy.signum() as i8) {
+            break;
+        }
+        e.pos.y += f64::from(dy.signum());
+    }
+    let (left, right, bottom) = (contact(e, -1, 0), contact(e, 1, 0), contact(e, 0, 1));
+    if !left && !right {
+        e.data.insert("stuck".into(), 0.0);
+    }
+    if !bottom && e.value("stuck") == 0.0 {
+        e.vel.y += e.value("gravity");
+    }
+    e.vel.y = e.vel.y.min(8.0);
+    if left || right {
+        e.vel.x *= -0.5;
+        e.data.insert("gravity".into(), 0.6);
+    }
+    if bottom {
+        e.data.insert("gravity".into(), 0.6);
+        e.vel.y = if e.vel.y > 1.0 {
+            -e.vel.y * e.value("bounceFactor")
+        } else {
+            0.0
+        };
+        e.vel.x = if e.vel.x.abs() < 0.1 {
+            0.0
+        } else {
+            e.vel.x * e.value("frictionFactor")
+        };
+        if e.vel.y.abs() < 1.0 {
+            e.pos.y -= 1.0;
+            if !contact(e, 0, 1) {
+                e.pos.y += 1.0;
             }
+            e.vel.y = 0.0;
         }
     }
-    (wall, floor)
+    if e.object == "oArrow" && e.vel.x.abs() > 6.0 {
+        if left {
+            e.pos.x -= 2.0;
+            e.vel = Vec2::default();
+        } else if right {
+            e.pos.x += 2.0;
+            e.vel = Vec2::default();
+        }
+        e.data.insert("stuck".into(), 1.0);
+    } else if left && e.value("stuck") == 0.0 {
+        if !right {
+            e.pos.x += 1.0;
+        }
+    } else if right && e.value("stuck") == 0.0 {
+        e.pos.x -= 1.0;
+    }
+    if contact(e, 0, -1) {
+        if e.vel.y < 0.0 {
+            e.vel.y *= -0.8;
+        } else {
+            e.pos.y += 1.0;
+        }
+        e.data.insert("gravity".into(), 0.6);
+    }
+    if super::lava_at(game, Rect::new(e.pos.x - 3.0, e.pos.y - 3.0, 7.0, 7.0)) {
+        e.data.insert("gravity".into(), 0.0);
+        e.vel = Vec2::default();
+        e.pos.y += 0.05;
+    } else {
+        e.data.insert("gravity".into(), 0.6);
+    }
+    if super::lava_at(game, Rect::new(e.pos.x, e.pos.y - 5.0, 0.001, 0.001)) {
+        e.alive = false;
+    }
+}
+
+/// oArrow/oFishBone Step's literal image_angle quadrants. GML angles
+/// rotate counterclockwise; renderer/collision rotations use screen radians.
+pub(super) fn item_rotation(velocity: Vec2, stuck: bool, previous: f64) -> f64 {
+    let Vec2 { x, y } = velocity;
+    let angle = if x > 0.0 && y < 0.0 {
+        (-y / x).atan()
+    } else if x < 0.0 && y < 0.0 {
+        std::f64::consts::PI - (-y / -x).atan()
+    } else if x > 0.0 && y > 0.0 {
+        (y / x).atan()
+    } else if x < 0.0 && y > 0.0 {
+        std::f64::consts::PI + (y / -x).atan()
+    } else if x < 0.0 {
+        std::f64::consts::PI
+    } else if !stuck {
+        0.0
+    } else {
+        return previous;
+    };
+    -angle
 }
 
 fn hit_player(game: &mut Game, projectile: &mut Entity, damage: i32) {
-    if game.player.health <= 0 {
+    if super::player_dead(game) {
         return;
     }
     // Classic projectile damage bypasses contact-damage invulnerability.
@@ -435,9 +540,13 @@ fn hit_player(game: &mut Game, projectile: &mut Entity, damage: i32) {
     game.events.push(GameEvent::Damage { amount: damage });
     game.sound("sndHurt", game.player.pos);
     projectile.alive = false;
+    super::release_held_after_hit(game);
 }
 
 fn mattock_dig(game: &mut Game, e: &Entity) {
+    if matches!(game.world.name.as_str(), "rTitle" | "rHighscores") {
+        return;
+    }
     enum DigTarget {
         Tile(i32, i32),
         Dynamic(u64),
@@ -455,7 +564,7 @@ fn mattock_dig(game: &mut Game, e: &Entity) {
                 && body.alive
                 && body.solid
                 && !body.held
-                && body.bounds().contains(Vec2::new(e.pos.x, point_y))
+                && body.sprite_bounds().contains(Vec2::new(e.pos.x, point_y))
         }) {
             target = Some(DigTarget::Dynamic(body.id));
             break;
@@ -474,16 +583,16 @@ fn mattock_dig(game: &mut Game, e: &Entity) {
                 if protected || !game.world.tile(x, y).is_some_and(Tile::is_destructible) {
                     return;
                 }
-                game.world.set_tile(x as usize, y as usize, "");
+                super::explosives::destroy_terrain(game, x as usize, y as usize);
             }
             DigTarget::Dynamic(id) => {
-                let Some(body) = game.world.entity_mut(id) else {
+                let Some(body) = game.world.entity(id) else {
                     return;
                 };
                 if body.value("invincible") != 0.0 {
                     return;
                 }
-                body.alive = false;
+                super::explosives::destroy_solid_instance(game, id);
             }
         }
         // Source evaluates rand before checking the character flag.
@@ -502,6 +611,38 @@ fn mattock_dig(game: &mut Game, e: &Entity) {
         } else {
             game.sound("sndCrunch", e.pos);
         }
+    }
+}
+
+/// Player Step's held bomb-arrow counter precedes item activation/use.
+pub fn pre_tick(game: &mut Game) {
+    if game
+        .player
+        .data
+        .get("bow_bomb_armed")
+        .copied()
+        .unwrap_or(0.0)
+        == 0.0
+    {
+        return;
+    }
+    let toggle = game
+        .player
+        .data
+        .entry("bow_arrow_toggle".into())
+        .or_default();
+    *toggle = if *toggle == 0.0 { 1.0 } else { 0.0 };
+    let fuse = game
+        .player
+        .data
+        .entry("bow_bomb_fuse".into())
+        .or_insert(80.0);
+    if *fuse > 0.0 {
+        *fuse -= 1.0;
+    } else {
+        game.world.spawn("oExplosion", game.player.pos);
+        game.player.data.insert("bow_bomb_armed".into(), 0.0);
+        game.player.data.remove("bow_bomb_fuse");
     }
 }
 
@@ -549,37 +690,6 @@ pub fn tick(game: &mut Game) {
     if let Some(cooldown) = game.player.data.get_mut("weapon_cooldown") {
         *cooldown = (*cooldown - 1.0).max(0.0);
     }
-    if game
-        .player
-        .data
-        .get("bow_bomb_armed")
-        .copied()
-        .unwrap_or(0.0)
-        != 0.0
-    {
-        // A release transfers the remaining fuse to the projectile below;
-        // otherwise cooking continues even after the bow was dropped.
-        let releasing = game.player.data.get("bow_armed").copied().unwrap_or(0.0) != 0.0
-            && game.player.data.get("attack_held").copied().unwrap_or(0.0) == 0.0
-            && game
-                .player
-                .held
-                .and_then(|id| game.world.entity(id))
-                .is_some_and(|item| item.object == "oBow");
-        if !releasing {
-            let fuse = game
-                .player
-                .data
-                .entry("bow_bomb_fuse".into())
-                .or_insert(80.0);
-            *fuse -= 1.0;
-            if *fuse <= 0.0 {
-                game.world.spawn("oExplosion", game.player.pos);
-                game.player.data.insert("bow_bomb_armed".into(), 0.0);
-                game.player.data.remove("bow_bomb_fuse");
-            }
-        }
-    }
     if game.player.data.get("bow_armed").copied().unwrap_or(0.0) != 0.0 {
         let holding_bow = game
             .player
@@ -596,7 +706,7 @@ pub fn tick(game: &mut Game) {
             fire_bow(game);
         }
     }
-    if (game.player.health <= 0 || game.player.stun > 0)
+    if (super::player_dead(game) || game.player.is_stunned())
         && game.player.data.contains_key("weapon_melee_age")
     {
         if let Some(id) = game.player.data.get("weapon_melee_id").copied() {
@@ -709,54 +819,28 @@ pub fn tick(game: &mut Game) {
                     e.alive = false;
                     game.sound("sndHit", e.pos);
                 }
-                let player_mask = sprite_rectangle(&game.player.sprite, game.player.pos)
-                    .unwrap_or_else(|| game.player.bounds());
+                let player_mask = game.player.sprite_bounds();
                 let exiting = matches!(
                     game.player.sprite.as_str(),
                     "sPExit" | "sDamselExit" | "sTunnelExit"
                 );
-                if e.alive && !exiting && e.bounds().intersects(player_mask) {
+                if e.alive && !exiting && e.sprite_bounds().intersects(player_mask) {
                     hit_player(game, &mut e, 4);
                 }
             }
             "oArrow" => {
-                if e.value("safe") > 0.0 {
-                    e.data.insert("safe".into(), e.value("safe") - 1.0);
-                }
-                if !e.held && e.value("stuck") == 0.0 {
-                    let speed = e.vel.x;
-                    let (wall, floor) = move_item_projectile(game, &mut e, 4.0);
-                    if wall && speed.abs() > 6.0 {
-                        e.data.insert("stuck".into(), 1.0);
-                        e.vel = Vec2::default();
-                    } else {
-                        if wall {
-                            e.vel.x *= -0.5;
-                            e.data.insert("gravity".into(), 0.6);
-                        }
-                        if floor {
-                            e.vel.y = if e.vel.y.abs() > 1.0 {
-                                -e.vel.y * 0.5
-                            } else {
-                                0.0
-                            };
-                            e.vel.x *= 0.3;
-                            e.data.insert("gravity".into(), 0.6);
-                        } else {
-                            e.vel.y = (e.vel.y + e.value("gravity")).min(8.0);
-                        }
-                    }
-                }
-                e.data.insert("rotation".into(), e.vel.y.atan2(e.vel.x));
+                tick_item_body(game, &mut e);
+                let rotation = item_rotation(e.vel, e.value("stuck") != 0.0, e.value("rotation"));
+                e.data.insert("rotation".into(), rotation);
                 if e.alive
                     && !e.held
                     && e.vel.x.abs() > 3.0
                     && e.value("safe") == 0.0
-                    && e.bounds().intersects(Rect::new(
+                    && e.sprite_bounds().intersects(Rect::new(
                         game.player.pos.x - 8.0,
                         game.player.pos.y - 8.0,
-                        16.0,
-                        16.0,
+                        17.0,
+                        17.0,
                     ))
                 {
                     hit_player(game, &mut e, 2);
@@ -770,16 +854,16 @@ pub fn tick(game: &mut Game) {
                 if e.alive
                     && !e.held
                     && bow
-                    && game.player.health > 0
-                    && game.player.stun == 0
+                    && !super::player_dead(game)
+                    && !game.player.is_stunned()
                     && e.value("stuck") == 0.0
                     && e.vel.x.abs() < 1.0
                     && e.vel.y.abs() < 1.0
-                    && e.bounds().intersects(Rect::new(
+                    && e.sprite_bounds().intersects(Rect::new(
                         game.player.pos.x - 8.0,
                         game.player.pos.y - 8.0,
-                        16.0,
-                        16.0,
+                        17.0,
+                        17.0,
                     ))
                 {
                     e.alive = false;
@@ -798,21 +882,8 @@ pub fn tick(game: &mut Game) {
                         game.player.held = None;
                     }
                     game.sound("sndSplash", e.pos);
-                } else if !e.held {
-                    let (wall, floor) = move_item_projectile(game, &mut e, 4.0);
-                    if wall {
-                        e.vel.x *= -0.5;
-                    }
-                    if floor {
-                        e.vel.x *= 0.3;
-                        e.vel.y = if e.vel.y.abs() > 1.0 {
-                            -e.vel.y * 0.5
-                        } else {
-                            0.0
-                        };
-                    } else {
-                        e.vel.y = (e.vel.y + 0.6).min(8.0);
-                    }
+                } else {
+                    tick_item_body(game, &mut e);
                 }
                 e.animation += 0.3;
                 e.data.insert("light_radius".into(), 64.0);
@@ -831,11 +902,10 @@ pub fn tick(game: &mut Game) {
                         })
                         .min_by(|a, b| e.pos.distance(a.pos).total_cmp(&e.pos.distance(b.pos)));
                     if let Some(target) = target {
-                        let body = target.bounds();
-                        let delta = Vec2::new(
-                            body.x + body.w / 2.0 - e.pos.x,
-                            body.y + body.h / 2.0 - e.pos.y,
-                        );
+                        // The source aims at instance origin + (8, 8),
+                        // including large enemies with wider sprite masks.
+                        let delta =
+                            Vec2::new(target.pos.x + 8.0 - e.pos.x, target.pos.y + 8.0 - e.pos.y);
                         let len = delta.x.hypot(delta.y);
                         if len > 0.0 {
                             e.vel = Vec2::new(2.0 * delta.x / len, 2.0 * delta.y / len);
@@ -853,6 +923,10 @@ pub fn tick(game: &mut Game) {
                 e.animation += 0.25;
             }
             "oWebBall" => {
+                if e.data.remove("web_life_pending").is_some() {
+                    e.data
+                        .insert("life".into(), f64::from(20 + game.rng.range(81)));
+                }
                 if e.state == 0 {
                     let collided = move_projectile(game, &mut e);
                     e.vel.y = (e.vel.y + 0.2).min(6.0);
@@ -863,8 +937,9 @@ pub fn tick(game: &mut Game) {
                             && target.id != id
                             && (crate::catalog::is_a(&target.object, "oEnemy")
                                 && target.object != "oGiantSpider"
+                                || crate::catalog::is_a(&target.object, "oItem")
                                 || matches!(target.object.as_str(), "oWater" | "oWeb"))
-                            && target.bounds().intersects(e.bounds())
+                            && target.sprite_bounds().intersects(e.sprite_bounds())
                     });
                     if collided || target || life < 0.0 {
                         e.state = 1;
@@ -876,7 +951,9 @@ pub fn tick(game: &mut Game) {
                     e.timer -= 1;
                 } else {
                     e.alive = false;
-                    let web = game.world.spawn("oWeb", e.pos);
+                    let web = game
+                        .world
+                        .spawn("oWeb", Vec2::new(e.pos.x - 8.0, e.pos.y - 8.0));
                     game.world
                         .entity_mut(web)
                         .unwrap()
@@ -910,9 +987,10 @@ pub fn tick(game: &mut Game) {
             }
         }
         if e.alive && e.object == "oArrow" && e.value("bomb_arrow") != 0.0 {
-            let fuse = e.value("bomb_arrow_fuse") - 1.0;
+            let new_alarm = e.data.remove("bomb_arrow_new_alarm").is_some();
+            let fuse = e.value("bomb_arrow_fuse") - f64::from(!new_alarm);
             e.data.insert("bomb_arrow_fuse".into(), fuse);
-            if fuse <= 0.0 {
+            if !new_alarm && fuse <= 0.0 {
                 game.world.spawn("oExplosion", e.pos);
                 if game.player.held == Some(id) {
                     game.player.held = None;
@@ -1098,10 +1176,10 @@ mod tests {
         let id = game.world.spawn("oArrow", Vec2::new(80.0, 88.0));
         let arrow = game.world.entity_mut(id).unwrap();
         arrow.vel.x = 8.0;
-        arrow.data.insert("safe".into(), 10.0);
+        arrow.data.insert("safe".into(), 1.0);
         tick(&mut game);
         assert_eq!(game.player.health, 4);
-        assert_eq!(game.world.entity(id).unwrap().value("safe"), 9.0);
+        assert_eq!(game.world.entity(id).unwrap().value("safe"), 1.0);
         assert_eq!(game.world.entity(id).unwrap().vel.y, 0.2);
     }
     #[test]
@@ -1170,19 +1248,21 @@ mod tests {
         );
     }
     #[test]
-    fn bomb_arrow_consumes_one_bomb_and_preserves_cooked_fuse() {
+    fn bomb_arrow_requires_but_does_not_consume_bomb_and_preserves_cooked_fuse() {
         let (mut game, id) = armed("oBow");
         game.data.insert("arrows".into(), 6.0);
         game.player.data.insert("attack_held".into(), 1.0);
         use_weapon(&mut game, id, &InputFrame::default());
         assert!(arm_bomb_arrow(&mut game));
         assert!(arm_bomb_arrow(&mut game));
-        assert_eq!(game.player.bombs, 3);
+        assert_eq!(game.player.bombs, 4);
         for _ in 0..10 {
+            pre_tick(&mut game);
             tick(&mut game);
         }
         assert_eq!(game.player.data["bow_bomb_fuse"], 70.0);
         game.player.data.insert("attack_held".into(), 0.0);
+        pre_tick(&mut game);
         tick(&mut game);
         let arrow = game
             .world
@@ -1225,8 +1305,12 @@ mod tests {
         use_weapon(&mut game, id, &InputFrame::default());
         arm_bomb_arrow(&mut game);
         for _ in 0..80 {
+            pre_tick(&mut game);
             tick(&mut game);
         }
+        assert!(!game.world.entities.iter().any(|e| e.object == "oExplosion"));
+        pre_tick(&mut game);
+        tick(&mut game);
         assert!(
             game.world
                 .entities
@@ -1234,6 +1318,48 @@ mod tests {
                 .any(|e| e.object == "oExplosion" && e.pos == game.player.pos)
         );
         assert_eq!(game.player.data["bow_bomb_armed"], 0.0);
+    }
+
+    #[test]
+    fn game_step_bomb_arrow_arming_preserves_initial_counter_and_blink_phase() {
+        let (mut game, _) = flat_room("oBow");
+        game.data.insert("arrows".into(), 6.0);
+        game.step(&InputFrame {
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        game.step(&InputFrame {
+            attack: true,
+            bomb_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.bombs, 4);
+        assert_eq!(game.player.data["bow_bomb_fuse"], 80.0);
+        assert_eq!(
+            game.player
+                .data
+                .get("bow_arrow_toggle")
+                .copied()
+                .unwrap_or(0.0),
+            0.0
+        );
+        game.step(&InputFrame {
+            attack: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.data["bow_bomb_fuse"], 79.0);
+        assert_eq!(game.player.data["bow_arrow_toggle"], 1.0);
+        game.step(&InputFrame::default());
+        let arrow = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oArrow")
+            .unwrap();
+        assert_eq!(arrow.value("bomb_arrow_fuse"), 78.0);
+        assert_eq!(game.player.data["bow_arrow_toggle"], 0.0);
+        assert_eq!(game.player.bombs, 4);
     }
     #[test]
     fn bullets_collide_with_dynamic_solids_and_mattock_digs_them() {
@@ -1493,5 +1619,168 @@ mod tests {
         assert!(wave.vel.x > 0.0);
         assert!(wave.vel.y >= 0.0);
         assert!((wave.vel.x.hypot(wave.vel.y) - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn game_step_arrow_and_flare_follow_room_move_to_fraction_phase() {
+        for name in ["oArrow", "oFlare"] {
+            let (mut game, _) = flat_room("oMachete");
+            let id = game.world.spawn(name, Vec2::new(200.0, 80.0));
+            game.world.entity_mut(id).unwrap().vel.x = 0.3;
+            game.step(&InputFrame::default());
+            assert_eq!(game.engine_time(), 2);
+            assert_eq!(game.world.entity(id).unwrap().pos.x, 200.0, "{name}");
+            game.step(&InputFrame::default());
+            assert_eq!(game.engine_time(), 3);
+            assert_eq!(game.world.entity(id).unwrap().pos.x, 201.0, "{name}");
+        }
+    }
+
+    #[test]
+    fn game_step_arrow_bounces_before_testing_embedding_speed() {
+        let (mut game, _) = flat_room("oMachete");
+        game.world.set_tile(10, 5, "oBlock");
+        let id = game.world.spawn("oArrow", Vec2::new(148.0, 88.0));
+        game.world.entity_mut(id).unwrap().vel.x = 8.0;
+        game.step(&InputFrame::default());
+        let arrow = game.world.entity(id).unwrap();
+        assert_eq!(arrow.pos.x, 155.0);
+        assert_eq!(arrow.vel.x, -4.0);
+        assert_eq!(arrow.value("stuck"), 0.0);
+    }
+
+    #[test]
+    fn game_step_flare_rebounds_from_ceiling() {
+        let (mut game, _) = flat_room("oMachete");
+        game.world.set_tile(10, 5, "oBlock");
+        let id = game.world.spawn("oFlare", Vec2::new(168.0, 100.0));
+        game.world.entity_mut(id).unwrap().vel.y = -4.0;
+        game.step(&InputFrame::default());
+        assert!(game.world.entity(id).unwrap().vel.y > 0.0);
+        assert_eq!(game.world.entity(id).unwrap().pos.y, 100.0);
+    }
+
+    #[test]
+    fn game_step_webball_collides_with_pickup_items() {
+        let (mut game, _) = flat_room("oMachete");
+        game.world.spawn("oRock", Vec2::new(200.0, 100.0));
+        let id = game.world.spawn("oWebBall", Vec2::new(200.0, 100.0));
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().sprite, "sWebCreate");
+        assert_eq!(game.world.entity(id).unwrap().state, 1);
+    }
+
+    #[test]
+    fn game_step_web_create_preserves_source_corner_origin() {
+        let (mut game, _) = flat_room("oMachete");
+        let id = game.world.spawn("oWebBall", Vec2::new(200.0, 100.0));
+        let ball = game.world.entity_mut(id).unwrap();
+        ball.state = 1;
+        ball.timer = 0;
+        game.step(&InputFrame::default());
+        let web = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oWeb")
+            .unwrap();
+        assert_eq!(web.pos, Vec2::new(192.0, 92.0));
+    }
+
+    #[test]
+    fn game_step_down_does_not_suppress_airborne_gunfire() {
+        for name in ["oPistol", "oShotgun", "oSceptre", "oWebCannon", "oMachete"] {
+            let (mut game, _) = flat_room(name);
+            game.player.pos.y = 100.0;
+            game.player.grounded = false;
+            game.player.state = PlayerState::Falling;
+            game.step(&InputFrame {
+                down: true,
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            assert!(
+                game.world.entities.iter().any(|e| matches!(
+                    e.object.as_str(),
+                    "oBullet" | "oPsychicWaveP" | "oWebBall" | "oMachetePre"
+                )),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn game_step_mattock_keeps_title_and_score_terrain_intact() {
+        for room in ["rTitle", "rHighscores"] {
+            let (mut game, _) = flat_room("oMattock");
+            game.world.name = room.into();
+            game.world.set_tile(6, 9, "oBlock");
+            let id = game.world.spawn("oMattockHit", Vec2::new(96.0, 152.0));
+            game.world.entity_mut(id).unwrap().timer = 0;
+            game.step(&InputFrame::default());
+            assert_eq!(game.world.tile(6, 9).unwrap().object, "oBlock", "{room}");
+        }
+    }
+
+    #[test]
+    fn game_step_offscreen_arrow_keeps_body_frozen_but_bomb_fuse_runs() {
+        let (mut game, _) = flat_room("oMachete");
+        game.world = World::new(100, 20, Area::Mines, 1);
+        game.player.held = None;
+        let id = game.world.spawn("oArrow", Vec2::new(380.0, 100.0));
+        let arrow = game.world.entity_mut(id).unwrap();
+        arrow.vel.x = 8.0;
+        arrow.data.insert("bomb_arrow".into(), 1.0);
+        arrow.data.insert("bomb_arrow_fuse".into(), 2.0);
+        game.step(&InputFrame::default());
+        let arrow = game.world.entity(id).unwrap();
+        assert_eq!(arrow.pos, Vec2::new(380.0, 100.0));
+        assert_eq!(arrow.value("bomb_arrow_fuse"), 1.0);
+        game.step(&InputFrame::default());
+        assert!(game.world.entity(id).is_none());
+    }
+
+    #[test]
+    fn game_step_webball_lifetime_uses_source_random_range_and_expiry_order() {
+        let mut distinct = std::collections::BTreeSet::new();
+        for seed in 1..=32 {
+            let mut game = Game::shell(seed, RulesPreset::Classic);
+            game.player.pos = Vec2::new(40.0, 40.0);
+            let id = game.world.spawn("oWebBall", Vec2::new(200.0, 60.0));
+            game.step(&InputFrame::default());
+            let life = game.world.entity(id).unwrap().value("life");
+            assert!((19.0..=99.0).contains(&life));
+            distinct.insert(life as i32);
+            game.world
+                .entity_mut(id)
+                .unwrap()
+                .data
+                .insert("life".into(), 2.0);
+            game.step(&InputFrame::default());
+            assert_eq!(game.world.entity(id).unwrap().value("life"), 1.0);
+            game.step(&InputFrame::default());
+            assert_eq!(game.world.entity(id).unwrap().state, 0);
+            game.step(&InputFrame::default());
+            assert_eq!(game.world.entity(id).unwrap().state, 1);
+        }
+        assert!(
+            distinct.len() > 1,
+            "Create lifetime must vary rather than remain fixed at 60"
+        );
+    }
+
+    #[test]
+    fn arrow_rotation_preserves_source_quadrants_and_stuck_angle() {
+        for (velocity, degrees) in [
+            (Vec2::new(1.0, -1.0), -45.0),
+            (Vec2::new(-1.0, -1.0), -135.0),
+            (Vec2::new(1.0, 1.0), -45.0),
+            (Vec2::new(-1.0, 1.0), -225.0),
+            (Vec2::new(0.0, 1.0), 0.0),
+        ] {
+            assert!((item_rotation(velocity, false, 1.0).to_degrees() - degrees).abs() < 1e-10);
+        }
+        assert_eq!(item_rotation(Vec2::default(), true, 0.7), 0.7);
     }
 }

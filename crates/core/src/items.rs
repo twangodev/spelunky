@@ -58,6 +58,7 @@ pub fn init_entity(entity: &mut Entity) {
         entity.data.entry("frictionFactor".into()).or_insert(0.3);
         entity.data.entry("canPickUp".into()).or_insert(1.0);
         entity.data.entry("damage".into()).or_insert(1.0);
+        entity.data.entry("breakPieces".into()).or_insert(1.0);
         if entity.object == "oFishBone" {
             entity.data.insert("gravity".into(), 0.2);
         }
@@ -97,7 +98,17 @@ pub fn init_entity(entity: &mut Entity) {
 pub fn tick(game: &mut Game, input: &InputFrame) {
     for entity in &mut game.world.entities {
         init_entity(entity);
+        if let Some(ticks) = entity.data.get_mut("safe_ticks") {
+            if *ticks > 0.0 {
+                *ticks -= 1.0;
+                if *ticks <= 0.0 {
+                    entity.data.insert("safe".into(), 0.0);
+                }
+            }
+        }
     }
+    utility::pre_tick(game);
+    weapons::pre_tick(game);
     game.player
         .data
         .insert("attack_held".into(), f64::from(input.attack));
@@ -108,8 +119,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     {
         game.player.held = None;
     }
-    if game.player.health <= 0 || game.player.stun > 0 {
+    if player_dead(game) || game.player.is_stunned() {
         crate::characters::tick(game, input);
+        cancel_attack(game);
         weapons::fire_bow_on_drop(game);
         if let Some(id) = game.player.held.take() {
             if let Some(entity) = game.world.entity_mut(id) {
@@ -148,6 +160,11 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
                         .is_some_and(|e| is_usable_weapon(&e.object));
                     if !needs_duck || game.player.state == PlayerState::Ducking {
                         throw_item(game, id, input);
+                    } else {
+                        // scrUseItem's kDown drop attempt is followed by a
+                        // separate non-ducking weapon-use check. In the air,
+                        // Down therefore still fires guns/swings a machete.
+                        weapons::use_weapon(game, id, input);
                     }
                 } else if !weapons::use_weapon(game, id, input)
                     && !utility::use_utility(game, id, input)
@@ -185,6 +202,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     weapons::tick(game);
     collectibles::tick(game);
     utility::tick(game);
+    update_depths(game);
     // A projectile subsystem may have destroyed the carried entity this tick.
     if game
         .player
@@ -193,6 +211,99 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     {
         game.player.held = None;
     }
+}
+
+fn update_depths(game: &mut Game) {
+    let spectacles = game.player.has("Spectacles");
+    let treasure_visible = spectacles || game.player.has("UdjatEye");
+    for index in 0..game.world.entities.len() {
+        let entity = &game.world.entities[index];
+        if !entity.alive {
+            continue;
+        }
+        let fragile = matches!(entity.object.as_str(), "oJar" | "oSkull");
+        let mut depth = None;
+        if collectibles::treasure_value(&entity.object).is_some() {
+            if item_body_active(game, entity) {
+                depth = Some(if treasure_visible { 0.0 } else { 101.0 });
+            }
+        } else if crate::catalog::is_a(&entity.object, "oItem")
+            && (fragile || item_body_active(game, entity))
+        {
+            depth = Some(if entity.held {
+                1.0
+            } else if fragile {
+                100.0
+            } else if entity.object == "oDice" && spectacles {
+                0.0
+            } else if spectacles {
+                51.0
+            } else {
+                101.0
+            });
+        }
+        // oBomb's own Step follows the inherited parent and overrides it.
+        if entity.object == "oBomb" {
+            if entity.sprite == "sBombArmed" {
+                depth = Some(49.0);
+            }
+            if entity.value("sticky") != 0.0 {
+                depth = Some(1.0);
+            }
+        }
+        if let Some(depth) = depth {
+            game.world.entities[index]
+                .data
+                .insert("depth".into(), depth);
+        }
+    }
+}
+
+pub(super) fn player_dead(game: &Game) -> bool {
+    game.player.health <= 0
+        || game.player.state == PlayerState::Dead
+        || game.state == RunState::Dead
+}
+
+fn cancel_attack(game: &mut Game) {
+    // oPlayer1's dead/stunned branch clears whipping and destroys oWhip
+    // (including oSlash/oMattockHit descendants) before item updates.
+    game.player.attack_timer = 0;
+    game.player.data.remove("whip_elapsed");
+    for entity in &mut game.world.entities {
+        if crate::catalog::is_a(&entity.object, "oWhip") {
+            entity.alive = false;
+        }
+    }
+}
+
+/// The late oPlayer1 Step release after a projectile hit differs from its
+/// early already-stunned release: the newly dropped item inherits knockback.
+pub(super) fn release_held_after_hit(game: &mut Game) {
+    cancel_attack(game);
+    let velocity = Vec2::new(game.player.vel.x, -6.0);
+    let Some(id) = drop_held_with_velocity(game, velocity) else {
+        return;
+    };
+    if let Some(entity) = game.world.entity_mut(id) {
+        entity.data.insert("armed".into(), 1.0);
+        if entity.object == "oDamsel" {
+            entity.state = 2;
+        }
+    }
+}
+
+/// scrDropItem's explicit velocity release, also used by enemies that throw
+/// the player. Unlike the player's late damage branch this does not arm items.
+pub fn drop_held_with_velocity(game: &mut Game, velocity: Vec2) -> Option<u64> {
+    weapons::fire_bow_on_drop(game);
+    let id = game.player.held.take()?;
+    if let Some(entity) = game.world.entity_mut(id) {
+        entity.held = false;
+        entity.vel = velocity;
+    }
+    explosives::restore_stashed_item(game);
+    Some(id)
 }
 
 fn is_usable_weapon(name: &str) -> bool {
@@ -257,6 +368,11 @@ fn throw_item(game: &mut Game, id: u64, input: &InputFrame) {
     let wall = game.world.solid_at_except(pos.x + facing * 8.0, pos.y, id);
     if let Some(entity) = game.world.entity_mut(id) {
         let heavy = entity.value("heavy") != 0.0 || entity.object == "oDamsel";
+        if entity.object == "oDamsel" {
+            entity.state = 2;
+            entity.timer = 120;
+            entity.pos.y -= 4.0;
+        }
         entity.held = false;
         entity.vel.x = facing * if heavy { 4.0 } else { 8.0 } + velocity.x;
         entity.vel.y = if input.up {
@@ -266,7 +382,8 @@ fn throw_item(game: &mut Game, id: u64, input: &InputFrame) {
         } else {
             -3.0
         };
-        entity.data.insert("safe".into(), 10.0);
+        entity.data.insert("safe".into(), 1.0);
+        entity.data.insert("safe_ticks".into(), 10.0);
         entity.data.insert("armed".into(), 1.0);
         entity.data.insert("owner".into(), 1.0);
         if wall {
@@ -331,7 +448,9 @@ fn attach_held(game: &mut Game) {
             entity.object.as_str(),
             "oGoldIdol" | "oCrystalSkull" | "oLampItem" | "oLampRedItem" | "oDamsel"
         );
-        let y_offset = if large {
+        let y_offset = if entity.object == "oDice" {
+            if ducking { 0.0 } else { -2.0 }
+        } else if large {
             if ducking { 2.0 } else { 0.0 }
         } else if heavy {
             if ducking { -2.0 } else { -4.0 }
@@ -421,7 +540,11 @@ fn tick_whip(game: &mut Game) {
             game.player.pos.y,
         );
         entity.timer = entity.timer.saturating_sub(1);
-        if entity.timer == 0 || game.player.health <= 0 || game.player.attack_timer == 0 {
+        if entity.timer == 0
+            || game.player.state == PlayerState::Dead
+            || game.player.health <= 0
+            || game.player.attack_timer == 0
+        {
             entity.alive = false;
         }
     }
@@ -429,6 +552,7 @@ fn tick_whip(game: &mut Game) {
 
 fn ordinary_body(name: &str) -> bool {
     is_item(name)
+        && collectibles::treasure_value(name).is_none()
         && !matches!(
             name,
             "oBomb"
@@ -440,6 +564,13 @@ fn ordinary_body(name: &str) -> bool {
                 | "oBall"
                 | "oBall2"
         )
+}
+
+fn item_body_active(game: &Game, entity: &Entity) -> bool {
+    entity.pos.x > game.camera.x - 16.0
+        && entity.pos.x < game.camera.x + VIEW_WIDTH + 16.0
+        && entity.pos.y > game.camera.y - 16.0
+        && entity.pos.y < game.camera.y + VIEW_HEIGHT + 16.0
 }
 
 fn body_bounds(entity: &Entity, pos: Vec2) -> Rect {
@@ -529,18 +660,43 @@ fn body_contact(world: &World, entity: &Entity, dx: i8, dy: i8) -> bool {
     world.collides_except(probe, entity.id)
 }
 
+fn body_horizontal_move_contact(world: &World, entity: &Entity, dx: i8) -> bool {
+    // moveTo calls getIdCollisionLeft/Right, whose line starts at tb+5.
+    // The post-movement isCollisionLeft/Right checks use the full height.
+    let bounds = body_bounds(entity, entity.pos);
+    let x = if dx < 0 {
+        bounds.x - 1.0
+    } else {
+        bounds.x + bounds.w
+    };
+    let top = (bounds.y + 5.0).round_ties_even();
+    let bottom = (bounds.y + bounds.h - 1.0).round_ties_even();
+    world.collides_except(
+        Rect::new(
+            x.round_ties_even(),
+            top.min(bottom),
+            1.0,
+            (bottom - top).abs() + 1.0,
+        ),
+        entity.id,
+    )
+}
+
 fn tick_bodies(game: &mut Game) {
+    tick_treasures(game);
     let mut broken = Vec::new();
     for index in 0..game.world.entities.len() {
         let mut entity = game.world.entities[index].clone();
         if !entity.alive || entity.held || !ordinary_body(&entity.object) {
             continue;
         }
-        if entity.value("safe") > 0.0 {
-            *entity.data.get_mut("safe").unwrap() -= 1.0;
+        let fragile = matches!(entity.object.as_str(), "oJar" | "oSkull");
+        let dice = entity.object == "oDice";
+        let overrides_parent = fragile || dice;
+        if !fragile && !item_body_active(game, &entity) {
+            continue;
         }
         let velocity = entity.vel;
-        let fragile = matches!(entity.object.as_str(), "oJar" | "oSkull");
         let mut destroy = entity.value("broken") > 0.0;
         // moveTo resolves the complete quantized horizontal displacement first.
         let dx = displacement(velocity.x, game.engine_time());
@@ -550,7 +706,7 @@ fn tick_bodies(game: &mut Game) {
         let embedded = game
             .world
             .solid_at_except(entity.pos.x, entity.pos.y, entity.id);
-        if embedded && !fragile {
+        if embedded && !overrides_parent {
             let top = body_contact(&game.world, &entity, 0, -1);
             let bottom = body_contact(&game.world, &entity, 0, 1);
             let left = body_contact(&game.world, &entity, -1, 0);
@@ -564,9 +720,13 @@ fn tick_bodies(game: &mut Game) {
             } else {
                 entity.vel = Vec2::default();
             }
+            // The source's embedded escape is the final `else` of oItem Step;
+            // ordinary movement, gravity, bounces and lava run only outside it.
+            game.world.entities[index] = entity;
+            continue;
         } else {
             for _ in 0..dx.unsigned_abs() {
-                if body_contact(&game.world, &entity, dx.signum() as i8, 0) {
+                if body_horizontal_move_contact(&game.world, &entity, dx.signum() as i8) {
                     hit_x = true;
                     break;
                 }
@@ -587,10 +747,24 @@ fn tick_bodies(game: &mut Game) {
         let right = body_contact(&game.world, &entity, 1, 0);
         let bottom = body_contact(&game.world, &entity, 0, 1);
         let top = body_contact(&game.world, &entity, 0, -1);
+        if fragile {
+            for (name, value) in [
+                ("colLeft", left),
+                ("colRight", right),
+                ("colTop", top),
+                ("colBot", bottom),
+            ] {
+                entity.data.insert(name.into(), f64::from(value));
+            }
+        }
         hit_x |= left || right;
         if fragile {
             // Jar and skull override oItem: gravity precedes collision response.
             if entity.vel.y < 6.0 {
+                entity.vel.y += entity.value("gravity");
+            }
+        } else if dice {
+            if !bottom && entity.vel.y < 6.0 {
                 entity.vel.y += entity.value("gravity");
             }
         } else {
@@ -599,19 +773,20 @@ fn tick_bodies(game: &mut Game) {
             }
             entity.vel.y = entity.vel.y.min(8.0);
         }
-        if top && entity.vel.y < 0.0 {
-            if fragile && (entity.object == "oSkull" || entity.vel.y < -3.0) {
+        if fragile && top && entity.vel.y < 0.0 {
+            if entity.object == "oSkull" || entity.vel.y < -3.0 {
                 destroy = true;
             }
             entity.vel.y = -entity.vel.y * 0.8;
-            entity.data.insert("gravity".into(), 0.6);
         }
         if hit_x {
             if fragile && velocity.x.abs() > if entity.object == "oSkull" { 2.0 } else { 3.0 } {
                 destroy = true;
             }
             entity.vel.x = -velocity.x * 0.5;
-            entity.data.insert("gravity".into(), 0.6);
+            if !overrides_parent {
+                entity.data.insert("gravity".into(), 0.6);
+            }
         }
         if bottom || (hit_y && velocity.y > 0.0) {
             if fragile && entity.vel.y > 3.0 {
@@ -627,7 +802,16 @@ fn tick_bodies(game: &mut Game) {
             } else {
                 entity.vel.x * entity.value("frictionFactor")
             };
-            entity.data.insert("gravity".into(), 0.6);
+            if !overrides_parent {
+                entity.data.insert("gravity".into(), 0.6);
+            }
+            if !fragile && entity.vel.y.abs() < 1.0 {
+                entity.pos.y -= 1.0;
+                if !body_contact(&game.world, &entity, 0, 1) {
+                    entity.pos.y += 1.0;
+                }
+                entity.vel.y = 0.0;
+            }
         }
         if left && !right {
             entity.pos.x += 1.0;
@@ -640,9 +824,30 @@ fn tick_bodies(game: &mut Game) {
                 entity.vel.y = 0.0;
             }
         }
-        if !fragile && top && entity.vel.y >= 0.0 {
-            entity.pos.y += 1.0;
-            entity.data.insert("gravity".into(), 0.6);
+        if !fragile && body_contact(&game.world, &entity, 0, -1) {
+            if entity.vel.y < 0.0 {
+                entity.vel.y = -entity.vel.y * 0.8;
+            } else {
+                entity.pos.y += 1.0;
+            }
+            if !dice {
+                entity.data.insert("gravity".into(), 0.6);
+            }
+        }
+        if fragile && entity.vel.y.abs() < 1.0 {
+            let bounds = body_bounds(&entity, entity.pos);
+            if game.world.collides_except(
+                Rect::new(
+                    bounds.x.round_ties_even(),
+                    (bounds.y + bounds.h - 1.0).round_ties_even(),
+                    bounds.w,
+                    1.0,
+                ),
+                entity.id,
+            ) {
+                entity.pos.y -= 1.0;
+                entity.vel.y = 0.0;
+            }
         }
         if lava_at(
             game,
@@ -651,6 +856,10 @@ fn tick_bodies(game: &mut Game) {
             entity.data.insert("gravity".into(), 0.0);
             entity.vel = Vec2::default();
             entity.pos.y += 0.05;
+        } else if !overrides_parent {
+            // oItem restores normal gravity after the movement response. A
+            // mitt changes this tick's acceleration; it is not permanent.
+            entity.data.insert("gravity".into(), 0.6);
         }
         if lava_at(
             game,
@@ -667,6 +876,98 @@ fn tick_bodies(game: &mut Game) {
     for id in broken {
         break_item(game, id);
     }
+    for entity in &mut game.world.entities {
+        if entity.alive && entity.object == "oFishBone" {
+            // oFishBone Step calls inherited before updating image_angle;
+            // its own orientation runs even when parent body motion is gated.
+            entity.data.insert(
+                "rotation".into(),
+                weapons::item_rotation(entity.vel, false, 0.0),
+            );
+        }
+    }
+}
+
+fn tick_treasures(game: &mut Game) {
+    // oTreasure inherits oDrawnSprite rather than oItem. In particular its
+    // contacts are sampled before moveTo, it never bounces on the floor, and
+    // its Step is frozen outside the camera's expanded rectangle.
+    for index in 0..game.world.entities.len() {
+        let mut entity = game.world.entities[index].clone();
+        if !entity.alive
+            || collectibles::treasure_value(&entity.object).is_none()
+            || entity.state != 1
+            || entity.pos.x <= game.camera.x - 16.0
+            || entity.pos.x >= game.camera.x + VIEW_WIDTH + 16.0
+            || entity.pos.y <= game.camera.y - 16.0
+            || entity.pos.y >= game.camera.y + VIEW_HEIGHT + 16.0
+        {
+            continue;
+        }
+        let left = body_contact(&game.world, &entity, -1, 0);
+        let right = body_contact(&game.world, &entity, 1, 0);
+        let bottom = body_contact(&game.world, &entity, 0, 1);
+        let dx = displacement(entity.vel.x, game.engine_time());
+        let dy = displacement(entity.vel.y, game.engine_time());
+        for _ in 0..dx.unsigned_abs() {
+            if body_horizontal_move_contact(&game.world, &entity, dx.signum() as i8) {
+                break;
+            }
+            entity.pos.x += f64::from(dx.signum());
+        }
+        for _ in 0..dy.unsigned_abs() {
+            if body_contact(&game.world, &entity, 0, dy.signum() as i8) {
+                break;
+            }
+            entity.pos.y += f64::from(dy.signum());
+        }
+        if !bottom {
+            entity.vel.y += entity.value("gravity");
+        }
+        entity.vel.y = entity.vel.y.min(8.0);
+        if body_contact(&game.world, &entity, 0, -1) {
+            if entity.vel.y < 0.0 {
+                entity.vel.y = -entity.vel.y * 0.8;
+            } else {
+                entity.pos.y += 1.0;
+            }
+        }
+        if left || right {
+            entity.vel.x *= -0.5;
+        }
+        if bottom {
+            entity.vel.x = if entity.vel.x.abs() < 0.1 {
+                0.0
+            } else {
+                entity.vel.x * 0.3
+            };
+            entity.pos.y -= 1.0;
+            if !body_contact(&game.world, &entity, 0, 1) {
+                entity.pos.y += 1.0;
+            }
+            entity.vel.y = 0.0;
+        }
+        if left && !right {
+            entity.pos.x += 1.0;
+        } else if right {
+            entity.pos.x -= 1.0;
+        }
+        if lava_at(
+            game,
+            Rect::new(entity.pos.x - 3.0, entity.pos.y - 3.0, 7.0, 7.0),
+        ) {
+            entity.data.insert("gravity".into(), 0.0);
+            entity.vel = Vec2::default();
+            entity.pos.y += 0.05;
+        }
+        if lava_at(
+            game,
+            Rect::new(entity.pos.x, entity.pos.y - 5.0, 0.001, 0.001),
+        ) {
+            entity.alive = false;
+        }
+        game.world.entities[index] = entity;
+    }
 }
 
 /// Called by combat when a fragile thrown body breaks on a creature.
@@ -681,8 +982,14 @@ pub fn break_item(game: &mut Game, id: u64) {
     entity.alive = false;
     let pos = entity.pos;
     let jar = entity.object == "oJar";
+    let pieces = entity.data.get("breakPieces").copied().unwrap_or(1.0) != 0.0;
+    let left = entity.value("colLeft") != 0.0;
+    let right = entity.value("colRight") != 0.0;
     if game.player.held == Some(id) {
         game.player.held = None;
+    }
+    if !pieces {
+        return;
     }
     if jar || entity.object == "oSkull" {
         game.sound("sndBreak", pos);
@@ -706,7 +1013,24 @@ pub fn break_item(game: &mut Game, id: u64) {
             None
         };
         if let Some(name) = loot {
-            game.world.spawn(name, pos);
+            let spawn = if name == "oSpider" {
+                Vec2::new(pos.x - 8.0, pos.y - 8.0)
+            } else if name == "oSnake" {
+                Vec2::new(
+                    pos.x
+                        - if left {
+                            0.0
+                        } else if right {
+                            16.0
+                        } else {
+                            8.0
+                        },
+                    pos.y - 8.0,
+                )
+            } else {
+                pos
+            };
+            game.world.spawn(name, spawn);
         }
     }
 }
@@ -731,6 +1055,366 @@ mod tests {
         let rock = game.world.entity(id).unwrap();
         assert_eq!(rock.vel, Vec2::new(14.0, -0.4));
         assert_eq!(rock.value("gravity"), 0.1);
+    }
+    #[test]
+    fn game_step_mitt_throw_returns_to_source_item_gravity_after_first_tick() {
+        let mut game = game();
+        game.player.pos = Vec2::new(100.0, 100.0);
+        game.player.equipment.insert("Mitt".into());
+        let rock = game.world.spawn("oRock", game.player.pos);
+        game.world.entity_mut(rock).unwrap().held = true;
+        game.player.held = Some(rock);
+        game.step(&InputFrame {
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert!((game.world.entity(rock).unwrap().vel.y + 0.3).abs() < 1e-9);
+        assert_eq!(game.world.entity(rock).unwrap().value("gravity"), 0.6);
+        game.step(&InputFrame::default());
+        assert!((game.world.entity(rock).unwrap().vel.y - 0.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn game_step_embedded_item_only_uses_source_escape_branch() {
+        let mut game = game();
+        game.player.pos = Vec2::new(200.0, 200.0);
+        game.world.set_tile(6, 6, "oBlock");
+        let rock = game.world.spawn("oRock", Vec2::new(104.0, 104.0));
+        game.world.entity_mut(rock).unwrap().vel = Vec2::new(3.0, 3.0);
+        game.step(&InputFrame::default());
+        let rock = game.world.entity(rock).unwrap();
+        assert_eq!(rock.pos, Vec2::new(104.0, 104.0));
+        assert_eq!(rock.vel, Vec2::default());
+    }
+
+    #[test]
+    fn game_step_item_moves_past_upper_corner_using_source_horizontal_strip() {
+        let mut game = game();
+        game.player.pos = Vec2::new(200.0, 200.0);
+        game.world.set_tile(6, 5, "oBlock");
+        let rock = game.world.spawn("oRock", Vec2::new(91.0, 98.0));
+        game.world.entity_mut(rock).unwrap().vel = Vec2::new(2.0, 1.0);
+        game.step(&InputFrame::default());
+        // moveTo advances x by two; the subsequent full side probe backs off
+        // one. Its fresh ceiling probe is then clear, so y remains 99.
+        assert_eq!(game.world.entity(rock).unwrap().pos, Vec2::new(92.0, 99.0));
+    }
+
+    #[test]
+    fn game_step_item_settles_out_of_one_pixel_floor_overlap() {
+        for object in ["oRock", "oSkull", "oJar"] {
+            let mut game = game();
+            game.player.pos = Vec2::new(200.0, 200.0);
+            for x in 0..game.world.width {
+                game.world.set_tile(x, 4, "oBlock");
+            }
+            let y = if object == "oJar" { 59.0 } else { 61.0 };
+            let item = game.world.spawn(object, Vec2::new(100.0, y));
+            game.step(&InputFrame::default());
+            assert_eq!(game.world.entity(item).unwrap().pos.y, y - 1.0, "{object}");
+            assert_eq!(game.world.entity(item).unwrap().vel.y, 0.0, "{object}");
+        }
+    }
+
+    #[test]
+    fn game_step_treasure_uses_pre_move_floor_contact_without_item_bounce() {
+        let mut game = game();
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 4, "oBlock");
+        }
+        game.player.pos = Vec2::new(40.0, 56.0);
+        let gold = game.world.spawn("oGoldNugget", Vec2::new(100.0, 54.0));
+        game.world.entity_mut(gold).unwrap().vel.y = 6.0;
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(gold).unwrap().pos.y, 60.0);
+        assert_eq!(game.world.entity(gold).unwrap().vel.y, 6.6);
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(gold).unwrap().pos.y, 60.0);
+        assert_eq!(game.world.entity(gold).unwrap().vel.y, 0.0);
+    }
+
+    #[test]
+    fn game_step_treasure_outside_view_keeps_source_position_and_velocity() {
+        let mut game = game();
+        let gold = game.world.spawn("oGoldNugget", Vec2::new(360.0, 100.0));
+        game.world.entity_mut(gold).unwrap().vel = Vec2::new(1.0, 2.0);
+        for _ in 0..3 {
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(
+            game.world.entity(gold).unwrap().pos,
+            Vec2::new(360.0, 100.0)
+        );
+        assert_eq!(game.world.entity(gold).unwrap().vel, Vec2::new(1.0, 2.0));
+    }
+
+    #[test]
+    fn game_step_parent_item_freezes_outside_view_but_jar_override_keeps_moving() {
+        let mut game = game();
+        // Beyond oItem's view+16, within oLevel's active view+96 region.
+        let rock = game.world.spawn("oRock", Vec2::new(360.0, 100.0));
+        let jar = game.world.spawn("oJar", Vec2::new(380.0, 100.0));
+        game.world.entity_mut(rock).unwrap().vel = Vec2::new(1.0, 2.0);
+        game.world.entity_mut(jar).unwrap().vel = Vec2::new(1.0, 2.0);
+        game.step(&InputFrame::default());
+        assert_eq!(
+            game.world.entity(rock).unwrap().pos,
+            Vec2::new(360.0, 100.0)
+        );
+        assert_eq!(game.world.entity(rock).unwrap().vel, Vec2::new(1.0, 2.0));
+        assert_eq!(game.world.entity(jar).unwrap().pos, Vec2::new(381.0, 102.0));
+    }
+
+    #[test]
+    fn game_step_throwing_damsel_uses_source_thrown_state_and_origin_shift() {
+        let mut game = game();
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 8, "oBlock");
+        }
+        game.player.pos = Vec2::new(100.0, 120.0);
+        game.player.grounded = true;
+        game.player.state = PlayerState::Standing;
+        let damsel = game.world.spawn("oDamsel", Vec2::new(104.0, 120.0));
+        crate::enemies::init_entity(game.world.entity_mut(damsel).unwrap());
+        game.world.entity_mut(damsel).unwrap().held = true;
+        game.player.held = Some(damsel);
+        game.step(&InputFrame {
+            attack_pressed: true,
+            ..Default::default()
+        });
+        let damsel = game.world.entity(damsel).unwrap();
+        assert_eq!(game.player.held, None);
+        assert_eq!(damsel.state, 2);
+        assert_eq!(damsel.timer, 120);
+        assert_eq!(damsel.pos.y, 114.0);
+        assert_eq!(damsel.vel.x, 4.0);
+    }
+
+    #[test]
+    fn game_step_dice_uses_own_soft_fall_cap_and_preserves_mitt_gravity() {
+        let mut game = game();
+        let die = game.world.spawn("oDice", Vec2::new(100.0, 60.0));
+        game.world.entity_mut(die).unwrap().vel.y = 5.8;
+        game.step(&InputFrame::default());
+        assert!((game.world.entity(die).unwrap().vel.y - 6.4).abs() < 1e-9);
+        game.step(&InputFrame::default());
+        assert!((game.world.entity(die).unwrap().vel.y - 6.4).abs() < 1e-9);
+        game.world.entity_mut(die).unwrap().vel.y = -2.0;
+        game.world
+            .entity_mut(die)
+            .unwrap()
+            .data
+            .insert("gravity".into(), 0.1);
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(die).unwrap().value("gravity"), 0.1);
+    }
+
+    #[test]
+    fn game_step_held_die_uses_own_standing_and_ducking_offsets() {
+        let mut game = game();
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 8, "oBlock");
+        }
+        game.player.pos = Vec2::new(100.0, 120.0);
+        game.player.grounded = true;
+        game.player.state = PlayerState::Standing;
+        let die = game.world.spawn("oDice", game.player.pos);
+        game.world.entity_mut(die).unwrap().held = true;
+        game.player.held = Some(die);
+        game.step(&InputFrame::default());
+        assert_eq!(
+            game.world.entity(die).unwrap().pos.y,
+            game.player.pos.y - 2.0
+        );
+        game.step(&InputFrame {
+            down: true,
+            ..Default::default()
+        });
+        assert_eq!(game.world.entity(die).unwrap().pos.y, game.player.pos.y);
+    }
+
+    #[test]
+    fn game_step_item_depths_follow_selected_family_and_equipment() {
+        for spectacles in [false, true] {
+            let mut game = game();
+            if spectacles {
+                game.player.equipment.insert("Spectacles".into());
+            }
+            for (index, (object, expected)) in [
+                ("oRock", if spectacles { 51.0 } else { 101.0 }),
+                ("oJar", 100.0),
+                ("oSkull", 100.0),
+                ("oGoldNugget", if spectacles { 0.0 } else { 101.0 }),
+                ("oDice", if spectacles { 0.0 } else { 101.0 }),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let id = game
+                    .world
+                    .spawn(object, Vec2::new(100.0 + index as f64 * 24.0, 100.0));
+                game.world
+                    .entity_mut(id)
+                    .unwrap()
+                    .data
+                    .insert("expected_depth".into(), expected);
+            }
+            let bomb = game.world.spawn("oBomb", Vec2::new(240.0, 100.0));
+            explosives::arm_bomb(game.world.entity_mut(bomb).unwrap());
+            let sticky = game.world.spawn("oBomb", Vec2::new(260.0, 100.0));
+            explosives::arm_bomb(game.world.entity_mut(sticky).unwrap());
+            game.world
+                .entity_mut(sticky)
+                .unwrap()
+                .data
+                .insert("sticky".into(), 1.0);
+            let held = game.world.spawn("oRock", game.player.pos);
+            game.world.entity_mut(held).unwrap().held = true;
+            game.player.held = Some(held);
+            game.step(&InputFrame::default());
+            for entity in &game.world.entities {
+                if let Some(expected) = entity.data.get("expected_depth") {
+                    assert_eq!(entity.value("depth"), *expected, "{}", entity.object);
+                }
+            }
+            assert_eq!(game.world.entity(bomb).unwrap().value("depth"), 49.0);
+            assert_eq!(game.world.entity(sticky).unwrap().value("depth"), 1.0);
+            assert_eq!(game.world.entity(held).unwrap().value("depth"), 1.0);
+        }
+    }
+
+    #[test]
+    fn game_step_item_safety_is_boolean_with_an_independent_alarm_while_held() {
+        let mut game = game();
+        let permanent = game.world.spawn("oRock", Vec2::new(100.0, 100.0));
+        game.world
+            .entity_mut(permanent)
+            .unwrap()
+            .data
+            .insert("safe".into(), 1.0);
+        let held = game.world.spawn("oRock", game.player.pos);
+        let item = game.world.entity_mut(held).unwrap();
+        item.held = true;
+        item.data.insert("safe".into(), 1.0);
+        item.data.insert("safe_ticks".into(), 2.0);
+        game.player.held = Some(held);
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(held).unwrap().value("safe"), 1.0);
+        assert_eq!(game.world.entity(held).unwrap().value("safe_ticks"), 1.0);
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(held).unwrap().value("safe"), 0.0);
+        assert_eq!(game.world.entity(held).unwrap().value("safe_ticks"), 0.0);
+        assert_eq!(game.world.entity(permanent).unwrap().value("safe"), 1.0);
+    }
+
+    #[test]
+    fn game_step_dead_latch_blocks_item_actions_even_with_positive_life() {
+        let mut game = game();
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 4, "oBlock");
+        }
+        game.player.pos = Vec2::new(40.0, 56.0);
+        game.player.state = PlayerState::Dead;
+        game.state = RunState::Dead;
+        game.player.health = 1;
+        game.world.spawn("oRock", Vec2::new(40.0, 60.0));
+        game.world.spawn("oGoldNugget", Vec2::new(40.0, 56.0));
+        let before = (game.player.bombs, game.player.ropes);
+        game.step(&InputFrame {
+            down: true,
+            attack: true,
+            attack_pressed: true,
+            bomb_pressed: true,
+            rope_pressed: true,
+            cycle_pressed: true,
+            ..Default::default()
+        });
+        assert!(game.player.held.is_none());
+        assert_eq!((game.player.bombs, game.player.ropes), before);
+        assert_eq!(game.player.attack_timer, 0);
+        assert_eq!(game.data.get("collect").copied().unwrap_or(0.0), 0.0);
+        assert!(!game.world.entities.iter().any(|e| matches!(
+            e.object.as_str(),
+            "oWhip" | "oWhipPre" | "oBomb" | "oRopeThrow"
+        )));
+    }
+
+    #[test]
+    fn game_step_broken_jar_enemy_loot_uses_source_origins() {
+        let mut spider = false;
+        let mut snake = false;
+        for seed in 0..256 {
+            let mut game = Game::shell(seed, RulesPreset::Classic);
+            game.player.pos = Vec2::new(200.0, 200.0);
+            game.world.set_tile(4, 2, "oBlock");
+            let jar = game.world.spawn("oJar", Vec2::new(55.0, 40.0));
+            game.world.entity_mut(jar).unwrap().vel.x = 10.0;
+            game.step(&InputFrame::default());
+            for entity in &game.world.entities {
+                if entity.object == "oSpider" {
+                    spider = true;
+                    assert_eq!(entity.previous_pos, Vec2::new(51.0, 32.0));
+                }
+                if entity.object == "oSnake" {
+                    snake = true;
+                    assert_eq!(entity.previous_pos, Vec2::new(43.0, 32.0));
+                }
+            }
+            if spider && snake {
+                break;
+            }
+        }
+        assert!(spider && snake);
+    }
+
+    #[test]
+    fn clean_jar_destroy_releases_hand_without_break_sound_or_loot_rng() {
+        let mut game = game();
+        let jar = game.world.spawn("oJar", game.player.pos);
+        game.player.held = Some(jar);
+        game.world
+            .entity_mut(jar)
+            .unwrap()
+            .data
+            .insert("breakPieces".into(), 0.0);
+        let mut rng = game.rng.clone();
+        break_item(&mut game, jar);
+        assert!(game.player.held.is_none());
+        assert!(game.events.is_empty());
+        assert_eq!(game.world.entities.len(), 1);
+        assert_eq!(game.rng.next_u64(), rng.next_u64());
+    }
+
+    #[test]
+    fn game_step_stun_cancels_whip_before_forward_hit_is_created() {
+        let mut game = game();
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 4, "oBlock");
+        }
+        game.player.pos = Vec2::new(40.0, 56.0);
+        game.player.grounded = true;
+        game.player.state = PlayerState::Standing;
+        game.step(&InputFrame {
+            attack_pressed: true,
+            ..Default::default()
+        });
+        for _ in 0..4 {
+            game.step(&InputFrame::default());
+        }
+        game.player.stun = 20;
+        game.step(&InputFrame::default());
+        assert_eq!(game.player.attack_timer, 0);
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|e| e.alive && crate::catalog::is_a(&e.object, "oWhip"))
+        );
+        for _ in 0..12 {
+            game.step(&InputFrame::default());
+        }
+        assert!(!game.world.entities.iter().any(|e| e.object == "oWhip"));
     }
     #[test]
     fn whip_has_rear_windup_and_delayed_forward_hit() {

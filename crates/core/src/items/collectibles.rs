@@ -2,7 +2,7 @@
 //! events, oPlayer1 Step, and scrStealItem. Ordinary item motion belongs to items.
 use crate::model::{Area, Entity, Game, GameEvent, InputFrame, Rect, Vec2};
 
-fn treasure_value(object: &str) -> Option<u32> {
+pub(super) fn treasure_value(object: &str) -> Option<u32> {
     Some(match object {
         "oGoldChunk" => 100,
         "oGoldNugget" | "oGoldBar" => 500,
@@ -64,6 +64,9 @@ pub fn init_entity(entity: &mut Entity) {
         return;
     }
     entity.data.insert("collectibles_initialized".into(), 1.);
+    if entity.object == "oFlareCrate" {
+        entity.data.entry("flare_spark_timer".into()).or_insert(1.);
+    }
     let (left, top, right, bottom) = match entity.object.as_str() {
         "oGoldChunk" | "oEmerald" | "oSapphire" | "oRuby" => (-2., -2., 2., 2.),
         "oGoldBars" => (-7., -8., 7., 8.),
@@ -87,6 +90,8 @@ pub fn init_entity(entity: &mut Entity) {
         entity.data.entry(key.into()).or_insert(value);
     }
     if let Some(value) = treasure_value(&entity.object) {
+        // oTreasure Create marks its independent movement engine ACTIVE.
+        entity.state = 1;
         entity
             .data
             .entry("value".into())
@@ -255,7 +260,7 @@ pub fn tick(game: &mut Game) {
         spawn(game, "oDiamond", pos, Vec2::default());
     }
 
-    if game.player.health <= 0 || game.player.stun > 0 {
+    if super::player_dead(game) || game.player.is_stunned() {
         return;
     }
     let contact = Rect::new(game.player.pos.x - 8., game.player.pos.y - 8., 17., 17.);
@@ -349,7 +354,7 @@ pub fn tick(game: &mut Game) {
 
 /// Returns true when the attack edge was consumed by a container or equipment.
 pub fn interact(game: &mut Game, input: &InputFrame) -> bool {
-    if !input.attack_pressed || game.player.health <= 0 || game.player.stun > 0 {
+    if !input.attack_pressed || super::player_dead(game) || game.player.is_stunned() {
         return false;
     }
     for entity in &mut game.world.entities {
@@ -490,6 +495,25 @@ mod tests {
     use crate::model::RulesPreset;
     fn game() -> Game {
         Game::shell(7, RulesPreset::Classic)
+    }
+
+    #[test]
+    fn airborne_stun_cannot_collect_or_open_after_its_timer_expires() {
+        let mut g = game();
+        g.player.state = crate::PlayerState::Stunned;
+        g.player.stun = 0;
+        let pos = g.player.pos;
+        let gold = g.world.spawn("oGoldChunk", pos);
+        let chest = g.world.spawn("oChest", pos);
+        g.step(&InputFrame {
+            up: true,
+            attack_pressed: true,
+            ..InputFrame::default()
+        });
+        assert!(g.player.is_stunned());
+        assert!(g.world.entity(gold).is_some());
+        assert_eq!(g.world.entity(chest).unwrap().state, 0);
+        assert_eq!(g.data.get("collect").copied().unwrap_or(0.0), 0.0);
     }
 
     #[test]

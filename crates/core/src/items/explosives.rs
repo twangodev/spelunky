@@ -40,8 +40,8 @@ pub fn init_entity(entity: &mut Entity) {
 
 fn can_use(game: &Game) -> bool {
     game.state == RunState::Playing
-        && game.player.health > 0
-        && game.player.stun == 0
+        && !super::player_dead(game)
+        && !game.player.is_stunned()
         && game.player.attack_timer == 0
 }
 
@@ -208,6 +208,7 @@ pub fn use_bomb(game: &mut Game, input: &InputFrame) {
     bomb.data
         .insert("sticky".into(), if paste { 1.0 } else { 0.0 });
     bomb.data.insert("safe_ticks".into(), 10.0);
+    bomb.data.insert("safe".into(), 1.0);
     game.player.bombs -= 1;
     game.sound("sndThrow", pos);
 }
@@ -295,7 +296,10 @@ pub fn tick(game: &mut Game) {
             .data
             .insert("simulation_tick".into(), game.engine_time() as f64);
         match entity.object.as_str() {
-            "oBomb" | "oFireFrogBomb" => tick_bomb(game, &mut entity),
+            "oBomb" | "oFireFrogBomb" => {
+                tick_bomb(game, &mut entity);
+                warn_shopkeeper(game, &entity);
+            }
             "oRopeThrow" => tick_rope(game, &mut entity),
             "oExplosion" => {
                 announce_explosion(game, &mut entity);
@@ -321,6 +325,36 @@ pub fn tick(game: &mut Game) {
     }
 }
 
+/// oBomb End Step follows its enemy after ordinary enemy movement has finished.
+pub fn end_tick(game: &mut Game) {
+    let bombs: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|entity| {
+            entity.alive && entity.object == "oBomb" && entity.value("attached_id") != 0.0
+        })
+        .map(|entity| {
+            (
+                entity.id,
+                entity.value("attached_id") as u64,
+                entity.value("sticky_x"),
+                entity.value("sticky_y"),
+            )
+        })
+        .collect();
+    for (id, target, dx, dy) in bombs {
+        let target_pos = game.world.entity(target).map(|entity| entity.pos);
+        if let Some(bomb) = game.world.entity_mut(id) {
+            if let Some(pos) = target_pos {
+                bomb.pos = Vec2::new(pos.x - dx, pos.y - dy);
+            } else {
+                bomb.data.insert("attached_id".into(), 0.0);
+            }
+        }
+    }
+}
+
 fn tick_bomb(game: &mut Game, bomb: &mut Entity) {
     if bomb.value("armed") != 0.0 {
         bomb.timer = bomb.timer.saturating_sub(1);
@@ -341,9 +375,8 @@ fn tick_bomb(game: &mut Game, bomb: &mut Entity) {
             return;
         }
     }
-    let safe = bomb.value("safe_ticks");
-    if safe > 0.0 {
-        bomb.data.insert("safe_ticks".into(), safe - 1.0);
+    if !super::item_body_active(game, bomb) {
+        return;
     }
     if bomb.held {
         bomb.pos = Vec2::new(
@@ -365,34 +398,33 @@ fn tick_bomb(game: &mut Game, bomb: &mut Entity) {
         }
         bomb.data.insert("attached_id".into(), 0.0);
     }
-    if bomb.value("stuck") != 0.0
-        && !game.world.collides_except(
-            Rect::new(bomb.pos.x - 5.0, bomb.pos.y - 5.0, 10.0, 10.0),
-            bomb.id,
-        )
-    {
-        bomb.data.insert("stuck".into(), 0.0);
+    if !projectile_motion(
+        &game.world,
+        bomb,
+        bomb.value("sticky") != 0.0 && bomb.value("armed") != 0.0,
+    ) {
+        return;
     }
-    if bomb.value("stuck") == 0.0 {
-        projectile_motion(
-            &game.world,
-            bomb,
-            bomb.value("sticky") != 0.0 && bomb.value("armed") != 0.0,
-        );
+    // oItem Step sinks in lava before testing the destruction point. Authored
+    // lava is an instance, not necessarily a tile in the generated terrain.
+    if super::lava_at(
+        game,
+        Rect::new(bomb.pos.x - 3.0, bomb.pos.y - 3.0, 7.0, 7.0),
+    ) {
+        bomb.data.insert("gravity".into(), 0.0);
+        bomb.vel = Vec2::default();
+        bomb.pos.y += 0.05;
+    } else {
+        bomb.data.insert("gravity".into(), 0.6);
     }
-    if game
-        .world
-        .tile(
-            (bomb.pos.x / 16.0).floor() as i32,
-            ((bomb.pos.y - 5.0) / 16.0).floor() as i32,
-        )
-        .is_some_and(|tile| tile.object == "oLava")
-    {
+    if super::lava_at(game, Rect::new(bomb.pos.x, bomb.pos.y - 5.0, 1.0, 1.0)) {
         bomb.alive = false;
         if let Some(stored) = game.world.entity_mut(bomb.id) {
             stored.alive = false;
         }
-        explode(game, bomb.pos);
+        if bomb.object == "oBomb" {
+            explode(game, bomb.pos);
+        }
         return;
     }
     if bomb.value("sticky") != 0.0 && (bomb.vel.x.abs() > 2.0 || bomb.vel.y.abs() > 2.0) {
@@ -411,7 +443,46 @@ fn tick_bomb(game: &mut Game, bomb: &mut Entity) {
     }
 }
 
-fn projectile_motion(world: &World, entity: &mut Entity, sticky: bool) {
+fn warn_shopkeeper(game: &mut Game, bomb: &Entity) {
+    if !bomb.alive || bomb.object != "oBomb" || bomb.value("armed") == 0.0 {
+        return;
+    }
+    let room = |pos: Vec2| {
+        (
+            (((pos.x - 16.0).max(0.0) / 160.0).floor() as i32).min(3),
+            (((pos.y - 16.0).max(0.0) / 128.0).floor() as i32).min(4),
+        )
+    };
+    let distance = |keeper: &Entity| {
+        let a = bomb.sprite_bounds();
+        let b = keeper.sprite_bounds();
+        let dx = (a.x - b.x - b.w + 1.0).max(b.x - a.x - a.w + 1.0).max(0.0);
+        let dy = (a.y - b.y - b.h + 1.0).max(b.y - a.y - a.h + 1.0).max(0.0);
+        dx.hypot(dy)
+    };
+    if game.world.entities.iter().any(|keeper| {
+        let keeper_room = room(keeper.pos);
+        keeper.alive
+            && keeper.object == "oShopkeeper"
+            && (
+                keeper
+                    .data
+                    .get("shop_room_x")
+                    .copied()
+                    .unwrap_or(f64::from(keeper_room.0)) as i32,
+                keeper
+                    .data
+                    .get("shop_room_y")
+                    .copied()
+                    .unwrap_or(f64::from(keeper_room.1)) as i32,
+            ) == room(bomb.pos)
+            && distance(keeper) < 96.0
+    }) {
+        crate::economy::anger(game, bomb.pos, "TERRORIST!");
+    }
+}
+
+fn projectile_motion(world: &World, entity: &mut Entity, sticky: bool) -> bool {
     let frog = entity.object == "oFireFrogBomb";
     let body_at = |pos: Vec2| {
         if frog {
@@ -420,6 +491,43 @@ fn projectile_motion(world: &World, entity: &mut Entity, sticky: bool) {
             Rect::new(pos.x - 4.0, pos.y - 4.0, 8.0, 8.0)
         }
     };
+    let contact = |pos, dx: i8, dy: i8| {
+        let b = body_at(pos);
+        let rect = if dx != 0 {
+            Rect::new(
+                (if dx < 0 { b.x - 1.0 } else { b.x + b.w }).round_ties_even(),
+                b.y.round_ties_even(),
+                1.0,
+                b.h,
+            )
+        } else {
+            Rect::new(
+                b.x.round_ties_even(),
+                (if dy < 0 { b.y - 1.0 } else { b.y + b.h }).round_ties_even(),
+                b.w,
+                1.0,
+            )
+        };
+        world.collides_except(rect, entity.id)
+    };
+    if world.solid_at_except(entity.pos.x, entity.pos.y, entity.id) {
+        let (top, bottom, left, right) = (
+            contact(entity.pos, 0, -1),
+            contact(entity.pos, 0, 1),
+            contact(entity.pos, -1, 0),
+            contact(entity.pos, 1, 0),
+        );
+        if top && !bottom {
+            entity.pos.y += 1.0;
+        } else if left && !right {
+            entity.pos.x += 1.0;
+        } else if right && !left {
+            entity.pos.x -= 1.0;
+        } else {
+            entity.vel = Vec2::default();
+        }
+        return false;
+    }
     // Platform Engine/moveTo.gml converts fractional speeds using global time,
     // then moves every horizontal pixel before moving any vertical pixels.
     let time = entity.value("simulation_tick") as u64;
@@ -429,14 +537,16 @@ fn projectile_motion(world: &World, entity: &mut Entity, sticky: bool) {
         let next = Vec2::new(entity.pos.x + f64::from(dx.signum()), entity.pos.y);
         let bounds = body_at(entity.pos);
         let probe = Rect::new(
-            if dx > 0 {
+            (if dx > 0 {
                 bounds.x + bounds.w
             } else {
                 bounds.x - 1.0
-            },
-            bounds.y,
+            })
+            .round_ties_even(),
+            (bounds.y + 5.0).round_ties_even(),
             1.0,
-            bounds.h,
+            (bounds.y + bounds.h - 1.0).round_ties_even() - (bounds.y + 5.0).round_ties_even()
+                + 1.0,
         );
         if world.collides_except(probe, entity.id) {
             break;
@@ -461,33 +571,22 @@ fn projectile_motion(world: &World, entity: &mut Entity, sticky: bool) {
         }
         entity.pos = next;
     }
-    let bounds = body_at(entity.pos);
-    let side = world.collides_except(
-        Rect::new(bounds.x - 1.0, bounds.y, 1.0, bounds.h),
-        entity.id,
-    ) || world.collides_except(
-        Rect::new(bounds.x + bounds.w, bounds.y, 1.0, bounds.h),
-        entity.id,
+    let (left, right, floor) = (
+        contact(entity.pos, -1, 0),
+        contact(entity.pos, 1, 0),
+        contact(entity.pos, 0, 1),
     );
-    let floor = world.collides_except(
-        Rect::new(bounds.x, bounds.y + bounds.h, bounds.w, 1.0),
-        entity.id,
-    );
-    let ceiling = world.collides_except(
-        Rect::new(bounds.x, bounds.y - 1.0, bounds.w, 1.0),
-        entity.id,
-    );
+    let side = left || right;
+    let ceiling = contact(entity.pos, 0, -1);
+    if !side {
+        entity.data.insert("stuck".into(), 0.0);
+    }
     if !floor {
         let gravity = entity.data.get("gravity").copied().unwrap_or(0.6);
         entity.vel.y = (entity.vel.y + gravity).min(8.0);
     }
     if side || floor || ceiling {
         entity.data.insert("gravity".into(), 0.6);
-    }
-    if sticky && (side || floor || ceiling) {
-        entity.vel = Vec2::default();
-        entity.data.insert("stuck".into(), 1.0);
-        return;
     }
     if side {
         entity.vel.x *= -0.5;
@@ -503,15 +602,65 @@ fn projectile_motion(world: &World, entity: &mut Entity, sticky: bool) {
         } else {
             entity.vel.x *= 0.3;
         }
+        if entity.vel.y.abs() < 1.0 {
+            entity.pos.y -= 1.0;
+            if !contact(entity.pos, 0, 1) {
+                entity.pos.y += 1.0;
+            }
+            entity.vel.y = 0.0;
+        }
     }
-    if ceiling && entity.vel.y < 0.0 {
-        entity.vel.y *= -0.8;
+    if sticky {
+        if side || floor || ceiling {
+            entity.vel = Vec2::default();
+            entity.data.insert("stuck".into(), 1.0);
+            if floor {
+                entity.pos.y += 1.0;
+            }
+        }
+    } else {
+        if left && entity.value("stuck") == 0.0 {
+            if !right {
+                entity.pos.x += 1.0;
+            }
+        } else if right && entity.value("stuck") == 0.0 {
+            entity.pos.x -= 1.0;
+        }
+        if contact(entity.pos, 0, -1) {
+            if entity.vel.y < 0.0 {
+                entity.vel.y *= -0.8;
+            } else {
+                entity.pos.y += 1.0;
+            }
+            entity.data.insert("gravity".into(), 0.6);
+        }
     }
+    true
 }
 
 fn tick_rope(game: &mut Game, rope: &mut Entity) {
+    if rope.held {
+        return;
+    }
+    // oItem's inherited Step always runs for ropes, even outside the view and
+    // while the custom rope extension step is suppressing their velocity.
+    if projectile_motion(&game.world, rope, false) {
+        if super::lava_at(
+            game,
+            Rect::new(rope.pos.x - 3.0, rope.pos.y - 3.0, 7.0, 7.0),
+        ) {
+            rope.data.insert("gravity".into(), 0.0);
+            rope.vel = Vec2::default();
+            rope.pos.y += 0.05;
+        } else {
+            rope.data.insert("gravity".into(), 0.6);
+        }
+        if super::lava_at(game, Rect::new(rope.pos.x, rope.pos.y - 5.0, 0.001, 0.001)) {
+            rope.alive = false;
+            return;
+        }
+    }
     if rope.value("falling") == 0.0 {
-        projectile_motion(&game.world, rope, false);
         if rope.value("armed") != 0.0 && rope.vel.y >= 0.0 {
             let snapped = (rope.pos.x / 16.0).round_ties_even() * 16.0;
             let near = if rope.value("px") < snapped {
@@ -558,12 +707,7 @@ fn spawn_rope_part(game: &mut Game, kind: &str, pos: Vec2) {
 
 fn tick_rope_burn(game: &mut Game, rope: &mut Entity) {
     let burn = rope.value("burn_timer");
-    let x = ((rope.pos.x + if rope.object == "oRope" { 8.0 } else { 0.0 }) / 16.0).floor() as i32;
-    let y = (rope.pos.y / 16.0).floor() as i32;
-    let in_lava = game
-        .world
-        .tile(x, y)
-        .is_some_and(|tile| tile.object == "oLava");
+    let in_lava = super::lava_at(game, Rect::new(rope.pos.x + 12.0, rope.pos.y, 1.0, 1.0));
     if burn == 0.0 && in_lava && rope.object == "oRope" {
         let id = game
             .world
@@ -572,6 +716,17 @@ fn tick_rope_burn(game: &mut Game, rope: &mut Entity) {
     } else if burn > 1.0 {
         rope.data.insert("burn_timer".into(), burn - 1.0);
     } else if burn == 1.0 {
+        // oRope Step releases a climber touching the segment being removed.
+        // Waiting for a later ladder query leaves the player climbing a rope
+        // that has already disappeared during this authoritative frame.
+        if game.player.state == PlayerState::Climbing
+            && game
+                .player
+                .sprite_bounds()
+                .contains(Vec2::new(rope.pos.x + 12.0, rope.pos.y + 4.0))
+        {
+            game.player.state = PlayerState::Falling;
+        }
         rope.alive = false;
     }
 }
@@ -621,15 +776,23 @@ fn announce_explosion(game: &mut Game, explosion: &mut Entity) {
 fn apply_explosion(game: &mut Game, explosion: &Entity) {
     let frame = (explosion.animation.floor() as usize).min(9);
     let hits = |bounds| mask_intersects(explosion.pos, frame, bounds);
+    let solids_active = game.flags.contains("tutorial") || super::item_body_active(game, explosion);
+    let mut solid_collision = false;
     for y in 0..game.world.height {
         for x in 0..game.world.width {
             let bounds = Rect::new(x as f64 * 16.0, y as f64 * 16.0, 16.0, 16.0);
-            if game.world.tiles[y * game.world.width + x].is_destructible() && hits(bounds) {
-                destroy_terrain(game, x, y);
+            if solids_active
+                && game.world.tiles[y * game.world.width + x].is_solid()
+                && hits(bounds)
+            {
+                solid_collision = true;
+                if game.world.tiles[y * game.world.width + x].is_destructible() {
+                    destroy_terrain(game, x, y);
+                }
             }
         }
     }
-    if game.player.health > 0
+    if !super::player_dead(game)
         && hits(Rect::new(
             game.player.pos.x - 8.0,
             game.player.pos.y - 8.0,
@@ -653,31 +816,35 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
         game.player.data.insert("burning".into(), 50.0);
     }
     let mut magma_spawns = Vec::new();
+    let mut solid_destroys = Vec::new();
     for entity in &mut game.world.entities {
         if !entity.alive || entity.id == explosion.id || !hits(entity.sprite_bounds()) {
             continue;
         }
-        if entity.object == "oBomb" {
-            // A chain reaction has a short, randomized fuse, never instant recursion.
-            if entity.value("chain_explosion_id") != explosion.id as f64 {
-                entity
-                    .data
-                    .insert("chain_explosion_id".into(), explosion.id as f64);
-                entity.sprite = "sBombArmed".into();
-                entity.data.insert("armed".into(), 1.0);
-                entity.data.insert("attached_id".into(), 0.0);
-                entity.data.insert("stuck".into(), 0.0);
-                entity.timer = 4 + game.rng.range(5);
-                if entity.pos.y < explosion.pos.y {
-                    entity.vel.y = -(2.0 + f64::from(game.rng.range(3)));
-                }
-                let horizontal_speed = 2.0 + f64::from(game.rng.range(3));
-                entity.vel.x = if entity.pos.x < explosion.pos.x {
-                    -horizontal_speed
-                } else {
-                    horizontal_speed
-                };
+        if crate::catalog::is_a(&entity.object, "oSolid") {
+            solid_collision |= solids_active;
+            // The original Collision with oSolid event applies equally to
+            // tiles and instances such as push blocks and thin ice.
+            if solids_active && entity.value("invincible") == 0.0 && entity.object != "oHardBlock" {
+                solid_destroys.push(entity.id);
             }
+        } else if entity.object == "oBomb" {
+            // Collision callbacks run on every overlapping frame. In
+            // particular an overlapping blast resets this short fuse again.
+            entity.sprite = "sBombArmed".into();
+            entity.data.insert("armed".into(), 1.0);
+            entity.data.insert("attached_id".into(), 0.0);
+            entity.data.insert("stuck".into(), 0.0);
+            entity.timer = 4 + game.rng.range(5);
+            if entity.pos.y < explosion.pos.y {
+                entity.vel.y = -(2.0 + f64::from(game.rng.range(3)));
+            }
+            let horizontal_speed = 2.0 + f64::from(game.rng.range(3));
+            entity.vel.x = if entity.pos.x < explosion.pos.x {
+                -horizontal_speed
+            } else {
+                horizontal_speed
+            };
         } else if entity.object == "oMagmaMan" {
             entity.alive = false;
             for _ in 0..2 {
@@ -689,41 +856,26 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
         } else if (crate::enemies::is_enemy(&entity.object) || entity.object == "oDamsel")
             && entity.value("invincible") == 0.0
         {
-            // Avoid applying damage twice for the same persistent explosion frame.
-            if entity.value("damaged_explosion_id") != explosion.id as f64 {
-                entity
-                    .data
-                    .insert("damaged_explosion_id".into(), explosion.id as f64);
-                entity.health -= if entity.object == "oDamsel" { 100 } else { 30 };
-                let speed = 4.0 + f64::from(game.rng.range(3));
-                entity.vel = Vec2::new(
-                    if entity.pos.x > explosion.pos.x {
-                        speed
-                    } else {
-                        -speed
-                    },
-                    -6.0,
-                );
-                entity.data.insert("burning".into(), 50.0);
-                if matches!(
-                    entity.object.as_str(),
-                    "oCaveman" | "oManTrap" | "oYeti" | "oHawkman" | "oShopkeeper" | "oVampire"
-                ) {
-                    entity.state = 98;
-                    entity.timer = 100;
-                }
+            entity.health -= if entity.object == "oDamsel" { 100 } else { 30 };
+            let speed = 4.0 + f64::from(game.rng.range(3));
+            entity.vel = Vec2::new(
+                if entity.pos.x > explosion.pos.x {
+                    speed
+                } else {
+                    -speed
+                },
+                -6.0,
+            );
+            entity.data.insert("burning".into(), 50.0);
+            if entity.object == "oDamsel" {
+                entity.state = 2;
             }
         } else if matches!(
             entity.object.as_str(),
             "oWeb" | "oBoulder" | "oBarrierEmitter" | "oArrow" | "oFishBone" | "oJar" | "oSkull"
         ) {
             entity.alive = false;
-        } else if crate::catalog::is_a(&entity.object, "oItem")
-            && entity.value("blast_impulse_id") != explosion.id as f64
-        {
-            entity
-                .data
-                .insert("blast_impulse_id".into(), explosion.id as f64);
+        } else if crate::catalog::is_a(&entity.object, "oItem") {
             if entity.object != "oRopeThrow" || entity.value("falling") == 0.0 {
                 entity.vel.y += if entity.pos.y < explosion.pos.y {
                     -6.0
@@ -745,13 +897,37 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
             }
         }
     }
+    for id in solid_destroys {
+        destroy_solid_instance(game, id);
+    }
+    if solid_collision {
+        // This cleanup belongs to the explosion event itself, independently
+        // of whether a solid's Destroy event inherits oSolid's event.
+        let unsupported: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|entity| {
+                entity.alive
+                    && entity.object == "oSpikes"
+                    && !game.world.solid_at(entity.pos.x, entity.pos.y + 16.0)
+            })
+            .map(|entity| entity.id)
+            .collect();
+        for id in unsupported {
+            if let Some(spikes) = game.world.entity_mut(id) {
+                spikes.alive = false;
+            }
+        }
+    }
     for (pos, velocity_y) in magma_spawns {
         let id = game.world.spawn("oMagma", pos);
         game.world.entity_mut(id).unwrap().vel.y = velocity_y;
     }
 }
 
-fn destroy_terrain(game: &mut Game, x: usize, y: usize) {
+pub(super) fn destroy_terrain(game: &mut Game, x: usize, y: usize) {
+    let object = game.world.tiles[y * game.world.width + x].object.clone();
     let center = Vec2::new(x as f64 * 16.0 + 8.0, y as f64 * 16.0 + 8.0);
     let metadata = game
         .world
@@ -769,6 +945,8 @@ fn destroy_terrain(game: &mut Game, x: usize, y: usize) {
     if let Some(metadata) = metadata {
         game.world.entity_mut(metadata.id).unwrap().alive = false;
         if metadata.value("shopWall") != 0.0 {
+            // Existing generated metadata records shop wall crime explicitly.
+            crate::economy::anger(game, center, "DIE, YOU VANDAL!");
             game.flags.insert("shopkeepers_angry".into());
         }
         for (key, object) in [
@@ -819,16 +997,134 @@ fn destroy_terrain(game: &mut Game, x: usize, y: usize) {
             caveman.data.insert("invincible".into(), 20.0);
         }
     }
-    // Source solids destroy fixtures resting on their upper face.
-    let point = Vec2::new(center.x, center.y - 9.0);
+    if inherits_solid_destroy(&object) {
+        solid_parent_destroy(game, Vec2::new(center.x - 8.0, center.y - 8.0), false);
+    }
+}
+
+// Objects with their own non-inheriting Destroy events stop the event chain.
+// Derived from the official Destroy.xml action_inherited entries.
+fn inherits_solid_destroy(object: &str) -> bool {
+    let mut name = object;
+    while let Some(def) = crate::catalog::object(name) {
+        if name == "oSolid" {
+            return true;
+        }
+        if matches!(
+            name,
+            "oArrowRepeaterR"
+                | "oArrowTrapLeft"
+                | "oSmashTrapLit"
+                | "oArrowRepeaterL"
+                | "oDoor"
+                | "oSmashTrap"
+                | "oTrapBlock"
+                | "oCeilingTrap"
+                | "oArrowTrapRight"
+                | "oSpearTrapTop"
+                | "oSpearTrapBottom"
+                | "oGrave"
+                | "oIceBlock"
+                | "oSign"
+                | "oBlock"
+                | "oAltarRight"
+                | "oIce"
+                | "oXocBlock"
+                | "oPushBlock"
+                | "oAltarLeft"
+                | "oSacAltarLeft"
+        ) {
+            return false;
+        }
+        name = &def.parent;
+    }
+    false
+}
+
+fn solid_parent_destroy(game: &mut Game, pos: Vec2, shop_wall: bool) {
+    if shop_wall {
+        crate::economy::anger(game, pos, "DIE, YOU VANDAL!");
+        game.flags.insert("shopkeepers_angry".into());
+    }
+    let upper = Vec2::new(pos.x + 8.0, pos.y - 1.0);
+    let lower = Vec2::new(pos.x + 8.0, pos.y + 18.0);
+    let mut lamps = Vec::new();
     for entity in &mut game.world.entities {
-        if entity.alive
-            && matches!(entity.object.as_str(), "oSpikes" | "oTikiTorch" | "oGrave")
-            && entity.bounds().contains(point)
+        if !entity.alive {
+            continue;
+        }
+        if matches!(entity.object.as_str(), "oSpikes" | "oTikiTorch" | "oGrave")
+            && entity.sprite_bounds().contains(upper)
         {
+            entity.alive = false;
+        } else if matches!(entity.object.as_str(), "oLamp" | "oLampRed")
+            && entity.sprite_bounds().contains(lower)
+        {
+            lamps.push((
+                if entity.object == "oLampRed" {
+                    "oLampRedItem"
+                } else {
+                    "oLampItem"
+                },
+                Vec2::new(entity.pos.x + 8.0, entity.pos.y + 12.0),
+            ));
             entity.alive = false;
         }
     }
+    for (object, pos) in lamps {
+        game.world.spawn(object, pos);
+    }
+}
+
+/// Execute gameplay Destroy effects once for an independently stored solid.
+/// Used by explosions and mattocks; target invincibility is respected here.
+pub(crate) fn destroy_solid_instance(game: &mut Game, id: u64) -> bool {
+    let Some(entity) = game
+        .world
+        .entities
+        .iter()
+        .find(|entity| entity.id == id)
+        .cloned()
+    else {
+        return false;
+    };
+    if !crate::catalog::is_a(&entity.object, "oSolid")
+        || entity.value("destroy_done") != 0.0
+        || entity.value("invincible") != 0.0
+        || entity.object == "oHardBlock"
+    {
+        return false;
+    }
+    let stored = game
+        .world
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == id)
+        .unwrap();
+    stored.alive = false;
+    stored.data.insert("destroy_done".into(), 1.0);
+    if inherits_solid_destroy(&entity.object) {
+        solid_parent_destroy(game, entity.pos, entity.value("shopWall") != 0.0);
+    }
+    if entity.object == "oPushBlock"
+        && entity.value("cleanDeath") == 0.0
+        && !game.flags.contains("cleanSolids")
+        && (game.flags.contains("city_of_gold") || game.flags.contains("cityOfGold"))
+    {
+        for object in ["oGoldChunk", "oGoldChunk", "oGoldChunk", "oGoldNugget"] {
+            let pos = Vec2::new(
+                entity.pos.x + 8.0 + f64::from(game.rng.range(5)) - f64::from(game.rng.range(5)),
+                entity.pos.y + 8.0 + f64::from(game.rng.range(5)) - f64::from(game.rng.range(5)),
+            );
+            let velocity = Vec2::new(
+                f64::from(game.rng.range(4)) - f64::from(game.rng.range(4)),
+                2.0 + f64::from(game.rng.range(3)),
+            );
+            let gold = game.world.spawn(object, pos);
+            game.world.entity_mut(gold).unwrap().vel = velocity;
+        }
+    }
+    true
 }
 
 /// The source uses per-frame precise alpha collision masks with origin (24,24).
@@ -1164,7 +1460,8 @@ mod tests {
         g.world.entity_mut(id).unwrap().vel = Vec2::new(12.0, 0.0);
         g.step(&InputFrame::default());
         let bomb = g.world.entity(id).unwrap();
-        assert_eq!(bomb.pos.x, 92.0);
+        // Source post-movement side correction backs one pixel away.
+        assert_eq!(bomb.pos.x, 91.0);
         assert!(bomb.vel.x < 0.0);
     }
 
@@ -1250,6 +1547,275 @@ mod tests {
         assert!(!rope.held);
         assert_eq!(rope.value("falling"), 0.0);
         assert_eq!(rope.vel.x, 3.2);
+    }
+
+    #[test]
+    fn game_step_explosion_destroys_dynamic_solids_and_preserves_invincible_ones() {
+        for object in ["oPushBlock", "oThinIce", "oDarkFall"] {
+            for invincible in [false, true] {
+                let mut g = game();
+                let target = g.world.spawn(object, Vec2::new(80.0, 80.0));
+                g.world
+                    .entity_mut(target)
+                    .unwrap()
+                    .data
+                    .insert("invincible".into(), f64::from(invincible));
+                // Keep moving solids supported so this checks destruction,
+                // rather than incidental movement out of the blast mask.
+                g.world.set_tile(5, 6, "oHardBlock");
+                g.world.spawn("oExplosion", Vec2::new(88.0, 84.0));
+                g.step(&InputFrame::default());
+                assert_eq!(g.world.entity(target).is_some(), invincible, "{object}");
+                assert_eq!(g.world.tile(5, 6).unwrap().object, "oHardBlock");
+            }
+        }
+    }
+
+    #[test]
+    fn game_step_overlapping_explosion_refreshes_a_bombs_chain_fuse() {
+        let mut g = game();
+        let bomb = g.world.spawn("oBomb", Vec2::new(88.0, 88.0));
+        g.world.spawn("oExplosion", Vec2::new(88.0, 88.0));
+        g.step(&InputFrame::default());
+        assert!((4..=8).contains(&g.world.entity(bomb).unwrap().timer));
+        // A short alarm can be reached while a bomb remains in a persistent
+        // blast. The next collision callback must refresh it, not ignore the
+        // bomb because the same explosion touched it on an earlier frame.
+        g.world.entity_mut(bomb).unwrap().timer = 2;
+        g.step(&InputFrame::default());
+        assert!((4..=8).contains(&g.world.entity(bomb).unwrap().timer));
+    }
+
+    #[test]
+    fn game_step_authored_lava_destroys_bombs_and_burns_rope_segments() {
+        let mut g = game();
+        g.world.spawn("oLava", Vec2::new(80.0, 80.0));
+        let bomb = g.world.spawn("oBomb", Vec2::new(88.0, 88.0));
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(bomb).is_none());
+        assert!(
+            g.events
+                .iter()
+                .any(|event| matches!(event, GameEvent::Explosion { .. }))
+        );
+
+        let mut g = game();
+        g.world.spawn("oLava", Vec2::new(80.0, 80.0));
+        g.world.spawn("oRope", Vec2::new(72.0, 84.0));
+        g.step(&InputFrame::default());
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .any(|entity| entity.object == "oRopeBurn")
+        );
+        for _ in 0..3 {
+            g.step(&InputFrame::default());
+        }
+        assert!(
+            !g.world
+                .entities
+                .iter()
+                .any(|entity| entity.object == "oRope")
+        );
+    }
+
+    #[test]
+    fn game_step_bomb_clears_corner_above_its_horizontal_movement_strip() {
+        let mut g = game();
+        g.world.set_tile(6, 5, "oBlock");
+        // Body top y=93 overlaps the bottom three pixels of the wall at
+        // y=80..95. moveTo probes y=98..100, allowing passage underneath.
+        let bomb = g.world.spawn("oBomb", Vec2::new(91.0, 97.0));
+        g.world.entity_mut(bomb).unwrap().vel = Vec2::new(2.0, 0.0);
+        g.step(&InputFrame::default());
+        // moveTo reaches x=93, then source isCollisionRight backs off one
+        // pixel because its full-height strip still touches the corner.
+        assert_eq!(g.world.entity(bomb).unwrap().pos.x, 92.0);
+    }
+
+    #[test]
+    fn game_step_offscreen_bomb_keeps_its_body_still_but_its_fuse_runs() {
+        let mut g = game();
+        // Outside oItem's 16px view margin, inside oLevel's 96px active margin.
+        let bomb = g.world.spawn("oBomb", Vec2::new(400.0, 80.0));
+        arm_bomb(g.world.entity_mut(bomb).unwrap());
+        let entity = g.world.entity_mut(bomb).unwrap();
+        entity.timer = 2;
+        entity.vel = Vec2::new(3.0, 2.0);
+        g.step(&InputFrame::default());
+        let entity = g.world.entity(bomb).unwrap();
+        assert_eq!(entity.pos, Vec2::new(400.0, 80.0));
+        assert_eq!(entity.vel, Vec2::new(3.0, 2.0));
+        assert_eq!(entity.timer, 1);
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(bomb).is_none());
+        assert!(g.events.iter().any(|event| matches!(event,
+            GameEvent::Explosion { pos, .. } if *pos == Vec2::new(400.0, 80.0))));
+    }
+
+    #[test]
+    fn game_step_embedded_bomb_escapes_without_applying_velocity_or_gravity() {
+        let mut g = game();
+        g.world.set_tile(5, 5, "oBlock");
+        let bomb = g.world.spawn("oBomb", Vec2::new(88.0, 95.0));
+        g.world.entity_mut(bomb).unwrap().vel = Vec2::new(3.0, -2.0);
+        g.step(&InputFrame::default());
+        let entity = g.world.entity(bomb).unwrap();
+        assert_eq!(entity.pos, Vec2::new(88.0, 96.0));
+        assert_eq!(entity.vel, Vec2::new(3.0, -2.0));
+    }
+
+    #[test]
+    fn game_step_bomb_settles_out_of_floor_and_pushes_away_from_ceiling() {
+        let mut g = game();
+        g.world.set_tile(5, 6, "oBlock");
+        let bomb = g.world.spawn("oBomb", Vec2::new(88.0, 93.0));
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(bomb).unwrap().pos.y, 92.0);
+        assert_eq!(g.world.entity(bomb).unwrap().vel.y, 0.0);
+
+        let mut g = game();
+        g.world.set_tile(5, 5, "oBlock");
+        let bomb = g.world.spawn("oBomb", Vec2::new(88.0, 100.0));
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(bomb).unwrap().pos.y, 101.0);
+        assert_eq!(g.world.entity(bomb).unwrap().vel.y, 0.6);
+    }
+
+    #[test]
+    fn game_step_armed_bomb_warns_shopkeeper_before_exploding() {
+        let mut g = game();
+        let keeper = g.world.spawn("oShopkeeper", Vec2::new(96.0, 88.0));
+        let bomb = g.world.spawn("oBomb", Vec2::new(88.0, 88.0));
+        arm_bomb(g.world.entity_mut(bomb).unwrap());
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(keeper).unwrap().value("angered"), 1.0);
+        assert!(g.flags.contains("wanted"));
+        assert!(
+            !g.events
+                .iter()
+                .any(|event| matches!(event, GameEvent::Explosion { .. }))
+        );
+    }
+}
+
+#[cfg(test)]
+mod destruction_end_step_regression {
+    use super::*;
+
+    fn game() -> Game {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.player.pos = Vec2::new(160.0, 160.0);
+        game
+    }
+
+    #[test]
+    fn game_step_blast_releases_city_of_gold_push_block_treasure_once() {
+        let mut g = game();
+        g.flags.insert("city_of_gold".into());
+        let block = g.world.spawn("oPushBlock", Vec2::new(80.0, 80.0));
+        g.world.set_tile(5, 6, "oHardBlock");
+        g.world.spawn("oExplosion", Vec2::new(88.0, 88.0));
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(block).is_none());
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|entity| entity.object == "oGoldChunk")
+                .count(),
+            3
+        );
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|entity| entity.object == "oGoldNugget")
+                .count(),
+            1
+        );
+        g.step(&InputFrame::default());
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|entity| entity.object == "oGoldChunk")
+                .count(),
+            3
+        );
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|entity| entity.object == "oGoldNugget")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn game_step_inherited_solid_destroy_removes_fixtures_and_releases_lamps() {
+        for (lamp, item) in [("oLamp", "oLampItem"), ("oLampRed", "oLampRedItem")] {
+            let mut g = game();
+            let block = g.world.spawn("oThinIce", Vec2::new(80.0, 80.0));
+            let torch = g.world.spawn("oTikiTorch", Vec2::new(80.0, 48.0));
+            let grave = g.world.spawn("oGrave", Vec2::new(80.0, 64.0));
+            let hanging = g.world.spawn(lamp, Vec2::new(80.0, 96.0));
+            g.world.spawn("oExplosion", Vec2::new(88.0, 84.0));
+            g.step(&InputFrame::default());
+            for removed in [block, torch, grave, hanging] {
+                assert!(g.world.entity(removed).is_none(), "{lamp}: {removed}");
+            }
+            let dropped: Vec<_> = g
+                .world
+                .entities
+                .iter()
+                .filter(|entity| entity.object == item)
+                .collect();
+            assert_eq!(dropped.len(), 1);
+            assert_eq!(dropped[0].pos, Vec2::new(88.0, 108.0));
+        }
+    }
+
+    #[test]
+    fn non_inheriting_solid_destroy_does_not_drop_parent_lamps() {
+        for object in ["oPushBlock", "oBlock", "oIce"] {
+            let mut g = game();
+            let block = g.world.spawn(object, Vec2::new(80.0, 80.0));
+            let lamp = g.world.spawn("oLamp", Vec2::new(80.0, 96.0));
+            assert!(destroy_solid_instance(&mut g, block));
+            assert!(g.world.entity(lamp).is_some(), "{object}");
+            assert!(
+                !g.world
+                    .entities
+                    .iter()
+                    .any(|entity| entity.object == "oLampItem")
+            );
+            assert!(!destroy_solid_instance(&mut g, block));
+        }
+    }
+
+    #[test]
+    fn game_step_sticky_bomb_follows_enemys_current_end_step_position() {
+        let mut g = game();
+        for x in 0..12 {
+            g.world.set_tile(x, 6, "oHardBlock");
+        }
+        let enemy = g.world.spawn("oSnake", Vec2::new(80.0, 80.0));
+        crate::enemies::init_entity(g.world.entity_mut(enemy).unwrap());
+        let bomb = g.world.spawn("oBomb", Vec2::new(88.0, 84.0));
+        arm_bomb(g.world.entity_mut(bomb).unwrap());
+        let attached = g.world.entity_mut(bomb).unwrap();
+        attached.data.insert("attached_id".into(), enemy as f64);
+        attached.data.insert("sticky_x".into(), -8.0);
+        attached.data.insert("sticky_y".into(), -4.0);
+        g.step(&InputFrame::default());
+        let target = g.world.entity(enemy).unwrap();
+        assert!(target.pos.x > 80.0);
+        let bomb = g.world.entity(bomb).unwrap();
+        assert_eq!(bomb.pos, Vec2::new(target.pos.x + 8.0, target.pos.y + 4.0));
+        assert_eq!(bomb.previous_pos, Vec2::new(88.0, 84.0));
     }
 }
 
