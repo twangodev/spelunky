@@ -705,11 +705,13 @@ pub fn generate(rng: &mut Rng, level: u32, flags: &BTreeSet<String>) -> World {
     special::apply(&mut world, rng, &selected);
     apply_wanted_posters(&mut world, &selected);
     let graphics_high = !has(&selected, "low_graphics");
-    terrain::initialize_with_graphics(&mut world, rng, graphics_high);
+    terrain::create_generated(&mut world, rng);
+    population::populate(&mut world, rng, &selected);
+    terrain::setup_generated(&mut world, rng, graphics_high);
     if graphics_high {
         background_extras(&mut world, rng);
     }
-    population::populate(&mut world, rng, &selected);
+    terrain::finalize_generated(&mut world);
     // Construction/carving does not dispatch source Solid Destroy events.
     world.fluid_dirty = false;
     world

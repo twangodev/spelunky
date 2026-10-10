@@ -175,14 +175,26 @@ pub(super) fn initialize(world: &mut World, rng: &mut Rng) {
 }
 
 pub(super) fn initialize_custom(world: &mut World, rng: &mut Rng) {
-    initialize_terrain(world, rng, true, false);
+    create_terrain(world, rng, true);
+    initialize_custom_instances(world, rng);
 }
 
+#[cfg(test)]
 pub(super) fn initialize_with_graphics(world: &mut World, rng: &mut Rng, graphics_high: bool) {
-    initialize_terrain(world, rng, false, graphics_high);
+    create_generated(world, rng);
+    setup_generated(world, rng, graphics_high);
+    finalize_generated(world);
 }
 
-fn initialize_terrain(world: &mut World, rng: &mut Rng, custom: bool, graphics_high: bool) {
+/// Terrain Create events precede scrEntityGen. This phase establishes the
+/// original base/treasure sprites and buried contents without SetupWalls masks,
+/// fringes, drips or water surfaces. Room-stamp/Create interleaving remains a
+/// separate compatibility concern; this port currently batches the Create pass.
+pub(super) fn create_generated(world: &mut World, rng: &mut Rng) {
+    create_terrain(world, rng, false);
+}
+
+fn create_terrain(world: &mut World, rng: &mut Rng, custom: bool) {
     let city = world.name == "City of Gold";
     for y in 0..world.height {
         for x in 0..world.width {
@@ -214,9 +226,9 @@ fn initialize_terrain(world: &mut World, rng: &mut Rng, custom: bool, graphics_h
             let mut frozen = false;
             if source_boundary {
                 // scrInitLevel explicitly replaces boundary Create-event
-                // variants with the area's base sprite. Preserve the port's
-                // established interior RNG stream while applying SetupWalls
-                // silhouettes below; exact GameMaker RNG remains unaudited.
+                // variants with the area's base sprite. Boundary Create RNG
+                // draws are not reproduced here yet; this phase split does
+                // not establish exact GameMaker generation/RNG parity.
                 if object == "oTemple" && city {
                     sprite = "sGTemple".into();
                 }
@@ -262,15 +274,6 @@ fn initialize_terrain(world: &mut World, rng: &mut Rng, custom: bool, graphics_h
                     }
                 }
             }
-            let sides = neighbors(world, x, y, &object);
-            // SetupWalls overwrites gold sprites; their Destroy event then
-            // releases no gold. City of Gold uses the global flag instead.
-            if !custom && let Some(edge) = edge_sprite(&object, city, sides) {
-                sprite = edge;
-                if !(object == "oTemple" && city) {
-                    gold = 0;
-                }
-            }
             if let Some(explicit) = explicit_sprite {
                 sprite = explicit;
                 if !(object == "oTemple" && city) {
@@ -302,7 +305,61 @@ fn initialize_terrain(world: &mut World, rng: &mut Rng, custom: bool, graphics_h
                     e.text.insert("treasure".into(), name.into());
                 }
             }
-            if !custom && graphics_high {
+        }
+    }
+    // oLava Create selects its spurt timer when the instance is created, before
+    // population. Surface selection and its extra random roll belong later.
+    for y in 0..world.height {
+        for x in 0..world.width {
+            if world.tile(x as i32, y as i32).unwrap().object == "oLava" {
+                let id = metadata(world, x, y);
+                create_lava(world.entity_mut(id).unwrap(), rng);
+            }
+        }
+    }
+    let lava: Vec<_> = world
+        .entities
+        .iter()
+        .filter(|entity| entity.alive && entity.object == "oLava")
+        .map(|entity| entity.id)
+        .collect();
+    for id in lava {
+        create_lava(world.entity_mut(id).unwrap(), rng);
+    }
+}
+
+/// scrSetupWalls runs after population, so its probes see the solids/traps
+/// population added or removed. Keep its initialization guard independent of
+/// terrain Create to avoid rerolling buried contents while setting up edges.
+pub(super) fn setup_generated(world: &mut World, rng: &mut Rng, graphics_high: bool) {
+    let city = world.name == "City of Gold";
+    for y in 0..world.height {
+        for x in 0..world.width {
+            let object = world.tiles[y * world.width + x].object.clone();
+            if !matches!(
+                object.as_str(),
+                "oBrick" | "oLush" | "oDark" | "oTemple" | "oIce"
+            ) {
+                continue;
+            }
+            let id = metadata(world, x, y);
+            if world.entity(id).unwrap().value("terrain_setup_initialized") != 0.0 {
+                continue;
+            }
+            let sides = neighbors(world, x, y, &object);
+            let edge = edge_sprite(&object, city, sides);
+            let entity = world.entity_mut(id).unwrap();
+            if let Some(edge) = edge {
+                entity.text.insert("terrain_sprite".into(), edge);
+                // Gold is determined by the current sprite at destruction.
+                // SetupWalls replaces Create's gold sprite on exposed edges.
+                if !(object == "oTemple" && city) {
+                    entity.data.remove("gold_chunks");
+                    entity.data.remove("gold_nuggets");
+                }
+            }
+            entity.data.insert("terrain_setup_initialized".into(), 1.0);
+            if graphics_high {
                 setup_fringe(
                     world,
                     rng,
@@ -311,7 +368,7 @@ fn initialize_terrain(world: &mut World, rng: &mut Rng, custom: bool, graphics_h
                     sides,
                 );
             }
-            if !custom && object == "oIce" && !sides.1 && rng.chance(1, 20) {
+            if object == "oIce" && !sides.1 && rng.chance(1, 20) {
                 let below = Vec2::new(x as f64 * 16.0, (y + 1) as f64 * 16.0);
                 if !world.solid_point_except(below, 0) {
                     let id = world.spawn("oIceBottom", below);
@@ -324,23 +381,17 @@ fn initialize_terrain(world: &mut World, rng: &mut Rng, custom: bool, graphics_h
             }
         }
     }
-    if !custom {
-        setup_fake_temple(world, rng, city, graphics_high);
-        super::water::setup(world, rng);
-    }
+    setup_fake_temple(world, rng, city, graphics_high);
+    super::water::setup(world, rng);
     for y in 0..world.height {
         for x in 0..world.width {
             if world.tile(x as i32, y as i32).unwrap().object != "oLava" {
                 continue;
             }
             let origin = Vec2::new(x as f64 * 16.0, y as f64 * 16.0);
-            let exposed = !custom && lava_exposed(world, origin);
+            let exposed = lava_exposed(world, origin);
             let id = metadata(world, x, y);
-            if custom {
-                create_lava(world.entity_mut(id).unwrap(), rng);
-            } else {
-                setup_lava(world.entity_mut(id).unwrap(), rng, exposed, true);
-            }
+            setup_lava(world.entity_mut(id).unwrap(), rng, exposed, true);
         }
     }
     let lava: Vec<_> = world
@@ -351,18 +402,15 @@ fn initialize_terrain(world: &mut World, rng: &mut Rng, custom: bool, graphics_h
         .collect();
     for id in lava {
         let origin = world.entity(id).unwrap().pos;
-        if custom {
-            create_lava(world.entity_mut(id).unwrap(), rng);
-        } else {
-            let exposed = lava_exposed(world, origin);
-            setup_lava(world.entity_mut(id).unwrap(), rng, exposed, false);
-        }
+        let exposed = lava_exposed(world, origin);
+        setup_lava(world.entity_mut(id).unwrap(), rng, exposed, false);
     }
-    if !custom {
-        super::water::propagate_surface(world);
-    } else {
-        initialize_custom_instances(world, rng);
-    }
+}
+
+/// scrInitLevel propagates surface sprites after background details and
+/// post-generation cleanup, rather than as part of scrSetupWalls itself.
+pub(super) fn finalize_generated(world: &mut World) {
+    super::water::propagate_surface(world);
 }
 
 /// Source tile_add decorations use background pixel rectangles, not sprites.
@@ -589,8 +637,8 @@ fn setup_lava(entity: &mut Entity, rng: &mut Rng, exposed: bool, metadata: bool)
     if entity.value("lava_setup_initialized") != 0.0 {
         return;
     }
-    let explicit_spurt = entity.data.contains_key("spurt");
     create_lava(entity, rng);
+    let explicit_spurt = entity.value("lava_explicit_spurt") != 0.0;
     if exposed && !explicit_spurt && rng.chance(1, 4) {
         entity.data.insert("spurt".into(), 1.0);
     }
@@ -605,6 +653,11 @@ fn setup_lava(entity: &mut Entity, rng: &mut Rng, exposed: bool, metadata: bool)
 
 fn create_lava(entity: &mut Entity, rng: &mut Rng) {
     if entity.value("lava_initialized") == 0.0 {
+        // Preserve authored overrides across the separated Create/setup calls;
+        // Create's own default `spurt = false` is not an authored override.
+        if entity.data.contains_key("spurt") {
+            entity.data.insert("lava_explicit_spurt".into(), 1.0);
+        }
         let time = entity
             .data
             .get("spurt_time")
@@ -622,6 +675,167 @@ fn create_lava(entity: &mut Entity, rng: &mut Rng) {
 mod tests {
     use super::*;
     use crate::model::Area;
+
+    #[test]
+    fn generated_population_is_independent_of_later_graphics_rng() {
+        let source = include_str!(
+            "../../../../references/classic-1.1/Scripts/Level Generation/scrInitLevel.gml"
+        );
+        let population = source.find("scrEntityGen();").unwrap();
+        let walls = source.find("scrSetupWalls(864)").unwrap();
+        let details = source.find("if (global.graphicsHigh)").unwrap();
+        let surface = source.find("scrCheckWaterTop();").unwrap();
+        assert!(population < walls && walls < details && details < surface);
+
+        let high = crate::generation::generate(&mut Rng::new(42), 1, &Default::default());
+        let low = crate::generation::generate(
+            &mut Rng::new(42),
+            1,
+            &["low_graphics".into()].into_iter().collect(),
+        );
+        let actors = |world: &World| {
+            world
+                .entities
+                .iter()
+                .filter(|entity| {
+                    !matches!(
+                        entity.object.as_str(),
+                        "oTerrainMetadata" | "oGenerationDecoration" | "oIceBottom"
+                    )
+                })
+                .map(|entity| {
+                    (
+                        entity.object.clone(),
+                        entity.pos,
+                        entity.sprite.clone(),
+                        entity.state,
+                        entity.timer,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            actors(&high),
+            actors(&low),
+            "source cosmetic draws occur after enemy/treasure population"
+        );
+        let decorations = |world: &World| {
+            world
+                .entities
+                .iter()
+                .filter(|entity| entity.object == "oGenerationDecoration")
+                .count()
+        };
+        assert!(decorations(&high) > decorations(&low));
+    }
+
+    #[test]
+    fn create_phase_keeps_source_gold_until_setup_without_fringe_draws() {
+        let source = include_str!(
+            "../../../../references/classic-1.1/Objects/Blocks/oBrick.events/Create.xml"
+        );
+        assert!(source.contains("n = rand(1,10);"));
+        assert!(source.contains("n = rand(1,100);"));
+        assert!(source.contains("if (n &lt; 20) sprite_index = sBrickGold;"));
+        let seed = (0..64)
+            .find(|&seed| {
+                let mut source_rng = Rng::new(seed);
+                source_rng.range(10);
+                1 + source_rng.range(100) < 20
+            })
+            .unwrap();
+        let mut source_rng = Rng::new(seed);
+        source_rng.range(10);
+        source_rng.range(100);
+        let mut world = World::new(3, 3, Area::Mines, 1);
+        world.set_tile(1, 1, "oBrick");
+        let mut actual = Rng::new(seed);
+        create_generated(&mut world, &mut actual);
+        let id = metadata(&mut world, 1, 1);
+        let brick = world.entity(id).unwrap();
+        assert_eq!(brick.text["terrain_sprite"], "sBrickGold");
+        assert_eq!(brick.value("gold_chunks"), 3.0);
+        assert_eq!(brick.value("terrain_setup_initialized"), 0.0);
+        assert!(
+            !world
+                .entities
+                .iter()
+                .any(|e| e.object == "oGenerationDecoration")
+        );
+        assert_eq!(actual.next_u64(), source_rng.next_u64());
+        setup_generated(&mut world, &mut actual, false);
+        let brick = world.entity(id).unwrap();
+        assert_eq!(brick.text["terrain_sprite"], "sCaveUp2");
+        assert_eq!(brick.value("gold_chunks"), 0.0);
+        assert_eq!(brick.value("terrain_initialized"), 1.0);
+        assert_eq!(brick.value("terrain_setup_initialized"), 1.0);
+    }
+
+    #[test]
+    fn setup_observes_terrain_changes_since_create_and_preserves_metadata() {
+        let mut world = World::new(5, 5, Area::Mines, 1);
+        for y in 1..=3 {
+            world.set_tile(2, y, "oBrick");
+        }
+        let id = metadata(&mut world, 2, 2);
+        let brick = world.entity_mut(id).unwrap();
+        brick.data.insert("invincible".into(), 1.0);
+        brick.text.insert("treasure".into(), "oRubyBig".into());
+        let mut rng = Rng::new(4);
+        create_generated(&mut world, &mut rng);
+        assert!(!world.entity(id).unwrap().text["terrain_sprite"].starts_with("sCave"));
+        // A population operation removes the neighbor before SetupWalls.
+        world.set_tile(2, 1, "");
+        setup_generated(&mut world, &mut rng, false);
+        let brick = world.entity(id).unwrap();
+        assert_eq!(brick.text["terrain_sprite"], "sCaveUp");
+        assert_eq!(brick.text["treasure"], "oRubyBig");
+        assert_eq!(brick.value("invincible"), 1.0);
+        assert_eq!(
+            world.entities.iter().filter(|e| e.id == id).count(),
+            1,
+            "phase changes must retain metadata identity"
+        );
+    }
+
+    #[test]
+    fn lava_create_timer_precedes_population_and_surface_setup() {
+        let mut world = World::new(5, 5, Area::Temple, 13);
+        let id = world.spawn("oLava", Vec2::new(16.0, 32.0));
+        let mut actual = Rng::new(42);
+        let mut source_rng = Rng::new(42);
+        let time = 100.0 + f64::from(source_rng.range(201));
+        create_generated(&mut world, &mut actual);
+        let lava = world.entity(id).unwrap();
+        assert_eq!(lava.sprite, "sLava");
+        assert_eq!(lava.value("spurt_time"), time);
+        assert_eq!(lava.value("lava_setup_initialized"), 0.0);
+        assert_eq!(actual.next_u64(), source_rng.next_u64());
+        // A solid created by population covers the lava before SetupWalls.
+        world.spawn("oPushBlock", Vec2::new(16.0, 16.0));
+        setup_generated(&mut world, &mut actual, false);
+        let lava = world.entity(id).unwrap();
+        assert_eq!(lava.sprite, "sLava");
+        assert_eq!(lava.value("spurt_time"), time);
+        assert_eq!(lava.value("spurt"), 0.0);
+        assert_eq!(lava.value("lava_setup_initialized"), 1.0);
+    }
+
+    #[test]
+    fn horizontal_surface_propagation_waits_for_final_phase() {
+        let mut world = World::new(12, 12, Area::Jungle, 5);
+        let open = world.spawn("oWaterSwim", Vec2::new(64.0, 80.0));
+        let covered = world.spawn("oWaterSwim", Vec2::new(80.0, 80.0));
+        world.set_tile(5, 4, "oLush");
+        let mut rng = Rng::new(1);
+        create_generated(&mut world, &mut rng);
+        assert_eq!(world.entity(open).unwrap().sprite, "sWater");
+        setup_generated(&mut world, &mut rng, false);
+        assert_eq!(world.entity(open).unwrap().sprite, "sWaterTop");
+        assert_eq!(world.entity(covered).unwrap().sprite, "sWater");
+        finalize_generated(&mut world);
+        assert_eq!(world.entity(covered).unwrap().sprite, "sWaterTop");
+    }
 
     #[test]
     fn high_graphics_fringe_choices_follow_source_short_circuit_draw_order() {
