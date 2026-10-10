@@ -358,11 +358,7 @@ fn update_membership(game: &mut Game) {
             .get(i)
             .is_some_and(|t| t.engine_active && !t.object.is_empty()),
     };
-    let changed = game
-        .dispatcher
-        .active_order
-        .iter()
-        .any(|i| !active_now(*i))
+    let changed = game.dispatcher.active_order.iter().any(|i| !active_now(*i))
         || game
             .dispatcher
             .inactive_order
@@ -493,16 +489,26 @@ pub fn activate_object(game: &mut Game, object: &str) {
     if catalog::is_a("oPlayer1", object) {
         game.player.engine_active = true;
     }
+    // The catalog and object names cannot change within these flag-only loops.
+    // Resolve each distinct name once without changing either traversal order.
+    let mut family_matches: HashMap<&str, bool> = HashMap::new();
     for e in &mut game.world.entities {
-        if catalog::is_a(&e.object, object) {
+        if *family_matches
+            .entry(e.object.as_str())
+            .or_insert_with(|| catalog::is_a(&e.object, object))
+        {
             e.engine_active = true;
         }
     }
     for t in &mut game.world.tiles {
-        if catalog::is_a(&t.object, object) {
+        if *family_matches
+            .entry(t.object.as_str())
+            .or_insert_with(|| catalog::is_a(&t.object, object))
+        {
             t.engine_active = true;
         }
     }
+    drop(family_matches);
     update_membership(game);
 }
 pub fn descendant_instances(game: &Game, parent: &str) -> Vec<Instance> {
