@@ -2023,10 +2023,16 @@ mod tests {
             let mut g = Game::shell(7, rules);
             g.load_custom(&level, "cape-swap", "");
             let spawn = g.player.pos;
-            g.world
-                .spawn("oCapePickup", Vec2::new(spawn.x, spawn.y + 2.0));
-            g.world
-                .spawn("oJetpack", Vec2::new(spawn.x + 8.0, spawn.y + 4.0));
+            let cape = g.spawn("oCapePickup", Vec2::new(spawn.x, spawn.y + 2.0));
+            let jetpack = g.spawn("oJetpack", Vec2::new(spawn.x + 8.0, spawn.y + 4.0));
+            assert_eq!(g.world.entity(cape).unwrap().value("cost"), 12000.0);
+            assert_eq!(g.world.entity(jetpack).unwrap().value("cost"), 20000.0);
+            // Source Create assigns shop costs. With no Shopkeeper, oItem
+            // clears them in its later Step, after the player's pickup event.
+            // Let that real Step run before beginning the input-only swap.
+            g.step(&InputFrame::default());
+            assert_eq!(g.world.entity(cape).unwrap().value("cost"), 0.0);
+            assert_eq!(g.world.entity(jetpack).unwrap().value("cost"), 0.0);
             g.step(&InputFrame {
                 down: true,
                 attack_pressed: true,
@@ -2038,6 +2044,8 @@ mod tests {
                 jump_released: true,
                 ..Default::default()
             });
+            let falling_before_open = g.player.vel.y;
+            assert!(falling_before_open > 0.0);
             g.step(&InputFrame {
                 jump: true,
                 jump_pressed: true,
@@ -2049,14 +2057,15 @@ mod tests {
             assert!(!g.player.has("Cape"));
             // The controller ran before item pickup: the source Cape was
             // still present for this tick's drag and its falling-time reset.
-            assert_eq!(g.player.vel.y, 1.5);
+            let cape_drag = (falling_before_open + 1.0) * 0.5;
+            assert_eq!(g.player.vel.y, cape_drag);
             assert_eq!(value(&g.player, "cape_open", 0.0), 1.0);
             g.step(&InputFrame::default());
             assert_eq!(value(&g.player, "cape_open", -1.0), 0.0);
-            assert_eq!(g.player.vel.y, 2.5);
+            assert_eq!(g.player.vel.y, cape_drag + 1.0);
             assert!(value(&g.player, "fall_timer", 0.0) > 0.0);
             g.step(&InputFrame::default());
-            assert_eq!(g.player.vel.y, 3.5);
+            assert_eq!(g.player.vel.y, cape_drag + 2.0);
         }
     }
     #[test]
