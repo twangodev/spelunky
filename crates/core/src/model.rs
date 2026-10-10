@@ -174,6 +174,11 @@ impl Default for Player {
     }
 }
 impl Player {
+    /// Classic stores the stunned flag independently from its countdown.
+    /// Throws can remain stunned in flight after the countdown reaches zero.
+    pub fn is_stunned(&self) -> bool {
+        self.stun > 0 || self.state == PlayerState::Stunned
+    }
     /// Current source sprite mask for collision events, separate from the
     /// platform engine's custom rectangle returned by `bounds()`.
     pub fn sprite_bounds(&self) -> Rect {
@@ -330,17 +335,8 @@ impl Tile {
         crate::catalog::is_solid(&self.object)
     }
     pub fn is_ladder(&self) -> bool {
-        matches!(
-            self.object.as_str(),
-            "oLadder"
-                | "oLadderOrange"
-                | "oLadderTop"
-                | "oVine"
-                | "oVineTop"
-                | "oRope"
-                | "oRopeTop"
-                | "oRopeSegment"
-        )
+        crate::catalog::is_a(&self.object, "oLadder")
+            || crate::catalog::is_a(&self.object, "oLadderTop")
     }
     pub fn is_destructible(&self) -> bool {
         self.is_solid() && !matches!(self.object.as_str(), "oSolid" | "oHardBlock")
@@ -409,6 +405,120 @@ impl World {
             self.tiles[y * self.width + x] = Tile::new(object)
         }
     }
+    /// Collision mask of the instance stored at this tile origin. Tiles retain
+    /// source origins and sprite footprints; a storage cell is not a collider.
+    /// An explicit terrain sprite corresponds to source `sprite_index` writes
+    /// (notably the otherwise sprite-less oSolid shop ice blocks).
+    pub fn tile_bounds(&self, x: i32, y: i32) -> Rect {
+        let origin = Vec2::new(f64::from(x) * TILE_SIZE, f64::from(y) * TILE_SIZE);
+        let Some(tile) = self.tile(x, y) else {
+            return Rect::new(origin.x, origin.y, 0.0, 0.0);
+        };
+        let sprite = self.entities.iter().find_map(|metadata| {
+            (metadata.alive
+                && metadata.object == "oTerrainMetadata"
+                && (metadata.pos.x / TILE_SIZE).floor() as i32 == x
+                && (metadata.pos.y / TILE_SIZE).floor() as i32 == y)
+                .then(|| metadata.text.get("terrain_sprite").map(String::as_str))
+                .flatten()
+        });
+        crate::catalog::instance_sprite_bounds(
+            &tile.object,
+            sprite
+                .or_else(|| crate::catalog::sprite(&tile.object))
+                .unwrap_or(""),
+            origin,
+            0.0,
+            Vec2::new(1.0, 1.0),
+            0.0,
+        )
+    }
+
+    /// Source group query against stored tile instances. It inspects complete
+    /// masks, including portions extending beyond their storage cells. Dynamic
+    /// instances are handled separately by callers that need them.
+    pub fn tiles_collide(&self, r: Rect, group: &str) -> bool {
+        self.tiles_match(r, group, None)
+    }
+
+    /// Point form of the same tile-instance mask query, with exact half-open
+    /// containment rather than a tiny rectangle that can touch a nearby edge.
+    pub fn tiles_point(&self, point: Vec2, group: &str) -> bool {
+        self.tiles_match(
+            Rect::new(point.x, point.y, 0.001, 0.001),
+            group,
+            Some(point),
+        )
+    }
+
+    fn tiles_match(&self, r: Rect, group: &str, point: Option<Vec2>) -> bool {
+        if !r.is_valid() || self.width == 0 {
+            return false;
+        }
+        let matches = |mask: Rect| point.map_or_else(|| mask.intersects(r), |p| mask.contains(p));
+        let envelope = crate::catalog::group_bounds(group).unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
+        let x0 = (((r.x - envelope.x - envelope.w) / TILE_SIZE).floor() as i32).max(0);
+        let y0 = (((r.y - envelope.y - envelope.h) / TILE_SIZE).floor() as i32).max(0);
+        let x1 = (((r.x + r.w - envelope.x) / TILE_SIZE).floor() as i32)
+            .min((self.width as i32).saturating_sub(1));
+        let y1 = (((r.y + r.h - envelope.y) / TILE_SIZE).floor() as i32)
+            .min((self.height as i32).saturating_sub(1));
+        // Build the sparse per-instance overrides once, rather than performing
+        // a linear metadata lookup for every solid in every collision query.
+        let mut overrides = vec![0_u64; self.tiles.len().div_ceil(64)];
+        for metadata in &self.entities {
+            if !metadata.alive || metadata.object != "oTerrainMetadata" {
+                continue;
+            }
+            let Some(sprite) = metadata.text.get("terrain_sprite") else {
+                continue;
+            };
+            let x = (metadata.pos.x / TILE_SIZE).floor() as i32;
+            let y = (metadata.pos.y / TILE_SIZE).floor() as i32;
+            let Some(tile) = self.tile(x, y) else {
+                continue;
+            };
+            let index = y as usize * self.width + x as usize;
+            let bit = 1_u64 << (index % 64);
+            if overrides[index / 64] & bit != 0 {
+                continue;
+            }
+            overrides[index / 64] |= bit;
+            let mask = crate::catalog::instance_sprite_bounds(
+                &tile.object,
+                sprite,
+                Vec2::new(f64::from(x) * TILE_SIZE, f64::from(y) * TILE_SIZE),
+                0.0,
+                Vec2::new(1.0, 1.0),
+                0.0,
+            );
+            let near = x >= x0 && x <= x1 && y >= y0 && y <= y1;
+            if (!near && !matches(mask)) || !crate::catalog::is_a(&tile.object, group) {
+                continue;
+            }
+            if matches(mask) {
+                return true;
+            }
+        }
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                let index = y as usize * self.width + x as usize;
+                if overrides[index / 64] & (1_u64 << (index % 64)) != 0 {
+                    continue;
+                }
+                if let Some(tile) = self.tile(x, y)
+                    && crate::catalog::is_a(&tile.object, group)
+                    && matches(crate::catalog::bounds(
+                        &tile.object,
+                        Vec2::new(f64::from(x) * TILE_SIZE, f64::from(y) * TILE_SIZE),
+                    ))
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
     pub fn solid_at(&self, x: f64, y: f64) -> bool {
         self.solid_at_except(x, y, 0)
     }
@@ -421,11 +531,7 @@ impl World {
         if !x.is_finite() || !y.is_finite() {
             return false;
         }
-        self.tile(
-            (x / TILE_SIZE).floor() as i32,
-            (y / TILE_SIZE).floor() as i32,
-        )
-        .is_some_and(Tile::is_solid)
+        self.tiles_point(Vec2::new(x, y), "oSolid")
             || self.entities.iter().any(|e| {
                 e.id != excluded
                     && e.alive
@@ -436,26 +542,7 @@ impl World {
     }
     /// Tile-only rectangle query. Use collides_except for dynamic solids too.
     pub fn collides(&self, r: Rect) -> bool {
-        if !r.is_valid() {
-            return false;
-        }
-        // Only authored cells can collide. Clamp scans to room storage so a
-        // large valid probe through open space does not traverse billions of
-        // nonexistent cells.
-        let x0 = ((r.x / 16.0).floor() as i32).max(0);
-        let y0 = ((r.y / 16.0).floor() as i32).max(0);
-        let x1 = (((r.x + r.w - 0.001) / 16.0).floor() as i32)
-            .min((self.width as i32).saturating_sub(1));
-        let y1 = (((r.y + r.h - 0.001) / 16.0).floor() as i32)
-            .min((self.height as i32).saturating_sub(1));
-        for y in y0..=y1 {
-            for x in x0..=x1 {
-                if self.tile(x, y).is_some_and(Tile::is_solid) {
-                    return true;
-                }
-            }
-        }
-        false
+        self.tiles_collide(r, "oSolid")
     }
     pub fn collides_except(&self, r: Rect, excluded: u64) -> bool {
         self.collides(r)
@@ -700,5 +787,130 @@ mod geometry_tests {
         assert_eq!(game.engine_time(), 0);
         game.level_tick = 100_000_001;
         assert_eq!(game.engine_time(), 1);
+    }
+
+    #[test]
+    fn source_shop_ice_sprite_blocks_player_in_actual_step() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = World::new(16, 12, Area::Mines, 1);
+        for x in 0..16 {
+            game.world.set_tile(x, 8, "oBrick");
+        }
+        game.world.set_tile(5, 7, "oSolid");
+        let id = game.world.spawn("oTerrainMetadata", Vec2::new(88.0, 120.0));
+        game.world
+            .entity_mut(id)
+            .unwrap()
+            .text
+            .insert("terrain_sprite".into(), "sIceBlock".into());
+        game.player.pos = Vec2::new(75.0, 120.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        for _ in 0..30 {
+            game.step(&InputFrame {
+                right: true,
+                ..InputFrame::default()
+            });
+            assert!(
+                game.player.pos.x <= 75.0,
+                "shop wall escaped at tick {}: {:?}",
+                game.tick,
+                game.player.pos
+            );
+        }
+    }
+
+    #[test]
+    fn wide_authored_solid_supports_player_beyond_its_storage_cell() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = World::new(16, 12, Area::Mines, 1);
+        game.world.set_tile(5, 7, "oTitleLogo");
+        game.player.pos = Vec2::new(200.0, 104.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        for _ in 0..30 {
+            game.step(&InputFrame::default());
+            assert_eq!(
+                game.player.pos.y, 104.0,
+                "wide source solid lost support at tick {}",
+                game.tick
+            );
+        }
+    }
+
+    #[test]
+    fn tile_queries_use_source_thickness_extents_and_explicit_sprites() {
+        let mut world = World::new(16, 12, Area::Mines, 1);
+        world.set_tile(2, 3, "oThinIce");
+        assert!(world.solid_at(35.0, 56.0));
+        assert!(!world.solid_at(35.0, 57.0));
+        assert!(!world.collides(Rect::new(35.0, 57.0, 1.0, 1.0)));
+        world.set_tile(4, 3, "oMoai");
+        assert!(world.solid_at(70.0, 100.0));
+        assert!(world.collides(Rect::new(70.0, 100.0, 1.0, 1.0)));
+        world.set_tile(10, 3, "oSolid");
+        assert!(
+            !world.solid_at(165.0, 50.0),
+            "an abstract object has no implicit mask"
+        );
+        let id = world.spawn("oTerrainMetadata", Vec2::new(168.0, 56.0));
+        world
+            .entity_mut(id)
+            .unwrap()
+            .text
+            .insert("terrain_sprite".into(), "sIceBlock".into());
+        assert!(world.solid_at(165.0, 50.0));
+        world.entity_mut(id).unwrap().alive = false;
+        assert!(!world.solid_at(165.0, 50.0));
+    }
+
+    #[test]
+    fn explicit_tile_sprite_can_narrow_or_extend_beyond_family_defaults() {
+        let mut world = World::new(40, 12, Area::Mines, 1);
+        world.set_tile(2, 3, "oBlock");
+        let id = world.spawn("oTerrainMetadata", Vec2::new(40.0, 56.0));
+        world
+            .entity_mut(id)
+            .unwrap()
+            .text
+            .insert("terrain_sprite".into(), "sThinIce1".into());
+        assert!(world.tiles_point(Vec2::new(35.0, 56.0), "oSolid"));
+        assert!(!world.tiles_point(Vec2::new(35.0, 57.0), "oSolid"));
+        assert!(!world.collides(Rect::new(35.0, 57.0, 1.0, 1.0)));
+        world
+            .entity_mut(id)
+            .unwrap()
+            .text
+            .insert("terrain_sprite".into(), "sCopy".into());
+        // sCopy's 144-pixel width exceeds the oSolid family's widest default
+        // mask (sTitle at 128 pixels). Broad-phase bounds cannot truncate it.
+        assert!(world.tiles_point(Vec2::new(170.0, 50.0), "oSolid"));
+        assert!(world.collides(Rect::new(170.0, 50.0, 1.0, 1.0)));
+        assert!(!world.tiles_point(Vec2::new(31.9995, 50.0), "oSolid"));
+        assert!(!world.tiles_point(Vec2::new(f64::NAN, 50.0), "oSolid"));
+    }
+
+    #[test]
+    fn stun_status_retains_source_boolean_after_throw_countdown() {
+        let mut player = Player::default();
+        assert!(!player.is_stunned());
+        player.stun = 1;
+        assert!(player.is_stunned());
+        player.stun = 0;
+        player.state = PlayerState::Stunned;
+        assert!(player.is_stunned());
+        player.state = PlayerState::Standing;
+        assert!(!player.is_stunned());
+    }
+
+    #[test]
+    fn ladder_family_excludes_decorative_rope_cap() {
+        for name in ["oLadderOrange", "oLadderTop", "oVine", "oVineTop", "oRope"] {
+            assert!(Tile::new(name).is_ladder(), "{name}");
+        }
+        assert!(!Tile::new("oRopeTop").is_ladder());
+        assert!(!Tile::new("oRopeSegment").is_ladder());
     }
 }

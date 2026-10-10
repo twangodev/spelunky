@@ -44,20 +44,7 @@ fn solid(w: &World, p: &Player, pos: Vec2) -> bool {
 fn collision_rect(w: &World, r: Rect, group: &str) -> bool {
     // GameMaker has no implicit room-edge collider. In particular, the Ice
     // Caves abyss must let the player leave the room and trigger falling death.
-    let mut tile_collision = false;
-    for y in (r.y / 16.0).floor() as i32..=((r.y + r.h - 0.001) / 16.0).floor() as i32 {
-        for x in (r.x / 16.0).floor() as i32..=((r.x + r.w - 0.001) / 16.0).floor() as i32 {
-            tile_collision |= w.tile(x, y).is_some_and(|t| {
-                crate::catalog::is_a(&t.object, group)
-                    && crate::catalog::bounds(
-                        &t.object,
-                        Vec2::new(f64::from(x) * 16.0, f64::from(y) * 16.0),
-                    )
-                    .intersects(r)
-            });
-        }
-    }
-    tile_collision
+    w.tiles_collide(r, group)
         || w.entities.iter().any(|e| {
             e.alive
                 && !e.held
@@ -316,15 +303,34 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     set(p, "character_damsel", f64::from(damsel));
     set(p, "character_tunnelman", f64::from(tunnelman));
     p.invincible = p.invincible.saturating_sub(1);
-    if p.stun > 0
-        && matches!(
-            p.sprite.as_str(),
-            "sStunL" | "sDamselStunL" | "sTunnelStunL"
-        )
-    {
+    let stationary_stun_pose = matches!(
+        p.sprite.as_str(),
+        "sStunL" | "sDamselStunL" | "sTunnelStunL"
+    );
+    if p.stun > 0 && stationary_stun_pose {
         p.stun -= 1;
     }
-    if p.health <= 0 || p.stun > 0 {
+    // Throws can set Classic's independent `stunned` flag without adding any
+    // timer. They still tumble until the stationary stun pose is reached.
+    let stunned = p.stun > 0 || (p.state == PlayerState::Stunned && !stationary_stun_pose);
+    if p.health <= 0 || stunned {
+        // This precedes the separate hurt controller in oPlayer1 Step. A long
+        // fall ends a throw's one-shot wall injury even while input is disabled.
+        let mut fall = value(p, "fall_timer", 0.0);
+        if value(p, "parachute_open", 0.0) > 0.0 {
+            fall = 0.0;
+        }
+        if p.vel.y > 0.0 && p.state != PlayerState::Climbing {
+            fall += 1.0;
+            if fall > 16.0 {
+                set(p, "wall_hurt", 0.0);
+                set(p, "wallHurt", 0.0);
+            }
+        } else {
+            fall = 0.0;
+        }
+        set(p, "fall_timer", fall);
+        set(p, "fall_ticks", fall);
         let impact = stunned_tick(&mut game.world, p, engine_time);
         if impact {
             game.events.push(GameEvent::Damage { amount: 1 });
@@ -332,10 +338,18 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         }
         return;
     }
+    // Classic keeps its platform state STANDING while the separate `stunned`
+    // flag owns movement (oPlayer1 Step 331-337). Our explicit Stunned state
+    // must leave that controller when its timer expires; otherwise it is
+    // neither ON_GROUND nor IN_AIR and can never jump or select normal art.
+    if p.state == PlayerState::Stunned {
+        p.state = PlayerState::Standing;
+    }
     if value(p, "duck_to_hang", 0.0) > 0.0 {
         duck_to_hang_tick(&game.world, p);
         return;
     }
+    set(p, "bounced", 0.0);
     let mut effective = *input;
     let cant_jump = value(p, "cantJump", 0.0);
     if cant_jump > 0.0 || (tunnelman && p.sprite == "sTunnelAttackL" && p.held.is_none()) {
@@ -384,6 +398,10 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     }
     if p.vel.y > 0.0 && p.state != PlayerState::Climbing {
         fall += 1.0;
+        if fall > 16.0 {
+            set(p, "wall_hurt", 0.0);
+            set(p, "wallHurt", 0.0);
+        }
         if has(p, &["Parachute", "parachute"])
             && fall > 14.0
             && !solid_point(w, Vec2::new(p.pos.x, p.pos.y + 32.0))
@@ -646,6 +664,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         p.jump_time = 0;
         p.coyote_ticks = 0;
         p.buffered_jump_ticks = 0;
+        set(p, "push_timer", 0.0);
         set(p, "jump_released", 0.0);
         sound = Some("sndJump");
     }
@@ -883,6 +902,18 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         xf = 0.98;
         yf = 1.0;
     }
+    if grounded_state(p.state) {
+        if p.state == PlayerState::Running
+            && ((input.left && col_left) || (input.right && col_right))
+        {
+            let push = value(p, "push_timer", 0.0);
+            set(p, "push_timer", push + 1.0);
+        } else {
+            set(p, "push_timer", 0.0);
+        }
+    }
+    let push = value(p, "push_timer", 0.0);
+    set(p, "push_timer", push.min(100.0));
     if grounded_state(p.state) && !input.jump && !input.down && !run_key {
         limit_x = 3.0;
     }
@@ -1022,7 +1053,7 @@ fn stunned_tick(w: &mut World, p: &mut Player, time: u64) -> bool {
     p.grounded = below(w, p);
     p.state = if p.health <= 0 {
         PlayerState::Dead
-    } else if p.stun > 0 {
+    } else if p.stun > 0 || p.state == PlayerState::Stunned {
         PlayerState::Stunned
     } else {
         PlayerState::Falling
@@ -1132,7 +1163,15 @@ fn animate(p: &mut Player, input: &InputFrame, w: &World) {
     // characterStepEvent resets the falling upper bound after moving; its -6
     // bound is specifically a movement-phase mask, not the next tick's mask.
     set(p, "collision_top", -8.0);
-    let name = character_sprite(p, &name).to_owned();
+    let name = character_sprite(
+        p,
+        if value(p, "push_timer", 0.0) > 20.0 && p.state != PlayerState::Climbing {
+            "sPushLeft"
+        } else {
+            &name
+        },
+    )
+    .to_owned();
     if name != p.sprite {
         p.sprite = name;
         p.animation = 0.0;
@@ -1201,6 +1240,406 @@ fn character_sprite<'a>(p: &Player, name: &'a str) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sustained_wall_push_uses_selected_pose_and_clears_on_release_or_jump() {
+        use crate::characters::{self, Character};
+        for (character, sprite) in [
+            (Character::Explorer, "sPushLeft"),
+            (Character::Damsel, "sDamselPushL"),
+            (Character::TunnelMan, "sTunnelPushL"),
+        ] {
+            let mut g = room(RulesPreset::Classic);
+            characters::apply(&mut g, character);
+            g.world.set_tile(6, 9, "oBlock");
+            g.player.pos.x = 91.0;
+            for _ in 0..25 {
+                g.step(&InputFrame {
+                    right: true,
+                    ..Default::default()
+                });
+            }
+            assert_eq!(g.player.sprite, sprite);
+            assert!(value(&g.player, "push_timer", 0.0) > 20.0);
+            g.step(&InputFrame::default());
+            assert_eq!(value(&g.player, "push_timer", -1.0), 0.0);
+            assert_ne!(g.player.sprite, sprite);
+            for _ in 0..130 {
+                g.step(&InputFrame {
+                    right: true,
+                    ..Default::default()
+                });
+            }
+            assert_eq!(value(&g.player, "push_timer", -1.0), 100.0);
+            g.step(&InputFrame {
+                jump: true,
+                jump_pressed: true,
+                ..Default::default()
+            });
+            assert_eq!(value(&g.player, "push_timer", -1.0), 0.0);
+            assert!(g.player.vel.y < 0.0);
+            g.step(&InputFrame {
+                jump: true,
+                ..Default::default()
+            });
+            assert_ne!(g.player.sprite, sprite);
+        }
+    }
+    #[test]
+    fn moveable_solid_push_reaches_pose_after_two_ticks_on_either_side() {
+        use crate::characters::{self, Character};
+        for (character, sprite) in [
+            (Character::Explorer, "sPushLeft"),
+            (Character::Damsel, "sDamselPushL"),
+            (Character::TunnelMan, "sTunnelPushL"),
+        ] {
+            for right in [false, true] {
+                let mut g = room(RulesPreset::Classic);
+                characters::apply(&mut g, character);
+                g.player.pos.x = if right { 91.0 } else { 117.0 };
+                g.world.spawn("oPushBlock", Vec2::new(96.0, 144.0));
+                for _ in 0..2 {
+                    g.step(&InputFrame {
+                        left: !right,
+                        right,
+                        ..Default::default()
+                    });
+                }
+                assert_eq!(value(&g.player, "push_timer", -1.0), 22.0);
+                assert_eq!(g.player.sprite, sprite);
+            }
+        }
+    }
+    #[test]
+    fn projectile_stun_eventually_recovers_on_authored_support_without_new_hits() {
+        use crate::characters::{self, Character};
+        for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
+            for support in ["oBlock", "oIce", "oTreeBranchTile", "oPushBlock"] {
+                for environment in ["", "oWaterSwim", "oWeb", "oLadder"] {
+                    let mut g = room(RulesPreset::Classic);
+                    characters::apply(&mut g, character);
+                    g.player.health = 20;
+                    for x in 0..20 {
+                        g.world.set_tile(x, 10, "");
+                        g.world.set_tile(x, 11, "oBlock");
+                        if support == "oPushBlock" {
+                            g.world.spawn(support, Vec2::new(x as f64 * 16.0, 160.0));
+                        } else {
+                            g.world.set_tile(x, 10, support);
+                        }
+                        if !environment.is_empty() {
+                            g.world.set_tile(x, 9, environment);
+                        }
+                    }
+                    let bullet = g.world.spawn("oBullet", Vec2::new(80.0, 152.0));
+                    g.world.entity_mut(bullet).unwrap().vel.x = 8.0;
+                    g.step(&InputFrame::default());
+                    assert!(
+                        g.player.stun > 0,
+                        "impact did not stun: {character:?}/{support}/{environment}"
+                    );
+                    for _ in 0..300 {
+                        g.step(&InputFrame::default());
+                        if g.player.stun == 0 {
+                            break;
+                        }
+                    }
+                    assert_eq!(
+                        g.player.stun, 0,
+                        "stuck: {character:?}/{support}/{environment} pos={:?} vel={:?} sprite={} state={:?}",
+                        g.player.pos, g.player.vel, g.player.sprite, g.player.state
+                    );
+                    assert_eq!(
+                        g.state,
+                        RunState::Playing,
+                        "died: {character:?}/{support}/{environment}"
+                    );
+                    g.step(&InputFrame {
+                        jump: true,
+                        jump_pressed: true,
+                        ..Default::default()
+                    });
+                    assert!(
+                        g.player.vel.y < 0.0,
+                        "cannot jump after recovery: {character:?}/{support}/{environment} state={:?}",
+                        g.player.state
+                    );
+                    assert_ne!(g.player.state, PlayerState::Stunned);
+                }
+            }
+        }
+    }
+    #[test]
+    fn yeti_throw_expires_wall_injury_during_long_fall() {
+        let mut g = Game::shell(1, RulesPreset::Classic);
+        g.world = World::new(128, 100, Area::Ice, 9);
+        for x in 0..128 {
+            g.world.set_tile(x, 80, "oIce");
+        }
+        g.world.set_tile(8, 9, "oIce");
+        g.player.pos = Vec2::new(136.0, 136.0);
+        g.player.state = PlayerState::Standing;
+        g.player.grounded = true;
+        g.player.health = 20;
+        g.world.spawn("oYeti", Vec2::new(128.0, 128.0));
+        g.step(&InputFrame::default());
+        assert_eq!(g.player.stun, 0, "Classic throws do not add a stun timer");
+        assert!(
+            g.player.is_stunned(),
+            "fixture must enter the real Yeti grab event"
+        );
+        assert_eq!(value(&g.player, "wall_hurt", 0.0), 1.0);
+        for _ in 0..40 {
+            g.step(&InputFrame::default());
+        }
+        assert!(value(&g.player, "fall_timer", 0.0) > 16.0);
+        assert_eq!(value(&g.player, "wall_hurt", -1.0), 0.0);
+        assert_eq!(g.player.health, 20);
+    }
+    #[test]
+    fn zero_timer_throws_remain_stunned_in_flight_then_recover_for_all_characters() {
+        use crate::characters::{self, Character};
+        for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
+            for actor in ["oYeti", "oHawkman", "oShopkeeper"] {
+                let mut g = room(RulesPreset::Classic);
+                characters::apply(&mut g, character);
+                g.player.health = 20;
+                g.player.pos = Vec2::new(264.0, 136.0);
+                g.world.set_tile(16, 9, "oIce");
+                let id = g.world.spawn(actor, Vec2::new(256.0, 128.0));
+                let enemy = g.world.entity_mut(id).unwrap();
+                crate::enemies::init_entity(enemy);
+                if actor == "oShopkeeper" {
+                    enemy.state = 2;
+                    enemy.data.insert("has_gun".into(), 0.0);
+                }
+                g.step(&InputFrame::default());
+                assert_eq!(g.player.stun, 0);
+                assert!(g.player.is_stunned(), "real throw {character:?}/{actor}");
+                // Isolate recovery from subsequent attacks by the same enemy.
+                g.world.entity_mut(id).unwrap().alive = false;
+                g.step(&InputFrame {
+                    attack: true,
+                    attack_pressed: true,
+                    jump: true,
+                    jump_pressed: true,
+                    ..Default::default()
+                });
+                assert!(
+                    g.player.is_stunned(),
+                    "must still tumble {character:?}/{actor}"
+                );
+                assert_eq!(g.player.attack_timer, 0);
+                for _ in 0..120 {
+                    if !g.player.is_stunned() {
+                        break;
+                    }
+                    g.step(&InputFrame::default());
+                }
+                assert!(
+                    !g.player.is_stunned(),
+                    "eventual recovery {character:?}/{actor}"
+                );
+                assert!(
+                    g.player.health > 0,
+                    "survive {character:?}/{actor} pos={:?} state={:?}",
+                    g.player.pos,
+                    g.player.state
+                );
+                for _ in 0..30 {
+                    if g.player.grounded && grounded_state(g.player.state) && g.player.vel.y == 0.0
+                    {
+                        break;
+                    }
+                    g.step(&InputFrame::default());
+                }
+                assert!(
+                    g.player.grounded,
+                    "land after recovery {character:?}/{actor}"
+                );
+                g.step(&InputFrame {
+                    jump: true,
+                    jump_pressed: true,
+                    ..Default::default()
+                });
+                assert!(
+                    g.player.vel.y < 0.0,
+                    "jump after throw {character:?}/{actor} state={:?} vel={:?} stun={}",
+                    g.player.state,
+                    g.player.vel,
+                    g.player.stun
+                );
+            }
+        }
+    }
+    #[test]
+    fn projectile_stun_interrupts_attack_and_held_bow_then_restores_controls() {
+        use crate::characters::{self, Character};
+        for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
+            for bow in [false, true] {
+                let mut g = room(RulesPreset::Classic);
+                characters::apply(&mut g, character);
+                g.player.health = 20;
+                if bow {
+                    let id = g.world.spawn("oBow", g.player.pos);
+                    g.player.held = Some(id);
+                    g.world.entity_mut(id).unwrap().held = true;
+                }
+                g.step(&InputFrame {
+                    attack: true,
+                    attack_pressed: true,
+                    ..Default::default()
+                });
+                let bullet = g.world.spawn("oBullet", Vec2::new(80.0, 152.0));
+                g.world.entity_mut(bullet).unwrap().vel.x = 8.0;
+                g.step(&InputFrame {
+                    attack: true,
+                    ..Default::default()
+                });
+                assert_eq!(g.player.stun, 20);
+                g.step(&InputFrame::default());
+                assert!(g.player.held.is_none());
+                assert_eq!(g.player.attack_timer, 0);
+                assert!(!g.world.entities.iter().any(|e| e.alive
+                    && e.value("owner_player") != 0.0
+                    && matches!(
+                        e.object.as_str(),
+                        "oWhip"
+                            | "oWhipPre"
+                            | "oMattockPre"
+                            | "oMattockHit"
+                            | "oMachetePre"
+                            | "oSlash"
+                    )));
+                for _ in 0..120 {
+                    if g.player.stun == 0 {
+                        break;
+                    }
+                    g.step(&InputFrame::default());
+                }
+                assert_eq!(g.player.stun, 0);
+                assert_eq!(value(&g.player, "bounced", -1.0), 0.0);
+                g.step(&InputFrame {
+                    jump: true,
+                    jump_pressed: true,
+                    ..Default::default()
+                });
+                assert!(g.player.vel.y < 0.0, "{character:?}/bow={bow}");
+            }
+        }
+    }
+    #[test]
+    fn natural_ledge_grab_projectile_hit_recovers_on_both_sides_for_each_character() {
+        use crate::characters::{self, Character};
+        for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
+            for facing in [-1, 1] {
+                let mut g = room(RulesPreset::Classic);
+                characters::apply(&mut g, character);
+                g.player.health = 20;
+                for x in 10..14 {
+                    for y in 5..10 {
+                        g.world.set_tile(x, y, "oBlock");
+                    }
+                }
+                g.world
+                    .set_tile(if facing > 0 { 8 } else { 15 }, 5, "oBlock");
+                g.player.pos = Vec2::new(if facing > 0 { 136.0 } else { 248.0 }, 72.0);
+                g.player.state = PlayerState::Falling;
+                g.player.grounded = false;
+                g.step(&InputFrame::default());
+                g.step(&InputFrame::default());
+                let mut held = false;
+                for _ in 0..60 {
+                    let press = !held && !g.player.grounded;
+                    held |= press;
+                    g.step(&InputFrame {
+                        left: facing < 0,
+                        right: facing > 0,
+                        jump: held,
+                        jump_pressed: press,
+                        ..Default::default()
+                    });
+                    if g.player.state == PlayerState::Hanging {
+                        break;
+                    }
+                }
+                assert_eq!(
+                    g.player.state,
+                    PlayerState::Hanging,
+                    "natural grab {character:?}/{facing}"
+                );
+                let bullet = g.world.spawn(
+                    "oBullet",
+                    Vec2::new(g.player.pos.x - f64::from(facing) * 8.0, g.player.pos.y),
+                );
+                g.world.entity_mut(bullet).unwrap().vel.x = f64::from(facing) * 8.0;
+                g.step(&InputFrame::default());
+                assert_eq!(g.player.stun, 20, "real impact {character:?}/{facing}");
+                for _ in 0..180 {
+                    if !g.player.is_stunned() {
+                        break;
+                    }
+                    g.step(&InputFrame::default());
+                }
+                assert!(!g.player.is_stunned(), "recovery {character:?}/{facing}");
+                g.step(&InputFrame {
+                    jump: true,
+                    jump_pressed: true,
+                    ..Default::default()
+                });
+                assert!(g.player.vel.y < 0.0, "jump {character:?}/{facing}");
+            }
+        }
+    }
+    #[test]
+    fn actual_ladder_climb_projectile_stun_releases_climb_and_recovers() {
+        use crate::characters::{self, Character};
+        for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
+            let mut g = room(RulesPreset::Classic);
+            characters::apply(&mut g, character);
+            g.player.health = 20;
+            for y in 5..10 {
+                g.world.set_tile(5, y, "oLadder");
+            }
+            g.step(&InputFrame {
+                up: true,
+                ..Default::default()
+            });
+            assert_eq!(g.player.state, PlayerState::Climbing);
+            let bullet = g.world.spawn("oBullet", Vec2::new(80.0, 152.0));
+            g.world.entity_mut(bullet).unwrap().vel.x = 8.0;
+            g.step(&InputFrame {
+                up: true,
+                ..Default::default()
+            });
+            assert_eq!(g.player.stun, 20);
+            for _ in 0..120 {
+                if !g.player.is_stunned() {
+                    break;
+                }
+                g.step(&InputFrame::default());
+            }
+            assert!(!g.player.is_stunned());
+            assert_ne!(g.player.state, PlayerState::Climbing);
+            for _ in 0..30 {
+                if g.player.grounded && grounded_state(g.player.state) && g.player.vel.y == 0.0 {
+                    break;
+                }
+                g.step(&InputFrame::default());
+            }
+            g.step(&InputFrame {
+                jump: true,
+                jump_pressed: true,
+                ..Default::default()
+            });
+            assert!(
+                g.player.vel.y < 0.0,
+                "{character:?} pos={:?} state={:?} data={:?}",
+                g.player.pos,
+                g.player.state,
+                g.player.data
+            );
+        }
+    }
     fn room(rules: RulesPreset) -> Game {
         let mut g = Game::shell(1, rules);
         g.world = World::new(20, 20, Area::Mines, 1);

@@ -81,7 +81,67 @@ pub fn sprite_def(name: &str) -> Option<&'static SpriteDef> {
 
 /// Unscaled first-frame sprite mask at its original source origin.
 pub fn sprite_bounds(name: &str, pos: Vec2) -> Rect {
-    transformed_sprite_bounds(name, pos, 0.0, Vec2::new(1.0, 1.0), 0.0)
+    static BOUNDS: OnceLock<BTreeMap<String, Rect>> = OnceLock::new();
+    let bounds = BOUNDS
+        .get_or_init(|| {
+            catalog()
+                .sprites
+                .keys()
+                .map(|name| {
+                    (
+                        name.clone(),
+                        transformed_sprite_bounds(
+                            name,
+                            Vec2::default(),
+                            0.0,
+                            Vec2::new(1.0, 1.0),
+                            0.0,
+                        ),
+                    )
+                })
+                .collect()
+        })
+        .get(name)
+        .copied()
+        .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
+    Rect::new(pos.x + bounds.x, pos.y + bounds.y, bounds.w, bounds.h)
+}
+
+/// Envelope of default masks in a source object family, used only to select
+/// tile origins for a broad phase. Explicit per-instance sprite overrides are
+/// queried separately, so this envelope never limits their collision extent.
+pub fn group_bounds(group: &str) -> Option<Rect> {
+    static GROUPS: OnceLock<BTreeMap<String, Rect>> = OnceLock::new();
+    GROUPS
+        .get_or_init(|| {
+            let mut groups: BTreeMap<String, Rect> = BTreeMap::new();
+            for def in catalog().objects.values() {
+                let r = bounds(&def.name, Vec2::default());
+                if !r.is_valid() {
+                    continue;
+                }
+                let mut current = def.name.as_str();
+                for _ in 0..catalog().objects.len() {
+                    let Some(parent) = object(current) else {
+                        break;
+                    };
+                    groups
+                        .entry(current.to_owned())
+                        .and_modify(|envelope| {
+                            let left = envelope.x.min(r.x);
+                            let top = envelope.y.min(r.y);
+                            let right = (envelope.x + envelope.w).max(r.x + r.w);
+                            let bottom = (envelope.y + envelope.h).max(r.y + r.h);
+                            *envelope = Rect::new(left, top, right - left, bottom - top);
+                        })
+                        .or_insert(r);
+                    current = &parent.parent;
+                }
+            }
+            groups
+        })
+        .get(group)
+        .copied()
 }
 
 #[derive(Deserialize)]
@@ -128,6 +188,9 @@ pub fn instance_sprite_bounds(
     angle: f64,
 ) -> Rect {
     let mask = object_mask(object);
+    if animation == 0.0 && scale == Vec2::new(1.0, 1.0) && angle == 0.0 {
+        return sprite_bounds(mask_sprite(mask, current_sprite), pos);
+    }
     transformed_sprite_bounds(
         mask_sprite(mask, current_sprite),
         pos,
@@ -186,6 +249,14 @@ fn transformed_sprite_bounds(
         return empty;
     }
     let [ox, oy] = sprite.origin;
+    if scale == Vec2::new(1.0, 1.0) && angle == 0.0 {
+        return Rect::new(
+            pos.x + f64::from(left - ox),
+            pos.y + f64::from(top - oy),
+            f64::from(right - left + 1),
+            f64::from(bottom - top + 1),
+        );
+    }
     let (sin, cos) = angle.sin_cos();
     let mut min = Vec2::new(f64::INFINITY, f64::INFINITY);
     let mut max = Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
