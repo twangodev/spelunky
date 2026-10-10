@@ -10,7 +10,17 @@ fn position_player(game: &mut Game, pos: Vec2) {
     game.player.health = 99;
     game.player.invincible = 999;
     game.player.grounded = true;
+    // This fixture teleports the owner between distant generated interactions.
+    // Move its actual held instance too: in normal play oItem Step has already
+    // kept it attached before the next room activation partition runs.
+    if let Some(id) = game.player.held {
+        let held = game.world.entity_mut(id).expect("held fixture instance");
+        held.pos = pos;
+        held.previous_pos = pos;
+        held.vel = Vec2::default();
+    }
     game.update_camera();
+    game.previous_camera = game.camera;
 }
 
 fn positioned_exit(game: &mut Game) {
@@ -85,14 +95,11 @@ fn generated_key_opens_generated_locked_chest_through_game_step() {
         .find(|e| e.object == "oLockedChest")
         .unwrap();
     let chest_id = chest.id;
-    game.player.pos = chest.pos;
-    game.player.previous_pos = game.player.pos;
-    game.player.vel = Vec2::default();
-    game.player.health = 99;
-    game.player.invincible = 999;
+    let chest_pos = chest.pos;
     // Use the actual generated key; isolate the chest interaction from pickup.
     game.player.held = Some(key);
     game.world.entity_mut(key).unwrap().held = true;
+    position_player(&mut game, chest_pos);
     game.step(&InputFrame::default());
     assert!(game.world.entity(key).is_none());
     assert!(game.world.entity(chest_id).is_none());
@@ -184,6 +191,10 @@ fn exposed_generated_market_ankh_moai_and_gold_door_form_a_reachable_state_chain
         .unwrap();
     let moai_id = moai.id;
     let revival_pos = Vec2::new(moai.pos.x + 8.0, moai.pos.y + 8.0);
+    // Source revival checks instance_exists(oMoai), which only sees active
+    // instances. Stage the death beside the discovered Moai, rather than back
+    // at a distant entrance whose activation region excludes the monument.
+    position_player(&mut game, Vec2::new(revival_pos.x, revival_pos.y - 32.0));
     game.player.health = 0;
     game.step(&InputFrame::default());
     assert_eq!(game.state, RunState::Playing);
