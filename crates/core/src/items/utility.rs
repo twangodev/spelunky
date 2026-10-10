@@ -88,7 +88,7 @@ pub fn use_utility(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
     // Classic searches only three tiles upward, even if the result stays solid.
     for _ in 0..3 {
         if target.y <= 16.0
-            || !solid_rect(game, Rect::new(target.x - 4.0, target.y - 4.0, 8.0, 8.0))
+            || !solid_rect(game, Rect::new(target.x - 4.0, target.y - 4.0, 9.0, 9.0))
         {
             break;
         }
@@ -108,6 +108,10 @@ pub fn use_utility(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
     game.player.grounded = false;
     game.update_camera();
     game.previous_camera = game.camera;
+    // The common held-item attachment and punishment-chain updates run later
+    // in this tick. Present their final destination, including carry offsets,
+    // rather than interpolating from the source room or the temporary anchor.
+    game.flags.insert("render_discontinuity".into());
     // Teleporting is a discontinuity, including carried items and punishment
     // chains: interpolation must never sweep them through the intervening room.
     for entity in &mut game.world.entities {
@@ -118,9 +122,20 @@ pub fn use_utility(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
             entity.previous_pos = target;
         }
     }
-    let player_bounds = game.player.bounds();
+    // instance_place uses sprite masks, independent of setCollisionBounds used
+    // by the platform engine. In particular the standing sprite is 12px wide
+    // while the normal movement rectangle is 10px wide.
+    let mut player_bounds =
+        sprite_bounds(&game.player.sprite, target).unwrap_or_else(|| game.player.bounds());
+    if game.player.facing > 0 {
+        // characterDrawEvent sets image_xscale=-1 for RIGHT. Inclusive source
+        // bounds [-6,5] therefore become [-5,6], retaining the last mask pixel.
+        player_bounds.x = 2.0 * target.x - (player_bounds.x + player_bounds.w - 1.0);
+    }
     if let Some(enemy) = game.world.entities.iter_mut().find(|e| {
-        e.alive && crate::catalog::is_a(&e.object, "oEnemy") && e.bounds().intersects(player_bounds)
+        e.alive
+            && crate::catalog::is_a(&e.object, "oEnemy")
+            && instance_bounds(e).intersects(player_bounds)
     }) {
         // The original directly destroys the first intersecting enemy, bypassing
         // invulnerability, ordinary attack damage and death drops.
@@ -141,12 +156,43 @@ pub fn use_utility(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
 }
 
 fn solid_rect(game: &Game, rect: Rect) -> bool {
-    game.world.collides(rect)
-        || game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.alive && crate::catalog::is_solid(&e.object) && rect.intersects(e.bounds()))
+    // GameMaker collision queries do not create solid walls at room edges.
+    // Tile storage must therefore ignore missing cells instead of using the
+    // generic World::collides adapter's implicit outside-room collider.
+    for y in (rect.y / TILE_SIZE).floor() as i32
+        ..=((rect.y + rect.h - 0.00001) / TILE_SIZE).floor() as i32
+    {
+        for x in (rect.x / TILE_SIZE).floor() as i32
+            ..=((rect.x + rect.w - 0.00001) / TILE_SIZE).floor() as i32
+        {
+            if game.world.tile(x, y).is_some_and(Tile::is_solid) {
+                return true;
+            }
+        }
+    }
+    game.world.entities.iter().any(|e| {
+        e.alive && crate::catalog::is_solid(&e.object) && rect.intersects(instance_bounds(e))
+    })
+}
+
+fn sprite_bounds(sprite: &str, pos: Vec2) -> Option<Rect> {
+    let sprite = crate::catalog::sprite_def(sprite)?;
+    let [left, top, right, bottom] = sprite.bounds;
+    Some(Rect::new(
+        pos.x + f64::from(left - sprite.origin[0]),
+        pos.y + f64::from(top - sprite.origin[1]),
+        f64::from((right - left + 1).max(0)),
+        f64::from((bottom - top + 1).max(0)),
+    ))
+}
+
+fn instance_bounds(entity: &Entity) -> Rect {
+    let mask = crate::catalog::object(&entity.object)
+        .map(|object| object.mask.as_str())
+        .filter(|mask| !mask.is_empty())
+        .unwrap_or(&entity.sprite);
+    sprite_bounds(mask, entity.pos)
+        .unwrap_or_else(|| crate::catalog::bounds(&entity.object, entity.pos))
 }
 
 /// The trap subsystem owns idol pickup triggers and the once-only idol count.
@@ -308,6 +354,101 @@ mod tests {
         use_utility(&mut game, id, &InputFrame::default());
         assert!(game.world.entity(snake).is_none());
         assert!(game.world.entity(second).is_some());
+    }
+
+    #[test]
+    fn landing_probe_includes_the_source_right_endpoint() {
+        let (mut game, id) = held_teleporter(11);
+        game.player.pos.x = 156.0;
+        let distance = 16.0 * f64::from(4 + game.rng.clone().range(5));
+        let target_x = game.player.pos.x + distance;
+        // The block begins exactly at tx+4, the last included source pixel.
+        game.world
+            .set_tile(((target_x + 4.0) / 16.0) as usize, 10, "oBlock");
+        use_utility(&mut game, id, &InputFrame::default());
+        assert_eq!(game.player.pos, Vec2::new(target_x, 144.0));
+        assert_eq!(game.player.health, 4);
+    }
+
+    #[test]
+    fn teleport_does_not_invent_outside_room_crushing() {
+        let (mut game, id) = held_teleporter(11);
+        game.player.pos.y = -8.0;
+        use_utility(&mut game, id, &InputFrame::default());
+        assert_eq!(game.player.pos.y, -8.0);
+        assert_eq!(game.player.health, 4);
+    }
+
+    #[test]
+    fn full_step_telefrag_uses_sprite_masks_and_resets_carried_presentation() {
+        let (mut game, id) = held_teleporter(11);
+        game.player.pos.y = 168.0;
+        game.player.state = PlayerState::Standing;
+        game.player.sprite = "sStandLeft".into();
+        game.player.grounded = true;
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 11, "oBlock");
+        }
+        let distance = 16.0 * f64::from(4 + game.rng.clone().range(5));
+        let target = Vec2::new(160.0 + distance, 168.0);
+        // The snake's source sprite starts at +1,+4. Its leftmost mask pixel
+        // intersects the right-facing player's +6 sprite pixel, outside the
+        // movement bounds (and outside the unmirrored sprite mask).
+        let snake = game
+            .world
+            .spawn("oSnake", Vec2::new(target.x + 5.0, target.y - 4.0));
+        game.world
+            .entity_mut(snake)
+            .unwrap()
+            .data
+            .insert("invincible".into(), 1.0);
+        game.step(&InputFrame {
+            attack_pressed: true,
+            ..InputFrame::default()
+        });
+        assert_eq!(game.player.pos, target);
+        assert!(game.world.entity(snake).is_none());
+        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.pos, game.player.previous_pos);
+        assert_eq!(game.camera, game.previous_camera);
+        assert!(game.flags.contains("render_discontinuity"));
+        assert_eq!(
+            game.world.entity(id).unwrap().pos,
+            Vec2::new(target.x + 4.0, target.y + 2.0)
+        );
+        // The renderer bypasses interpolation for this tick, then Game::step
+        // consumes the discontinuity before capturing the next snapshots.
+        game.step(&InputFrame::default());
+        assert!(!game.flags.contains("render_discontinuity"));
+    }
+
+    #[test]
+    fn full_step_failed_teleport_crushes_through_invulnerability() {
+        let (mut game, id) = held_teleporter(11);
+        game.player.pos.y = 168.0;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        game.player.invincible = 100;
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 11, "oBlock");
+        }
+        let distance = 16.0 * f64::from(4 + game.rng.clone().range(5));
+        let tx = ((160.0 + distance) / 16.0) as usize;
+        for y in 0..11 {
+            game.world.set_tile(tx - 1, y, "oBlock");
+            game.world.set_tile(tx, y, "oBlock");
+        }
+        game.step(&InputFrame {
+            attack_pressed: true,
+            ..InputFrame::default()
+        });
+        assert_eq!(game.state, RunState::Dead);
+        assert_eq!(game.player.health, 0);
+        assert!(game.events.contains(&GameEvent::Damage { amount: 99 }));
+        assert!(game.events.contains(&GameEvent::Died));
+        // The held teleporter remains an ordinary item until the next update;
+        // this asserts the failed use didn't silently become a throw.
+        assert_eq!(game.player.held, Some(id));
     }
 
     #[test]

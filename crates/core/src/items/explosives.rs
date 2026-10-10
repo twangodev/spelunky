@@ -45,6 +45,10 @@ fn can_use(game: &Game) -> bool {
         && game.player.attack_timer == 0
 }
 
+fn solid_point(world: &World, pos: Vec2) -> bool {
+    world.solid_point_except(pos, 0)
+}
+
 /// First use arms a carried bomb; subsequent use can throw it normally.
 pub fn arm_bomb(bomb: &mut Entity) {
     init_entity(bomb);
@@ -155,6 +159,23 @@ pub fn use_held_rope(game: &mut Game, id: u64, input: &InputFrame) -> bool {
         restore_stashed_item(game);
     } else {
         game.player.ropes = before;
+        if input.down && can_use(game) {
+            // scrUseItem's carried-rope path throws the reserved rope when
+            // downward anchoring fails; the dedicated rope button keeps it.
+            let rope = game.world.entity_mut(id).unwrap();
+            rope.held = false;
+            rope.pos = Vec2::new(
+                game.player.pos.x + 4.0 * f64::from(game.player.facing),
+                game.player.pos.y + 2.0,
+            );
+            rope.previous_pos = rope.pos;
+            rope.vel = Vec2::new(3.2 * f64::from(game.player.facing), 0.5);
+            rope.data.insert("armed".into(), 0.0);
+            rope.data.insert("falling".into(), 0.0);
+            game.player.held = None;
+            restore_stashed_item(game);
+            game.sound("sndThrow", game.player.pos);
+        }
     }
     true
 }
@@ -196,10 +217,12 @@ pub fn use_rope(game: &mut Game, input: &InputFrame) {
         return;
     }
     let pos = game.player.pos;
+    let player_bounds = game.player.bounds();
     if !input.down
-        && game
-            .world
-            .collides_except(Rect::new(pos.x - 4.0, pos.y - 5.0, 8.0, 1.0), 0)
+        && game.world.collides_except(
+            Rect::new(player_bounds.x, player_bounds.y - 1.0, player_bounds.w, 1.0),
+            0,
+        )
     {
         return;
     }
@@ -207,16 +230,17 @@ pub fn use_rope(game: &mut Game, input: &InputFrame) {
     if input.down {
         // Downward placement prefers the near side of the adjacent tile.
         let direction = f64::from(game.player.facing);
-        if game.world.solid_at(pos.x + 8.0 * direction, pos.y) {
+        if solid_point(&game.world, Vec2::new(pos.x + 8.0 * direction, pos.y)) {
             return;
         }
-        let snapped = ((pos.x + 16.0 * direction) / 16.0).round() * 16.0;
+        let snapped = ((pos.x + 16.0 * direction) / 16.0).round_ties_even() * 16.0;
         let preferred = snapped - 8.0 * direction;
         let alternate = snapped + 8.0 * direction;
         let clear = |x| {
-            !game
-                .world
-                .collides_except(Rect::new(x - 1.0, pos.y, 2.0, 16.0), 0)
+            !game.world.collides_except(
+                Rect::new(if x < snapped { x } else { x - 1.0 }, pos.y, 2.0, 17.0),
+                0,
+            )
         };
         throw_pos.x = if clear(preferred) {
             preferred
@@ -267,6 +291,9 @@ pub fn tick(game: &mut Game) {
             continue;
         };
         init_entity(&mut entity);
+        entity
+            .data
+            .insert("simulation_tick".into(), game.engine_time() as f64);
         match entity.object.as_str() {
             "oBomb" | "oFireFrogBomb" => tick_bomb(game, &mut entity),
             "oRopeThrow" => tick_rope(game, &mut entity),
@@ -373,7 +400,7 @@ fn tick_bomb(game: &mut Game, bomb: &mut Entity) {
         if let Some(target) = game.world.entities.iter().find(|target| {
             target.alive
                 && (crate::enemies::is_enemy(&target.object) || target.object == "oDamsel")
-                && contact.intersects(target.bounds())
+                && contact.intersects(target.sprite_bounds())
         }) {
             bomb.data.insert("attached_id".into(), target.id as f64);
             bomb.data
@@ -385,28 +412,77 @@ fn tick_bomb(game: &mut Game, bomb: &mut Entity) {
 }
 
 fn projectile_motion(world: &World, entity: &mut Entity, sticky: bool) {
-    let steps = entity.vel.x.abs().max(entity.vel.y.abs()).ceil().max(1.0) as usize;
-    let delta = Vec2::new(entity.vel.x / steps as f64, entity.vel.y / steps as f64);
-    let mut side = false;
-    let mut floor = false;
-    let mut ceiling = false;
-    for _ in 0..steps {
-        let horizontal = Rect::new(entity.pos.x + delta.x - 4.0, entity.pos.y - 4.0, 8.0, 8.0);
-        if delta.x != 0.0 && world.collides_except(horizontal, entity.id) {
-            side = true;
-        } else if !side {
-            entity.pos.x += delta.x;
+    let frog = entity.object == "oFireFrogBomb";
+    let body_at = |pos: Vec2| {
+        if frog {
+            Rect::new(pos.x - 6.0, pos.y - 4.0, 12.0, 12.0)
+        } else {
+            Rect::new(pos.x - 4.0, pos.y - 4.0, 8.0, 8.0)
         }
-        let vertical = Rect::new(entity.pos.x - 4.0, entity.pos.y + delta.y - 4.0, 8.0, 8.0);
-        if delta.y != 0.0 && world.collides_except(vertical, entity.id) {
-            if delta.y > 0.0 {
-                floor = true;
+    };
+    // Platform Engine/moveTo.gml converts fractional speeds using global time,
+    // then moves every horizontal pixel before moving any vertical pixels.
+    let time = entity.value("simulation_tick") as u64;
+    let dx = super::displacement(entity.vel.x, time);
+    let dy = super::displacement(entity.vel.y, time);
+    for _ in 0..dx.unsigned_abs() {
+        let next = Vec2::new(entity.pos.x + f64::from(dx.signum()), entity.pos.y);
+        let bounds = body_at(entity.pos);
+        let probe = Rect::new(
+            if dx > 0 {
+                bounds.x + bounds.w
             } else {
-                ceiling = true;
-            }
-        } else if !floor && !ceiling {
-            entity.pos.y += delta.y;
+                bounds.x - 1.0
+            },
+            bounds.y,
+            1.0,
+            bounds.h,
+        );
+        if world.collides_except(probe, entity.id) {
+            break;
         }
+        entity.pos = next;
+    }
+    for _ in 0..dy.unsigned_abs() {
+        let next = Vec2::new(entity.pos.x, entity.pos.y + f64::from(dy.signum()));
+        let bounds = body_at(entity.pos);
+        let probe = Rect::new(
+            bounds.x,
+            if dy > 0 {
+                bounds.y + bounds.h
+            } else {
+                bounds.y - 1.0
+            },
+            bounds.w,
+            1.0,
+        );
+        if world.collides_except(probe, entity.id) {
+            break;
+        }
+        entity.pos = next;
+    }
+    let bounds = body_at(entity.pos);
+    let side = world.collides_except(
+        Rect::new(bounds.x - 1.0, bounds.y, 1.0, bounds.h),
+        entity.id,
+    ) || world.collides_except(
+        Rect::new(bounds.x + bounds.w, bounds.y, 1.0, bounds.h),
+        entity.id,
+    );
+    let floor = world.collides_except(
+        Rect::new(bounds.x, bounds.y + bounds.h, bounds.w, 1.0),
+        entity.id,
+    );
+    let ceiling = world.collides_except(
+        Rect::new(bounds.x, bounds.y - 1.0, bounds.w, 1.0),
+        entity.id,
+    );
+    if !floor {
+        let gravity = entity.data.get("gravity").copied().unwrap_or(0.6);
+        entity.vel.y = (entity.vel.y + gravity).min(8.0);
+    }
+    if side || floor || ceiling {
+        entity.data.insert("gravity".into(), 0.6);
     }
     if sticky && (side || floor || ceiling) {
         entity.vel = Vec2::default();
@@ -416,26 +492,20 @@ fn projectile_motion(world: &World, entity: &mut Entity, sticky: bool) {
     if side {
         entity.vel.x *= -0.5;
     }
-    if ceiling && entity.vel.y < 0.0 {
-        entity.vel.y *= -0.8;
-    }
-    let grounded = floor
-        || world.collides_except(
-            Rect::new(entity.pos.x - 4.0, entity.pos.y - 3.0, 8.0, 8.0),
-            entity.id,
-        );
-    if grounded {
+    if floor {
         entity.vel.y = if entity.vel.y > 1.0 {
             -entity.vel.y * 0.5
         } else {
             0.0
         };
-        entity.vel.x *= 0.3;
         if entity.vel.x.abs() < 0.1 {
             entity.vel.x = 0.0;
+        } else {
+            entity.vel.x *= 0.3;
         }
-    } else {
-        entity.vel.y = (entity.vel.y + 0.6).min(8.0);
+    }
+    if ceiling && entity.vel.y < 0.0 {
+        entity.vel.y *= -0.8;
     }
 }
 
@@ -443,17 +513,18 @@ fn tick_rope(game: &mut Game, rope: &mut Entity) {
     if rope.value("falling") == 0.0 {
         projectile_motion(&game.world, rope, false);
         if rope.value("armed") != 0.0 && rope.vel.y >= 0.0 {
-            let snapped = (rope.pos.x / 16.0).round() * 16.0;
+            let snapped = (rope.pos.x / 16.0).round_ties_even() * 16.0;
             let near = if rope.value("px") < snapped {
                 snapped - 8.0
             } else {
                 snapped + 8.0
             };
-            rope.pos.x = if game.world.solid_at(near, rope.pos.y) {
+            rope.pos.x = if solid_point(&game.world, Vec2::new(near, rope.pos.y)) {
                 snapped * 2.0 - near
             } else {
                 near
             };
+            rope.pos.y = rope.pos.y.round_ties_even();
             rope.vel = Vec2::default();
             rope.data.insert("armed".into(), 0.0);
             rope.data.insert("falling".into(), 1.0);
@@ -467,7 +538,7 @@ fn tick_rope(game: &mut Game, rope: &mut Entity) {
         rope.data.insert("fall_count".into(), count);
         if count > 16.0
             || game.world.collides_except(
-                Rect::new(rope.pos.x - 4.0, rope.pos.y - 4.0, 8.0, 9.0),
+                Rect::new(rope.pos.x - 4.0, rope.pos.y + 4.0, 8.0, 1.0),
                 rope.id,
             )
         {
@@ -481,17 +552,8 @@ fn tick_rope(game: &mut Game, rope: &mut Entity) {
 fn spawn_rope_part(game: &mut Game, kind: &str, pos: Vec2) {
     let id = game.world.spawn(kind, pos);
     init_entity(game.world.entity_mut(id).unwrap());
-    // Climbing reads ladder tiles; rope entities remain for original rendering.
-    let center_x = pos.x + if kind == "oRope" { 8.0 } else { 0.0 };
-    let x = (center_x / 16.0).floor() as i32;
-    let y = (pos.y / 16.0).floor() as i32;
-    if game
-        .world
-        .tile(x, y)
-        .is_some_and(|tile| tile.object.is_empty())
-    {
-        game.world.set_tile(x as usize, y as usize, "oRopeSegment");
-    }
+    // oRope inherits oLadder and has a narrow, original per-instance climb mask.
+    // Synthetic full-tile ladders would permit climbing beside the actual rope.
 }
 
 fn tick_rope_burn(game: &mut Game, rope: &mut Entity) {
@@ -511,24 +573,6 @@ fn tick_rope_burn(game: &mut Game, rope: &mut Entity) {
         rope.data.insert("burn_timer".into(), burn - 1.0);
     } else if burn == 1.0 {
         rope.alive = false;
-        let another_segment = game.world.entities.iter().any(|other| {
-            other.id != rope.id
-                && other.alive
-                && matches!(other.object.as_str(), "oRope" | "oRopeTop")
-                && {
-                    let center_x = other.pos.x + if other.object == "oRope" { 8.0 } else { 0.0 };
-                    (center_x / 16.0).floor() as i32 == x
-                        && (other.pos.y / 16.0).floor() as i32 == y
-                }
-        });
-        if !another_segment
-            && game
-                .world
-                .tile(x, y)
-                .is_some_and(|tile| tile.object == "oRopeSegment")
-        {
-            game.world.set_tile(x as usize, y as usize, "");
-        }
     }
 }
 
@@ -536,22 +580,17 @@ fn tick_burning_flame(game: &mut Game, flame: &mut Entity) {
     flame.pos.y -= 1.0;
     flame.animation += 0.8;
     let near = Rect::new(flame.pos.x - 1.0, flame.pos.y - 8.0, 2.0, 16.0);
-    if game.world.solid_at(flame.pos.x, flame.pos.y)
-        || !game
-            .world
-            .entities
-            .iter()
-            .any(|rope| rope.alive && rope.object == "oRope" && near.intersects(rope.bounds()))
+    if solid_point(&game.world, flame.pos)
+        || !game.world.entities.iter().any(|rope| {
+            rope.alive && rope.object == "oRope" && near.intersects(rope.sprite_bounds())
+        })
     {
         flame.alive = false;
         return;
     }
-    if let Some(rope) = game
-        .world
-        .entities
-        .iter_mut()
-        .find(|rope| rope.alive && rope.object == "oRope" && rope.bounds().contains(flame.pos))
-    {
+    if let Some(rope) = game.world.entities.iter_mut().find(|rope| {
+        rope.alive && rope.object == "oRope" && rope.sprite_bounds().contains(flame.pos)
+    }) {
         rope.data.insert("burn_timer".into(), 1.0);
     }
 }
@@ -590,8 +629,17 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
             }
         }
     }
-    if game.player.health > 0 && game.player.invincible == 0 && hits(game.player.bounds()) {
-        game.damage_player(10);
+    if game.player.health > 0
+        && hits(Rect::new(
+            game.player.pos.x - 8.0,
+            game.player.pos.y - 8.0,
+            17.0,
+            17.0,
+        ))
+    {
+        // oPlayer1's explosion hurt block bypasses ordinary contact invincibility.
+        game.player.health -= 10;
+        game.events.push(GameEvent::Damage { amount: 10 });
         let speed = 4.0 + f64::from(game.rng.range(3));
         game.player.vel = Vec2::new(
             if game.player.pos.x > explosion.pos.x {
@@ -606,7 +654,7 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
     }
     let mut magma_spawns = Vec::new();
     for entity in &mut game.world.entities {
-        if !entity.alive || entity.id == explosion.id || !hits(entity.bounds()) {
+        if !entity.alive || entity.id == explosion.id || !hits(entity.sprite_bounds()) {
             continue;
         }
         if entity.object == "oBomb" {
@@ -620,14 +668,15 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
                 entity.data.insert("attached_id".into(), 0.0);
                 entity.data.insert("stuck".into(), 0.0);
                 entity.timer = 4 + game.rng.range(5);
-                entity.vel = Vec2::new(
-                    if entity.pos.x < explosion.pos.x {
-                        -3.0
-                    } else {
-                        3.0
-                    },
-                    -3.0,
-                );
+                if entity.pos.y < explosion.pos.y {
+                    entity.vel.y = -(2.0 + f64::from(game.rng.range(3)));
+                }
+                let horizontal_speed = 2.0 + f64::from(game.rng.range(3));
+                entity.vel.x = if entity.pos.x < explosion.pos.x {
+                    -horizontal_speed
+                } else {
+                    horizontal_speed
+                };
             }
         } else if entity.object == "oMagmaMan" {
             entity.alive = false;
@@ -923,7 +972,13 @@ mod tests {
                 .iter()
                 .any(|entity| entity.object == "oRopeTop")
         );
-        assert!(g.world.tiles.iter().any(Tile::is_ladder));
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .any(|entity| entity.object == "oRope"
+                    && crate::catalog::is_a(&entity.object, "oLadder"))
+        );
     }
 
     #[test]
@@ -1092,6 +1147,109 @@ mod tests {
                 .iter()
                 .any(|entity| entity.object == "oJetpack" && entity.pos == Vec2::new(88.0, 86.0))
         );
+    }
+
+    #[test]
+    fn game_step_quantizes_bomb_motion_by_level_engine_time_and_hits_dynamic_walls() {
+        let mut g = game();
+        g.tick = 100; // Entering a new room resets engine phase, not total run ticks.
+        let id = g.world.spawn("oBomb", Vec2::new(80.0, 80.0));
+        g.world.entity_mut(id).unwrap().vel.x = 1.5;
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().pos.x, 82.0);
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().pos.x, 83.0);
+        let block = g.world.spawn("oPushBlock", Vec2::new(96.0, 80.0));
+        g.world.entity_mut(block).unwrap().solid = true;
+        g.world.entity_mut(id).unwrap().vel = Vec2::new(12.0, 0.0);
+        g.step(&InputFrame::default());
+        let bomb = g.world.entity(id).unwrap();
+        assert_eq!(bomb.pos.x, 92.0);
+        assert!(bomb.vel.x < 0.0);
+    }
+
+    #[test]
+    fn game_step_bomb_can_fall_away_from_an_overlapping_ceiling() {
+        let mut g = game();
+        g.world.set_tile(5, 5, "oBlock");
+        let id = g.world.spawn("oBomb", Vec2::new(88.0, 99.0));
+        g.world.entity_mut(id).unwrap().vel.y = 2.0;
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().pos.y, 101.0);
+    }
+
+    #[test]
+    fn game_step_explosion_bypasses_contact_invincibility_and_knocks_player_back() {
+        let mut g = game();
+        g.player.health = 30;
+        g.player.invincible = 40;
+        g.world.spawn("oExplosion", g.player.pos);
+        g.step(&InputFrame::default());
+        assert_eq!(g.player.health, 20);
+        assert_eq!(g.player.stun, 100);
+        assert_eq!(g.player.vel.y, -6.0);
+        assert!((4.0..=6.0).contains(&g.player.vel.x.abs()));
+        assert!(g.player.invincible < 40);
+    }
+
+    #[test]
+    fn game_step_downward_rope_places_over_ledge_without_creating_broad_ladder_tiles() {
+        let mut g = game();
+        g.player.pos = Vec2::new(152.0, 152.0);
+        g.player.previous_pos = g.player.pos;
+        g.player.state = PlayerState::Standing;
+        g.player.grounded = true;
+        g.world.set_tile(9, 10, "oBlock");
+        g.step(&InputFrame {
+            down: true,
+            rope_pressed: true,
+            ..Default::default()
+        });
+        let top = g
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oRopeTop")
+            .unwrap();
+        assert_eq!(top.pos, Vec2::new(168.0, 152.0));
+        for _ in 0..17 {
+            g.step(&InputFrame::default());
+        }
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|entity| entity.object == "oRope")
+                .count(),
+            16
+        );
+        assert!(!g.world.tiles.iter().any(Tile::is_ladder));
+    }
+
+    #[test]
+    fn game_step_blocked_carried_rope_is_thrown_without_spending_another_rope() {
+        let mut g = game();
+        g.player.pos = Vec2::new(152.0, 152.0);
+        g.player.previous_pos = g.player.pos;
+        g.player.state = PlayerState::Standing;
+        g.player.grounded = true;
+        for x in 0..g.world.width {
+            g.world.set_tile(x, 10, "oBlock");
+        }
+        g.player.bombs = 0;
+        cycle_inventory(&mut g);
+        let reserved = g.player.held.unwrap();
+        g.step(&InputFrame {
+            down: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert!(g.player.held.is_none());
+        assert_eq!(g.player.ropes, 3);
+        let rope = g.world.entity(reserved).unwrap();
+        assert!(!rope.held);
+        assert_eq!(rope.value("falling"), 0.0);
+        assert_eq!(rope.vel.x, 3.2);
     }
 }
 

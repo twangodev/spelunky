@@ -119,13 +119,13 @@ pub fn init_entity(entity: &mut Entity) {
 }
 
 fn bounds(entity: &Entity) -> Rect {
-    // init_entity is also called lazily for entities added by other systems.
-    Rect::new(
-        entity.pos.x + entity.value("bboxLeft"),
-        entity.pos.y + entity.value("bboxTop"),
-        entity.value("bboxRight") - entity.value("bboxLeft"),
-        entity.value("bboxBottom") - entity.value("bboxTop"),
-    )
+    // GM collision_point/rectangle and collision events use sprite masks;
+    // setCollisionBounds supplies the separate movement-engine rectangle.
+    entity.sprite_bounds()
+}
+
+fn origin_is_solid(game: &Game, entity: &Entity) -> bool {
+    game.world.solid_at_except(entity.pos.x, entity.pos.y, entity.id)
 }
 
 fn spawn(game: &mut Game, object: &str, pos: Vec2, vel: Vec2) -> u64 {
@@ -233,7 +233,7 @@ pub fn tick(game: &mut Game) {
         .entities
         .iter()
         .filter(|e| e.alive && e.object == "oGhost")
-        .map(Entity::bounds)
+        .map(bounds)
         .collect();
     let transformed: Vec<_> = game
         .world
@@ -257,7 +257,7 @@ pub fn tick(game: &mut Game) {
     if game.player.health <= 0 || game.player.stun > 0 {
         return;
     }
-    let contact = Rect::new(game.player.pos.x - 8., game.player.pos.y - 8., 16., 16.);
+    let contact = Rect::new(game.player.pos.x - 8., game.player.pos.y - 8., 17., 17.);
     // The original collects at most one nearest treasure each simulation tick.
     let treasure = game
         .world
@@ -273,10 +273,13 @@ pub fn tick(game: &mut Game) {
     if let Some(id) = treasure {
         let e = game.world.entity(id).unwrap();
         let delayed = !e.object.starts_with("oGold");
-        let can_collect = e
-            .data
-            .get("canCollect")
-            .map_or(!delayed || e.age >= 20, |v| *v > 0.);
+        let collect_delay = e.value("collect_delay").max(0.) as u32;
+        let can_collect = e.age >= collect_delay
+            && e.data
+                .get("canCollect")
+                .map_or(!delayed || e.age >= 20, |v| {
+                    *v > 0. || (collect_delay > 0 && e.age >= collect_delay)
+                });
         if can_collect {
             let base = e.value("value") as u32;
             let area = match game.world.area {
@@ -315,7 +318,7 @@ pub fn tick(game: &mut Game) {
                     && e.object == object
                     && e.value("forSale") <= 0.
                     && contact.intersects(bounds(e))
-                    && !game.world.solid_at(e.pos.x, e.pos.y)
+                    && !origin_is_solid(game, e)
             })
             .map(|e| e.id);
         if let Some(id) = id {
@@ -388,7 +391,7 @@ pub fn interact(game: &mut Game, input: &InputFrame) -> bool {
         }
     }
     if input.down && game.player.held.is_none() {
-        let reach = Rect::new(game.player.pos.x - 8., game.player.pos.y, 16., 8.);
+        let reach = Rect::new(game.player.pos.x - 8., game.player.pos.y, 17., 9.);
         // Respect the nearest item so an equipment pickup cannot reach through
         // another ordinary item selected by the normal holding system.
         let pickup = game
@@ -410,7 +413,7 @@ pub fn interact(game: &mut Game, input: &InputFrame) -> bool {
             .filter(|e| {
                 equipment(&e.object).is_some()
                     && e.value("forSale") <= 0.
-                    && !game.world.solid_at(e.pos.x, e.pos.y)
+                    && !origin_is_solid(game, e)
             })
             .map(|e| e.id);
         if let Some(id) = pickup {
@@ -703,5 +706,82 @@ mod tests {
                 .iter()
                 .any(|e| e.alive && e.object == "oDiamond")
         );
+    }
+
+    fn floor_game() -> Game {
+        let mut g = game();
+        for x in 0..8 {
+            g.world.set_tile(x, 3, "oBlock");
+        }
+        g.player.grounded = true;
+        g.player.state = crate::model::PlayerState::Standing;
+        g
+    }
+
+    #[test]
+    fn game_step_does_not_collect_supplies_embedded_in_dynamic_solid() {
+        let mut g = floor_game();
+        let block = g.world.spawn("oPushBlock", Vec2::new(48., 32.));
+        let bag = g.world.spawn("oBombBag", Vec2::new(54., 40.));
+        g.step(&InputFrame::default());
+        assert_eq!(g.player.bombs, 4);
+        assert!(g.world.entity(bag).is_some());
+        g.world.entity_mut(block).unwrap().alive = false;
+        g.step(&InputFrame::default());
+        assert_eq!(g.player.bombs, 7);
+        assert!(g.world.entity(bag).is_none());
+    }
+
+    #[test]
+    fn game_step_uses_crate_sprite_mask_for_up_attack_point() {
+        let mut g = floor_game();
+        g.flags.insert("tutorial".into());
+        // sCrate extends two pixels above its instance origin, unlike the
+        // movement rectangle's zero top offset.
+        let crate_id = g.world.spawn("oCrate", Vec2::new(40., 42.));
+        g.step(&InputFrame {
+            up: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert!(g.world.entity(crate_id).is_none());
+        assert_eq!(g.data["totalCrates"], 1.);
+    }
+
+    #[test]
+    fn game_step_held_key_uses_source_mask_overlap() {
+        let mut g = floor_game();
+        let key = g.world.spawn("oKey", g.player.pos);
+        g.player.held = Some(key);
+        g.world.entity_mut(key).unwrap().held = true;
+        // Key is attached at x44: its sprite right edge overlaps this chest,
+        // while the narrower movement rectangles remain separated.
+        let chest = g.world.spawn("oLockedChest", Vec2::new(55., 40.));
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(key).is_none());
+        assert!(g.world.entity(chest).is_none());
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oUdjatEye")
+        );
+    }
+
+    #[test]
+    fn game_step_monkey_gold_waits_for_twenty_tick_collection_alarm() {
+        let mut g = floor_game();
+        let nugget = g.world.spawn("oGoldNugget", g.player.pos);
+        let e = g.world.entity_mut(nugget).unwrap();
+        e.data.insert("collect_delay".into(), 20.);
+        e.data.insert("canCollect".into(), 0.);
+        for _ in 0..19 {
+            g.step(&InputFrame::default());
+        }
+        assert!(g.world.entity(nugget).is_some());
+        assert_eq!(g.player.money, 0);
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(nugget).is_none());
+        assert_eq!(g.data["collect"], 500.);
     }
 }
