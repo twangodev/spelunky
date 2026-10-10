@@ -2007,7 +2007,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 696,
+          "line": 704,
           "module": "crates/core/src/player.rs"
         }
       ],
@@ -8158,7 +8158,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 248,
+          "line": 256,
           "module": "crates/core/src/player.rs"
         }
       ],
@@ -8193,7 +8193,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 248,
+          "line": 256,
           "module": "crates/core/src/player.rs"
         }
       ],
@@ -8437,7 +8437,7 @@
       "handlers": [
         {
           "kind": "player_tick_replacement",
-          "line": 690,
+          "line": 698,
           "module": "crates/core/src/player.rs"
         },
         {
@@ -11745,7 +11745,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 527,
+          "line": 535,
           "module": "crates/core/src/player.rs"
         }
       ],
