@@ -1265,11 +1265,12 @@ mod tests {
         }
         assert!(!game.world.entities.iter().any(|e| e.object == "oSlash"));
         tick(&mut game);
-        assert!(game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.object == "oSlash" && e.alive && e.value("damage") == 2.0));
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .any(|e| e.object == "oSlash" && e.alive && e.value("damage") == 2.0)
+        );
     }
     #[test]
     fn mattock_requires_ground_and_only_slows_the_onset_tick() {
@@ -1286,17 +1287,20 @@ mod tests {
         for _ in 0..3 {
             tick(&mut game);
         }
-        assert!(!game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.object == "oMattockHit"));
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|e| e.object == "oMattockHit")
+        );
         tick(&mut game);
-        assert!(game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.object == "oMattockHit" && e.alive));
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .any(|e| e.object == "oMattockHit" && e.alive)
+        );
     }
     #[test]
     fn bomb_arrow_requires_but_does_not_consume_bomb_and_preserves_cooked_fuse() {
@@ -1362,11 +1366,12 @@ mod tests {
         assert!(!game.world.entities.iter().any(|e| e.object == "oExplosion"));
         pre_tick(&mut game);
         tick(&mut game);
-        assert!(game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.object == "oExplosion" && e.pos == game.player.pos));
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .any(|e| e.object == "oExplosion" && e.pos == game.player.pos)
+        );
         assert_eq!(game.player.data["bow_bomb_armed"], 0.0);
     }
 

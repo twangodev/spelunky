@@ -96,11 +96,7 @@ impl HostTiming {
         step
     }
     fn alpha(&self) -> f64 {
-        if self.history_ready {
-            self.alpha
-        } else {
-            1.
-        }
+        if self.history_ready { self.alpha } else { 1. }
     }
 }
 
@@ -2190,14 +2186,17 @@ mod tests {
             game.step(&InputFrame::default());
             assert_eq!(game.tick, lethal_tick + elapsed);
             assert_eq!(death_reveal_ready(&game), elapsed >= 100);
-            assert!(!game
-                .events
-                .iter()
-                .any(|event| matches!(event, GameEvent::Died)));
-            assert!(!game
-                .events
-                .iter()
-                .any(|event| matches!(event, GameEvent::Sound { name, .. } if name == "sndDie")));
+            assert!(
+                !game
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, GameEvent::Died))
+            );
+            assert!(
+                !game.events.iter().any(
+                    |event| matches!(event, GameEvent::Sound { name, .. } if name == "sndDie")
+                )
+            );
             if elapsed == 5 {
                 assert_ne!(game.player.pos, corpse_start);
                 assert_ne!(game.world.entity(rock).unwrap().pos, rock_start);
