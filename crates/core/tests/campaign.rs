@@ -178,7 +178,10 @@ fn actual_pickups_and_walking_open_gold_door_without_entering_its_solid() {
 
 #[test]
 fn exposed_generated_market_ankh_moai_and_gold_door_form_a_reachable_state_chain() {
-    let mut game = Game::new(42, RulesPreset::Classic);
+    // Source scrEntityGen enables Tomb Lord placement on level thirteen, but
+    // still requires eligible support and a successful rand(1, 40) draw. Seed 1
+    // supplies that generated prerequisite throughout this complete chain.
+    let mut game = Game::new(1, RulesPreset::Classic);
     while !game.world.entities.iter().any(|e| e.object == "oXMarket") {
         assert!(
             game.world.level < 7,
@@ -282,7 +285,7 @@ fn exposed_generated_market_ankh_moai_and_gold_door_form_a_reachable_state_chain
         .entities
         .iter()
         .find(|e| e.object == "oTombLord")
-        .unwrap()
+        .expect("selected chain seed must generate a Tomb Lord on level thirteen")
         .id;
     // Isolate the generated boss's death/drop transition from combat execution.
     let tomb_pos = game.world.entity(tomb).unwrap().pos;
