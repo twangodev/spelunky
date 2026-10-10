@@ -547,7 +547,7 @@ pub struct Game {
     pub data: BTreeMap<String, f64>,
 }
 impl Game {
-    /// Persistent oGame's source clock starts at 1 on every room entry, then
+    /// The oGame source clock starts at 1 on every room entry, then
     /// increments before simulation and wraps after 100,000,000.
     pub fn engine_time(&self) -> u64 {
         self.level_tick.wrapping_add(1) % 100_000_001

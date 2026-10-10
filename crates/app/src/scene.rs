@@ -1,5 +1,5 @@
 //! Builds a presentation snapshot without advancing simulation or animation.
-use spelunky_core::{catalog, Area, Entity, Game, PlayerState, Vec2, TICK_RATE};
+use spelunky_core::{Area, Entity, Game, PlayerState, TICK_RATE, Vec2, catalog};
 use std::collections::BTreeMap;
 
 use crate::{atlas::Atlas, renderer::DrawQuad};
@@ -356,17 +356,9 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
             let name = if climbing {
                 "sCapeBack"
             } else if open {
-                if right {
-                    "sCapeUR"
-                } else {
-                    "sCapeUL"
-                }
+                if right { "sCapeUR" } else { "sCapeUL" }
             } else if player.vel.x.abs() > 0.0 {
-                if right {
-                    "sCapeRight"
-                } else {
-                    "sCapeLeft"
-                }
+                if right { "sCapeRight" } else { "sCapeLeft" }
             } else if right {
                 "sCapeDR"
             } else {
@@ -1054,15 +1046,21 @@ mod tests {
         game.data.insert("hub_draw_status".into(), 1.0);
         let mut quads = Vec::new();
         hud(&mut quads, &game, Vec2::default(), &atlas);
-        assert!(quads
-            .iter()
-            .any(|quad| quad.uv == atlas.sprite("sHoopsIcon", 0.0).unwrap().uv));
-        assert!(quads
-            .iter()
-            .any(|quad| quad.uv == atlas.sprite("sTimerIcon", 0.0).unwrap().uv));
-        assert!(!quads
-            .iter()
-            .any(|quad| quad.uv == atlas.sprite("sBombIcon", 0.0).unwrap().uv));
+        assert!(
+            quads
+                .iter()
+                .any(|quad| quad.uv == atlas.sprite("sHoopsIcon", 0.0).unwrap().uv)
+        );
+        assert!(
+            quads
+                .iter()
+                .any(|quad| quad.uv == atlas.sprite("sTimerIcon", 0.0).unwrap().uv)
+        );
+        assert!(
+            !quads
+                .iter()
+                .any(|quad| quad.uv == atlas.sprite("sBombIcon", 0.0).unwrap().uv)
+        );
         let mut expected = Vec::new();
         text(
             &mut expected,
@@ -1160,12 +1158,16 @@ mod tests {
         lamp.data.insert("light_offset_y".into(), -4.0);
         lamp.data.insert("light_offset_x".into(), 3.0);
         let lights = scene_lights(&game, 1.0);
-        assert!(lights
-            .iter()
-            .any(|light| light.position == Vec2::new(28.0, 38.0) && light.radius == 96.0));
-        assert!(lights
-            .iter()
-            .any(|light| light.position == Vec2::new(153.0, 146.0) && light.radius == 96.0));
+        assert!(
+            lights
+                .iter()
+                .any(|light| light.position == Vec2::new(28.0, 38.0) && light.radius == 96.0)
+        );
+        assert!(
+            lights
+                .iter()
+                .any(|light| light.position == Vec2::new(153.0, 146.0) && light.radius == 96.0)
+        );
         assert_eq!(illumination(&lights, Vec2::new(153.0, 146.0)), [1.0; 3]);
     }
 
@@ -1195,9 +1197,11 @@ mod tests {
         assert_eq!(scene_lights(&game, 1.0).len(), 1);
         let mut quads = Vec::new();
         darkness(&mut quads, &game, Vec2::default(), 1.0);
-        assert!(quads
-            .iter()
-            .any(|quad| quad.color[0] > 0.0 && quad.color[1] == 0.0 && quad.color[3] > 0.0));
+        assert!(
+            quads
+                .iter()
+                .any(|quad| quad.color[0] > 0.0 && quad.color[1] == 0.0 && quad.color[3] > 0.0)
+        );
     }
 
     #[test]
@@ -1212,10 +1216,12 @@ mod tests {
         decoration.sprite = "bgAlienShip".into();
         decoration.data.insert("variant".into(), 1.0);
         let quads = game_scene(&game, 1.0, false, &atlas);
-        assert!(quads
-            .iter()
-            .any(|quad| quad.rect == [100.0, 100.0, 32.0, 64.0]
-                && quad.uv == atlas.region("bgAlienShip", [32, 0, 32, 64]).unwrap().uv));
+        assert!(
+            quads
+                .iter()
+                .any(|quad| quad.rect == [100.0, 100.0, 32.0, 64.0]
+                    && quad.uv == atlas.region("bgAlienShip", [32, 0, 32, 64]).unwrap().uv)
+        );
         assert!(quads.iter().any(|quad| quad.rect[..2] == [0.0, 0.0]
             && quad.uv == atlas.sprite("sBrick", 0.0).unwrap().uv));
     }
@@ -1284,12 +1290,16 @@ mod tests {
             .insert("hidden".into(), 1.0);
         let quads = game_scene(&game, 0.0, false, &atlas);
         let terrain_uv = atlas.sprite("sDarkSmooth", 0.0).unwrap().uv;
-        assert!(quads
-            .iter()
-            .any(|quad| quad.uv == terrain_uv && quad.rect[..2] == [48.0, 64.0]));
-        assert!(!quads
-            .iter()
-            .any(|quad| quad.uv == atlas.sprite("sRock", 0.0).unwrap().uv));
+        assert!(
+            quads
+                .iter()
+                .any(|quad| quad.uv == terrain_uv && quad.rect[..2] == [48.0, 64.0])
+        );
+        assert!(
+            !quads
+                .iter()
+                .any(|quad| quad.uv == atlas.sprite("sRock", 0.0).unwrap().uv)
+        );
     }
 
     #[test]

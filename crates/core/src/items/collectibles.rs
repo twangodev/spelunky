@@ -125,7 +125,8 @@ fn bounds(entity: &Entity) -> Rect {
 }
 
 fn origin_is_solid(game: &Game, entity: &Entity) -> bool {
-    game.world.solid_at_except(entity.pos.x, entity.pos.y, entity.id)
+    game.world
+        .solid_at_except(entity.pos.x, entity.pos.y, entity.id)
 }
 
 fn spawn(game: &mut Game, object: &str, pos: Vec2, vel: Vec2) -> u64 {

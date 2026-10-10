@@ -7,7 +7,7 @@ use crate::{
 use spelunky_core::{
     catalog,
     editor::EditorState,
-    level::{Level, LEVEL_HEIGHT, LEVEL_WIDTH},
+    level::{LEVEL_HEIGHT, LEVEL_WIDTH, Level},
 };
 use winit::keyboard::KeyCode;
 

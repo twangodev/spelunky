@@ -96,11 +96,7 @@ impl HostTiming {
         step
     }
     fn alpha(&self) -> f64 {
-        if self.history_ready {
-            self.alpha
-        } else {
-            1.
-        }
+        if self.history_ready { self.alpha } else { 1. }
     }
 }
 
