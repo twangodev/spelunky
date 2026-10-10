@@ -191,7 +191,10 @@ fn treasure(
     let bonus = if state.cemetery { 10 } else { 0 };
     let level = world.level;
     if alcove {
-        if world.area != Area::Ice && rng.chance(1, 60) {
+        // Preserve scrTreasureGen:54's literal typo, not intended proximity:
+        // GiantSpider's compiled object index is 749, so (749 < 100) is 0.
+        // distance_to_object(0) has no target and returns 1,000,000 (truthy).
+        if world.area != Area::Ice && rng.chance(1, 5) {
             spawn(world, rng, "oWeb", x, y - 1);
         } else if state.udjat && !exists(world, "oLockedChest") {
             if rng.chance(1, state.chest_chance) {
@@ -220,7 +223,8 @@ fn treasure(
             spawn(world, rng, "oRubyBig", x, y - 1);
         }
     } else if tunnel {
-        if world.area != Area::Ice && rng.chance(1, 60) {
+        // The same literal expression at scrTreasureGen:100 assigns n = 10.
+        if world.area != Area::Ice && rng.chance(1, 10) {
             spawn(world, rng, "oWeb", x, y - 1);
         } else if rng.chance(1, 4) {
             spawn(world, rng, "oGoldBar", x, y - 1);
@@ -769,6 +773,137 @@ mod tests {
             chest_chance: 8,
             damsel: false,
             cemetery: false,
+        }
+    }
+
+    fn literal_source_web_branch(rng: &mut Rng, area: Area, alcove: bool) -> Vec<&'static str> {
+        // Independent scrTreasureGen:43–125 oracle for genUdjatEye=false,
+        // oGame.damsel=true, argument0=0. Use literal rand(1,n) results and
+        // source statement order, without calling the production helper.
+        for (limit, object) in [(100, "oRock"), (40, "oJar")] {
+            if 1 + rng.range(limit) == 1 {
+                return vec![object];
+            }
+        }
+        // Canonical EXE object table: oGiantSpider=749, object slot0 absent.
+        // Its numeric '<' yields0, distance_to_object(0) returns1,000,000,
+        // and the compiled if tests >=0.5. Spider proximity is never queried.
+        let argument = u32::from(749_u32 < 100);
+        assert_eq!(argument, 0);
+        let distance_to_object_zero = 1_000_000.0;
+        let mut n = 60;
+        if distance_to_object_zero >= 0.5 {
+            n = if alcove { 5 } else { 10 };
+        }
+        if area != Area::Ice && 1 + rng.range(n) == 1 {
+            return vec!["oWeb"];
+        }
+        let level = if area == Area::Ice { 9 } else { 1 };
+        let rolls: &[(u32, &str)] = if alcove {
+            &[
+                (10, "oCrate"),
+                (15, "oChest"),
+                (40 - 2 * level, "bones"),
+                (3, "oGoldBar"),
+                (6, "oGoldBars"),
+                (6, "oEmeraldBig"),
+                (8, "oSapphireBig"),
+                (10, "oRubyBig"),
+            ]
+        } else {
+            &[
+                (4, "oGoldBar"),
+                (8, "oGoldBars"),
+                (80 - level, "bones"),
+                (8, "oEmeraldBig"),
+                (9, "oSapphireBig"),
+                (10, "oRubyBig"),
+            ]
+        };
+        for &(limit, object) in rolls {
+            if 1 + rng.range(limit) == 1 {
+                return if object == "bones" {
+                    if 1 + rng.range(8) == 1 {
+                        vec!["oFakeBones"]
+                    } else {
+                        vec!["oBones", "oSkull"]
+                    }
+                } else {
+                    vec![object]
+                };
+            }
+        }
+        Vec::new()
+    }
+
+    #[test]
+    fn treasure_web_typo_matches_literal_source_rng_and_ignores_spider_proximity() {
+        for area in [Area::Mines, Area::Ice] {
+            for alcove in [false, true] {
+                let mut webs = 0;
+                let mut fallthrough = 0;
+                for seed in 0..64 {
+                    for spider in [
+                        None,
+                        Some(Vec2::new(96.0, 112.0)),
+                        Some(Vec2::new(512.0, 512.0)),
+                    ] {
+                        let level = if area == Area::Ice { 9 } else { 1 };
+                        let mut world = World::new(16, 16, area, level);
+                        world.entrance = at(1, 1);
+                        world.exit = at(14, 14);
+                        world.set_tile(6, 8, "oBlock");
+                        world.set_tile(5, 7, "oBlock");
+                        if alcove {
+                            world.set_tile(6, 6, "oBlock");
+                        } else {
+                            world.set_tile(7, 7, "oBlock");
+                        }
+                        if let Some(position) = spider {
+                            world.spawn("oGiantSpider", position);
+                        }
+                        let first_new = world.entities.len();
+                        let water = WaterMasks::new(&world);
+                        let mut state = treasure_state();
+                        state.damsel = true;
+                        let mut actual = Rng::new(seed);
+                        let mut source = actual.clone();
+                        let expected = literal_source_web_branch(&mut source, area, alcove);
+                        treasure(&mut world, &mut actual, &water, &mut state, 6, 8);
+                        let spawned = &world.entities[first_new..];
+                        assert_eq!(
+                            spawned
+                                .iter()
+                                .map(|entity| entity.object.as_str())
+                                .collect::<Vec<_>>(),
+                            expected,
+                            "{area:?} alcove={alcove} seed={seed} spider={spider:?}"
+                        );
+                        assert_eq!(actual.next_u64(), source.next_u64(), "source RNG order");
+                        for entity in spawned {
+                            let expected_position = match entity.object.as_str() {
+                                "oWeb" | "oFakeBones" | "oBones" => Vec2::new(96.0, 112.0),
+                                "oSkull" => Vec2::new(108.0, 124.0),
+                                "oJar" => Vec2::new(104.0, 122.0),
+                                "oCrate" | "oChest" | "oGoldBars" => Vec2::new(104.0, 120.0),
+                                _ => Vec2::new(104.0, 124.0),
+                            };
+                            assert_eq!(entity.pos, expected_position);
+                        }
+                        if expected == ["oWeb"] {
+                            webs += 1;
+                        } else if !matches!(expected.first(), Some(&"oRock" | &"oJar")) {
+                            fallthrough += 1;
+                        }
+                    }
+                }
+                assert!(fallthrough > 0, "exercise downstream loot chain");
+                if area == Area::Ice {
+                    assert_eq!(webs, 0, "Ice skips the web random statement");
+                } else {
+                    assert!(webs > 0, "exercise source web successes");
+                }
+            }
         }
     }
 
