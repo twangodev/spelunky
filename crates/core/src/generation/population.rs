@@ -137,6 +137,97 @@ fn source_point_family(world: &World, point: Vec2, family: &str) -> bool {
         })
 }
 
+fn family_origins(world: &World, family: &str) -> Vec<Vec2> {
+    let mut instances: Vec<_> = world
+        .tiles
+        .iter()
+        .enumerate()
+        .filter(|(_, tile)| crate::catalog::is_a(&tile.object, family))
+        .map(|(index, tile)| {
+            (
+                tile.creation_serial,
+                Vec2::new(
+                    (index % world.width) as f64 * 16.0,
+                    (index / world.width) as f64 * 16.0,
+                ),
+            )
+        })
+        .chain(
+            world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && crate::catalog::is_a(&entity.object, family))
+                .map(|entity| (entity.creation_serial, entity.pos)),
+        )
+        .collect();
+    // Source generation's with-family arrays append at instance creation.
+    // Merge the port's two storage forms by that order; this does not establish
+    // equivalence of earlier authored births or post-Draw rebuilt arrays.
+    instances.sort_by_key(|(serial, _)| *serial);
+    instances
+        .into_iter()
+        .map(|(_, position)| position)
+        .collect()
+}
+
+#[cfg(test)]
+struct JunglePopulationTrace {
+    world_before: World,
+    rng_before: Rng,
+    rng_after: Rng,
+    cemetery: bool,
+}
+
+#[cfg(test)]
+thread_local! {
+    static JUNGLE_POPULATION_TRACE: std::cell::RefCell<Option<Vec<JunglePopulationTrace>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn jungle_population(world: &mut World, rng: &mut Rng, cemetery: bool) {
+    #[cfg(test)]
+    let before = JUNGLE_POPULATION_TRACE.with(|trace| {
+        trace
+            .borrow()
+            .as_ref()
+            .map(|_| (world.clone(), rng.clone()))
+    });
+    // scrEntityGen:322–325 visits Vine instances, not covered grid cells.
+    // VineTop is a sibling, so it does not participate. Each Monkey Create
+    // consumes its facing draw before the next Vine's chance draw.
+    for position in family_origins(world, "oVine") {
+        if rng.chance(1, 15) {
+            crate::creation::spawn_generated_entity(world, rng, "oMonkey", position);
+        }
+    }
+    // The separate with oWater at :327–337 includes WaterSwim and Lava.
+    // Probe the instance origin, then create exactly once per eligible
+    // instance at +4,+4; overlapping instances still each get their roll.
+    for position in family_origins(world, "oWater") {
+        if !source_point_family(world, position, "oSolid") && rng.chance(1, 30) {
+            crate::creation::spawn_generated_entity(
+                world,
+                rng,
+                if cemetery { "oDeadFish" } else { "oPiranha" },
+                Vec2::new(position.x + 4.0, position.y + 4.0),
+            );
+        }
+    }
+    #[cfg(test)]
+    if let Some((world_before, rng_before)) = before {
+        JUNGLE_POPULATION_TRACE.with(|trace| {
+            if let Some(trace) = trace.borrow_mut().as_mut() {
+                trace.push(JunglePopulationTrace {
+                    world_before,
+                    rng_before,
+                    rng_after: rng.clone(),
+                    cemetery,
+                });
+            }
+        });
+    }
+}
+
 fn treasure(
     world: &mut World,
     rng: &mut Rng,
@@ -559,23 +650,7 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
         arrows(world, rng, &supports);
     }
     if world.area == Area::Jungle {
-        for y in 1..world.height as i32 - 1 {
-            for x in 1..world.width as i32 - 1 {
-                let object = world.tile(x, y).map(|t| t.object.as_str()).unwrap_or("");
-                if object == "oVine" && rng.chance(1, 15) {
-                    spawn(world, rng, "oMonkey", x, y);
-                }
-                if water.wet(x, y) && !solid(world, x, y) && rng.chance(1, 30) {
-                    spawn(
-                        world,
-                        rng,
-                        if cemetery { "oDeadFish" } else { "oPiranha" },
-                        x,
-                        y,
-                    );
-                }
-            }
-        }
+        jungle_population(world, rng, cemetery);
     }
     if world.dark {
         world.spawn("oFlareCrate", free_near(world, world.entrance));
@@ -774,6 +849,179 @@ mod tests {
             damsel: false,
             cemetery: false,
         }
+    }
+
+    fn literal_jungle_source(
+        world: &World,
+        rng: &mut Rng,
+        cemetery: bool,
+    ) -> Vec<(&'static str, Vec2, Option<i8>)> {
+        // Explicit source XML membership: VineTop is not a Vine child;
+        // WaterSwim and Lava are the two Water descendants. Establish the
+        // port's input instance order independently of family_origins.
+        let mut instances = Vec::new();
+        for (index, tile) in world.tiles.iter().enumerate() {
+            instances.push((
+                tile.creation_serial,
+                tile.object.as_str(),
+                Vec2::new(
+                    (index % world.width) as f64 * 16.0,
+                    (index / world.width) as f64 * 16.0,
+                ),
+            ));
+        }
+        for entity in world.entities.iter().filter(|entity| entity.alive) {
+            instances.push((entity.creation_serial, entity.object.as_str(), entity.pos));
+        }
+        instances.sort_by_key(|(serial, _, _)| *serial);
+        let mut births = Vec::new();
+        // scrEntityGen:322–325; Monkey Create facing=rand(0,1).
+        for &(_, object, position) in &instances {
+            if object == "oVine" && 1 + rng.range(15) == 1 {
+                let facing = if rng.range(2) == 0 { -1 } else { 1 };
+                births.push(("oMonkey", position, Some(facing)));
+            }
+        }
+        // scrEntityGen:327–337; Piranha Create rand(1,2), whereas DeadFish
+        // Create has no random statement. Do not rasterize Water masks.
+        for &(_, object, position) in &instances {
+            if !matches!(object, "oWater" | "oWaterSwim" | "oLava") {
+                continue;
+            }
+            let blocked = world.tiles_point(position, "oSolid")
+                || world.entities.iter().any(|entity| {
+                    entity.alive
+                        && crate::catalog::is_a(&entity.object, "oSolid")
+                        && entity.sprite_bounds().contains(position)
+                });
+            if !blocked && 1 + rng.range(30) == 1 {
+                let facing = if cemetery {
+                    None
+                } else {
+                    Some(if 1 + rng.range(2) == 1 { -1 } else { 1 })
+                };
+                births.push((
+                    if cemetery { "oDeadFish" } else { "oPiranha" },
+                    Vec2::new(position.x + 4.0, position.y + 4.0),
+                    facing,
+                ));
+            }
+        }
+        births
+    }
+
+    fn assert_jungle_births(
+        world: &World,
+        after_serial: u64,
+        expected: &[(&str, Vec2, Option<i8>)],
+    ) {
+        let actual: Vec<_> = world
+            .entities
+            .iter()
+            .filter(|entity| {
+                entity.creation_serial > after_serial
+                    && matches!(entity.object.as_str(), "oMonkey" | "oPiranha" | "oDeadFish")
+            })
+            .collect();
+        assert_eq!(actual.len(), expected.len());
+        for (entity, &(object, position, facing)) in actual.iter().zip(expected) {
+            assert_eq!(entity.object, object);
+            assert_eq!(entity.pos, position);
+            if let Some(facing) = facing {
+                assert_eq!(entity.facing, facing);
+                assert_eq!(entity.value("jungle_context_created"), 1.0);
+            }
+        }
+        assert!(
+            actual
+                .windows(2)
+                .all(|pair| pair[0].creation_serial < pair[1].creation_serial)
+        );
+    }
+
+    #[test]
+    fn jungle_instance_passes_match_literal_source_with_immediate_create_draws() {
+        let mut fixture = World::new(12, 12, Area::Jungle, 5);
+        // Deliberately interleave storage types, source families and spatial
+        // order. Duplicate/overhanging Water instances must each get one roll.
+        fixture.spawn("oWaterSwim", Vec2::new(21.5, 24.5));
+        fixture.set_tile(9, 8, "oVine");
+        fixture.spawn("oVine", Vec2::new(18.5, 41.0));
+        fixture.set_tile(1, 1, "oWaterSwim");
+        fixture.spawn("oVineTop", Vec2::new(36.0, 36.0));
+        fixture.spawn("oWaterSwim", Vec2::new(21.5, 24.5));
+        fixture.spawn("oLava", Vec2::new(72.0, 40.0));
+        fixture.spawn("oWater", Vec2::new(0.0, 0.0));
+        fixture.set_tile(6, 6, "oBlock");
+        fixture.spawn("oWaterSwim", Vec2::new(111.5, 111.5));
+        fixture.spawn("oPushBlock", Vec2::new(48.0, 80.0));
+        fixture.spawn("oWaterSwim", Vec2::new(48.0, 80.0));
+        let dead = fixture.spawn("oVine", Vec2::new(70.0, 70.0));
+        fixture.entity_mut(dead).unwrap().alive = false;
+        assert!(source_point_family(
+            &fixture,
+            Vec2::new(111.5, 111.5),
+            "oSolid"
+        ));
+        assert!(!source_point_family(
+            &fixture,
+            Vec2::new(119.5, 119.5),
+            "oSolid"
+        ));
+        for cemetery in [false, true] {
+            let mut monkeys = 0;
+            let mut fish = 0;
+            for seed in 0..128 {
+                let mut world = fixture.clone();
+                let mut actual = Rng::new(seed);
+                let mut source = actual.clone();
+                let expected = literal_jungle_source(&fixture, &mut source, cemetery);
+                jungle_population(&mut world, &mut actual, cemetery);
+                assert_jungle_births(&world, fixture.creation_serial, &expected);
+                assert_eq!(
+                    actual.next_u64(),
+                    source.next_u64(),
+                    "seed={seed} cemetery={cemetery}"
+                );
+                monkeys += expected
+                    .iter()
+                    .filter(|(object, _, _)| *object == "oMonkey")
+                    .count();
+                fish += expected
+                    .iter()
+                    .filter(|(object, _, _)| *object != "oMonkey")
+                    .count();
+            }
+            assert!(monkeys > 0 && fish > 0, "exercise both Create sequences");
+        }
+    }
+
+    #[test]
+    fn generated_jungle_uses_separate_source_instance_passes() {
+        let flags = BTreeSet::from(["no_dark_level".into(), "made_market_entrance".into()]);
+        let mut vine_instances = 0;
+        let mut water_instances = 0;
+        for seed in 0..8 {
+            JUNGLE_POPULATION_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
+            let world = super::super::generate(&mut Rng::new(seed), 5, &flags);
+            let traces = JUNGLE_POPULATION_TRACE.with(|trace| trace.borrow_mut().take().unwrap());
+            assert_eq!(traces.len(), 1);
+            let trace = &traces[0];
+            let mut source = trace.rng_before.clone();
+            let expected = literal_jungle_source(&trace.world_before, &mut source, trace.cemetery);
+            assert_jungle_births(&world, trace.world_before.creation_serial, &expected);
+            let mut actual = trace.rng_after.clone();
+            assert_eq!(
+                actual.next_u64(),
+                source.next_u64(),
+                "generated seed={seed}"
+            );
+            // Coverage is aggregated across real layouts; no fixture injects
+            // a pool/vine or forces a successful actor chance into generation.
+            vine_instances += family_origins(&trace.world_before, "oVine").len();
+            water_instances += family_origins(&trace.world_before, "oWater").len();
+        }
+        assert!(vine_instances > 0 && water_instances > 0);
     }
 
     fn literal_source_web_branch(rng: &mut Rng, area: Area, alcove: bool) -> Vec<&'static str> {
