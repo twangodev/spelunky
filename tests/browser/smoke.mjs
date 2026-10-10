@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { installMovementTrace, runMovementAcceptance } from './movement.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const artifacts = path.resolve(process.env.BROWSER_ARTIFACTS || path.join(root, 'artifacts/browser'));
@@ -176,6 +177,7 @@ try {
       result.version = browser.version();
       const context = await browser.newContext({ viewport: { width: 960, height: 720 }, acceptDownloads: true });
       await context.addInitScript(instrument);
+      await context.addInitScript(installMovementTrace);
       const page = await context.newPage();
       activePage = page;
       page.on('pageerror', error => result.errors.push(String(error)));
@@ -307,6 +309,9 @@ try {
       assert.equal(result.finalGraphics.contextLost, 0);
       assert.deepEqual(result.errors, []);
       assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
+      await runMovementAcceptance({ page, result, screenshot });
+      assert.deepEqual(result.errors, []);
+      assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
       await context.close();
 
       // Failure paths run in fresh storage, separate from the happy-path session.
@@ -350,6 +355,7 @@ try {
     } catch (error) {
       result.failure = error.stack || String(error);
       if (activePage && !activePage.isClosed()) {
+        result.failureMovementTrace = await activePage.evaluate(() => window.__movementTrace?.slice(-120)).catch(() => null);
         await activePage.screenshot({ path: path.join(artifacts, `${engine}-failure.png`) }).catch(() => {});
       }
     } finally {
