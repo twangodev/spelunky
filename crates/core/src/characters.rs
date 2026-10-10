@@ -339,7 +339,10 @@ mod tests {
         assert!(recovered, "the live Yeti throw must naturally recover");
         assert!(game.player.health > 0);
         for _ in 0..60 {
-            if game.player.grounded && game.player.vel.y == 0. {
+            if game.player.grounded
+                && game.player.vel.y == 0.
+                && !game.player.data.contains_key("character_attack_active")
+            {
                 break;
             }
             game.step(&neutral);
