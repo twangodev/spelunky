@@ -1053,6 +1053,15 @@ impl App {
                     0.8,
                     WHITE,
                 );
+                text(
+                    &mut quads,
+                    atlas,
+                    "UNOFFICIAL MOD - (C) 2008,2009 DEREK YU/MOSSMOUTH",
+                    12.,
+                    234.,
+                    0.55,
+                    WHITE,
+                );
             }
             Screen::Pause => {
                 self.panel(&mut quads);
@@ -1223,7 +1232,7 @@ impl App {
             Screen::About => {
                 text(&mut quads, atlas, "SPELUNKY CLASSIC", 50., 20., 1.6, GOLD);
                 for (index, line) in [
-                    "ORIGINAL GAME BY DEREK YU / MOSSMOUTH",
+                    "(C) 2008,2009 DEREK YU / MOSSMOUTH",
                     "UNOFFICIAL MODIFIED RUST PORT",
                     "CLASSIC 1.1 REFERENCE",
                     "FREE DISTRIBUTION - DO NOT SELL",
