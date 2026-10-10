@@ -29,7 +29,7 @@ pub fn tick(game: &mut Game, _input: &InputFrame) {
                     item.alive
                         && catalog::is_a(&item.object, "oItem")
                         && (item.vel.x > 0.0 || item.vel.y > 0.0)
-                        && e.bounds().intersects(item.bounds())
+                        && e.sprite_bounds().intersects(item.sprite_bounds())
                 }) {
                     e.alive = false;
                     game.player.data.insert("parachute_open".into(), 0.0);
@@ -67,12 +67,21 @@ pub fn tick(game: &mut Game, _input: &InputFrame) {
 fn sign(game: &mut Game, e: &mut Entity) {
     let remaining = (e.value("message_cooldown") - 1.0).max(0.0);
     e.data.insert("message_cooldown".into(), remaining);
-    if !e.bounds().intersects(game.player.bounds()) {
+    let mask = e.sprite_bounds();
+    if !mask.intersects(game.player.sprite_bounds())
+        && !game.world.entities.iter().any(|character| {
+            character.alive
+                && catalog::is_a(&character.object, "oCharacter")
+                && mask.intersects(character.sprite_bounds())
+        })
+    {
         return;
     }
     // The source collision refreshes the global display lifetime every tick.
     game.data.insert("message_timer".into(), 200.0);
-    if remaining != 0.0 {
+    let changed = game.data.get("message_sign_id").copied() != Some(e.id as f64);
+    game.data.insert("message_sign_id".into(), e.id as f64);
+    if remaining != 0.0 && !changed {
         return;
     }
     let first = e.text.get("message").map(String::as_str).unwrap_or("");
@@ -82,7 +91,7 @@ fn sign(game: &mut Game, e: &mut Entity) {
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("\n");
-    if !message.is_empty() {
+    if !message.is_empty() || changed {
         game.events.push(GameEvent::Message(message));
         // Events notify the presentation once, rather than duplicating the same
         // notification on every overlapping tick. Display lifetime still refreshes.
@@ -117,15 +126,13 @@ fn point_family(game: &Game, point: Vec2, family: &str) -> bool {
             (point.y / 16.0).floor() as i32,
         )
         .is_some_and(|t| catalog::is_a(&t.object, family))
-        || game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.alive && catalog::is_a(&e.object, family) && e.bounds().contains(point))
+        || game.world.entities.iter().any(|e| {
+            e.alive && catalog::is_a(&e.object, family) && e.sprite_bounds().contains(point)
+        })
 }
 
 fn ice_bottom(game: &mut Game, e: &mut Entity) {
-    if !game.world.solid_at(e.pos.x + 8.0, e.pos.y - 1.0) {
+    if !point_family(game, Vec2::new(e.pos.x + 8.0, e.pos.y - 1.0), "oSolid") {
         e.alive = false;
         return;
     }
@@ -154,8 +161,8 @@ fn frozen_caveman(game: &mut Game, e: &mut Entity) {
     // imported rooms) need the source Destroy event here instead.
     let adapted = game.world.entities.iter().any(|other| {
         other.value("frozen_caveman") != 0.0
-            && (other.pos.x - e.pos.x).abs() < 16.0
-            && (other.pos.y - e.pos.y).abs() < 16.0
+            && (other.pos.x / 16.0).floor() == (e.pos.x / 16.0).floor()
+            && (other.pos.y / 16.0).floor() == (e.pos.y / 16.0).floor()
     });
     if adapted
         || game.flags.contains("cleanSolids")
@@ -256,7 +263,7 @@ fn rubble(game: &Game, e: &mut Entity) {
     } else if point_family(game, e.pos, "oLava") {
         e.alive = false;
     }
-    if game.world.solid_at(e.pos.x, e.pos.y) || outside(game, e.pos, 32.0) {
+    if point_family(game, e.pos, "oSolid") || outside(game, e.pos, 32.0) {
         e.alive = false;
     }
 }
@@ -291,9 +298,10 @@ fn detritus(game: &mut Game, e: &mut Entity) {
             .world
             .entities
             .iter()
+            .take_while(|other| other.id != e.id)
             .filter(|other| other.alive && catalog::is_a(&other.object, "oDetritus"))
             .count()
-            > 32
+            >= 32
         {
             e.alive = false;
             return;
@@ -305,8 +313,8 @@ fn detritus(game: &mut Game, e: &mut Entity) {
         e.alive = false;
         return;
     }
-    let dx = displacement(e.vel.x, game.tick);
-    let dy = displacement(e.vel.y, game.tick);
+    let dx = displacement(e.vel.x, game.engine_time());
+    let dy = displacement(e.vel.y, game.engine_time());
     for _ in 0..dx.unsigned_abs() {
         let next = Vec2::new(e.pos.x + f64::from(dx.signum()), e.pos.y);
         if game
@@ -375,7 +383,10 @@ fn detritus(game: &mut Game, e: &mut Entity) {
         {
             game.world.spawn("oBloodTrail", e.pos);
         }
-        if e.age >= 5 && game.player.has("Kapala") && e.bounds().intersects(game.player.bounds()) {
+        if e.age >= 5
+            && game.player.has("Kapala")
+            && e.sprite_bounds().intersects(game.player.sprite_bounds())
+        {
             let blood = game.data.get("bloodLevel").copied().unwrap_or(0.0) + 1.0;
             game.data
                 .insert("bloodLevel".into(), if blood > 8.0 { 0.0 } else { blood });
@@ -407,14 +418,19 @@ fn detritus(game: &mut Game, e: &mut Entity) {
 }
 
 fn fallen_decoration(game: &mut Game, e: &mut Entity) {
-    if e.object == "oFakeBones" && outside(game, e.pos, 16.0) {
+    if e.object == "oFakeBones"
+        && !(e.pos.x > game.camera.x - 16.0
+            && e.pos.x < game.camera.x + VIEW_WIDTH
+            && e.pos.y > game.camera.y - 16.0
+            && e.pos.y < game.camera.y + VIEW_HEIGHT)
+    {
         return;
     }
-    if !game.world.solid_at(e.pos.x + 8.0, e.pos.y + 16.0) {
+    if !point_family(game, Vec2::new(e.pos.x + 8.0, e.pos.y + 16.0), "oSolid") {
         e.pos.y += e.vel.y;
         e.vel.y += 0.2;
     }
-    if game.world.solid_at(e.pos.x + 8.0, e.pos.y + 15.0) {
+    if point_family(game, Vec2::new(e.pos.x + 8.0, e.pos.y + 15.0), "oSolid") {
         e.pos.y -= 1.0;
     }
     if e.object == "oFakeBones" {
@@ -481,6 +497,7 @@ mod tests {
     }
     fn advance(g: &mut Game) {
         g.tick += 1;
+        g.level_tick += 1;
         for e in &mut g.world.entities {
             e.age += 1;
         }
@@ -641,7 +658,19 @@ mod tests {
         let mut g = room();
         g.player.data.insert("parachute_open".into(), 1.0);
         let rock = g.world.spawn("oRock", Vec2::new(40.0, 28.0));
-        g.world.entity_mut(rock).unwrap().vel.x = -1.0;
+        g.world.entity_mut(rock).unwrap().vel.x = 1.0;
+        // The rock touches the canopy's engine rectangle but is above the
+        // opening frame's actual sprite mask, so it must not cut it.
+        advance(&mut g);
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oParachute")
+        );
+        let item = g.world.entity_mut(rock).unwrap();
+        item.pos.y = 36.0;
+        item.vel.x = -1.0;
         advance(&mut g);
         assert!(
             g.world
@@ -658,5 +687,114 @@ mod tests {
                 .any(|e| e.alive && e.object == "oParachute")
         );
         assert_eq!(g.player.data["parachute_open"], 0.0);
+    }
+    #[test]
+    fn integrated_sign_event_uses_player_sprite_mask_at_movement_edge() {
+        let mut g = room();
+        for x in 0..20 {
+            g.world.set_tile(x, 3, "oBrick");
+        }
+        g.player.grounded = true;
+        g.player.state = crate::PlayerState::Standing;
+        let sign = g.world.spawn("oMsgSign", Vec2::new(46.0, 32.0));
+        g.world
+            .entity_mut(sign)
+            .unwrap()
+            .text
+            .insert("message".into(), "SPRITE EDGE".into());
+        g.step(&InputFrame::default());
+        assert!(
+            !g.player
+                .bounds()
+                .intersects(g.world.entity(sign).unwrap().sprite_bounds())
+        );
+        assert!(
+            g.player
+                .sprite_bounds()
+                .intersects(g.world.entity(sign).unwrap().sprite_bounds())
+        );
+        assert!(g.events.contains(&GameEvent::Message("SPRITE EDGE".into())));
+    }
+    #[test]
+    fn switching_back_to_a_sign_replaces_current_message_before_cooldown() {
+        let mut g = room();
+        for (x, text) in [(32.0, "FIRST"), (80.0, "SECOND")] {
+            let id = g.world.spawn("oMsgSign", Vec2::new(x, 32.0));
+            g.world
+                .entity_mut(id)
+                .unwrap()
+                .text
+                .insert("message".into(), text.into());
+        }
+        advance(&mut g);
+        assert_eq!(g.events, vec![GameEvent::Message("FIRST".into())]);
+        g.player.pos.x = 88.0;
+        advance(&mut g);
+        assert_eq!(g.events, vec![GameEvent::Message("SECOND".into())]);
+        g.player.pos.x = 40.0;
+        advance(&mut g);
+        assert_eq!(g.events, vec![GameEvent::Message("FIRST".into())]);
+    }
+    #[test]
+    fn room_clock_quantizes_detritus_without_using_lifetime_tick() {
+        let mut g = room();
+        g.tick = 100;
+        let id = g.world.spawn("oBone", Vec2::new(80.0, 80.0));
+        let e = g.world.entity_mut(id).unwrap();
+        e.data.insert("world_effect_initialized".into(), 1.0);
+        e.data.insert("life".into(), 60.0);
+        e.data.insert("gravity".into(), 0.0);
+        e.vel = Vec2::new(0.4, 0.0);
+        advance(&mut g); // source time 2, lifetime tick 101: no displacement
+        assert_eq!(g.world.entity(id).unwrap().pos.x, 80.0);
+        advance(&mut g); // source time 3, lifetime tick 102: one pixel
+        assert_eq!(g.world.entity(id).unwrap().pos.x, 81.0);
+        g.level_tick = 0;
+        advance(&mut g); // another room restarts the phase at source time 2
+        assert_eq!(g.world.entity(id).unwrap().pos.x, 81.0);
+    }
+    #[test]
+    fn detritus_cap_preserves_oldest_instances_and_rejects_newest() {
+        let mut g = room();
+        let ids: Vec<_> = (0..33)
+            .map(|_| g.world.spawn("oBone", Vec2::new(80.0, 80.0)))
+            .collect();
+        advance(&mut g);
+        assert!(ids[..32].iter().all(|id| g.world.entity(*id).is_some()));
+        assert!(g.world.entity(ids[32]).is_none());
+    }
+    #[test]
+    fn source_point_collision_sees_moving_solid_support_but_not_room_boundary() {
+        let mut g = room();
+        let support = g.world.spawn("oPushBlock", Vec2::new(80.0, 48.0));
+        let ice = g.world.spawn("oIceBottom", Vec2::new(80.0, 64.0));
+        advance(&mut g);
+        assert!(g.world.entity(ice).is_some());
+        g.world.entity_mut(support).unwrap().alive = false;
+        advance(&mut g);
+        assert!(g.world.entity(ice).is_none());
+        let edge = g.world.spawn("oIceBottom", Vec2::new(80.0, 0.0));
+        advance(&mut g);
+        assert!(g.world.entity(edge).is_none());
+    }
+    #[test]
+    fn adjacent_frozen_metadata_does_not_suppress_explicit_occupant_release() {
+        let mut g = room();
+        let metadata = g.world.spawn("oTerrainMetadata", Vec2::new(72.0, 72.0));
+        g.world
+            .entity_mut(metadata)
+            .unwrap()
+            .data
+            .insert("frozen_caveman".into(), 1.0);
+        g.world.spawn("oFrozenCaveman", Vec2::new(80.0, 64.0));
+        advance(&mut g);
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oCaveman")
+                .count(),
+            1
+        );
     }
 }
