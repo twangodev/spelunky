@@ -2714,6 +2714,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -2735,6 +2736,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -2756,6 +2758,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -2777,6 +2780,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -2798,6 +2802,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -2819,6 +2824,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -2840,6 +2846,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -2861,6 +2868,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -2877,6 +2885,3763 @@
         }
       ],
       "width": 320
+    },
+    "rIntro": {
+      "background_color": "C0C0C0",
+      "backgrounds": [
+        {
+          "image": "backgroundNight",
+          "is_foreground": false,
+          "offset": {
+            "x": 0,
+            "y": 0
+          },
+          "speed": {
+            "x": 0,
+            "y": 0
+          },
+          "stretch": false,
+          "tile_horizontally": true,
+          "tile_vertically": true,
+          "visible_on_room_start": true
+        },
+        {
+          "image": "",
+          "is_foreground": false,
+          "offset": {
+            "x": 0,
+            "y": 0
+          },
+          "speed": {
+            "x": 0,
+            "y": 0
+          },
+          "stretch": false,
+          "tile_horizontally": true,
+          "tile_vertically": true,
+          "visible_on_room_start": false
+        },
+        {
+          "image": "",
+          "is_foreground": false,
+          "offset": {
+            "x": 0,
+            "y": 0
+          },
+          "speed": {
+            "x": 0,
+            "y": 0
+          },
+          "stretch": false,
+          "tile_horizontally": true,
+          "tile_vertically": true,
+          "visible_on_room_start": false
+        },
+        {
+          "image": "",
+          "is_foreground": false,
+          "offset": {
+            "x": 0,
+            "y": 0
+          },
+          "speed": {
+            "x": 0,
+            "y": 0
+          },
+          "stretch": false,
+          "tile_horizontally": true,
+          "tile_vertically": true,
+          "visible_on_room_start": false
+        },
+        {
+          "image": "",
+          "is_foreground": false,
+          "offset": {
+            "x": 0,
+            "y": 0
+          },
+          "speed": {
+            "x": 0,
+            "y": 0
+          },
+          "stretch": false,
+          "tile_horizontally": true,
+          "tile_vertically": true,
+          "visible_on_room_start": false
+        },
+        {
+          "image": "",
+          "is_foreground": false,
+          "offset": {
+            "x": 0,
+            "y": 0
+          },
+          "speed": {
+            "x": 0,
+            "y": 0
+          },
+          "stretch": false,
+          "tile_horizontally": true,
+          "tile_vertically": true,
+          "visible_on_room_start": false
+        },
+        {
+          "image": "",
+          "is_foreground": false,
+          "offset": {
+            "x": 0,
+            "y": 0
+          },
+          "speed": {
+            "x": 0,
+            "y": 0
+          },
+          "stretch": false,
+          "tile_horizontally": true,
+          "tile_vertically": true,
+          "visible_on_room_start": false
+        },
+        {
+          "image": "",
+          "is_foreground": false,
+          "offset": {
+            "x": 0,
+            "y": 0
+          },
+          "speed": {
+            "x": 0,
+            "y": 0
+          },
+          "stretch": false,
+          "tile_horizontally": true,
+          "tile_vertically": true,
+          "visible_on_room_start": false
+        }
+      ],
+      "caption": "",
+      "creation_code": "",
+      "draw_background_color": false,
+      "enable_views": true,
+      "height": 240,
+      "id": 100,
+      "instances": [
+        {
+          "creation_code": "",
+          "id": 131015,
+          "locked": false,
+          "object": "oMoon",
+          "x": 208,
+          "y": 16
+        },
+        {
+          "creation_code": "",
+          "id": 131534,
+          "locked": false,
+          "object": "oIntroBG",
+          "x": 0,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 131035,
+          "locked": false,
+          "object": "oPalmTreeDark",
+          "x": 80,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 131036,
+          "locked": false,
+          "object": "oPalmTreeDark",
+          "x": 224,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 131037,
+          "locked": false,
+          "object": "oPalmTreeDark",
+          "x": 272,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 131038,
+          "locked": false,
+          "object": "oPalmTreeDark",
+          "x": 416,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 131039,
+          "locked": false,
+          "object": "oPalmTreeDark",
+          "x": 512,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 131041,
+          "locked": false,
+          "object": "oPalmTreeDark",
+          "x": 640,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 131017,
+          "locked": false,
+          "object": "oCaveBG2",
+          "x": 752,
+          "y": 144
+        },
+        {
+          "creation_code": "",
+          "id": 131018,
+          "locked": false,
+          "object": "oCaveBG2",
+          "x": 720,
+          "y": 144
+        },
+        {
+          "creation_code": "",
+          "id": 131019,
+          "locked": false,
+          "object": "oCaveBG2",
+          "x": 784,
+          "y": 144
+        },
+        {
+          "creation_code": "",
+          "id": 131020,
+          "locked": false,
+          "object": "oCaveBG2",
+          "x": 816,
+          "y": 144
+        },
+        {
+          "creation_code": "",
+          "id": 131021,
+          "locked": false,
+          "object": "oCaveBG2",
+          "x": 848,
+          "y": 144
+        },
+        {
+          "creation_code": "",
+          "id": 131022,
+          "locked": false,
+          "object": "oCaveBG2",
+          "x": 880,
+          "y": 144
+        },
+        {
+          "creation_code": "",
+          "id": 131023,
+          "locked": false,
+          "object": "oCaveBG2",
+          "x": 912,
+          "y": 144
+        },
+        {
+          "creation_code": "",
+          "id": 131024,
+          "locked": false,
+          "object": "oCaveBG2",
+          "x": 720,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 131025,
+          "locked": false,
+          "object": "oCaveBG2",
+          "x": 752,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 131026,
+          "locked": false,
+          "object": "oCaveBG2",
+          "x": 784,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 131027,
+          "locked": false,
+          "object": "oCaveBG2",
+          "x": 816,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 131028,
+          "locked": false,
+          "object": "oCaveBG2",
+          "x": 848,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 131029,
+          "locked": false,
+          "object": "oCaveBG2",
+          "x": 880,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 131030,
+          "locked": false,
+          "object": "oCaveBG2",
+          "x": 912,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 131031,
+          "locked": false,
+          "object": "oCaveBG2",
+          "x": 912,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 131032,
+          "locked": false,
+          "object": "oCaveBGEntrance",
+          "x": 704,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 131043,
+          "locked": false,
+          "object": "oShrubDark",
+          "x": 192,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 131044,
+          "locked": false,
+          "object": "oShrubDark",
+          "x": 336,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 131046,
+          "locked": false,
+          "object": "oShrubDark",
+          "x": 384,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 131047,
+          "locked": false,
+          "object": "oShrubDark",
+          "x": 464,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 131048,
+          "locked": false,
+          "object": "oShrubDark",
+          "x": 560,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 131049,
+          "locked": false,
+          "object": "oShrubDark",
+          "x": 640,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 131050,
+          "locked": false,
+          "object": "oShrubDark",
+          "x": 672,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130330,
+          "locked": false,
+          "object": "oDesert",
+          "x": 0,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130331,
+          "locked": false,
+          "object": "oDesert",
+          "x": 16,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130332,
+          "locked": false,
+          "object": "oDesert",
+          "x": 32,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130333,
+          "locked": false,
+          "object": "oDesert",
+          "x": 48,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130334,
+          "locked": false,
+          "object": "oDesert",
+          "x": 64,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130336,
+          "locked": false,
+          "object": "oDesert",
+          "x": 48,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130337,
+          "locked": false,
+          "object": "oDesert",
+          "x": 32,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130338,
+          "locked": false,
+          "object": "oDesert",
+          "x": 16,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130339,
+          "locked": false,
+          "object": "oDesert",
+          "x": 0,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130362,
+          "locked": false,
+          "object": "oDesert",
+          "x": 224,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130363,
+          "locked": false,
+          "object": "oDesert",
+          "x": 208,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130364,
+          "locked": false,
+          "object": "oDesert",
+          "x": 192,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130365,
+          "locked": false,
+          "object": "oDesert",
+          "x": 176,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130366,
+          "locked": false,
+          "object": "oDesert",
+          "x": 160,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130367,
+          "locked": false,
+          "object": "oDesert",
+          "x": 144,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130368,
+          "locked": false,
+          "object": "oDesert",
+          "x": 128,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130372,
+          "locked": false,
+          "object": "oDesert",
+          "x": 64,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130373,
+          "locked": false,
+          "object": "oDesert",
+          "x": 80,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130374,
+          "locked": false,
+          "object": "oDesert",
+          "x": 96,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130375,
+          "locked": false,
+          "object": "oDesert",
+          "x": 112,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130392,
+          "locked": false,
+          "object": "oDesert",
+          "x": 80,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130393,
+          "locked": false,
+          "object": "oDesert",
+          "x": 96,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130394,
+          "locked": false,
+          "object": "oDesert",
+          "x": 112,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130395,
+          "locked": false,
+          "object": "oDesert",
+          "x": 128,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130396,
+          "locked": false,
+          "object": "oDesert",
+          "x": 144,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130397,
+          "locked": false,
+          "object": "oDesert",
+          "x": 160,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130398,
+          "locked": false,
+          "object": "oDesert",
+          "x": 176,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130399,
+          "locked": false,
+          "object": "oDesert",
+          "x": 192,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130400,
+          "locked": false,
+          "object": "oDesert",
+          "x": 208,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130412,
+          "locked": false,
+          "object": "oDesert",
+          "x": 432,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130413,
+          "locked": false,
+          "object": "oDesert",
+          "x": 416,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130414,
+          "locked": false,
+          "object": "oDesert",
+          "x": 400,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130418,
+          "locked": false,
+          "object": "oDesert",
+          "x": 336,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130419,
+          "locked": false,
+          "object": "oDesert",
+          "x": 320,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130420,
+          "locked": false,
+          "object": "oDesert",
+          "x": 304,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130421,
+          "locked": false,
+          "object": "oDesert",
+          "x": 288,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130422,
+          "locked": false,
+          "object": "oDesert",
+          "x": 272,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130424,
+          "locked": false,
+          "object": "oDesert",
+          "x": 240,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130425,
+          "locked": false,
+          "object": "oDesert",
+          "x": 256,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130435,
+          "locked": false,
+          "object": "oDesert",
+          "x": 384,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130436,
+          "locked": false,
+          "object": "oDesert",
+          "x": 368,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130437,
+          "locked": false,
+          "object": "oDesert",
+          "x": 352,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130446,
+          "locked": false,
+          "object": "oDesert",
+          "x": 224,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130447,
+          "locked": false,
+          "object": "oDesert",
+          "x": 240,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130448,
+          "locked": false,
+          "object": "oDesert",
+          "x": 256,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130449,
+          "locked": false,
+          "object": "oDesert",
+          "x": 272,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130450,
+          "locked": false,
+          "object": "oDesert",
+          "x": 288,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130451,
+          "locked": false,
+          "object": "oDesert",
+          "x": 304,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130452,
+          "locked": false,
+          "object": "oDesert",
+          "x": 320,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130453,
+          "locked": false,
+          "object": "oDesert",
+          "x": 336,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130454,
+          "locked": false,
+          "object": "oDesert",
+          "x": 352,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130455,
+          "locked": false,
+          "object": "oDesert",
+          "x": 368,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130456,
+          "locked": false,
+          "object": "oDesert",
+          "x": 384,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130457,
+          "locked": false,
+          "object": "oDesert",
+          "x": 400,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130458,
+          "locked": false,
+          "object": "oDesert",
+          "x": 416,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130494,
+          "locked": false,
+          "object": "oDesert",
+          "x": 624,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130495,
+          "locked": false,
+          "object": "oDesert",
+          "x": 608,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130496,
+          "locked": false,
+          "object": "oDesert",
+          "x": 592,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130497,
+          "locked": false,
+          "object": "oDesert",
+          "x": 576,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130498,
+          "locked": false,
+          "object": "oDesert",
+          "x": 560,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130499,
+          "locked": false,
+          "object": "oDesert",
+          "x": 544,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130500,
+          "locked": false,
+          "object": "oDesert",
+          "x": 528,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130501,
+          "locked": false,
+          "object": "oDesert",
+          "x": 512,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130502,
+          "locked": false,
+          "object": "oDesert",
+          "x": 496,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130503,
+          "locked": false,
+          "object": "oDesert",
+          "x": 480,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130504,
+          "locked": false,
+          "object": "oDesert",
+          "x": 464,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130505,
+          "locked": false,
+          "object": "oDesert",
+          "x": 448,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130507,
+          "locked": false,
+          "object": "oDesert",
+          "x": 432,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130508,
+          "locked": false,
+          "object": "oDesert",
+          "x": 448,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130509,
+          "locked": false,
+          "object": "oDesert",
+          "x": 464,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130510,
+          "locked": false,
+          "object": "oDesert",
+          "x": 480,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130511,
+          "locked": false,
+          "object": "oDesert",
+          "x": 496,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130512,
+          "locked": false,
+          "object": "oDesert",
+          "x": 512,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130513,
+          "locked": false,
+          "object": "oDesert",
+          "x": 528,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130514,
+          "locked": false,
+          "object": "oDesert",
+          "x": 544,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130515,
+          "locked": false,
+          "object": "oDesert",
+          "x": 560,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130516,
+          "locked": false,
+          "object": "oDesert",
+          "x": 576,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130517,
+          "locked": false,
+          "object": "oDesert",
+          "x": 592,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130520,
+          "locked": false,
+          "object": "oDesert",
+          "x": 640,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130521,
+          "locked": false,
+          "object": "oDesert",
+          "x": 656,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130522,
+          "locked": false,
+          "object": "oDesert",
+          "x": 672,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130536,
+          "locked": false,
+          "object": "oDesert",
+          "x": 608,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130537,
+          "locked": false,
+          "object": "oDesert",
+          "x": 624,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130538,
+          "locked": false,
+          "object": "oDesert",
+          "x": 640,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130539,
+          "locked": false,
+          "object": "oDesert",
+          "x": 656,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130540,
+          "locked": false,
+          "object": "oDesert",
+          "x": 672,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130541,
+          "locked": false,
+          "object": "oDesert",
+          "x": 688,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130542,
+          "locked": false,
+          "object": "oDesert",
+          "x": 704,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130543,
+          "locked": false,
+          "object": "oDesert",
+          "x": 720,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130687,
+          "locked": false,
+          "object": "oDark",
+          "x": 944,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 130688,
+          "locked": false,
+          "object": "oDark",
+          "x": 944,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130689,
+          "locked": false,
+          "object": "oDark",
+          "x": 944,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130690,
+          "locked": false,
+          "object": "oDark",
+          "x": 928,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130691,
+          "locked": false,
+          "object": "oDark",
+          "x": 928,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130695,
+          "locked": false,
+          "object": "oDark",
+          "x": 928,
+          "y": 144
+        },
+        {
+          "creation_code": "",
+          "id": 130696,
+          "locked": false,
+          "object": "oDark",
+          "x": 944,
+          "y": 144
+        },
+        {
+          "creation_code": "",
+          "id": 130697,
+          "locked": false,
+          "object": "oDark",
+          "x": 944,
+          "y": 160
+        },
+        {
+          "creation_code": "",
+          "id": 130698,
+          "locked": false,
+          "object": "oDark",
+          "x": 944,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130699,
+          "locked": false,
+          "object": "oDark",
+          "x": 896,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 130700,
+          "locked": false,
+          "object": "oDark",
+          "x": 896,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130701,
+          "locked": false,
+          "object": "oDark",
+          "x": 896,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130702,
+          "locked": false,
+          "object": "oDark",
+          "x": 880,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130703,
+          "locked": false,
+          "object": "oDark",
+          "x": 880,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130704,
+          "locked": false,
+          "object": "oDark",
+          "x": 864,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130706,
+          "locked": false,
+          "object": "oDark",
+          "x": 880,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 130707,
+          "locked": false,
+          "object": "oDark",
+          "x": 864,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 130708,
+          "locked": false,
+          "object": "oDark",
+          "x": 848,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 130709,
+          "locked": false,
+          "object": "oDark",
+          "x": 832,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 130710,
+          "locked": false,
+          "object": "oDark",
+          "x": 816,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 130711,
+          "locked": false,
+          "object": "oDark",
+          "x": 800,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 130712,
+          "locked": false,
+          "object": "oDark",
+          "x": 784,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 130717,
+          "locked": false,
+          "object": "oDark",
+          "x": 736,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 130718,
+          "locked": false,
+          "object": "oDark",
+          "x": 752,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 130719,
+          "locked": false,
+          "object": "oDark",
+          "x": 768,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 130722,
+          "locked": false,
+          "object": "oDark",
+          "x": 800,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130723,
+          "locked": false,
+          "object": "oDark",
+          "x": 816,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130724,
+          "locked": false,
+          "object": "oDark",
+          "x": 832,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130725,
+          "locked": false,
+          "object": "oDark",
+          "x": 848,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130727,
+          "locked": false,
+          "object": "oDark",
+          "x": 864,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130728,
+          "locked": false,
+          "object": "oDark",
+          "x": 848,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130729,
+          "locked": false,
+          "object": "oDark",
+          "x": 832,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130730,
+          "locked": false,
+          "object": "oDark",
+          "x": 816,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130731,
+          "locked": false,
+          "object": "oDark",
+          "x": 800,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130733,
+          "locked": false,
+          "object": "oDark",
+          "x": 768,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130734,
+          "locked": false,
+          "object": "oDark",
+          "x": 784,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 130735,
+          "locked": false,
+          "object": "oDark",
+          "x": 784,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130736,
+          "locked": false,
+          "object": "oDark",
+          "x": 768,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130737,
+          "locked": false,
+          "object": "oDark",
+          "x": 752,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130738,
+          "locked": false,
+          "object": "oDark",
+          "x": 736,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 130739,
+          "locked": false,
+          "object": "oDark",
+          "x": 720,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 130740,
+          "locked": false,
+          "object": "oDark",
+          "x": 704,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 130741,
+          "locked": false,
+          "object": "oDark",
+          "x": 688,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 130742,
+          "locked": false,
+          "object": "oDark",
+          "x": 896,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130743,
+          "locked": false,
+          "object": "oDark",
+          "x": 880,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130744,
+          "locked": false,
+          "object": "oDark",
+          "x": 864,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130745,
+          "locked": false,
+          "object": "oDark",
+          "x": 848,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130746,
+          "locked": false,
+          "object": "oDark",
+          "x": 832,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130747,
+          "locked": false,
+          "object": "oDark",
+          "x": 816,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130748,
+          "locked": false,
+          "object": "oDark",
+          "x": 800,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130749,
+          "locked": false,
+          "object": "oDark",
+          "x": 784,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130750,
+          "locked": false,
+          "object": "oDark",
+          "x": 768,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130751,
+          "locked": false,
+          "object": "oDark",
+          "x": 752,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130752,
+          "locked": false,
+          "object": "oDark",
+          "x": 736,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130753,
+          "locked": false,
+          "object": "oDark",
+          "x": 720,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130754,
+          "locked": false,
+          "object": "oDark",
+          "x": 704,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130755,
+          "locked": false,
+          "object": "oDark",
+          "x": 688,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130756,
+          "locked": false,
+          "object": "oDark",
+          "x": 672,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130758,
+          "locked": false,
+          "object": "oDark",
+          "x": 640,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130759,
+          "locked": false,
+          "object": "oDark",
+          "x": 656,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130760,
+          "locked": false,
+          "object": "oDark",
+          "x": 656,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 130761,
+          "locked": false,
+          "object": "oDark",
+          "x": 672,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 130762,
+          "locked": false,
+          "object": "oDark",
+          "x": 688,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 130763,
+          "locked": false,
+          "object": "oDark",
+          "x": 704,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 130764,
+          "locked": false,
+          "object": "oDark",
+          "x": 720,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 130765,
+          "locked": false,
+          "object": "oDark",
+          "x": 736,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 130766,
+          "locked": false,
+          "object": "oDark",
+          "x": 752,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 130767,
+          "locked": false,
+          "object": "oDark",
+          "x": 768,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 130768,
+          "locked": false,
+          "object": "oDark",
+          "x": 784,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 130769,
+          "locked": false,
+          "object": "oDark",
+          "x": 800,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 130770,
+          "locked": false,
+          "object": "oDark",
+          "x": 816,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 130771,
+          "locked": false,
+          "object": "oDark",
+          "x": 832,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 130772,
+          "locked": false,
+          "object": "oDark",
+          "x": 848,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 130773,
+          "locked": false,
+          "object": "oDark",
+          "x": 864,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 130774,
+          "locked": false,
+          "object": "oDark",
+          "x": 880,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 130775,
+          "locked": false,
+          "object": "oDark",
+          "x": 896,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 130776,
+          "locked": false,
+          "object": "oDark",
+          "x": 896,
+          "y": 96
+        },
+        {
+          "creation_code": "",
+          "id": 130777,
+          "locked": false,
+          "object": "oDark",
+          "x": 880,
+          "y": 96
+        },
+        {
+          "creation_code": "",
+          "id": 130778,
+          "locked": false,
+          "object": "oDark",
+          "x": 864,
+          "y": 96
+        },
+        {
+          "creation_code": "",
+          "id": 130779,
+          "locked": false,
+          "object": "oDark",
+          "x": 848,
+          "y": 96
+        },
+        {
+          "creation_code": "",
+          "id": 130780,
+          "locked": false,
+          "object": "oDark",
+          "x": 832,
+          "y": 96
+        },
+        {
+          "creation_code": "",
+          "id": 130781,
+          "locked": false,
+          "object": "oDark",
+          "x": 816,
+          "y": 96
+        },
+        {
+          "creation_code": "",
+          "id": 130782,
+          "locked": false,
+          "object": "oDark",
+          "x": 800,
+          "y": 96
+        },
+        {
+          "creation_code": "",
+          "id": 130783,
+          "locked": false,
+          "object": "oDark",
+          "x": 784,
+          "y": 96
+        },
+        {
+          "creation_code": "",
+          "id": 130784,
+          "locked": false,
+          "object": "oDark",
+          "x": 768,
+          "y": 96
+        },
+        {
+          "creation_code": "",
+          "id": 130785,
+          "locked": false,
+          "object": "oDark",
+          "x": 752,
+          "y": 96
+        },
+        {
+          "creation_code": "",
+          "id": 130786,
+          "locked": false,
+          "object": "oDark",
+          "x": 736,
+          "y": 96
+        },
+        {
+          "creation_code": "",
+          "id": 130787,
+          "locked": false,
+          "object": "oDark",
+          "x": 720,
+          "y": 96
+        },
+        {
+          "creation_code": "",
+          "id": 130788,
+          "locked": false,
+          "object": "oDark",
+          "x": 704,
+          "y": 96
+        },
+        {
+          "creation_code": "",
+          "id": 130789,
+          "locked": false,
+          "object": "oDark",
+          "x": 688,
+          "y": 96
+        },
+        {
+          "creation_code": "",
+          "id": 130791,
+          "locked": false,
+          "object": "oDark",
+          "x": 688,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 130792,
+          "locked": false,
+          "object": "oDark",
+          "x": 704,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 130793,
+          "locked": false,
+          "object": "oDark",
+          "x": 704,
+          "y": 48
+        },
+        {
+          "creation_code": "",
+          "id": 130794,
+          "locked": false,
+          "object": "oDark",
+          "x": 720,
+          "y": 48
+        },
+        {
+          "creation_code": "",
+          "id": 130795,
+          "locked": false,
+          "object": "oDark",
+          "x": 736,
+          "y": 48
+        },
+        {
+          "creation_code": "",
+          "id": 130799,
+          "locked": false,
+          "object": "oDark",
+          "x": 736,
+          "y": 80
+        },
+        {
+          "creation_code": "",
+          "id": 130802,
+          "locked": false,
+          "object": "oDark",
+          "x": 688,
+          "y": 80
+        },
+        {
+          "creation_code": "",
+          "id": 130803,
+          "locked": false,
+          "object": "oDark",
+          "x": 704,
+          "y": 80
+        },
+        {
+          "creation_code": "",
+          "id": 130804,
+          "locked": false,
+          "object": "oDark",
+          "x": 720,
+          "y": 80
+        },
+        {
+          "creation_code": "",
+          "id": 130811,
+          "locked": false,
+          "object": "oDark",
+          "x": 720,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 130812,
+          "locked": false,
+          "object": "oDark",
+          "x": 736,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 130814,
+          "locked": false,
+          "object": "oDark",
+          "x": 768,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 130817,
+          "locked": false,
+          "object": "oDark",
+          "x": 816,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 130823,
+          "locked": false,
+          "object": "oDark",
+          "x": 880,
+          "y": 80
+        },
+        {
+          "creation_code": "",
+          "id": 130835,
+          "locked": false,
+          "object": "oDark",
+          "x": 848,
+          "y": 80
+        },
+        {
+          "creation_code": "",
+          "id": 130837,
+          "locked": false,
+          "object": "oDark",
+          "x": 816,
+          "y": 80
+        },
+        {
+          "creation_code": "",
+          "id": 130838,
+          "locked": false,
+          "object": "oDark",
+          "x": 800,
+          "y": 80
+        },
+        {
+          "creation_code": "",
+          "id": 130839,
+          "locked": false,
+          "object": "oDark",
+          "x": 784,
+          "y": 80
+        },
+        {
+          "creation_code": "",
+          "id": 130840,
+          "locked": false,
+          "object": "oDark",
+          "x": 768,
+          "y": 80
+        },
+        {
+          "creation_code": "",
+          "id": 130841,
+          "locked": false,
+          "object": "oDark",
+          "x": 752,
+          "y": 80
+        },
+        {
+          "creation_code": "",
+          "id": 130842,
+          "locked": false,
+          "object": "oDark",
+          "x": 752,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 130846,
+          "locked": false,
+          "object": "oDark",
+          "x": 752,
+          "y": 0
+        },
+        {
+          "creation_code": "",
+          "id": 130847,
+          "locked": false,
+          "object": "oDark",
+          "x": 736,
+          "y": 0
+        },
+        {
+          "creation_code": "",
+          "id": 130848,
+          "locked": false,
+          "object": "oDark",
+          "x": 736,
+          "y": 16
+        },
+        {
+          "creation_code": "",
+          "id": 130849,
+          "locked": false,
+          "object": "oDark",
+          "x": 736,
+          "y": 32
+        },
+        {
+          "creation_code": "",
+          "id": 130867,
+          "locked": false,
+          "object": "oDark",
+          "x": 752,
+          "y": 48
+        },
+        {
+          "creation_code": "",
+          "id": 130868,
+          "locked": false,
+          "object": "oDark",
+          "x": 752,
+          "y": 32
+        },
+        {
+          "creation_code": "",
+          "id": 130869,
+          "locked": false,
+          "object": "oDark",
+          "x": 752,
+          "y": 16
+        },
+        {
+          "creation_code": "",
+          "id": 130870,
+          "locked": false,
+          "object": "oDark",
+          "x": 768,
+          "y": 16
+        },
+        {
+          "creation_code": "",
+          "id": 130871,
+          "locked": false,
+          "object": "oDark",
+          "x": 768,
+          "y": 0
+        },
+        {
+          "creation_code": "",
+          "id": 130872,
+          "locked": false,
+          "object": "oDark",
+          "x": 784,
+          "y": 0
+        },
+        {
+          "creation_code": "",
+          "id": 130873,
+          "locked": false,
+          "object": "oDark",
+          "x": 800,
+          "y": 0
+        },
+        {
+          "creation_code": "",
+          "id": 130875,
+          "locked": false,
+          "object": "oDark",
+          "x": 800,
+          "y": 32
+        },
+        {
+          "creation_code": "",
+          "id": 130876,
+          "locked": false,
+          "object": "oDark",
+          "x": 800,
+          "y": 48
+        },
+        {
+          "creation_code": "",
+          "id": 130877,
+          "locked": false,
+          "object": "oDark",
+          "x": 800,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 130878,
+          "locked": false,
+          "object": "oDark",
+          "x": 784,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 130879,
+          "locked": false,
+          "object": "oDark",
+          "x": 784,
+          "y": 48
+        },
+        {
+          "creation_code": "",
+          "id": 130881,
+          "locked": false,
+          "object": "oDark",
+          "x": 784,
+          "y": 16
+        },
+        {
+          "creation_code": "",
+          "id": 130883,
+          "locked": false,
+          "object": "oDark",
+          "x": 768,
+          "y": 48
+        },
+        {
+          "creation_code": "",
+          "id": 130884,
+          "locked": false,
+          "object": "oDark",
+          "x": 768,
+          "y": 32
+        },
+        {
+          "creation_code": "",
+          "id": 130885,
+          "locked": false,
+          "object": "oDark",
+          "x": 784,
+          "y": 32
+        },
+        {
+          "creation_code": "",
+          "id": 130886,
+          "locked": false,
+          "object": "oDark",
+          "x": 800,
+          "y": 16
+        },
+        {
+          "creation_code": "",
+          "id": 130889,
+          "locked": false,
+          "object": "oDark",
+          "x": 832,
+          "y": 0
+        },
+        {
+          "creation_code": "",
+          "id": 130893,
+          "locked": false,
+          "object": "oDark",
+          "x": 816,
+          "y": 48
+        },
+        {
+          "creation_code": "",
+          "id": 130894,
+          "locked": false,
+          "object": "oDark",
+          "x": 816,
+          "y": 32
+        },
+        {
+          "creation_code": "",
+          "id": 130895,
+          "locked": false,
+          "object": "oDark",
+          "x": 816,
+          "y": 16
+        },
+        {
+          "creation_code": "",
+          "id": 130896,
+          "locked": false,
+          "object": "oDark",
+          "x": 816,
+          "y": 0
+        },
+        {
+          "creation_code": "",
+          "id": 130897,
+          "locked": false,
+          "object": "oDark",
+          "x": 832,
+          "y": 16
+        },
+        {
+          "creation_code": "",
+          "id": 130901,
+          "locked": false,
+          "object": "oDark",
+          "x": 832,
+          "y": 80
+        },
+        {
+          "creation_code": "",
+          "id": 130902,
+          "locked": false,
+          "object": "oDark",
+          "x": 832,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 130903,
+          "locked": false,
+          "object": "oDark",
+          "x": 832,
+          "y": 48
+        },
+        {
+          "creation_code": "",
+          "id": 130904,
+          "locked": false,
+          "object": "oDark",
+          "x": 832,
+          "y": 32
+        },
+        {
+          "creation_code": "",
+          "id": 130906,
+          "locked": false,
+          "object": "oDark",
+          "x": 848,
+          "y": 0
+        },
+        {
+          "creation_code": "",
+          "id": 130912,
+          "locked": false,
+          "object": "oDark",
+          "x": 864,
+          "y": 80
+        },
+        {
+          "creation_code": "",
+          "id": 130913,
+          "locked": false,
+          "object": "oDark",
+          "x": 864,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 130914,
+          "locked": false,
+          "object": "oDark",
+          "x": 864,
+          "y": 48
+        },
+        {
+          "creation_code": "",
+          "id": 130917,
+          "locked": false,
+          "object": "oDark",
+          "x": 864,
+          "y": 32
+        },
+        {
+          "creation_code": "",
+          "id": 130920,
+          "locked": false,
+          "object": "oDark",
+          "x": 848,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 130921,
+          "locked": false,
+          "object": "oDark",
+          "x": 848,
+          "y": 48
+        },
+        {
+          "creation_code": "",
+          "id": 130922,
+          "locked": false,
+          "object": "oDark",
+          "x": 848,
+          "y": 32
+        },
+        {
+          "creation_code": "",
+          "id": 130923,
+          "locked": false,
+          "object": "oDark",
+          "x": 848,
+          "y": 16
+        },
+        {
+          "creation_code": "",
+          "id": 130924,
+          "locked": false,
+          "object": "oDark",
+          "x": 864,
+          "y": 16
+        },
+        {
+          "creation_code": "",
+          "id": 130925,
+          "locked": false,
+          "object": "oDark",
+          "x": 864,
+          "y": 0
+        },
+        {
+          "creation_code": "",
+          "id": 130926,
+          "locked": false,
+          "object": "oDark",
+          "x": 880,
+          "y": 0
+        },
+        {
+          "creation_code": "",
+          "id": 130930,
+          "locked": false,
+          "object": "oDark",
+          "x": 880,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 130931,
+          "locked": false,
+          "object": "oDark",
+          "x": 880,
+          "y": 48
+        },
+        {
+          "creation_code": "",
+          "id": 130932,
+          "locked": false,
+          "object": "oDark",
+          "x": 880,
+          "y": 32
+        },
+        {
+          "creation_code": "",
+          "id": 130933,
+          "locked": false,
+          "object": "oDark",
+          "x": 880,
+          "y": 16
+        },
+        {
+          "creation_code": "",
+          "id": 130939,
+          "locked": false,
+          "object": "oDark",
+          "x": 896,
+          "y": 32
+        },
+        {
+          "creation_code": "",
+          "id": 130940,
+          "locked": false,
+          "object": "oDark",
+          "x": 896,
+          "y": 16
+        },
+        {
+          "creation_code": "",
+          "id": 130941,
+          "locked": false,
+          "object": "oDark",
+          "x": 896,
+          "y": 0
+        },
+        {
+          "creation_code": "",
+          "id": 130942,
+          "locked": false,
+          "object": "oDark",
+          "x": 912,
+          "y": 0
+        },
+        {
+          "creation_code": "",
+          "id": 130943,
+          "locked": false,
+          "object": "oDark",
+          "x": 912,
+          "y": 16
+        },
+        {
+          "creation_code": "",
+          "id": 130951,
+          "locked": false,
+          "object": "oDark",
+          "x": 912,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130952,
+          "locked": false,
+          "object": "oDark",
+          "x": 928,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130953,
+          "locked": false,
+          "object": "oDark",
+          "x": 944,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 130954,
+          "locked": false,
+          "object": "oDark",
+          "x": 944,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 130956,
+          "locked": false,
+          "object": "oDark",
+          "x": 912,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 130959,
+          "locked": false,
+          "object": "oDark",
+          "x": 928,
+          "y": 80
+        },
+        {
+          "creation_code": "",
+          "id": 130961,
+          "locked": false,
+          "object": "oDark",
+          "x": 944,
+          "y": 96
+        },
+        {
+          "creation_code": "",
+          "id": 130963,
+          "locked": false,
+          "object": "oDark",
+          "x": 928,
+          "y": 112
+        },
+        {
+          "creation_code": "",
+          "id": 130964,
+          "locked": false,
+          "object": "oDark",
+          "x": 928,
+          "y": 96
+        },
+        {
+          "creation_code": "",
+          "id": 130965,
+          "locked": false,
+          "object": "oDark",
+          "x": 912,
+          "y": 96
+        },
+        {
+          "creation_code": "",
+          "id": 130966,
+          "locked": false,
+          "object": "oDark",
+          "x": 912,
+          "y": 80
+        },
+        {
+          "creation_code": "",
+          "id": 130967,
+          "locked": false,
+          "object": "oDark",
+          "x": 896,
+          "y": 80
+        },
+        {
+          "creation_code": "",
+          "id": 130968,
+          "locked": false,
+          "object": "oDark",
+          "x": 896,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 130969,
+          "locked": false,
+          "object": "oDark",
+          "x": 896,
+          "y": 48
+        },
+        {
+          "creation_code": "",
+          "id": 130971,
+          "locked": false,
+          "object": "oDark",
+          "x": 928,
+          "y": 48
+        },
+        {
+          "creation_code": "",
+          "id": 130976,
+          "locked": false,
+          "object": "oDark",
+          "x": 928,
+          "y": 32
+        },
+        {
+          "creation_code": "",
+          "id": 130978,
+          "locked": false,
+          "object": "oDark",
+          "x": 928,
+          "y": 0
+        },
+        {
+          "creation_code": "",
+          "id": 130979,
+          "locked": false,
+          "object": "oDark",
+          "x": 928,
+          "y": 16
+        },
+        {
+          "creation_code": "",
+          "id": 130980,
+          "locked": false,
+          "object": "oDark",
+          "x": 912,
+          "y": 32
+        },
+        {
+          "creation_code": "",
+          "id": 130981,
+          "locked": false,
+          "object": "oDark",
+          "x": 912,
+          "y": 48
+        },
+        {
+          "creation_code": "",
+          "id": 130982,
+          "locked": false,
+          "object": "oDark",
+          "x": 912,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 130983,
+          "locked": false,
+          "object": "oDark",
+          "x": 928,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 130985,
+          "locked": false,
+          "object": "oDark",
+          "x": 944,
+          "y": 80
+        },
+        {
+          "creation_code": "",
+          "id": 130986,
+          "locked": false,
+          "object": "oDark",
+          "x": 944,
+          "y": 64
+        },
+        {
+          "creation_code": "",
+          "id": 130987,
+          "locked": false,
+          "object": "oDark",
+          "x": 944,
+          "y": 48
+        },
+        {
+          "creation_code": "",
+          "id": 130988,
+          "locked": false,
+          "object": "oDark",
+          "x": 944,
+          "y": 32
+        },
+        {
+          "creation_code": "",
+          "id": 130989,
+          "locked": false,
+          "object": "oDark",
+          "x": 944,
+          "y": 16
+        },
+        {
+          "creation_code": "",
+          "id": 130990,
+          "locked": false,
+          "object": "oDark",
+          "x": 944,
+          "y": 0
+        },
+        {
+          "creation_code": "",
+          "id": 130991,
+          "locked": false,
+          "object": "oDark",
+          "x": 912,
+          "y": 144
+        },
+        {
+          "creation_code": "",
+          "id": 130996,
+          "locked": false,
+          "object": "oDark",
+          "x": 928,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 130997,
+          "locked": false,
+          "object": "oDark",
+          "x": 928,
+          "y": 160
+        },
+        {
+          "creation_code": "",
+          "id": 130998,
+          "locked": false,
+          "object": "oDark",
+          "x": 928,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130999,
+          "locked": false,
+          "object": "oDark",
+          "x": 896,
+          "y": 144
+        },
+        {
+          "creation_code": "",
+          "id": 131000,
+          "locked": false,
+          "object": "oDark",
+          "x": 672,
+          "y": 144
+        },
+        {
+          "creation_code": "",
+          "id": 131001,
+          "locked": false,
+          "object": "oDark",
+          "x": 688,
+          "y": 144
+        },
+        {
+          "creation_code": "",
+          "id": 131002,
+          "locked": false,
+          "object": "oDark",
+          "x": 704,
+          "y": 144
+        },
+        {
+          "creation_code": "",
+          "id": 131003,
+          "locked": false,
+          "object": "oDark",
+          "x": 720,
+          "y": 144
+        },
+        {
+          "creation_code": "",
+          "id": 131004,
+          "locked": false,
+          "object": "oDark",
+          "x": 736,
+          "y": 144
+        },
+        {
+          "creation_code": "",
+          "id": 131005,
+          "locked": false,
+          "object": "oDark",
+          "x": 704,
+          "y": 160
+        },
+        {
+          "creation_code": "",
+          "id": 131006,
+          "locked": false,
+          "object": "oDark",
+          "x": 688,
+          "y": 160
+        },
+        {
+          "creation_code": "",
+          "id": 135308,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 0,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135309,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 16,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135310,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 32,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135311,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 48,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135312,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 64,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135315,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 80,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135316,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 752,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 135317,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 736,
+          "y": 224
+        },
+        {
+          "creation_code": "",
+          "id": 135318,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 720,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 135319,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 704,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 135320,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 688,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 135321,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 672,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135322,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 656,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135323,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 640,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135324,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 624,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135325,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 608,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135326,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 592,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135327,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 576,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135328,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 560,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135329,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 544,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135330,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 528,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135331,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 512,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135332,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 496,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135333,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 480,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135334,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 464,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135335,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 448,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135336,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 432,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135337,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 416,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135338,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 400,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135339,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 384,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135340,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 368,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135341,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 352,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135342,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 336,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135343,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 304,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135344,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 320,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135345,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 288,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135346,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 272,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135347,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 256,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135348,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 240,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135349,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 224,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135350,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 208,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135351,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 192,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135352,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 176,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135353,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 160,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135354,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 144,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135355,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 128,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135356,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 112,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 135357,
+          "locked": false,
+          "object": "oDesert2",
+          "x": 96,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 130618,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 0,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130619,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 16,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130620,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 32,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130621,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 48,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130622,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 64,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130623,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 80,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130624,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 96,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130625,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 112,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130626,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 128,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130627,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 144,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130628,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 160,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130629,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 176,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130630,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 192,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130631,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 208,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130632,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 224,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130633,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 240,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130634,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 256,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130635,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 272,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130636,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 288,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130637,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 304,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130638,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 320,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130639,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 336,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130640,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 352,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130651,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 384,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130652,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 400,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130653,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 416,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130654,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 432,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130655,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 448,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130656,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 464,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130657,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 480,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130658,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 496,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130659,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 512,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130660,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 528,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130661,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 544,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130662,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 560,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130663,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 576,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130664,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 592,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130665,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 608,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130666,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 624,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130667,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 640,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130668,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 656,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130669,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 672,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 131052,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 688,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 131053,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 704,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 131054,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 720,
+          "y": 192
+        },
+        {
+          "creation_code": "",
+          "id": 131055,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 736,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 131056,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 752,
+          "y": 208
+        },
+        {
+          "creation_code": "",
+          "id": 131057,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 688,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 131058,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 704,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 134515,
+          "locked": false,
+          "object": "oDesertTop",
+          "x": 368,
+          "y": 176
+        },
+        {
+          "creation_code": "",
+          "id": 130617,
+          "locked": false,
+          "object": "oIntro",
+          "x": 0,
+          "y": 0
+        },
+        {
+          "creation_code": "",
+          "id": 131007,
+          "locked": false,
+          "object": "oBricks",
+          "x": 16,
+          "y": 0
+        },
+        {
+          "creation_code": "",
+          "id": 131010,
+          "locked": false,
+          "object": "oGlobals",
+          "x": 32,
+          "y": 0
+        },
+        {
+          "creation_code": "",
+          "id": 131012,
+          "locked": false,
+          "object": "oGame",
+          "x": 48,
+          "y": 0
+        },
+        {
+          "creation_code": "",
+          "id": 134510,
+          "locked": false,
+          "object": "oBatIntro",
+          "x": 608,
+          "y": 144
+        },
+        {
+          "creation_code": "",
+          "id": 134511,
+          "locked": false,
+          "object": "oBatIntro",
+          "x": 592,
+          "y": 128
+        },
+        {
+          "creation_code": "",
+          "id": 134512,
+          "locked": false,
+          "object": "oBatIntro",
+          "x": 576,
+          "y": 160
+        },
+        {
+          "creation_code": "",
+          "id": 134513,
+          "locked": false,
+          "object": "oBatIntro",
+          "x": 544,
+          "y": 144
+        }
+      ],
+      "persistent": false,
+      "source": "Rooms/rIntro.xml",
+      "source_sha256": "6e76be8b76b876393af97e878883b3daeabbcf1ab5fb9e402baf5b784b8a9bf1",
+      "speed": 30,
+      "tiles": [],
+      "views": [
+        {
+          "object_following": {
+            "hBorder": 160,
+            "hSpeed": -1,
+            "vBorder": 160,
+            "vSpeed": -1
+          },
+          "object_following_name": "oPDummy3",
+          "port_on_screen": {
+            "height": 480,
+            "width": 640,
+            "x": 0,
+            "y": 0
+          },
+          "view_in_room": {
+            "height": 240,
+            "width": 320,
+            "x": 0,
+            "y": 0
+          },
+          "visible_on_room_start": true
+        },
+        {
+          "object_following": {
+            "hBorder": 32,
+            "hSpeed": -1,
+            "vBorder": 32,
+            "vSpeed": -1
+          },
+          "object_following_name": "",
+          "port_on_screen": {
+            "height": 480,
+            "width": 640,
+            "x": 0,
+            "y": 0
+          },
+          "view_in_room": {
+            "height": 480,
+            "width": 640,
+            "x": 0,
+            "y": 0
+          },
+          "visible_on_room_start": false
+        },
+        {
+          "object_following": {
+            "hBorder": 32,
+            "hSpeed": -1,
+            "vBorder": 32,
+            "vSpeed": -1
+          },
+          "object_following_name": "",
+          "port_on_screen": {
+            "height": 480,
+            "width": 640,
+            "x": 0,
+            "y": 0
+          },
+          "view_in_room": {
+            "height": 480,
+            "width": 640,
+            "x": 0,
+            "y": 0
+          },
+          "visible_on_room_start": false
+        },
+        {
+          "object_following": {
+            "hBorder": 32,
+            "hSpeed": -1,
+            "vBorder": 32,
+            "vSpeed": -1
+          },
+          "object_following_name": "",
+          "port_on_screen": {
+            "height": 480,
+            "width": 640,
+            "x": 0,
+            "y": 0
+          },
+          "view_in_room": {
+            "height": 480,
+            "width": 640,
+            "x": 0,
+            "y": 0
+          },
+          "visible_on_room_start": false
+        },
+        {
+          "object_following": {
+            "hBorder": 32,
+            "hSpeed": -1,
+            "vBorder": 32,
+            "vSpeed": -1
+          },
+          "object_following_name": "",
+          "port_on_screen": {
+            "height": 480,
+            "width": 640,
+            "x": 0,
+            "y": 0
+          },
+          "view_in_room": {
+            "height": 480,
+            "width": 640,
+            "x": 0,
+            "y": 0
+          },
+          "visible_on_room_start": false
+        },
+        {
+          "object_following": {
+            "hBorder": 32,
+            "hSpeed": -1,
+            "vBorder": 32,
+            "vSpeed": -1
+          },
+          "object_following_name": "",
+          "port_on_screen": {
+            "height": 480,
+            "width": 640,
+            "x": 0,
+            "y": 0
+          },
+          "view_in_room": {
+            "height": 480,
+            "width": 640,
+            "x": 0,
+            "y": 0
+          },
+          "visible_on_room_start": false
+        },
+        {
+          "object_following": {
+            "hBorder": 32,
+            "hSpeed": -1,
+            "vBorder": 32,
+            "vSpeed": -1
+          },
+          "object_following_name": "",
+          "port_on_screen": {
+            "height": 480,
+            "width": 640,
+            "x": 0,
+            "y": 0
+          },
+          "view_in_room": {
+            "height": 480,
+            "width": 640,
+            "x": 0,
+            "y": 0
+          },
+          "visible_on_room_start": false
+        },
+        {
+          "object_following": {
+            "hBorder": 32,
+            "hSpeed": -1,
+            "vBorder": 32,
+            "vSpeed": -1
+          },
+          "object_following_name": "",
+          "port_on_screen": {
+            "height": 480,
+            "width": 640,
+            "x": 0,
+            "y": 0
+          },
+          "view_in_room": {
+            "height": 480,
+            "width": 640,
+            "x": 0,
+            "y": 0
+          },
+          "visible_on_room_start": false
+        }
+      ],
+      "width": 960
     },
     "rMoon": {
       "background_color": "C0C0C0",
@@ -4452,6 +8217,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -4473,6 +8239,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -4494,6 +8261,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -4515,6 +8283,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -4536,6 +8305,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -4557,6 +8327,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -4578,6 +8349,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -4599,6 +8371,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -6158,6 +9931,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -6179,6 +9953,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -6200,6 +9975,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -6221,6 +9997,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -6242,6 +10019,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -6263,6 +10041,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -6284,6 +10063,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -6305,6 +10085,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -8088,6 +11869,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -8109,6 +11891,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -8130,6 +11913,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -8151,6 +11935,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -8172,6 +11957,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -8193,6 +11979,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -8214,6 +12001,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -8235,6 +12023,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -11450,6 +15239,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -11471,6 +15261,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -11492,6 +15283,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -11513,6 +15305,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -11534,6 +15327,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -11555,6 +15349,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -11576,6 +15371,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
@@ -11597,6 +15393,7 @@
             "vBorder": 32,
             "vSpeed": -1
           },
+          "object_following_name": "",
           "port_on_screen": {
             "height": 480,
             "width": 640,
