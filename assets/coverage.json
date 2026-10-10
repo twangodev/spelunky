@@ -2,15 +2,15 @@
   "counts": {
     "by_category": {
       "behavior": 17,
-      "gameplay": 239,
+      "gameplay": 242,
       "ui": 151,
-      "visual": 46
+      "visual": 43
     },
     "by_status": {
-      "asset_only_unverified": 45,
-      "host_replacement_unverified": 138,
-      "no_direct_handler_found": 4,
-      "partial_handler_present": 240,
+      "asset_only_unverified": 24,
+      "host_replacement_unverified": 125,
+      "no_direct_handler_found": 3,
+      "partial_handler_present": 275,
       "partial_static_tile_adapter": 13,
       "source_abstraction": 13
     },
@@ -83,6 +83,11 @@
         },
         {
           "kind": "explicit_object_match_arm",
+          "line": 1200,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
           "line": 173,
           "module": "crates/core/src/traps/altar.rs"
         }
@@ -138,17 +143,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 285,
+          "line": 353,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 321,
+          "line": 389,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 879,
+          "line": 956,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1202,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -214,7 +224,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 289,
+          "line": 357,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1200,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -238,7 +253,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 78,
+          "line": 86,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -258,7 +273,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 78,
+          "line": 86,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -297,7 +312,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1115,
+          "line": 1144,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -316,7 +331,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1115,
+          "line": 1144,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -335,17 +350,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 33,
+          "line": 50,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 80,
+          "line": 97,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 109,
+          "line": 126,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -369,12 +384,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 879,
+          "line": 911,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -397,7 +412,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 246,
+          "line": 264,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -425,7 +440,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 246,
+          "line": 264,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -453,7 +468,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 246,
+          "line": 1144,
+          "module": "crates/core/src/items/explosives.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 264,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -481,7 +501,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 246,
+          "line": 264,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -503,7 +523,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 246,
+          "line": 1144,
+          "module": "crates/core/src/items/explosives.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 264,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -531,7 +556,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 246,
+          "line": 264,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -569,8 +594,19 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1185,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1806,
+          "module": "crates/core/src/ending.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oBGEnd3",
       "parity_verified": false,
       "source_events": [
@@ -579,7 +615,7 @@
       ],
       "source_id": 632,
       "source_path": "Objects/Other/End/oBGEnd3.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "behavior",
@@ -599,7 +635,7 @@
       "handlers": [
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         },
         {
@@ -623,8 +659,18 @@
       "category": "gameplay",
       "handlers": [
         {
+          "kind": "explicit_object_match_arm",
+          "line": 1135,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1716,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         },
         {
@@ -659,7 +705,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 280,
+          "line": 348,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -691,7 +737,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 288,
+          "line": 170,
+          "module": "crates/core/src/enemies/npcs.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 356,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -714,7 +765,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1161,
+          "line": 1182,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -748,12 +799,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 296,
+          "line": 310,
           "module": "crates/core/src/items/utility.rs"
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -798,6 +849,11 @@
         },
         {
           "kind": "explicit_object_match_arm",
+          "line": 1183,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
           "line": 173,
           "module": "crates/core/src/traps/altar.rs"
         }
@@ -832,7 +888,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 909,
+          "line": 930,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -882,7 +938,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 387,
+          "line": 308,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -900,8 +956,19 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1132,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1715,
+          "module": "crates/core/src/ending.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oBigTreasure",
       "parity_verified": false,
       "source_events": [
@@ -910,7 +977,7 @@
       ],
       "source_id": 603,
       "source_path": "Objects/Other/End/oBigTreasure.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "visual",
@@ -950,7 +1017,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1119,
+          "line": 1147,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -970,7 +1037,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 348,
+          "line": 269,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -993,22 +1060,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 362,
+          "line": 283,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 578,
+          "line": 735,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 587,
+          "line": 744,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 606,
+          "line": 763,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -1029,12 +1096,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 362,
+          "line": 283,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 588,
+          "line": 745,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -1064,7 +1131,7 @@
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -1088,22 +1155,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 978,
+          "line": 988,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 77,
+          "line": 94,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 103,
+          "line": 120,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 156,
+          "line": 173,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -1139,27 +1206,27 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 969,
-          "module": "crates/core/src/generation/tiles.rs"
-        },
-        {
-          "kind": "explicit_object_match_arm",
           "line": 979,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 76,
+          "line": 989,
+          "module": "crates/core/src/generation/tiles.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 93,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 104,
+          "line": 121,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 160,
+          "line": 177,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -1212,7 +1279,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 348,
+          "line": 269,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -1233,7 +1300,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 366,
+          "line": 287,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -1296,32 +1363,32 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 683,
+          "line": 686,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 970,
+          "line": 980,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 989,
+          "line": 999,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 154,
+          "line": 172,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 701,
+          "line": 737,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -1378,7 +1445,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1114,
+          "line": 1143,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -1398,7 +1465,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1115,
+          "line": 1144,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -1414,8 +1481,14 @@
     },
     {
       "category": "behavior",
-      "handlers": [],
-      "note": "No audited object dispatch exists; source gameplay behavior needs implementation or documented equivalent.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1196,
+          "module": "crates/core/src/ending.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oBricks",
       "parity_verified": false,
       "source_events": [
@@ -1423,29 +1496,29 @@
       ],
       "source_id": 578,
       "source_path": "Objects/oBricks.xml",
-      "status": "no_direct_handler_found"
+      "status": "partial_handler_present"
     },
     {
       "category": "gameplay",
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 362,
+          "line": 283,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 579,
+          "line": 736,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 589,
+          "line": 746,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 606,
+          "line": 763,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -1466,7 +1539,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 865,
+          "line": 901,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -1491,22 +1564,32 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 362,
+          "line": 1176,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1830,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 283,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 580,
+          "line": 737,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 593,
+          "line": 750,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 606,
+          "line": 763,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -1544,8 +1627,19 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1153,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1786,
+          "module": "crates/core/src/ending.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oCamel",
       "parity_verified": false,
       "source_events": [
@@ -1554,11 +1648,16 @@
       ],
       "source_id": 690,
       "source_path": "Objects/Other/Intro/oCamel.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "gameplay",
       "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1851,
+          "module": "crates/core/src/ending.rs"
+        },
         {
           "kind": "manually_reviewed_shared_behavior",
           "line": 361,
@@ -1581,22 +1680,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 694,
+          "line": 697,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 985,
+          "line": 995,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 23,
+          "line": 40,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 107,
+          "line": 124,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -1629,8 +1728,19 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1161,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1786,
+          "module": "crates/core/src/ending.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oCaravan",
       "parity_verified": false,
       "source_events": [
@@ -1639,7 +1749,7 @@
       ],
       "source_id": 768,
       "source_path": "Objects/Other/Intro/oCaravan.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "visual",
@@ -1722,17 +1832,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 316,
+          "line": 384,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 879,
+          "line": 956,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 906,
+          "line": 983,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1187,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -1792,7 +1907,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 280,
+          "line": 348,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -1811,7 +1926,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 677,
+          "line": 680,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -1861,6 +1976,11 @@
     {
       "category": "gameplay",
       "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1877,
+          "module": "crates/core/src/ending.rs"
+        },
         {
           "kind": "manually_reviewed_shared_behavior",
           "line": 89,
@@ -1979,12 +2099,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 75,
+          "line": 92,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -2021,17 +2141,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 980,
+          "line": 990,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 29,
+          "line": 46,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 106,
+          "line": 123,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -2089,12 +2209,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 75,
+          "line": 92,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -2130,12 +2250,12 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "explicit_object_match_arm",
+          "line": 1196,
+          "module": "crates/core/src/ending.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oCredits1",
       "parity_verified": false,
       "source_events": [
@@ -2155,18 +2275,18 @@
       ],
       "source_id": 683,
       "source_path": "Objects/oCredits1.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "ui",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "explicit_object_match_arm",
+          "line": 1196,
+          "module": "crates/core/src/ending.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oCredits2",
       "parity_verified": false,
       "source_events": [
@@ -2186,24 +2306,24 @@
       ],
       "source_id": 767,
       "source_path": "Objects/oCredits2.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "gameplay",
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 34,
+          "line": 51,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 81,
+          "line": 98,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 114,
+          "line": 131,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -2222,7 +2342,7 @@
       "handlers": [
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -2278,11 +2398,6 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 989,
-          "module": "crates/core/src/enemies/jungle.rs"
-        },
-        {
-          "kind": "explicit_object_match_arm",
           "line": 15,
           "module": "crates/core/src/enemies/npcs.rs"
         },
@@ -2298,12 +2413,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 280,
+          "line": 348,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 940,
+          "line": 1017,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1206,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -2313,7 +2433,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 689,
+          "line": 692,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -2345,8 +2465,19 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1127,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1772,
+          "module": "crates/core/src/ending.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oDamselKiss",
       "parity_verified": false,
       "source_events": [
@@ -2357,7 +2488,7 @@
       ],
       "source_id": 623,
       "source_path": "Objects/Characters/oDamselKiss.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "ui",
@@ -2457,7 +2588,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 287,
+          "line": 355,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1196,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -2505,8 +2641,19 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1204,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1815,
+          "module": "crates/core/src/ending.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oDesertScroll",
       "parity_verified": false,
       "source_events": [
@@ -2515,12 +2662,23 @@
       ],
       "source_id": 682,
       "source_path": "Objects/Other/Intro/oDesertScroll.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1205,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1815,
+          "module": "crates/core/src/ending.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oDesertScroll2",
       "parity_verified": false,
       "source_events": [
@@ -2529,7 +2687,7 @@
       ],
       "source_id": 918,
       "source_path": "Objects/Other/Intro/oDesertScroll2.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "visual",
@@ -2546,8 +2704,19 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1206,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1815,
+          "module": "crates/core/src/ending.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oDesertTopScroll",
       "parity_verified": false,
       "source_events": [
@@ -2556,7 +2725,7 @@
       ],
       "source_id": 684,
       "source_path": "Objects/Other/Intro/oDesertTopScroll.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "behavior",
@@ -2582,12 +2751,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 73,
+          "line": 32,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1189,
+          "line": 90,
+          "module": "crates/core/src/items/collectibles.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1243,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -2624,7 +2798,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 682,
+          "line": 685,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -2644,12 +2818,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 261,
+          "line": 275,
           "module": "crates/core/src/items/utility.rs"
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -2709,7 +2883,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 398,
+          "line": 319,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -2755,7 +2929,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 71,
+          "line": 26,
+          "module": "crates/core/src/items/collectibles.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 88,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -2785,12 +2964,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 73,
+          "line": 27,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1192,
+          "line": 90,
+          "module": "crates/core/src/items/collectibles.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1246,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -2827,12 +3011,12 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "explicit_object_match_arm",
+          "line": 1196,
+          "module": "crates/core/src/ending.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oEnd",
       "parity_verified": false,
       "source_events": [
@@ -2842,18 +3026,18 @@
       ],
       "source_id": 584,
       "source_path": "Objects/oEnd.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "ui",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "explicit_object_match_arm",
+          "line": 1196,
+          "module": "crates/core/src/ending.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oEnd2",
       "parity_verified": false,
       "source_events": [
@@ -2865,7 +3049,7 @@
       ],
       "source_id": 605,
       "source_path": "Objects/oEnd2.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "visual",
@@ -2882,12 +3066,12 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "explicit_object_match_arm",
+          "line": 1196,
+          "module": "crates/core/src/ending.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oEnd3",
       "parity_verified": false,
       "source_events": [
@@ -2904,18 +3088,18 @@
       ],
       "source_id": 613,
       "source_path": "Objects/oEnd3.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "ui",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "explicit_object_match_arm",
+          "line": 1196,
+          "module": "crates/core/src/ending.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oEndCustom",
       "parity_verified": false,
       "source_events": [
@@ -2932,12 +3116,18 @@
       ],
       "source_id": 897,
       "source_path": "Objects/oEndCustom.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1758,
+          "module": "crates/core/src/ending.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oEndPlat",
       "parity_verified": false,
       "source_events": [
@@ -2946,7 +3136,7 @@
       ],
       "source_id": 582,
       "source_path": "Objects/Other/End/oEndPlat.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "visual",
@@ -2999,7 +3189,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 280,
+          "line": 348,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -3020,7 +3210,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 61,
+          "line": 62,
           "module": "crates/core/src/game.rs"
         }
       ],
@@ -3054,7 +3244,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 496,
+          "line": 500,
           "module": "crates/core/src/progression.rs"
         }
       ],
@@ -3106,12 +3296,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 693,
+          "line": 696,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 366,
+          "line": 287,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -3172,6 +3362,11 @@
         },
         {
           "kind": "explicit_object_match_arm",
+          "line": 1193,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
           "line": 173,
           "module": "crates/core/src/traps/altar.rs"
         }
@@ -3192,7 +3387,7 @@
       "handlers": [
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -3222,7 +3417,7 @@
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -3262,7 +3457,7 @@
       "handlers": [
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -3283,7 +3478,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 349,
+          "line": 270,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -3306,12 +3501,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 362,
+          "line": 283,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 595,
+          "line": 752,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -3336,12 +3531,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 922,
+          "line": 954,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -3362,7 +3557,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 75,
+          "line": 92,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
@@ -3372,7 +3567,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 237,
+          "line": 251,
           "module": "crates/core/src/items/utility.rs"
         }
       ],
@@ -3398,7 +3593,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 305,
+          "line": 319,
           "module": "crates/core/src/items/utility.rs"
         }
       ],
@@ -3434,7 +3629,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 280,
+          "line": 348,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -3502,6 +3697,11 @@
         },
         {
           "kind": "explicit_object_match_arm",
+          "line": 1192,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
           "line": 173,
           "module": "crates/core/src/traps/altar.rs"
         }
@@ -3541,7 +3741,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 347,
+          "line": 268,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -3565,12 +3765,12 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "explicit_object_match_arm",
+          "line": 1196,
+          "module": "crates/core/src/ending.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oGame",
       "parity_verified": false,
       "source_events": [
@@ -3584,7 +3784,7 @@
       ],
       "source_id": 318,
       "source_path": "Objects/oGame.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "ui",
@@ -3626,7 +3826,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 280,
+          "line": 348,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -3684,22 +3884,27 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 284,
+          "line": 352,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 319,
+          "line": 387,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 879,
+          "line": 956,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 954,
+          "line": 1031,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1186,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -3749,12 +3954,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 284,
+          "line": 352,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 319,
+          "line": 387,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1186,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -3793,7 +4003,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 443,
+          "line": 464,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -3831,32 +4041,32 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 692,
+          "line": 695,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 969,
+          "line": 979,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 983,
+          "line": 993,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 27,
+          "line": 44,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 81,
+          "line": 98,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 110,
+          "line": 127,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -3921,7 +4131,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 73,
+          "line": 24,
+          "module": "crates/core/src/items/collectibles.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 90,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -3967,7 +4182,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 72,
+          "line": 25,
+          "module": "crates/core/src/items/collectibles.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 89,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -4027,7 +4247,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 71,
+          "line": 22,
+          "module": "crates/core/src/items/collectibles.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 88,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -4065,7 +4290,7 @@
       "handlers": [
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -4112,7 +4337,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 73,
+          "line": 23,
+          "module": "crates/core/src/items/collectibles.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 90,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -4132,7 +4362,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1115,
+          "line": 1144,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -4153,7 +4383,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 78,
+          "line": 86,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -4202,17 +4432,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 316,
+          "line": 384,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 879,
+          "line": 956,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 906,
+          "line": 983,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1203,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -4284,7 +4519,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 280,
+          "line": 348,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -4301,7 +4536,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 387,
+          "line": 1182,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1825,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 308,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -4344,12 +4589,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 345,
+          "line": 256,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 427,
+          "line": 485,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -4415,7 +4660,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 346,
+          "line": 267,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -4509,7 +4754,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 387,
+          "line": 308,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -4535,7 +4780,7 @@
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -4600,12 +4845,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 286,
+          "line": 354,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 700,
+          "line": 1197,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 703,
           "module": "crates/core/src/generation/tiles.rs"
         }
       ],
@@ -4627,32 +4877,32 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 695,
+          "line": 698,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 969,
+          "line": 979,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 984,
+          "line": 994,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 24,
+          "line": 41,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 79,
+          "line": 96,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 108,
+          "line": 125,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -4689,12 +4939,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 36,
+          "line": 53,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 113,
+          "line": 130,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -4756,7 +5006,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 680,
+          "line": 683,
           "module": "crates/core/src/generation/tiles.rs"
         }
       ],
@@ -4776,17 +5026,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 35,
+          "line": 52,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 81,
+          "line": 98,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 114,
+          "line": 131,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -4810,12 +5060,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 73,
+          "line": 90,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -4889,7 +5139,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 78,
+          "line": 86,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -4906,7 +5156,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 78,
+          "line": 86,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -4923,12 +5173,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 344,
+          "line": 255,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 854,
+          "line": 1288,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -4962,7 +5212,7 @@
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -4981,12 +5231,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 344,
+          "line": 255,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 783,
+          "line": 1217,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -5020,7 +5270,7 @@
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -5054,7 +5304,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 280,
+          "line": 348,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -5079,17 +5329,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 362,
+          "line": 283,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 581,
+          "line": 738,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 594,
+          "line": 751,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -5109,12 +5359,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 362,
+          "line": 283,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 597,
+          "line": 754,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -5139,7 +5389,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 350,
+          "line": 271,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -5160,12 +5410,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 591,
+          "line": 748,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 398,
+          "line": 319,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -5185,7 +5435,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 78,
+          "line": 86,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -5201,8 +5451,19 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1193,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1732,
+          "module": "crates/core/src/ending.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oLavaSpray",
       "parity_verified": false,
       "source_events": [
@@ -5212,7 +5473,7 @@
       ],
       "source_id": 604,
       "source_path": "Objects/Other/End/oLavaSpray.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "ui",
@@ -5236,7 +5497,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 398,
+          "line": 319,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -5252,8 +5513,14 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 264,
+          "module": "crates/core/src/world_events.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oLeaves",
       "parity_verified": false,
       "source_events": [
@@ -5263,7 +5530,7 @@
       ],
       "source_id": 586,
       "source_path": "Objects/Blocks/oLeaves.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "visual",
@@ -5435,7 +5702,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 291,
+          "line": 382,
           "module": "crates/core/src/game.rs"
         },
         {
@@ -5445,12 +5712,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 76,
+          "line": 93,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -5491,7 +5758,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1118,
+          "line": 1146,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -5511,32 +5778,32 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 687,
+          "line": 690,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 970,
+          "line": 980,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 988,
+          "line": 998,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 167,
+          "line": 185,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 705,
+          "line": 741,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -5556,7 +5823,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1018,
+          "line": 1060,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -5614,7 +5881,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 280,
+          "line": 348,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -5664,12 +5931,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 280,
+          "line": 348,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 970,
+          "line": 1047,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -5710,7 +5977,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 280,
+          "line": 348,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -5760,17 +6027,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 316,
+          "line": 384,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 879,
+          "line": 956,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 911,
+          "line": 988,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1194,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -5826,27 +6098,27 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 684,
+          "line": 687,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 983,
+          "line": 993,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 167,
+          "line": 185,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 706,
+          "line": 742,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -5863,8 +6135,14 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "generic_item_body_registration",
+          "line": 13,
+          "module": "crates/core/src/items.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oMattockHead",
       "parity_verified": false,
       "source_events": [
@@ -5872,14 +6150,14 @@
       ],
       "source_id": 752,
       "source_path": "Objects/Items/oMattockHead.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "gameplay",
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1018,
+          "line": 1060,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -5900,7 +6178,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1018,
+          "line": 1060,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -6123,27 +6401,27 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 969,
+          "line": 979,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 982,
+          "line": 992,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 28,
+          "line": 45,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 81,
+          "line": 98,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 111,
+          "line": 128,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -6179,7 +6457,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 294,
+          "line": 385,
           "module": "crates/core/src/game.rs"
         }
       ],
@@ -6198,7 +6476,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 78,
+          "line": 86,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -6217,7 +6495,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 78,
+          "line": 86,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -6275,7 +6553,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 318,
+          "line": 386,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1191,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -6387,7 +6670,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 343,
+          "line": 254,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -6525,7 +6808,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 280,
+          "line": 348,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -6566,7 +6849,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 280,
+          "line": 348,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -6601,7 +6884,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 280,
+          "line": 348,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -6621,12 +6904,22 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "explicit_object_match_arm",
+          "line": 1112,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1609,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1706,
+          "module": "crates/core/src/ending.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oPDummy",
       "parity_verified": false,
       "source_events": [
@@ -6643,18 +6936,28 @@
       ],
       "source_id": 508,
       "source_path": "Objects/Other/oPDummy.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "ui",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "explicit_object_match_arm",
+          "line": 1117,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1664,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1707,
+          "module": "crates/core/src/ending.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oPDummy2",
       "parity_verified": false,
       "source_events": [
@@ -6667,7 +6970,7 @@
       ],
       "source_id": 612,
       "source_path": "Objects/Other/oPDummy2.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "ui",
@@ -6717,12 +7020,12 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "explicit_object_match_arm",
+          "line": 1708,
+          "module": "crates/core/src/ending.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oPDummy5",
       "parity_verified": false,
       "source_events": [
@@ -6731,18 +7034,18 @@
       ],
       "source_id": 634,
       "source_path": "Objects/Other/oPDummy5.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "ui",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "explicit_object_match_arm",
+          "line": 1122,
+          "module": "crates/core/src/ending.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oPDummy6",
       "parity_verified": false,
       "source_events": [
@@ -6751,7 +7054,7 @@
       ],
       "source_id": 898,
       "source_path": "Objects/Other/oPDummy6.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "ui",
@@ -6821,8 +7124,19 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1207,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1815,
+          "module": "crates/core/src/ending.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oPalmTreeScroll",
       "parity_verified": false,
       "source_events": [
@@ -6831,24 +7145,24 @@
       ],
       "source_id": 689,
       "source_path": "Objects/Other/Intro/oPalmTreeScroll.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "gameplay",
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 987,
+          "line": 997,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 22,
+          "line": 39,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 105,
+          "line": 122,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -6867,12 +7181,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 366,
+          "line": 287,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 491,
+          "line": 500,
           "module": "crates/core/src/player.rs"
         }
       ],
@@ -6892,12 +7206,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 367,
+          "line": 288,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 491,
+          "line": 500,
           "module": "crates/core/src/player.rs"
         }
       ],
@@ -6935,22 +7249,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 980,
+          "line": 990,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 31,
+          "line": 48,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 77,
+          "line": 94,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 106,
+          "line": 123,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -6989,7 +7303,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 280,
+          "line": 348,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1195,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -7032,27 +7351,27 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 685,
+          "line": 688,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 970,
+          "line": 980,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 981,
+          "line": 991,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 702,
+          "line": 738,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -7136,8 +7455,19 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1149,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1759,
+          "module": "crates/core/src/ending.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oPlayerSil",
       "parity_verified": false,
       "source_events": [
@@ -7146,24 +7476,34 @@
       ],
       "source_id": 608,
       "source_path": "Objects/Other/End/oPlayerSil.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "gameplay",
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 362,
+          "line": 1176,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1826,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 283,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 590,
+          "line": 747,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 601,
+          "line": 758,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -7199,7 +7539,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 280,
+          "line": 348,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -7216,9 +7556,15 @@
       "status": "partial_handler_present"
     },
     {
-      "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "category": "gameplay",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 266,
+          "module": "crates/core/src/world_events.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oPsychicCreate2",
       "parity_verified": false,
       "source_events": [
@@ -7228,12 +7574,18 @@
       ],
       "source_id": 692,
       "source_path": "Objects/Effects/oPsychicCreate2.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
-      "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "category": "gameplay",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 266,
+          "module": "crates/core/src/world_events.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oPsychicCreateP",
       "parity_verified": false,
       "source_events": [
@@ -7244,7 +7596,7 @@
       ],
       "source_id": 793,
       "source_path": "Objects/Effects/oPsychicCreateP.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "gameplay",
@@ -7266,7 +7618,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 280,
+          "line": 348,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -7295,7 +7647,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 945,
+          "line": 977,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -7319,12 +7671,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 677,
+          "line": 680,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1119,
+          "line": 1147,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -7410,7 +7762,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1079,
+          "line": 1100,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -7427,7 +7779,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1086,
+          "line": 1107,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -7449,7 +7801,7 @@
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -7512,7 +7864,7 @@
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -7570,27 +7922,27 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 971,
+          "line": 981,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 978,
+          "line": 988,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 78,
+          "line": 95,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 103,
+          "line": 120,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 164,
+          "line": 181,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -7636,7 +7988,7 @@
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -7680,7 +8032,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 398,
+          "line": 319,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -7697,7 +8049,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 388,
+          "line": 309,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -7718,7 +8070,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 398,
+          "line": 319,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -7737,7 +8089,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 398,
+          "line": 319,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -7757,7 +8109,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 398,
+          "line": 319,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -7779,7 +8131,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 71,
+          "line": 30,
+          "module": "crates/core/src/items/collectibles.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 88,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -7809,12 +8166,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 73,
+          "line": 31,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1190,
+          "line": 90,
+          "module": "crates/core/src/items/collectibles.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1244,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -7852,7 +8214,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1115,
+          "line": 1144,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -7873,7 +8235,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 78,
+          "line": 86,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -7895,7 +8257,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 71,
+          "line": 28,
+          "module": "crates/core/src/items/collectibles.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 88,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -7925,12 +8292,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 73,
+          "line": 29,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1191,
+          "line": 90,
+          "module": "crates/core/src/items/collectibles.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1245,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -7978,6 +8350,11 @@
         },
         {
           "kind": "explicit_object_match_arm",
+          "line": 190,
+          "module": "crates/core/src/enemies/npcs.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
           "line": 92,
           "module": "crates/core/src/enemies.rs"
         },
@@ -8005,17 +8382,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 194,
+          "line": 212,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 704,
+          "line": 740,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -8088,11 +8465,6 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 990,
-          "module": "crates/core/src/enemies/jungle.rs"
-        },
-        {
-          "kind": "explicit_object_match_arm",
           "line": 22,
           "module": "crates/core/src/enemies/npcs.rs"
         },
@@ -8108,27 +8480,32 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 316,
+          "line": 384,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 848,
+          "line": 925,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 879,
+          "line": 956,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 930,
+          "line": 1007,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 690,
+          "line": 1204,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 693,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -8190,22 +8567,27 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 316,
+          "line": 384,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 848,
+          "line": 925,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 879,
+          "line": 956,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 930,
+          "line": 1007,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1204,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -8247,27 +8629,27 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 686,
+          "line": 689,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 970,
+          "line": 980,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 986,
+          "line": 996,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 703,
+          "line": 739,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -8287,7 +8669,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 240,
+          "line": 274,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -8307,7 +8689,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 242,
+          "line": 276,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -8363,8 +8745,19 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1208,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1815,
+          "module": "crates/core/src/ending.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oShrubScroll",
       "parity_verified": false,
       "source_events": [
@@ -8373,14 +8766,14 @@
       ],
       "source_id": 688,
       "source_path": "Objects/Other/Intro/oShrubScroll.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "gameplay",
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1115,
+          "line": 1144,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -8424,6 +8817,11 @@
         },
         {
           "kind": "explicit_object_match_arm",
+          "line": 1188,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
           "line": 173,
           "module": "crates/core/src/traps/altar.rs"
         }
@@ -8461,7 +8859,7 @@
       "handlers": [
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -8483,7 +8881,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1018,
+          "line": 1060,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -8564,7 +8962,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 387,
+          "line": 308,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -8654,17 +9052,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 362,
+          "line": 283,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 577,
+          "line": 734,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 605,
+          "line": 762,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -8705,7 +9103,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 698,
+          "line": 1184,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 701,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -8761,7 +9164,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 317,
+          "line": 338,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -8788,7 +9191,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 317,
+          "line": 338,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -8844,7 +9247,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 317,
+          "line": 338,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -8871,7 +9274,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 347,
+          "line": 368,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -8896,17 +9299,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 983,
+          "line": 993,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 30,
+          "line": 47,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 110,
+          "line": 127,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -8967,6 +9370,11 @@
         },
         {
           "kind": "explicit_object_match_arm",
+          "line": 1185,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
           "line": 173,
           "module": "crates/core/src/traps/altar.rs"
         }
@@ -9002,6 +9410,11 @@
           "kind": "enemy_dispatch_registration",
           "line": 19,
           "module": "crates/core/src/enemies/caves.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1185,
+          "module": "crates/core/src/enemies.rs"
         }
       ],
       "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
@@ -9037,17 +9450,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 982,
+          "line": 992,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 26,
+          "line": 43,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 111,
+          "line": 128,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -9102,12 +9515,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 362,
+          "line": 283,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 592,
+          "line": 749,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -9127,17 +9540,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 981,
+          "line": 991,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 25,
+          "line": 42,
           "module": "crates/core/src/items/collectibles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 112,
+          "line": 129,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -9211,8 +9624,14 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1190,
+          "module": "crates/core/src/ending.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oSprite",
       "parity_verified": false,
       "source_events": [
@@ -9220,7 +9639,7 @@
       ],
       "source_id": 563,
       "source_path": "Objects/oSprite.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "ui",
@@ -9297,7 +9716,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1188,
+          "line": 1209,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -9318,12 +9737,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 970,
+          "line": 980,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 979,
+          "line": 989,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -9343,7 +9762,7 @@
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -9379,7 +9798,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 78,
+          "line": 86,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -9410,7 +9829,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1118,
+          "line": 1146,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -9430,7 +9849,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 678,
+          "line": 681,
           "module": "crates/core/src/generation/tiles.rs"
         }
       ],
@@ -9471,7 +9890,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 681,
+          "line": 684,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -9521,12 +9940,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 344,
+          "line": 255,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 856,
+          "line": 1290,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -9631,27 +10050,32 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 285,
+          "line": 353,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 320,
+          "line": 388,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 879,
+          "line": 956,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 961,
+          "line": 1038,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 697,
+          "line": 1205,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 700,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -9698,12 +10122,12 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "explicit_object_match_arm",
+          "line": 1196,
+          "module": "crates/core/src/ending.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oTransition",
       "parity_verified": false,
       "source_events": [
@@ -9715,14 +10139,14 @@
       ],
       "source_id": 562,
       "source_path": "Objects/oTransition.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "gameplay",
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 691,
+          "line": 694,
           "module": "crates/core/src/generation/tiles.rs"
         }
       ],
@@ -9754,8 +10178,19 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1149,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1759,
+          "module": "crates/core/src/ending.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oTreasureSil",
       "parity_verified": false,
       "source_events": [
@@ -9764,15 +10199,20 @@
       ],
       "source_id": 609,
       "source_path": "Objects/Other/End/oTreasureSil.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "gameplay",
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1114,
+          "line": 1143,
           "module": "crates/core/src/items/explosives.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 264,
+          "module": "crates/core/src/world_events.rs"
         }
       ],
       "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
@@ -9792,8 +10232,13 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 676,
+          "line": 679,
           "module": "crates/core/src/generation/tiles.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 264,
+          "module": "crates/core/src/world_events.rs"
         }
       ],
       "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
@@ -9833,7 +10278,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 78,
+          "line": 86,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -9870,7 +10315,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 387,
+          "line": 390,
           "module": "crates/core/src/progression.rs"
         }
       ],
@@ -9937,7 +10382,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 868,
+          "line": 945,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1201,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -9978,7 +10428,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 280,
+          "line": 348,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -10020,7 +10470,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 32,
+          "line": 49,
           "module": "crates/core/src/items/collectibles.rs"
         }
       ],
@@ -10064,17 +10514,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 316,
+          "line": 384,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 879,
+          "line": 956,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 906,
+          "line": 983,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1190,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -10128,7 +10583,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 78,
+          "line": 86,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -10145,7 +10600,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 78,
+          "line": 86,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -10158,9 +10613,20 @@
       "status": "partial_static_tile_adapter"
     },
     {
-      "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "category": "gameplay",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1170,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1836,
+          "module": "crates/core/src/ending.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oVolcanoFlame",
       "parity_verified": false,
       "source_events": [
@@ -10171,18 +10637,23 @@
       ],
       "source_id": 679,
       "source_path": "Objects/Effects/oVolcanoFlame.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "ui",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "explicit_object_match_arm",
+          "line": 1167,
+          "module": "crates/core/src/ending.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1778,
+          "module": "crates/core/src/ending.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oWalDamsel",
       "parity_verified": false,
       "source_events": [
@@ -10191,7 +10662,7 @@
       ],
       "source_id": 903,
       "source_path": "Objects/Other/oWalDamsel.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "behavior",
@@ -10217,7 +10688,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 679,
+          "line": 682,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -10290,7 +10761,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 979,
+          "line": 1011,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -10319,27 +10790,27 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 688,
+          "line": 691,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 970,
+          "line": 980,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 987,
+          "line": 997,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 707,
+          "line": 743,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "generic_item_body_registration",
-          "line": 12,
+          "line": 13,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -10393,7 +10864,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 279,
+          "line": 291,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -10413,7 +10884,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 487,
+          "line": 499,
           "module": "crates/core/src/items.rs"
         }
       ],
@@ -10434,7 +10905,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 698,
+          "line": 719,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10451,7 +10922,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 698,
+          "line": 719,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10502,7 +10973,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 297,
+          "line": 388,
           "module": "crates/core/src/game.rs"
         },
         {
@@ -10526,7 +10997,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 696,
+          "line": 717,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10543,7 +11014,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 685,
+          "line": 706,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10560,7 +11031,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 694,
+          "line": 715,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10577,7 +11048,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 692,
+          "line": 713,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10594,7 +11065,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 693,
+          "line": 714,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10611,7 +11082,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 697,
+          "line": 718,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10628,7 +11099,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 687,
+          "line": 708,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10645,7 +11116,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 695,
+          "line": 716,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10662,7 +11133,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 691,
+          "line": 712,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10679,7 +11150,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 686,
+          "line": 707,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10696,7 +11167,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1119,
+          "line": 1147,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -10713,8 +11184,14 @@
     },
     {
       "category": "visual",
-      "handlers": [],
-      "note": "Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 257,
+          "module": "crates/core/src/world_events.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oYellHelp",
       "parity_verified": false,
       "source_events": [
@@ -10724,7 +11201,7 @@
       ],
       "source_id": 601,
       "source_path": "Objects/Characters/oYellHelp.xml",
-      "status": "asset_only_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "gameplay",
@@ -10746,7 +11223,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 280,
+          "line": 348,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -10770,12 +11247,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 362,
+          "line": 283,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 596,
+          "line": 753,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -10835,22 +11312,27 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 316,
+          "line": 384,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 879,
+          "line": 956,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 919,
+          "line": 996,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 696,
+          "line": 1198,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 699,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -10915,22 +11397,27 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 285,
+          "line": 353,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 320,
+          "line": 388,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 961,
+          "line": 1038,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 699,
+          "line": 1199,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 702,
           "module": "crates/core/src/generation/tiles.rs"
         }
       ],
@@ -11011,6 +11498,11 @@
         {
           "kind": "explicit_object_match_arm",
           "line": 86,
+          "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1189,
           "module": "crates/core/src/enemies.rs"
         }
       ],
