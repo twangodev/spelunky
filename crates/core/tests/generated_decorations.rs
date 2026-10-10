@@ -1,5 +1,6 @@
 use spelunky_core::{
-    Game, InputFrame, Rng, RulesPreset, Vec2, World, generation, hub::HubKind, level::Level,
+    Game, InputFrame, Rect, Rng, RulesPreset, VIEW_HEIGHT, VIEW_WIDTH, Vec2, World, catalog,
+    generation, hub::HubKind, level::Level,
 };
 use std::collections::BTreeSet;
 
@@ -30,6 +31,69 @@ fn generated_forest_with_trunk_and_canopy(selected: &BTreeSet<String>) -> World 
         }
     }
     panic!("no real generated trunk and canopy in seeds 0..64 for {selected:?}");
+}
+
+fn natural_offscreen_casino() -> Game {
+    // Corrected synchronous Create draws can change which seed has a casino.
+    // Select by generated geometry, never by whether the behavior under test passes.
+    // Try the currently suitable seed first to avoid regenerating 52 worlds
+    // in every debug run; the bounded fallback keeps the layout precondition explicit.
+    for seed in std::iter::once(51).chain((0..64).filter(|seed| *seed != 51)) {
+        let mut game = Game::new(seed, RulesPreset::Classic);
+        game.next_level();
+        let dice: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.object == "oDice")
+            .collect();
+        let Some(prize) = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.value("inDiceHouse") != 0.0)
+        else {
+            continue;
+        };
+        if dice.len() != 2 {
+            continue;
+        }
+        // oLevel Step: camera rectangle, literal player x+16/y+16 sizes,
+        // then the first Boulder/Olmec regions. Dice are not always-active.
+        let p = game.player.pos;
+        let mut regions = vec![
+            Rect::new(
+                game.camera.x - 96.0,
+                game.camera.y - 96.0,
+                VIEW_WIDTH + 192.0,
+                VIEW_HEIGHT + 192.0,
+            ),
+            Rect::new(p.x - 16.0, p.y - 16.0, p.x + 16.0, p.y + 16.0),
+        ];
+        for (object, offset, size) in [("oBoulder", 32.0, 64.0), ("oOlmec", 16.0, 96.0)] {
+            if let Some(e) = game
+                .world
+                .entities
+                .iter()
+                .find(|e| e.alive && catalog::is_a(&e.object, object))
+            {
+                regions.push(Rect::new(e.pos.x - offset, e.pos.y - offset, size, size));
+            }
+        }
+        let outside = |bounds: Rect| {
+            regions.iter().all(|region| {
+                // Source region activation uses inclusive mask bounds.
+                !(bounds.x <= region.x + region.w
+                    && bounds.x + bounds.w - 1.0 >= region.x
+                    && bounds.y <= region.y + region.h
+                    && bounds.y + bounds.h - 1.0 >= region.y)
+            })
+        };
+        if dice.iter().all(|die| outside(die.sprite_bounds())) && outside(prize.sprite_bounds()) {
+            return game;
+        }
+    }
+    panic!("no real offscreen casino in natural level 2 for seeds 0..64");
 }
 
 #[test]
@@ -320,9 +384,8 @@ fn generated_canopies_run_source_create_before_first_step_including_cemetery() {
 }
 
 #[test]
-fn natural_casino_initializes_offscreen_dice_before_prize_generation() {
-    let mut game = Game::new(123, RulesPreset::Classic);
-    game.next_level();
+fn natural_casino_initializes_offscreen_dice_and_preserves_birth_order() {
+    let mut game = natural_offscreen_casino();
     assert_eq!(game.world.level, 2);
     let dice: Vec<_> = game
         .world
@@ -331,15 +394,15 @@ fn natural_casino_initializes_offscreen_dice_before_prize_generation() {
         .filter(|e| e.object == "oDice")
         .collect();
     assert_eq!(dice.len(), 2);
-    assert_eq!(
-        dice.iter()
-            .map(|e| e.value("value") as u32)
-            .collect::<Vec<_>>(),
-        vec![5, 4]
-    );
-    for die in dice {
+    let initial_dice: Vec<_> = dice
+        .iter()
+        .map(|die| (die.id, die.value("value"), die.alarms, die.creation_serial))
+        .collect();
+    for die in &dice {
         assert_eq!(die.age, 0);
         assert_eq!(die.value("dice_create_initialized"), 1.0);
+        assert!((1.0..=6.0).contains(&die.value("value")));
+        assert_eq!(die.value("value").fract(), 0.0);
     }
     let prize = game
         .world
@@ -347,47 +410,85 @@ fn natural_casino_initializes_offscreen_dice_before_prize_generation() {
         .iter()
         .find(|e| e.value("inDiceHouse") != 0.0)
         .unwrap();
-    assert_eq!(prize.object, "oBombBox");
-    assert_eq!(prize.pos, Vec2::new(632.0, 376.0));
-    game.step(&InputFrame::default());
-    let dice: Vec<_> = game
-        .world
-        .entities
-        .iter()
-        .filter(|e| e.object == "oDice")
-        .collect();
-    assert_eq!(
-        dice.iter()
-            .map(|e| e.value("value") as u32)
-            .collect::<Vec<_>>(),
-        vec![5, 4]
+    // The two mirrored source casino templates contain q+dd or dd+q.
+    // Row stamping must preserve that placement order, including both cases.
+    let mut births = vec![prize, dice[0], dice[1]];
+    assert!(births.iter().all(|e| e.pos.y == prize.pos.y));
+    births.sort_by(|a, b| a.pos.x.total_cmp(&b.pos.x));
+    assert!(
+        births
+            .windows(2)
+            .all(|pair| pair[0].creation_serial < pair[1].creation_serial)
     );
     assert!(
-        dice.iter().all(|die| die.age == 1 && !die.engine_active),
-        "fresh instances age before Level553 deactivates offscreen Dice773"
+        [
+            "oJetpack",
+            "oCapePickup",
+            "oShotgun",
+            "oGloves",
+            "oTeleporter",
+            "oMattock",
+            "oPaste",
+            "oSpringShoes",
+            "oSpikeShoes",
+            "oCompass",
+            "oPistol",
+            "oMachete",
+            "oBombBox",
+        ]
+        .contains(&prize.object.as_str())
     );
-    for _ in 0..2 {
+    let initial_prize = (
+        prize.id,
+        prize.object.clone(),
+        prize.pos,
+        prize.creation_serial,
+    );
+
+    for frame in 1..=3 {
         game.step(&InputFrame::default());
+        let dice: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.object == "oDice")
+            .collect();
+        assert_eq!(dice.len(), 2);
+        for (id, face, alarms, birth) in &initial_dice {
+            let die = dice.iter().find(|die| die.id == *id).unwrap();
+            assert_eq!(
+                die.value("value"),
+                *face,
+                "no deferred Create/reroll on frame {frame}"
+            );
+            assert_eq!(
+                die.alarms, *alarms,
+                "offscreen alarms freeze on frame {frame}"
+            );
+            assert_eq!(die.value("dice_create_initialized"), 1.0);
+            assert_eq!(die.creation_serial, *birth);
+            assert_eq!(
+                die.age, 1,
+                "fresh instances age once before Level553 deactivates Dice773; later frames freeze"
+            );
+            assert!(
+                !die.engine_active,
+                "source offscreen precondition on frame {frame}"
+            );
+        }
+        let prize = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.id == initial_prize.0)
+            .unwrap();
+        assert_eq!(
+            (&prize.object, prize.pos),
+            (&initial_prize.1, initial_prize.2)
+        );
+        assert_eq!(prize.value("inDiceHouse"), 1.0);
+        assert_eq!(prize.creation_serial, initial_prize.3);
     }
-    let dice: Vec<_> = game
-        .world
-        .entities
-        .iter()
-        .filter(|e| e.object == "oDice")
-        .collect();
-    assert_eq!(dice.len(), 2);
-    assert!(
-        dice.iter().all(|die| die.age == 1
-            && !die.engine_active
-            && die.value("dice_create_initialized") == 1.0),
-        "later offscreen frames must freeze the already initialized dice"
-    );
-    assert_eq!(
-        dice.iter()
-            .map(|e| e.value("value") as u32)
-            .collect::<Vec<_>>(),
-        vec![5, 4]
-    );
 }
 
 #[test]
