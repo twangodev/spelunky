@@ -108,6 +108,48 @@ fn distance_to_player(game: &Game, e: &Entity) -> f64 {
     dx.hypot(dy)
 }
 
+/// Image playback and Animation End are independent of the viewport guard
+/// around Alien Boss Step. Item hits retain the current image index.
+pub(super) fn tick_independent_animation(e: &mut Entity) {
+    if e.object != "oAlienBoss" {
+        return;
+    }
+    e.data.insert("boss_animation_advanced".into(), 0.0);
+    if e.sprite != "sAlienBossHurt" {
+        return;
+    }
+    e.data.insert("animation_speed".into(), 0.8);
+    let frame = e.animation.rem_euclid(5.0) + 0.8;
+    e.animation = frame.rem_euclid(5.0);
+    e.data.insert("phase".into(), e.animation);
+    e.data.insert("boss_animation_advanced".into(), 1.0);
+    if frame >= 5.0 {
+        e.sprite = "sAlienBoss".into();
+    }
+}
+
+pub(super) fn animation_end(e: &mut Entity, ended_sprite: &str) {
+    if e.object != "oYetiKing" {
+        return;
+    }
+    match ended_sprite {
+        "sYetiKingTurnR" => {
+            e.facing = 1;
+            e.state = 1;
+        }
+        "sYetiKingTurnL" => {
+            e.facing = -1;
+            e.state = 1;
+        }
+        "sYetiKingYellL" | "sYetiKingYellR" => {
+            e.state = 0;
+            e.data.insert("counter".into(), 30.0);
+            e.data.insert("animation_speed".into(), 0.25);
+        }
+        _ => {}
+    }
+}
+
 pub fn tick(game: &mut Game, e: &mut Entity) {
     match e.object.as_str() {
         "oYeti" => yeti(game, e),
@@ -455,15 +497,12 @@ fn king(game: &mut Game, e: &mut Entity) {
         }
         2 => {
             e.vel.x = 0.0;
-            if phase(e, 0.25) >= 5.0 {
-                e.facing = -e.facing;
-                enter(e, 1);
-            }
         }
         3 => {
             e.vel.x = 0.0;
             e.data.insert("attack_timer".into(), 100.0);
-            let frame = phase(e, 0.5);
+            e.data.insert("animation_speed".into(), 0.5);
+            let frame = e.animation;
             if (7.0..=12.0).contains(&frame) {
                 if frame == 7.0 {
                     game.sound("sndYetiYell", e.pos);
@@ -496,10 +535,6 @@ fn king(game: &mut Game, e: &mut Entity) {
                     }
                 }
             }
-            if frame >= 13.0 {
-                enter(e, 0);
-                e.data.insert("counter".into(), 30.0);
-            }
         }
         _ => {}
     }
@@ -514,9 +549,6 @@ fn king(game: &mut Game, e: &mut Entity) {
         _ => "sYetiKingRight",
     }
     .into();
-    if e.state < 2 {
-        phase(e, 0.25);
-    }
     if super::solid_mask(&game.world, e.bounds(), e.id) {
         e.pos.y -= 2.0;
     }
@@ -674,7 +706,15 @@ fn boss(game: &mut Game, e: &mut Entity) {
         e.data.insert("psychic_recover".into(), 100.0);
         game.sound("sndPsychic", e.pos);
     }
-    phase(e, 0.25);
+    if e.sprite != "sAlienBossHurt" {
+        e.data.insert("animation_speed".into(), 0.25);
+        if e.value("boss_animation_advanced") == 0.0 {
+            // sAlienBoss has four frames. Keeping its current image bounded
+            // preserves the image index when oItem changes the hurt sprite.
+            e.animation = phase(e, 0.25).rem_euclid(4.0);
+            e.data.insert("phase".into(), e.animation);
+        }
+    }
 }
 
 fn eject(game: &mut Game, e: &mut Entity) {
@@ -1050,6 +1090,165 @@ mod tests {
         }
         assert_eq!(e.sprite, "sAlienBossDead");
         assert!(g.world.entity(id).is_none());
+    }
+
+    fn boss_item_room() -> Game {
+        let mut g = Game::shell(5, RulesPreset::Classic);
+        g.world = World::new(60, 30, Area::Ice, 9);
+        g.world.name = "boss item animation fixture".into();
+        g.player.pos = Vec2::new(40.0, 152.0);
+        g.player.state = PlayerState::Standing;
+        g.player.grounded = true;
+        for x in 0..60 {
+            g.world.set_tile(x, 10, "oBlock");
+        }
+        g
+    }
+
+    fn throw_boss_rock(g: &mut Game, x: f64) {
+        let id = g.world.spawn("oRock", Vec2::new(x - 1.0, 140.0));
+        g.world.entity_mut(id).unwrap().vel.x = 5.0;
+        g.step(&crate::InputFrame::default());
+        // The first rock need not remain overlapping during recovery.
+        if let Some(rock) = g.world.entity_mut(id) {
+            rock.alive = false;
+        }
+    }
+
+    #[test]
+    fn actual_step_boss_item_hurt_finishes_and_accepts_another_hit() {
+        let mut g = boss_item_room();
+        let id = g.world.spawn("oAlienBoss", Vec2::new(128.0, 128.0));
+        throw_boss_rock(&mut g, 128.0);
+        assert_eq!(g.world.entity(id).unwrap().health, 9);
+        assert_eq!(g.world.entity(id).unwrap().sprite, "sAlienBossHurt");
+        for _ in 0..5 {
+            g.step(&crate::InputFrame::default());
+        }
+        let boss = g.world.entity(id).unwrap();
+        assert_eq!(boss.sprite, "sAlienBossHurt");
+        assert!((boss.animation - 4.25).abs() < 1e-9);
+        assert_eq!(boss.value("animation_speed"), 0.8);
+        g.step(&crate::InputFrame::default());
+        let boss = g.world.entity(id).unwrap();
+        assert_eq!(boss.sprite, "sAlienBoss");
+        assert!((boss.animation - 0.05).abs() < 1e-9);
+        assert_eq!(boss.value("animation_speed"), 0.25);
+        throw_boss_rock(&mut g, 128.0);
+        assert_eq!(g.world.entity(id).unwrap().health, 8);
+    }
+
+    #[test]
+    fn actual_step_boss_late_item_hurt_retains_current_source_frame() {
+        let mut g = boss_item_room();
+        let id = g.world.spawn("oAlienBoss", Vec2::new(128.0, 128.0));
+        for _ in 0..40 {
+            g.step(&crate::InputFrame::default());
+        }
+        throw_boss_rock(&mut g, 128.0);
+        assert!((g.world.entity(id).unwrap().animation - 2.25).abs() < 1e-9);
+        for _ in 0..3 {
+            g.step(&crate::InputFrame::default());
+        }
+        assert_eq!(g.world.entity(id).unwrap().sprite, "sAlienBossHurt");
+        g.step(&crate::InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().sprite, "sAlienBoss");
+    }
+
+    #[test]
+    fn actual_step_boss_hurt_animation_end_runs_outside_ai_viewport() {
+        let mut g = boss_item_room();
+        g.player.pos.x = 208.0;
+        g.update_camera();
+        assert_eq!(g.camera.x, 16.0);
+        let left = crate::InputFrame {
+            left: true,
+            run: true,
+            ..Default::default()
+        };
+        while g.player.pos.x > 152.0 {
+            g.step(&left);
+        }
+        assert_eq!(g.camera.x, 16.0);
+        // The rock's source Step gate is still active on the hit frame. Running
+        // farther left then scrolls the boss beyond its narrower AI guard.
+        let id = g.world.spawn("oAlienBoss", Vec2::new(335.0, 128.0));
+        throw_boss_rock(&mut g, 335.0);
+        assert_eq!(g.world.entity(id).unwrap().sprite, "sAlienBossHurt");
+        for _ in 0..7 {
+            g.step(&left);
+        }
+        let boss = g.world.entity(id).unwrap();
+        assert_eq!(boss.sprite, "sAlienBoss");
+        assert_eq!(boss.pos, Vec2::new(335.0, 128.0));
+        assert!(g.camera.x < 11.0);
+        // Animation End changes the sprite; the skipped Step has not restored
+        // its normal image speed yet.
+        assert_eq!(boss.value("animation_speed"), 0.8);
+        let frozen_counter = boss.value("psychic_recover");
+        g.step(&left);
+        assert_eq!(
+            g.world.entity(id).unwrap().value("psychic_recover"),
+            frozen_counter
+        );
+    }
+
+    #[test]
+    fn actual_step_king_turn_finishes_while_falling_player_scrolls_away() {
+        let mut g = boss_item_room();
+        for x in 0..8 {
+            g.world.set_tile(x, 10, "");
+            g.world.set_tile(x, 21, "oBlock");
+        }
+        g.player.state = PlayerState::Falling;
+        g.player.grounded = false;
+        g.player.vel.y = 10.0;
+        let id = g.world.spawn("oYetiKing", Vec2::new(128.0, 128.0));
+        g.step(&crate::InputFrame::default());
+        g.step(&crate::InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().state, 2);
+        assert_eq!(g.world.entity(id).unwrap().sprite, "sYetiKingTurnL");
+        for _ in 0..48 {
+            g.step(&crate::InputFrame::default());
+        }
+        let king = g.world.entity(id).unwrap();
+        assert_eq!(g.camera.y, 184.0);
+        assert_eq!(king.pos, Vec2::new(131.0, 128.0));
+        assert_eq!(king.state, 1);
+        assert_eq!(king.facing, -1);
+        // Animation End changes facing/state even when Step is skipped. Its
+        // counter and attack timer remain frozen by the source viewport guard.
+        assert_eq!(king.value("counter"), 30.0);
+        assert_eq!(king.value("attack_timer"), 0.0);
+    }
+
+    #[test]
+    fn actual_step_king_yell_finishes_offscreen_without_running_ai_timers() {
+        let mut g = boss_item_room();
+        for x in 0..8 {
+            g.world.set_tile(x, 10, "");
+            g.world.set_tile(x, 21, "oBlock");
+        }
+        // The king remains supported while the player's narrower body falls
+        // alongside this tile and scrolls the camera down.
+        g.world.set_tile(1, 10, "oBlock");
+        g.player.state = PlayerState::Falling;
+        g.player.grounded = false;
+        g.player.vel.y = 10.0;
+        let id = g.world.spawn("oYetiKing", Vec2::new(16.0, 128.0));
+        g.step(&crate::InputFrame::default());
+        g.step(&crate::InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().state, 3);
+        for _ in 0..48 {
+            g.step(&crate::InputFrame::default());
+        }
+        let king = g.world.entity(id).unwrap();
+        assert_eq!(g.camera.y, 184.0);
+        assert_eq!(king.pos, Vec2::new(19.0, 128.0));
+        assert_eq!(king.state, 0);
+        assert_eq!(king.value("counter"), 30.0);
+        assert_eq!(king.value("attack_timer"), 100.0);
+        assert_eq!(king.value("animation_speed"), 0.25);
     }
 
     #[test]

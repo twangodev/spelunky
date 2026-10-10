@@ -79,6 +79,63 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
     }
 }
 
+pub(super) fn animation_end(e: &mut Entity, sprite: &str) {
+    if e.object == "oDamsel" && e.state == 3 {
+        e.state = 0;
+        e.timer = 200;
+    } else if e.object == "oDamsel" && e.state == 6 {
+        e.state = 5;
+    } else if matches!(e.object.as_str(), "oShopkeeper" | "oShopkeeper2") && sprite == "sShopThrowL"
+    {
+        e.state = 2;
+        e.sprite = "sShopLeft".into();
+    }
+}
+
+pub(super) fn tick_independent_events(game: &mut Game, e: &mut Entity) {
+    if !e.alive {
+        return;
+    }
+    if e.object == "oBarrierEmitter" {
+        if game.world.entities.iter().any(|item| {
+            item.alive
+                && item.sprite_bounds().intersects(e.sprite_bounds())
+                && (item.object == "oBullet"
+                    || crate::catalog::is_a(&item.object, "oItem")
+                        && (item.vel.x.abs() > 2.0 || item.vel.y.abs() > 2.0))
+        }) {
+            destroy_emitter(game, e);
+        }
+    } else if matches!(e.object.as_str(), "oShopkeeper" | "oShopkeeper2")
+        && e.health > 0
+        && e.state == 2
+        && e.value("has_gun") == 0.0
+    {
+        if let Some(gun) = game.world.entities.iter_mut().find(|gun| {
+            gun.alive
+                && crate::catalog::is_a(&gun.object, "oShotgun")
+                && gun.sprite_bounds().intersects(e.sprite_bounds())
+        }) {
+            if gun.held {
+                game.player.held = game.player.held.filter(|id| *id != gun.id);
+                gun.held = false;
+            }
+            gun.alive = false;
+            e.data.insert("has_gun".into(), 1.0);
+        }
+    }
+}
+
+fn destroy_emitter(game: &mut Game, e: &mut Entity) {
+    e.alive = false;
+    for barrier in &mut game.world.entities {
+        if barrier.object == "oBarrier" {
+            barrier.alive = false;
+        }
+    }
+    game.sound("sndSmallExplode", e.pos);
+}
+
 fn ghost(game: &mut Game, e: &mut Entity) {
     if e.state == 0 {
         e.data
@@ -148,7 +205,13 @@ fn damsel(game: &mut Game, e: &mut Entity) {
     }
     let swimming = super::inherited::point(&game.world, e.pos, "oWaterSwim");
     e.data.insert("swimming".into(), f64::from(swimming));
-    let (_, grounded) = if e.held {
+    // Only the inherited oItem movement has a viewport guard. Damsel's own
+    // hazards, counters and state events continue for every engine-active NPC.
+    let inherited_active = e.pos.x > game.camera.x - 16.0
+        && e.pos.x < game.camera.x + VIEW_WIDTH + 16.0
+        && e.pos.y > game.camera.y - 16.0
+        && e.pos.y < game.camera.y + VIEW_HEIGHT + 16.0;
+    let (_, grounded) = if e.held || !inherited_active {
         (false, false)
     } else {
         move_body(&game.world, e, if swimming { 0.2 } else { 0.6 })
@@ -237,6 +300,10 @@ fn damsel(game: &mut Game, e: &mut Entity) {
         e.timer = 120;
         game.sound("sndDamsel", e.pos);
     }
+    if e.held {
+        e.facing = game.player.facing;
+        return;
+    }
     match e.state {
         0 => {
             e.vel.x = 0.0;
@@ -283,10 +350,9 @@ fn damsel(game: &mut Game, e: &mut Entity) {
             }
         }
         3 => {
-            if e.animation >= 8.0 {
-                e.state = 0;
-                e.timer = 200;
-                e.animation = 0.0;
+            if e.animation == 4.0 {
+                game.world
+                    .spawn("oYellHelp", Vec2::new(e.pos.x, e.pos.y - 16.0));
             }
         }
         5 => {
@@ -309,10 +375,6 @@ fn damsel(game: &mut Game, e: &mut Entity) {
                     ),
                 );
                 game.sound("sndKiss", e.pos);
-            }
-            if e.animation >= 10.0 {
-                e.state = 5;
-                e.animation = 0.0;
             }
         }
         _ => {}
@@ -353,9 +415,23 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
         || game.flags.contains("thief")
         || game.data.get("thiefLevel").copied().unwrap_or(0.0) > 0.0
         || game.data.get("thief_level").copied().unwrap_or(0.0) > 0.0;
-    if angry && e.state == 0 {
-        e.state = 4;
-        e.timer = 20;
+    let player_bounds = game.player.sprite_bounds();
+    let own_bounds = e.sprite_bounds();
+    let distance = ((player_bounds.x - own_bounds.x - own_bounds.w + 1.0)
+        .max(own_bounds.x - player_bounds.x - player_bounds.w + 1.0)
+        .max(0.0))
+    .hypot(
+        (player_bounds.y - own_bounds.y - own_bounds.h + 1.0)
+            .max(own_bounds.y - player_bounds.y - player_bounds.h + 1.0)
+            .max(0.0),
+    );
+    if matches!(e.state, 1 | 4)
+        && ((super::player_alive(game)
+            && distance < 64.0
+            && game.player.pos.y - (e.pos.y + 8.0) < 16.0)
+            || (game.player.pos.x - (e.pos.x + 8.0)).abs() < 4.0)
+    {
+        e.state = 2;
     }
     if e.state >= 98 {
         if e.value("has_gun") > 0.0 {
@@ -400,6 +476,10 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
             1
         };
         e.sprite = "sShopLeft".into();
+        if angry {
+            e.state = 4;
+            return;
+        }
         if e.value("welcomed") == 0.0 && e.pos.distance(game.player.pos) < 80.0 {
             game.events
                 .push(GameEvent::Message("WELCOME TO MY SHOP!".into()));
@@ -411,6 +491,7 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
             }
         }
     } else if e.state == 5 {
+        e.data.insert("animation_speed".into(), 0.5);
         let d = center(e).distance(game.player.pos);
         e.facing = if game.player.pos.x < center(e).x {
             -1
@@ -431,7 +512,6 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
             e.state = 0;
         }
     } else if e.state == 4 {
-        e.vel.x = 0.0;
         if grounded && e.timer > 0 {
             e.timer -= 1;
         }
@@ -440,19 +520,14 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
             e.facing = if game.rng.range(2) == 0 { -1 } else { 1 };
         }
     } else if e.state == 1 {
+        e.data.insert("animation_speed".into(), 0.5);
         if wall {
             e.facing *= -1;
         }
         e.vel.x = f64::from(e.facing) * 1.5;
-        if center(e).distance(game.player.pos) < 64.0 {
-            e.state = 2;
-        }
     } else if e.state == 3 {
-        if e.animation >= 8.0 {
-            e.state = 2;
-            e.animation = 0.0;
-        }
     } else if e.state == 2 {
+        e.data.insert("animation_speed".into(), 1.0);
         if e.value("turn_timer") > 0.0 {
             e.data
                 .insert("turn_timer".into(), e.value("turn_timer") - 1.0);
@@ -558,6 +633,9 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
             "sShopRunLeft"
         }
         .into();
+        if !super::player_alive(game) {
+            e.state = 1;
+        }
     }
 }
 
@@ -677,33 +755,8 @@ fn dead_fish(game: &mut Game, e: &mut Entity) {
 
 fn barrier(game: &mut Game, e: &mut Entity) {
     if e.object == "oBarrierEmitter" {
-        if e.value("barrier_created") == 0.0 {
-            if !game
-                .world
-                .entities
-                .iter()
-                .any(|x| x.alive && x.object == "oBarrier")
-            {
-                game.world
-                    .spawn("oBarrier", Vec2::new(e.pos.x, e.pos.y + 16.0));
-            }
-            e.data.insert("barrier_created".into(), 1.0);
-        }
-        let struck = game.world.entities.iter().any(|x| {
-            x.alive
-                && x.bounds().intersects(e.bounds())
-                && (x.object == "oBullet"
-                    || crate::catalog::is_a(&x.object, "oItem")
-                        && (x.vel.x.abs() > 2.0 || x.vel.y.abs() > 2.0))
-        });
-        if struck || !game.world.solid_at(e.pos.x, e.pos.y - 16.0) {
-            e.alive = false;
-            for b in &mut game.world.entities {
-                if b.object == "oBarrier" {
-                    b.alive = false;
-                }
-            }
-            game.sound("sndSmallExplode", e.pos);
+        if !game.world.solid_at(e.pos.x, e.pos.y - 16.0) {
+            destroy_emitter(game, e);
         }
         return;
     }
@@ -890,9 +943,7 @@ mod tests {
     fn destroying_emitter_releases_barrier() {
         let mut g = Game::shell(1, RulesPreset::Classic);
         g.world.set_tile(5, 4, "oBlock");
-        let mut e = Entity::new(99, "oBarrierEmitter", Vec2::new(80.0, 80.0));
-        init(&mut e);
-        barrier(&mut g, &mut e);
+        let id = g.world.spawn("oBarrierEmitter", Vec2::new(80.0, 80.0));
         assert!(
             g.world
                 .entities
@@ -900,14 +951,187 @@ mod tests {
                 .any(|e| e.alive && e.object == "oBarrier")
         );
         g.world.spawn("oBullet", Vec2::new(88.0, 88.0));
-        barrier(&mut g, &mut e);
-        assert!(!e.alive);
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(id).is_none());
         assert!(
             !g.world
                 .entities
                 .iter()
                 .any(|e| e.alive && e.object == "oBarrier")
         );
+    }
+    #[test]
+    fn actual_step_new_murderer_keeper_attacks_without_invented_patrol_wait() {
+        let mut g = actual_room();
+        for x in 0..30 {
+            g.world.set_tile(x, 9, "oBlock");
+        }
+        g.player.pos = Vec2::new(184.0, 136.0);
+        g.flags.insert("murderer".into());
+        let id = g.world.spawn("oShopkeeper", Vec2::new(128.0, 128.0));
+        g.world
+            .entity_mut(id)
+            .unwrap()
+            .data
+            .insert("has_gun".into(), 0.0);
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().state, 4);
+        assert_eq!(g.world.entity(id).unwrap().timer, 0);
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().state, 2);
+    }
+    #[test]
+    fn actual_step_stars_keeper_stops_attacking_dead_player() {
+        let mut g = actual_room();
+        g.player.health = 0;
+        g.player.state = PlayerState::Dead;
+        g.state = RunState::Dead;
+        let id = g.world.spawn("oShopkeeper2", Vec2::new(128.0, 128.0));
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().state, 1);
+    }
+    #[test]
+    fn actual_step_damsel_yell_uses_ten_frames_and_frame_four_help() {
+        let mut g = actual_room();
+        for x in 0..30 {
+            g.world.set_tile(x, 9, "oBlock");
+        }
+        let id = g.world.spawn("oDamsel", Vec2::new(120.0, 136.0));
+        for _ in 0..201 {
+            g.step(&InputFrame::default());
+        }
+        assert_eq!(g.world.entity(id).unwrap().state, 3);
+        for frame_tick in 1..=20 {
+            g.step(&InputFrame::default());
+            if frame_tick == 8 {
+                assert!(g.world.entities.iter().any(|e| e.object == "oYellHelp"));
+            }
+            assert_eq!(
+                g.world.entity(id).unwrap().state,
+                if frame_tick == 20 { 0 } else { 3 }
+            );
+        }
+        assert_eq!(g.world.entity(id).unwrap().timer, 200);
+    }
+    #[test]
+    fn actual_step_keeper_throw_ends_after_seven_source_frames() {
+        let mut g = actual_room();
+        for x in 0..30 {
+            g.world.set_tile(x, 9, "oBlock");
+        }
+        g.player.pos = Vec2::new(136.0, 136.0);
+        let id = g.world.spawn("oShopkeeper2", Vec2::new(128.0, 128.0));
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().state, 3);
+        assert_eq!(g.world.entity(id).unwrap().value("animation_speed"), 1.0);
+        for _ in 0..6 {
+            g.step(&InputFrame::default());
+            assert_eq!(g.world.entity(id).unwrap().state, 3);
+        }
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().state, 2);
+        assert_eq!(g.world.entity(id).unwrap().sprite, "sShopLeft");
+    }
+    #[test]
+    fn actual_step_damsel_child_events_run_outside_inherited_item_viewport() {
+        for lava in [false, true] {
+            let mut g = actual_room();
+            g.player.pos = Vec2::new(40.0, 136.0);
+            let id = g.world.spawn("oDamsel", Vec2::new(370.0, 136.0));
+            g.world.entity_mut(id).unwrap().vel.x = 1.0;
+            if lava {
+                g.world.spawn("oLava", Vec2::new(368.0, 128.0));
+            }
+            g.step(&InputFrame::default());
+            let e = g.world.entity(id).unwrap();
+            assert_eq!(e.pos, Vec2::new(370.0, 136.0));
+            assert_eq!(e.health, if lava { 0 } else { 4 });
+            if !lava {
+                assert_eq!(e.timer, 199);
+            }
+        }
+    }
+    #[test]
+    fn actual_step_offscreen_emitter_creates_once_and_keeps_collision_events() {
+        let mut g = actual_room();
+        g.player.pos = Vec2::new(40.0, 128.0);
+        let id = g.world.spawn("oBarrierEmitter", Vec2::new(352.0, 80.0));
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oBarrier")
+                .count(),
+            1
+        );
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(id).is_some()); // narrow Step support check skipped
+        let bullet = g.world.spawn("oBullet", Vec2::new(356.0, 84.0));
+        g.world.entity_mut(bullet).unwrap().vel = Vec2::default();
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(id).is_none());
+        assert!(!g.world.entities.iter().any(|e| e.object == "oBarrier"));
+    }
+    #[test]
+    fn actual_step_emitter_destruction_callbacks_run_once_when_causes_overlap() {
+        for (supported, bullet) in [(false, false), (true, true), (false, true)] {
+            let mut g = actual_room();
+            if supported {
+                g.world.set_tile(10, 4, "oBlock");
+            }
+            let emitter = g.world.spawn("oBarrierEmitter", Vec2::new(160.0, 80.0));
+            if bullet {
+                g.world.spawn("oBullet", Vec2::new(168.0, 88.0));
+            }
+            g.step(&InputFrame::default());
+            assert!(g.world.entity(emitter).is_none());
+            assert_eq!(
+                g.events
+                    .iter()
+                    .filter(|event| matches!(event,
+                        GameEvent::Sound { name, .. } if name == "sndSmallExplode"
+                    ))
+                    .count(),
+                1,
+                "supported={supported}, bullet={bullet}"
+            );
+        }
+    }
+    #[test]
+    fn actual_step_attacking_unarmed_keeper_consumes_shotgun_and_clears_holder() {
+        for held in [false, true] {
+            let mut g = actual_room();
+            for x in 0..30 {
+                g.world.set_tile(x, 6, "oBlock");
+            }
+            g.player.pos = if held {
+                Vec2::new(84.0, 88.0)
+            } else {
+                Vec2::new(200.0, 88.0)
+            };
+            g.player.facing = -1;
+            g.player.invincible = 30;
+            let keeper = g.world.spawn("oShopkeeper2", Vec2::new(72.0, 80.0));
+            g.world
+                .entity_mut(keeper)
+                .unwrap()
+                .data
+                .insert("firing".into(), 30.0);
+            let gun = g.world.spawn("oShotgun", Vec2::new(80.0, 88.0));
+            g.world
+                .entity_mut(gun)
+                .unwrap()
+                .data
+                .insert("gravity".into(), 0.0);
+            g.world.entity_mut(gun).unwrap().held = held;
+            if held {
+                g.player.held = Some(gun);
+            }
+            g.step(&InputFrame::default());
+            assert_eq!(g.world.entity(keeper).unwrap().value("has_gun"), 1.0);
+            assert!(g.world.entity(gun).is_none());
+            assert_eq!(g.player.held, None);
+        }
     }
     #[test]
     fn stars_corpse_expires_after_source_death_timer() {

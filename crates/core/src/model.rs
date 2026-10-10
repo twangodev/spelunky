@@ -650,6 +650,7 @@ impl World {
         crate::enemies::init_entity(&mut e);
         crate::items::init_entity(&mut e);
         self.entities.push(e);
+        crate::enemies::on_spawn(self, id);
         id
     }
     pub fn entity(&self, id: u64) -> Option<&Entity> {

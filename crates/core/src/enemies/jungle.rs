@@ -135,6 +135,20 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
     }
 }
 
+pub(super) fn animation_end(e: &mut Entity, sprite: &str) {
+    if e.object != "oManTrap" {
+        return;
+    }
+    if e.state == 97 {
+        e.sprite = "sManTrapSleepL".into();
+        e.state = 96;
+    } else if sprite == "sManTrapSleepL" {
+        e.sprite = "sManTrapStunL".into();
+        e.state = 98;
+        e.timer = 400;
+    }
+}
+
 fn die(game: &mut Game, e: &mut Entity) {
     if e.object == "oFireFrog" {
         let id = game
@@ -847,21 +861,9 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
         }
         97 => {
             e.vel.x = 0.0;
-            e.timer = e.timer.saturating_sub(1);
-            if e.timer == 0 {
-                e.state = 96;
-                e.timer = 32;
-                e.sprite = "sManTrapSleepL".into();
-                e.animation = 0.0;
-            }
         }
         96 => {
             e.vel.x = 0.0;
-            e.timer = e.timer.saturating_sub(1);
-            if e.timer == 0 {
-                e.state = 98;
-                e.timer = 400;
-            }
         }
         98 => {
             if grounded || e.held {
@@ -1013,7 +1015,6 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
 
 fn eat(e: &mut Entity, sprite: &str, x: f64) {
     e.state = 97;
-    e.timer = 28;
     e.vel.x = 0.0;
     e.animation = 0.0;
     e.facing = if x > center(e).x { 1 } else { -1 };
@@ -1099,15 +1100,23 @@ mod tests {
     #[test]
     fn mantrap_eating_is_lethal_and_then_sleeps() {
         let mut game = Game::shell(6, RulesPreset::Classic);
-        game.player.pos = Vec2::new(50.0, 50.0);
-        let mut e = entity("oManTrap", game.player.pos);
-        tick(&mut game, &mut e);
-        assert_eq!(e.state, 97);
-        assert_eq!(game.player.health, -99);
-        for _ in 0..29 {
-            tick(&mut game, &mut e);
+        for x in 0..30 {
+            game.world.set_tile(x, 4, "oBlock");
         }
-        assert_eq!(e.state, 96);
+        game.player.pos = Vec2::new(50.0, 56.0);
+        let id = game.world.spawn("oManTrap", Vec2::new(42.0, 48.0));
+        game.world.entity_mut(id).unwrap().vel = Vec2::default();
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().state, 97);
+        assert_eq!(game.state, crate::RunState::Dead);
+        for _ in 0..28 {
+            game.step(&crate::InputFrame::default());
+        }
+        assert_eq!(game.world.entity(id).unwrap().state, 96);
+        for _ in 0..32 {
+            game.step(&crate::InputFrame::default());
+        }
+        assert_eq!(game.world.entity(id).unwrap().state, 98);
     }
     #[test]
     fn jaws_has_forty_health_and_turn_pause() {

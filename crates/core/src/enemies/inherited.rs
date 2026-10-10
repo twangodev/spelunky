@@ -819,4 +819,91 @@ mod tests {
         g.step(&InputFrame::default());
         assert!(g.world.entity(id).is_none_or(|e| e.health <= 0));
     }
+    #[test]
+    fn actual_step_enemy_item_impacts_keep_parent_viewport_and_fragile_overrides() {
+        for object in ["oRock", "oShotgun", "oJar", "oSkull"] {
+            let mut g = room();
+            g.player.pos = Vec2::new(40.0, 160.0);
+            let enemy = g.world.spawn("oCaveman", Vec2::new(370.0, 80.0));
+            let item = g.world.spawn(object, Vec2::new(370.0, 87.0));
+            g.world.entity_mut(item).unwrap().vel.x = 5.0;
+            g.step(&InputFrame::default());
+            let e = g.world.entity(enemy).unwrap();
+            assert_eq!(e.health, 3, "{object}");
+            assert_eq!(
+                e.state == 98,
+                matches!(object, "oJar" | "oSkull"),
+                "{object}"
+            );
+            if matches!(object, "oJar" | "oSkull") {
+                assert!(g.world.entity(item).is_none());
+                assert!(g.world.entities.iter().any(|e| e.object == "oSmokePuff"));
+            }
+        }
+    }
+    #[test]
+    fn actual_step_dice_uses_its_own_strict_three_speed_impact_threshold() {
+        for speed in [3.0, 4.0] {
+            let mut g = room();
+            let enemy = g.world.spawn("oCaveman", Vec2::new(100.0, 80.0));
+            g.world.entity_mut(enemy).unwrap().vel = Vec2::default();
+            let die = g.world.spawn("oDice", Vec2::new(98.0, 88.0));
+            g.world.entity_mut(die).unwrap().vel.x = speed;
+            g.step(&InputFrame::default());
+            assert_eq!(
+                g.world.entity(enemy).unwrap().health,
+                if speed == 3.0 { 3 } else { 2 }
+            );
+        }
+    }
+    #[test]
+    fn actual_step_natural_mantrap_meal_finishes_after_player_falls_out_of_ai_view() {
+        let mut g = room();
+        for x in 8..40 {
+            g.world.set_tile(x, 10, "oBlock");
+        }
+        for x in 0..8 {
+            g.world.set_tile(x, 21, "oBlock");
+        }
+        g.player.pos = Vec2::new(40.0, 152.0);
+        g.player.state = PlayerState::Falling;
+        g.player.vel.y = 10.0;
+        let trap = g.world.spawn("oManTrap", Vec2::new(144.0, 144.0));
+        g.world.spawn("oCaveman", Vec2::new(144.0, 144.0));
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(trap).unwrap().state, 97);
+        for _ in 0..70 {
+            g.step(&InputFrame::default());
+        }
+        let e = g.world.entity(trap).unwrap();
+        assert!(g.camera.y > e.pos.y + 20.0);
+        assert_eq!(e.state, 98);
+        assert_eq!(e.timer, 400); // independent AnimationEnd; AI counter remains frozen
+        assert_eq!(e.sprite, "sManTrapStunL");
+    }
+    #[test]
+    fn actual_step_natural_tomb_turn_finishes_after_player_runs_out_of_ai_view() {
+        let mut g = room();
+        for x in 0..40 {
+            g.world.set_tile(x, 10, "oBlock");
+        }
+        g.player.pos = Vec2::new(300.0, 152.0);
+        g.update_camera();
+        let tomb = g.world.spawn("oTombLord", Vec2::new(398.0, 128.0));
+        let input = InputFrame {
+            left: true,
+            run: true,
+            ..InputFrame::default()
+        };
+        g.step(&input);
+        g.step(&input);
+        assert_eq!(g.world.entity(tomb).unwrap().state, 2);
+        for _ in 0..40 {
+            g.step(&input);
+        }
+        let e = g.world.entity(tomb).unwrap();
+        assert!(e.pos.x >= g.camera.x + VIEW_WIDTH);
+        assert_eq!(e.state, 1);
+        assert_eq!(e.facing, -1);
+    }
 }

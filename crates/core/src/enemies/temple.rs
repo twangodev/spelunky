@@ -33,6 +33,7 @@ pub fn init(e: &mut Entity) {
             e.vel.x = 2.5;
             e.sprite = "sTombLordRight".into();
             e.data.insert("contact_damage".into(), 2.0);
+            e.data.insert("animation_speed".into(), 0.25);
         }
         "oOlmec" => {
             e.health = 1;
@@ -98,6 +99,28 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
             } else {
                 e.timer -= 1;
             }
+        }
+        _ => {}
+    }
+}
+
+pub(super) fn animation_end(e: &mut Entity, sprite: &str) {
+    if e.object != "oTombLord" {
+        return;
+    }
+    match sprite {
+        "sTombLordTurnL" => {
+            e.facing = -1;
+            e.state = 1;
+        }
+        "sTombLordTurnR" => {
+            e.facing = 1;
+            e.state = 1;
+        }
+        "sTombLordAttackL" | "sTombLordAttackR" => {
+            e.state = 0;
+            e.timer = 30;
+            e.data.insert("animation_speed".into(), 0.25);
         }
         _ => {}
     }
@@ -317,7 +340,7 @@ fn tomb_lord(game: &mut Game, e: &mut Entity) {
                     && e.timer == 0)
             {
                 e.state = 2;
-                e.timer = 28;
+                e.timer = 30;
                 e.vel.x = 0.0;
                 e.animation = 0.0;
                 e.sprite = if e.facing < 0 {
@@ -342,16 +365,10 @@ fn tomb_lord(game: &mut Game, e: &mut Entity) {
         }
         2 => {
             e.vel.x = 0.0;
-            if e.timer > 0 {
-                e.timer -= 1;
-            } else {
-                e.facing = -e.facing;
-                e.state = 1;
-                e.timer = 30;
-            }
         }
         3 => {
             e.vel.x = 0.0;
+            e.data.insert("animation_speed".into(), 0.5);
             // Step refreshes attackTimer throughout the attack animation.
             e.data.insert("attack_cooldown".into(), 100.0);
             if (7.0..=12.0).contains(&e.animation) {
@@ -366,18 +383,12 @@ fn tomb_lord(game: &mut Game, e: &mut Entity) {
                     f.vel = Vec2::new(vx, vy);
                 }
             }
-            if e.animation >= 14.0 {
-                e.state = 0;
-                e.timer = 30;
-                e.sprite = format!("sTombLord{}", if e.facing < 0 { "Left" } else { "Right" });
-            }
         }
         _ => {}
     }
     if e.state == 1 && e.timer > 0 {
         e.timer -= 1;
     }
-    e.animation += if e.state == 3 { 0.5 } else { 0.25 };
 }
 
 fn fly(game: &mut Game, e: &mut Entity) {
@@ -408,6 +419,48 @@ fn fly(game: &mut Game, e: &mut Entity) {
         game.damage_player(2);
         game.player.invincible = invincible;
         game.player.vel = Vec2::new(e.vel.x, -4.0);
+        e.alive = false;
+        return;
+    }
+    if let Some(index) = game.world.entities.iter().position(|other| {
+        other.alive
+            && other.object == "oDamsel"
+            && other.value("invincible") == 0.0
+            && other.sprite_bounds().intersects(e.sprite_bounds())
+    }) {
+        // oFly has a dedicated Damsel collision event, including held bodies.
+        // Its throw counter and knockback differ from the oEnemy event below.
+        let other = &mut game.world.entities[index];
+        let bloodless = other.value("bloodless") != 0.0;
+        let blood_left = other.data.entry("blood_left".into()).or_insert(4.0);
+        let blood = if *blood_left > 0.0 {
+            if other.health < 0 {
+                *blood_left -= 1.0;
+            }
+            (!bloodless).then_some(Vec2::new(other.pos.x + 8.0, other.pos.y + 8.0))
+        } else {
+            None
+        };
+        other.held = false;
+        game.player.held = game.player.held.filter(|held| *held != other.id);
+        other.health -= 2;
+        other.vel = Vec2::new(e.vel.x * 0.3, -6.0);
+        other.state = 2;
+        other.timer = 120;
+        let pos = other.pos;
+        if let Some(pos) = blood.filter(|_| {
+            game.world
+                .entities
+                .iter()
+                .filter(|particle| {
+                    particle.alive && crate::catalog::is_a(&particle.object, "oDetritus")
+                })
+                .count()
+                < 16
+        }) {
+            game.world.spawn("oBlood", pos);
+        }
+        game.sound("sndDamsel", pos);
         e.alive = false;
         return;
     }
@@ -895,7 +948,7 @@ fn yellow_ball(game: &mut Game, e: &mut Entity) {
         spawn(
             game,
             ["oBat", "oSpider", "oSnake", "oFrog", "oFireFrog"][n as usize],
-            old,
+            Vec2::new(old.x - 8.0, old.y - 8.0),
         );
         e.alive = false;
     }
@@ -1278,6 +1331,91 @@ mod tests {
         g
     }
     #[test]
+    fn actual_step_fly_hits_unheld_and_held_damsel_but_respects_invincibility() {
+        for (held, invincible) in [(false, false), (true, false), (true, true)] {
+            let mut g = room();
+            let damsel_pos = if held {
+                g.player.pos = Vec2::new(136.0, 152.0);
+                Vec2::new(140.0, 152.0)
+            } else {
+                Vec2::new(96.0, 144.0)
+            };
+            let damsel_id = g.world.spawn("oDamsel", damsel_pos);
+            let damsel = g.world.entity_mut(damsel_id).unwrap();
+            damsel.held = held;
+            damsel
+                .data
+                .insert("invincible".into(), f64::from(invincible));
+            if held {
+                g.player.held = Some(damsel_id);
+            }
+            // The held fixture touches the Damsel's exposed right edge while
+            // clearing the player's sprite, so the dedicated event must run.
+            let fly_id = g.world.spawn(
+                "oFly",
+                if held {
+                    Vec2::new(150.0, 148.0)
+                } else {
+                    Vec2::new(100.0, 148.0)
+                },
+            );
+            let vx = if held { -1.0 } else { 1.0 };
+            g.world.entity_mut(fly_id).unwrap().vel = Vec2::new(vx, 0.0);
+            g.step(&crate::InputFrame::default());
+            let damsel = g.world.entity(damsel_id).unwrap();
+            assert_eq!(g.player.health, 4);
+            if invincible {
+                assert_eq!(damsel.health, 4);
+                assert!(damsel.held);
+                assert_eq!(g.player.held, Some(damsel_id));
+                assert!(g.world.entity(fly_id).is_some());
+            } else {
+                assert_eq!(damsel.health, 2, "held={held}");
+                assert_eq!(damsel.state, 2);
+                assert_eq!(damsel.timer, 120);
+                assert_eq!(damsel.vel, Vec2::new(vx * 0.3, -6.0));
+                assert!(!damsel.held);
+                assert!(g.player.held.is_none());
+                assert!(g.world.entity(fly_id).is_none());
+            }
+        }
+    }
+    #[test]
+    fn actual_step_natural_yellow_ball_spawns_enemy_at_rewound_top_left() {
+        let mut g = Game::shell(42, RulesPreset::Classic);
+        g.world = World::new(40, 30, Area::Mines, 1);
+        g.flags.insert("custom".into());
+        g.player.pos = Vec2::new(136.0, 136.0);
+        for x in 0..40 {
+            g.world.set_tile(x, 10, "oBlock");
+        }
+        for y in 0..10 {
+            g.world.set_tile(4, y, "oBlock");
+            g.world.set_tile(16, y, "oBlock");
+        }
+        let ball_id = g.world.spawn("oYellowBall", Vec2::new(180.0, 128.0));
+        for _ in 0..100 {
+            let before = g.world.entity(ball_id).unwrap().pos;
+            g.step(&crate::InputFrame::default());
+            if g.world.entity(ball_id).is_none() {
+                let spawned = g
+                    .world
+                    .entities
+                    .iter()
+                    .find(|entity| {
+                        matches!(
+                            entity.object.as_str(),
+                            "oBat" | "oSpider" | "oSnake" | "oFrog" | "oFireFrog"
+                        )
+                    })
+                    .expect("natural wall impact must hatch an enemy");
+                assert_eq!(spawned.pos, Vec2::new(before.x - 8.0, before.y - 8.0));
+                return;
+            }
+        }
+        panic!("natural YellowBall trajectory never reached either wall");
+    }
+    #[test]
     fn hawk_stomp_wins_over_grab_in_integrated_combat() {
         // oHawkman Collision with oCharacter: descending above y+5 stomps.
         let mut g = room();
@@ -1388,12 +1526,15 @@ mod tests {
     fn tomb_attack_refreshes_cooldown_until_animation_end() {
         // oTombLord Step ATTACK assigns attackTimer=100 on every step.
         let mut g = room();
-        let mut e = Entity::new(100, "oTombLord", Vec2::new(80.0, 128.0));
-        init(&mut e);
+        let id = g.world.spawn("oTombLord", Vec2::new(80.0, 128.0));
+        let e = g.world.entity_mut(id).unwrap();
         e.state = 3;
-        e.animation = 14.0;
+        e.sprite = "sTombLordAttackL".into();
+        e.animation = 13.5;
+        e.data.insert("animation_speed".into(), 0.5);
         e.data.insert("attack_cooldown".into(), 10.0);
-        tick(&mut g, &mut e);
+        g.step(&crate::InputFrame::default());
+        let e = g.world.entity(id).unwrap();
         assert_eq!(e.state, 0);
         assert_eq!(e.value("attack_cooldown"), 100.0);
     }
