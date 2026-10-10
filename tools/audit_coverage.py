@@ -72,12 +72,30 @@ def production_text(text):
  for start,end in reversed(ranges):text=text[:start]+blank(text[start:end])+text[end:]
  return text,ranges
 
+def function_line(text, name):
+ """Resolve a production function definition without depending on line offsets."""
+ production,_=production_text(text)
+ shadow=lexical_shadow(production)
+ definitions=list(re.finditer(
+  r'(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?fn\s+'+re.escape(name)+r'\s*\(',
+  shadow,
+ ))
+ assert len(definitions)==1, f'Expected one production definition of {name}'
+ return shadow[:definitions[0].start()].count('\n')+1
+
 # Regressions: an early helper/external test module must not hide later handlers;
 # braces inside literals/comments must not end an excluded item.
 fixture='#[cfg(test)]\nfn helper() { let s = r#"}"#; /* { */ }\n#[cfg(test)]\n#[path = "traversal.rs"]\nmod traversal;\nfn live() { match x { "oLive" => {} } }\n#[cfg(test)]\nmod tests { fn t() { match x { "oTest" => {} } } }\n'
 filtered,fixture_ranges=production_text(fixture)
 assert '"oLive"' in filtered and '"oTest"' not in filtered and 'fn helper' not in filtered
 assert len(filtered)==len(fixture) and filtered.count('\n')==fixture.count('\n') and len(fixture_ranges)==3
+
+# Adapter evidence must follow the actual definition when unrelated code moves.
+anchor_fixture='#[cfg(test)]\nfn is_solid() {}\n// pub fn is_solid() {}\nfn helper() {}\npub fn is_solid(name: &str) -> bool { true }\n'
+anchor_line=function_line(anchor_fixture,'is_solid')
+assert anchor_fixture.splitlines()[anchor_line-1].startswith('pub fn is_solid(')
+prefix='// Unrelated preceding change\nfn another_helper() {}\n\n'
+assert function_line(prefix+anchor_fixture,'is_solid')==anchor_line+prefix.count('\n')
 
 sources={p:p.read_text() for p in sorted((root/'crates/core/src').rglob('*.rs'))}
 excluded=set()
@@ -164,6 +182,7 @@ if rubble_dispatch:
    handlers[name].append({'module':rubble_module,'line':rubble_text[:rubble_dispatch.start()].count('\n')+1,'kind':'inherited_rubble_family_handler'})
 
 records=[]
+terrain_adapter_line=function_line(sources[root/'crates/core/src/catalog.rs'],'is_solid')
 for o in sorted(index['objects'],key=lambda x:x['name']):
  n=o['name'];path=o['path'];ev=handlers[n]
  category='gameplay'
@@ -180,7 +199,7 @@ for o in sorted(index['objects'],key=lambda x:x['name']):
  elif n in abstract:status='source_abstraction';reason='Source parent/group; requires inherited behavior coverage in concrete descendants.'
  elif category=='ui':status='host_replacement_unverified';reason='Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.'
  elif category=='visual':status='asset_only_unverified';reason='Original asset is catalogued; dynamic event/draw behavior has no direct audited handler.'
- elif isa(n,'oSolid') or isa(n,'oLadder') or n in {'oVine','oVineTop','oLadderTop','oTreeBranch'}:status='partial_static_tile_adapter';reason='Generic terrain/ladder collision exists; object-specific source events remain unverified.';ev=[{'module':'crates/core/src/catalog.rs','line':78,'kind':'source_hierarchy_terrain_adapter'}]
+ elif isa(n,'oSolid') or isa(n,'oLadder') or n in {'oVine','oVineTop','oLadderTop','oTreeBranch'}:status='partial_static_tile_adapter';reason='Generic terrain/ladder collision exists; object-specific source events remain unverified.';ev=[{'module':'crates/core/src/catalog.rs','line':terrain_adapter_line,'kind':'source_hierarchy_terrain_adapter'}]
  else:status='no_direct_handler_found';reason='No audited object dispatch exists; source gameplay behavior needs implementation or documented equivalent.'
  if status=='host_replacement_unverified':
   module='crates/app/src/editor_ui.rs' if '/Level Editor/' in path else ('crates/app/src/settings_ui.rs' if '/Init/' in path or n in {'oJoyConfig','oKeyConfig','oGamepad'} else 'crates/app/src/host.rs')
