@@ -30,3 +30,9 @@ rustc-ice-*.txt
 
 # Local acceptance evidence and downloads
 /artifacts/
+
+# Generated Svelte web output and dependencies
+/web/node_modules/
+/web/dist/
+/web/public/pkg/
+/web/public/assets/

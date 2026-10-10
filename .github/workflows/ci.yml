@@ -60,6 +60,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
       - name: Install wasm-pack
         run: cargo install wasm-pack --version 0.15.0 --locked
       - name: Check Wasm application
@@ -69,5 +75,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: spelunky-web
-          path: web
+          path: web/dist
           if-no-files-found: error
