@@ -270,18 +270,17 @@ fn treasure(
     }
     let left = Vec2::new(origin.x - 16.0, origin.y - 16.0);
     let right = Vec2::new(origin.x + 16.0, origin.y - 16.0);
-    let side = [left, right].iter().any(|point| {
-        source_point_family(world, *point, "oSolid") || source_point_family(world, *point, "oBlock")
-    });
-    let alcove = !col_stuff
-        && source_point_family(world, Vec2::new(origin.x, origin.y - 32.0), "oSolid")
-        && side;
-    let tunnel = !col_stuff
-        && source_point_family(world, left, "oSolid")
-        && source_point_family(world, right, "oSolid");
     let bonus = if state.cemetery { 10 } else { 0 };
     let level = world.level;
-    if alcove {
+    // scrTreasureGen:49–51 probes the roof before either side, and :96–97
+    // only probes the tunnel when the alcove branch did not match.
+    if !col_stuff
+        && source_point_family(world, Vec2::new(origin.x, origin.y - 32.0), "oSolid")
+        && (source_point_family(world, left, "oSolid")
+            || source_point_family(world, right, "oSolid")
+            || source_point_family(world, left, "oBlock")
+            || source_point_family(world, right, "oBlock"))
+    {
         // Preserve scrTreasureGen:54's literal typo, not intended proximity:
         // GiantSpider's compiled object index is 749, so (749 < 100) is 0.
         // distance_to_object(0) has no target and returns 1,000,000 (truthy).
@@ -313,7 +312,10 @@ fn treasure(
         } else if rng.chance(1, 10) {
             spawn(world, rng, "oRubyBig", x, y - 1);
         }
-    } else if tunnel {
+    } else if !col_stuff
+        && source_point_family(world, left, "oSolid")
+        && source_point_family(world, right, "oSolid")
+    {
         // The same literal expression at scrTreasureGen:100 assigns n = 10.
         if world.area != Area::Ice && rng.chance(1, 10) {
             spawn(world, rng, "oWeb", x, y - 1);
