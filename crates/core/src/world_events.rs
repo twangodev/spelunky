@@ -19,7 +19,7 @@ pub(crate) fn mask_distance(a: Rect, b: Rect) -> f64 {
 mod light;
 pub(crate) use light::{lighting_tick, sample_light_distances};
 
-/// oGame's global fluid pass runs before instance activation and object Steps.
+/// oGame318 fluid pass runs before Player319 and Level553 activation.
 /// Destroying a solid requests this pass; a quiet contained pool stays intact.
 pub(crate) fn fluid_tick(game: &mut Game) {
     if !game.world.fluid_dirty {
@@ -31,55 +31,63 @@ pub(crate) fn fluid_tick(game: &mut Game) {
         game.world.fluid_dirty = false;
         return;
     }
-    // Tiles have stable storage order; entity instances retain creation order.
-    let mut fluids: Vec<(Option<u64>, Vec2, String)> = game
-        .world
-        .tiles
-        .iter()
-        .enumerate()
-        .filter(|(_, tile)| catalog::is_a(&tile.object, "oWater"))
-        .map(|(index, tile)| {
-            (
-                None,
-                Vec2::new(
-                    (index % game.world.width) as f64 * 16.0,
-                    (index / game.world.width) as f64 * 16.0,
-                ),
-                tile.object.clone(),
-            )
-        })
-        .collect();
-    fluids.extend(
-        game.world
-            .entities
-            .iter()
-            .filter(|e| e.alive && catalog::is_a(&e.object, "oWater"))
-            .map(|e| (Some(e.id), e.pos, e.object.clone())),
-    );
+    // Canonical with(object) snapshots its count, but rereads the live
+    // descendant array at each index. Region activation can rebuild that array.
+    let count = crate::dispatcher::descendant_instances(game, "oWater").len();
     let mut drained = 0;
-    let regions = crate::activation::Regions::for_game(game);
-    let mut activated: Vec<Rect> = Vec::new();
-    for (id, origin, object) in fluids.clone() {
+    for cursor in 0..count {
+        let Some(instance) = crate::dispatcher::descendant_instances(game, "oWater")
+            .get(cursor)
+            .copied()
+        else {
+            continue;
+        };
+        if !crate::dispatcher::is_active(game, instance) {
+            continue;
+        }
+        let object = instance.object(game).to_owned();
+        if !catalog::is_a(&object, "oWater") {
+            continue;
+        }
+        let origin = instance.position(game);
         if !custom && origin.y >= 512.0 {
             continue;
         }
+        let id = match instance {
+            crate::dispatcher::Instance::Entity(id) => Some(id),
+            _ => None,
+        };
         if id.is_some_and(|id| game.world.entity(id).is_none()) {
             continue;
         }
-        let mask = id
-            .and_then(|id| game.world.entity(id).map(Entity::sprite_bounds))
-            .unwrap_or_else(|| {
-                game.world
-                    .tile_bounds((origin.x / 16.0) as i32, (origin.y / 16.0) as i32)
-            });
-        if !regions.bounds_active(mask) && !activated.iter().any(|region| region.intersects(mask)) {
-            continue;
-        }
-        activated.push(Rect::new(origin.x - 16.0, origin.y - 16.0, 48.0, 48.0));
+        crate::dispatcher::activate_region(
+            game,
+            Rect::new(origin.x - 16.0, origin.y - 16.0, 48.0, 48.0),
+        );
+        let fluids: Vec<_> = crate::dispatcher::descendant_instances(game, "oWater")
+            .into_iter()
+            .filter(|i| crate::dispatcher::is_active(game, *i))
+            .map(|i| {
+                let id = match i {
+                    crate::dispatcher::Instance::Entity(id) => Some(id),
+                    _ => None,
+                };
+                (id, i.position(game), i.object(game).to_owned())
+            })
+            .collect();
         let above = Vec2::new(origin.x, origin.y - 16.0);
         let exposed = !point_family(game, above, "oSolid") && !point_family(game, above, "oWater");
-        let neighbor_top =
-            [-16.0, 16.0].into_iter().any(|dx| {
+        if exposed {
+            surface_fluid(game, id, origin, &object);
+        }
+        for dx in [-16.0, 16.0] {
+            let mask = id
+                .and_then(|id| game.world.entity(id).map(Entity::sprite_bounds))
+                .unwrap_or_else(|| {
+                    game.world
+                        .tile_bounds((origin.x / 16.0) as i32, (origin.y / 16.0) as i32)
+                });
+            let top = {
                 let probe = Rect::new(mask.x + dx, mask.y, mask.w, mask.h);
                 // instance_place returns one instance, rather than accepting a
                 // later surface behind an earlier overlapping non-surface cell.
@@ -118,40 +126,9 @@ pub(crate) fn fluid_tick(game: &mut Game) {
                         }))
                     })
                     .unwrap_or(false)
-            });
-        if exposed || neighbor_top {
-            let sprite = if object == "oLava" {
-                "sLavaTop"
-            } else {
-                "sWaterTop"
             };
-            if let Some(id) = id {
-                game.world.entity_mut(id).unwrap().sprite = sprite.into();
-            } else {
-                let metadata = game
-                    .world
-                    .entities
-                    .iter()
-                    .find(|e| {
-                        e.alive
-                            && e.object == "oTerrainMetadata"
-                            && (e.pos.x / 16.0).floor() == origin.x / 16.0
-                            && (e.pos.y / 16.0).floor() == origin.y / 16.0
-                    })
-                    .map(|e| e.id)
-                    .unwrap_or_else(|| {
-                        let id = game.world.spawn(
-                            "oTerrainMetadata",
-                            Vec2::new(origin.x + 8.0, origin.y + 8.0),
-                        );
-                        game.world.entity_mut(id).unwrap().sprite.clear();
-                        id
-                    });
-                game.world
-                    .entity_mut(metadata)
-                    .unwrap()
-                    .text
-                    .insert("terrain_sprite".into(), sprite.into());
+            if top {
+                surface_fluid(game, id, origin, &object);
             }
         }
         if [
@@ -209,10 +186,50 @@ pub(crate) fn fluid_tick(game: &mut Game) {
     }
 }
 
-pub fn tick(game: &mut Game, _input: &InputFrame) {
+fn surface_fluid(game: &mut Game, id: Option<u64>, origin: Vec2, object: &str) {
+    let sprite = if object == "oLava" {
+        "sLavaTop"
+    } else {
+        "sWaterTop"
+    };
+    if let Some(id) = id {
+        game.world.entity_mut(id).unwrap().sprite = sprite.into();
+    } else {
+        let metadata = game
+            .world
+            .entities
+            .iter()
+            .find(|e| {
+                e.alive
+                    && e.object == "oTerrainMetadata"
+                    && (e.pos.x / 16.0).floor() == origin.x / 16.0
+                    && (e.pos.y / 16.0).floor() == origin.y / 16.0
+            })
+            .map(|e| e.id)
+            .unwrap_or_else(|| {
+                let id = game.world.spawn(
+                    "oTerrainMetadata",
+                    Vec2::new(origin.x + 8.0, origin.y + 8.0),
+                );
+                game.world.entity_mut(id).unwrap().sprite.clear();
+                id
+            });
+        game.world
+            .entity_mut(metadata)
+            .unwrap()
+            .text
+            .insert("terrain_sprite".into(), sprite.into());
+    }
+}
+
+/// oScreen Begin Step runs before normal collision refreshes a message.
+pub(crate) fn begin_step(game: &mut Game) {
     if let Some(timer) = game.data.get_mut("message_timer") {
         *timer = (*timer - 1.0).max(0.0);
     }
+}
+
+pub(crate) fn prepare_tick(game: &mut Game) {
     // Generated/imported producers register these at Create time. A stable
     // grid-order fallback also supports raw World::set_tile fixtures/authors.
     let mut registered_trees = vec![false; game.world.tiles.len()];
@@ -242,84 +259,377 @@ pub fn tick(game: &mut Game, _input: &InputFrame) {
     for (x, y) in raw_trees {
         initialize_tree(&mut game.world, x, y);
     }
-    parachute(game);
-    let count = game.world.entities.len();
-    canopy_tick(game, count);
-    for index in 0..count {
-        let mut e = game.world.entities[index].clone();
-        if !e.alive {
-            continue;
+    for e in &mut game.world.entities {
+        if e.object == "oIceBottom" && e.value("drip_alarm_adapted") == 0.0 {
+            if let Some(value) = e.data.get("drip_alarm") {
+                e.alarms[0] = *value as i32;
+                e.data.insert("drip_alarm_adapted".into(), 1.0);
+            }
         }
-        match e.object.as_str() {
-            "oMsgSign" => sign(game, &mut e),
-            "oLamp" | "oLampRed" | "oTikiTorch" => light(&mut e),
-            "oHintHand" => e.animation = (e.animation + 0.5) % 5.0,
-            "oYellHelp" => {
-                if e.age >= 40 {
-                    e.alive = false;
-                } else {
-                    e.pos.y -= 0.1;
-                }
-            }
-            "oLeaves" | "oTreeBranch" | "oTree" => {}
-            "oTerrainMetadata" if e.value("tree_initialized") != 0.0 => {}
-            "oPsychicCreateP" | "oPsychicCreate2" => psychic_create(game, &mut e),
-            "oIceBottom" => ice_bottom(game, &mut e),
-            "oFrozenCaveman" => frozen_caveman(game, &mut e),
-            "oBlood" | "oBone" => detritus(game, &mut e),
-            "oFlame" => flame(game, &mut e),
-            "oLava" => lava(game, &mut e, false),
-            "oTerrainMetadata"
-                if game
-                    .world
-                    .tile(
-                        (e.pos.x / 16.0).floor() as i32,
-                        (e.pos.y / 16.0).floor() as i32,
-                    )
-                    .is_some_and(|tile| tile.object == "oLava") =>
-            {
-                lava(game, &mut e, true)
-            }
-            "oPoof" | "oSmokePuff" | "oBloodSpark" | "oBloodTrail" | "oBubble" | "oSplash"
-            | "oBurn" | "oLaserExplode" | "oFlameTrail" | "oYellowTrail" | "oLaserTrail" => {
-                effect(game, &mut e)
-            }
-            "oBones" | "oFakeBones" | "oParaUsed" => fallen_decoration(game, &mut e),
-            "oParachute" => {
-                e.pos = Vec2::new(game.player.pos.x - 8.0, game.player.pos.y - 16.0);
-                if game.world.entities.iter().any(|item| {
-                    item.alive
-                        && catalog::is_a(&item.object, "oItem")
-                        && (item.vel.x > 0.0 || item.vel.y > 0.0)
-                        && e.sprite_bounds().intersects(item.sprite_bounds())
-                }) {
-                    e.alive = false;
-                    game.player.data.insert("parachute_open".into(), 0.0);
-                    game.world.spawn("oParaUsed", e.pos);
-                }
-                if e.sprite == "sParaOpen" {
-                    e.animation += 1.0;
-                    if e.animation >= 5.0 {
-                        e.sprite = "sParachute".into();
-                        e.animation = 0.0;
+        if e.object == "oTerrainMetadata" {
+            let x = (e.pos.x / 16.0).floor() as i32;
+            let y = (e.pos.y / 16.0).floor() as i32;
+            let index = (x >= 0
+                && y >= 0
+                && (x as usize) < game.world.width
+                && (y as usize) < game.world.height)
+                .then_some(y.max(0) as usize * game.world.width + x.max(0) as usize);
+            if let Some(tile) = index.and_then(|index| game.world.tiles.get(index)) {
+                if tile.object == "oLava" {
+                    e.data.entry("animation_speed".into()).or_insert(0.4);
+                    if let Some(object) = catalog::object(&tile.object) {
+                        e.text
+                            .entry("terrain_sprite".into())
+                            .or_insert_with(|| object.sprite.clone());
                     }
                 }
             }
-            "oSmallCollect" | "oBigCollect" | "oHeart" | "oItemsGet" => collect_effect(&mut e),
-            "oRubbleDark" => {
-                e.pos.y += e.vel.y;
-                e.vel.y += 0.6;
-                if point_family(game, e.pos, "oBrick")
-                    || point_family(game, e.pos, "oBlock")
-                    || outside_room(game, &e)
+        }
+    }
+}
+
+pub(crate) fn source_object(game: &Game, id: u64) -> Option<String> {
+    let e = game.world.entity(id)?;
+    if e.object != "oTerrainMetadata" {
+        return Some(e.object.clone());
+    }
+    let x = (e.pos.x / 16.0).floor() as i32;
+    let y = (e.pos.y / 16.0).floor() as i32;
+    let object = &game.world.tile(x, y)?.object;
+    matches!(object.as_str(), "oTree" | "oLava").then(|| object.clone())
+}
+
+pub(crate) fn handles(object: &str) -> bool {
+    matches!(
+        object,
+        "oMsgSign"
+            | "oLamp"
+            | "oLampRed"
+            | "oTikiTorch"
+            | "oHintHand"
+            | "oYellHelp"
+            | "oLeaves"
+            | "oTreeBranch"
+            | "oTree"
+            | "oPsychicCreateP"
+            | "oPsychicCreate2"
+            | "oIceBottom"
+            | "oFrozenCaveman"
+            | "oBlood"
+            | "oBone"
+            | "oFlame"
+            | "oLava"
+            | "oPoof"
+            | "oSmokePuff"
+            | "oBloodSpark"
+            | "oBloodTrail"
+            | "oBubble"
+            | "oSplash"
+            | "oBurn"
+            | "oFlareSpark"
+            | "oLaserExplode"
+            | "oFlameTrail"
+            | "oYellowTrail"
+            | "oLaserTrail"
+            | "oBones"
+            | "oFakeBones"
+            | "oParaUsed"
+            | "oParachute"
+            | "oSmallCollect"
+            | "oBigCollect"
+            | "oHeart"
+            | "oItemsGet"
+            | "oRubbleDark"
+    ) || catalog::is_a(object, "oRubblePiece")
+}
+
+/// Fixed Create defaults run synchronously before producer overrides.
+pub(crate) fn init_entity(e: &mut Entity) {
+    if e.value("world_create_initialized") != 0.0 {
+        return;
+    }
+    e.data.insert("world_create_initialized".into(), 1.0);
+    let speed = match e.object.as_str() {
+        "oPoof" | "oSmokePuff" | "oBurn" | "oFlareSpark" | "oFlameTrail" | "oSmallCollect"
+        | "oLavaDrip" => Some(0.4),
+        "oBloodSpark" | "oLamp" | "oLampRed" | "oTikiTorch" | "oHintHand" => Some(0.5),
+        "oBloodTrail" | "oLaserExplode" | "oLaserTrail" | "oItemsGet" => Some(0.8),
+        "oBubble" | "oLeaf" | "oPsychicCreateP" => Some(0.2),
+        "oSplash" => Some(0.6),
+        "oBlood" | "oBone" | "oFlame" => Some(0.3),
+        "oLava" | "oPsychicCreate2" => Some(0.4),
+        _ => None,
+    };
+    if let Some(speed) = speed {
+        e.set_image_speed(speed);
+    }
+    if catalog::is_a(&e.object, "oDetritus") {
+        e.data.insert("bounce".into(), 1.0);
+    }
+    match e.object.as_str() {
+        "oSmallCollect" | "oBigCollect" | "oHeart" => e.alarms[0] = 30,
+        "oItemsGet" => {
+            e.alarms[0] = 40;
+            e.vel.y = 0.1;
+        }
+        "oYellHelp" => e.alarms[0] = 40,
+        "oBlood" => {
+            e.alarms[0] = 1;
+            e.alarms[1] = 1;
+            e.alarms[2] = 5;
+            e.data.insert("bounce".into(), 0.0);
+            e.data.insert("invincible".into(), 1.0);
+            e.data.insert("collectible".into(), 0.0);
+        }
+        "oFlame" => {
+            e.alarms[0] = 2;
+            e.alarms[1] = 50;
+        }
+        "oSmokePuff" => e.vel.y = 0.1,
+        "oBurn" | "oFlareSpark" => e.vel.y = -0.1,
+        "oLeaf" => {
+            e.vel.y = 0.4;
+            e.data.insert("gravity".into(), 0.01);
+        }
+        _ => {}
+    }
+    if catalog::is_a(&e.object, "oRubblePiece") {
+        e.data.entry("gravity".into()).or_insert(0.6);
+        e.data.insert("world_effect_initialized".into(), 1.0);
+    }
+    if matches!(e.object.as_str(), "oLamp" | "oLampRed" | "oTikiTorch") {
+        light(e);
+    }
+}
+
+/// Source Create for callers with the game RNG available.
+pub(crate) fn create_instance(game: &mut Game, id: u64) {
+    let Some(index) = game.world.entities.iter().position(|e| e.id == id) else {
+        return;
+    };
+    let mut e = game.world.entities[index].clone();
+    if e.object == "oLeaves" {
+        let cemetery = game.flags.contains("cemetery") || game.flags.contains("cemetary");
+        initialize_leaves(&mut game.world, id, cemetery);
+        return;
+    }
+    if matches!(e.object.as_str(), "oPsychicCreateP" | "oPsychicCreate2") {
+        initialize_psychic_create(game, &mut e);
+    } else if catalog::is_a(&e.object, "oDetritus") {
+        initialize_detritus(game, &mut e);
+    } else if e.object == "oLava" {
+        initialize_lava(game, &mut e);
+    } else if handles(&e.object) {
+        initialize_effect(game, &mut e);
+    }
+    game.world.entities[index] = e;
+}
+
+/// Create callbacks requiring the game's RNG or event queue.
+pub(crate) fn spawn_effect(game: &mut Game, object: &str, pos: Vec2) -> u64 {
+    let id = game.world.spawn(object, pos);
+    let mut e = game.world.entity(id).unwrap().clone();
+    initialize_effect(game, &mut e);
+    let index = game.world.entities.iter().position(|e| e.id == id).unwrap();
+    game.world.entities[index] = e;
+    id
+}
+
+fn initialize_effect(game: &mut Game, e: &mut Entity) {
+    if e.value("world_effect_initialized") != 0.0 {
+        return;
+    }
+    match e.object.as_str() {
+        "oBloodSpark" => e.vel.y = -f64::from(1 + game.rng.range(3)) * 0.2,
+        "oBubble" => e.vel.y = -f64::from(1 + game.rng.range(3)) * 0.1,
+        "oLaserExplode" => game.sound("sndSmallExplode", e.pos),
+        "oIceBottom" => {
+            e.alarms[0] = (20 + game.rng.range(381)) as i32;
+        }
+        _ => {}
+    }
+    e.data.insert("world_effect_initialized".into(), 1.0);
+}
+
+pub(crate) fn step_instance(game: &mut Game, id: u64) {
+    let Some(index) = game
+        .world
+        .entities
+        .iter()
+        .position(|e| e.id == id && e.alive)
+    else {
+        return;
+    };
+    let mut e = game.world.entities[index].clone();
+    let Some(object) = source_object(game, id) else {
+        return;
+    };
+    match object.as_str() {
+        "oTree" => {
+            let terrain = e.object == "oTerrainMetadata";
+            tree(game, &mut e, terrain);
+        }
+        "oLeaves" | "oTreeBranch" => {
+            if object == "oLeaves" && e.value("leaves_initialized") == 0.0 {
+                let cemetery = game.flags.contains("cemetery") || game.flags.contains("cemetary");
+                initialize_leaves(&mut game.world, id, cemetery);
+                e = game.world.entities[index].clone();
+            }
+            canopy(game, &mut e);
+        }
+        "oPsychicCreateP" | "oPsychicCreate2" => psychic_create(game, &mut e),
+        "oIceBottom" => ice_bottom(game, &mut e),
+        "oFrozenCaveman" => frozen_caveman(game, &mut e),
+        "oBlood" | "oBone" => detritus(game, &mut e),
+        "oFlame" => flame(game, &mut e),
+        "oLava" => {
+            let terrain = e.object == "oTerrainMetadata";
+            lava(game, &mut e, terrain);
+        }
+        "oPoof" | "oSmokePuff" | "oBloodSpark" | "oBloodTrail" | "oBubble" | "oSplash"
+        | "oBurn" | "oFlareSpark" | "oLaserExplode" | "oFlameTrail" | "oYellowTrail"
+        | "oLaserTrail" => effect(game, &mut e),
+        "oBones" | "oFakeBones" | "oParaUsed" => fallen_decoration(game, &mut e),
+        "oParachute" => e.pos = Vec2::new(game.player.pos.x - 8.0, game.player.pos.y - 16.0),
+        "oYellHelp" => e.pos.y -= 0.1,
+        "oSmallCollect" | "oBigCollect" | "oHeart" | "oItemsGet" => collect_effect(&mut e),
+        "oRubbleDark" => {
+            e.pos.y += e.vel.y;
+            e.vel.y += 0.6;
+            if point_family(game, e.pos, "oBrick")
+                || point_family(game, e.pos, "oBlock")
+                || outside_room(game, &e)
+            {
+                e.alive = false;
+            }
+        }
+        _ if catalog::is_a(&object, "oRubblePiece") => rubble(game, &mut e),
+        _ => {}
+    }
+    game.world.entities[index] = e;
+}
+
+pub(crate) fn builtin_motion(_game: &mut Game, _id: u64) {}
+
+pub(crate) fn alarm(game: &mut Game, id: u64, index: u8) {
+    let Some(mut e) = game.world.entity(id).cloned() else {
+        return;
+    };
+    match (e.object.as_str(), index) {
+        ("oSmallCollect" | "oBigCollect" | "oHeart" | "oItemsGet" | "oYellHelp", 0) => {
+            e.alive = false
+        }
+        ("oBlood", 1) => {
+            e.data.insert("invincible".into(), 0.0);
+            e.data.insert("bounce".into(), 1.0);
+        }
+        ("oBlood", 2) => {
+            e.data.insert("collectible".into(), 1.0);
+        }
+        ("oBlood" | "oFlame", 0) => {
+            let blood = e.object == "oBlood";
+            if !blood || !game.flags.contains("low_graphics") {
+                let trail = if blood { "oBloodTrail" } else { "oFlameTrail" };
+                if game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.alive && e.object == trail)
+                    .count()
+                    < 12
                 {
+                    spawn_effect(game, trail, e.pos);
+                }
+                e.alarms[0] = if blood { 4 } else { 2 };
+            }
+        }
+        ("oIceBottom", 0) => {
+            game.world
+                .spawn("oDrip", Vec2::new(e.pos.x + 8.0, e.pos.y + 4.0));
+            e.alarms[0] = (20 + game.rng.range(381)) as i32;
+        }
+        _ => {}
+    }
+    if let Some(index) = game.world.entities.iter().position(|other| other.id == id) {
+        game.world.entities[index] = e;
+    }
+}
+
+pub(crate) fn animation_end(game: &mut Game, id: u64) {
+    let Some(mut e) = game.world.entity(id).cloned() else {
+        return;
+    };
+    match e.object.as_str() {
+        "oPoof" | "oSmokePuff" | "oBloodSpark" | "oBloodTrail" | "oBubble" | "oSplash"
+        | "oBurn" | "oFlareSpark" | "oLaserExplode" | "oFlameTrail" | "oYellowTrail"
+        | "oLaserTrail" | "oLavaDrip" | "oPsychicCreateP" | "oPsychicCreate2" => e.alive = false,
+        "oBone" if e.value("dying") != 0.0 => e.alive = false,
+        "oParachute" if e.sprite == "sParaOpen" => e.set_sprite("sParachute"),
+        "oFakeBones" if e.sprite == "sSkeletonCreateL" => {
+            game.world.spawn("oSkeleton", e.pos);
+            e.alive = false;
+        }
+        _ => {}
+    }
+    if let Some(index) = game.world.entities.iter().position(|other| other.id == id) {
+        game.world.entities[index] = e;
+    }
+}
+
+pub(crate) fn collision(game: &mut Game, id: u64, other: crate::dispatcher::Instance) {
+    let Some(mut e) = game.world.entity(id).cloned() else {
+        return;
+    };
+    let object = other.object(game).to_owned();
+    match e.object.as_str() {
+        "oPsychicCreateP" if catalog::is_a(&object, "oSolid") => e.alive = false,
+        "oFlame" if catalog::is_a(&object, "oWater") => {
+            spawn_effect(game, "oSmokePuff", e.pos);
+            spawn_effect(game, "oSmokePuff", e.pos);
+            e.alive = false;
+        }
+        "oMsgSign" if catalog::is_a(&object, "oCharacter") => sign(game, &mut e),
+        "oParachute" if catalog::is_a(&object, "oItem") => {
+            if let crate::dispatcher::Instance::Entity(other_id) = other {
+                if game
+                    .world
+                    .entity(other_id)
+                    .is_some_and(|other| other.vel.x > 0.0 || other.vel.y > 0.0)
+                {
+                    game.world.spawn("oParaUsed", e.pos);
                     e.alive = false;
+                    game.player.data.insert("parachute_open".into(), 0.0);
                 }
             }
-            _ if catalog::is_a(&e.object, "oRubblePiece") => rubble(game, &mut e),
-            _ => {}
         }
+        _ => {}
+    }
+    if let Some(index) = game.world.entities.iter().position(|other| other.id == id) {
         game.world.entities[index] = e;
+    }
+}
+
+/// Legacy focused harness; production uses the source phase dispatcher.
+pub fn tick(game: &mut Game, _input: &InputFrame) {
+    prepare_tick(game);
+    sync_parachute(game);
+    let count = game.world.entities.len();
+    canopy_tick(game, count);
+    let ids: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .take(count)
+        .filter(|e| {
+            !matches!(
+                source_object(game, e.id).as_deref(),
+                Some("oTree" | "oLeaves" | "oTreeBranch")
+            )
+        })
+        .map(|e| e.id)
+        .collect();
+    for id in ids {
+        step_instance(game, id);
     }
 }
 
@@ -443,7 +753,7 @@ fn canopy(game: &mut Game, e: &mut Entity) {
     let right = support(e.pos.x + 16.0);
     // The source never changes spriteSet after Create.
     if !branch && e.value("sprite_set") == 0.0 && left && right {
-        e.sprite = "sLeavesTop".into();
+        e.set_sprite("sLeavesTop");
     }
     let inside_view = e.pos.x > game.camera.x - 16.0
         && e.pos.x < game.camera.x + VIEW_WIDTH + 16.0
@@ -525,39 +835,10 @@ fn psychic_create(game: &Game, e: &mut Entity) {
     if player_effect && e.vel.y < 6.0 {
         e.vel.y += 0.6;
     }
-    if player_effect {
-        // These source sprites have unit scale and no rotation. Collision with
-        // oSolid is an event mask overlap, rather than a point query.
-        let mask = catalog::instance_mask(
-            &e.object,
-            &e.sprite,
-            e.pos,
-            e.animation,
-            Vec2::new(1.0, 1.0),
-            0.0,
-        );
-        let solid = game.world.tiles.iter().enumerate().any(|(i, tile)| {
-            catalog::is_a(&tile.object, "oSolid")
-                && mask.intersects_mask(&game.world.tile_collision_mask(
-                    (i % game.world.width) as i32,
-                    (i / game.world.width) as i32,
-                ))
-        }) || game.world.entities.iter().any(|other| {
-            other.alive && catalog::is_a(&other.object, "oSolid") && e.event_intersects(other)
-        });
-        if solid {
-            e.alive = false;
-        }
-    }
-    e.animation += if player_effect { 0.2 } else { 0.4 };
-    if e.animation + 1e-9 >= 6.0 {
-        e.alive = false;
-    }
 }
 
 fn sign(game: &mut Game, e: &mut Entity) {
-    let remaining = (e.value("message_cooldown") - 1.0).max(0.0);
-    e.data.insert("message_cooldown".into(), remaining);
+    let remaining = (e.value("message_cooldown_until") - game.tick as f64).max(0.0);
     let mask = e.sprite_bounds();
     if !mask.intersects(game.player.sprite_bounds())
         && !game.world.entities.iter().any(|character| {
@@ -586,13 +867,13 @@ fn sign(game: &mut Game, e: &mut Entity) {
         game.events.push(GameEvent::Message(message));
         // Events notify the presentation once, rather than duplicating the same
         // notification on every overlapping tick. Display lifetime still refreshes.
-        e.data.insert("message_cooldown".into(), 200.0);
+        e.data
+            .insert("message_cooldown_until".into(), game.tick as f64 + 200.0);
     }
 }
 
 fn light(e: &mut Entity) {
     let torch = e.object == "oTikiTorch";
-    e.animation = (e.animation + 0.5) % if torch { 5.0 } else { 3.0 };
     e.data
         .insert("light_radius".into(), if torch { 32.0 } else { 96.0 });
     e.data.insert("light_offset_x".into(), 8.0);
@@ -602,7 +883,7 @@ fn light(e: &mut Entity) {
     }
 }
 
-fn lava(game: &mut Game, e: &mut Entity, terrain: bool) {
+fn initialize_lava(game: &mut Game, e: &mut Entity) {
     if e.value("lava_initialized") == 0.0 {
         let time = e
             .data
@@ -614,7 +895,10 @@ fn lava(game: &mut Game, e: &mut Entity, terrain: bool) {
         e.data.entry("spurt".into()).or_insert(0.0);
         e.data.insert("lava_initialized".into(), 1.0);
     }
-    e.animation += 0.4;
+}
+
+fn lava(game: &mut Game, e: &mut Entity, terrain: bool) {
+    initialize_lava(game, e);
     let origin = if terrain {
         Vec2::new(e.pos.x - 8.0, e.pos.y - 8.0)
     } else {
@@ -687,19 +971,6 @@ fn ice_bottom(game: &mut Game, e: &mut Entity) {
         e.alive = false;
         return;
     }
-    if !e.data.contains_key("drip_alarm") {
-        e.data
-            .insert("drip_alarm".into(), f64::from(20 + game.rng.range(381)));
-    }
-    let alarm = e.value("drip_alarm") - 1.0;
-    if alarm <= 0.0 {
-        game.world
-            .spawn("oDrip", Vec2::new(e.pos.x + 8.0, e.pos.y + 4.0));
-        e.data
-            .insert("drip_alarm".into(), f64::from(20 + game.rng.range(381)));
-    } else {
-        e.data.insert("drip_alarm".into(), alarm);
-    }
 }
 
 fn frozen_caveman(game: &mut Game, e: &mut Entity) {
@@ -729,44 +1000,19 @@ fn frozen_caveman(game: &mut Game, e: &mut Entity) {
 }
 
 fn effect(game: &mut Game, e: &mut Entity) {
-    if e.value("world_effect_initialized") == 0.0 {
-        match e.object.as_str() {
-            "oSmokePuff" => e.vel.y = 0.1,
-            "oBloodSpark" => e.vel.y = -f64::from(1 + game.rng.range(3)) * 0.2,
-            "oBubble" => e.vel.y = -f64::from(1 + game.rng.range(3)) * 0.1,
-            "oBurn" => e.vel.y = -0.1,
-            "oLaserExplode" => game.sound("sndSmallExplode", e.pos),
-            _ => {}
-        }
-        e.data.insert("world_effect_initialized".into(), 1.0);
-    }
-    let (speed, frames) = match e.object.as_str() {
-        "oBloodSpark" => (0.5, 9.0),
-        "oBloodTrail" => (0.8, 7.0),
-        "oBubble" => (0.2, 9.0),
-        "oPoof" => (0.4, 6.0),
-        "oLavaDrip" => (0.4, 5.0),
-        "oSplash" => (0.6, 6.0),
-        "oBurn" => (0.4, 9.0),
-        "oLaserExplode" => (0.8, 8.0),
-        "oFlameTrail" => (0.4, 5.0),
-        "oYellowTrail" => (1.0, 12.0),
-        "oLaserTrail" => (0.8, 5.0),
-        _ => (0.4, 8.0),
-    };
+    initialize_effect(game, e);
     match e.object.as_str() {
         "oPoof" => {
             e.pos.x += e.vel.x;
             e.pos.y += e.vel.y;
         }
         "oSmokePuff" => e.pos.y -= e.vel.y,
-        "oBloodSpark" | "oBubble" | "oBurn" => e.pos.y += e.vel.y,
+        "oBloodSpark" | "oBubble" | "oBurn" | "oFlareSpark" => e.pos.y += e.vel.y,
         _ => {}
     }
-    e.animation += speed;
-    if e.animation + 1e-9 >= frames
-        || (e.object == "oBubble" && !point_family(game, e.pos, "oWater"))
-        || (e.object == "oBurn" && point_family(game, e.pos, "oSolid"))
+    if (e.object == "oBubble" && !point_family(game, e.pos, "oWater"))
+        || (matches!(e.object.as_str(), "oBurn" | "oFlareSpark")
+            && point_family(game, e.pos, "oSolid"))
     {
         e.alive = false;
     }
@@ -777,39 +1023,18 @@ fn collect_effect(e: &mut Entity) {
     if items {
         e.pos.y = (e.pos.y - 0.1).ceil();
         e.pos.x = e.pos.x.ceil();
-        e.animation += 0.8;
     } else {
         e.pos.y -= 1.0;
         if e.object == "oSmallCollect" {
             e.pos.x = e.pos.x.ceil();
             e.pos.y = e.pos.y.ceil();
-            e.animation += 0.4;
         }
-    }
-    if e.age >= if items { 40 } else { 30 } {
-        e.alive = false;
     }
 }
 
 fn flame(game: &mut Game, e: &mut Entity) {
-    let alarm_pos = e.pos;
-    // Flame inherits all oDetritus movement, bounce, life and instance-cap
-    // behavior, but not oBone's switch to a dying smoke sprite.
     detritus(game, e);
     if e.alive {
-        if e.age > 0
-            && e.age.is_multiple_of(2)
-            && game
-                .world
-                .entities
-                .iter()
-                .filter(|other| other.alive && other.object == "oFlameTrail")
-                .count()
-                < 12
-        {
-            game.world.spawn("oFlameTrail", alarm_pos);
-        }
-        e.animation += 0.3;
         if e.vel.y > 6.0 {
             e.alive = false;
         }
@@ -820,22 +1045,9 @@ fn flame(game: &mut Game, e: &mut Entity) {
         {
             e.data.insert("life".into(), 20.0);
         }
-        let mask = e.sprite_bounds();
-        if game.world.tiles_collide(mask, "oWater")
-            || game.world.entities.iter().any(|water| {
-                water.alive
-                    && catalog::is_a(&water.object, "oWater")
-                    && water.sprite_bounds().intersects(mask)
-            })
-        {
-            // The source Collision event creates one puff, then its Destroy
-            // event creates another. Both are intentional.
-            game.world.spawn("oSmokePuff", e.pos);
-            e.alive = false;
-        }
     }
     if !e.alive {
-        game.world.spawn("oSmokePuff", e.pos);
+        spawn_effect(game, "oSmokePuff", e.pos);
     }
 }
 
@@ -864,21 +1076,13 @@ fn rubble(game: &Game, e: &mut Entity) {
     }
     e.pos.x += e.vel.x;
     e.pos.y += e.vel.y;
-    e.vel.y += if e.object == "oLeaf" { 0.01 } else { 0.6 };
-    if e.object == "oLeaf" {
-        e.animation = (e.animation + e.data.get("animation_speed").copied().unwrap_or(0.2)) % 10.0;
-    } else if e.object == "oLavaDrip" {
-        e.animation += e.data.get("animation_speed").copied().unwrap_or(0.4);
-        if e.animation + 1e-9 >= 5.0 {
-            e.alive = false;
-        }
-    }
+    e.vel.y += e.data.get("gravity").copied().unwrap_or(0.6);
     if point_family(game, e.pos, "oWaterSwim") {
         if e.object == "oDrip" {
             e.alive = false;
         } else if e.object == "oLeaf" {
             e.vel.y = 0.0;
-            e.sprite = "sLeafStill".into();
+            e.set_sprite("sLeafStill");
         } else {
             e.vel.y = 0.2;
         }
@@ -947,7 +1151,6 @@ pub(crate) fn initialize_detritus(game: &mut Game, e: &mut Entity) {
 }
 
 pub(crate) fn detritus(game: &mut Game, e: &mut Entity) {
-    let alarm_pos = e.pos;
     initialize_detritus(game, e);
     if !e.alive {
         return;
@@ -999,79 +1202,41 @@ pub(crate) fn detritus(game: &mut Game, e: &mut Entity) {
         Rect::new(e.pos.x - extent, e.pos.y + extent, extent * 2.0, 1.0),
         e.id,
     );
-    if e.vel.y < 6.0 {
-        e.vel.y += e.value("gravity");
-    }
-    if e.vel.y < 0.0
-        && game.world.collides_except(
-            Rect::new(e.pos.x - extent, e.pos.y - extent - 1.0, extent * 2.0, 1.0),
+    if e.value("bounce") != 0.0 {
+        if e.vel.y < 6.0 {
+            e.vel.y += e.value("gravity");
+        }
+        if e.vel.y < 0.0
+            && game.world.collides_except(
+                Rect::new(e.pos.x - extent, e.pos.y - extent - 1.0, extent * 2.0, 1.0),
+                e.id,
+            )
+        {
+            e.vel.y *= -0.8;
+        }
+        if game.world.collides_except(
+            Rect::new(e.pos.x - extent - 1.0, e.pos.y - extent, 1.0, extent * 2.0),
             e.id,
-        )
-    {
-        e.vel.y *= -0.8;
-    }
-    if game.world.collides_except(
-        Rect::new(e.pos.x - extent - 1.0, e.pos.y - extent, 1.0, extent * 2.0),
-        e.id,
-    ) || game.world.collides_except(
-        Rect::new(e.pos.x + extent, e.pos.y - extent, 1.0, extent * 2.0),
-        e.id,
-    ) {
-        e.vel.x *= -0.5;
-    }
-    if bottom {
-        e.vel.y = if e.vel.y > 1.0 { e.vel.y * -0.5 } else { 0.0 };
+        ) || game.world.collides_except(
+            Rect::new(e.pos.x + extent, e.pos.y - extent, 1.0, extent * 2.0),
+            e.id,
+        ) {
+            e.vel.x *= -0.5;
+        }
+        if bottom {
+            e.vel.y = if e.vel.y > 1.0 { e.vel.y * -0.5 } else { 0.0 };
+        }
     }
     if e.object == "oBlood" {
-        e.data.insert("collectible".into(), f64::from(e.age >= 5));
         if e.vel.y > 6.0 {
             e.alive = false;
         }
         if bottom && life > 20.0 {
             e.data.insert("life".into(), 20.0);
         }
-        if e.age % 4 == 1
-            && game
-                .world
-                .entities
-                .iter()
-                .filter(|other| other.alive && other.object == "oBloodTrail")
-                .count()
-                < 12
-        {
-            game.world.spawn("oBloodTrail", alarm_pos);
-        }
-        if e.age >= 5
-            && game.player.has("Kapala")
-            && e.sprite_bounds().intersects(game.player.sprite_bounds())
-        {
-            let blood = game.data.get("bloodLevel").copied().unwrap_or(0.0) + 1.0;
-            game.data
-                .insert("bloodLevel".into(), if blood > 8.0 { 0.0 } else { blood });
-            game.world.spawn("oBloodSpark", e.pos);
-            if blood > 8.0 {
-                game.player.health += 1;
-                game.world.spawn(
-                    "oHeart",
-                    Vec2::new(game.player.pos.x, game.player.pos.y - 8.0),
-                );
-                game.sound("sndKiss", game.player.pos);
-            }
-            e.alive = false;
-        }
-        e.animation = (e.animation + 0.3) % 3.0;
-    } else if e.object == "oBone" {
-        if bottom && e.value("dying") == 0.0 {
-            e.sprite = "sSmokePuff".into();
-            e.animation = 0.0;
-            e.data.insert("dying".into(), 1.0);
-        }
-        e.animation += 0.3;
-        if e.value("dying") != 0.0 && e.animation + 1e-9 >= 8.0 {
-            e.alive = false;
-        } else if e.value("dying") == 0.0 {
-            e.animation %= 8.0;
-        }
+    } else if e.object == "oBone" && bottom {
+        e.set_sprite("sSmokePuff");
+        e.data.insert("dying".into(), 1.0);
     }
 }
 
@@ -1095,19 +1260,12 @@ fn fallen_decoration(game: &mut Game, e: &mut Entity) {
         if (game.player.pos.y - (e.pos.y + 8.0)).abs() < 8.0
             && (game.player.pos.x - (e.pos.x + 8.0)).abs() < 64.0
         {
-            e.sprite = "sSkeletonCreateL".into();
-        }
-        if e.sprite == "sSkeletonCreateL" {
-            e.animation += 1.0;
-            if e.animation >= 6.0 {
-                game.world.spawn("oSkeleton", e.pos);
-                e.alive = false;
-            }
+            e.set_sprite("sSkeletonCreateL");
         }
     }
 }
 
-fn parachute(game: &mut Game) {
+pub(crate) fn sync_parachute(game: &mut Game) {
     let open = game
         .player
         .data
@@ -1162,7 +1320,90 @@ mod tests {
             e.age += 1;
         }
         g.events.clear();
+        begin_step(g);
+        prepare_tick(g);
+        let ids: Vec<_> = g
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.alive)
+            .map(|e| e.id)
+            .collect();
+        for number in 0..12 {
+            for &id in &ids {
+                let fire = if let Some(e) = g.world.entity_mut(id) {
+                    if e.alarms[number] > 0 {
+                        e.alarms[number] -= 1;
+                        e.alarms[number] == 0
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if fire {
+                    alarm(g, id, number as u8);
+                }
+            }
+        }
         tick(g, &InputFrame::default());
+        let ids: Vec<_> = g
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.alive)
+            .map(|e| e.id)
+            .collect();
+        for id in ids {
+            let Some(e) = g.world.entity(id).cloned() else {
+                continue;
+            };
+            if e.sprite_bounds().intersects(g.player.sprite_bounds()) {
+                collision(g, id, crate::dispatcher::Instance::Player);
+            }
+            let others: Vec<_> = g
+                .world
+                .entities
+                .iter()
+                .filter(|o| o.alive && o.id != id && e.event_intersects(o))
+                .map(|o| o.id)
+                .collect();
+            for other in others {
+                collision(g, id, crate::dispatcher::Instance::Entity(other));
+            }
+            let tiles: Vec<_> =
+                g.world
+                    .tiles
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, t)| {
+                        !t.object.is_empty()
+                            && e.sprite_bounds().intersects(g.world.tile_bounds(
+                                (*i % g.world.width) as i32,
+                                (*i / g.world.width) as i32,
+                            ))
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
+            for tile in tiles {
+                collision(g, id, crate::dispatcher::Instance::Terrain(tile));
+            }
+        }
+        let ids: Vec<_> = g
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.alive)
+            .map(|e| e.id)
+            .collect();
+        for id in ids {
+            let e = g.world.entity_mut(id).unwrap();
+            let speed = e.image_speed();
+            let frames = catalog::sprite_frame_count(&e.sprite);
+            if crate::animation::advance(&mut e.animation, speed, frames) {
+                animation_end(g, id);
+            }
+        }
     }
     #[test]
     fn sign_preserves_both_metadata_lines_and_bounds_and_cooldown() {
@@ -1416,7 +1657,7 @@ mod tests {
         assert_eq!(g.world.entity(bones[0]).unwrap().vel.x, 7.0);
     }
     #[test]
-    fn actual_generated_tree_order_collapses_trunk_and_canopy_in_the_blast_step() {
+    fn actual_generated_tree_order_collapses_in_step_after_explosion_collision() {
         let mut g = room();
         g.player.pos = Vec2::new(240.0, 40.0);
         g.world.set_tile(5, 9, "oBlock");
@@ -1439,6 +1680,7 @@ mod tests {
             })
             .collect();
         g.world.spawn("oExplosion", Vec2::new(88.0, 136.0));
+        g.step(&InputFrame::default());
         g.step(&InputFrame::default());
         assert!((4..=8).all(|y| g.world.tile(5, y).unwrap().object.is_empty()));
         assert!(g.world.entity(branch).is_none());
@@ -1508,7 +1750,7 @@ mod tests {
             initialize_tree(&mut g.world, 5, y);
         }
         g.world.spawn("oExplosion", Vec2::new(88.0, 136.0));
-        for remaining in [2, 1, 0] {
+        for remaining in [3, 2, 1, 0] {
             g.step(&InputFrame::default());
             assert_eq!(
                 (4..=8)
@@ -1529,6 +1771,7 @@ mod tests {
             .collect();
         let tile = g.world.spawn("oTreeTile", Vec2::new(160.0, 80.0));
         g.world.spawn("oExplosion", Vec2::new(88.0, 136.0));
+        g.step(&InputFrame::default());
         g.step(&InputFrame::default());
         assert!(trees.iter().all(|&id| g.world.entity(id).is_none()));
         assert!(g.world.entity(tile).is_some());
@@ -1738,7 +1981,11 @@ mod tests {
                 let mut g = contained_pool(object, tiles);
                 g.player.pos = Vec2::new(64.0, 88.0);
                 g.player.facing = 1;
-                g.world.spawn("oMattockHit", Vec2::new(80.0, 96.0));
+                g.player.attack_timer = 3;
+                g.player.set_sprite("sWhipRight");
+                let hit = g.world.spawn("oMattockHit", Vec2::new(80.0, 96.0));
+                let hit = g.world.entity_mut(hit).unwrap();
+                hit.animation = catalog::sprite_frame_count(&hit.sprite) as f64 - 0.5;
                 g.step(&InputFrame::default());
                 assert!(g.world.tile(5, 6).unwrap().object.is_empty());
                 assert!(
@@ -1809,21 +2056,26 @@ mod tests {
         }
     }
     #[test]
-    fn fluid_pass_activates_neighbor_chain_but_preserves_isolated_offscreen_cell() {
+    fn fluid_pass_uses_prior_activation_and_fixed_descendant_count() {
         let mut g = room();
         g.world = World::new(80, 20, Area::Jungle, 5);
         g.flags.insert("custom".into());
         for x in 0..80 {
             g.world.set_tile(x, 3, "oBrick");
         }
-        let chain: Vec<_> = [400.0, 416.0, 432.0, 448.0]
+        let chain: Vec<_> = [392.0, 408.0, 424.0, 440.0]
             .into_iter()
             .map(|x| g.world.spawn("oWaterSwim", Vec2::new(x, 80.0)))
             .collect();
         let isolated = g.world.spawn("oWaterSwim", Vec2::new(600.0, 80.0));
+        // Fresh source instances start active. The first Level553 Step performs
+        // the initial region deactivation before a later Game318 fluid request.
+        g.step(&InputFrame::default());
         g.world.fluid_dirty = true;
         g.step(&InputFrame::default());
-        assert!(chain.iter().all(|id| g.world.entity(*id).is_none()));
+        assert!(chain[..2].iter().all(|id| g.world.entity(*id).is_none()));
+        assert!(chain[2..].iter().all(|id| g.world.entity(*id).is_some()));
+        assert_eq!(g.data["water_counter"], 2.0);
         assert!(g.world.entity(isolated).is_some());
         g.step(&InputFrame::default());
         assert!(g.world.entity(isolated).is_some());
@@ -1867,6 +2119,11 @@ mod tests {
             g.world.spawn("oLava", pos)
         };
         let lava = g.world.entity_mut(id).unwrap();
+        if terrain {
+            lava.text.insert("terrain_sprite".into(), "sLavaTop".into());
+        } else {
+            lava.set_sprite("sLavaTop");
+        }
         lava.data.insert("lava_initialized".into(), 1.0);
         lava.data.insert("spurt".into(), 1.0);
         lava.data.insert("spurt_time".into(), 100.0);
@@ -1940,6 +2197,13 @@ mod tests {
                 .unwrap()
                 .data
                 .insert("spurt_counter".into(), 0.0);
+            let mut source = g.rng.clone();
+            let magma = source.chance(1, 8);
+            source.unit();
+            source.unit();
+            source.unit();
+            let gravity = f64::from(1 + source.range(6)) * 0.1;
+            let launch = -f64::from(1 + source.range(4));
             g.step(&InputFrame::default());
             let particle = g
                 .world
@@ -1948,8 +2212,11 @@ mod tests {
                 .find(|e| matches!(e.object.as_str(), "oFlame" | "oMagma"))
                 .unwrap();
             seen.insert(particle.object.clone());
-            assert!((-4.0..=-1.0).contains(&particle.vel.y));
-            assert_eq!(particle.value("life"), 60.0);
+            assert_eq!(particle.object == "oMagma", magma);
+            // Magma649 receives Step after Lava573 creates it. Flame456's
+            // resource phase has already passed, so its first Step is tomorrow.
+            assert!((particle.vel.y - (launch + if magma { gravity } else { 0.0 })).abs() < 1e-9);
+            assert_eq!(particle.value("life"), if magma { 59.0 } else { 60.0 });
             assert_eq!(particle.value("world_effect_initialized"), 1.0);
             if particle.object == "oMagma" {
                 assert_eq!(particle.health, 200);
@@ -1969,9 +2236,9 @@ mod tests {
         // These are real gameplay-spawned effects, not persistent decorations.
         // Previously each survived indefinitely at frame zero in Game::step.
         for (object, speed, lifetime) in [
-            ("oSplash", 0.6, 10),
+            ("oSplash", 0.6, 11),
             ("oBurn", 0.4, 23),
-            ("oLaserExplode", 0.8, 10),
+            ("oLaserExplode", 0.8, 11),
             ("oFlameTrail", 0.4, 13),
             ("oYellowTrail", 1.0, 12),
             ("oLaserTrail", 0.8, 7),
@@ -1980,7 +2247,16 @@ mod tests {
             for x in 0..20 {
                 g.world.set_tile(x, 3, "oBrick");
             }
-            let id = g.world.spawn(object, Vec2::new(80.0, 80.0));
+            let id = spawn_effect(&mut g, object, Vec2::new(80.0, 80.0));
+            assert_eq!(
+                g.events
+                    .iter()
+                    .filter(
+                        |event| matches!(event,GameEvent::Sound{name,..} if name=="sndSmallExplode")
+                    )
+                    .count(),
+                usize::from(object == "oLaserExplode")
+            );
             for step in 1..lifetime {
                 g.step(&InputFrame::default());
                 let effect = g.world.entity(id).expect(object);
@@ -1991,7 +2267,7 @@ mod tests {
                 let sounds = g.events.iter().filter(|event| {
                     matches!(event, GameEvent::Sound { name, .. } if name == "sndSmallExplode")
                 }).count();
-                assert_eq!(sounds, usize::from(object == "oLaserExplode" && step == 1));
+                assert_eq!(sounds, 0);
             }
             g.step(&InputFrame::default());
             assert!(g.world.entity(id).is_none(), "{object} must finish once");
@@ -2045,7 +2321,7 @@ mod tests {
         assert!(g.events.iter().any(|event| {
             matches!(event, GameEvent::Sound { name, .. } if name == "sndSmallExplode")
         }));
-        for _ in 1..10 {
+        for _ in 1..11 {
             g.step(&InputFrame::default());
         }
         assert!(g.world.entity(id).is_none());
@@ -2291,6 +2567,7 @@ mod tests {
         g.step(&InputFrame::default());
         assert!(g.player.is_stunned());
         assert_eq!(g.player.stun, 0, "source Yeti throw supplies no timer");
+        g.step(&InputFrame::default());
         assert_eq!(g.player.data["parachute_open"], 0.0);
         assert!(
             !g.world
@@ -2463,5 +2740,126 @@ mod tests {
                 .count(),
             1
         );
+    }
+    #[test]
+    fn phase_effect_step_does_not_advance_or_expire_animation() {
+        let mut g = room();
+        let id = spawn_effect(&mut g, "oBurn", Vec2::new(80.0, 80.0));
+        g.world.entity_mut(id).unwrap().animation = 8.8;
+        step_instance(&mut g, id);
+        let e = g.world.entity(id).unwrap();
+        assert_eq!(e.animation, 8.8);
+        assert!((e.pos.y - 79.9).abs() < 1e-9);
+        animation_end(&mut g, id);
+        assert!(g.world.entity(id).is_none());
+    }
+
+    #[test]
+    fn collect_expiry_belongs_to_alarm_not_age_or_animation_end() {
+        let mut g = room();
+        let id = g.world.spawn("oItemsGet", Vec2::new(80.0, 80.0));
+        let e = g.world.entity_mut(id).unwrap();
+        e.age = 500;
+        e.animation = 1.9;
+        step_instance(&mut g, id);
+        animation_end(&mut g, id);
+        assert!(g.world.entity(id).is_some());
+        alarm(&mut g, id, 0);
+        assert!(g.world.entity(id).is_none());
+    }
+
+    #[test]
+    fn random_effect_create_precedes_overrides_and_does_not_repeat_in_step() {
+        let mut g = room();
+        let mut expected = g.rng.clone();
+        expected.range(3);
+        let id = spawn_effect(&mut g, "oBloodSpark", Vec2::new(80.0, 80.0));
+        g.world.entity_mut(id).unwrap().vel.y = 2.0;
+        step_instance(&mut g, id);
+        assert_eq!(g.world.entity(id).unwrap().pos.y, 82.0);
+        assert_eq!(g.rng.next_u64(), expected.next_u64());
+    }
+
+    #[test]
+    fn fixed_create_is_idempotent_after_caller_overrides() {
+        let mut g = room();
+        let id = g.world.spawn("oFlareSpark", Vec2::new(80.0, 80.0));
+        let e = g.world.entity_mut(id).unwrap();
+        e.vel.y = 3.0;
+        e.set_image_speed(0.0);
+        e.alarms[0] = 7;
+        init_entity(e);
+        assert_eq!(e.vel.y, 3.0);
+        assert_eq!(e.image_speed(), 0.0);
+        assert_eq!(e.alarms[0], 7);
+    }
+
+    #[test]
+    fn blood_alarm_flags_replace_age_approximations() {
+        let mut g = room();
+        let id = spawn_detritus(&mut g, "oBlood", Vec2::new(80.0, 80.0));
+        assert_eq!(g.world.entity(id).unwrap().value("bounce"), 0.0);
+        assert_eq!(g.world.entity(id).unwrap().value("collectible"), 0.0);
+        alarm(&mut g, id, 1);
+        assert_eq!(g.world.entity(id).unwrap().value("bounce"), 1.0);
+        assert_eq!(g.world.entity(id).unwrap().value("invincible"), 0.0);
+        alarm(&mut g, id, 2);
+        assert_eq!(g.world.entity(id).unwrap().value("collectible"), 1.0);
+        g.flags.insert("low_graphics".into());
+        g.world.entity_mut(id).unwrap().alarms[0] = 0;
+        alarm(&mut g, id, 0);
+        assert_eq!(g.world.entity(id).unwrap().alarms[0], 0);
+        assert!(!g.world.entities.iter().any(|e| e.object == "oBloodTrail"));
+    }
+    #[test]
+    fn fluid_with_reloads_live_parent_array_after_activation_rebuild() {
+        use crate::dispatcher::Instance;
+        for activate_neighbor in [false, true] {
+            let mut g = room();
+            g.flags.insert("custom".into());
+            for x in [5, 10] {
+                g.world.set_tile(x - 1, 5, "oBrick");
+                g.world.set_tile(x + 1, 5, "oBrick");
+                g.world.set_tile(x, 6, "oBrick");
+            }
+            let lava = g.world.spawn("oLava", Vec2::new(80.0, 80.0));
+            let water = g.world.spawn("oWaterSwim", Vec2::new(160.0, 80.0));
+            let actor = g.world.spawn("oHintHand", Vec2::new(88.0, 88.0));
+            g.world.entity_mut(actor).unwrap().engine_active = !activate_neighbor;
+            // Creation registered Lava then Water. A prior Draw sorted the
+            // global list by depth, leaving the descendant array unchanged.
+            g.dispatcher.active_order = vec![
+                Instance::Entity(water),
+                Instance::Entity(lava),
+                Instance::Player,
+            ];
+            g.dispatcher.active_order.extend(
+                g.world
+                    .tiles
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, tile)| !tile.object.is_empty())
+                    .map(|(i, _)| Instance::Terrain(i)),
+            );
+            g.dispatcher.registration_order = vec![Instance::Entity(lava), Instance::Entity(water)];
+            if activate_neighbor {
+                g.dispatcher.inactive_order.push(Instance::Entity(actor));
+            } else {
+                g.dispatcher.active_order.push(Instance::Entity(actor));
+            }
+            g.world.fluid_dirty = true;
+            fluid_tick(&mut g);
+            assert_eq!(g.world.entity(lava).unwrap().sprite, "sLavaTop");
+            assert_eq!(
+                g.world.entity(water).unwrap().sprite,
+                if activate_neighbor {
+                    "sWater"
+                } else {
+                    "sWaterTop"
+                }
+            );
+            assert_eq!(g.data["water_loop_safety"], 2.0);
+            assert_eq!(g.data["water_counter"], 0.0);
+        }
     }
 }

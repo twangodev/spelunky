@@ -19,6 +19,7 @@ pub fn init_entity(entity: &mut Entity) {
             entity.data.insert("armed".into(), 1.0);
             entity.data.insert("heavy".into(), 1.0);
             entity.timer = BOMB_FUSE;
+            entity.alarms[1] = BOMB_FUSE as i32;
         }
         "oRopeThrow" => {
             entity.sprite = "sRopeEnd".into();
@@ -27,11 +28,13 @@ pub fn init_entity(entity: &mut Entity) {
             entity.sprite = "sExplosion".into();
             entity.timer = EXPLOSION_TICKS;
             entity.animation = 0.0;
+            entity.set_image_speed(0.8);
         }
         "oRope" | "oRopeTop" => {}
         "oRopeBurn" => {
             entity.sprite = "sRopeBurn".into();
             entity.vel.y = -1.0;
+            entity.set_image_speed(0.8);
         }
         _ => return,
     }
@@ -57,6 +60,8 @@ pub fn arm_bomb(bomb: &mut Entity) {
         bomb.sprite = "sBombArmed".into();
         bomb.timer = BOMB_FUSE;
         bomb.animation = 0.0;
+        bomb.alarms[0] = 80;
+        bomb.set_image_speed(0.2);
     }
 }
 
@@ -73,7 +78,7 @@ pub fn restore_stashed_item(game: &mut Game) {
 }
 
 fn equip_inventory_item(game: &mut Game, kind: &str) {
-    let id = game.world.spawn(kind, game.player.pos);
+    let id = game.spawn(kind, game.player.pos);
     let paste = game.player.has("Paste");
     let entity = game.world.entity_mut(id).unwrap();
     init_entity(entity);
@@ -200,7 +205,7 @@ pub fn use_bomb(game: &mut Game, input: &InputFrame) {
         }
     }
     let paste = game.player.has("Paste");
-    let id = game.world.spawn("oBomb", pos);
+    let id = game.spawn("oBomb", pos);
     let bomb = game.world.entity_mut(id).unwrap();
     init_entity(bomb);
     bomb.vel = velocity;
@@ -208,6 +213,7 @@ pub fn use_bomb(game: &mut Game, input: &InputFrame) {
     bomb.data
         .insert("sticky".into(), if paste { 1.0 } else { 0.0 });
     bomb.data.insert("safe_ticks".into(), 10.0);
+    bomb.alarms[2] = 10;
     bomb.data.insert("safe".into(), 1.0);
     game.player.bombs -= 1;
     game.sound("sndThrow", pos);
@@ -252,7 +258,7 @@ pub fn use_rope(game: &mut Game, input: &InputFrame) {
             return;
         };
     }
-    let id = game.world.spawn("oRopeThrow", throw_pos);
+    let id = game.spawn("oRopeThrow", throw_pos);
     let rope = game.world.entity_mut(id).unwrap();
     init_entity(rope);
     rope.data.insert("px".into(), pos.x);
@@ -267,8 +273,285 @@ pub fn use_rope(game: &mut Game, input: &InputFrame) {
     game.sound("sndThrow", pos);
 }
 
+pub(crate) fn handles(object: &str) -> bool {
+    matches!(
+        object,
+        "oBomb"
+            | "oFireFrogBomb"
+            | "oRopeThrow"
+            | "oExplosion"
+            | "oRope"
+            | "oRopeTop"
+            | "oRopeBurn"
+    )
+}
+
+pub(crate) fn create_instance(game: &mut Game, id: u64) {
+    let Some(mut entity) = game.world.entity(id).cloned() else {
+        return;
+    };
+    if !handles(&entity.object) {
+        return;
+    }
+    init_entity(&mut entity);
+    if entity.object == "oExplosion" {
+        announce_explosion(game, &mut entity);
+    }
+    if let Some(stored) = game.world.entity_mut(id) {
+        *stored = entity;
+    }
+}
+
+/// Normal Step only. Alarms, automatic collisions and animation are dispatched separately.
+pub(crate) fn step_instance(game: &mut Game, id: u64) {
+    let Some(mut entity) = game.world.entity(id).cloned() else {
+        return;
+    };
+    init_entity(&mut entity);
+    entity
+        .data
+        .insert("simulation_tick".into(), game.engine_time() as f64);
+    match entity.object.as_str() {
+        "oBomb" | "oFireFrogBomb" => {
+            step_bomb_body(game, &mut entity);
+            warn_shopkeeper(game, &entity);
+        }
+        "oRopeThrow" => tick_rope(game, &mut entity),
+        "oRope" | "oRopeTop" => tick_rope_burn(game, &mut entity),
+        "oRopeBurn" => tick_burning_flame(game, &mut entity),
+        // oExplosion has no Normal Step event.
+        _ => {}
+    }
+    if let Some(stored) = game
+        .world
+        .entities
+        .iter_mut()
+        .find(|stored| stored.id == id)
+    {
+        *stored = entity;
+    }
+}
+
+pub(crate) fn alarm(game: &mut Game, id: u64, alarm: u8) {
+    let Some(entity) = game.world.entity(id) else {
+        return;
+    };
+    let object = entity.object.clone();
+    if !matches!(object.as_str(), "oBomb" | "oFireFrogBomb") {
+        return;
+    }
+    match alarm {
+        0 if object == "oBomb" => {
+            let bomb = game.world.entity_mut(id).unwrap();
+            bomb.set_image_speed(1.0);
+            bomb.alarms[1] = 40;
+        }
+        1 => {
+            let pos = game.world.entity(id).unwrap().pos;
+            // Create executes immediately; contact effects await the collision phase.
+            game.spawn("oExplosion", pos);
+            if game.player.held == Some(id) {
+                game.player.held = None;
+            }
+            game.world.entity_mut(id).unwrap().alive = false;
+        }
+        2 if object == "oBomb" => {
+            game.world
+                .entity_mut(id)
+                .unwrap()
+                .data
+                .insert("safe_ticks".into(), 0.0);
+        }
+        _ => {}
+    }
+}
+
+/// The dispatcher has already tested the pair's automatic collision masks.
+pub(crate) fn collision(game: &mut Game, self_id: u64, other: crate::dispatcher::Instance) {
+    use crate::dispatcher::Instance;
+    let Some(explosion) = game
+        .world
+        .entity(self_id)
+        .filter(|e| e.object == "oExplosion")
+        .cloned()
+    else {
+        return;
+    };
+    let solids_active =
+        game.flags.contains("tutorial") || super::item_body_active(game, &explosion);
+    match other {
+        Instance::Player => {} // Player hurt is a query in Player Step.
+        Instance::Terrain(index) => {
+            if solids_active && game.world.tiles.get(index).is_some_and(Tile::is_solid) {
+                if game.world.tiles[index].is_destructible() {
+                    destroy_terrain(game, index % game.world.width, index / game.world.width);
+                }
+                explosion_solid_cleanup(game);
+            }
+        }
+        Instance::Entity(id) => {
+            let Some(mut entity) = game.world.entity(id).cloned() else {
+                return;
+            };
+            if crate::catalog::is_a(&entity.object, "oSolid") {
+                if solids_active {
+                    if entity.value("invincible") == 0.0 && entity.object != "oHardBlock" {
+                        destroy_solid_instance(game, id);
+                    }
+                    explosion_solid_cleanup(game);
+                }
+                return;
+            }
+            if entity.object == "oMagmaMan" {
+                for _ in 0..2 {
+                    let magma = crate::world_events::spawn_detritus(
+                        game,
+                        "oMagma",
+                        Vec2::new(entity.pos.x + 8.0, entity.pos.y - 4.0),
+                    );
+                    let y_vel = -(1.0 + f64::from(game.rng.range(3)));
+                    if let Some(magma) = game.world.entities.iter_mut().find(|e| e.id == magma) {
+                        magma.vel.y = y_vel;
+                    }
+                }
+                entity.alive = false;
+            } else if (crate::enemies::is_enemy(&entity.object) || entity.object == "oDamsel")
+                && entity.value("invincible") == 0.0
+            {
+                entity.health -= if entity.object == "oDamsel" { 100 } else { 30 };
+                let speed = 4.0 + f64::from(game.rng.range(3));
+                entity.vel = Vec2::new(
+                    if entity.pos.x > explosion.pos.x {
+                        speed
+                    } else {
+                        -speed
+                    },
+                    -6.0,
+                );
+                entity.data.insert("burning".into(), 50.0);
+                if entity.object == "oDamsel" {
+                    entity.state = 2;
+                }
+            } else if matches!(
+                entity.object.as_str(),
+                "oWeb" | "oBoulder" | "oBarrierEmitter"
+            ) {
+                entity.alive = false;
+            } else if crate::catalog::is_a(&entity.object, "oItem") {
+                match entity.object.as_str() {
+                    "oArrow" | "oFishBone" | "oJar" | "oSkull" => entity.alive = false,
+                    "oBomb" => {
+                        entity.sprite = "sBombArmed".into();
+                        entity.set_image_speed(1.0);
+                        // Do not cancel Alarm 0: its pending callback may reset Alarm 1.
+                        entity.alarms[1] = 4 + game.rng.range(5) as i32;
+                        entity.timer = entity.alarms[1] as u32;
+                        entity.data.insert("attached_id".into(), 0.0);
+                        entity.data.insert("stuck".into(), 0.0);
+                        if entity.pos.y < explosion.pos.y {
+                            entity.vel.y = -(2.0 + f64::from(game.rng.range(3)));
+                        }
+                        let speed = 2.0 + f64::from(game.rng.range(3));
+                        entity.vel.x = if entity.pos.x < explosion.pos.x {
+                            -speed
+                        } else {
+                            speed
+                        };
+                    }
+                    _ if entity.object != "oRopeThrow" || entity.value("falling") == 0.0 => {
+                        entity.vel.y += if entity.pos.y < explosion.pos.y {
+                            -6.0
+                        } else {
+                            6.0
+                        };
+                        let speed = 4.0 + f64::from(game.rng.range(3));
+                        entity.vel.x += if entity.pos.x < explosion.pos.x {
+                            -speed
+                        } else {
+                            speed
+                        };
+                    }
+                    _ => {}
+                }
+                if entity.held {
+                    entity.held = false;
+                    game.player.held = None;
+                }
+            }
+            let fragile = !entity.alive && matches!(entity.object.as_str(), "oJar" | "oSkull");
+            if let Some(stored) = game
+                .world
+                .entities
+                .iter_mut()
+                .find(|stored| stored.id == id)
+            {
+                *stored = entity;
+            }
+            if fragile {
+                super::break_item(game, id);
+            }
+        }
+    }
+}
+
+fn explosion_solid_cleanup(game: &mut Game) {
+    for entity in &mut game.world.entities {
+        if entity.alive && crate::catalog::is_a(&entity.object, "oTreasure") {
+            entity.state = 1;
+        }
+    }
+    let unsupported: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|entity| {
+            entity.alive
+                && entity.object == "oSpikes"
+                && !game.world.solid_at(entity.pos.x, entity.pos.y + 16.0)
+        })
+        .map(|entity| entity.id)
+        .collect();
+    for id in unsupported {
+        if let Some(spikes) = game.world.entity_mut(id) {
+            spikes.alive = false;
+        }
+    }
+}
+
+pub(crate) fn animation_end(game: &mut Game, id: u64) {
+    if let Some(entity) = game.world.entity_mut(id) {
+        if entity.object == "oExplosion" {
+            entity.alive = false;
+        }
+    }
+}
+
+pub(crate) fn end_instance(game: &mut Game, id: u64) {
+    let Some(bomb) = game.world.entity(id).filter(|e| e.object == "oBomb") else {
+        return;
+    };
+    let target = bomb.value("attached_id") as u64;
+    if target == 0 {
+        return;
+    }
+    let offset = Vec2::new(bomb.value("sticky_x"), bomb.value("sticky_y"));
+    let target_pos = game.world.entity(target).map(|entity| entity.pos);
+    let bomb = game.world.entity_mut(id).unwrap();
+    if let Some(pos) = target_pos {
+        bomb.pos = Vec2::new(pos.x - offset.x, pos.y - offset.y);
+    } else {
+        bomb.data.insert("attached_id".into(), 0.0);
+    }
+}
+
 /// Uses stable IDs so entities spawned during a tick do not update early.
 pub fn tick(game: &mut Game) {
+    player_explosion_hurt(game);
+    tick_entities(game);
+}
+
+/// Legacy family loop without the separately dispatched Player Step callback.
+pub(crate) fn tick_entities(game: &mut Game) {
     let ids: Vec<_> = game
         .world
         .entities
@@ -312,7 +595,10 @@ pub fn tick(game: &mut Game) {
                 }
             }
             "oRope" | "oRopeTop" => tick_rope_burn(game, &mut entity),
-            "oRopeBurn" => tick_burning_flame(game, &mut entity),
+            "oRopeBurn" => {
+                tick_burning_flame(game, &mut entity);
+                entity.animation += 0.8;
+            }
             _ => unreachable!(),
         }
         if let Some(stored) = game
@@ -376,6 +662,10 @@ fn tick_bomb(game: &mut Game, bomb: &mut Entity) {
             return;
         }
     }
+    step_bomb_body(game, bomb);
+}
+
+fn step_bomb_body(game: &mut Game, bomb: &mut Entity) {
     if !super::item_body_active(game, bomb) {
         return;
     }
@@ -701,7 +991,7 @@ fn tick_rope(game: &mut Game, rope: &mut Entity) {
 }
 
 fn spawn_rope_part(game: &mut Game, kind: &str, pos: Vec2) {
-    let id = game.world.spawn(kind, pos);
+    let id = game.spawn(kind, pos);
     init_entity(game.world.entity_mut(id).unwrap());
     // oRope inherits oLadder and has a narrow, original per-instance climb mask.
     // Synthetic full-tile ladders would permit climbing beside the actual rope.
@@ -711,9 +1001,7 @@ fn tick_rope_burn(game: &mut Game, rope: &mut Entity) {
     let burn = rope.value("burn_timer");
     let in_lava = super::lava_at(game, Rect::new(rope.pos.x + 12.0, rope.pos.y, 1.0, 1.0));
     if burn == 0.0 && in_lava && rope.object == "oRope" {
-        let id = game
-            .world
-            .spawn("oRopeBurn", Vec2::new(rope.pos.x + 8.0, rope.pos.y));
+        let id = game.spawn("oRopeBurn", Vec2::new(rope.pos.x + 8.0, rope.pos.y));
         init_entity(game.world.entity_mut(id).unwrap());
     } else if burn > 1.0 {
         rope.data.insert("burn_timer".into(), burn - 1.0);
@@ -735,7 +1023,7 @@ fn tick_rope_burn(game: &mut Game, rope: &mut Entity) {
 
 fn tick_burning_flame(game: &mut Game, flame: &mut Entity) {
     flame.pos.y -= 1.0;
-    flame.animation += 0.8;
+
     let near = Rect::new(flame.pos.x - 1.0, flame.pos.y - 8.0, 2.0, 16.0);
     if solid_point(&game.world, flame.pos)
         || !game.world.entities.iter().any(|rope| {
@@ -753,13 +1041,16 @@ fn tick_burning_flame(game: &mut Game, flame: &mut Entity) {
 }
 
 fn explode(game: &mut Game, pos: Vec2) {
-    let id = game.world.spawn("oExplosion", pos);
+    let id = game.spawn("oExplosion", pos);
     init_entity(game.world.entity_mut(id).unwrap());
-    // Newly spawned explosion begins its first collision frame immediately.
+    // Legacy direct fixtures retain immediate contact scanning below. Runtime
+    // Create only announces the blast; the dispatcher owns its contact phase.
     let mut explosion = game.world.entity(id).unwrap().clone();
     announce_explosion(game, &mut explosion);
     *game.world.entity_mut(id).unwrap() = explosion.clone();
-    apply_explosion(game, &explosion);
+    if game.dispatcher.phase == crate::dispatcher::Phase::Idle {
+        apply_explosion(game, &explosion);
+    }
 }
 
 fn announce_explosion(game: &mut Game, explosion: &mut Entity) {
@@ -772,7 +1063,46 @@ fn announce_explosion(game: &mut Game, explosion: &mut Entity) {
         radius: 24.0,
     });
     game.sound("sndExplosion", explosion.pos);
-    game.data.insert("shake".into(), 5.0);
+    game.data
+        .entry("shake".into())
+        .and_modify(|value| *value = value.max(5.0))
+        .or_insert(5.0);
+}
+
+/// oPlayer1 Step queries overlap once, then uses the nearest explosion's origin.
+/// The latter query intentionally includes explosions that did not overlap.
+pub(crate) fn player_explosion_hurt(game: &mut Game) {
+    if super::player_dead(game) || game.player.is_exiting() {
+        return;
+    }
+    let pos = game.player.pos;
+    let probe = Rect::new(pos.x - 8.0, pos.y - 8.0, 17.0, 17.0);
+    let explosions = || {
+        game.world.entities.iter().filter(|entity| {
+            entity.alive
+                && entity.engine_active
+                && crate::catalog::is_a(&entity.object, "oExplosion")
+        })
+    };
+    if !explosions().any(|entity| entity.mask_intersects(probe, CollisionPrecision::BoundingBox)) {
+        return;
+    }
+    let nearest = explosions()
+        .min_by(|a, b| a.pos.distance(pos).total_cmp(&b.pos.distance(pos)))
+        .unwrap()
+        .pos;
+    // This source block bypasses ordinary contact invincibility.
+    game.player.health -= 10;
+    // Literal source survivor quirk: this cause counter increments after subtraction.
+    if game.player.health > 0 && crate::statistics::is_real_level(game) {
+        game.lifetime_stats
+            .misc_death(crate::statistics::MiscDeath::Explosion);
+    }
+    game.events.push(GameEvent::Damage { amount: 10 });
+    let speed = 4.0 + f64::from(game.rng.range(3));
+    game.player.vel = Vec2::new(if pos.x > nearest.x { speed } else { -speed }, -6.0);
+    game.player.stun = 100;
+    game.player.data.insert("burning".into(), 50.0);
 }
 
 fn apply_explosion(game: &mut Game, explosion: &Entity) {
@@ -793,30 +1123,6 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
                 }
             }
         }
-    }
-    if !super::player_dead(game)
-        && !game.player.is_exiting()
-        && hits(Rect::new(
-            game.player.pos.x - 8.0,
-            game.player.pos.y - 8.0,
-            17.0,
-            17.0,
-        ))
-    {
-        // oPlayer1's explosion hurt block bypasses ordinary contact invincibility.
-        game.player.health -= 10;
-        game.events.push(GameEvent::Damage { amount: 10 });
-        let speed = 4.0 + f64::from(game.rng.range(3));
-        game.player.vel = Vec2::new(
-            if game.player.pos.x > explosion.pos.x {
-                speed
-            } else {
-                -speed
-            },
-            -6.0,
-        );
-        game.player.stun = 100;
-        game.player.data.insert("burning".into(), 50.0);
     }
     let mut magma_spawns = Vec::new();
     let mut solid_destroys = Vec::new();
@@ -945,8 +1251,14 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
     }
 }
 
-pub(super) fn destroy_terrain(game: &mut Game, x: usize, y: usize) {
+pub(crate) fn destroy_terrain(game: &mut Game, x: usize, y: usize) {
     destroy_terrain_impl(game, x, y, true);
+}
+
+/// A solid's source instance_destroy call bypasses its attack immunity.
+/// Empty or non-solid cells have no solid instance Destroy event to dispatch.
+pub(crate) fn destroy_terrain_self(game: &mut Game, x: usize, y: usize) -> bool {
+    destroy_terrain_impl(game, x, y, false)
 }
 
 /// oTree Step destroys itself on lost support, regardless of invincibility.
@@ -963,7 +1275,18 @@ pub(crate) fn destroy_unsupported_tree_tile(game: &mut Game, x: usize, y: usize)
 }
 
 fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibility: bool) -> bool {
-    let object = game.world.tiles[y * game.world.width + x].object.clone();
+    if x >= game.world.width || y >= game.world.height {
+        return false;
+    }
+    let Some(tile) = game.world.tile(x as i32, y as i32) else {
+        return false;
+    };
+    if !crate::catalog::is_a(&tile.object, "oSolid")
+        || (respect_invincibility && tile.object == "oHardBlock")
+    {
+        return false;
+    }
+    let object = tile.object.clone();
     let center = Vec2::new(x as f64 * 16.0 + 8.0, y as f64 * 16.0 + 8.0);
     let metadata = game
         .world
@@ -1020,7 +1343,7 @@ fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibili
                     f64::from(game.rng.range(4)) - f64::from(game.rng.range(4)),
                     2.0 + f64::from(game.rng.range(3)),
                 );
-                let id = game.world.spawn(object, pos);
+                let id = game.spawn(object, pos);
                 game.world.entity_mut(id).unwrap().vel = velocity;
             }
         }
@@ -1041,16 +1364,12 @@ fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibili
                 };
                 let dx = metadata.data.get("treasure_dx").copied().unwrap_or(0.0);
                 let dy = metadata.data.get("treasure_dy").copied().unwrap_or(0.0);
-                let id = game
-                    .world
-                    .spawn(object, Vec2::new(center.x + dx, center.y + dy));
+                let id = game.spawn(object, Vec2::new(center.x + dx, center.y + dy));
                 game.world.entity_mut(id).unwrap().state = 1;
             }
         }
         if metadata.value("frozen_caveman") != 0.0 && outputs_enabled {
-            let id = game
-                .world
-                .spawn("oCaveman", Vec2::new(center.x - 8.0, center.y - 8.0));
+            let id = game.spawn("oCaveman", Vec2::new(center.x - 8.0, center.y - 8.0));
             crate::enemies::init_entity(game.world.entity_mut(id).unwrap());
             let caveman = game.world.entity_mut(id).unwrap();
             caveman.state = 98;
@@ -1121,6 +1440,23 @@ fn solid_outputs_enabled(game: &Game, entity: &Entity) -> bool {
 
 fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
     let family = solid_destroy_family(&entity.object);
+    // This proxy field is source instance state. Synchronous rubble Creates
+    // may retire a cleared terrain registration and its bookkeeping map, so
+    // preserve fired before the first nested callback.
+    let arrow_fired = matches!(family, "oArrowTrapLeft" | "oArrowTrapRight").then(|| {
+        let key = if entity.id == 0 {
+            let x = (entity.pos.x / 16.0).floor() as usize;
+            let y = (entity.pos.y / 16.0).floor() as usize;
+            format!("hazard:{}:fired", y * game.world.width + x)
+        } else {
+            format!("hazard_entity:{}:fired", entity.id)
+        };
+        game.data
+            .get(&key)
+            .copied()
+            .unwrap_or(entity.value("fired"))
+            != 0.0
+    });
     if family == "oXocBlock" {
         // tile_layer_find(99,x,y) removes the individual foreground mural
         // fragment, independently from cleanDeath and the loot branch.
@@ -1135,6 +1471,9 @@ fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
         }
     }
     if !solid_outputs_enabled(game, entity) {
+        if family == "oSacAltarLeft" {
+            crate::traps::altar::destroyed(game, entity);
+        }
         return;
     }
     let city = game.flags.contains("city_of_gold") || game.flags.contains("cityOfGold");
@@ -1142,7 +1481,9 @@ fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
     let rubble_style = match family {
         "oBrick" | "oTree" => Some(("sRubble", "sRubbleSmall")),
         "oBrickSmooth" | "oGrave" | "oSign" | "oAltarLeft" | "oAltarRight" | "oSacAltarLeft"
-        | "oArrowTrapLeft" | "oArrowTrapRight" => Some(("sRubbleTan", "sRubbleTanSmall")),
+        | "oArrowTrapLeft" | "oArrowTrapRight" | "oTrapBlock" => {
+            Some(("sRubbleTan", "sRubbleTanSmall"))
+        }
         "oLush" | "oTemple" => Some(("sRubbleLush", "sRubbleLushSmall")),
         "oBlock" | "oPushBlock" | "oXocBlock" if !city => Some(("sRubbleLush", "sRubbleLushSmall")),
         _ => None,
@@ -1157,9 +1498,21 @@ fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
                 center.x + f64::from(game.rng.range(9)) - f64::from(game.rng.range(9)),
                 center.y + f64::from(game.rng.range(9)) - f64::from(game.rng.range(9)),
             );
-            let id = game.world.spawn(object, pos);
+            let id = game.spawn(object, pos);
             game.world.entity_mut(id).unwrap().sprite = sprite.into();
         }
+    }
+    if family == "oTrapBlock" && entity.value("dying") != 0.0 {
+        game.sound("sndThump", entity.pos);
+        game.data
+            .entry("shake".into())
+            .and_modify(|value| *value = value.max(10.0))
+            .or_insert(10.0);
+    }
+    if family == "oSacAltarLeft" {
+        // Defilement follows rubble, outside the clean-death output guard.
+        crate::traps::altar::destroyed(game, entity);
+        return;
     }
     if matches!(family, "oIce" | "oIceBlock") {
         for _ in 0..3 {
@@ -1167,7 +1520,7 @@ fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
                 entity.pos.x + f64::from(game.rng.range(17)),
                 entity.pos.y + f64::from(game.rng.range(17)),
             );
-            game.world.spawn("oDrip", pos);
+            game.spawn("oDrip", pos);
         }
     }
     if matches!(family, "oDark" | "oAlienShip" | "oAlienShipFloor") {
@@ -1178,25 +1531,11 @@ fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
                 center.x + f64::from(game.rng.range(9)) - (f64::from(game.rng.range(9)) - 8.0),
                 center.y + f64::from(game.rng.range(9)) - (f64::from(game.rng.range(9)) - 8.0),
             );
-            game.world.spawn(object, pos);
+            game.spawn(object, pos);
         }
     }
-    if matches!(family, "oArrowTrapLeft" | "oArrowTrapRight") {
-        let key = if entity.id == 0 {
-            let x = (entity.pos.x / 16.0).floor() as usize;
-            let y = (entity.pos.y / 16.0).floor() as usize;
-            format!("hazard:{}:fired", y * game.world.width + x)
-        } else {
-            format!("hazard_entity:{}:fired", entity.id)
-        };
-        let fired = game
-            .data
-            .get(&key)
-            .copied()
-            .unwrap_or(entity.value("fired"));
-        if fired == 0.0 {
-            game.world.spawn("oArrow", center);
-        }
+    if arrow_fired == Some(false) {
+        game.spawn("oArrow", center);
     }
     if release_gold {
         let gold_sprite = matches!(
@@ -1228,7 +1567,7 @@ fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
                     f64::from(game.rng.range(4)) - f64::from(game.rng.range(4)),
                     2.0 + f64::from(game.rng.range(3)),
                 );
-                let id = game.world.spawn(object, pos);
+                let id = game.spawn(object, pos);
                 game.world.entity_mut(id).unwrap().vel = vel;
             }
         }
@@ -1248,7 +1587,7 @@ fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
         };
         if let Some(gem) = gem {
             for _ in 0..2 {
-                game.world.spawn(gem, center);
+                game.spawn(gem, center);
             }
         }
     }
@@ -1259,7 +1598,7 @@ fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
             .get("treasure")
             .is_some_and(|treasure| treasure == "Big Ruby")
     {
-        game.world.spawn("oRubyBig", center);
+        game.spawn("oRubyBig", center);
     }
 }
 
@@ -1341,7 +1680,7 @@ fn solid_parent_destroy(game: &mut Game, pos: Vec2, shop_wall: bool) {
         solid_destroy_body(game, &grave, true);
     }
     for (object, pos) in lamps {
-        game.world.spawn(object, pos);
+        game.spawn(object, pos);
     }
 }
 
@@ -1349,6 +1688,12 @@ fn solid_parent_destroy(game: &mut Game, pos: Vec2, shop_wall: bool) {
 /// Used by explosions and mattocks; target invincibility is respected here.
 pub(crate) fn destroy_solid_instance(game: &mut Game, id: u64) -> bool {
     destroy_solid_instance_impl(game, id, true)
+}
+
+/// Dispatch an instance's own source destruction without attack guards.
+/// destroy_done still prevents repeating the same instance's callbacks.
+pub(crate) fn destroy_solid_self(game: &mut Game, id: u64) -> bool {
+    destroy_solid_instance_impl(game, id, false)
 }
 
 /// oTree's own lost-support destruction bypasses the attack immunity guard.
@@ -1375,8 +1720,8 @@ fn destroy_solid_instance_impl(game: &mut Game, id: u64, respect_invincibility: 
     };
     if !crate::catalog::is_a(&entity.object, "oSolid")
         || entity.value("destroy_done") != 0.0
-        || (respect_invincibility && entity.value("invincible") != 0.0)
-        || entity.object == "oHardBlock"
+        || (respect_invincibility
+            && (entity.value("invincible") != 0.0 || entity.object == "oHardBlock"))
     {
         return false;
     }
@@ -1943,13 +2288,13 @@ mod tests {
         let bomb = g.world.spawn("oBomb", Vec2::new(88.0, 88.0));
         g.world.spawn("oExplosion", Vec2::new(88.0, 88.0));
         g.step(&InputFrame::default());
-        assert!((4..=8).contains(&g.world.entity(bomb).unwrap().timer));
+        assert!((4..=8).contains(&g.world.entity(bomb).unwrap().alarms[1]));
         // A short alarm can be reached while a bomb remains in a persistent
         // blast. The next collision callback must refresh it, not ignore the
         // bomb because the same explosion touched it on an earlier frame.
-        g.world.entity_mut(bomb).unwrap().timer = 2;
+        g.world.entity_mut(bomb).unwrap().alarms[1] = 2;
         g.step(&InputFrame::default());
-        assert!((4..=8).contains(&g.world.entity(bomb).unwrap().timer));
+        assert!((4..=8).contains(&g.world.entity(bomb).unwrap().alarms[1]));
     }
 
     #[test]
@@ -2007,13 +2352,14 @@ mod tests {
         let bomb = g.world.spawn("oBomb", Vec2::new(400.0, 80.0));
         arm_bomb(g.world.entity_mut(bomb).unwrap());
         let entity = g.world.entity_mut(bomb).unwrap();
-        entity.timer = 2;
+        entity.alarms[0] = -1;
+        entity.alarms[1] = 2;
         entity.vel = Vec2::new(3.0, 2.0);
         g.step(&InputFrame::default());
         let entity = g.world.entity(bomb).unwrap();
         assert_eq!(entity.pos, Vec2::new(400.0, 80.0));
         assert_eq!(entity.vel, Vec2::new(3.0, 2.0));
-        assert_eq!(entity.timer, 1);
+        assert_eq!(entity.alarms[1], 1);
         g.step(&InputFrame::default());
         assert!(g.world.entity(bomb).is_none());
         assert!(g.events.iter().any(|event| matches!(event,
@@ -2408,6 +2754,16 @@ mod destruction_callbacks {
                         .entities
                         .iter()
                         .filter(|e| e.object == "oDrip")
+                        .all(|e| e.vel.y == 0.0)
+                );
+                // These births occur during automatic collisions, after their
+                // Normal Step slot. Gravity starts on the following frame.
+                game.step(&InputFrame::default());
+                assert!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(|e| e.object == "oDrip")
                         .all(|e| e.vel.y == 0.6)
                 );
             }
@@ -2505,6 +2861,11 @@ mod literal_dark_and_arrow_destroy_regressions {
                         .filter(|event| matches!(event, GameEvent::Damage { amount: 10 }))
                         .count(),
                     usize::from(!exit)
+                );
+                assert_eq!(
+                    game.lifetime_stats.misc_deaths
+                        [crate::statistics::MiscDeath::Explosion as usize],
+                    u64::from(!exit)
                 );
                 if exit {
                     assert_eq!(game.player.vel, before_velocity);
@@ -2607,6 +2968,9 @@ mod literal_dark_and_arrow_destroy_regressions {
             for fired in [false, true] {
                 let mut game = Game::shell(7, RulesPreset::Classic);
                 game.player.pos = Vec2::new(72.0, 88.0);
+                game.player.state = PlayerState::Standing;
+                game.player.grounded = true;
+                game.player.facing = 1;
                 game.world.set_tile(4, 6, "oHardBlock");
                 let fired_key = if dynamic {
                     let target = game.world.spawn("oArrowTrapRight", Vec2::new(80.0, 80.0));
@@ -2615,10 +2979,32 @@ mod literal_dark_and_arrow_destroy_regressions {
                     game.world.set_tile(5, 5, "oArrowTrapRight");
                     format!("hazard:{}:fired", 5 * game.world.width + 5)
                 };
-                game.data.insert(fired_key, f64::from(fired));
-                let hit = game.world.spawn("oMattockHit", Vec2::new(88.0, 88.0));
-                game.world.entity_mut(hit).unwrap().timer = 0;
+                let mattock = game.world.spawn("oMattock", game.player.pos);
+                game.world.entity_mut(mattock).unwrap().held = true;
+                game.player.held = Some(mattock);
+                // Let source Create establish the trap state before overriding
+                // the fixture's initial fired/unfired condition.
                 game.step(&InputFrame::default());
+                game.data.insert(fired_key, f64::from(fired));
+                game.step(&InputFrame {
+                    attack: true,
+                    attack_pressed: true,
+                    ..Default::default()
+                });
+                for _ in 0..10 {
+                    let target_exists = if dynamic {
+                        game.world
+                            .entities
+                            .iter()
+                            .any(|e| e.alive && e.object == "oArrowTrapRight")
+                    } else {
+                        game.world.tile(5, 5).is_some_and(Tile::is_solid)
+                    };
+                    if !target_exists {
+                        break;
+                    }
+                    game.step(&InputFrame::default());
+                }
                 let arrows: Vec<_> = game
                     .world
                     .entities
@@ -3152,3 +3538,281 @@ const EXPLOSION_MASKS: [[u64; 48]; 10] = [
         0x000000000000,
     ],
 ];
+
+#[cfg(test)]
+mod source_player_explosion_step {
+    use super::*;
+
+    #[test]
+    fn game_step_queries_overlapping_explosions_once_with_literal_survivor_counter() {
+        for count in [1, 2] {
+            for (hp, real_room, expected_count) in [(20, true, 1), (4, true, 0), (20, false, 0)] {
+                let mut game = Game::shell(7, RulesPreset::Classic);
+                game.player.pos = Vec2::new(160.0, 160.0);
+                game.player.previous_pos = game.player.pos;
+                game.player.health = hp;
+                if !real_room {
+                    game.flags.insert("tutorial".into());
+                }
+                for n in 0..count {
+                    game.world
+                        .spawn("oExplosion", Vec2::new(159.0 + 2.0 * f64::from(n), 160.0));
+                }
+                let mut expected_rng = game.rng.clone();
+                let speed = 4.0 + f64::from(expected_rng.range(3));
+                game.step(&InputFrame::default());
+                assert_eq!(
+                    game.player.health,
+                    (hp - 10).max(0),
+                    "blasts={count} hp={hp} real={real_room}"
+                );
+                assert_eq!(
+                    game.events
+                        .iter()
+                        .filter(|event| matches!(event, GameEvent::Damage { amount: 10 }))
+                        .count(),
+                    1
+                );
+                assert_eq!(game.player.vel, Vec2::new(speed, -6.0));
+                assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
+                assert_eq!(
+                    game.lifetime_stats.misc_deaths
+                        [crate::statistics::MiscDeath::Explosion as usize],
+                    expected_count
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn game_step_bomb_alarm_zero_overwrites_a_pending_short_alarm_one() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.player.pos = Vec2::new(160.0, 160.0);
+        game.world.set_tile(10, 11, "oHardBlock");
+        game.world.set_tile(5, 6, "oHardBlock");
+        let id = game.world.spawn("oBomb", Vec2::new(88.0, 88.0));
+        let bomb = game.world.entity_mut(id).unwrap();
+        arm_bomb(bomb);
+        bomb.alarms[0] = 1;
+        bomb.alarms[1] = 2;
+        // Alarm-number order is observable: Alarm 0 writes 40 before Alarm 1's
+        // same-frame decrement, extending a previously shortened fuse.
+        game.step(&InputFrame::default());
+        let bomb = game.world.entity(id).unwrap();
+        assert_eq!(bomb.alarms[0], 0);
+        assert_eq!(bomb.alarms[1], 39);
+        assert_eq!(bomb.image_speed(), 1.0);
+        for _ in 0..38 {
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(game.world.entity(id).unwrap().alarms[1], 1);
+        game.step(&InputFrame::default());
+        assert!(game.world.entity(id).is_none());
+        assert_eq!(
+            game.events
+                .iter()
+                .filter(|e| matches!(e, GameEvent::Explosion { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn game_step_clean_altar_destroy_still_defiles_in_its_synchronous_callback() {
+        for object in ["oSacAltarLeft", "oSacAltarRight"] {
+            for dynamic in [false, true] {
+                let mut game = Game::shell(7, RulesPreset::Classic);
+                game.player.pos = Vec2::new(160.0, 160.0);
+                game.flags.insert("cleanSolids".into());
+                if dynamic {
+                    game.world.spawn(object, Vec2::new(80.0, 80.0));
+                } else {
+                    game.world.set_tile(5, 5, object);
+                }
+                game.world.spawn("oExplosion", Vec2::new(88.0, 88.0));
+                let mut expected_rng = game.rng.clone();
+                game.step(&InputFrame::default());
+                assert_eq!(
+                    game.data.get("favor").copied(),
+                    Some(-16.0),
+                    "{object} dynamic={dynamic}"
+                );
+                assert_eq!(game.data.get("kali_punish").copied(), Some(1.0));
+                assert!(
+                    !game
+                        .world
+                        .entities
+                        .iter()
+                        .any(|e| matches!(e.object.as_str(), "oRubble" | "oRubbleSmall"))
+                );
+                assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
+            }
+        }
+    }
+
+    #[test]
+    fn player_step_uses_bounding_box_query_and_nearest_across_all_explosions() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.player.health = 30;
+        game.player.pos = Vec2::new(160.0, 160.0);
+        // Late frame has a narrower bbox: this nearer instance does not overlap.
+        let near = game.world.spawn("oExplosion", Vec2::new(181.0, 160.0));
+        game.world.entity_mut(near).unwrap().animation = 9.0;
+        // Earlier frame is broad enough to overlap from a more distant origin.
+        let far = game.world.spawn("oExplosion", Vec2::new(136.0, 160.0));
+        game.world.entity_mut(far).unwrap().animation = 3.0;
+        let probe = Rect::new(152.0, 152.0, 17.0, 17.0);
+        assert!(
+            !game
+                .world
+                .entity(near)
+                .unwrap()
+                .mask_intersects(probe, CollisionPrecision::BoundingBox)
+        );
+        assert!(
+            game.world
+                .entity(far)
+                .unwrap()
+                .mask_intersects(probe, CollisionPrecision::BoundingBox)
+        );
+        player_explosion_hurt(&mut game);
+        assert_eq!(game.player.health, 20);
+        assert!(
+            game.player.vel.x < 0.0,
+            "nearest query includes the nonoverlapping explosion to the right"
+        );
+    }
+}
+
+#[cfg(test)]
+mod source_solid_self_destroy {
+    use super::*;
+
+    #[test]
+    fn self_destroy_bypasses_attack_immunity_for_cells_and_instances_exactly_once() {
+        for object in ["oTrapBlock", "oHardBlock"] {
+            for dynamic in [false, true] {
+                let mut game = Game::shell(7, RulesPreset::Classic);
+                let id = if dynamic {
+                    game.world.spawn(object, Vec2::new(80.0, 80.0))
+                } else {
+                    game.world.set_tile(5, 5, object);
+                    game.world.spawn("oTerrainMetadata", Vec2::new(88.0, 88.0))
+                };
+                game.world
+                    .entity_mut(id)
+                    .unwrap()
+                    .data
+                    .insert("invincible".into(), 1.0);
+                let mut expected_rng = game.rng.clone();
+                if dynamic {
+                    assert!(!destroy_solid_instance(&mut game, id));
+                } else {
+                    destroy_terrain(&mut game, 5, 5);
+                    assert_eq!(game.world.tile(5, 5).unwrap().object, object);
+                }
+                assert!(game.world.entity(id).is_some());
+                assert!(game.events.is_empty());
+                if object == "oTrapBlock" {
+                    for _ in 0..12 {
+                        expected_rng.next_u64();
+                    }
+                }
+                if dynamic {
+                    // Some source own Steps have already marked the instance
+                    // dead when the stored callback is dispatched.
+                    game.world.entity_mut(id).unwrap().alive = false;
+                    assert!(destroy_solid_self(&mut game, id));
+                    assert!(!destroy_solid_self(&mut game, id));
+                } else {
+                    assert!(destroy_terrain_self(&mut game, 5, 5));
+                    assert!(!destroy_terrain_self(&mut game, 5, 5));
+                    assert!(!destroy_terrain_self(&mut game, usize::MAX, 5));
+                }
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(|e| matches!(e.sprite.as_str(), "sRubbleTan" | "sRubbleTanSmall"))
+                        .count(),
+                    if object == "oTrapBlock" { 3 } else { 0 }
+                );
+                assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
+            }
+        }
+    }
+
+    #[test]
+    fn explosion_and_trap_destroy_preserve_the_longer_source_camera_shake() {
+        for existing in [0.0_f64, 3.0, 20.0] {
+            for (object, duration) in [("oExplosion", 5.0), ("oTrapBlock", 10.0)] {
+                let mut game = Game::shell(7, RulesPreset::Classic);
+                game.data.insert("shake".into(), existing);
+                let id = game.spawn(object, Vec2::new(80.0, 80.0));
+                if object == "oTrapBlock" {
+                    game.world
+                        .entity_mut(id)
+                        .unwrap()
+                        .data
+                        .insert("dying".into(), 1.0);
+                    assert!(destroy_solid_self(&mut game, id));
+                }
+                assert_eq!(game.data["shake"], existing.max(duration));
+            }
+        }
+    }
+
+    #[test]
+    fn trap_block_thump_and_shake_share_the_source_debris_clean_guard() {
+        for clean in ["none", "cleanDeath", "cleanSolids"] {
+            for dying in [false, true] {
+                let mut game = Game::shell(7, RulesPreset::Classic);
+                let id = game.world.spawn("oTrapBlock", Vec2::new(80.0, 80.0));
+                game.world
+                    .entity_mut(id)
+                    .unwrap()
+                    .data
+                    .insert("dying".into(), f64::from(dying));
+                if clean == "cleanDeath" {
+                    game.world
+                        .entity_mut(id)
+                        .unwrap()
+                        .data
+                        .insert("cleanDeath".into(), 1.0);
+                }
+                if clean == "cleanSolids" {
+                    game.flags.insert("cleanSolids".into());
+                }
+                let mut expected_rng = game.rng.clone();
+                if clean == "none" {
+                    for _ in 0..12 {
+                        expected_rng.next_u64();
+                    }
+                }
+                assert!(destroy_solid_self(&mut game, id));
+                assert_eq!(
+                    game.events
+                        .iter()
+                        .filter(
+                            |e| matches!(e, GameEvent::Sound { name, .. } if name == "sndThump")
+                        )
+                        .count(),
+                    usize::from(clean == "none" && dying)
+                );
+                assert_eq!(
+                    game.data.get("shake").copied(),
+                    (clean == "none" && dying).then_some(10.0)
+                );
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(|e| matches!(e.sprite.as_str(), "sRubbleTan" | "sRubbleTanSmall"))
+                        .count(),
+                    if clean == "none" { 3 } else { 0 }
+                );
+                assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
+            }
+        }
+    }
+}

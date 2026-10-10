@@ -30,10 +30,11 @@ fn custom_terrain_retains_hidden_create_contents_and_releases_them_on_destructio
     let x = (metadata.pos.x / 16.0) as i32;
     let y = (metadata.pos.y / 16.0) as i32;
     assert_eq!(game.world.tile(x, y).unwrap().object, "oDark");
-    let bomb = game.world.spawn("oBomb", metadata.pos);
-    let bomb = game.world.entity_mut(bomb).unwrap();
-    bomb.data.insert("armed".into(), 1.0);
-    bomb.timer = 1;
+    // Source Explosion Create runs synchronously; automatic collision then
+    // dispatches the terrain's Destroy callback. Bomb explosions are driven
+    // by Alarm1, so a legacy `timer = 1` does not create this event.
+    let explosion = game.spawn("oExplosion", metadata.pos);
+    assert_eq!(game.world.entity(explosion).unwrap().image_speed(), 0.8);
     game.step(&InputFrame::default());
     assert!(game.world.tile(x, y).unwrap().object.is_empty());
     assert!(

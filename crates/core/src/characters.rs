@@ -35,12 +35,12 @@ pub fn apply(game: &mut Game, character: Character) {
     game.player.data.remove("character_attack_elapsed");
     game.player.attack_timer = 0;
     game.player.animation = 0.0;
-    game.player.sprite = match character {
+    let sprite = match character {
         Character::Explorer => "sStandLeft",
         Character::Damsel => "sDamselLeft",
         Character::TunnelMan => "sTunnelLeft",
-    }
-    .into();
+    };
+    game.player.set_sprite(sprite);
 }
 
 pub fn selected(game: &Game) -> Character {
@@ -65,11 +65,11 @@ fn swing_part(game: &mut Game, front: bool) {
     );
     let part = game.world.entity_mut(id).unwrap();
     part.facing = facing;
-    part.sprite = format!(
+    part.set_sprite(&format!(
         "sMattock{}{}",
         if front { "Hit" } else { "Pre" },
         if facing < 0 { "L" } else { "R" }
-    );
+    ));
     part.timer = if front { 5 } else { 3 };
     part.data.insert("owner".into(), 1.0);
     part.data.insert("owner_player".into(), 1.0);
@@ -93,7 +93,8 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         .unwrap_or(0.0)
         != 0.0;
     if selected(game) != Character::TunnelMan
-        || game.player.health <= 0
+        || game.player.state == PlayerState::Dead
+        || game.state == RunState::Dead
         // oPlayer1 Step's item/innate attack branch checks the independent
         // stunned flag, including enemy throws that assign no timer.
         || game.player.is_stunned()
@@ -127,8 +128,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         game.player
             .data
             .insert("character_attack_elapsed".into(), 0.0);
+        game.player.set_sprite("sTunnelAttackL");
         game.player.animation = 0.0;
-        swing_part(game, false);
+        game.player.set_image_speed(0.6);
     }
     let elapsed = game
         .player
@@ -137,10 +139,20 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         .or_default();
     *elapsed += 1.0;
     let age = *elapsed as u32;
-    game.player.sprite = "sTunnelAttackL".into();
-    game.player.animation = 0.6 + f64::from(age.saturating_sub(1));
-    game.player.attack_timer = 12_u32.saturating_sub(age);
-    if (6..12).contains(&age)
+    // The source tests the current image_index during Step. Endframe advances
+    // it later; rebuilding a phase from elapsed ticks would animate twice.
+    game.player.attack_timer = 12_u32.saturating_sub(age).max(1);
+    if active
+        && game.player.animation < 2.0
+        && !game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.alive && e.object == "oMattockPre")
+    {
+        swing_part(game, false);
+    }
+    if game.player.animation > 4.0
         && !game
             .world
             .entities
@@ -150,15 +162,13 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         swing_part(game, true);
         game.sound("sndWhip", game.player.pos);
     }
-    if age >= 12 {
-        for entity in &mut game.world.entities {
-            if entity.value("character_mattock") != 0.0 {
-                entity.alive = false;
-            }
-        }
-        game.player.data.remove("character_attack_active");
-        game.player.data.remove("character_attack_elapsed");
-    }
+}
+
+/// The player Animation End callback clears whipping; attack attachments retain
+/// their own source lifetime instead of being removed early during Step.
+pub fn animation_end(game: &mut Game) {
+    game.player.data.remove("character_attack_active");
+    game.player.data.remove("character_attack_elapsed");
 }
 
 #[cfg(test)]
@@ -217,27 +227,33 @@ mod tests {
                 .iter()
                 .filter(|e| e.object == "oMattockPre")
                 .count(),
-            1
+            0
         );
         assert!(!game.player.data.contains_key("cantJump"));
     }
 
     #[test]
     fn innate_mattock_uses_fast_original_swing_and_two_damage() {
-        let mut game = Game::shell(1, RulesPreset::Classic);
-        apply(&mut game, Character::TunnelMan);
-        game.player.grounded = true;
-        game.player.facing = -1;
-        tick(
-            &mut game,
-            &InputFrame {
-                attack_pressed: true,
-                ..Default::default()
-            },
-        );
-        for _ in 0..4 {
-            tick(&mut game, &InputFrame::default());
+        let mut level = crate::level::Level::default();
+        level.set_tile(4, 3, '@').unwrap();
+        for x in 0..40 {
+            level.set_tile(x, 4, '1').unwrap();
         }
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.load_custom(&level, "mattock-animation", "");
+        apply(&mut game, Character::TunnelMan);
+        for _ in 0..8 {
+            game.step(&InputFrame::default());
+        }
+        game.step(&InputFrame {
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert!((game.player.animation - 0.6).abs() < 1e-9);
+        for _ in 0..4 {
+            game.step(&InputFrame::default());
+        }
+        assert!((game.player.animation - 4.6).abs() < 1e-9);
         assert!(
             !game
                 .world
@@ -245,22 +261,23 @@ mod tests {
                 .iter()
                 .any(|e| e.object == "oMattockHit")
         );
-        tick(&mut game, &InputFrame::default());
+        game.step(&InputFrame::default());
         let hit = game
             .world
             .entities
             .iter()
             .find(|e| e.object == "oMattockHit")
             .unwrap();
-        assert_eq!(hit.sprite, "sMattockHitL");
-        assert_eq!(hit.pos.x, game.player.pos.x - 16.0);
+        assert_eq!(hit.sprite, "sMattockHitR");
+        assert_eq!(hit.pos.x, game.player.pos.x + 16.0);
         assert_eq!(hit.value("damage"), 2.0);
         assert_eq!(hit.value("puncture"), 1.0);
         for _ in 6..12 {
-            tick(&mut game, &InputFrame::default());
+            game.step(&InputFrame::default());
         }
         assert_eq!(game.player.attack_timer, 0);
         assert!(!game.player.data.contains_key("character_attack_active"));
+        assert!((game.player.animation - 0.6).abs() < 1e-9);
         assert_eq!(game.player.health, 2);
         assert!(game.player.equipment.is_empty());
     }
@@ -306,6 +323,9 @@ mod tests {
         let mut ordinary = game.clone();
         ordinary.step(&attack);
         assert_eq!(ordinary.player.attack_timer, 11);
+        // Attachment checks precede the attack input in Player Step, so the
+        // pre-swing instance is created on the following authoritative tick.
+        ordinary.step(&InputFrame::default());
         assert!(ordinary.world.entities.iter().any(|e| {
             e.alive && e.object == "oMattockPre" && e.value("character_mattock") != 0.
         }));
@@ -351,6 +371,7 @@ mod tests {
         assert_eq!(game.player.vel.y, 0.);
         game.step(&attack);
         assert_eq!(game.player.attack_timer, 11);
+        game.step(&neutral);
         assert!(game.world.entities.iter().any(|e| {
             e.alive && e.object == "oMattockPre" && e.value("character_mattock") != 0.
         }));

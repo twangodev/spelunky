@@ -1,11 +1,16 @@
 //! Classic hazards translated from object event code. Static hazard positions are
 //! GameMaker instance origins (usually tile top-left), not actor centers.
-use crate::model::{CollisionPrecision, Entity, Game, GameEvent, PlayerState, Rect, Vec2};
+use crate::dispatcher::Instance;
+#[cfg(test)]
+use crate::model::{CollisionPrecision, PlayerState};
+use crate::model::{Entity, Game, GameEvent, Rect, Vec2};
 
 #[path = "traps/altar.rs"]
-mod altar;
+pub(crate) mod altar;
 #[path = "traps/curses.rs"]
 mod curses;
+#[path = "traps/detectors.rs"]
+mod detectors;
 #[path = "traps/moving.rs"]
 mod moving;
 
@@ -14,6 +19,7 @@ pub fn pre_tick(game: &mut Game) {
     moving::pre_tick(game);
 }
 
+#[cfg(test)]
 pub fn tick(game: &mut Game) {
     environment(game);
     detectors(game);
@@ -21,6 +27,271 @@ pub fn tick(game: &mut Game) {
     moving::tick(game);
     altar::tick(game);
     curses::tick(game);
+}
+
+pub(crate) fn handles(object: &str) -> bool {
+    detectors::handles(object)
+        || moving::handles(object)
+        || curses::handles(object)
+        || matches!(
+            object,
+            "oWeb"
+                | "oGiantTikiHead"
+                | "oKaliHead"
+                | "oTrapBlock"
+                | "oSacAltarLeft"
+                | "oSacAltarRight"
+        )
+}
+
+pub(crate) fn init_entity(entity: &mut Entity) {
+    if !handles(&entity.object) || entity.value("traps_fixed_initialized") != 0. {
+        return;
+    }
+    detectors::init_entity(entity);
+    moving::init_entity(entity);
+    curses::init_entity(entity);
+    if entity.object == "oWeb" {
+        entity.data.entry("life".into()).or_insert(12.);
+        entity.data.entry("dying".into()).or_insert(0.);
+    }
+    if entity.object == "oTrapBlock" {
+        entity.data.entry("dying".into()).or_insert(0.);
+        entity.data.entry("deathTimer".into()).or_insert(0.);
+    }
+    entity.data.insert("traps_fixed_initialized".into(), 1.);
+}
+
+/// oKaliHead Create runs at birth, before subsequent generation RNG draws.
+pub(crate) fn initialize_kali_head(world: &mut crate::World, rng: &mut crate::Rng, id: u64) {
+    let Some(entity) = world.entity_mut(id) else {
+        return;
+    };
+    if entity.object != "oKaliHead" || entity.value("kali_create_initialized") != 0. {
+        return;
+    }
+    entity.set_sprite(&format!("sKaliHead{}", rng.range(3) + 1));
+    entity.data.insert("kali_create_initialized".into(), 1.);
+}
+
+pub(crate) fn create(game: &mut Game, instance: Instance) {
+    if !handles(instance.object(game)) {
+        return;
+    }
+    match instance {
+        Instance::Entity(id) => {
+            let Some(entity) = game.world.entity_mut(id) else {
+                return;
+            };
+            init_entity(entity);
+            if entity.value("traps_create_initialized") != 0. {
+                return;
+            }
+            entity.data.insert("traps_create_initialized".into(), 1.);
+        }
+        Instance::Terrain(index) => {
+            if game
+                .data
+                .insert(format!("traps_create_terrain:{index}"), 1.)
+                .is_some()
+            {
+                return;
+            }
+        }
+        Instance::Player => return,
+    }
+    detectors::create(game, instance);
+    moving::create(game, instance);
+    curses::create_instance(game, instance);
+    if let Instance::Entity(id) = instance {
+        initialize_kali_head(&mut game.world, &mut game.rng, id);
+    }
+}
+
+pub(crate) fn step_instance(game: &mut Game, instance: Instance) {
+    let object = instance.object(game).to_owned();
+    if detectors::handles(&object) {
+        detectors::step_instance(game, instance);
+    } else if moving::handles(&object) {
+        moving::step_instance(game, instance);
+    } else if curses::handles(&object) {
+        curses::step_instance(game, instance);
+    } else if object == "oWeb" {
+        web_step(game, instance);
+    } else if object == "oTrapBlock" {
+        trap_block_step(game, instance);
+    } else if matches!(object.as_str(), "oSacAltarLeft" | "oSacAltarRight") {
+        altar::step_instance(game, instance);
+    }
+}
+
+pub(crate) fn builtin_motion(game: &mut Game, instance: Instance) {
+    moving::builtin_motion(game, instance);
+}
+
+pub(crate) fn outside_room(game: &mut Game, instance: Instance) {
+    moving::outside_room(game, instance);
+}
+
+pub(crate) fn collision(game: &mut Game, this: Instance, other: Instance) {
+    let object = this.object(game).to_owned();
+    if detectors::handles(&object) {
+        detectors::collision(game, this, other);
+    } else if moving::handles(&object) {
+        moving::collision(game, this, other);
+    } else if object == "oWeb" {
+        web_collision(game, this, other);
+    }
+}
+
+pub(crate) fn animation_end(game: &mut Game, instance: Instance) {
+    let object = instance.object(game).to_owned();
+    if detectors::handles(&object) {
+        detectors::animation_end(game, instance);
+    } else if moving::handles(&object) {
+        moving::animation_end(game, instance);
+    }
+}
+
+pub(crate) fn alarm(game: &mut Game, instance: Instance, index: u8) {
+    let object = instance.object(game).to_owned();
+    if matches!(object.as_str(), "oGiantTikiHead" | "oKaliHead") && index == 0 {
+        let pos = instance.position(game);
+        match instance {
+            Instance::Entity(id) => {
+                if let Some(entity) = game.world.entity_mut(id) {
+                    entity.sprite = "sGTHHole".into();
+                }
+            }
+            Instance::Terrain(_index) => {
+                let center = Vec2::new(pos.x + 8., pos.y + 8.);
+                let id = game
+                    .world
+                    .entities
+                    .iter()
+                    .find(|e| e.alive && e.object == "oTerrainMetadata" && e.pos == center)
+                    .map(|e| e.id)
+                    .unwrap_or_else(|| game.spawn("oTerrainMetadata", center));
+                game.world
+                    .entity_mut(id)
+                    .unwrap()
+                    .text
+                    .insert("terrain_sprite".into(), "sGTHHole".into());
+            }
+            _ => {}
+        }
+        if object == "oGiantTikiHead" {
+            game.spawn("oBoulder", pos);
+        } else {
+            for _ in 0..6 {
+                let id = game.spawn("oSpider", pos);
+                let velocity = Vec2::new(
+                    f64::from(game.rng.range(4)) - f64::from(game.rng.range(4)),
+                    -(1. + f64::from(game.rng.range(3))),
+                );
+                game.world.entity_mut(id).unwrap().vel = velocity;
+            }
+        }
+        game.sound("sndThump", pos);
+    } else {
+        detectors::alarm(game, instance, index);
+    }
+}
+
+pub(crate) fn initialize_level(game: &mut Game) {
+    if game.level_tick == 0 {
+        curses::initialize_level(game);
+    }
+}
+
+pub(crate) fn player_crush(game: &mut Game) {
+    moving::player_crush(game);
+}
+pub(crate) fn player_spears(game: &mut Game) {
+    detectors::player_hurt(game);
+}
+pub(crate) fn player_moving_hurt(game: &mut Game) {
+    moving::player_hurt(game);
+}
+
+fn web_step(game: &mut Game, instance: Instance) {
+    let Instance::Entity(id) = instance else {
+        return;
+    };
+    if let Some(entity) = game.world.entity_mut(id) {
+        let life = entity.data.get("life").copied().unwrap_or(12.);
+        entity.data.insert("image_alpha".into(), life / 12.);
+        let next = life
+            - if entity.value("dying") != 0. {
+                0.02
+            } else {
+                0.
+            };
+        entity.data.insert("life".into(), next);
+        if next <= 1. {
+            entity.alive = false;
+        }
+    }
+}
+
+fn web_collision(game: &mut Game, this: Instance, other: Instance) {
+    let Instance::Entity(web) = this else {
+        return;
+    };
+    let object = other.object(game).to_owned();
+    if crate::catalog::is_a(&object, "oWater")
+        || matches!(object.as_str(), "oLava" | "oLaser" | "oSlash" | "oMagmaMan")
+    {
+        if let Some(entity) = game.world.entity_mut(web) {
+            entity.alive = false;
+        }
+    }
+    let Instance::Entity(id) = other else {
+        return;
+    };
+    let Some(entity) = game.world.entity_mut(id) else {
+        return;
+    };
+    let enemy = crate::catalog::is_a(&object, "oEnemy");
+    let item = crate::catalog::is_a(&object, "oItem");
+    let rubble = crate::catalog::is_a(&object, "oRubblePiece");
+    if enemy && !matches!(object.as_str(), "oSpider" | "oGiantSpider")
+        || item && !entity.held && !crate::catalog::is_a(&object, "oRope")
+        || rubble
+        || crate::catalog::is_a(&object, "oTreasure")
+    {
+        entity.vel = Vec2::default();
+    }
+    if enemy && crate::catalog::is_a(&object, "oShopkeeper") && entity.health > 0 {
+        entity.state = 2;
+    }
+    if rubble {
+        entity.data.insert("animation_speed".into(), 0.);
+    }
+}
+
+fn trap_block_step(game: &mut Game, instance: Instance) {
+    let Instance::Entity(id) = instance else {
+        return;
+    };
+    let Some(entity) = game.world.entity_mut(id) else {
+        return;
+    };
+    if entity.value("dying") == 0. {
+        return;
+    }
+    let timer = entity
+        .data
+        .get("death_timer")
+        .copied()
+        .unwrap_or_else(|| entity.value("deathTimer"));
+    if timer > 0. {
+        entity.data.insert("deathTimer".into(), timer - 1.);
+        entity.data.remove("death_timer");
+    } else {
+        entity.alive = false;
+        crate::items::explosives::destroy_solid_self(game, id);
+    }
 }
 
 #[derive(Clone)]
@@ -89,55 +360,75 @@ fn current_rect(game: &Game, h: &Hazard) -> Rect {
         .unwrap_or_else(|| rect(h))
 }
 fn lethal(game: &mut Game) {
-    // Source environmental kills bypass the ordinary damage invulnerability.
-    if game.player.health > 0 {
-        game.player.health -= 99;
-        if game.player.health <= 0 {
-            game.player.state = PlayerState::Dead;
+    // The independent source dead flag is latched after the entire player Step.
+    // Hazard damage must not eagerly replace the player's movement state.
+    game.player.health -= 99;
+    game.events.push(GameEvent::Damage { amount: 99 });
+}
+
+pub(crate) fn player_hurt_enabled(game: &Game) -> bool {
+    game.player.health >= -99
+        && game.player.data.get("hidden").copied().unwrap_or(0.) == 0.
+        && !game.player.is_exiting()
+}
+
+/// oPlayer1 Step 210: before active/controller and outside the exit hurt guard.
+pub(crate) fn player_lava(game: &mut Game) {
+    let pos = game.player.pos;
+    if hazards(game).iter().any(|h| {
+        h.object == "oLava" && current_rect(game, h).contains(Vec2::new(pos.x, pos.y + 6.))
+    }) {
+        if game.state != crate::RunState::Dead {
+            if crate::statistics::is_real_level(game) {
+                game.lifetime_stats
+                    .misc_death(crate::statistics::MiscDeath::Lava);
+            }
+            game.sound("sndFlame", pos);
         }
-        game.events.push(GameEvent::Damage { amount: 99 });
+        lethal(game);
+        game.player.vel = Vec2::new(0., 0.1);
+        game.player.data.insert("burning".into(), 100.);
+        game.player.data.insert("gravity".into(), 0.);
+        game.player.data.insert("my_gravity".into(), 0.);
+        game.player.data.insert("bounced".into(), 1.);
+        game.player.data.insert("depth".into(), 999.);
     }
 }
-fn environment(game: &mut Game) {
-    let all = hazards(game);
+
+/// oPlayer1 Step 1752-1781: the last late-hurt family, after ceiling traps.
+pub(crate) fn player_spikes(game: &mut Game) {
+    // The dispatcher evaluates the source outer hurt guard once, before crush.
+    // Its later visibility/health changes do not skip the rest of this block.
     let pos = game.player.pos;
-    let mut lava_applied = false;
-    let mut spikes_applied = false;
-    for h in &all {
-        if !lava_applied
-            && h.object == "oLava"
-            && current_rect(game, h).contains(Vec2::new(pos.x, pos.y + 6.0))
-        {
-            lava_applied = true;
-            let living = game.player.health > 0;
+    let spikes = hazards(game).into_iter().find(|h| {
+        h.object == "oSpikes"
+            && Rect::new(pos.x - 4., pos.y - 4., 9., 13.).intersects(current_rect(game, h))
+    });
+    let Some(spikes) = spikes else {
+        return;
+    };
+    let fall = game.player.data.get("fall_ticks").copied().unwrap_or(0.);
+    if game.player.vel.y > 0. && (fall > 4. || game.player.is_stunned()) {
+        if game.state != crate::RunState::Dead {
+            if crate::statistics::is_real_level(game) {
+                game.lifetime_stats
+                    .misc_death(crate::statistics::MiscDeath::Spikes);
+            }
             lethal(game);
-            game.player.vel = Vec2::new(0.0, 0.1);
-            game.player.data.insert("burning".into(), 100.0);
-            if living {
-                game.sound("sndFlame", pos);
-            }
+            game.player.vel = Vec2::default();
+            game.sound("sndHurt", pos);
         }
-        let fall = game.player.data.get("fall_ticks").copied().unwrap_or(0.0);
-        if !spikes_applied
-            && h.object == "oSpikes"
-            && !game.player.is_exiting()
-            && Rect::new(pos.x - 4.0, pos.y - 4.0, 9.0, 13.0).intersects(current_rect(game, h))
-            && game.player.vel.y > 0.0
-            && (fall > 4.0 || game.player.is_stunned())
-        {
-            spikes_applied = true;
-            if game.player.health > 0 {
-                lethal(game);
-                game.player.vel = Vec2::default();
-                game.sound("sndHurt", pos);
-            }
-            if let Some(id) = h.id {
-                if let Some(e) = game.world.entity_mut(id) {
-                    e.sprite = "sSpikesBlood".into();
-                }
-            }
+        if let Some(entity) = spikes.id.and_then(|id| game.world.entity_mut(id)) {
+            entity.sprite = "sSpikesBlood".into();
         }
     }
+}
+
+#[cfg(test)]
+fn environment(game: &mut Game) {
+    player_lava(game);
+    player_spikes(game);
+    let all = hazards(game);
     // Web collision handlers freeze movable objects. Spider-family immunity and
     // magma melting are explicit exceptions in the Classic event source.
     let webs: Vec<_> = all.iter().filter(|h| h.object == "oWeb").cloned().collect();
@@ -206,6 +497,7 @@ fn remove_hazard(game: &mut Game, h: &Hazard) {
             .set_tile((h.pos.x / 16.0) as usize, (h.pos.y / 16.0) as usize, "");
     }
 }
+#[cfg(test)]
 fn movable(e: &Entity) -> bool {
     [
         "oCharacter",
@@ -218,6 +510,7 @@ fn movable(e: &Entity) -> bool {
     .any(|parent| crate::catalog::is_a(&e.object, parent))
 }
 
+#[cfg(test)]
 fn detector(game: &Game, h: &Hazard, right: bool) -> Rect {
     let y = h.pos.y + 8.0;
     if right {
@@ -242,22 +535,12 @@ fn detector(game: &Game, h: &Hazard, right: bool) -> Rect {
     }
 }
 
+#[cfg(test)]
 fn detector_occupied_bounds(area: Rect) -> Rect {
-    // Alarm 1 creates oArrowTrapTest at this origin and stretches sRed in X.
-    // Its source mask fills every column, but only rows 1..14. Keep the
-    // cached creation span separate from the occupied mask, including its
-    // sprite origin and GM8's independently rounded inclusive bbox edges.
-    let sprite = crate::catalog::sprite_def("sRed").expect("source detector sprite");
-    let [left, top, right, bottom] = sprite.bounds;
-    let [ox, oy] = sprite.origin;
-    let scale = area.w / 16.0;
-    let x0 = (area.x + f64::from(left - ox) * scale).round_ties_even();
-    let x1 = (area.x + f64::from(right - ox + 1) * scale - 1.0).round_ties_even();
-    let y0 = (area.y + f64::from(top - oy)).round_ties_even();
-    let y1 = (area.y + f64::from(bottom - oy)).round_ties_even();
-    Rect::new(x0, y0, x1 - x0 + 1.0, y1 - y0 + 1.0)
+    detectors::detector_occupied_bounds(area)
 }
 
+#[cfg(test)]
 fn detectors(game: &mut Game) {
     for h in hazards(game) {
         match h.object.as_str() {
@@ -319,7 +602,7 @@ fn detectors(game: &mut Game) {
                     });
                 if activated {
                     let pos = Vec2::new(h.pos.x + if right { 18.0 } else { -2.0 }, h.pos.y + 4.0);
-                    let id = game.world.spawn("oArrow", pos);
+                    let id = game.spawn("oArrow", pos);
                     if let Some(e) = game.world.entity_mut(id) {
                         e.vel.x = if right { 8.0 } else { -8.0 };
                         e.facing = if right { 1 } else { -1 };
@@ -344,7 +627,7 @@ fn detectors(game: &mut Game) {
                 if cooldown <= 1.0
                     && let Some(right) = spear_target(game, &h)
                 {
-                    let id = game.world.spawn(
+                    let id = game.spawn(
                         "oSpearsLeft",
                         Vec2::new(h.pos.x + if right { 16.0 } else { -16.0 }, h.pos.y),
                     );
@@ -416,6 +699,7 @@ fn detectors(game: &mut Game) {
 
 /// The source tests the nearest member of each family, first on the left,
 /// then on the right. Actor and item origins use different vertical probes.
+#[cfg(test)]
 fn spear_target(game: &Game, trap: &Hazard) -> Option<bool> {
     let center = Vec2::new(trap.pos.x + 8.0, trap.pos.y + 8.0);
     let nearest = |family: &str| {
@@ -456,6 +740,7 @@ fn spear_target(game: &Game, trap: &Hazard) -> Option<bool> {
     }
     None
 }
+#[cfg(test)]
 fn idol_traps(game: &mut Game) {
     let ids: Vec<_> = game
         .world
@@ -488,7 +773,7 @@ fn idol_traps(game: &mut Game) {
             }
         }
         if let Some(pos) = spawn {
-            game.world.spawn("oBoulder", pos);
+            game.spawn("oBoulder", pos);
             game.sound("sndThump", pos);
         }
         if let Some(pos) = destroyed {
@@ -582,8 +867,8 @@ mod tests {
                 for x in 0..20 {
                     game.world.set_tile(x, 12, "oBlock");
                 }
-                game.world.spawn(trap, Vec2::new(80.0, 80.0));
-                let rock = game.world.spawn("oRock", Vec2::new(rock_x, rock_y));
+                game.spawn(trap, Vec2::new(80.0, 80.0));
+                let rock = game.spawn("oRock", Vec2::new(rock_x, rock_y));
                 game.world.entity_mut(rock).unwrap().vel.x = 1.0;
 
                 game.step(&crate::InputFrame::default());
@@ -618,8 +903,8 @@ mod tests {
             for x in 0..20 {
                 game.world.set_tile(x, 12, "oBlock");
             }
-            game.world.spawn("oArrowTrapLeft", Vec2::new(80.0, 80.0));
-            let moving = game.world.spawn(object, Vec2::new(50.0, 82.0));
+            game.spawn("oArrowTrapLeft", Vec2::new(80.0, 80.0));
+            let moving = game.spawn(object, Vec2::new(50.0, 82.0));
             game.world.entity_mut(moving).unwrap().vel.x = 1.0;
 
             game.step(&crate::InputFrame::default());
@@ -665,11 +950,9 @@ mod tests {
         }
         assert!(game.player.grounded);
         assert_eq!(game.player.health, 4);
-        let spikes = game.world.spawn("oSpikes", Vec2::new(288.0, 96.0));
+        let spikes = game.spawn("oSpikes", Vec2::new(288.0, 96.0));
         let pos = game.player.pos;
-        let yeti = game
-            .world
-            .spawn("oYeti", Vec2::new(pos.x - 8.0, pos.y - 8.0));
+        let yeti = game.spawn("oYeti", Vec2::new(pos.x - 8.0, pos.y - 8.0));
         game.step(&crate::InputFrame::default());
         assert_eq!(game.player.stun, 0);
         assert!(
@@ -702,8 +985,7 @@ mod tests {
         let mut game = Game::shell(11, RulesPreset::Classic);
         game.load_custom(&level, "ordinary-fall-spikes", "");
         let pos = game.player.pos;
-        game.world
-            .spawn("oSpikes", Vec2::new(pos.x - 8.0, pos.y + 8.0));
+        game.spawn("oSpikes", Vec2::new(pos.x - 8.0, pos.y + 8.0));
         let mut survived_four = false;
         for _ in 0..12 {
             game.step(&crate::InputFrame::default());
@@ -733,8 +1015,8 @@ mod tests {
     #[test]
     fn lava_applies_the_source_ninety_nine_damage_once_per_character_step() {
         let mut game = room();
-        game.world.spawn("oLava", Vec2::new(32.0, 32.0));
-        game.world.spawn("oLava", Vec2::new(32.0, 32.0));
+        game.spawn("oLava", Vec2::new(32.0, 32.0));
+        game.spawn("oLava", Vec2::new(32.0, 32.0));
         // Kali can heal without a source life cap. A collision_point query
         // subtracts 99 once even when authored lava instances overlap.
         game.player.health = 200;
@@ -760,7 +1042,7 @@ mod tests {
     fn dying_web_shares_escape_life_and_fades_before_destroying() {
         let mut game = room();
         game.player.pos = Vec2::new(120.0, 120.0);
-        let web = game.world.spawn("oWeb", Vec2::new(32.0, 32.0));
+        let web = game.spawn("oWeb", Vec2::new(32.0, 32.0));
         let entity = game.world.entity_mut(web).unwrap();
         entity.data.insert("life".into(), 1.03);
         entity.data.insert("dying".into(), 1.0);
@@ -777,8 +1059,8 @@ mod tests {
         let mut game = room();
         game.player.pos = Vec2::new(120.0, 40.0);
         game.world.set_tile(5, 6, "oHardBlock");
-        game.world.spawn("oWeb", Vec2::new(80.0, 80.0));
-        let id = game.world.spawn("oCaveman", Vec2::new(80.0, 80.0));
+        game.spawn("oWeb", Vec2::new(80.0, 80.0));
+        let id = game.spawn("oCaveman", Vec2::new(80.0, 80.0));
         let caveman = game.world.entity_mut(id).unwrap();
         crate::enemies::init_entity(caveman);
         caveman.state = 98;
@@ -788,7 +1070,7 @@ mod tests {
         game.step(&crate::InputFrame::default());
         assert_eq!(game.world.entity(id).unwrap().timer, 3);
         assert_eq!(game.world.entity(id).unwrap().value("webbed"), 0.0);
-        let bullet = game.world.spawn("oBullet", Vec2::new(87.0, 87.0));
+        let bullet = game.spawn("oBullet", Vec2::new(87.0, 87.0));
         let bullet = game.world.entity_mut(bullet).unwrap();
         bullet.data.insert("owner".into(), 1.0);
         bullet.data.insert("damage".into(), 4.0);
@@ -801,8 +1083,8 @@ mod tests {
         let mut game = room();
         game.player.pos = Vec2::new(120.0, 40.0);
         game.world.set_tile(5, 6, "oHardBlock");
-        game.world.spawn("oWeb", Vec2::new(80.0, 80.0));
-        let id = game.world.spawn("oShopkeeper", Vec2::new(80.0, 80.0));
+        game.spawn("oWeb", Vec2::new(80.0, 80.0));
+        let id = game.spawn("oShopkeeper", Vec2::new(80.0, 80.0));
         game.step(&crate::InputFrame::default());
         let keeper = game.world.entity(id).unwrap();
         assert_eq!(keeper.state, 2);
@@ -815,10 +1097,10 @@ mod tests {
             game.world.set_tile(x, 10, "oHardBlock");
         }
         let trap_x = if right { 64.0 } else { 96.0 };
-        let trap = game.world.spawn("oSpearTrapTop", Vec2::new(trap_x, 144.0));
+        let trap = game.spawn("oSpearTrapTop", Vec2::new(trap_x, 144.0));
         game.data
             .insert(format!("hazard_entity:{trap}:cooldown"), 50.0);
-        let spear = game.world.spawn("oSpearsLeft", Vec2::new(80.0, 144.0));
+        let spear = game.spawn("oSpearsLeft", Vec2::new(80.0, 144.0));
         let entity = game.world.entity_mut(spear).unwrap();
         entity.sprite = if right { "sSpearsRight" } else { "sSpearsLeft" }.into();
         entity.animation = 20.0;
@@ -882,12 +1164,10 @@ mod tests {
                 let mut game = authored_exit_room(character, exit);
                 let player_pos = game.player.pos;
                 let spear_pos = Vec2::new(player_pos.x - 8.0, player_pos.y - 8.0);
-                let trap = game
-                    .world
-                    .spawn("oSpearTrapTop", Vec2::new(spear_pos.x + 16.0, spear_pos.y));
+                let trap = game.spawn("oSpearTrapTop", Vec2::new(spear_pos.x + 16.0, spear_pos.y));
                 game.data
                     .insert(format!("hazard_entity:{trap}:cooldown"), 50.0);
-                let spear = game.world.spawn("oSpearsLeft", spear_pos);
+                let spear = game.spawn("oSpearsLeft", spear_pos);
                 game.world.entity_mut(spear).unwrap().animation = 20.0;
                 game.step(&crate::InputFrame::default());
                 assert_eq!(game.world.entity(spear).unwrap().animation, 21.0);
@@ -912,11 +1192,60 @@ mod tests {
     }
 
     #[test]
+    fn actual_lava_records_source_cause_for_revived_and_fatal_campaign_hits_only() {
+        for (custom, ankh) in [(false, false), (false, true), (true, true)] {
+            let mut game = if custom {
+                authored_exit_room(crate::characters::Character::Explorer, false)
+            } else {
+                Game::new(42, RulesPreset::Classic)
+            };
+            if ankh {
+                let p = game.player.pos;
+                let id = game.spawn("oAnkh", Vec2::new(p.x, p.y + 4.));
+                let item = game.world.entity_mut(id).unwrap();
+                item.data.insert("cost".into(), 0.);
+                item.data.insert("forSale".into(), 0.);
+                game.step(&crate::InputFrame {
+                    down: true,
+                    attack: true,
+                    attack_pressed: true,
+                    ..Default::default()
+                });
+                assert!(game.player.has("Ankh"));
+            }
+            let p = game.player.pos;
+            // Two overlapping lava instances still satisfy one source point query.
+            game.spawn("oLava", Vec2::new(p.x - 8., p.y - 8.));
+            game.spawn("oLava", Vec2::new(p.x - 8., p.y - 8.));
+            game.step(&crate::InputFrame::default());
+            assert_eq!(game.lifetime_stats.misc_deaths[11], u64::from(!custom));
+            assert_eq!(
+                game.events
+                    .iter()
+                    .filter(|e| **e == GameEvent::Damage { amount: 99 })
+                    .count(),
+                1
+            );
+            if ankh {
+                assert_eq!(game.player.health, 4);
+                assert!(!game.player.has("Ankh"));
+                assert_ne!(game.state, crate::RunState::Dead);
+            } else {
+                assert_eq!(game.state, crate::RunState::Dead);
+                game.step(&crate::InputFrame::default());
+                assert_eq!(
+                    game.lifetime_stats.misc_deaths[11], 1,
+                    "the independent dead flag suppresses another lava cause"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn real_exit_animation_does_not_protect_from_the_outer_lava_check() {
         let mut game = authored_exit_room(crate::characters::Character::Explorer, true);
         let pos = game.player.pos;
-        game.world
-            .spawn("oLava", Vec2::new(pos.x - 8.0, pos.y - 8.0));
+        game.spawn("oLava", Vec2::new(pos.x - 8.0, pos.y - 8.0));
         game.step(&crate::InputFrame::default());
         assert_eq!(game.player.health, 0);
         assert_eq!(game.state, crate::RunState::Dead);
@@ -963,9 +1292,11 @@ mod tests {
             .alive = false;
         game.step(&crate::InputFrame::default());
         assert!(game.world.entity(spear).is_none());
-        assert_eq!(game.player.health, 16);
+        // Player319 observes the active spear before Spear528 destroys it.
+        assert_eq!(game.player.health, 12);
+        assert!(game.events.contains(&GameEvent::Damage { amount: 4 }));
         let mut game = room();
-        let trap = game.world.spawn("oSpearTrapTop", Vec2::new(80.0, 80.0));
+        let trap = game.spawn("oSpearTrapTop", Vec2::new(80.0, 80.0));
         game.data
             .insert(format!("hazard_entity:{trap}:cooldown"), 25.0);
         game.step(&crate::InputFrame::default());
@@ -978,8 +1309,8 @@ mod tests {
         for x in 0..game.world.width {
             game.world.set_tile(x, 6, "oHardBlock");
         }
-        game.world.spawn("oSpearTrapTop", Vec2::new(80.0, 80.0));
-        game.world.spawn("oCaveman", Vec2::new(110.0, 80.0));
+        game.spawn("oSpearTrapTop", Vec2::new(80.0, 80.0));
+        game.spawn("oCaveman", Vec2::new(110.0, 80.0));
         game.step(&crate::InputFrame::default());
         assert!(
             game.world
@@ -992,8 +1323,8 @@ mod tests {
         for x in 0..game.world.width {
             game.world.set_tile(x, 6, "oHardBlock");
         }
-        game.world.spawn("oSpearTrapTop", Vec2::new(80.0, 80.0));
-        game.world.spawn("oGoldNugget", Vec2::new(110.0, 88.0));
+        game.spawn("oSpearTrapTop", Vec2::new(80.0, 80.0));
+        game.spawn("oGoldNugget", Vec2::new(110.0, 88.0));
         game.step(&crate::InputFrame::default());
         assert!(
             !game

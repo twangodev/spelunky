@@ -44,6 +44,46 @@ export async function state(page, expected) {
   return snapshot(page);
 }
 
+// Reach the host menu through the source opening and its ordinary skip inputs.
+// Reloads recreate Intro; no Rust opening/player flags are changed by the test.
+export async function reachTitleMenu(page) {
+  await page.waitForFunction(() => window.__spelunkyTest?.screen, null, { timeout: 15000 });
+  const route = { initial: await snapshot(page), inputs: [] };
+  if (route.initial.screen === 'Title') return route;
+  await page.locator('canvas').focus();
+  assert.equal(route.initial.screen, 'Playing');
+  assert.ok(['Intro', 'Title'].includes(route.initial.opening?.kind), 'Expected the actual source opening after startup');
+  if (route.initial.opening.kind === 'Intro') {
+    await page.keyboard.press('Enter');
+    route.inputs.push('Enter: reveal Intro');
+    await page.waitForFunction(() => window.__spelunkyTest.opening?.kind === 'Intro'
+      && window.__spelunkyTest.opening.fadeLevel <= 0, null, { timeout: 15000 });
+    const revealed = await snapshot(page);
+    // The source creates its dummy on the next tick after the fade reaches zero.
+    await page.waitForFunction(tick => window.__spelunkyTest.tick >= tick + 2, revealed.tick, { timeout: 10000 });
+    route.revealed = await snapshot(page);
+    await page.keyboard.press('Enter');
+    route.inputs.push('Enter: fade Intro to authored Title');
+    await page.waitForFunction(() => window.__spelunkyTest.world?.name === 'rTitle', null, { timeout: 15000 });
+  }
+  route.authoredTitle = await snapshot(page);
+  if (route.authoredTitle.opening) {
+    await page.keyboard.press('Enter');
+    route.inputs.push('Enter: skip authored Title entrance');
+    await page.waitForFunction(() => window.__spelunkyTest.world?.name === 'rTitle'
+      && !window.__spelunkyTest.opening, null, { timeout: 15000 });
+  }
+  route.hub = await snapshot(page);
+  assert.equal(route.hub.world.name, 'rTitle');
+  await page.keyboard.press('Escape');
+  await state(page, 'Pause');
+  await press(page, 'ArrowDown', 2);
+  await page.keyboard.press('Enter');
+  route.inputs.push('Escape, ArrowDown, ArrowDown, Enter: host Title menu');
+  route.menu = await state(page, 'Title');
+  return route;
+}
+
 export async function press(page, key, count = 1) {
   for (let i = 0; i < count; i++) {
     await page.keyboard.press(key);
@@ -113,7 +153,7 @@ async function pauseWhileMoving(page, direction, toward, result) {
 export async function restoreDefaultSettings(page) {
   await page.setViewportSize({ width: 960, height: 720 });
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await state(page, 'Title');
+  await reachTitleMenu(page);
   await page.locator('canvas').focus();
   // A new app instance starts the settings cursor at row zero. Restore defaults
   // through the actual menu to use Classic rules, unsnapped motion, and Z jump.
@@ -138,7 +178,7 @@ export async function runMovementAcceptance({ page, result, screenshot }) {
     if (rules === 'Assisted') {
       // Reload resets the settings cursor; toggling rule row zero persists via UI.
       await page.reload({ waitUntil: 'domcontentloaded' });
-      await state(page, 'Title');
+      await reachTitleMenu(page);
       await page.locator('canvas').focus();
       await press(page, 'ArrowUp', 4);
       await page.keyboard.press('Enter');

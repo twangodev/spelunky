@@ -134,6 +134,8 @@ pub enum PlayerState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Player {
+    #[serde(default = "crate::dispatcher::initially_active")]
+    pub engine_active: bool,
     pub pos: Vec2,
     pub previous_pos: Vec2,
     pub vel: Vec2,
@@ -156,10 +158,13 @@ pub struct Player {
     pub buffered_jump_ticks: u32,
     pub selected: u8,
     pub data: BTreeMap<String, f64>,
+    #[serde(default = "crate::dispatcher::unset_alarms")]
+    pub alarms: [i32; 12],
 }
 impl Default for Player {
     fn default() -> Self {
         Self {
+            engine_active: true,
             pos: Vec2::new(40.0, 40.0),
             previous_pos: Vec2::new(40.0, 40.0),
             vel: Vec2::default(),
@@ -175,6 +180,7 @@ impl Default for Player {
             invincible: 0,
             stun: 0,
             animation: 0.0,
+            alarms: crate::dispatcher::unset_alarms(),
             sprite: "sStandLeft".into(),
             attack_timer: 0,
             jump_time: 0,
@@ -186,6 +192,15 @@ impl Default for Player {
     }
 }
 impl Player {
+    pub fn set_sprite(&mut self, next: &str) {
+        crate::animation::assign(&mut self.sprite, &mut self.animation, next);
+    }
+    pub fn image_speed(&self) -> f64 {
+        self.data.get("animation_speed").copied().unwrap_or(1.0)
+    }
+    pub fn set_image_speed(&mut self, speed: f64) {
+        self.data.insert("animation_speed".into(), speed);
+    }
     /// oPlayer1's source hurt block excludes every character's exit sprite,
     /// independently of the invincibility countdown used by contact damage.
     pub fn is_exiting(&self) -> bool {
@@ -203,7 +218,15 @@ impl Player {
     /// Current source sprite mask for collision events, separate from the
     /// platform engine's custom rectangle returned by `bounds()`.
     pub fn sprite_bounds(&self) -> Rect {
-        self.collision_mask().bounds()
+        let (scale, angle) = self.collision_transform();
+        crate::catalog::instance_sprite_bounds(
+            "oPlayer1",
+            &self.sprite,
+            self.pos,
+            self.animation,
+            scale,
+            angle,
+        )
     }
     pub fn mask_contains(&self, point: Vec2, precision: CollisionPrecision) -> bool {
         self.collision_mask().contains(point, precision)
@@ -211,7 +234,18 @@ impl Player {
     pub fn mask_intersects(&self, rect: Rect, precision: CollisionPrecision) -> bool {
         self.collision_mask().intersects(rect, precision)
     }
-    fn collision_mask(&self) -> crate::catalog::CollisionMask {
+    pub(crate) fn collision_mask(&self) -> crate::catalog::CollisionMask {
+        let (scale, angle) = self.collision_transform();
+        crate::catalog::instance_mask(
+            "oPlayer1",
+            &self.sprite,
+            self.pos,
+            self.animation,
+            scale,
+            angle,
+        )
+    }
+    fn collision_transform(&self) -> (Vec2, f64) {
         let xscale = self
             .data
             .get("image_xscale")
@@ -224,14 +258,7 @@ impl Player {
             .copied()
             .unwrap_or(0.0)
             .to_radians();
-        crate::catalog::instance_mask(
-            "oPlayer1",
-            &self.sprite,
-            self.pos,
-            self.animation,
-            Vec2::new(xscale, yscale),
-            angle,
-        )
+        (Vec2::new(xscale, yscale), angle)
     }
     pub fn bounds(&self) -> Rect {
         let half = self
@@ -250,6 +277,8 @@ impl Player {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entity {
     pub id: u64,
+    #[serde(default)]
+    pub creation_serial: u64,
     pub object: String,
     pub sprite: String,
     pub pos: Vec2,
@@ -266,12 +295,33 @@ pub struct Entity {
     pub held: bool,
     pub data: BTreeMap<String, f64>,
     pub text: BTreeMap<String, String>,
+    #[serde(default = "crate::dispatcher::unset_alarms")]
+    pub alarms: [i32; 12],
+    #[serde(default = "crate::dispatcher::initially_active")]
+    pub engine_active: bool,
 }
 impl Entity {
+    pub fn set_sprite(&mut self, next: &str) {
+        crate::animation::assign(&mut self.sprite, &mut self.animation, next);
+    }
+    pub fn image_speed(&self) -> f64 {
+        self.data.get("animation_speed").copied().unwrap_or(1.0)
+    }
+    pub fn set_image_speed(&mut self, speed: f64) {
+        self.data.insert("animation_speed".into(), speed);
+    }
     /// Collision-event mask from the current sprite/object mask. Movement
     /// overrides in `data["collision_*"]` deliberately do not affect this.
     pub fn sprite_bounds(&self) -> Rect {
-        self.collision_mask().bounds()
+        let (scale, angle) = self.collision_transform();
+        crate::catalog::instance_sprite_bounds(
+            &self.object,
+            &self.sprite,
+            self.pos,
+            self.animation,
+            scale,
+            angle,
+        )
     }
     pub fn mask_contains(&self, point: Vec2, precision: CollisionPrecision) -> bool {
         self.collision_mask().contains(point, precision)
@@ -285,18 +335,21 @@ impl Entity {
         self.collision_mask()
             .intersects_mask(&other.collision_mask())
     }
-    fn collision_mask(&self) -> crate::catalog::CollisionMask {
-        // Unlike enemy draw_sprite_ext mirroring, Damsel's Draw event writes
-        // the actual image_xscale property and therefore changes her mask.
-        let default_xscale = if matches!(
-            self.object.as_str(),
-            "oDamsel" | "oPDummy" | "oPDummy2" | "oPDummy3" | "oPDummy6"
-        ) && self.facing > 0
-        {
-            -1.0
-        } else {
-            1.0
-        };
+    pub(crate) fn collision_mask(&self) -> crate::catalog::CollisionMask {
+        let (scale, angle) = self.collision_transform();
+        crate::catalog::instance_mask(
+            &self.object,
+            &self.sprite,
+            self.pos,
+            self.animation,
+            scale,
+            angle,
+        )
+    }
+    fn collision_transform(&self) -> (Vec2, f64) {
+        // Source image_xscale is an instance property. Damsel/dummy Draw
+        // writes it after Collision; a Step-facing change cannot alter it yet.
+        let default_xscale = 1.0;
         let xscale = self
             .data
             .get("image_xscale")
@@ -314,14 +367,7 @@ impl Entity {
                     0.0
                 }
             });
-        crate::catalog::instance_mask(
-            &self.object,
-            &self.sprite,
-            self.pos,
-            self.animation,
-            Vec2::new(xscale, yscale),
-            angle,
-        )
+        (Vec2::new(xscale, yscale), angle)
     }
     pub fn new(id: u64, object: impl Into<String>, pos: Vec2) -> Self {
         let object = object.into();
@@ -331,6 +377,7 @@ impl Entity {
         let solid = crate::catalog::is_solid(&object);
         Self {
             id,
+            creation_serial: 0,
             object,
             sprite,
             pos,
@@ -347,6 +394,8 @@ impl Entity {
             held: false,
             data: BTreeMap::new(),
             text: BTreeMap::new(),
+            alarms: crate::dispatcher::unset_alarms(),
+            engine_active: true,
         }
     }
     pub fn bounds(&self) -> Rect {
@@ -366,14 +415,31 @@ impl Entity {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tile {
     pub object: String,
+    #[serde(default)]
+    pub creation_serial: u64,
+    #[serde(default = "crate::dispatcher::unset_alarms")]
+    pub alarms: [i32; 12],
+    #[serde(default = "crate::dispatcher::initially_active")]
+    pub engine_active: bool,
+}
+impl Default for Tile {
+    fn default() -> Self {
+        Self {
+            object: String::new(),
+            creation_serial: 0,
+            alarms: crate::dispatcher::unset_alarms(),
+            engine_active: true,
+        }
+    }
 }
 impl Tile {
     pub fn new(object: impl Into<String>) -> Self {
         Self {
             object: object.into(),
+            ..Self::default()
         }
     }
     pub fn is_solid(&self) -> bool {
@@ -421,6 +487,10 @@ pub struct World {
     pub dark: bool,
     pub name: String,
     pub next_id: u64,
+    #[serde(default)]
+    pub creation_serial: u64,
+    #[serde(default)]
+    pub tile_revision: u64,
     /// A destroyed solid requests the source global water/lava drainage pass.
     #[serde(default)]
     pub fluid_dirty: bool,
@@ -439,6 +509,8 @@ impl World {
             dark: false,
             name: String::new(),
             next_id: 1,
+            creation_serial: 0,
+            tile_revision: 0,
             fluid_dirty: false,
         }
     }
@@ -451,7 +523,10 @@ impl World {
     }
     pub fn set_tile(&mut self, x: usize, y: usize, object: impl Into<String>) {
         if x < self.width && y < self.height {
-            let replacement = Tile::new(object);
+            self.creation_serial = self.creation_serial.saturating_add(1);
+            self.tile_revision = self.tile_revision.wrapping_add(1);
+            let mut replacement = Tile::new(object);
+            replacement.creation_serial = self.creation_serial;
             let previous = &self.tiles[y * self.width + x];
             if previous.object != replacement.object
                 && crate::catalog::is_a(&previous.object, "oSolid")
@@ -659,8 +734,12 @@ impl World {
         let id = self.next_id;
         self.next_id += 1;
         let mut e = Entity::new(id, object, pos);
+        self.creation_serial = self.creation_serial.saturating_add(1);
+        e.creation_serial = self.creation_serial;
         crate::enemies::init_entity(&mut e);
         crate::items::init_entity(&mut e);
+        crate::world_events::init_entity(&mut e);
+        crate::traps::init_entity(&mut e);
         self.entities.push(e);
         crate::enemies::on_spawn(self, id);
         id
@@ -727,9 +806,17 @@ pub enum GameEvent {
         radius: f64,
     },
     Message(String),
+    Dialogue(SourceMessage),
     LevelComplete,
     Died,
     Won,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceMessage {
+    pub first: String,
+    pub second: String,
+    pub ticks: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -743,6 +830,9 @@ pub enum RunState {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Game {
+    /// Immutable state observed by the source Draw phase, before Animation.
+    #[serde(skip)]
+    pub draw_view: Option<Box<Game>>,
     pub seed: u64,
     pub tick: u64,
     pub level_tick: u64,
@@ -758,8 +848,79 @@ pub struct Game {
     pub previous_camera: Vec2,
     pub flags: BTreeSet<String>,
     pub data: BTreeMap<String, f64>,
+    #[serde(default)]
+    pub lifetime_stats: crate::statistics::LifetimeStats,
+    #[serde(default)]
+    pub dispatcher: crate::dispatcher::State,
+    #[serde(default = "crate::dispatcher::unset_alarms")]
+    pub alarms: [i32; 12],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opening: Option<crate::opening::OpeningState>,
+    #[serde(default)]
+    pub game_over: crate::progression::GameOverState,
 }
 impl Game {
+    pub fn presentation(&self) -> &Game {
+        self.draw_view.as_deref().unwrap_or(self)
+    }
+    pub fn capture_draw_view(&mut self) {
+        self.draw_view = None;
+        self.draw_view = Some(Box::new(self.clone()));
+    }
+    /// Create callbacks run synchronously before producer assignments.
+    pub fn spawn(&mut self, object: impl Into<String>, pos: Vec2) -> u64 {
+        let id = self.world.spawn(object, pos);
+        crate::dispatcher::create(self, id);
+        id
+    }
+    pub fn is_level(&self) -> bool {
+        if [
+            "hub",
+            "hub_title",
+            "hub_scores",
+            "hub_sun",
+            "hub_moon",
+            "hub_stars",
+        ]
+        .iter()
+        .any(|flag| self.flags.contains(*flag))
+            || self.opening.is_some()
+        {
+            return false;
+        }
+        if self
+            .ending
+            .as_ref()
+            .is_some_and(|ending| ending.stage != crate::ending::EndingStage::Exit)
+        {
+            return false;
+        }
+        if self.flags.contains("tutorial")
+            || self.flags.contains("custom_level")
+            || self.flags.contains("custom")
+        {
+            return true;
+        }
+        if self.world.name.starts_with('r') {
+            return matches!(
+                self.world.name.as_str(),
+                "rTutorial" | "rLoadLevel" | "rLevel" | "rLevel2" | "rLevel3" | "rOlmec"
+            );
+        }
+        (1..=16).contains(&self.world.level)
+    }
+    pub fn is_load_level(&self) -> bool {
+        self.world.name == "rLoadLevel"
+            || self.flags.contains("custom")
+            || self.flags.contains("custom_level")
+    }
+    pub fn is_real_level(&self) -> bool {
+        self.is_level()
+            && !self.flags.contains("tutorial")
+            && !self.flags.contains("custom")
+            && !self.flags.contains("custom_level")
+            && !matches!(self.world.name.as_str(), "rTutorial" | "rLoadLevel")
+    }
     /// The oGame source clock starts at 1 on every room entry, then
     /// increments before simulation and wraps after 100,000,000.
     pub fn engine_time(&self) -> u64 {
@@ -767,6 +928,7 @@ impl Game {
     }
     pub fn shell(seed: u64, rules: RulesPreset) -> Self {
         Self {
+            draw_view: None,
             seed,
             tick: 0,
             level_tick: 0,
@@ -777,6 +939,11 @@ impl Game {
             events: Vec::new(),
             state: RunState::Playing,
             ending: None,
+            opening: None,
+            game_over: Default::default(),
+            lifetime_stats: Default::default(),
+            dispatcher: Default::default(),
+            alarms: crate::dispatcher::unset_alarms(),
             camera: Vec2::default(),
             previous_camera: Vec2::default(),
             flags: BTreeSet::new(),
@@ -809,6 +976,149 @@ impl Game {
 #[cfg(test)]
 mod geometry_tests {
     use super::*;
+
+    // Preserve the pre-optimization argument extraction independently from
+    // collision_transform(), so a changed default cannot make both paths agree.
+    fn original_entity_bounds(e: &Entity) -> Rect {
+        let xscale = e.data.get("image_xscale").copied().unwrap_or(1.0);
+        let yscale = e.data.get("image_yscale").copied().unwrap_or(1.0);
+        let angle = e
+            .data
+            .get("image_angle")
+            .map(|angle| -angle.to_radians())
+            .unwrap_or_else(|| {
+                if matches!(e.object.as_str(), "oArrow" | "oFishBone") {
+                    e.value("rotation")
+                } else {
+                    0.0
+                }
+            });
+        crate::catalog::instance_mask(
+            &e.object,
+            &e.sprite,
+            e.pos,
+            e.animation,
+            Vec2::new(xscale, yscale),
+            angle,
+        )
+        .bounds()
+    }
+
+    fn original_player_bounds(p: &Player) -> Rect {
+        let xscale = p
+            .data
+            .get("image_xscale")
+            .copied()
+            .unwrap_or(if p.facing > 0 { -1.0 } else { 1.0 });
+        let yscale = p.data.get("image_yscale").copied().unwrap_or(1.0);
+        let angle = -p
+            .data
+            .get("image_angle")
+            .copied()
+            .unwrap_or(0.0)
+            .to_radians();
+        crate::catalog::instance_mask(
+            "oPlayer1",
+            &p.sprite,
+            p.pos,
+            p.animation,
+            Vec2::new(xscale, yscale),
+            angle,
+        )
+        .bounds()
+    }
+
+    fn assert_bounds_bits(actual: Rect, expected: Rect, context: &str) {
+        let bits = |r: Rect| [r.x.to_bits(), r.y.to_bits(), r.w.to_bits(), r.h.to_bits()];
+        assert_eq!(bits(actual), bits(expected), "{context}");
+    }
+
+    fn bounds_transform_cases() -> Vec<(Vec2, BTreeMap<String, f64>)> {
+        [
+            (Vec2::new(32.0, 48.0), vec![]),
+            (Vec2::new(32.5, -48.5), vec![]),
+            (Vec2::new(-0.0, 0.0), vec![]),
+            (Vec2::new(32.0, 48.0), vec![("image_xscale", -1.0)]),
+            (Vec2::new(32.0, 48.0), vec![("image_yscale", -1.0)]),
+            (Vec2::new(32.5, -48.5), vec![("image_xscale", 4.0)]),
+            (
+                Vec2::new(32.0, 48.0),
+                vec![("image_xscale", 2.0), ("image_yscale", 3.0)],
+            ),
+            (Vec2::new(32.5, -48.5), vec![("image_angle", 90.0)]),
+            (Vec2::new(32.0, 48.0), vec![("image_angle", 1.5)]),
+            (Vec2::new(32.0, 48.0), vec![("rotation", 0.75)]),
+            (
+                Vec2::new(32.0, 48.0),
+                vec![("rotation", 0.75), ("image_angle", -45.0)],
+            ),
+            (Vec2::new(32.0, 48.0), vec![("image_xscale", 0.0)]),
+            (Vec2::new(32.0, 48.0), vec![("image_yscale", 0.0)]),
+            (Vec2::new(32.0, 48.0), vec![("image_xscale", f64::NAN)]),
+            (Vec2::new(32.0, 48.0), vec![("image_angle", f64::NAN)]),
+            (Vec2::new(f64::NAN, 48.0), vec![]),
+            (Vec2::new(32.0, f64::INFINITY), vec![]),
+        ]
+        .into_iter()
+        .map(|(pos, data)| {
+            (
+                pos,
+                data.into_iter()
+                    .map(|(key, value)| (key.into(), value))
+                    .collect(),
+            )
+        })
+        .collect()
+    }
+
+    #[test]
+    fn bounds_only_path_matches_original_masks_for_every_object_and_transform() {
+        let cases = bounds_transform_cases();
+        for name in crate::catalog::object_names().chain(["missing", ""]) {
+            let mut e = Entity::new(1, name, Vec2::default());
+            for (pos, data) in &cases {
+                e.pos = *pos;
+                e.data = data.clone();
+                for animation in [0.0, -0.0, 2.75, -0.5, f64::NAN, f64::INFINITY] {
+                    e.animation = animation;
+                    let expected = original_entity_bounds(&e);
+                    assert_bounds_bits(e.sprite_bounds(), expected, name);
+                    assert_bounds_bits(e.collision_mask().bounds(), expected, name);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bounds_only_path_matches_original_current_frames_and_player_facing() {
+        let atlas: serde_json::Value =
+            serde_json::from_str(include_str!("../../../assets/atlas.json")).unwrap();
+        let sprites = atlas["sprites"].as_object().unwrap();
+        let cases = bounds_transform_cases();
+        let mut e = Entity::new(1, "oSnake", Vec2::default());
+        let mut p = Player::default();
+        for sprite in sprites.keys().map(String::as_str).chain(["missing", ""]) {
+            e.sprite = sprite.into();
+            p.sprite = sprite.into();
+            for frame in 0..crate::catalog::sprite_frame_count(sprite).max(1) {
+                for (pos, data) in &cases {
+                    e.pos = *pos;
+                    e.data = data.clone();
+                    e.animation = frame as f64 + 0.5;
+                    assert_bounds_bits(e.sprite_bounds(), original_entity_bounds(&e), sprite);
+                    p.pos = *pos;
+                    p.data = data.clone();
+                    p.animation = e.animation;
+                    for facing in [-1, 0, 1] {
+                        p.facing = facing;
+                        let expected = original_player_bounds(&p);
+                        assert_bounds_bits(p.sprite_bounds(), expected, sprite);
+                        assert_bounds_bits(p.collision_mask().bounds(), expected, sprite);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn collision_events_use_current_sprite_not_movement_override() {

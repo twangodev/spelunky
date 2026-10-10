@@ -1,7 +1,6 @@
 //! Classic 1.1 Skeleton, Zombie and Vampire Create/Step event translations.
-//! Source instance origins are retained. Tile/rect collisions stand in for
-//! GameMaker masks; blood, bone and skull instances need their own item systems.
-//! Activation, combat, kill accounting and Vampire cape drops belong to dispatcher.
+//! Source instance origins and the separate movement/collision masks are retained.
+//! Automatic animation and paired Collision events belong to the engine dispatcher.
 use super::{bounds, move_body};
 use crate::{Entity, Game, PlayerState, Rect, Vec2, World};
 
@@ -15,25 +14,48 @@ pub fn init(e: &mut Entity) {
     e.health = if e.object == "oVampire" { 6 } else { 1 };
     e.facing = 1;
     e.vel = Vec2::new(if e.object == "oVampire" { 2.5 } else { 0.0 }, 0.0);
+    e.set_image_speed(if e.object == "oZombie" { 0.4 } else { 0.5 });
     e.data.insert(
-        "animation_speed".into(),
-        if e.object == "oZombie" { 0.4 } else { 0.5 },
+        "stun_time".into(),
+        if e.object == "oVampire" { 60.0 } else { 200.0 },
     );
-    e.data.insert("stun_time".into(), 60.0);
     e.data.insert(
         "bloodless".into(),
         if e.object == "oZombie" { 0.0 } else { 1.0 },
     );
     e.data.insert("source_facing_pending".into(), 1.0);
-    e.sprite = match e.object.as_str() {
+    e.set_sprite(match e.object.as_str() {
         "oSkeleton" => "sSkeletonLeft",
         "oZombie" => "sZombieLeft",
         _ => "sVampireLeft",
-    }
-    .into();
+    });
 }
 
-pub fn tick(game: &mut Game, e: &mut Entity) {
+pub(super) fn create_local(ctx: &mut crate::creation::EntityCreateContext<'_>, e: &mut Entity) {
+    if e.object == "oZombie" && e.value("source_facing_pending") > 0.0 {
+        e.facing = if ctx.rng.range(2) == 0 { -1 } else { 1 };
+        // Create uses collision_point(x, y, oWater, 0, 0), including descendants.
+        if ctx.world.tiles_point(e.pos, "oWater")
+            || ctx.world.entities.iter().any(|water| {
+                water.alive
+                    && crate::catalog::is_a(&water.object, "oWater")
+                    && water.sprite_bounds().contains(e.pos)
+            })
+        {
+            e.data.insert("swimming".into(), 1.0);
+        }
+        e.data.insert("source_facing_pending".into(), 0.0);
+    }
+}
+
+pub(super) fn create(game: &mut Game, e: &mut Entity) {
+    create_local(
+        &mut crate::creation::EntityCreateContext {
+            world: &game.world,
+            rng: &mut game.rng,
+        },
+        e,
+    );
     if e.value("source_facing_pending") > 0.0 {
         e.facing = match e.object.as_str() {
             "oSkeleton" => {
@@ -43,11 +65,13 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
                     1
                 }
             }
-            "oZombie" => random_facing(game),
             _ => 1,
         };
         e.data.insert("source_facing_pending".into(), 0.0);
     }
+}
+
+pub fn tick(game: &mut Game, e: &mut Entity) {
     match e.object.as_str() {
         "oSkeleton" => skeleton(game, e),
         "oZombie" => zombie(game, e),
@@ -56,8 +80,16 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
     }
 }
 
+pub(super) fn alarm(_game: &mut Game, e: &mut Entity, index: u8) {
+    // oVampire Alarm 0 overrides the inherited event with one variable write.
+    if e.object == "oVampire" && index == 0 {
+        e.data.insert("whipped".into(), 0.0);
+    }
+}
+
 /// The inherited enemy event pins held bodies to the player before Step.
 /// Keep that position while running the Vampire's recovery/death state machine.
+#[cfg(test)]
 pub(super) fn tick_held(game: &mut Game, e: &mut Entity) {
     let position = e.pos;
     e.vel = Vec2::default();
@@ -146,7 +178,7 @@ fn debris(game: &mut Game, e: &mut Entity) {
     for _ in 0..3 {
         crate::world_events::spawn_detritus(game, "oBone", p);
     }
-    let id = game.world.spawn("oSkull", p);
+    let id = game.spawn("oSkull", p);
     let y_velocity = -f64::from(1 + game.rng.range(3));
     let velocity = Vec2::new(
         f64::from(game.rng.range(4)) - f64::from(game.rng.range(4)),
@@ -157,19 +189,7 @@ fn debris(game: &mut Game, e: &mut Entity) {
     }
 }
 fn create_blood(game: &mut Game, e: &Entity) {
-    // scrCreateBlood suppresses bloodless enemies and caps oDetritus at 16.
-    if e.value("bloodless") == 0.0
-        && game
-            .world
-            .entities
-            .iter()
-            .filter(|p| p.alive && crate::catalog::is_a(&p.object, "oDetritus"))
-            .count()
-            < 16
-    {
-        game.world
-            .spawn("oBlood", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
-    }
+    super::create_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 1);
 }
 fn skeleton(game: &mut Game, e: &mut Entity) {
     let swimming = game
@@ -192,6 +212,7 @@ fn skeleton(game: &mut Game, e: &mut Entity) {
     }
     if e.health < 1 {
         debris(game, e);
+        super::record_death(game, e);
         e.alive = false;
         return;
     }
@@ -215,12 +236,11 @@ fn skeleton(game: &mut Game, e: &mut Entity) {
         e.pos.y -= 2.0;
     }
     if e.state != 98 {
-        e.sprite = if e.state == 1 {
+        e.set_sprite(if e.state == 1 {
             "sSkeletonWalkLeft"
         } else {
             "sSkeletonLeft"
-        }
-        .into();
+        });
     }
 }
 fn zombie(game: &mut Game, e: &mut Entity) {
@@ -231,6 +251,7 @@ fn zombie(game: &mut Game, e: &mut Entity) {
     if e.health < 1 {
         create_blood(game, e);
         debris(game, e);
+        super::record_death(game, e);
         e.alive = false;
         return;
     }
@@ -288,12 +309,11 @@ fn zombie(game: &mut Game, e: &mut Entity) {
     if top(&game.world, e) {
         e.vel.y = 1.0;
     }
-    e.sprite = if grounded {
+    e.set_sprite(if grounded {
         "sZombieLeft"
     } else {
         "sZombieJumpL"
-    }
-    .into();
+    });
 }
 fn vampire(game: &mut Game, e: &mut Entity) {
     let gravity = if e.held || matches!(e.state, 6 | 7) {
@@ -315,8 +335,7 @@ fn vampire(game: &mut Game, e: &mut Entity) {
         e.pos.y + if e.state >= 98 { 12.0 } else { 8.0 },
     );
     if crushed && (e.state >= 98 || !e.held) {
-        game.world
-            .spawn("oSmokePuff", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
+        game.spawn("oSmokePuff", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
         game.sound("sndCavemanDie", e.pos);
         e.alive = false;
         return;
@@ -334,7 +353,7 @@ fn vampire(game: &mut Game, e: &mut Entity) {
                 e.pos.x + f64::from(4 + game.rng.range(9)),
                 e.pos.y + f64::from(4 + game.rng.range(9)),
             );
-            game.world.spawn("oBurn", p);
+            game.spawn("oBurn", p);
         }
         e.data.insert("burning".into(), burning - 1.0);
     }
@@ -388,7 +407,7 @@ fn vampire(game: &mut Game, e: &mut Entity) {
             }
         }
         2 => {
-            e.data.insert("animation_speed".into(), 1.0);
+            e.set_image_speed(1.0);
             if side(&game.world, e, e.facing, 4.0) {
                 if ceiling {
                     e.facing *= -1;
@@ -487,7 +506,7 @@ fn vampire(game: &mut Game, e: &mut Entity) {
         }
         98 => {
             if !grounded {
-                e.sprite = if e.vel.x == 0.0 && e.health > 0 {
+                e.set_sprite(if e.vel.x == 0.0 && e.health > 0 {
                     "sVampireStunL"
                 } else if e.value("bounced") > 0.0 {
                     if e.vel.y < 0.0 {
@@ -499,8 +518,7 @@ fn vampire(game: &mut Game, e: &mut Entity) {
                     "sVampireDieLL"
                 } else {
                     "sVampireDieLR"
-                }
-                .into();
+                });
             }
             if grounded && e.value("bounced") == 0.0 {
                 e.data.insert("bounced".into(), 1.0);
@@ -520,7 +538,13 @@ fn vampire(game: &mut Game, e: &mut Entity) {
         }
         99 => {
             debris(game, e);
+            super::record_death(game, e);
             game.sound("sndCavemanDie", e.pos);
+            let id = game.spawn("oCapePickup", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
+            if let Some(cape) = game.world.entity_mut(id) {
+                cape.data.insert("cost".into(), 0.0);
+                cape.data.insert("forSale".into(), 0.0);
+            }
             e.alive = false;
             return;
         }
@@ -571,39 +595,129 @@ fn vampire(game: &mut Game, e: &mut Entity) {
         e.vel.x = 0.0;
     }
     if e.state == 6 {
-        e.sprite = "sVampireBatHang".into();
+        e.set_sprite("sVampireBatHang");
     } else if e.state < 98 && e.state != 3 {
-        e.sprite = match e.state {
+        e.set_sprite(match e.state {
             7 => "sVampireBatLeft",
             4 => "sVampireJumpL",
             _ if e.vel.x.abs() > 0.0 => "sVampireRunL",
             _ => "sVampireLeft",
-        }
-        .into();
+        });
     }
     if e.held {
-        e.sprite = if e.health > 0 {
+        e.set_sprite(if e.health > 0 {
             "sVampireHeldL"
         } else {
             "sVampireDHeldL"
-        }
-        .into();
+        });
     }
 }
 
-/// oVampire Collision with oBlood runs in the collision phase, after Step and
-/// combat, including when held or stunned. The source has no health cap/guard.
+/// An already selected Collision pair executes independently of the AI Step
+/// guard. The source Vampire/oBlood handler has no health cap or state guard.
+pub(super) fn collision(
+    game: &mut Game,
+    e: &mut Entity,
+    other: crate::dispatcher::Instance,
+) -> bool {
+    if e.object != "oVampire" {
+        return false;
+    }
+    if other == crate::dispatcher::Instance::Player {
+        vampire_character_collision(game, e);
+        return true;
+    }
+    if other.object(game) != "oBlood" {
+        return false;
+    }
+    let crate::dispatcher::Instance::Entity(id) = other else {
+        return true;
+    };
+    if e.alive {
+        if let Some(blood) = game.world.entity_mut(id) {
+            e.health += 1;
+            blood.alive = false;
+        }
+    }
+    true
+}
+
+fn vampire_character_collision(game: &mut Game, e: &mut Entity) {
+    if (game.player.pos.x - (e.pos.x + 8.0)).abs() > 8.0 {
+        return;
+    }
+    let jumped_on = game.player.state != PlayerState::Dead
+        && game.state != crate::RunState::Dead
+        && matches!(
+            game.player.state,
+            PlayerState::Jumping | PlayerState::Falling
+        )
+        && game.player.pos.y < e.pos.y + 5.0
+        && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0;
+    if jumped_on {
+        if e.state < 98 {
+            game.player.vel.y = -6.0 - 0.2 * game.player.vel.y;
+            let fall = game.player.data.get("fall_timer").copied().unwrap_or(0.0);
+            let multiplier = if game.player.has("SpikeShoes") { 3 } else { 1 };
+            e.health -= multiplier * ((fall / 16.0).floor() as i32 + 1);
+            if multiplier == 3 && e.value("bloodless") == 0.0 {
+                game.spawn(
+                    "oBlood",
+                    Vec2::new(game.player.pos.x, game.player.pos.y + 8.0),
+                );
+            }
+            game.player.data.insert("fall_timer".into(), 0.0);
+            super::set_counts_as_kill(e, true);
+            e.state = 98;
+            e.timer = e.value("stun_time") as u32;
+            e.vel.y = -6.0;
+            e.vel.x += if game.player.pos.x < e.pos.x + 8.0 {
+                1.0
+            } else {
+                -1.0
+            };
+            e.set_image_speed(0.5);
+            game.sound("sndHit", e.pos);
+        }
+    } else if game.player.invincible == 0 && e.state < 98 {
+        game.player.data.insert("blink".into(), 30.0);
+        game.player.invincible = 30;
+        if game.player.pos.y < e.pos.y {
+            game.player.vel.y = -6.0;
+        }
+        game.player.vel.x = if game.player.pos.x < e.pos.x {
+            -6.0
+        } else {
+            6.0
+        };
+        game.spawn("oBlood", game.player.pos);
+        if game.player.health > 0 {
+            game.player.health -= 1;
+            game.events.push(crate::GameEvent::Damage { amount: 1 });
+        }
+        // This particular source override has no enemyDeaths[7] producer.
+        game.sound("sndHurt", game.player.pos);
+    }
+}
+
+/// Compatibility for direct family fixtures; the engine dispatches individual
+/// pairs through `collision` rather than scanning neighbors during Step.
+#[cfg(test)]
 pub(super) fn absorb_blood(game: &mut Game, e: &mut Entity) {
     if !e.alive || e.object != "oVampire" {
         return;
     }
     // Collision events use sprite bounds, separately from the shorter move body.
     let body = e.sprite_bounds();
-    for blood in &mut game.world.entities {
-        if blood.alive && blood.object == "oBlood" && body.intersects(blood.bounds()) {
-            e.health += 1;
-            blood.alive = false;
-        }
+    let blood_ids: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|blood| blood.alive && blood.object == "oBlood" && body.intersects(blood.bounds()))
+        .map(|blood| blood.id)
+        .collect();
+    for id in blood_ids {
+        collision(game, e, crate::dispatcher::Instance::Entity(id));
     }
 }
 
@@ -611,6 +725,99 @@ pub(super) fn absorb_blood(game: &mut Game, e: &mut Entity) {
 mod tests {
     use super::*;
     use crate::RulesPreset;
+    #[test]
+    fn zombie_local_create_consumes_one_source_draw_and_runtime_preserves_it() {
+        for seed in [1, 7, 42, 129] {
+            let mut game = Game::shell(seed, RulesPreset::Classic);
+            let mut zombie = Entity::new(1, "oZombie", Vec2::new(100.0, 40.0));
+            init(&mut zombie);
+            let mut source_rng = game.rng.clone();
+            let facing = if source_rng.range(2) == 0 { -1 } else { 1 };
+            for _ in 0..2 {
+                create_local(
+                    &mut crate::creation::EntityCreateContext {
+                        world: &game.world,
+                        rng: &mut game.rng,
+                    },
+                    &mut zombie,
+                );
+            }
+            assert_eq!(zombie.facing, facing);
+            assert_eq!(zombie.value("source_facing_pending"), 0.0);
+            assert_eq!(game.rng.clone().next_u64(), source_rng.clone().next_u64());
+            zombie.facing = -facing;
+            create(&mut game, &mut zombie);
+            create(&mut game, &mut zombie);
+            assert_eq!(zombie.facing, -facing);
+            assert_eq!(game.rng.next_u64(), source_rng.next_u64());
+        }
+    }
+
+    #[test]
+    fn zombie_local_create_preserves_skeleton_and_vampire_runtime_create() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.player.pos.x = 40.0;
+        let source_rng = game.rng.clone();
+        for (object, facing) in [("oSkeleton", -1), ("oVampire", 1)] {
+            let mut actor = Entity::new(1, object, Vec2::new(80.0, 80.0));
+            init(&mut actor);
+            create_local(
+                &mut crate::creation::EntityCreateContext {
+                    world: &game.world,
+                    rng: &mut game.rng,
+                },
+                &mut actor,
+            );
+            assert_eq!(actor.value("source_facing_pending"), 1.0, "{object}");
+            assert_eq!(actor.facing, 1, "local Zombie hook must ignore {object}");
+            create(&mut game, &mut actor);
+            assert_eq!(actor.facing, facing, "{object}");
+            assert_eq!(actor.value("source_facing_pending"), 0.0, "{object}");
+        }
+        assert_eq!(game.rng.next_u64(), source_rng.clone().next_u64());
+    }
+
+    #[test]
+    fn zombie_local_create_latches_origin_water_family_once() {
+        for object in ["oWaterSwim", "oLava"] {
+            for dynamic in [false, true] {
+                for (origin, wet) in [
+                    (Vec2::new(48.0, 48.0), true),
+                    (Vec2::new(47.0, 48.0), false),
+                    (Vec2::new(64.0, 48.0), false),
+                ] {
+                    let mut game = Game::shell(42, RulesPreset::Classic);
+                    if dynamic {
+                        game.world.spawn(object, Vec2::new(48.0, 48.0));
+                    } else {
+                        game.world.set_tile(3, 3, object);
+                    }
+                    let mut zombie = Entity::new(999, "oZombie", origin);
+                    init(&mut zombie);
+                    let mut expected_rng = game.rng.clone();
+                    expected_rng.range(2);
+                    create_local(
+                        &mut crate::creation::EntityCreateContext {
+                            world: &game.world,
+                            rng: &mut game.rng,
+                        },
+                        &mut zombie,
+                    );
+                    assert_eq!(
+                        zombie.value("swimming"),
+                        f64::from(wet),
+                        "{object}, dynamic={dynamic}, origin={origin:?}"
+                    );
+                    // Runtime bootstrap must preserve caller writes after local Create.
+                    zombie.data.insert("swimming".into(), f64::from(!wet));
+                    create(&mut game, &mut zombie);
+                    assert_eq!(zombie.value("swimming"), f64::from(!wet));
+                    assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
+                }
+            }
+        }
+    }
+
     #[test]
     fn source_health_and_skeleton_delay() {
         let mut game = Game::shell(42, RulesPreset::Classic);
@@ -625,6 +832,233 @@ mod tests {
         let mut vampire = Entity::new(100, "oVampire", Vec2::new(40.0, 40.0));
         init(&mut vampire);
         assert_eq!(vampire.health, 6);
+    }
+    #[test]
+    fn source_create_facing_is_synchronous_and_does_not_repeat_in_step() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.player.pos = Vec2::new(40.0, 80.0);
+        let initial_rng = game.rng.clone();
+        let skeleton = game.spawn("oSkeleton", Vec2::new(80.0, 80.0));
+        assert_eq!(game.world.entity(skeleton).unwrap().facing, -1);
+        assert_eq!(game.rng.clone().next_u64(), initial_rng.clone().next_u64());
+
+        let mut source_rng = game.rng.clone();
+        let zombie_facing = if source_rng.range(2) == 0 { -1 } else { 1 };
+        let zombie = game.spawn("oZombie", Vec2::new(120.0, 80.0));
+        assert_eq!(game.world.entity(zombie).unwrap().facing, zombie_facing);
+        assert_eq!(game.rng.clone().next_u64(), source_rng.clone().next_u64());
+        game.player.pos = Vec2::new(250.0, 160.0);
+
+        game.step(&crate::InputFrame::default());
+
+        assert_eq!(game.world.entity(skeleton).unwrap().facing, -1);
+        assert_eq!(game.world.entity(zombie).unwrap().facing, zombie_facing);
+        assert_eq!(game.rng.clone().next_u64(), source_rng.next_u64());
+    }
+    #[test]
+    fn actual_vampire_stomp_restores_credit_and_stunned_control_does_nothing() {
+        for stunned in [false, true] {
+            let mut game = Game::shell(42, RulesPreset::Classic);
+            // oPlayer1.active gates its controller, not automatic collisions.
+            // This isolates the child collision from unrelated air movement.
+            game.player.data.insert("active".into(), 0.0);
+            game.player.pos = Vec2::new(88.0, 80.0);
+            game.player.state = PlayerState::Falling;
+            game.player.vel.y = 3.0;
+            let id = game.spawn("oVampire", Vec2::new(80.0, 80.0));
+            let vampire = game.world.entity_mut(id).unwrap();
+            vampire.state = if stunned { 98 } else { 3 };
+            vampire.vel = Vec2::default();
+            super::super::set_counts_as_kill(vampire, false);
+
+            game.step(&crate::InputFrame::default());
+
+            let vampire = game.world.entity(id).unwrap();
+            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.invincible, 0);
+            assert_eq!(vampire.state, 98);
+            if stunned {
+                assert_eq!(vampire.health, 6);
+                assert_eq!(game.player.vel.y, 3.0);
+                assert!(!super::super::counts_as_kill(vampire));
+            } else {
+                assert_eq!(vampire.health, 5);
+                assert_eq!(vampire.vel.y, -6.0);
+                assert_eq!(vampire.timer, 60);
+                assert_eq!(game.player.vel.y, -6.6);
+                assert!(super::super::counts_as_kill(vampire));
+            }
+        }
+    }
+    #[test]
+    fn actual_vampire_contact_has_blink_and_knockback_without_stun_or_death_stat() {
+        for health in [4, 1] {
+            let mut game = Game::shell(42, RulesPreset::Classic);
+            game.player.data.insert("active".into(), 0.0);
+            game.player.pos = Vec2::new(88.0, 78.0);
+            game.player.state = PlayerState::Standing;
+            game.player.health = health;
+            let id = game.spawn("oVampire", Vec2::new(80.0, 80.0));
+            let vampire = game.world.entity_mut(id).unwrap();
+            vampire.state = 3;
+            vampire.vel = Vec2::default();
+
+            game.step(&crate::InputFrame::default());
+
+            assert_eq!(game.player.health, health - 1);
+            assert_eq!(game.player.invincible, 30);
+            assert_eq!(game.player.data["blink"], 30.0);
+            assert_eq!(game.player.stun, 0);
+            assert_eq!(game.player.vel, Vec2::new(6.0, -6.0));
+            assert_eq!(game.lifetime_stats.enemy_deaths[7], 0);
+            assert_eq!(game.world.entity(id).unwrap().health, 6);
+        }
+    }
+    #[test]
+    fn family_step_preserves_valid_animation_index_for_engine_endframe() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.player.pos = Vec2::new(200.0, 160.0);
+        for object in ["oSkeleton", "oZombie", "oVampire"] {
+            let mut enemy = Entity::new(99, object, Vec2::new(80.0, 80.0));
+            crate::enemies::init_entity(&mut enemy);
+            enemy.animation = 0.25;
+            enemy.timer = 20;
+            enemy.vel = Vec2::default();
+            tick(&mut game, &mut enemy);
+            assert_eq!(enemy.animation, 0.25, "{object} advanced during Step");
+            assert_eq!(
+                enemy.image_speed(),
+                if object == "oZombie" { 0.4 } else { 0.5 }
+            );
+            assert_eq!(
+                enemy.value("stun_time"),
+                if object == "oVampire" { 60.0 } else { 200.0 }
+            );
+        }
+    }
+    #[test]
+    fn actual_death_steps_credit_source_counters_and_lifetime_once() {
+        for (object, category, index) in [
+            ("oSkeleton", "skeletons", 5),
+            ("oZombie", "zombies", 6),
+            ("oVampire", "vampires", 7),
+        ] {
+            for (custom, counts_as_kill) in [(false, true), (true, true), (false, false)] {
+                let mut game = Game::shell(42, RulesPreset::Classic);
+                game.player.pos = Vec2::new(200.0, 160.0);
+                if custom {
+                    game.flags.insert("custom".into());
+                }
+                let id = game.world.spawn(object, Vec2::new(80.0, 80.0));
+                let enemy = game.world.entity_mut(id).unwrap();
+                enemy.health = 0;
+                enemy.state = 99;
+                enemy.vel = Vec2::default();
+                enemy
+                    .data
+                    .insert("counts_as_kill".into(), f64::from(counts_as_kill));
+
+                game.step(&crate::InputFrame::default());
+
+                let expected = f64::from(counts_as_kill);
+                assert!(game.world.entity(id).is_none(), "{object}");
+                assert_eq!(
+                    game.data.get(category).copied().unwrap_or(0.0),
+                    expected,
+                    "{object}"
+                );
+                assert_eq!(
+                    game.data.get("kills").copied().unwrap_or(0.0),
+                    expected,
+                    "{object}"
+                );
+                assert_eq!(
+                    game.lifetime_stats.enemy_kills[index],
+                    u64::from(counts_as_kill && !custom),
+                    "{object}"
+                );
+
+                game.step(&crate::InputFrame::default());
+
+                assert_eq!(
+                    game.data.get(category).copied().unwrap_or(0.0),
+                    expected,
+                    "{object} repeated"
+                );
+                assert_eq!(
+                    game.data.get("kills").copied().unwrap_or(0.0),
+                    expected,
+                    "{object} repeated"
+                );
+                assert_eq!(
+                    game.lifetime_stats.enemy_kills[index],
+                    u64::from(counts_as_kill && !custom),
+                    "{object} repeated"
+                );
+            }
+        }
+    }
+    #[test]
+    fn vampire_credit_and_cape_wait_for_explicit_dead_branch() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.player.pos = Vec2::new(200.0, 160.0);
+        let id = game.world.spawn("oVampire", Vec2::new(80.0, 80.0));
+        let vampire = game.world.entity_mut(id).unwrap();
+        vampire.health = 0;
+        vampire.state = 98;
+        vampire.vel = Vec2::new(2.0, -1.0);
+        vampire.data.insert("counts_as_kill".into(), 1.0);
+
+        game.step(&crate::InputFrame::default());
+
+        assert_eq!(game.world.entity(id).unwrap().state, 98);
+        assert_eq!(game.data.get("kills").copied().unwrap_or(0.0), 0.0);
+        assert_eq!(game.lifetime_stats.enemy_kills[7], 0);
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|e| e.object == "oCapePickup")
+        );
+
+        game.world.entity_mut(id).unwrap().state = 99;
+        game.step(&crate::InputFrame::default());
+
+        assert!(game.world.entity(id).is_none());
+        assert_eq!(game.data["kills"], 1.0);
+        assert_eq!(game.data["vampires"], 1.0);
+        assert_eq!(game.lifetime_stats.enemy_kills[7], 1);
+        let capes: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.object == "oCapePickup")
+            .collect();
+        assert_eq!(capes.len(), 1);
+        assert_eq!(capes[0].value("cost"), 0.0);
+        assert_eq!(capes[0].value("forSale"), 0.0);
+    }
+    #[test]
+    fn vampire_crush_destroys_without_dead_branch_credit_or_cape() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.player.pos = Vec2::new(200.0, 160.0);
+        game.world.set_tile(5, 5, "oBlock");
+        let id = game.world.spawn("oVampire", Vec2::new(80.0, 80.0));
+        game.world.entity_mut(id).unwrap().vel = Vec2::default();
+
+        game.step(&crate::InputFrame::default());
+
+        assert!(game.world.entity(id).is_none());
+        assert_eq!(game.data.get("kills").copied().unwrap_or(0.0), 0.0);
+        assert_eq!(game.lifetime_stats.enemy_kills[7], 0);
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|e| e.object == "oCapePickup")
+        );
     }
     #[test]
     fn zombie_does_not_chase_swimming_player() {
@@ -711,6 +1145,10 @@ mod tests {
             game.step(&crate::InputFrame::default());
 
             assert!(game.world.entity(id).is_none(), "{object}");
+            // Source resource order visits Skeleton (652), Bone (654),
+            // Skull (663), then Vampire (915). Skeleton's newborn debris
+            // receives Step this frame; Vampire's waits one frame.
+            let newborn_step_ran = object == "oSkeleton";
             let bones: Vec<_> = game
                 .world
                 .entities
@@ -720,9 +1158,18 @@ mod tests {
             assert_eq!(bones.len(), 3, "{object}");
             for (bone, (velocity, gravity)) in bones.iter().zip(&bone_launches) {
                 assert_eq!(bone.value("world_effect_initialized"), 1.0);
-                assert_eq!(bone.value("life"), 59.0);
+                assert_eq!(
+                    bone.value("life"),
+                    if newborn_step_ran { 59.0 } else { 60.0 }
+                );
                 assert_eq!(bone.value("gravity"), *gravity);
-                assert_eq!(bone.vel, Vec2::new(velocity.x, velocity.y + gravity));
+                assert_eq!(
+                    bone.vel,
+                    Vec2::new(
+                        velocity.x,
+                        velocity.y + if newborn_step_ran { *gravity } else { 0.0 }
+                    )
+                );
             }
             let skull = game
                 .world
@@ -730,7 +1177,22 @@ mod tests {
                 .iter()
                 .find(|e| e.alive && e.object == "oSkull")
                 .unwrap();
-            assert_eq!(skull.vel, skull_velocity, "{object}");
+            assert_eq!(
+                skull.vel,
+                Vec2::new(
+                    skull_velocity.x,
+                    skull_velocity.y + if newborn_step_ran { 0.6 } else { 0.0 }
+                ),
+                "{object}"
+            );
+            assert_eq!(
+                skull.pos,
+                if newborn_step_ran {
+                    Vec2::new(88.0 + skull_velocity.x, 88.0 + skull_velocity.y)
+                } else {
+                    Vec2::new(88.0, 88.0)
+                }
+            );
             assert_eq!(game.rng.clone().next_u64(), source_rng.clone().next_u64());
 
             game.step(&crate::InputFrame::default());
@@ -752,7 +1214,7 @@ mod tests {
                     .entities
                     .iter()
                     .filter(|e| e.object == "oBone")
-                    .all(|e| e.value("life") == 58.0)
+                    .all(|e| e.value("life") == if newborn_step_ran { 58.0 } else { 59.0 })
             );
         }
     }

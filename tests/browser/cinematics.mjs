@@ -1,12 +1,12 @@
 // Source-authored cinematic routes reached through UI and real keyboard input.
 import assert from 'node:assert/strict';
-import { snapshot, state, press, restoreDefaultSettings } from './movement.mjs';
+import { snapshot, state, press, reachTitleMenu, restoreDefaultSettings } from './movement.mjs';
 import { importDocument, startCustom, walkThroughNextDoor, continueTransition, level } from './adversarial.mjs';
 
 export async function runCinematicAcceptance({ page, result, screenshot }) {
   await restoreDefaultSettings(page);
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await state(page, 'Title');
+  await reachTitleMenu(page);
   await page.locator('canvas').focus();
   await page.keyboard.press('F2');
   await state(page, 'Editor');
@@ -48,7 +48,7 @@ export async function runCinematicAcceptance({ page, result, screenshot }) {
   custom.status = 'passed';
 
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await state(page, 'Title');
+  await reachTitleMenu(page);
   await page.locator('canvas').focus();
   await press(page, 'ArrowDown', 2);
   await page.keyboard.press('Enter');

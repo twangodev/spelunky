@@ -9,10 +9,11 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { installMovementTrace, runMovementAcceptance } from './movement.mjs';
+import { installMovementTrace, runMovementAcceptance, reachTitleMenu } from './movement.mjs';
 import { runAdversarialAcceptance, runOnboardingAcceptance } from './adversarial.mjs';
 import { installLightingProfile, installLightingSeedControl, installLightingProbe, runLightingAcceptance } from './lighting.mjs';
 import { runCinematicAcceptance } from './cinematics.mjs';
+import { installBloodProbe, runBloodAcceptance } from './blood.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const webRoot = path.resolve(process.env.BROWSER_WEB_ROOT || path.join(root, 'web'));
@@ -36,7 +37,7 @@ const report = {
   scope: 'Automated browser engine acceptance, optionally using a virtual display; no physical 240 Hz display or Safari application validation.',
   engines: [],
 };
-assert.ok(['full', 'gameplay', 'adversarial', 'movement', 'onboarding', 'lighting', 'cinematics'].includes(report.suite), 'BROWSER_SUITE must be full, gameplay, adversarial, movement, onboarding, lighting, or cinematics');
+assert.ok(['full', 'gameplay', 'adversarial', 'movement', 'onboarding', 'lighting', 'cinematics', 'blood'].includes(report.suite), 'BROWSER_SUITE must be full, gameplay, adversarial, movement, onboarding, lighting, cinematics, or blood');
 if (report.suite === 'gameplay') report.deferredChecks = ['Source-valid natural dark-room WebGL pixel acceptance runs separately; gameplay success does not imply lighting acceptance.'];
 await mkdir(artifacts, { recursive: true });
 await access(tools);
@@ -88,7 +89,7 @@ if (!base) {
 report.url = base;
 report.webRoot = webRoot;
 report.runnerSha256 = Object.fromEntries(await Promise.all(
-  ['smoke.mjs', 'movement.mjs', 'adversarial.mjs', 'lighting.mjs', 'cinematics.mjs'].map(async filename => [
+  ['smoke.mjs', 'movement.mjs', 'adversarial.mjs', 'lighting.mjs', 'cinematics.mjs', 'blood.mjs'].map(async filename => [
     filename, createHash('sha256').update(await readFile(path.join(root, 'tests/browser', filename))).digest('hex'),
   ]),
 ));
@@ -125,6 +126,7 @@ async function ready(page) {
   assert.equal(await page.locator('#status').evaluate(element => element.hidden), true, await page.locator('#status').textContent());
   await page.waitForFunction(() => window.__smoke.draws > 2, null, { timeout: 120000 });
   await page.locator('canvas').focus();
+  return reachTitleMenu(page);
 }
 
 async function press(page, key, count = 1) {
@@ -195,6 +197,7 @@ try {
       const context = await browser.newContext({ viewport: { width: 960, height: 720 }, acceptDownloads: true });
       await context.addInitScript(instrument);
       await context.addInitScript(installMovementTrace);
+      await context.addInitScript(installBloodProbe);
       if (report.suite === 'lighting') {
         await context.addInitScript(installLightingProfile);
         await context.addInitScript(installLightingSeedControl);
@@ -207,7 +210,7 @@ try {
         if (message.type() === 'error') result.consoleErrors.push(message.text());
         if (message.type() === 'warning') result.warnings.push(message.text());
       });
-      await ready(page);
+      result.openingRoute = await ready(page);
       assert.match(await page.title(), /Spelunky Classic/);
       assert.match(await page.locator('#attribution').textContent(), /Derek Yu \/ Mossmouth/);
       const license = await page.request.get(new URL('assets/COPYING.txt', base).href);
@@ -222,6 +225,7 @@ try {
         if (report.suite === 'adversarial') await runAdversarialAcceptance({ page, result, screenshot });
         else if (report.suite === 'movement') await runMovementAcceptance({ page, result, screenshot });
         else if (report.suite === 'onboarding') await runOnboardingAcceptance({ page, result, screenshot });
+        else if (report.suite === 'blood') await runBloodAcceptance({ page, result, screenshot });
         else if (report.suite === 'cinematics') await runCinematicAcceptance({ page, result, screenshot });
         else await runLightingAcceptance({ page, result, screenshot });
         assert.deepEqual(result.errors, []);
@@ -347,6 +351,7 @@ try {
       await runMovementAcceptance({ page, result, screenshot });
       await runAdversarialAcceptance({ page, result, screenshot });
       await runCinematicAcceptance({ page, result, screenshot });
+      await runBloodAcceptance({ page, result, screenshot });
       assert.deepEqual(result.errors, []);
       assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
       await context.close();
@@ -391,6 +396,7 @@ try {
       // Failure paths run in fresh storage, separate from the happy-path session.
       const corrupt = await browser.newContext();
       await corrupt.addInitScript(instrument);
+      await corrupt.addInitScript(installMovementTrace);
       await corrupt.addInitScript(() => localStorage.setItem('spelunky-rust.save', '{invalid'));
       const corruptPage = await corrupt.newPage();
       corruptPage.on('pageerror', error => result.errors.push(String(error)));
@@ -402,6 +408,7 @@ try {
       await corrupt.close();
       const denied = await browser.newContext();
       await denied.addInitScript(instrument);
+      await denied.addInitScript(installMovementTrace);
       await denied.addInitScript(() => Object.defineProperty(window, 'localStorage', { get() { throw new DOMException('Test denial', 'SecurityError'); } }));
       const deniedPage = await denied.newPage();
       deniedPage.on('pageerror', error => result.errors.push(String(error)));

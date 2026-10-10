@@ -1,7 +1,10 @@
 //! Source lighting queries share one ordered scan of the visible room.
 use super::mask_distance;
 use crate::{Game, Rect, Vec2, catalog};
-use std::{collections::BTreeMap, sync::OnceLock};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::OnceLock,
+};
 
 const FAMILIES: [&str; 13] = [
     "oExplosion",
@@ -100,7 +103,9 @@ fn nearest_sources(game: &Game, requested: u16) -> [Option<LightSource>; 13] {
         if bits == 0 {
             return;
         }
-        let distance = position.distance(game.player.pos);
+        let dx = position.x - game.player.pos.x;
+        let dy = position.y - game.player.pos.y;
+        let distance = dx * dx + dy * dy;
         while bits != 0 {
             let family = bits.trailing_zeros() as usize;
             bits &= bits - 1;
@@ -111,27 +116,51 @@ fn nearest_sources(game: &Game, requested: u16) -> [Option<LightSource>; 13] {
             }
         }
     };
-    // Keep each family's original tile-first, then entity creation order.
-    for (index, tile) in game.world.tiles.iter().enumerate() {
-        let bits = family_bits(&tile.object) & requested;
-        if bits != 0 {
-            consider(
-                bits,
-                Vec2::new(
-                    (index % game.world.width) as f64 * 16.,
-                    (index / game.world.width) as f64 * 16.,
-                ),
-                SourceRef::Tile(index),
-            );
-        }
-    }
-    for (index, entity) in game.world.entities.iter().enumerate() {
-        if entity.alive {
-            consider(
-                family_bits(&entity.object) & requested,
-                entity.pos,
-                SourceRef::Entity(index),
-            );
+    // instance_nearest(object) walks that object's descendant array. Each
+    // family preserves the same registration/rebuild order, including a
+    // reactivated instance appended behind previously active instances.
+    // Index only requested emitters so this remains one family scan rather
+    // than repeating entity lookups for all thirteen source queries.
+    let entities: HashMap<_, _> = game
+        .world
+        .entities
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entity)| {
+            let bits = family_bits(&entity.object) & requested;
+            (entity.alive && entity.engine_active && bits != 0)
+                .then_some((entity.id, (bits, entity.pos, SourceRef::Entity(index))))
+        })
+        .collect();
+    for instance in &game.dispatcher.registration_order {
+        match *instance {
+            crate::dispatcher::Instance::Terrain(index) => {
+                let Some(tile) = game
+                    .world
+                    .tiles
+                    .get(index)
+                    .filter(|tile| tile.engine_active)
+                else {
+                    continue;
+                };
+                let bits = family_bits(&tile.object) & requested;
+                if bits != 0 {
+                    consider(
+                        bits,
+                        Vec2::new(
+                            (index % game.world.width) as f64 * 16.,
+                            (index / game.world.width) as f64 * 16.,
+                        ),
+                        SourceRef::Tile(index),
+                    );
+                }
+            }
+            crate::dispatcher::Instance::Entity(id) => {
+                if let Some(&(bits, position, source)) = entities.get(&id) {
+                    consider(bits, position, source);
+                }
+            }
+            crate::dispatcher::Instance::Player => {}
         }
     }
     sources.map(|source| source.map(|source| resolve(game, source)))
@@ -194,53 +223,67 @@ mod tests {
     use super::*;
     use crate::{Area, RulesPreset, World};
 
-    // This is the original independent per-family selector, retained as the
-    // equivalence oracle rather than sharing the indexed scan's machinery.
+    // Independent per-family source query: walk the actual descendant array
+    // and compare squared origins, without the indexed selector's family table.
     fn original_nearest(game: &Game, family: &str) -> Option<LightSource> {
         let mut nearest = None;
         let mut distance = f64::INFINITY;
-        for (index, tile) in game.world.tiles.iter().enumerate() {
-            if !catalog::is_a(&tile.object, family) {
+        for instance in crate::dispatcher::descendant_instances(game, family) {
+            if !crate::dispatcher::is_active(game, instance) {
                 continue;
             }
-            let x = index % game.world.width;
-            let y = index / game.world.width;
-            let candidate_distance =
-                Vec2::new(x as f64 * 16., y as f64 * 16.).distance(game.player.pos);
-            if candidate_distance < distance {
-                let animation = game
-                    .world
-                    .entities
-                    .iter()
-                    .find(|entity| {
-                        entity.alive
-                            && entity.object == "oTerrainMetadata"
-                            && (entity.pos.x / 16.).floor() as usize == x
-                            && (entity.pos.y / 16.).floor() as usize == y
-                    })
-                    .map_or(0., |entity| entity.animation);
-                nearest = Some(LightSource {
-                    mask: game.world.tile_bounds(x as i32, y as i32),
-                    animation,
-                    flare_distance: 0.,
-                });
-                distance = candidate_distance;
-            }
-        }
-        for entity in game
-            .world
-            .entities
-            .iter()
-            .filter(|entity| entity.alive && catalog::is_a(&entity.object, family))
-        {
-            let candidate_distance = entity.pos.distance(game.player.pos);
-            if candidate_distance < distance {
-                nearest = Some(LightSource {
-                    mask: entity.sprite_bounds(),
-                    animation: entity.animation,
-                    flare_distance: entity.data.get("dist_to_player").copied().unwrap_or(0.),
-                });
-                distance = candidate_distance;
+            let (position, source) = match instance {
+                crate::dispatcher::Instance::Terrain(index) => {
+                    if game.world.tiles[index].object.is_empty() {
+                        continue;
+                    }
+                    let x = index % game.world.width;
+                    let y = index / game.world.width;
+                    let animation = game
+                        .world
+                        .entities
+                        .iter()
+                        .find(|entity| {
+                            entity.alive
+                                && entity.object == "oTerrainMetadata"
+                                && (entity.pos.x / 16.).floor() as usize == x
+                                && (entity.pos.y / 16.).floor() as usize == y
+                        })
+                        .map_or(0., |entity| entity.animation);
+                    (
+                        Vec2::new(x as f64 * 16., y as f64 * 16.),
+                        LightSource {
+                            mask: game.world.tile_bounds(x as i32, y as i32),
+                            animation,
+                            flare_distance: 0.,
+                        },
+                    )
+                }
+                crate::dispatcher::Instance::Entity(id) => {
+                    let Some(entity) = game.world.entity(id) else {
+                        continue;
+                    };
+                    (
+                        entity.pos,
+                        LightSource {
+                            mask: entity.sprite_bounds(),
+                            animation: entity.animation,
+                            flare_distance: entity
+                                .data
+                                .get("dist_to_player")
+                                .copied()
+                                .unwrap_or(0.),
+                        },
+                    )
+                }
+                crate::dispatcher::Instance::Player => continue,
+            };
+            let dx = position.x - game.player.pos.x;
+            let dy = position.y - game.player.pos.y;
+            let candidate = dx * dx + dy * dy;
+            if candidate < distance {
+                distance = candidate;
+                nearest = Some(source);
             }
         }
         nearest
@@ -251,7 +294,8 @@ mod tests {
         game.player.pos = Vec2::new(80., 80.);
         game
     }
-    fn assert_sources(game: &Game) {
+    fn assert_sources(game: &mut Game) {
+        crate::dispatcher::activate_object(game, "oDrawnSprite");
         for requested in [BEFORE_PLAYER, FLARE, BEFORE_PLAYER | FLARE] {
             let sources = nearest_sources(game, requested);
             for (index, family) in FAMILIES.iter().enumerate() {
@@ -278,7 +322,7 @@ mod tests {
             game.world.spawn(object, Vec2::new(160.5, 88.25));
             for animation in [0., 1.25, 3.5] {
                 game.world.entity_mut(id).unwrap().animation = animation;
-                assert_sources(&game);
+                assert_sources(&mut game);
             }
             count += 1;
         }
@@ -286,7 +330,7 @@ mod tests {
         assert_eq!(family_bits("not-a-bundled-object"), 0);
     }
     #[test]
-    fn tile_and_entity_ties_keep_tile_order_and_first_metadata_animation() {
+    fn tile_and_entity_ties_keep_registration_order_and_first_metadata_animation() {
         let mut game = room();
         game.player.pos = Vec2::new(88., 80.);
         game.world.set_tile(5, 5, "oExplosion");
@@ -299,18 +343,18 @@ mod tests {
         game.world.entity_mut(duplicate).unwrap().animation = 4.5;
         let id = game.world.spawn("oExplosion", Vec2::new(96., 80.));
         game.world.entity_mut(id).unwrap().animation = 4.;
-        assert_sources(&game);
+        assert_sources(&mut game);
         let source = nearest_sources(&game, BEFORE_PLAYER)[0].unwrap();
         assert_eq!(source.animation, 2.25);
         assert_eq!(source.mask, game.world.tile_bounds(5, 5));
         game.world.entity_mut(metadata).unwrap().alive = false;
-        assert_sources(&game);
+        assert_sources(&mut game);
         assert_eq!(
             nearest_sources(&game, BEFORE_PLAYER)[0].unwrap().animation,
             4.5
         );
         game.world.set_tile(5, 5, "oLampRed");
-        assert_sources(&game);
+        assert_sources(&mut game);
     }
     #[test]
     fn nearest_origin_precedes_mask_distance_and_membership_never_freezes_instances() {
@@ -319,18 +363,18 @@ mod tests {
         let second = game.world.spawn("oLampRed", Vec2::new(88., 80.));
         game.world.entity_mut(first).unwrap().sprite = "sExplosion".into();
         game.world.entity_mut(first).unwrap().animation = 3.;
-        assert_sources(&game);
+        assert_sources(&mut game);
         assert_eq!(
             nearest_sources(&game, BEFORE_PLAYER)[2].unwrap().animation,
             3.
         );
         game.world.entity_mut(first).unwrap().alive = false;
-        assert_sources(&game);
+        assert_sources(&mut game);
         game.world.entity_mut(second).unwrap().pos = Vec2::new(300., 300.);
         game.world.spawn("oLampRed", Vec2::new(82.5, 81.25));
-        assert_sources(&game);
+        assert_sources(&mut game);
         game.world.entities.retain(|entity| entity.id != second);
-        assert_sources(&game);
+        assert_sources(&mut game);
     }
     #[test]
     fn closer_origin_wins_even_when_farther_sprite_mask_is_closer() {
@@ -342,7 +386,7 @@ mod tests {
         let near_mask = game.world.entity(near).unwrap().sprite_bounds();
         let far_mask = game.world.entity(far).unwrap().sprite_bounds();
         assert!(mask_distance(player, far_mask) < mask_distance(player, near_mask));
-        assert_sources(&game);
+        assert_sources(&mut game);
         assert_eq!(
             nearest_sources(&game, BEFORE_PLAYER)[2].unwrap().mask,
             near_mask
@@ -362,8 +406,9 @@ mod tests {
                     entity.animation = animation;
                     entity.data.insert("dist_to_player".into(), 18.5);
                 }
+                assert_sources(&mut game);
                 let hash = game.state_hash();
-                assert_sources(&game);
+                assert_sources(&mut game);
                 assert_eq!(
                     game.state_hash(),
                     hash,
@@ -429,10 +474,11 @@ mod tests {
                 .insert("dist_to_player".into(), cached);
         }
         game.player.pos.x = 48.;
+        crate::dispatcher::activate_object(&mut game, "oDrawnSprite");
         sample_light_distances(&mut game);
         assert_eq!(game.player.data["dist_to_nearest_light_source"], 999.);
         game.player.pos.x = 112.;
-        assert_sources(&game);
+        assert_sources(&mut game);
         lighting_tick(&mut game);
         assert_eq!(game.data["darkness"], 64. / 160.);
         assert_eq!(game.player.data["dist_to_nearest_light_source"], 999.);
@@ -440,5 +486,77 @@ mod tests {
         game.data.insert("darkness".into(), 0.7);
         lighting_tick(&mut game);
         assert_eq!(game.data["darkness"], 0.7);
+    }
+    #[test]
+    fn actual_walk_reactivation_keeps_nearest_lamp_independent_of_storage_order() {
+        fn walking_room() -> Game {
+            let mut game = Game::shell(123, RulesPreset::Classic);
+            game.world = World::new(80, 30, Area::Mines, 1);
+            game.world.dark = true;
+            for x in 0..80 {
+                game.world.set_tile(x, 10, "oBlock");
+            }
+            game.player.pos = Vec2::new(700., 152.);
+            game.player.previous_pos = game.player.pos;
+            game.player.state = crate::PlayerState::Standing;
+            game.player.grounded = true;
+            game.camera = Vec2::new(508., 8.);
+            game
+        }
+        let input = crate::InputFrame {
+            left: true,
+            run: true,
+            ..Default::default()
+        };
+        let mut outcomes = Vec::new();
+        for left_created_first in [true, false] {
+            let mut game = walking_room();
+            let left = Vec2::new(247., 152.);
+            let right = Vec2::new(547., 152.);
+            let (left_id, right_id) = if left_created_first {
+                (
+                    game.world.spawn("oLamp", left),
+                    game.world.spawn("oLamp", right),
+                )
+            } else {
+                let right_id = game.world.spawn("oLamp", right);
+                (game.world.spawn("oLamp", left), right_id)
+            };
+            for _ in 0..53 {
+                game.step(&input);
+            }
+            assert_eq!(game.player.pos, Vec2::new(397., 152.));
+            assert_eq!(
+                crate::dispatcher::descendant_instances(&game, "oLamp"),
+                vec![
+                    crate::dispatcher::Instance::Entity(right_id),
+                    crate::dispatcher::Instance::Entity(left_id)
+                ]
+            );
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .find(|e| e.object == "oLamp")
+                    .unwrap()
+                    .id,
+                if left_created_first {
+                    left_id
+                } else {
+                    right_id
+                }
+            );
+            game.step(&crate::InputFrame::default());
+            // Source Player319 samples nearest origin before this movement;
+            // Level553 consumes its cache later. The right Lamp wins the tie.
+            assert_eq!(game.player.pos, Vec2::new(394., 152.));
+            assert_eq!(game.player.data["dist_to_nearest_light_source"], 147.);
+            assert_eq!(game.data["darkness"], 0.9);
+            outcomes.push((
+                game.player.data["dist_to_nearest_light_source"],
+                game.data["darkness"],
+            ));
+        }
+        assert_eq!(outcomes[0], outcomes[1]);
     }
 }

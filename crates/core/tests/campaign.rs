@@ -39,6 +39,10 @@ fn positioned_exit(game: &mut Game) {
         game,
         Vec2::new(bounds.x + bounds.w / 2.0, bounds.y + bounds.h / 2.0),
     );
+    // Teleporting does not establish the source ON_GROUND controller state.
+    // Let the live controller settle before requesting the actual exit.
+    game.step(&InputFrame::default());
+    assert_eq!(game.state, RunState::Playing);
     game.step(&InputFrame {
         up: true,
         ..Default::default()
@@ -117,8 +121,67 @@ fn generated_key_opens_generated_locked_chest_through_game_step() {
 }
 
 #[test]
+fn actual_pickups_and_walking_open_gold_door_without_entering_its_solid() {
+    for crown in [false, true] {
+        let mut level = spelunky_core::level::Level::default();
+        level.set_tile(6, 7, '@').unwrap();
+        for x in 0..40 {
+            level.set_tile(x, 8, '1').unwrap();
+        }
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.load_custom(&level, "gold-door-approach", "");
+        for _ in 0..8 {
+            game.step(&InputFrame::default());
+        }
+        for object in if crown {
+            vec!["oCrown", "oSceptre"]
+        } else {
+            vec!["oSceptre"]
+        } {
+            let id = game.spawn(object, Vec2::new(game.player.pos.x, game.player.pos.y + 4.));
+            let item = game.world.entity_mut(id).unwrap();
+            item.data.insert("cost".into(), 0.);
+            item.data.insert("forSale".into(), 0.);
+            game.step(&InputFrame {
+                down: true,
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(game.player.has("Crown"), crown);
+        let sceptre = game.player.held.expect("actual pickup holds sceptre");
+        assert_eq!(game.world.entity(sceptre).unwrap().object, "oSceptre");
+        let p = game.player.pos;
+        let door = game.spawn("oGoldDoor", Vec2::new(p.x + 32., p.y - 8.));
+        for _ in 0..20 {
+            game.step(&InputFrame {
+                right: true,
+                ..Default::default()
+            });
+            assert_eq!(game.state, RunState::Playing);
+            assert_eq!(game.player.health, 4);
+            if game.world.entity(door).is_none() {
+                break;
+            }
+        }
+        assert_eq!(game.world.entity(door).is_none(), crown);
+        assert_eq!(
+            game.world.entities.iter().any(|e| e.object == "oXGold"),
+            crown
+        );
+        assert_eq!(game.player.held.is_none(), crown);
+        assert_eq!(game.world.entity(sceptre).is_none(), crown);
+    }
+}
+
+#[test]
 fn exposed_generated_market_ankh_moai_and_gold_door_form_a_reachable_state_chain() {
-    let mut game = Game::new(42, RulesPreset::Classic);
+    // Source scrEntityGen enables Tomb Lord placement on level thirteen, but
+    // still requires eligible support and a successful rand(1, 40) draw. Seed 1
+    // supplies that generated prerequisite throughout this complete chain.
+    let mut game = Game::new(1, RulesPreset::Classic);
     while !game.world.entities.iter().any(|e| e.object == "oXMarket") {
         assert!(
             game.world.level < 7,
@@ -222,7 +285,7 @@ fn exposed_generated_market_ankh_moai_and_gold_door_form_a_reachable_state_chain
         .entities
         .iter()
         .find(|e| e.object == "oTombLord")
-        .unwrap()
+        .expect("selected chain seed must generate a Tomb Lord on level thirteen")
         .id;
     // Isolate the generated boss's death/drop transition from combat execution.
     let tomb_pos = game.world.entity(tomb).unwrap().pos;
@@ -249,8 +312,21 @@ fn exposed_generated_market_ankh_moai_and_gold_door_form_a_reachable_state_chain
         .unwrap();
     let door_id = door.id;
     let door_pos = door.pos;
-    position_player(&mut game, Vec2::new(door_pos.x + 8.0, door_pos.y + 8.0));
-    game.step(&InputFrame::default());
+    // GoldDoor is solid. Approach with the held sceptre instead of placing
+    // the player inside it: Player Step crush precedes automatic Collision.
+    position_player(&mut game, Vec2::new(door_pos.x - 8.0, door_pos.y + 8.0));
+    assert!(!game.world.solid_at(game.player.pos.x, game.player.pos.y));
+    for _ in 0..8 {
+        game.step(&InputFrame {
+            right: true,
+            ..Default::default()
+        });
+        assert_eq!(game.state, RunState::Playing);
+        assert!(game.player.health > 0);
+        if game.world.entity(door_id).is_none() {
+            break;
+        }
+    }
     assert!(game.world.entity(door_id).is_none());
     assert!(game.player.held.is_none());
     let gold_door = game
@@ -261,6 +337,8 @@ fn exposed_generated_market_ankh_moai_and_gold_door_form_a_reachable_state_chain
         .unwrap();
     let gold_pos = gold_door.pos;
     position_player(&mut game, Vec2::new(gold_pos.x + 8.0, gold_pos.y + 8.0));
+    game.step(&InputFrame::default());
+    assert_eq!(game.state, RunState::Playing);
     game.step(&InputFrame {
         up: true,
         ..Default::default()

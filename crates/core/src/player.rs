@@ -30,6 +30,18 @@ fn grounded_state(s: PlayerState) -> bool {
 fn airborne(s: PlayerState) -> bool {
     matches!(s, PlayerState::Jumping | PlayerState::Falling)
 }
+fn remember_platform_traits(p: &mut Player) {
+    set(
+        p,
+        "source_platform_grounded",
+        f64::from(grounded_state(p.state)),
+    );
+    set(
+        p,
+        "source_platform_climbing",
+        f64::from(p.state == PlayerState::Climbing),
+    );
+}
 fn bounds_at(p: &Player, pos: Vec2) -> Rect {
     let half = value(p, "collision_half_width", 5.0);
     let top = value(p, "collision_top", -8.0);
@@ -149,8 +161,20 @@ fn swimming_without_lava(w: &World, p: &Player) -> bool {
 
 /// oPlayer1 runs these effects before entering its dead/stunned controller.
 /// The swimming flag starts only in oWaterSwim; ordinary movement clears it
-/// after leaving water and webs. A stunned swimmer still emits source bubbles.
+/// after leaving water and webs. Bubble emission belongs to the active branch.
 fn environmental_prelude(game: &mut Game) {
+    let red = value(&game.player, "red_color", 0.0);
+    if red > 0.0 {
+        if value(&game.player, "red_toggle", 0.0) != 0.0 {
+            set(&mut game.player, "red_color", red - 5.0);
+        } else if red < 20.0 {
+            set(&mut game.player, "red_color", red + 5.0);
+        } else {
+            set(&mut game.player, "red_toggle", 1.0);
+        }
+    } else {
+        set(&mut game.player, "red_color", 0.0);
+    }
     let pos = game.player.pos;
     if collision_rect(
         &game.world,
@@ -171,18 +195,329 @@ fn environmental_prelude(game: &mut Game) {
         }
         set(&mut game.player, "burning", burning - 1.0);
     }
+}
+
+fn swimming_effects(game: &mut Game) {
+    let pos = game.player.pos;
     let bubble_max = value(&game.player, "bubble_timer_max", 20.0);
     if swimming_without_lava(&game.world, &game.player) {
+        set(&mut game.player, "fall_timer", 0.0);
+        set(&mut game.player, "fall_ticks", 0.0);
         let bubble = value(&game.player, "bubble_timer", 0.0);
         if bubble > 0.0 {
             set(&mut game.player, "bubble_timer", bubble - 1.0);
         } else {
-            game.world.spawn("oBubble", Vec2::new(pos.x, pos.y - 4.0));
+            crate::world_events::spawn_effect(game, "oBubble", Vec2::new(pos.x, pos.y - 4.0));
             set(&mut game.player, "bubble_timer", bubble_max);
         }
     } else {
         set(&mut game.player, "bubble_timer", bubble_max);
     }
+}
+
+/// The active Player Step prelude runs even when characterStepEvent is skipped
+/// by a stun, death, ledge transition, or exit animation. Its fall injury and
+/// synchronous Create events precede the swimming/bubble branch.
+fn active_prelude(game: &mut Game) {
+    let p = &mut game.player;
+    let stationary = matches!(
+        p.sprite.as_str(),
+        "sStunL" | "sDamselStunL" | "sTunnelStunL"
+    );
+    if p.stun > 0 && stationary {
+        p.set_image_speed(0.4);
+        p.stun -= 1;
+    }
+    if p.stun == 0 && stationary && p.state == PlayerState::Stunned {
+        p.state = PlayerState::Standing;
+    }
+    let mut fall = value(p, "fall_timer", 0.0);
+    if value(p, "parachute_open", 0.0) > 0.0 {
+        fall = 0.0;
+    }
+    let mut injury = 0;
+    let hidden_state = matches!(p.state, PlayerState::Stunned | PlayerState::Dead);
+    let climbing = p.state == PlayerState::Climbing
+        || (hidden_state && value(p, "source_platform_climbing", 0.0) != 0.0);
+    if p.vel.y > 0.0 && !climbing {
+        fall += 1.0;
+        if fall > 16.0 {
+            set(p, "wall_hurt", 0.0);
+            set(p, "wallHurt", 0.0);
+        }
+        if has(p, &["Parachute", "parachute"])
+            && !p.is_stunned()
+            && fall > 14.0
+            && !solid_point(&game.world, Vec2::new(p.pos.x, p.pos.y + 32.0))
+        {
+            p.equipment.remove("Parachute");
+            p.equipment.remove("parachute");
+            set(p, "parachute_open", 1.0);
+            fall = 0.0;
+        }
+    } else if (grounded_state(p.state)
+        || (matches!(p.state, PlayerState::Stunned | PlayerState::Dead)
+            && value(p, "source_platform_grounded", 0.0) != 0.0))
+        && fall > 16.0
+        && !collision_rect(
+            &game.world,
+            Rect::new(p.pos.x - 8.0, p.pos.y - 8.0, 17.0, 17.0),
+            "oSpringTrap",
+        )
+    {
+        injury = if fall > 48.0 {
+            10
+        } else if fall > 32.0 {
+            2
+        } else {
+            1
+        };
+        fall = 0.0;
+    } else {
+        fall = 0.0;
+        set(p, "parachute_open", 0.0);
+    }
+    set(p, "fall_timer", fall);
+    set(p, "fall_ticks", fall);
+    if injury > 0 {
+        // The source subtracts life directly: fall injury bypasses the hit
+        // invulnerability check and does not invent its hurt sound or flash.
+        game.player.health -= injury;
+        game.events.push(GameEvent::Damage { amount: injury });
+        if game.player.health < 1 {
+            for _ in 0..3 {
+                if value(&game.player, "bloodless", 0.0) == 0.0
+                    && game
+                        .world
+                        .entities
+                        .iter()
+                        .filter(|e| e.alive && crate::catalog::is_a(&e.object, "oDetritus"))
+                        .count()
+                        < 16
+                {
+                    game.spawn("oBlood", game.player.pos);
+                }
+            }
+            if crate::statistics::is_real_level(game) {
+                game.lifetime_stats
+                    .misc_death(crate::statistics::MiscDeath::LongFall);
+            }
+        }
+        set(&mut game.player, "bounced", 1.0);
+        game.player.stun += 60;
+        game.player.vel.y = -3.0;
+        for (offset, velocity) in [(-4.0, -0.4), (4.0, 0.4)] {
+            let id = crate::world_events::spawn_effect(
+                game,
+                "oPoof",
+                Vec2::new(game.player.pos.x + offset, game.player.pos.y + 6.0),
+            );
+            game.world.entity_mut(id).unwrap().vel.x = velocity;
+        }
+        game.sound("sndThud", game.player.pos);
+    }
+    swimming_effects(game);
+}
+
+fn pit_prelude(game: &mut Game) {
+    if game.player.pos.y <= game.world.height as f64 * 16.0 + 16.0
+        || game.state == RunState::Dead
+        || game.player.state == PlayerState::Dead
+    {
+        return;
+    }
+    if crate::statistics::is_real_level(game) {
+        game.lifetime_stats
+            .misc_death(crate::statistics::MiscDeath::Pit);
+    }
+    game.player.health -= 99;
+    game.player.vel = Vec2::default();
+    set(&mut game.player, "gravity", 0.0);
+    set(&mut game.player, "my_gravity", 0.0);
+    set(&mut game.player, "bounced", 1.0);
+    if let Some(id) = game.player.held.take() {
+        if let Some(held) = game.world.entity_mut(id) {
+            held.data.insert("visible".into(), 1.0);
+            held.held = false;
+        }
+    }
+    game.sound("sndThud", game.player.pos);
+    game.sound("sndDie", game.player.pos);
+}
+
+fn level_feature(game: &Game, names: &[&str], room_name: &str) -> bool {
+    (!game.flags.contains("custom_level") && game.world.name == room_name)
+        || names.iter().any(|name| game.flags.contains(*name))
+}
+
+/// scrInitLevel schedules the feature announcement after ten source ticks.
+/// Imported editor rooms are rLoadLevel and omit this announcement alarm.
+pub(crate) fn initialize_level_alarms(game: &mut Game) {
+    if game.flags.contains("custom_level") {
+        return;
+    }
+    if game.world.dark
+        || level_feature(game, &["black_market", "blackMarket"], "Black Market")
+        || level_feature(game, &["snake_pit", "snakePit"], "Snake Pit")
+        || level_feature(game, &["cemetery", "cemetary"], "Cemetery")
+        || level_feature(game, &["lake"], "Lake")
+        || level_feature(game, &["yeti_lair", "yetiLair"], "Yeti Lair")
+        || level_feature(game, &["alien_ship", "alienCraft"], "Alien Ship")
+        || level_feature(game, &["sacrifice_pit", "sacrificePit"], "Sacrifice Pit")
+        || level_feature(game, &["city_of_gold", "cityOfGold"], "City of Gold")
+    {
+        game.player.alarms[0] = 10;
+    }
+}
+
+fn level_message(game: &mut Game, first: &str, second: &str) {
+    game.data.insert("message_timer".into(), 200.0);
+    game.events.push(GameEvent::Dialogue(SourceMessage {
+        first: first.into(),
+        second: second.into(),
+        ticks: 200,
+    }));
+}
+
+/// The player's source Alarm events are dispatched independently of its active
+/// controller flag, through the engine's indexed Alarm phase.
+pub fn alarm(game: &mut Game, number: u8) {
+    if matches!(number, 0 | 1 | 4) {
+        if number != 4 && game.flags.contains("tutorial") {
+            return;
+        }
+        let dark = game.world.dark;
+        let cemetery = level_feature(game, &["cemetery", "cemetary"], "Cemetery");
+        let lake = level_feature(game, &["lake"], "Lake");
+        let sacrifice = level_feature(game, &["sacrifice_pit", "sacrificePit"], "Sacrifice Pit");
+        let message = if number == 0 && dark {
+            game.player.alarms[1] = 210;
+            if has(&game.player, &["Crown", "crown", "Hedjet"]) {
+                Some(("THE HEDJET SHINES BRIGHTLY.", ""))
+            } else {
+                Some(("I CAN'T SEE A THING!", "I'D BETTER USE THESE FLARES!"))
+            }
+        } else if number == 0
+            && level_feature(game, &["black_market", "blackMarket"], "Black Market")
+        {
+            game.player.alarms[1] = 210;
+            Some(("WELCOME TO THE BLACK MARKET!", ""))
+        } else if number != 4 && level_feature(game, &["snake_pit", "snakePit"], "Snake Pit") {
+            Some(("I HEAR SNAKES... I HATE SNAKES!", ""))
+        } else if cemetery && (number == 0 || (number == 1 && dark)) {
+            if lake {
+                game.player.alarms[if number == 0 { 1 } else { 4 }] = 210;
+            }
+            Some(("THE DEAD ARE RESTLESS!", ""))
+        } else if lake {
+            Some((
+                if number == 4 {
+                    "YOU HEAR RUSHING WATER..."
+                } else {
+                    "I CAN HEAR RUSHING WATER..."
+                },
+                "",
+            ))
+        } else if number != 4 && level_feature(game, &["yeti_lair", "yetiLair"], "Yeti Lair") {
+            Some(("IT SMELLS LIKE WET FUR IN HERE!", ""))
+        } else if number != 4 && level_feature(game, &["alien_ship", "alienCraft"], "Alien Ship") {
+            Some(("THERE'S A PSYCHIC PRESENCE HERE!", ""))
+        } else if number != 4
+            && level_feature(game, &["city_of_gold", "cityOfGold"], "City of Gold")
+        {
+            if sacrifice {
+                game.player.alarms[if number == 0 { 1 } else { 4 }] = 210;
+            }
+            Some(("IT'S THE LEGENDARY CITY OF GOLD!", ""))
+        } else if sacrifice {
+            Some(("I CAN HEAR PRAYERS TO KALI!", ""))
+        } else {
+            None
+        };
+        if let Some((first, second)) = message {
+            level_message(game, first, second);
+        }
+        return;
+    }
+    match number {
+        2 | 3 => {
+            let key = if number == 2 {
+                "climb_sound_toggle"
+            } else {
+                "walk_sound_toggle"
+            };
+            let toggle = value(&game.player, key, 0.0) != 0.0;
+            let sound = match (number, toggle) {
+                (2, true) => "sndClimb1",
+                (2, false) => "sndClimb2",
+                (_, true) => "sndStep1",
+                (_, false) => "sndStep2",
+            };
+            game.sound(sound, game.player.pos);
+            set(&mut game.player, key, f64::from(!toggle));
+        }
+        10 => {
+            let x = game.player.pos.x + f64::from(game.rng.range(4)) - f64::from(game.rng.range(4));
+            let y = game.player.pos.y + f64::from(game.rng.range(4)) - f64::from(game.rng.range(4));
+            let id = crate::world_events::spawn_effect(game, "oFlareSpark", Vec2::new(x, y));
+            let vy = f64::from(1 + game.rng.range(3));
+            let vx = f64::from(game.rng.range(4)) - f64::from(game.rng.range(4));
+            if let Some(spark) = game.world.entity_mut(id) {
+                spark.vel = Vec2::new(vx, vy);
+            }
+            game.sound("sndJetpack", game.player.pos);
+        }
+        11 => {
+            if value(&game.player, "bow_armed", 0.0) != 0.0
+                || value(&game.player, "bow_bomb_armed", 0.0) != 0.0
+            {
+                let toggle = value(&game.player, "bow_arrow_toggle", 0.0) == 0.0;
+                set(&mut game.player, "bow_arrow_toggle", f64::from(toggle));
+                game.player.alarms[11] = 1;
+            }
+        }
+        _ => {}
+    }
+}
+
+/// oPlayer1 owns the Blood collision event; dead Kapala corpses can collect and
+/// heal without clearing the independent dead flag.
+pub fn collision(game: &mut Game, other: crate::dispatcher::Instance) {
+    let crate::dispatcher::Instance::Entity(id) = other else {
+        return;
+    };
+    if !has(&game.player, &["Kapala", "kapala"]) {
+        return;
+    }
+    let Some(blood) = game.world.entity(id) else {
+        return;
+    };
+    if !crate::catalog::is_a(&blood.object, "oBlood") || blood.value("collectible") == 0.0 {
+        return;
+    }
+    let pos = blood.pos;
+    let count = game.data.entry("bloodLevel".into()).or_default();
+    *count += 1.0;
+    let heal = *count > 8.0;
+    crate::world_events::spawn_effect(game, "oBloodSpark", pos);
+    if let Some(blood) = game.world.entity_mut(id) {
+        blood.alive = false;
+    }
+    if heal {
+        game.data.insert("bloodLevel".into(), 0.0);
+        game.player.health += 1;
+        crate::world_events::spawn_effect(
+            game,
+            "oHeart",
+            Vec2::new(game.player.pos.x, game.player.pos.y - 8.0),
+        );
+        game.sound("sndKiss", game.player.pos);
+    }
+    let red = value(&game.player, "red_color", 0.0);
+    if red < 55.0 {
+        set(&mut game.player, "red_color", red + 5.0);
+    }
+    set(&mut game.player, "red_toggle", 0.0);
 }
 fn platform(w: &World, p: &Player, pos: Vec2, dy: f64) -> bool {
     if dy <= 0.0 {
@@ -360,8 +695,15 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     // Pickups run after this controller: their pickup tick retains source drag.
     if !has(&game.player, &["Cape", "cape"]) {
         set(&mut game.player, "cape_open", 0.0);
+    } else if value(&game.player, "cape_open", 0.0) > 0.0 {
+        set(&mut game.player, "fall_timer", 0.0);
+        set(&mut game.player, "fall_ticks", 0.0);
     }
     environmental_prelude(game);
+    // Source burning ticks before the separate lava branch resets it to 100.
+    // Keeping lava outside this prelude would shorten its lifetime on entry.
+    crate::traps::player_lava(game);
+    pit_prelude(game);
     if game.state == RunState::Dead {
         game.player.state = PlayerState::Dead;
     }
@@ -370,49 +712,20 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let p = &mut game.player;
     set(p, "character_damsel", f64::from(damsel));
     set(p, "character_tunnelman", f64::from(tunnelman));
-    if p.health > 0 && p.state != PlayerState::Dead {
-        p.invincible = p.invincible.saturating_sub(1);
-    }
-    let blink = value(p, "blink", 0.0);
-    if blink > 0.0 {
-        let toggle = value(p, "blink_toggle", -1.0);
-        set(p, "blink_toggle", -toggle);
-        set(p, "blink", blink - 1.0);
-    } else {
-        set(p, "blink_toggle", -1.0);
-    }
-    let stationary_stun_pose = matches!(
-        p.sprite.as_str(),
-        "sStunL" | "sDamselStunL" | "sTunnelStunL"
-    );
     let active = value(p, "active", 1.0) != 0.0;
-    if active && p.stun > 0 && stationary_stun_pose {
-        p.stun -= 1;
+    if active {
+        active_prelude(game);
     }
-    // Throws can set Classic's independent `stunned` flag without adding any
-    // timer. They still tumble until the stationary stun pose is reached.
-    let stunned = p.stun > 0 || (p.state == PlayerState::Stunned && !stationary_stun_pose);
-    if p.health <= 0 || p.state == PlayerState::Dead || stunned {
-        // This precedes the separate hurt controller in oPlayer1 Step. A long
-        // fall ends a throw's one-shot wall injury even while input is disabled.
-        let mut fall = value(p, "fall_timer", 0.0);
-        if value(p, "parachute_open", 0.0) > 0.0 {
-            fall = 0.0;
+    let p = &mut game.player;
+    if p.state == PlayerState::Dead || p.is_stunned() {
+        // Source keeps its platform state separate from dead/stunned. The
+        // skipped active controller forces STANDING only after the fall
+        // prelude, so retain the preceding tick's trait for first-hit onset.
+        if active {
+            let standing = value(p, "duck_to_hang", 0.0) == 0.0;
+            set(p, "source_platform_grounded", f64::from(standing));
+            set(p, "source_platform_climbing", 0.0);
         }
-        if p.vel.y > 0.0 && p.state != PlayerState::Climbing {
-            fall += 1.0;
-            if fall > 16.0 {
-                set(p, "wall_hurt", 0.0);
-                set(p, "wallHurt", 0.0);
-            }
-        } else {
-            fall = 0.0;
-        }
-        if swimming_without_lava(&game.world, p) {
-            fall = 0.0;
-        }
-        set(p, "fall_timer", fall);
-        set(p, "fall_ticks", fall);
         let impact = stunned_tick(&mut game.world, p, engine_time);
         if impact {
             game.events.push(GameEvent::Damage { amount: 1 });
@@ -432,6 +745,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         if p.state != PlayerState::Ducking && value(p, "duck_to_hang", 0.0) == 0.0 {
             p.state = PlayerState::Standing;
         }
+        let ground = grounded_state(p.state) && value(p, "duck_to_hang", 0.0) == 0.0;
+        set(p, "source_platform_grounded", f64::from(ground));
+        set(p, "source_platform_climbing", 0.0);
         return;
     }
     // Classic keeps its platform state STANDING while the separate `stunned`
@@ -442,7 +758,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         p.state = PlayerState::Standing;
     }
     if value(p, "duck_to_hang", 0.0) > 0.0 {
-        duck_to_hang_tick(&game.world, p);
+        p.vel = Vec2::default();
+        set(p, "source_platform_grounded", 0.0);
+        set(p, "source_platform_climbing", 0.0);
         return;
     }
     set(p, "bounced", 0.0);
@@ -460,7 +778,6 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let input = &effective;
     let w = &mut game.world;
     let mut sound = None;
-    let mut fall_damage = 0;
     let col_bot = below(w, p);
     let col_left = edge(w, p, Side::Left, 1.0);
     let col_right = edge(w, p, Side::Right, 1.0);
@@ -479,7 +796,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let mut ladder_timer = value(p, "ladder_timer", 0.0);
     let mut hang_count = value(p, "hang_count", 0.0);
     let mut cape = value(p, "cape_open", 0.0) > 0.0;
-    let mut parachute = value(p, "parachute_open", 0.0) > 0.0;
+    let parachute = value(p, "parachute_open", 0.0) > 0.0;
     let mut fuel = value(p, "jetpack_fuel", 0.0);
     let mut jumped = value(p, "jumped", 0.0) > 0.0;
     let mut ax: f64 = 0.0;
@@ -487,64 +804,8 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let mut limit_x = value(p, "velocity_limit_x", 16.0);
     let mut limit_y_acc: f64 = 6.0;
 
-    // These run before characterStepEvent in Classic's oPlayer1 Step event.
-    if cape || parachute || in_water || in_web {
-        fall = 0.0;
-    }
-    if p.vel.y > 0.0 && p.state != PlayerState::Climbing {
-        fall += 1.0;
-        if fall > 16.0 {
-            set(p, "wall_hurt", 0.0);
-            set(p, "wallHurt", 0.0);
-        }
-        if has(p, &["Parachute", "parachute"])
-            && fall > 14.0
-            && !solid_point(w, Vec2::new(p.pos.x, p.pos.y + 32.0))
-        {
-            p.equipment.remove("Parachute");
-            p.equipment.remove("parachute");
-            parachute = true;
-            fall = 0.0;
-        }
-    } else if was_grounded && fall > 16.0 && !object_at(w, p.pos, &["oSpringTrap"]) {
-        fall_damage = if fall > 48.0 {
-            10
-        } else if fall > 32.0 {
-            2
-        } else {
-            1
-        };
-        p.vel.y = -3.0;
-        fall = 0.0;
-    } else {
-        fall = 0.0;
-        parachute = false;
-    }
-    if fall_damage > 0 {
-        set(p, "fall_timer", 0.0);
-        set(p, "fall_ticks", 0.0);
-        // This branch precedes characterStepEvent in the original and bypasses
-        // ordinary hit invulnerability, including the hurt flash timer.
-        let invincible = p.invincible;
-        p.invincible = 0;
-        game.damage_player(fall_damage);
-        game.player.invincible = invincible;
-        game.player.stun = 60;
-        game.player.vel.y = -3.0;
-        set(&mut game.player, "bounced", 1.0);
-        game.sound("sndThud", game.player.pos);
-        let impact = stunned_tick(&mut game.world, &mut game.player, engine_time);
-        if impact {
-            game.events.push(GameEvent::Damage { amount: 1 });
-            game.sound("sndHurt", game.player.pos);
-        }
-        return;
-    }
     if was_grounded {
         fuel = 50.0;
-    }
-    if swimming_without_lava(w, p) {
-        fall = 0.0;
     }
     if !in_water && !in_web {
         set(p, "swimming", 0.0);
@@ -640,9 +901,15 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         }
         if input.up && ladder_at(w, Vec2::new(p.pos.x, p.pos.y - 8.0)).is_some() {
             ay -= 0.6;
+            if p.alarms[2] < 1 {
+                p.alarms[2] = 8;
+            }
         } else if input.down {
             if ladder_at(w, Vec2::new(p.pos.x, p.pos.y + 8.0)).is_some() {
                 ay += 0.6;
+                if p.alarms[2] < 1 {
+                    p.alarms[2] = 8;
+                }
             } else {
                 p.state = PlayerState::Falling;
             }
@@ -734,6 +1001,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         ay -= 2.0;
         p.vel.y = -1.0;
         fuel -= 1.0;
+        if p.alarms[10] < 1 {
+            p.alarms[10] = 3;
+        }
         gravity = 0.0;
         p.state = PlayerState::Jumping;
         p.jump_time = 0;
@@ -1024,8 +1294,12 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     {
         set(p, "duck_to_hang", 1.0);
         p.vel = Vec2::default();
-        p.sprite = character_sprite(p, "sDuckToHangL").into();
+        let sprite = character_sprite(p, "sDuckToHangL");
+        p.set_sprite(sprite);
         p.animation = 0.0;
+        p.set_image_speed(0.8);
+        set(p, "source_platform_grounded", 0.0);
+        set(p, "source_platform_climbing", 0.0);
         if let Some(id) = p.held.take() {
             if let Some(held) = w.entity_mut(id) {
                 held.held = false;
@@ -1071,20 +1345,14 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     set(p, "jetpack_fuel", fuel);
     set(p, "jumped", f64::from(jumped));
     set(p, "velocity_limit_x", limit_x);
+    remember_platform_traits(p);
     animate(p, input, w);
     if let Some(name) = sound {
         game.sound(name, game.player.pos);
     }
 }
 
-fn duck_to_hang_tick(w: &World, p: &mut Player) {
-    p.vel = Vec2::default();
-    p.animation += 0.8;
-    // The original flip sprite has nine poses; its animation-end event performs
-    // the displacement and either grabs an adjacent ladder or reverses facing.
-    if p.animation < 9.0 {
-        return;
-    }
+fn duck_to_hang_end(w: &World, p: &mut Player) {
     p.pos.y = gm_round((p.pos.y + 16.0) / 8.0) * 8.0;
     if let Some(ladder) = ladder_at(w, Vec2::new(p.pos.x + f64::from(p.facing) * 8.0, p.pos.y)) {
         p.pos.x = ladder.x;
@@ -1095,16 +1363,9 @@ fn duck_to_hang_tick(w: &World, p: &mut Player) {
         p.state = PlayerState::Hanging;
     }
     p.previous_pos = p.pos;
-    p.animation = 0.0;
-    p.sprite = character_sprite(
-        p,
-        if p.state == PlayerState::Hanging {
-            "sHangLeft"
-        } else {
-            "sClimbUp"
-        },
-    )
-    .into();
+    remember_platform_traits(p);
+    // The source callback changes movement state, leaving sprite/index/speed
+    // untouched until characterSprite runs during the following Step.
     set(p, "duck_to_hang", 0.0);
     set(p, "gravity", 0.0);
     set(p, "fall_timer", 0.0);
@@ -1112,7 +1373,7 @@ fn duck_to_hang_tick(w: &World, p: &mut Player) {
 }
 
 fn stunned_tick(w: &mut World, p: &mut Player, time: u64) -> bool {
-    let dead = p.health <= 0 || p.state == PlayerState::Dead;
+    let dead = p.state == PlayerState::Dead;
     let bounced = value(p, "bounced", 0.0) > 0.0;
     p.vel.y += if bounced { 1.0 } else { 0.6 };
     if p.vel.y < 0.0 && edge(w, p, Side::Top, 1.0) {
@@ -1154,7 +1415,7 @@ fn stunned_tick(w: &mut World, p: &mut Player, time: u64) -> bool {
     } else {
         PlayerState::Falling
     };
-    p.sprite = character_sprite(
+    let sprite = character_sprite(
         p,
         if p.vel.x == 0.0 {
             if dead { "sDieL" } else { "sStunL" }
@@ -1169,10 +1430,50 @@ fn stunned_tick(w: &mut World, p: &mut Player, time: u64) -> bool {
         } else {
             "sDieLR"
         },
-    )
-    .into();
-    p.animation += 0.4;
+    );
+    p.set_sprite(sprite);
     impact
+}
+
+/// Dispatch oPlayer1's Animation End after the engine has advanced and wrapped
+/// image_index. The controller never advances animation during Step.
+pub fn animation_end(game: &mut Game) {
+    match game.player.sprite.as_str() {
+        "sAttackLeft" | "sDamselAttackL" | "sTunnelAttackL" => {
+            game.player.attack_timer = 0;
+            game.player.data.remove("whip_elapsed");
+            if let Some(held) = game.player.held.and_then(|id| game.world.entity_mut(id)) {
+                held.data.insert("visible".into(), 1.0);
+                held.data.insert("hidden".into(), 0.0);
+            }
+            crate::characters::animation_end(game);
+        }
+        "sDuckToHangL" | "sDamselDtHL" | "sTunnelDtHL" => {
+            duck_to_hang_end(&game.world, &mut game.player);
+        }
+        "sPExit" | "sDamselExit" | "sTunnelExit" => {
+            crate::ending::player_animation_end(game);
+        }
+        _ => {}
+    }
+}
+
+/// Final oPlayer1 Step bookkeeping runs after its hurt/revival actions and
+/// before the engine's automatic Collision phase. A fresh late collision keeps
+/// its complete blink/invincibility duration until the following Player Step.
+pub fn finish_step(game: &mut Game) {
+    let p = &mut game.player;
+    if p.state != PlayerState::Dead && game.state != RunState::Dead {
+        p.invincible = p.invincible.saturating_sub(1);
+    }
+    let blink = value(p, "blink", 0.0);
+    if blink > 0.0 {
+        let toggle = value(p, "blink_toggle", -1.0);
+        set(p, "blink_toggle", -toggle);
+        set(p, "blink", blink - 1.0);
+    } else {
+        set(p, "blink_toggle", -1.0);
+    }
 }
 
 fn animate(p: &mut Player, input: &InputFrame, w: &World) {
@@ -1189,9 +1490,12 @@ fn animate(p: &mut Player, input: &InputFrame, w: &World) {
         },
     );
     if p.attack_timer > 0 {
+        // characterStepEvent restores this on every whipping Step. The attack
+        // start later in that Step overrides it to 0.6 for its first frame.
+        p.set_image_speed(1.0);
         return;
     }
-    let mut speed = 0.0;
+    let mut speed = p.image_speed();
     let name = match p.state {
         PlayerState::Standing => {
             if !solid_point(w, Vec2::new(p.pos.x - 2.0, p.pos.y + 9.0)) {
@@ -1268,11 +1572,8 @@ fn animate(p: &mut Player, input: &InputFrame, w: &World) {
         },
     )
     .to_owned();
-    if name != p.sprite {
-        p.sprite = name;
-        p.animation = 0.0;
-    }
-    p.animation += speed.min(1.0);
+    p.set_sprite(&name);
+    p.set_image_speed(speed.min(1.0));
     let fall_count = if p.state == PlayerState::Falling {
         value(p, "fall_state_ticks", 0.0) + 1.0
     } else {
@@ -1336,6 +1637,294 @@ fn character_sprite<'a>(p: &Player, name: &'a str) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn natural_yeti_throw_keeps_source_standing_trait_for_long_fall_injury() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 31, "oBlock");
+        }
+        let pos = game.player.pos;
+        game.spawn("oYeti", Vec2::new(pos.x - 8.0, pos.y - 8.0));
+        game.step(&InputFrame::default());
+        assert!(game.player.is_stunned());
+        assert_eq!(game.player.stun, 0);
+        // The late enemy throw leaves the earlier FALLING trait intact for
+        // the following prelude; only the next skipped controller forces it.
+        assert_eq!(value(&game.player, "source_platform_grounded", 0.0), 0.0);
+        game.step(&InputFrame::default());
+        assert_eq!(value(&game.player, "source_platform_grounded", 0.0), 1.0);
+        let mut injured = false;
+        for _ in 0..120 {
+            game.step(&InputFrame::default());
+            if game.lifetime_stats.misc_deaths[3] != 0 {
+                injured = true;
+                break;
+            }
+        }
+        assert!(
+            injured,
+            "the real throw's long descent must retain source ON_GROUND"
+        );
+        assert_eq!(game.state, RunState::Dead);
+        assert_eq!(game.lifetime_stats.misc_deaths[3], 1);
+        assert_eq!(value(&game.player, "wall_hurt", 0.0), 0.0);
+        assert_eq!(game.player.stun, 60);
+    }
+
+    #[test]
+    fn natural_long_fall_creates_source_blood_then_poofs_with_immediate_rng() {
+        for (floor, injury, blood_count) in [(20, 1, 0), (31, 10, 3)] {
+            let mut game = Game::shell(7, RulesPreset::Classic);
+            for x in 0..game.world.width {
+                game.world.set_tile(x, floor, "oBlock");
+            }
+            let mut observed = false;
+            for _ in 0..120 {
+                let before = game.clone();
+                game.step(&InputFrame::default());
+                if !game
+                    .events
+                    .iter()
+                    .any(|e| matches!(e, GameEvent::Damage { amount } if *amount == injury))
+                {
+                    continue;
+                }
+                observed = true;
+                // The later source death checkpoint clamps lethal life to zero.
+                assert_eq!(game.player.health, (before.player.health - injury).max(0));
+                assert_eq!(game.player.stun, 60);
+                assert_eq!(game.player.invincible, 0);
+                assert!(
+                    game.events
+                        .iter()
+                        .any(|e| matches!(e, GameEvent::Sound { name, .. } if name == "sndThud"))
+                );
+                assert!(
+                    !game
+                        .events
+                        .iter()
+                        .any(|e| matches!(e, GameEvent::Sound { name, .. } if name == "sndHurt"))
+                );
+                let particles: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| matches!(e.object.as_str(), "oBlood" | "oPoof"))
+                    .collect();
+                assert_eq!(particles.len(), blood_count + 2);
+                assert!(
+                    particles[..blood_count]
+                        .iter()
+                        .all(|e| e.object == "oBlood")
+                );
+                assert!(particles[blood_count..].iter().all(|e| e.object == "oPoof"));
+                assert_eq!(particles[blood_count].vel.x, -0.4);
+                assert_eq!(particles[blood_count + 1].vel.x, 0.4);
+                assert!(
+                    particles[blood_count..]
+                        .iter()
+                        .all(|e| { e.vel.y == 0.0 && e.image_speed() == 0.4 })
+                );
+                // scrCreateBlood's Create draws happen immediately, before the
+                // following Poofs or any later Player Step producers. Each
+                // inherited Detritus Create draws x twice, y once, gravity once.
+                let mut expected_rng = before.rng;
+                for blood in &particles[..blood_count] {
+                    let vx = expected_rng.unit() * 4.0 - expected_rng.unit() * 4.0;
+                    let _vy = -1.0 - expected_rng.unit() * 2.0;
+                    let gravity = f64::from(1 + expected_rng.range(6)) * 0.1;
+                    assert_eq!(blood.vel.x, vx);
+                    assert_eq!(blood.value("gravity"), gravity);
+                    assert_eq!(blood.value("world_effect_initialized"), 1.0);
+                }
+                assert_eq!(game.rng.clone().next_u64(), expected_rng.next_u64());
+                break;
+            }
+            assert!(
+                observed,
+                "authored floor {floor} must cause its natural fall injury"
+            );
+        }
+    }
+
+    #[test]
+    fn natural_landing_in_new_water_runs_fall_injury_before_bubble_create() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 31, "oBlock");
+        }
+        for _ in 0..120 {
+            if grounded_state(game.player.state)
+                && game.player.vel.y == 0.0
+                && value(&game.player, "fall_timer", 0.0) > 48.0
+            {
+                break;
+            }
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(game.player.health, 4);
+        assert!(value(&game.player, "fall_timer", 0.0) > 48.0);
+        // Add an ordinary water instance at the natural landing, before the
+        // next Player Step recognizes the landing injury. Player position,
+        // velocity, fall timer, health, and swimming state are never injected.
+        let pos = game.player.pos;
+        game.spawn(
+            "oWaterSwim",
+            Vec2::new((pos.x / 16.0).floor() * 16.0, (pos.y / 16.0).floor() * 16.0),
+        );
+        let mut expected_rng = game.rng.clone();
+        for _ in 0..3 {
+            expected_rng.unit();
+            expected_rng.unit();
+            expected_rng.unit();
+            expected_rng.range(6);
+        }
+        game.step(&InputFrame::default());
+        assert_eq!(game.player.health, 0);
+        assert_eq!(value(&game.player, "fall_timer", -1.0), 0.0);
+        // Dry Player Steps keep bubbleTimer at its maximum. Water entry ticks
+        // it down after the injury; it does not create an immediate bubble.
+        assert_eq!(value(&game.player, "bubble_timer", -1.0), 19.0);
+        let effects: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.object.as_str(),
+                    "oSplash" | "oBlood" | "oPoof" | "oBubble"
+                )
+            })
+            .map(|e| e.object.as_str())
+            .collect();
+        assert_eq!(
+            effects,
+            ["oSplash", "oBlood", "oBlood", "oBlood", "oPoof", "oPoof"]
+        );
+        assert_eq!(game.rng.clone().next_u64(), expected_rng.clone().next_u64());
+        let bubble_velocity = -f64::from(1 + expected_rng.range(3)) * 0.1;
+        for _ in 0..20 {
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(value(&game.player, "bubble_timer", -1.0), 20.0);
+        let bubble = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oBubble")
+            .unwrap();
+        assert_eq!(bubble.vel.y, bubble_velocity);
+        assert_eq!(game.rng.clone().next_u64(), expected_rng.next_u64());
+    }
+
+    #[test]
+    fn natural_long_fall_and_pit_deaths_record_the_source_counter_once() {
+        for pit in [false, true] {
+            let mut game = Game::shell(7, RulesPreset::Classic);
+            if !pit {
+                for x in 0..game.world.width {
+                    game.world.set_tile(x, 31, "oBlock");
+                }
+            }
+            for _ in 0..160 {
+                game.step(&InputFrame::default());
+            }
+            assert_eq!(game.state, RunState::Dead);
+            assert_eq!(game.lifetime_stats.misc_deaths[if pit { 10 } else { 3 }], 1);
+            assert_eq!(game.lifetime_stats.misc_deaths[if pit { 3 } else { 10 }], 0);
+
+            // Authored editor rooms use the same controller but are excluded by
+            // the source isRealLevel guard, including a fatal natural pit fall.
+            let mut custom = Game::shell(7, RulesPreset::Classic);
+            let mut level = crate::level::Level::default();
+            level.set_tile(4, 3, '@').unwrap();
+            custom.load_custom(&level, "counter-context", "");
+            for _ in 0..160 {
+                custom.step(&InputFrame::default());
+            }
+            assert_eq!(custom.state, RunState::Dead);
+            assert_eq!(custom.lifetime_stats.misc_deaths[10], 0);
+        }
+    }
+
+    #[test]
+    fn real_running_look_and_crawl_inputs_preserve_source_animation_phase() {
+        use crate::characters::{Character, apply};
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for (character, running, looking, crawling) in [
+                (Character::Explorer, "sRunLeft", "sLookRunL", "sCrawlLeft"),
+                (
+                    Character::Damsel,
+                    "sDamselRunL",
+                    "sDamselRunL",
+                    "sDamselCrawlL",
+                ),
+                (
+                    Character::TunnelMan,
+                    "sTunnelRunL",
+                    "sTunnelLookRunL",
+                    "sTunnelCrawlL",
+                ),
+            ] {
+                let mut level = crate::level::Level::default();
+                level.set_tile(4, 3, '@').unwrap();
+                for x in 0..40 {
+                    level.set_tile(x, 5, '1').unwrap();
+                }
+                let mut game = Game::shell(7, rules);
+                game.load_custom(&level, "animation-phase", "");
+                apply(&mut game, character);
+                for _ in 0..8 {
+                    game.step(&InputFrame::default());
+                }
+                for _ in 0..8 {
+                    game.step(&InputFrame {
+                        right: true,
+                        ..Default::default()
+                    });
+                }
+                assert_eq!(game.player.sprite, running);
+                let before = game.player.animation;
+                assert!(
+                    before.floor() >= 1.0,
+                    "fixture must reach a visible later pose"
+                );
+                game.step(&InputFrame {
+                    right: true,
+                    up: true,
+                    ..Default::default()
+                });
+                assert_eq!(game.player.sprite, looking);
+                let count = crate::catalog::sprite_frame_count(looking) as f64;
+                let mut expected = before + 0.4;
+                if expected.floor() >= count {
+                    expected -= count;
+                }
+                assert!(
+                    (game.player.animation - expected).abs() < 1e-9,
+                    "{rules:?}/{character:?}: look transition restarted animation"
+                );
+
+                let before = game.player.animation;
+                game.step(&InputFrame {
+                    right: true,
+                    down: true,
+                    ..Default::default()
+                });
+                assert_eq!(game.player.sprite, crawling);
+                let count = crate::catalog::sprite_frame_count(crawling) as f64;
+                let mut expected = before + 0.8;
+                if expected.floor() >= count {
+                    expected -= count;
+                }
+                assert!(
+                    (game.player.animation - expected).abs() < 1e-9,
+                    "{rules:?}/{character:?}: crawl transition restarted animation"
+                );
+            }
+        }
+    }
 
     #[test]
     fn real_ankh_pickup_then_exit_lava_revives_without_interrupting_exit_animation() {
@@ -1434,10 +2023,16 @@ mod tests {
             let mut g = Game::shell(7, rules);
             g.load_custom(&level, "cape-swap", "");
             let spawn = g.player.pos;
-            g.world
-                .spawn("oCapePickup", Vec2::new(spawn.x, spawn.y + 2.0));
-            g.world
-                .spawn("oJetpack", Vec2::new(spawn.x + 8.0, spawn.y + 4.0));
+            let cape = g.spawn("oCapePickup", Vec2::new(spawn.x, spawn.y + 2.0));
+            let jetpack = g.spawn("oJetpack", Vec2::new(spawn.x + 8.0, spawn.y + 4.0));
+            assert_eq!(g.world.entity(cape).unwrap().value("cost"), 12000.0);
+            assert_eq!(g.world.entity(jetpack).unwrap().value("cost"), 20000.0);
+            // Source Create assigns shop costs. With no Shopkeeper, oItem
+            // clears them in its later Step, after the player's pickup event.
+            // Let that real Step run before beginning the input-only swap.
+            g.step(&InputFrame::default());
+            assert_eq!(g.world.entity(cape).unwrap().value("cost"), 0.0);
+            assert_eq!(g.world.entity(jetpack).unwrap().value("cost"), 0.0);
             g.step(&InputFrame {
                 down: true,
                 attack_pressed: true,
@@ -1449,6 +2044,8 @@ mod tests {
                 jump_released: true,
                 ..Default::default()
             });
+            let falling_before_open = g.player.vel.y;
+            assert!(falling_before_open > 0.0);
             g.step(&InputFrame {
                 jump: true,
                 jump_pressed: true,
@@ -1460,14 +2057,15 @@ mod tests {
             assert!(!g.player.has("Cape"));
             // The controller ran before item pickup: the source Cape was
             // still present for this tick's drag and its falling-time reset.
-            assert_eq!(g.player.vel.y, 1.5);
+            let cape_drag = (falling_before_open + 1.0) * 0.5;
+            assert_eq!(g.player.vel.y, cape_drag);
             assert_eq!(value(&g.player, "cape_open", 0.0), 1.0);
             g.step(&InputFrame::default());
             assert_eq!(value(&g.player, "cape_open", -1.0), 0.0);
-            assert_eq!(g.player.vel.y, 2.5);
+            assert_eq!(g.player.vel.y, cape_drag + 1.0);
             assert!(value(&g.player, "fall_timer", 0.0) > 0.0);
             g.step(&InputFrame::default());
-            assert_eq!(g.player.vel.y, 3.5);
+            assert_eq!(g.player.vel.y, cape_drag + 2.0);
         }
     }
     #[test]
@@ -1498,15 +2096,27 @@ mod tests {
             let bullet = g.world.spawn("oBullet", Vec2::new(80.0, 152.0));
             g.world.entity_mut(bullet).unwrap().vel.x = 8.0;
             g.step(&InputFrame::default());
+            assert_eq!(g.state, RunState::Playing);
+            assert!(g.player.health <= 0);
+            // Automatic Bullet collision follows Player Step; its independent
+            // death flag is latched during the next Player Step checkpoint.
+            for _ in 0..40 {
+                g.step(&InputFrame::default());
+            }
             assert_eq!(g.state, RunState::Dead);
             g.data.insert("bloodLevel".into(), 8.0);
-            let blood = g.world.spawn("oBlood", g.player.pos);
-            let particle = g.world.entity_mut(blood).unwrap();
-            particle.age = 4;
-            particle.data.insert("world_effect_initialized".into(), 1.0);
-            particle.data.insert("life".into(), 60.0);
-            particle.data.insert("gravity".into(), 0.1);
-            g.step(&InputFrame::default());
+            // Let real Blood Create, movement and Alarm 2 establish collectible
+            // state. No particle age/velocity/collectible field is injected.
+            for _ in 0..9 {
+                let pos = g.player.pos;
+                crate::world_events::spawn_detritus(&mut g, "oBlood", pos);
+            }
+            for _ in 0..40 {
+                g.step(&InputFrame::default());
+                if g.player.health > 0 {
+                    break;
+                }
+            }
             assert_eq!(g.player.health, 1, "legitimate Kapala heal {character:?}");
             assert_eq!(g.state, RunState::Dead);
             let mut neutral = g.clone();
@@ -1686,6 +2296,9 @@ mod tests {
         assert_eq!(value(&g.player, "blink_toggle", 0.0), -1.0);
         let bullet = g.world.spawn("oBullet", Vec2::new(80.0, 152.0));
         g.world.entity_mut(bullet).unwrap().vel.x = 8.0;
+        g.step(&InputFrame::default());
+        assert_eq!(g.state, RunState::Playing);
+        assert!(g.player.health <= 0);
         g.step(&InputFrame::default());
         assert_eq!(g.state, RunState::Dead);
         let remaining = g.player.invincible;

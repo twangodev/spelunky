@@ -1,6 +1,7 @@
 //! NPC/ghost behavior from oGhost, oDamsel, oShopkeeper and oScarab events.
 //! Shop purchase UI/dice/kissing-parlor economics belong to the economy system.
-use super::{can_stomp, center, in_stars, move_body, steer_toward, touches_player};
+use super::{can_stomp, center, in_stars, move_body, steer_toward};
+use crate::statistics::LifetimeCounter;
 use crate::*;
 
 pub fn init(e: &mut Entity) {
@@ -9,19 +10,23 @@ pub fn init(e: &mut Entity) {
         "oGhost" => {
             e.health = 1;
             e.state = 1;
-            e.sprite = "sGhostRight".into();
+            e.set_sprite("sGhostRight");
             e.data.insert("invincible".into(), 1.0);
         }
         "oDamsel" => {
             e.health = 4;
             e.timer = 200;
-            e.sprite = "sDamselLeft".into();
+            e.set_sprite("sDamselLeft");
             e.facing = -1;
             e.data.entry("canPickUp".into()).or_insert(1.0);
+            e.data.entry("heavy".into()).or_insert(1.0);
+            e.data.entry("gravity".into()).or_insert(0.6);
+            e.data.entry("bounceFactor".into()).or_insert(0.5);
+            e.data.entry("frictionFactor".into()).or_insert(0.3);
         }
         "oShopkeeper" | "oShopkeeper2" => {
             e.health = 20;
-            e.sprite = "sShopLeft".into();
+            e.set_sprite("sShopLeft");
             e.facing = -1;
             e.data.insert("has_gun".into(), 1.0);
             e.data.insert("stun_time".into(), 5.0);
@@ -38,17 +43,64 @@ pub fn init(e: &mut Entity) {
             }
         }
         "oScarab" => {
-            e.sprite = "sScarab".into();
+            e.set_sprite("sScarab");
+            e.data.insert("bloodless".into(), 1.0);
             e.timer = 20;
         }
         "oDeadFish" => {
-            e.sprite = "sDeadFishRight".into();
+            e.set_sprite("sDeadFishRight");
             e.facing = 1;
         }
         "oBarrier" | "oBarrierEmitter" => {
             e.data.insert("invincible".into(), 1.0);
         }
         _ => {}
+    }
+}
+
+/// Source Create state that can run during generation, before producer writes.
+pub(super) fn create_local(ctx: &mut crate::creation::EntityCreateContext<'_>, e: &mut Entity) {
+    if !matches!(e.object.as_str(), "oDamsel" | "oScarab") || e.value("npc_local_created") != 0.0 {
+        return;
+    }
+    e.data.insert("npc_local_created".into(), 1.0);
+    match e.object.as_str() {
+        "oDamsel" => {
+            // Preserve post-Create overrides in authored-room bootstraps.
+            e.data
+                .entry("cost".into())
+                .or_insert(15000.0 * f64::from(ctx.world.level));
+        }
+        "oScarab" => {
+            e.timer = 10 + ctx.rng.range(21);
+            if let Some(value) = match ctx.world.area {
+                Area::Mines => Some(4000.0),
+                Area::Jungle => Some(8000.0),
+                Area::Temple => Some(12000.0),
+                _ => None,
+            } {
+                e.data.insert("value".into(), value);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Remaining Game-context effects must run even after generated local Create.
+pub(super) fn create(game: &mut Game, e: &mut Entity) {
+    create_local(
+        &mut crate::creation::EntityCreateContext {
+            world: &game.world,
+            rng: &mut game.rng,
+        },
+        e,
+    );
+    if e.value("npc_created") != 0.0 {
+        return;
+    }
+    e.data.insert("npc_created".into(), 1.0);
+    if e.object == "oGhost" {
+        game.sound("sndGhost", e.pos);
     }
 }
 
@@ -64,10 +116,7 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
                 if timer > 0.0 {
                     e.data.insert("death_timer".into(), timer - 1.0);
                 } else {
-                    for _ in 0..3 {
-                        game.world
-                            .spawn("oBlood", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
-                    }
+                    create_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 3);
                     e.alive = false;
                 }
             }
@@ -79,8 +128,41 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
     }
 }
 
+pub(super) fn alarm(_game: &mut Game, e: &mut Entity, index: u8) {
+    if index == 0 && matches!(e.object.as_str(), "oShopkeeper" | "oShopkeeper2") {
+        e.data.insert("hit_cooldown".into(), 0.0);
+        e.data.insert("whipped".into(), 0.0);
+    }
+}
+
+/// Source oDamsel Draw mutates its collision scale and price-icon frame.
+/// The dispatcher owns visibility and when this event is invoked.
+pub(super) fn draw(_game: &mut Game, e: &mut Entity) {
+    if e.object != "oDamsel" {
+        return;
+    }
+    e.data.insert(
+        "image_xscale".into(),
+        if e.facing == 1 { -1.0 } else { 1.0 },
+    );
+    if e.value("cost") > 0.0 {
+        let frame = e.value("cimg");
+        e.data.insert("draw_cimg".into(), frame);
+        let next = frame + 1.0;
+        e.data
+            .insert("cimg".into(), if next > 9.0 { 0.0 } else { next });
+    }
+}
+
 pub(super) fn animation_end(e: &mut Entity, sprite: &str) {
-    if e.object == "oGhost" && sprite == "sGhostDisappear" {
+    if e.object == "oGhost" {
+        match sprite {
+            "sGhostDisappear" => e.alive = false,
+            "sGhostTurnLeft" => e.set_sprite("sGhostLeft"),
+            "sGhostTurnRight" => e.set_sprite("sGhostRight"),
+            _ => {}
+        }
+    } else if e.object == "oDamsel" && matches!(sprite, "sDamselExit2" | "sPExit") {
         e.alive = false;
     } else if e.object == "oDamsel" && e.state == 3 {
         e.state = 0;
@@ -90,69 +172,104 @@ pub(super) fn animation_end(e: &mut Entity, sprite: &str) {
     } else if matches!(e.object.as_str(), "oShopkeeper" | "oShopkeeper2") && sprite == "sShopThrowL"
     {
         e.state = 2;
-        e.sprite = "sShopLeft".into();
+        e.set_sprite("sShopLeft");
     }
 }
 
-pub(super) fn tick_independent_events(game: &mut Game, e: &mut Entity) {
+/// Automatic collision callbacks operate on the dispatcher-selected pair.
+/// Spatial queries in Step remain separate from these engine events.
+pub(super) fn collision(
+    game: &mut Game,
+    e: &mut Entity,
+    other: crate::dispatcher::Instance,
+) -> bool {
+    use crate::dispatcher::Instance;
     if !e.alive {
-        return;
+        return true;
     }
-    if e.object == "oScarab" {
-        if game.player.sprite_bounds().intersects(e.sprite_bounds()) {
-            // Source Create assigns 4000/8000/12000 in Mines/Jungle/Temple.
-            // Retain caller overrides and the existing unsupported-area
-            // fallback; Ice/Boss have no explicit value assignment in source.
-            let value = e
-                .data
-                .get("value")
-                .copied()
-                .unwrap_or(match game.world.area {
-                    Area::Mines => 4000.0,
-                    Area::Jungle => 8000.0,
-                    _ => 12000.0,
-                })
-                .max(0.0) as u32;
-            *game.data.entry("collect".into()).or_default() += f64::from(value);
-            let counter = game.data.entry("collectCounter".into()).or_default();
-            *counter = (*counter + 20.0).min(100.0);
-            *game.data.entry("scarabs".into()).or_default() += 1.0;
-            game.events.push(GameEvent::Collected {
-                object: "oScarab".into(),
-                value,
-            });
-            game.sound("sndCoin", e.pos);
-            e.alive = false;
-            destroyed(game, e);
+    match (e.object.as_str(), other) {
+        ("oGhost", Instance::Player) => {
+            ghost_player_collision(game, e);
+            true
         }
-    } else if e.object == "oBarrierEmitter" {
-        if game.world.entities.iter().any(|item| {
-            item.alive
-                && item.sprite_bounds().intersects(e.sprite_bounds())
-                && (item.object == "oBullet"
-                    || crate::catalog::is_a(&item.object, "oItem")
-                        && (item.vel.x.abs() > 2.0 || item.vel.y.abs() > 2.0))
-        }) {
-            destroy_emitter(game, e);
+        ("oScarab", Instance::Player) => {
+            collect_scarab(game, e);
+            true
         }
-    } else if matches!(e.object.as_str(), "oShopkeeper" | "oShopkeeper2")
-        && e.health > 0
-        && e.state == 2
-        && e.value("has_gun") == 0.0
-    {
-        if let Some(gun) = game.world.entities.iter_mut().find(|gun| {
-            gun.alive
-                && crate::catalog::is_a(&gun.object, "oShotgun")
-                && gun.sprite_bounds().intersects(e.sprite_bounds())
-        }) {
-            if gun.held {
-                game.player.held = game.player.held.filter(|id| *id != gun.id);
-                gun.held = false;
+        ("oBarrier", Instance::Player) => {
+            barrier_player_collision(game, e);
+            true
+        }
+        ("oShopkeeper" | "oShopkeeper2", Instance::Player) => {
+            if !matches!(e.state, 0 | 5 | 98 | 99) && can_stomp(game, e) {
+                false
+            } else {
+                keeper_player_collision(game, e);
+                true
             }
-            gun.alive = false;
-            e.data.insert("has_gun".into(), 1.0);
         }
+        ("oBarrierEmitter", Instance::Entity(id)) => {
+            let hit = game.world.entity(id).is_some_and(|item| {
+                item.object == "oBullet"
+                    || crate::catalog::is_a(&item.object, "oItem")
+                        && (item.vel.x.abs() > 2.0 || item.vel.y.abs() > 2.0)
+            });
+            if hit {
+                destroy_emitter(game, e);
+            }
+            true
+        }
+        ("oBarrier", Instance::Entity(id)) => {
+            barrier_item_collision(game, id);
+            true
+        }
+        ("oShopkeeper" | "oShopkeeper2", Instance::Entity(id)) => {
+            if game
+                .world
+                .entity(id)
+                .is_some_and(|gun| crate::catalog::is_a(&gun.object, "oShotgun"))
+            {
+                if e.health > 0 && e.state == 2 && e.value("has_gun") == 0.0 {
+                    let gun = game.world.entity_mut(id).unwrap();
+                    if gun.held {
+                        game.player.held = game.player.held.filter(|held| *held != id);
+                        gun.held = false;
+                    }
+                    gun.alive = false;
+                    e.data.insert("has_gun".into(), 1.0);
+                }
+                true
+            } else {
+                false
+            }
+        }
+        _ => false,
     }
+}
+
+fn collect_scarab(game: &mut Game, e: &mut Entity) {
+    // Literal source Create values; unsupported-area fallback is unchanged.
+    let value = e
+        .data
+        .get("value")
+        .copied()
+        .unwrap_or(match game.world.area {
+            Area::Mines => 4000.0,
+            Area::Jungle => 8000.0,
+            _ => 12000.0,
+        })
+        .max(0.0) as u32;
+    *game.data.entry("collect".into()).or_default() += f64::from(value);
+    let counter = game.data.entry("collectCounter".into()).or_default();
+    *counter = (*counter + 20.0).min(100.0);
+    *game.data.entry("scarabs".into()).or_default() += 1.0;
+    game.events.push(GameEvent::Collected {
+        object: "oScarab".into(),
+        value,
+    });
+    game.sound("sndCoin", e.pos);
+    e.alive = false;
+    destroyed(game, e);
 }
 
 fn destroy_emitter(game: &mut Game, e: &mut Entity) {
@@ -174,7 +291,7 @@ pub(super) fn destroyed(game: &mut Game, e: &mut Entity) {
                     e.pos.x + 2.0 + f64::from(game.rng.range(15)),
                     e.pos.y + 2.0 + f64::from(game.rng.range(15)),
                 );
-                let id = game.world.spawn("oFlareSpark", pos);
+                let id = game.spawn("oFlareSpark", pos);
                 let vy = f64::from(1 + game.rng.range(3));
                 game.world.entity_mut(id).unwrap().vel.y = vy;
             }
@@ -197,7 +314,7 @@ pub(super) fn destroyed(game: &mut Game, e: &mut Entity) {
                     e.pos.x + 6.0 + f64::from(game.rng.range(5)),
                     e.pos.y + 6.0 + f64::from(game.rng.range(5)),
                 );
-                game.world.spawn("oFlareSpark", pos);
+                game.spawn("oFlareSpark", pos);
             }
         }
         _ => {}
@@ -224,136 +341,110 @@ pub(super) fn finish_destroy_events(game: &mut Game) {
     }
 }
 
-fn ghost(game: &mut Game, e: &mut Entity) {
-    if e.state == 0 {
+fn create_blood(game: &mut Game, e: &Entity, pos: Vec2, count: u32) {
+    if e.value("bloodless") != 0.0 {
         return;
     }
-    steer_toward(e, game.player.pos, 1.0);
-    e.pos.x += e.vel.x;
-    e.pos.y += e.vel.y;
-    e.sprite = if e.facing < 0 {
-        "sGhostLeft"
-    } else {
-        "sGhostRight"
-    }
-    .into();
-    let gems: Vec<_> = game
-        .world
-        .entities
-        .iter()
-        .filter(|x| {
-            x.alive
-                && matches!(
-                    x.object.as_str(),
-                    "oEmeraldBig" | "oSapphireBig" | "oRubyBig"
-                )
-                && x.sprite_bounds().intersects(e.sprite_bounds())
-        })
-        .map(|x| x.id)
-        .collect();
-    for id in gems {
-        if let Some(gem) = game.world.entity_mut(id) {
-            gem.object = "oDiamond".into();
-            gem.sprite = "sDiamond".into();
+    for _ in 0..count {
+        if game
+            .world
+            .entities
+            .iter()
+            .filter(|p| p.alive && crate::catalog::is_a(&p.object, "oDetritus"))
+            .count()
+            < 16
+        {
+            crate::world_events::spawn_detritus(game, "oBlood", pos);
         }
-    }
-    if game.player.invincible == 0
-        && game.player.health > 0
-        && game.player.sprite_bounds().intersects(e.sprite_bounds())
-    {
-        game.player.health = -99;
-        game.player.invincible = 9999;
-        game.player
-            .held
-            .take()
-            .and_then(|id| game.world.entity_mut(id))
-            .map(|held| held.held = false);
-        for _ in 0..3 {
-            crate::world_events::spawn_detritus(game, "oBone", game.player.pos);
-        }
-        let skull = game.world.spawn(
-            "oSkull",
-            Vec2::new(game.player.pos.x, game.player.pos.y - 2.0),
-        );
-        let vy = -f64::from(1 + game.rng.range(3));
-        let vx = f64::from(game.rng.range(4)) - f64::from(game.rng.range(4));
-        game.world.entity_mut(skull).unwrap().vel = Vec2::new(vx, vy);
-        game.sound("sndDie", game.player.pos);
-        game.sound("sndGhost", e.pos);
-        e.state = 0;
-        e.sprite = "sGhostDisappear".into();
-        e.animation = 0.0;
-        e.data.insert("animation_speed".into(), 0.2);
     }
 }
 
+fn ghost(game: &mut Game, e: &mut Entity) {
+    if e.health < 1 {
+        *game.data.entry("kills".into()).or_default() += 1.0;
+        e.data.insert("death_recorded".into(), 1.0);
+        e.alive = false;
+        return;
+    }
+    if e.state == 0 {
+        return;
+    }
+    let origin = Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0);
+    let distance = origin.distance(game.player.pos);
+    if distance > 0.0 {
+        e.pos.x += (game.player.pos.x - origin.x) / distance;
+        e.pos.y += (game.player.pos.y - origin.y) / distance;
+    }
+    if game.player.pos.x < e.pos.x + 8.0 {
+        if e.sprite == "sGhostRight" {
+            e.set_sprite("sGhostTurnLeft");
+        }
+    } else if e.sprite == "sGhostLeft" {
+        e.set_sprite("sGhostTurnRight");
+    }
+}
+
+fn ghost_player_collision(game: &mut Game, e: &mut Entity) {
+    if game.player.invincible != 0 {
+        return;
+    }
+    if crate::statistics::is_real_level(game) {
+        game.lifetime_stats
+            .enemy_death(crate::statistics::EnemyDeath::Ghost);
+    }
+    game.player.health = -99;
+    game.player.invincible = 9999;
+    game.player.data.insert("visible".into(), 0.0);
+    game.player.data.insert("bounced".into(), 1.0);
+    game.data.insert("draw_hud".into(), 0.0);
+    for _ in 0..3 {
+        crate::world_events::spawn_detritus(game, "oBone", game.player.pos);
+    }
+    let skull = game.spawn(
+        "oSkull",
+        Vec2::new(game.player.pos.x, game.player.pos.y - 2.0),
+    );
+    let vy = -f64::from(1 + game.rng.range(3));
+    let vx = f64::from(game.rng.range(4)) - f64::from(game.rng.range(4));
+    game.world.entity_mut(skull).unwrap().vel = Vec2::new(vx, vy);
+    if let Some(id) = game.player.held.take() {
+        if let Some(held) = game.world.entity_mut(id) {
+            held.held = false;
+            held.vel = Vec2::new(f64::from(e.facing) * 2.0, -4.0);
+        }
+    }
+    game.sound("sndDie", game.player.pos);
+    game.sound("sndGhost", e.pos);
+    e.state = 0;
+    e.set_sprite("sGhostDisappear");
+    e.data.insert("animation_speed".into(), 0.2);
+}
+
 fn damsel(game: &mut Game, e: &mut Entity) {
-    e.data
-        .insert("depth".into(), if e.held { 1.0 } else { 99.0 });
     if e.state == 4 {
+        if e.value("hit_cooldown") > 0.0 {
+            e.data
+                .insert("hit_cooldown".into(), e.value("hit_cooldown") - 1.0);
+        }
         e.data.insert("depth".into(), 1000.0);
         e.data.insert("invincible".into(), 1.0);
         return;
     }
-    let swimming = super::inherited::point(&game.world, e.pos, "oWaterSwim");
-    e.data.insert("swimming".into(), f64::from(swimming));
-    // Only the inherited oItem movement has a viewport guard. Damsel's own
-    // hazards, counters and state events continue for every engine-active NPC.
-    let inherited_active = e.pos.x > game.camera.x - 16.0
-        && e.pos.x < game.camera.x + VIEW_WIDTH + 16.0
-        && e.pos.y > game.camera.y - 16.0
-        && e.pos.y < game.camera.y + VIEW_HEIGHT + 16.0;
-    let (_, grounded) = if e.held || !inherited_active {
-        (false, false)
-    } else {
-        move_body(&game.world, e, if swimming { 0.2 } else { 0.6 })
-    };
-    if e.value("invincible") == 0.0 && !e.held && game.world.solid_at(e.pos.x, e.pos.y) {
-        e.health = 0;
-        e.alive = false;
-        return;
+    // The inherited oItem Step owns held attachment, movement, bouncing,
+    // lava sinking, economics and its explicit impact queries. Only that
+    // parent event is viewport-gated; child Damsel events continue outside it.
+    let inherited_active = crate::items::item_body_active(game, e);
+    crate::items::tick_inherited_ball_body(game, e);
+    if inherited_active && e.held && game.player.held.is_none() {
+        // Parent clears held after attachment; movement resumes next Step.
+        e.held = false;
     }
-    if e.value("invincible") == 0.0 {
-        if super::inherited::point(&game.world, Vec2::new(e.pos.x, e.pos.y + 6.0), "oLava") {
-            e.health = 0;
-            e.state = 99;
-            e.vel = Vec2::new(0.0, 0.1);
-            e.data.insert("burning".into(), 1.0);
-            e.data.insert("depth".into(), 999.0);
-        }
-        if e.vel.y > 2.0
-            && super::inherited::point(&game.world, Vec2::new(e.pos.x, e.pos.y + 6.0), "oSpikes")
-        {
-            e.health = 0;
-            e.state = 99;
-            e.vel = Vec2::new(0.0, 0.2);
-        }
-        let spear_area = Rect::new(e.pos.x - 3.0, e.pos.y - 3.0, 7.0, 7.0);
-        let spear = game
-            .world
-            .entities
-            .iter()
-            .filter(|s| {
-                s.alive
-                    && crate::catalog::is_a(&s.object, "oSpearsLeft")
-                    && s.sprite_bounds().intersects(spear_area)
-            })
-            .min_by(|a, b| a.pos.distance(e.pos).total_cmp(&b.pos.distance(e.pos)))
-            .map(|s| (s.pos, s.animation));
-        if let Some((pos, _)) =
-            spear.filter(|(_, frame)| *frame >= 19.0 && *frame < 28.0 && (e.state != 2 || grounded))
-        {
-            e.health -= 2;
-            e.state = 2;
-            e.timer = 120;
-            e.vel = Vec2::new(if pos.x < e.pos.x { 4.0 } else { -4.0 }, -6.0);
-            if e.held {
-                e.held = false;
-                game.player.held = game.player.held.filter(|id| *id != e.id);
-            }
-            game.sound("sndHit", e.pos);
-        }
-    }
+    let body = e.bounds();
+    let grounded = super::solid_mask(
+        &game.world,
+        Rect::new(body.x, body.y + body.h, body.w, 1.0),
+        e.id,
+    );
     let exit = game
         .world
         .entities
@@ -369,55 +460,171 @@ fn damsel(game: &mut Game, e: &mut Entity) {
         e.vel = Vec2::default();
         e.pos = Vec2::new(exit.x + 8.0, exit.y + 8.0);
         e.previous_pos = e.pos;
-        e.sprite = if game.flags.contains("character_damsel") {
+        e.set_sprite(if game.flags.contains("character_damsel") {
             "sPExit"
         } else {
             "sDamselExit2"
-        }
-        .into();
-        e.animation = 0.0;
+        });
         e.data.insert("inactive".into(), 1.0);
+        e.data.insert("canPickUp".into(), 0.0);
         e.data.insert("depth".into(), 1000.0);
         e.data.insert("invincible".into(), 1.0);
         game.flags.insert("damsel_rescued".into());
         *game.data.entry("pending_damsel_kisses".into()).or_default() += 1.0;
         *game.data.entry("damsels".into()).or_default() += 1.0;
         *game.data.entry("xdamsels".into()).or_default() += 1.0;
+        game.lifetime_stats
+            .increment(LifetimeCounter::DamselsSavedTotal);
         game.sound("sndSteps", e.pos);
+    }
+    if e.value("hit_cooldown") > 0.0 {
+        e.data
+            .insert("hit_cooldown".into(), e.value("hit_cooldown") - 1.0);
+    }
+    let swimming = super::inherited::point(&game.world, e.pos, "oWaterSwim");
+    if swimming && e.value("swimming") == 0.0 {
+        game.spawn("oSplash", e.pos);
+        game.sound("sndSplash", e.pos);
+    }
+    e.data.insert("swimming".into(), f64::from(swimming));
+    e.data
+        .insert("gravity".into(), if swimming { 0.2 } else { 0.6 });
+    if e.value("invincible") == 0.0 && !e.held && game.world.solid_at(e.pos.x, e.pos.y) {
+        if e.health > 0 {
+            super::record_damsel_death(game, e, true);
+        }
+        create_blood(game, e, e.pos, 3);
+        game.sound("sndDamsel", e.pos);
+        e.health = 0;
+        e.alive = false;
         return;
+    }
+    if e.value("invincible") == 0.0 {
+        if super::inherited::point(&game.world, Vec2::new(e.pos.x, e.pos.y + 6.0), "oLava") {
+            if e.health > 0 {
+                super::record_damsel_death(game, e, false);
+            }
+            e.health = 0;
+            e.state = 99;
+            e.data.insert("dead".into(), 1.0);
+            e.data.insert("death_recorded".into(), 1.0);
+            e.vel = Vec2::new(0.0, 0.1);
+            e.data.insert("gravity".into(), 0.0);
+            e.data.insert("burning".into(), 1.0);
+            e.data.insert("depth".into(), 999.0);
+        }
+        if e.vel.y > 2.0
+            && super::inherited::point(&game.world, Vec2::new(e.pos.x, e.pos.y + 6.0), "oSpikes")
+        {
+            if e.health > 0 {
+                create_blood(game, e, e.pos, 3);
+                super::record_damsel_death(game, e, false);
+            }
+            for spike in &mut game.world.entities {
+                if spike.alive
+                    && spike.object == "oSpikes"
+                    && spike
+                        .sprite_bounds()
+                        .contains(Vec2::new(e.pos.x, e.pos.y + 6.0))
+                {
+                    spike.set_sprite("sSpikesBlood");
+                    break;
+                }
+            }
+            e.health = 0;
+            e.state = 99;
+            e.data.insert("dead".into(), 1.0);
+            e.data.insert("death_recorded".into(), 1.0);
+            e.set_sprite(if game.flags.contains("character_damsel") {
+                "sDieL"
+            } else {
+                "sDamselDieL"
+            });
+            e.vel = Vec2::new(0.0, 0.2);
+            e.data.insert("gravity".into(), 0.0);
+        }
+        let spear_area = Rect::new(e.pos.x - 3.0, e.pos.y - 3.0, 7.0, 7.0);
+        crate::dispatcher::register_instances(game);
+        let spears: Vec<_> = crate::dispatcher::descendant_instances(game, "oSpearsLeft")
+            .into_iter()
+            .filter_map(|instance| match instance {
+                crate::dispatcher::Instance::Entity(id) => game.world.entity(id),
+                _ => None,
+            })
+            .filter(|s| s.engine_active)
+            .collect();
+        let mut spear = None;
+        if spears
+            .iter()
+            .any(|s| s.sprite_bounds().intersects(spear_area))
+        {
+            // Source rectangle contact gates a separate instance_nearest
+            // query over the entire active family. Equal distances retain
+            // the first instance in the current array.
+            let mut nearest_distance = f64::INFINITY;
+            for candidate in spears {
+                let distance = candidate.pos.distance(e.pos);
+                if distance < nearest_distance {
+                    nearest_distance = distance;
+                    spear = Some((candidate.pos, candidate.animation));
+                }
+            }
+        }
+        if let Some((pos, _)) =
+            spear.filter(|(_, frame)| *frame >= 19.0 && *frame < 28.0 && (e.state != 2 || grounded))
+        {
+            e.health -= 2;
+            e.state = 2;
+            e.timer = 120;
+            e.vel = Vec2::new(if pos.x < e.pos.x { 4.0 } else { -4.0 }, -6.0);
+            if e.held {
+                e.held = false;
+                game.player.held = game.player.held.filter(|id| *id != e.id);
+            }
+            game.sound("sndHit", e.pos);
+        }
     }
     if e.health <= 0 {
         if e.value("cost") > 0.0 || e.value("for_sale") > 0.0 {
             game.flags.insert("shopkeepers_angry".into());
         }
-        e.state = 99;
-        e.sprite = "sDamselDieL".into();
-        return;
     }
-    if e.vel.y > 2.0 && e.state != 2 {
+    if !e.held && e.vel.y > 2.0 && e.state != 2 {
         e.state = 2;
-        e.timer = 120;
         game.sound("sndDamsel", e.pos);
     }
     if e.held {
         e.facing = game.player.facing;
+        crate::traps::altar::offering_entity(game, e);
         return;
     }
     match e.state {
         0 => {
             e.vel.x = 0.0;
-            e.sprite = "sDamselLeft".into();
+            e.set_sprite(if game.flags.contains("character_damsel") {
+                "sStandLeft"
+            } else {
+                "sDamselLeft"
+            });
             if e.timer > 0 {
                 e.timer -= 1;
             } else {
                 e.state = 3;
-                e.animation = 0.0;
-                e.sprite = "sDamselYellL".into();
+                e.set_sprite(if game.flags.contains("character_damsel") {
+                    "sYellLeft"
+                } else {
+                    "sDamselYellL"
+                });
                 game.sound("sndDamsel", e.pos);
             }
         }
         1 => {
-            e.sprite = "sDamselRunL".into();
+            e.set_image_speed(0.8);
+            e.set_sprite(if game.flags.contains("character_damsel") {
+                "sRunLeft"
+            } else {
+                "sDamselRunL"
+            });
             if game
                 .world
                 .solid_at(e.pos.x + f64::from(e.facing) * 8.0, e.pos.y)
@@ -427,7 +634,36 @@ fn damsel(game: &mut Game, e: &mut Entity) {
             e.vel.x = f64::from(e.facing) * 1.5;
         }
         2 => {
-            e.sprite = "sDamselStunL".into();
+            if e.value("startled") == 0.0 {
+                game.lifetime_stats
+                    .increment(LifetimeCounter::DamselsGrabbed);
+                e.data.insert("startled".into(), 1.0);
+            }
+            let male = game.flags.contains("character_damsel");
+            e.set_sprite(if e.vel.x == 0.0 {
+                if male { "sStunL" } else { "sDamselStunL" }
+            } else if e.value("bounced") != 0.0 {
+                if e.vel.y < 0.0 {
+                    if male {
+                        "sDieLBounce"
+                    } else {
+                        "sDamselBounceL"
+                    }
+                } else if male {
+                    "sDieLFall"
+                } else {
+                    "sDamselFallL"
+                }
+            } else if e.vel.x < 0.0 {
+                if male { "sDieLL" } else { "sDamselDieLL" }
+            } else if male {
+                "sDieLR"
+            } else {
+                "sDamselDieLR"
+            });
+            if grounded && e.value("bounced") == 0.0 {
+                e.data.insert("bounced".into(), 1.0);
+            }
             let b = e.bounds();
             let supported =
                 super::solid_mask(&game.world, Rect::new(b.x, b.y + b.h + 1.0, b.w, 1.0), e.id)
@@ -441,32 +677,41 @@ fn damsel(game: &mut Game, e: &mut Entity) {
                 if e.vel.x.abs() < 0.5 {
                     e.vel.x = 0.0;
                 }
-                if e.timer > 0 {
-                    e.timer -= 1;
-                } else {
-                    e.state = 1;
+                if e.value("dead") == 0.0 {
+                    if e.timer > 0 {
+                        e.timer -= 1;
+                    } else {
+                        e.state = 1;
+                    }
+                }
+                if e.health <= 0 {
+                    e.state = 99;
+                    e.set_sprite(if game.flags.contains("character_damsel") {
+                        "sDieL"
+                    } else {
+                        "sDamselDieL"
+                    });
+                    super::record_damsel_death(game, e, true);
                 }
             }
         }
         3 => {
             if e.animation == 4.0 {
-                game.world
-                    .spawn("oYellHelp", Vec2::new(e.pos.x, e.pos.y - 16.0));
+                game.spawn("oYellHelp", Vec2::new(e.pos.x, e.pos.y - 16.0));
             }
         }
         5 => {
             e.facing = if game.player.pos.x < e.pos.x { -1 } else { 1 };
             e.vel.x = 0.0;
-            e.sprite = if game.flags.contains("character_damsel") {
+            e.set_sprite(if game.flags.contains("character_damsel") {
                 "sStandLeft"
             } else {
                 "sDamselLeft"
-            }
-            .into();
+            });
         }
         6 => {
             if e.animation == 7.0 {
-                game.world.spawn(
+                game.spawn(
                     "oHeart",
                     Vec2::new(
                         e.pos.x + if e.facing < 0 { -8.0 } else { 8.0 },
@@ -478,34 +723,32 @@ fn damsel(game: &mut Game, e: &mut Entity) {
         }
         _ => {}
     }
+    crate::traps::altar::offering_entity(game, e);
 }
 
 fn shopkeeper(game: &mut Game, e: &mut Entity) {
     let impact_y = (e.vel.y + super::inherited::gravity(e, 0.6)).min(10.0);
-    let (wall, grounded) = move_body(&game.world, e, 0.6);
-    if game.world.solid_at(
-        e.pos.x + 8.0,
-        e.pos.y + if e.state >= 98 { 12.0 } else { 8.0 },
-    ) {
+    let (wall, grounded) = move_body(&game.world, e, if e.held { 0.0 } else { 0.6 });
+    e.vel.y = e.vel.y.min(8.0);
+    if (e.state >= 98 || !e.held)
+        && game.world.solid_at(
+            e.pos.x + 8.0,
+            e.pos.y + if e.state >= 98 { 12.0 } else { 8.0 },
+        )
+    {
+        super::record_keeper_crush(game, e);
+        create_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 3);
+        game.sound("sndCavemanDie", e.pos);
+        // Only the ordinary crush branch drops the gun before destruction.
+        if e.state < 98 && e.value("has_gun") > 0.0 {
+            keeper_drop_gun(game, e);
+        }
         e.health = 0;
         e.alive = false;
         return;
     }
-    if e.health <= 0 {
+    if e.health <= 0 && e.state < 98 {
         e.state = 99;
-        if !in_stars(game) && e.value("death_gold") == 0.0 {
-            e.data.insert("death_gold".into(), 1.0);
-            for _ in 0..1 + game.rng.range(4) {
-                let id = game
-                    .world
-                    .spawn("oGoldNugget", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
-                let vx = f64::from(1 + game.rng.range(3)) - f64::from(1 + game.rng.range(3));
-                if let Some(gold) = game.world.entity_mut(id) {
-                    gold.vel = Vec2::new(vx, -1.0);
-                }
-            }
-            game.sound("sndCavemanDie", e.pos);
-        }
     }
     let angry = e.value("angry") > 0.0
         || game.flags.contains("wanted")
@@ -532,38 +775,73 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
     {
         e.state = 2;
     }
+    super::shop_dialogue::tick(game, e, !angry);
     if e.state >= 98 {
-        if e.value("has_gun") > 0.0 {
-            let id = game.world.spawn("oShotgun", e.pos);
-            if let Some(gun) = game.world.entity_mut(id) {
-                gun.vel = Vec2::new(f64::from(e.facing) * 5.0, -5.0);
+        if e.state == 99 {
+            let first_death = e.value("dead") == 0.0;
+            super::record_death(game, e);
+            if first_death {
+                if !in_stars(game) {
+                    for _ in 0..1 + game.rng.range(4) {
+                        let id = game.spawn("oGoldNugget", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
+                        let vx =
+                            f64::from(1 + game.rng.range(3)) - f64::from(1 + game.rng.range(3));
+                        game.world.entity_mut(id).unwrap().vel = Vec2::new(vx, -1.0);
+                    }
+                }
+                game.sound("sndCavemanDie", e.pos);
             }
-            e.data.insert("has_gun".into(), 0.0);
-        }
-        e.sprite = if e.health > 0 {
-            "sShopStunL"
+            e.set_sprite("sShopDieL");
+            if e.vel.x != 0.0 || e.vel.y != 0.0 {
+                e.state = 98;
+            }
         } else {
-            "sShopDieL"
+            e.set_sprite(if grounded {
+                "sShopStunL"
+            } else if e.value("bounced") != 0.0 {
+                if e.vel.y < 0.0 {
+                    "sShopBounceL"
+                } else {
+                    "sShopFallL"
+                }
+            } else if e.vel.x < 0.0 {
+                "sShopDieLL"
+            } else {
+                "sShopDieLR"
+            });
+            if grounded && e.value("bounced") == 0.0 {
+                e.data.insert("bounced".into(), 1.0);
+                create_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 3);
+            }
+            if e.held || grounded {
+                if e.timer > 0 {
+                    e.timer -= 1;
+                } else if e.health > 0 {
+                    e.state = 2;
+                    if e.held {
+                        e.held = false;
+                        game.player.held = game.player.held.filter(|id| *id != e.id);
+                    }
+                }
+            }
         }
-        .into();
+        if e.value("has_gun") > 0.0 {
+            keeper_drop_gun(game, e);
+        }
         super::settle_body(&game.world, e, impact_y);
+        if e.vel.x == 0.0 && e.vel.y == 0.0 && e.health <= 0 {
+            e.state = 99;
+        }
         e.vel.x -= e.vel.x.signum() * 0.1;
         if e.vel.x.abs() < 0.5 {
             e.vel.x = 0.0;
         }
-        if grounded {
-            if e.timer > 0 {
-                e.timer -= 1;
-            } else if e.health > 0 {
-                e.state = 2;
-            }
-        }
-        if e.health <= 0 {
-            e.state = if e.vel.x == 0.0 && e.vel.y == 0.0 {
-                99
+        if e.held {
+            e.set_sprite(if e.health > 0 {
+                "sShopHeldL"
             } else {
-                98
-            };
+                "sShopDHeldL"
+            });
         }
         return;
     }
@@ -574,20 +852,14 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
         } else {
             1
         };
-        e.sprite = "sShopLeft".into();
+        e.set_sprite("sShopLeft");
         if angry {
             e.state = 4;
             return;
         }
-        if e.value("welcomed") == 0.0 && e.pos.distance(game.player.pos) < 80.0 {
-            game.events
-                .push(GameEvent::Message("WELCOME TO MY SHOP!".into()));
-            e.data.insert("welcomed".into(), 1.0);
-        }
-        if let Some(held) = game.player.held.and_then(|id| game.world.entity(id)) {
-            if held.value("cost") > 0.0 {
-                e.state = 5;
-            }
+        crate::economy::keeper_step(game, e);
+        if super::shop_dialogue::can_follow(game, e) {
+            e.state = 5;
         }
     } else if e.state == 5 {
         e.data.insert("animation_speed".into(), 0.5);
@@ -656,7 +928,7 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
             for _ in 0..6 {
                 let speed = f64::from(6 + game.rng.range(3));
                 let spread = game.rng.unit() - game.rng.unit();
-                let id = game.world.spawn(
+                let id = game.spawn(
                     "oBullet",
                     Vec2::new(
                         e.pos.x + if e.facing < 0 { 4.0 } else { 12.0 },
@@ -688,54 +960,26 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
         {
             e.vel.y = -f64::from(7 + game.rng.range(2));
         }
-        if touches_player(game, e)
-            && (game.player.pos.x - (e.pos.x + 8.0)).abs() <= 8.0
-            && !can_stomp(game, e)
-            && game.player.invincible == 0
-            && game.player.stun == 0
-            && game.player.state != PlayerState::Stunned
-            && game.player.state != PlayerState::Dead
-        {
-            if !game.world.solid_at(e.pos.x + 8.0, e.pos.y - 4.0) {
-                e.state = 3;
-                e.animation = 0.0;
-                e.facing = if game.player.pos.x > e.pos.x + 8.0 {
-                    1
-                } else {
-                    -1
-                };
-                e.vel.x = 0.0;
-                game.player.pos =
-                    Vec2::new(e.pos.x + if e.facing > 0 { 0.0 } else { 16.0 }, e.pos.y);
-                game.player.previous_pos = game.player.pos;
-                game.player.vel = Vec2::new(f64::from(e.facing) * 6.0, -6.0);
-                game.player.state = PlayerState::Stunned;
-                game.player.data.insert("bounced".into(), 0.0);
-                game.player.data.insert("wall_hurt".into(), 1.0);
-                super::drop_from_throw(game);
-            } else {
-                game.player.health -= 1;
-                game.player.invincible = 30;
-                game.player.data.insert("blink".into(), 30.0);
-                game.player.vel.x = if game.player.pos.x < e.pos.x {
-                    -6.0
-                } else {
-                    6.0
-                };
-                game.events.push(GameEvent::Damage { amount: 1 });
-                game.sound("sndHurt", game.player.pos);
-            }
-        }
-        e.sprite = if e.state == 3 {
+        e.set_sprite(if e.state == 3 {
             "sShopThrowL"
         } else {
             "sShopRunLeft"
-        }
-        .into();
+        });
         if !super::player_alive(game) {
             e.state = 1;
         }
     }
+}
+
+fn keeper_drop_gun(game: &mut Game, e: &mut Entity) {
+    let id = game.spawn("oShotgun", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
+    let vy = f64::from(4 + game.rng.range(3));
+    let vx = f64::from(4 + game.rng.range(3)) * if e.vel.x < 0.0 { -1.0 } else { 1.0 };
+    let gun = game.world.entity_mut(id).unwrap();
+    gun.vel = Vec2::new(vx, vy);
+    gun.data.insert("cost".into(), 0.0);
+    gun.data.insert("for_sale".into(), 0.0);
+    e.data.insert("has_gun".into(), 0.0);
 }
 
 fn scarab(game: &mut Game, e: &mut Entity) {
@@ -751,7 +995,7 @@ fn scarab(game: &mut Game, e: &mut Entity) {
                 e.pos.x + 2.0 + f64::from(game.rng.range(15)),
                 e.pos.y + 2.0 + f64::from(game.rng.range(15)),
             );
-            let id = game.world.spawn("oFlareSpark", pos);
+            let id = game.spawn("oFlareSpark", pos);
             let vy = f64::from(1 + game.rng.range(3));
             game.world.entity_mut(id).unwrap().vel.y = vy;
         }
@@ -808,11 +1052,12 @@ fn dead_fish(game: &mut Game, e: &mut Entity) {
                 Vec2::new(e.pos.x + 4.0, e.pos.y + 4.0),
             );
         }
+        super::record_death(game, e);
         e.alive = false;
         return;
     }
     if !water(game, Vec2::new(e.pos.x + 4.0, e.pos.y + 4.0)) {
-        game.world.spawn("oFishBone", e.pos);
+        game.spawn("oFishBone", e.pos);
         e.alive = false;
         return;
     }
@@ -846,65 +1091,114 @@ fn dead_fish(game: &mut Game, e: &mut Entity) {
         e.state = 2;
         e.timer = 20 + game.rng.range(21);
     }
-    e.sprite = if e.facing < 0 {
+    e.set_sprite(if e.facing < 0 {
         "sDeadFishLeft"
     } else {
         "sDeadFishRight"
-    }
-    .into();
+    });
 }
 
 fn barrier(game: &mut Game, e: &mut Entity) {
-    if e.object == "oBarrierEmitter" {
-        if !game.world.solid_at(e.pos.x, e.pos.y - 16.0) {
-            destroy_emitter(game, e);
-        }
-        return;
+    if e.object == "oBarrierEmitter" && !game.world.solid_at(e.pos.x, e.pos.y - 16.0) {
+        destroy_emitter(game, e);
     }
-    if !game
-        .world
-        .entities
-        .iter()
-        .any(|x| x.alive && x.object == "oBarrierEmitter")
+}
+
+fn keeper_player_collision(game: &mut Game, e: &mut Entity) {
+    if matches!(e.state, 0 | 5 | 98 | 99)
+        || e.health < 1
+        || !super::player_alive(game)
+        || game.player.stun > 0
+        || game.player.state == PlayerState::Stunned
+        || (game.player.pos.x - (e.pos.x + 8.0)).abs() > 8.0
+        || game.player.invincible != 0
     {
-        e.alive = false;
         return;
     }
-    if e.sprite_bounds().intersects(game.player.sprite_bounds()) && game.player.invincible == 0 {
-        game.player.health -= 1;
-        game.events.push(GameEvent::Damage { amount: 1 });
-        game.sound("sndHurt", game.player.pos);
+    if game.world.solid_at(e.pos.x + 8.0, e.pos.y - 4.0) {
         game.player.invincible = 30;
         game.player.data.insert("blink".into(), 30.0);
-        game.player.vel = Vec2::new(
-            if game.player.pos.x < e.pos.x {
-                -6.0
-            } else {
-                6.0
-            },
-            -2.0,
-        );
-    }
-    let mut release = false;
-    for item in &mut game.world.entities {
-        if !item.alive || !item.sprite_bounds().intersects(e.sprite_bounds()) {
-            continue;
-        }
-        if matches!(item.object.as_str(), "oBullet" | "oWebBall") {
-            item.alive = false;
-        } else if crate::catalog::is_a(&item.object, "oItem") {
-            item.vel = Vec2::new(-f64::from(4 + game.rng.range(3)), -2.0);
-            if item.held {
-                release = true;
-                item.held = false;
-            }
-            if matches!(item.object.as_str(), "oBomb" | "oFireFrogBomb") {
-                item.timer = 4 + game.rng.range(5);
-                item.data.insert("armed".into(), 1.0);
+        game.player.vel.x = if game.player.pos.x < e.pos.x {
+            -6.0
+        } else {
+            6.0
+        };
+        crate::world_events::spawn_detritus(game, "oBlood", game.player.pos);
+        if game.player.health > 0 {
+            game.player.health -= 1;
+            if game.player.health <= 0 && crate::statistics::is_real_level(game) {
+                game.lifetime_stats
+                    .enemy_death(crate::statistics::EnemyDeath::Shopkeeper);
             }
         }
+        game.events.push(GameEvent::Damage { amount: 1 });
+        game.sound("sndHurt", game.player.pos);
+    } else if e.state != 3 {
+        e.state = 3;
+        e.set_sprite("sShopThrowL");
+        e.facing = if game.player.pos.x > e.pos.x + 8.0 {
+            1
+        } else {
+            -1
+        };
+        e.vel.x = 0.0;
+        game.player.pos = Vec2::new(e.pos.x + if e.facing > 0 { 0.0 } else { 16.0 }, e.pos.y);
+        game.player.previous_pos = game.player.pos;
+        game.player.vel = Vec2::new(f64::from(e.facing) * 6.0, -6.0);
+        game.player.state = PlayerState::Stunned;
+        game.player.data.insert("bounced".into(), 0.0);
+        game.player.data.insert("wall_hurt".into(), 1.0);
+        super::drop_from_throw(game);
     }
-    if release {
+}
+
+fn barrier_player_collision(game: &mut Game, e: &Entity) {
+    if game.player.invincible != 0 {
+        return;
+    }
+    if game.player.health > 0 {
+        game.player.health -= 1;
+    }
+    game.events.push(GameEvent::Damage { amount: 1 });
+    game.sound("sndHurt", game.player.pos);
+    game.player.invincible = 30;
+    game.player.data.insert("blink".into(), 30.0);
+    game.player.vel = Vec2::new(
+        if game.player.pos.x < e.pos.x {
+            -6.0
+        } else {
+            6.0
+        },
+        -2.0,
+    );
+}
+
+fn barrier_item_collision(game: &mut Game, id: u64) {
+    let Some(item) = game.world.entity(id) else {
+        return;
+    };
+    if matches!(item.object.as_str(), "oBullet" | "oWebBall") {
+        game.world.entity_mut(id).unwrap().alive = false;
+        return;
+    }
+    if !crate::catalog::is_a(&item.object, "oItem") {
+        return;
+    }
+    // Source arms Bomb before drawing its horizontal reflection speed.
+    if matches!(item.object.as_str(), "oBomb" | "oFireFrogBomb") {
+        let alarm = 4 + game.rng.range(5);
+        let item = game.world.entity_mut(id).unwrap();
+        item.set_sprite("sBombArmed");
+        item.data.insert("animation_speed".into(), 1.0);
+        item.timer = alarm;
+        item.alarms[1] = alarm as i32;
+        item.data.insert("armed".into(), 1.0);
+    }
+    let vx = -f64::from(4 + game.rng.range(3));
+    let item = game.world.entity_mut(id).unwrap();
+    item.vel = Vec2::new(vx, -2.0);
+    if item.held {
+        // oItem Step releases the held flag after observing holdItem == 0.
         game.player.held = None;
     }
 }
@@ -912,6 +1206,234 @@ fn barrier(game: &mut Game, e: &mut Entity) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_scarab_create_consumes_its_draw_before_caller_and_not_at_bootstrap() {
+        let mut game = actual_room();
+        game.world.area = Area::Temple;
+        game.world.level = 13;
+        let mut expected = game.rng.clone();
+        let expected_timer = 10 + expected.range(21);
+        let expected_caller_draw = expected.range(97);
+        let id = crate::creation::spawn_generated_entity(
+            &mut game.world,
+            &mut game.rng,
+            "oScarab",
+            Vec2::new(370.0, 128.0),
+        );
+        let scarab = game.world.entity(id).unwrap();
+        assert_eq!(scarab.timer, expected_timer);
+        assert_eq!(scarab.value("value"), 12000.0);
+        assert_eq!(scarab.value("npc_local_created"), 1.0);
+        assert_eq!(scarab.value("npc_created"), 0.0);
+        assert_eq!(game.rng.range(97), expected_caller_draw);
+
+        game.step(&InputFrame::default());
+
+        let scarab = game.world.entity(id).unwrap();
+        assert_eq!(scarab.value("npc_created"), 1.0);
+        assert_eq!(scarab.timer, expected_timer, "outside its narrow AI view");
+        assert_eq!(game.rng.range(10000), expected.range(10000));
+    }
+
+    #[test]
+    fn generated_damsel_local_price_precedes_free_override_without_skipping_runtime_create() {
+        let mut game = actual_room();
+        game.world.level = 7;
+        let mut expected = game.rng.clone();
+        let id = crate::creation::spawn_generated_entity(
+            &mut game.world,
+            &mut game.rng,
+            "oDamsel",
+            Vec2::new(370.0, 128.0),
+        );
+        let damsel = game.world.entity_mut(id).unwrap();
+        assert_eq!(damsel.value("cost"), 105000.0);
+        assert_eq!(damsel.value("npc_local_created"), 1.0);
+        assert_eq!(damsel.value("npc_created"), 0.0);
+        damsel.data.insert("cost".into(), 0.0);
+        damsel.data.insert("for_sale".into(), 0.0);
+
+        game.step(&InputFrame::default());
+
+        let damsel = game.world.entity(id).unwrap();
+        assert_eq!(damsel.value("cost"), 0.0);
+        assert_eq!(damsel.value("for_sale"), 0.0);
+        assert_eq!(damsel.value("npc_created"), 1.0);
+        assert_eq!(game.rng.range(10000), expected.range(10000));
+    }
+
+    #[test]
+    fn generated_local_create_does_not_mark_or_skip_ghost_runtime_sound() {
+        let mut game = actual_room();
+        let id = crate::creation::spawn_generated_entity(
+            &mut game.world,
+            &mut game.rng,
+            "oGhost",
+            Vec2::new(370.0, 128.0),
+        );
+        assert_eq!(
+            game.world.entity(id).unwrap().value("npc_local_created"),
+            0.0
+        );
+        assert_eq!(game.world.entity(id).unwrap().value("npc_created"), 0.0);
+        for expected_sound_count in [1, 0] {
+            game.step(&InputFrame::default());
+            assert_eq!(game.world.entity(id).unwrap().value("npc_created"), 1.0);
+            assert_eq!(
+                game.events
+                    .iter()
+                    .filter(|event| {
+                        matches!(event, GameEvent::Sound { name, .. } if name == "sndGhost")
+                    })
+                    .count(),
+                expected_sound_count
+            );
+        }
+    }
+
+    #[test]
+    fn actual_step_damsel_spear_gate_selects_nearest_from_the_whole_family() {
+        for (two_traps, damsel_x, reverse_storage, expected_x_velocity) in [
+            (false, 122.0, false, 2.8),
+            (true, 122.0, false, -2.8),
+            (true, 120.0, false, 2.8),
+            (true, 120.0, true, 2.8),
+        ] {
+            let mut game = Game::shell(7, RulesPreset::Classic);
+            for x in 0..game.world.width {
+                game.world.set_tile(x, 10, "oBlock");
+            }
+            game.player.pos = Vec2::new(32.0, 152.0);
+            game.player.previous_pos = game.player.pos;
+            game.player.grounded = true;
+            game.world.set_tile(8, 9, "oSpearTrapTop");
+            if two_traps {
+                game.world.set_tile(9, 9, "oSpearTrapTop");
+            }
+            let id = game.spawn("oDamsel", Vec2::new(damsel_x, 152.0));
+            for _ in 0..19 {
+                game.step(&InputFrame::default());
+                assert_eq!(game.world.entity(id).unwrap().health, 4);
+            }
+            let damsel = game.world.entity(id).unwrap();
+            let area = Rect::new(damsel.pos.x - 3.0, damsel.pos.y - 3.0, 7.0, 7.0);
+            let spears: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|e| e.alive && crate::catalog::is_a(&e.object, "oSpearsLeft"))
+                .collect();
+            assert_eq!(spears.len(), if two_traps { 2 } else { 1 });
+            assert!(spears.iter().all(|s| s.animation == 19.0));
+            assert!(spears.iter().any(|s| s.sprite_bounds().intersects(area)));
+            if two_traps && damsel_x == 122.0 {
+                let nearest = spears
+                    .iter()
+                    .min_by(|a, b| {
+                        a.pos
+                            .distance(damsel.pos)
+                            .total_cmp(&b.pos.distance(damsel.pos))
+                    })
+                    .unwrap();
+                assert_eq!(nearest.pos, Vec2::new(128.0, 144.0));
+                assert!(!nearest.sprite_bounds().intersects(area));
+            } else if two_traps {
+                assert_eq!(
+                    spears[0].pos.distance(damsel.pos),
+                    spears[1].pos.distance(damsel.pos)
+                );
+                let first = crate::dispatcher::descendant_instances(&game, "oSpearsLeft")
+                    .into_iter()
+                    .find_map(|instance| match instance {
+                        crate::dispatcher::Instance::Entity(id) => game.world.entity(id),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(first.pos, Vec2::new(112.0, 144.0));
+            }
+            if reverse_storage {
+                // Storage is independent of the source parent array. The
+                // equal-distance result must retain its registered order.
+                game.world.entities.reverse();
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .find(|e| e.object == "oSpearsLeft")
+                        .unwrap()
+                        .pos,
+                    Vec2::new(128.0, 144.0)
+                );
+            }
+
+            game.step(&InputFrame::default());
+
+            let damsel = game.world.entity(id).unwrap();
+            assert_eq!(damsel.health, 2);
+            assert_eq!(damsel.state, 2);
+            assert_eq!(damsel.vel.y, -6.0);
+            assert!((damsel.vel.x - expected_x_velocity).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn damsel_draw_mutates_scale_and_only_positive_cost_icon_frame() {
+        let mut g = actual_room();
+        let mut e = Entity::new(99, "oDamsel", Vec2::new(64.0, 88.0));
+        e.facing = 1;
+        e.data.insert("cost".into(), 1.0);
+        e.data.insert("cimg".into(), 8.0);
+        draw(&mut g, &mut e);
+        assert_eq!(e.value("image_xscale"), -1.0);
+        assert_eq!(e.value("draw_cimg"), 8.0);
+        assert_eq!(e.value("cimg"), 9.0);
+        draw(&mut g, &mut e);
+        assert_eq!(e.value("draw_cimg"), 9.0);
+        assert_eq!(e.value("cimg"), 0.0);
+        e.facing = -1;
+        e.data.insert("cost".into(), 0.0);
+        e.data.insert("cimg".into(), 4.0);
+        draw(&mut g, &mut e);
+        assert_eq!(e.value("image_xscale"), 1.0);
+        assert_eq!(e.value("draw_cimg"), 9.0);
+        assert_eq!(e.value("cimg"), 4.0);
+    }
+
+    #[test]
+    fn actual_step_runtime_damsel_create_prices_before_caller_override() {
+        let mut g = actual_room();
+        g.world.level = 7;
+        let id = g.spawn("oDamsel", Vec2::new(104.0, 88.0));
+        assert_eq!(g.world.entity(id).unwrap().value("cost"), 105000.0);
+        g.world
+            .entity_mut(id)
+            .unwrap()
+            .data
+            .insert("cost".into(), 0.0);
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().value("cost"), 0.0);
+    }
+
+    #[test]
+    fn actual_step_generated_damsel_preserves_free_producer_override_at_bootstrap() {
+        let mut g = Game::new(3, RulesPreset::Classic);
+        let id = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oDamsel" && e.value("for_sale") == 0.0)
+            .expect("seed 3 generates an ordinary free Damsel")
+            .id;
+        assert_eq!(g.world.entity(id).unwrap().data.get("cost"), Some(&0.0));
+        assert_eq!(g.world.entity(id).unwrap().value("npc_created"), 0.0);
+        g.step(&InputFrame::default());
+        let damsel = g.world.entity(id).unwrap();
+        assert_eq!(damsel.value("npc_created"), 1.0);
+        assert_eq!(damsel.value("cost"), 0.0);
+        assert_eq!(damsel.value("for_sale"), 0.0);
+    }
+
     fn actual_room() -> Game {
         let mut g = Game::shell(123, RulesPreset::Classic);
         g.world = World::new(30, 20, Area::Mines, 1);
@@ -919,6 +1441,304 @@ mod tests {
         g.player.previous_pos = g.player.pos;
         g
     }
+    #[test]
+    fn actual_step_scarab_source_create_draw_precedes_caller_rng() {
+        let mut g = actual_room();
+        let mut expected = g.rng.clone();
+        let counter = 10 + expected.range(21);
+        let id = g.spawn("oScarab", Vec2::new(96.0, 96.0));
+        assert_eq!(g.world.entity(id).unwrap().timer, counter);
+        assert_eq!(g.world.entity(id).unwrap().value("value"), 4000.0);
+        assert_eq!(g.rng.range(1000), expected.range(1000));
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().timer, counter - 1);
+    }
+
+    #[test]
+    fn actual_step_natural_ghost_contact_preserves_valid_animation_phase() {
+        let mut g = actual_room();
+        for x in 0..30 {
+            g.world.set_tile(x, 9, "oBlock");
+        }
+        g.player.pos = Vec2::new(104.0, 136.0);
+        let id = g.spawn("oGhost", Vec2::new(64.0, 120.0));
+        let mut previous = 0.0;
+        for _ in 0..40 {
+            g.step(&InputFrame::default());
+            let ghost = g.world.entity(id).unwrap();
+            if ghost.state == 0 {
+                assert_eq!(ghost.sprite, "sGhostDisappear");
+                assert!(previous > 0.0, "contact followed natural chase animation");
+                assert!((ghost.animation - previous - 0.2).abs() < 1e-9);
+                assert_eq!(g.player.health, -99);
+                return;
+            }
+            previous = ghost.animation;
+        }
+        panic!("natural Ghost chase did not reach the player");
+    }
+
+    #[test]
+    fn actual_step_damsel_pickup_walk_throw_uses_parent_item_attachment() {
+        let mut g = actual_room();
+        for x in 0..30 {
+            g.world.set_tile(x, 6, "oBlock");
+        }
+        g.player.pos = Vec2::new(64.0, 88.0);
+        let id = g.spawn("oDamsel", g.player.pos);
+        assert_eq!(g.world.entity(id).unwrap().value("heavy"), 1.0);
+        g.step(&InputFrame {
+            down: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(g.player.held, Some(id));
+        assert_eq!(
+            g.world.entity(id).unwrap().pos,
+            Vec2::new(g.player.pos.x + 4.0, g.player.pos.y + 2.0)
+        );
+        assert_eq!(g.lifetime_stats.damsels_grabbed, 0);
+        for _ in 0..3 {
+            g.step(&InputFrame {
+                right: true,
+                ..Default::default()
+            });
+            assert_eq!(
+                g.world.entity(id).unwrap().pos,
+                Vec2::new(g.player.pos.x + 4.0, g.player.pos.y)
+            );
+        }
+        g.step(&InputFrame {
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(g.player.held, None);
+        assert_eq!(g.world.entity(id).unwrap().state, 2);
+        assert_eq!(g.lifetime_stats.damsels_grabbed, 1);
+        g.step(&InputFrame::default());
+        assert_eq!(g.lifetime_stats.damsels_grabbed, 1);
+    }
+
+    #[test]
+    fn actual_step_damsel_natural_fall_counts_first_thrown_once() {
+        let mut g = actual_room();
+        let id = g.world.spawn("oDamsel", Vec2::new(104.0, 80.0));
+        for _ in 0..12 {
+            g.step(&InputFrame::default());
+            if g.world.entity(id).is_some_and(|e| e.state == 2) {
+                break;
+            }
+        }
+        assert_eq!(g.world.entity(id).unwrap().state, 2);
+        assert_eq!(g.world.entity(id).unwrap().timer, 197);
+        assert_eq!(g.lifetime_stats.damsels_grabbed, 1);
+        g.step(&InputFrame::default());
+        assert_eq!(g.lifetime_stats.damsels_grabbed, 1);
+    }
+
+    #[test]
+    fn actual_step_damsel_lava_counts_only_lifetime_death_once() {
+        let mut g = actual_room();
+        g.world.spawn("oLava", Vec2::new(96.0, 96.0));
+        let id = g.world.spawn("oDamsel", Vec2::new(104.0, 90.0));
+        for _ in 0..6 {
+            g.step(&InputFrame::default());
+        }
+        assert_eq!(g.world.entity(id).unwrap().health, 0);
+        assert_eq!(g.world.entity(id).unwrap().value("dead"), 1.0);
+        assert_eq!(g.lifetime_stats.damsels_killed_total, 1);
+        assert_eq!(g.data.get("kills").copied().unwrap_or(0.0), 0.0);
+        assert_eq!(g.data.get("damselsKilled").copied().unwrap_or(0.0), 0.0);
+    }
+
+    #[test]
+    fn actual_step_damsel_inherits_fractional_lava_sinking_before_child_hazards() {
+        let mut g = actual_room();
+        g.world.spawn("oLava", Vec2::new(96.0, 96.0));
+        let id = g.spawn("oDamsel", Vec2::new(104.0, 96.0));
+        g.step(&InputFrame::default());
+        assert!((g.world.entity(id).unwrap().pos.y - 96.05).abs() < 1e-9);
+        assert_eq!(g.world.entity(id).unwrap().health, 0);
+        g.step(&InputFrame::default());
+        assert!((g.world.entity(id).unwrap().pos.y - 96.1).abs() < 1e-9);
+        assert_eq!(g.lifetime_stats.damsels_killed_total, 1);
+        assert_eq!(g.data.get("kills").copied().unwrap_or(0.0), 0.0);
+    }
+
+    #[test]
+    fn actual_step_submerged_damsel_runs_parent_destroy_and_child_lava_credit() {
+        let mut g = actual_room();
+        g.world.spawn("oLava", Vec2::new(96.0, 96.0));
+        let id = g.spawn("oDamsel", Vec2::new(104.0, 104.0));
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(id).is_none());
+        assert_eq!(g.lifetime_stats.damsels_killed_total, 1);
+        assert_eq!(g.data.get("kills").copied().unwrap_or(0.0), 0.0);
+    }
+
+    #[test]
+    fn actual_step_damsel_natural_spike_death_latches_without_run_credit() {
+        let mut g = actual_room();
+        g.world.spawn("oSpikes", Vec2::new(96.0, 128.0));
+        let id = g.world.spawn("oDamsel", Vec2::new(104.0, 80.0));
+        for _ in 0..30 {
+            g.step(&InputFrame::default());
+            if g.world.entity(id).is_some_and(|e| e.health <= 0) {
+                break;
+            }
+        }
+        assert_eq!(g.world.entity(id).unwrap().health, 0);
+        for _ in 0..4 {
+            g.step(&InputFrame::default());
+        }
+        assert_eq!(g.lifetime_stats.damsels_killed_total, 1);
+        assert_eq!(g.data.get("kills").copied().unwrap_or(0.0), 0.0);
+        assert_eq!(g.data.get("damselsKilled").copied().unwrap_or(0.0), 0.0);
+    }
+
+    #[test]
+    fn actual_step_damsel_crush_credits_lifetime_and_run() {
+        let mut g = actual_room();
+        g.world.set_tile(6, 6, "oBlock");
+        let id = g.world.spawn("oDamsel", Vec2::new(104.0, 104.0));
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(id).is_none());
+        assert_eq!(g.lifetime_stats.damsels_killed_total, 1);
+        assert_eq!(g.data["damselsKilled"], 1.0);
+        assert_eq!(g.data["kills"], 1.0);
+    }
+
+    #[test]
+    fn actual_step_keeper_stars_crush_uses_ordinary_crush_counters() {
+        let mut g = actual_room();
+        g.flags.insert("hub_stars".into());
+        g.world.name = "rStars".into();
+        g.world.set_tile(6, 6, "oBlock");
+        let id = g.world.spawn("oShopkeeper", Vec2::new(96.0, 96.0));
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(id).is_none());
+        assert_eq!(g.data["shopkeepers"], 1.0);
+        assert_eq!(g.data["kills"], 1.0);
+        assert_eq!(g.data.get("stars_kills").copied().unwrap_or(0.0), 0.0);
+        assert_eq!(g.lifetime_stats.enemy_kills[19], 0);
+        assert!(g.flags.contains("murderer"));
+    }
+
+    #[test]
+    fn actual_step_keeper_lava_death_keeps_source_kill_eligibility() {
+        let mut g = actual_room();
+        g.world.spawn("oLava", Vec2::new(96.0, 96.0));
+        let id = g.world.spawn("oShopkeeper", Vec2::new(96.0, 82.0));
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().health, 0);
+        assert_eq!(g.lifetime_stats.enemy_kills[19], 1);
+        assert_eq!(g.data["shopkeepers"], 1.0);
+        assert_eq!(g.data["kills"], 1.0);
+        assert!(g.flags.contains("murderer"));
+        for _ in 0..5 {
+            g.step(&InputFrame::default());
+        }
+        assert_eq!(g.lifetime_stats.enemy_kills[19], 1);
+        assert_eq!(g.data["kills"], 1.0);
+    }
+
+    #[test]
+    fn actual_step_keeper_ceiling_contact_records_lethal_attribution() {
+        let mut g = actual_room();
+        for x in 0..30 {
+            g.world.set_tile(x, 6, "oBlock");
+        }
+        g.world.set_tile(6, 4, "oBlock");
+        g.player.pos = Vec2::new(104.0, 88.0);
+        g.player.health = 1;
+        let id = g.world.spawn("oShopkeeper", Vec2::new(96.0, 80.0));
+        g.world.entity_mut(id).unwrap().state = 2;
+        g.step(&InputFrame::default());
+        assert_eq!(g.player.health, 0);
+        assert_eq!(g.lifetime_stats.enemy_deaths[19], 1);
+        assert_eq!(g.player.stun, 0);
+    }
+
+    fn shoot_natural_target(object: &str, pos: Vec2) -> (Game, u64) {
+        let mut g = actual_room();
+        for x in 0..30 {
+            g.world.set_tile(x, 6, "oBlock");
+        }
+        g.player.pos = Vec2::new(64.0, 88.0);
+        g.world.spawn("oShotgun", g.player.pos);
+        let id = g.world.spawn(object, pos);
+        g.step(&InputFrame {
+            down: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert!(g.player.held.is_some(), "natural shotgun pickup");
+        g.step(&InputFrame::default());
+        g.step(&InputFrame {
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        for _ in 0..20 {
+            if g.world.entity(id).is_some_and(|e| e.health <= 0) {
+                return (g, id);
+            }
+            g.step(&InputFrame::default());
+        }
+        panic!("natural shotgun failed to kill {object}");
+    }
+
+    #[test]
+    fn actual_step_keeper_natural_shotgun_death_waits_for_corpse_settlement() {
+        let (mut g, id) = shoot_natural_target("oShopkeeper", Vec2::new(80.0, 80.0));
+        assert_eq!(g.world.entity(id).unwrap().state, 98);
+        assert_eq!(g.data.get("kills").copied().unwrap_or(0.0), 0.0);
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().state, 98);
+        assert_eq!(g.lifetime_stats.enemy_kills[19], 0);
+        assert_eq!(g.data.get("kills").copied().unwrap_or(0.0), 0.0);
+        for _ in 0..180 {
+            g.step(&InputFrame::default());
+            if g.data.get("kills").copied().unwrap_or(0.0) > 0.0 {
+                break;
+            }
+        }
+        assert_eq!(g.data["shopkeepers"], 1.0);
+        assert_eq!(g.data["kills"], 1.0);
+        assert_eq!(g.lifetime_stats.enemy_kills[19], 1);
+        for _ in 0..5 {
+            g.step(&InputFrame::default());
+        }
+        assert_eq!(g.data["kills"], 1.0);
+    }
+
+    #[test]
+    fn actual_step_damsel_natural_shotgun_death_waits_for_support() {
+        let (mut g, id) = shoot_natural_target("oDamsel", Vec2::new(112.0, 88.0));
+        assert_eq!(g.world.entity(id).unwrap().state, 2);
+        assert_eq!(g.lifetime_stats.damsels_killed_total, 0);
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().state, 2);
+        assert_eq!(g.world.entity(id).unwrap().sprite, "sDamselDieLR");
+        assert_eq!(g.lifetime_stats.damsels_killed_total, 0);
+        for _ in 0..180 {
+            g.step(&InputFrame::default());
+            if g.lifetime_stats.damsels_killed_total > 0 {
+                break;
+            }
+        }
+        assert_eq!(g.lifetime_stats.damsels_killed_total, 1);
+        assert_eq!(g.data["damselsKilled"], 1.0);
+        assert_eq!(g.data["kills"], 1.0);
+        for _ in 0..5 {
+            g.step(&InputFrame::default());
+        }
+        assert_eq!(g.lifetime_stats.damsels_killed_total, 1);
+    }
+
     #[test]
     fn actual_step_barrier_hit_does_not_stun() {
         let mut g = actual_room();
@@ -943,6 +1763,10 @@ mod tests {
         g.player.pos = Vec2::new(101.0, 96.0);
         g.world.spawn("oGhost", Vec2::new(80.0, 80.0));
         g.step(&InputFrame::default());
+        assert_eq!(g.player.health, -99);
+        assert_eq!(g.state, RunState::Playing);
+        assert_eq!(g.lifetime_stats.enemy_deaths[23], 1);
+        g.step(&InputFrame::default());
         assert_eq!(g.state, RunState::Dead);
     }
     fn source_bone_create(rng: &mut Rng) -> (Vec2, f64) {
@@ -966,7 +1790,8 @@ mod tests {
         let skull_vy = -f64::from(1 + source_rng.range(3));
         let skull_vx = f64::from(source_rng.range(4)) - f64::from(source_rng.range(4));
         g.step(&InputFrame::default());
-        assert_eq!(g.state, RunState::Dead);
+        assert_eq!(g.player.health, -99);
+        assert_eq!(g.state, RunState::Playing);
         let actual_bones = g
             .world
             .entities
@@ -977,7 +1802,8 @@ mod tests {
         for (bone, (velocity, gravity)) in actual_bones.into_iter().zip(bones) {
             assert_eq!(bone.value("world_effect_initialized"), 1.0);
             assert_eq!(bone.vel.x, velocity.x);
-            assert!((bone.vel.y - (velocity.y + gravity)).abs() < 1e-9);
+            assert_eq!(bone.age, 0);
+            assert_eq!(bone.vel.y, velocity.y);
             assert_eq!(bone.value("gravity"), gravity);
         }
         let skull = g
@@ -989,6 +1815,20 @@ mod tests {
         assert_eq!(skull.pos, Vec2::new(104.0, 134.0));
         assert_eq!(skull.vel, Vec2::new(skull_vx, skull_vy));
         assert_eq!(g.rng.next_u64(), source_rng.next_u64());
+        let newborns = g
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.object == "oBone")
+            .map(|e| (e.id, e.vel.y, e.value("gravity")))
+            .collect::<Vec<_>>();
+        g.step(&InputFrame::default());
+        assert_eq!(g.state, RunState::Dead);
+        for (id, vy, gravity) in newborns {
+            let bone = g.world.entity(id).unwrap();
+            assert_eq!(bone.age, 1);
+            assert!((bone.vel.y - vy - gravity).abs() < 1e-9);
+        }
     }
     #[test]
     fn actual_step_dead_fish_bone_create_matches_source_rng_order() {
@@ -1011,10 +1851,24 @@ mod tests {
         for (bone, (velocity, gravity)) in actual_bones.into_iter().zip(bones) {
             assert_eq!(bone.value("world_effect_initialized"), 1.0);
             assert_eq!(bone.vel.x, velocity.x);
-            assert!((bone.vel.y - (velocity.y + gravity)).abs() < 1e-9);
+            assert_eq!(bone.age, 0);
+            assert_eq!(bone.vel.y, velocity.y);
             assert_eq!(bone.value("gravity"), gravity);
         }
         assert_eq!(g.rng.next_u64(), source_rng.next_u64());
+        let newborns = g
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.object == "oBone")
+            .map(|e| (e.id, e.vel.y, e.value("gravity")))
+            .collect::<Vec<_>>();
+        g.step(&InputFrame::default());
+        for (id, vy, gravity) in newborns {
+            let bone = g.world.entity(id).unwrap();
+            assert_eq!(bone.age, 1);
+            assert!((bone.vel.y - vy - gravity).abs() < 1e-9);
+        }
     }
     #[test]
     fn actual_step_ghost_disappears_after_full_fourteen_frame_animation() {
@@ -1067,23 +1921,32 @@ mod tests {
         assert_eq!(g.data["damsels"], 1.0);
         assert_eq!(g.data["xdamsels"], 1.0);
         assert_eq!(g.data["pending_damsel_kisses"], 1.0);
+        assert_eq!(g.lifetime_stats.damsels_saved_total, 1);
         for _ in 0..40 {
             g.step(&InputFrame::default());
         }
         assert!(g.world.entity(id).is_none());
         assert_eq!(g.data["damsels"], 1.0);
         assert_eq!(g.data["xdamsels"], 1.0);
+        assert_eq!(g.lifetime_stats.damsels_saved_total, 1);
     }
     #[test]
     fn actual_step_damsel_water_and_lava_hazards() {
-        for (liquid, health, vy) in [("oWaterSwim", 4, 0.2), ("oLava", 0, 0.1)] {
+        for (liquid, health, vy) in [("oWaterSwim", 4, 0.6), ("oLava", 0, 0.1)] {
             let mut g = actual_room();
             g.world.spawn(liquid, Vec2::new(96.0, 96.0));
-            let id = g.world.spawn("oDamsel", Vec2::new(104.0, 104.0));
+            let y = if liquid == "oLava" { 90.0 } else { 104.0 };
+            let id = g.world.spawn("oDamsel", Vec2::new(104.0, y));
             g.step(&InputFrame::default());
             let e = g.world.entity(id).unwrap();
             assert_eq!(e.health, health);
             assert!((e.vel.y - vy).abs() < 1e-9, "{liquid} vy={}", e.vel.y);
+            if liquid == "oWaterSwim" {
+                assert_eq!(e.value("gravity"), 0.2);
+                assert!(g.world.entities.iter().any(|e| e.object == "oSplash"));
+                g.step(&InputFrame::default());
+                assert!((g.world.entity(id).unwrap().vel.y - 0.8).abs() < 1e-9);
+            }
         }
     }
     #[test]
@@ -1095,6 +1958,9 @@ mod tests {
         e.state = 6;
         e.sprite = "sDamselKissL".into();
         e.animation = 6.5;
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().animation, 7.0);
+        assert!(!g.world.entities.iter().any(|e| e.object == "oHeart"));
         g.step(&InputFrame::default());
         assert_eq!(
             g.world
@@ -1126,7 +1992,7 @@ mod tests {
         let mut g = Game::shell(1, RulesPreset::Classic);
         let mut e = Entity::new(1, "oGhost", g.player.pos);
         init(&mut e);
-        ghost(&mut g, &mut e);
+        collision(&mut g, &mut e, crate::dispatcher::Instance::Player);
         assert_eq!(g.player.health, -99);
         assert_eq!(e.state, 0);
     }
@@ -1135,7 +2001,7 @@ mod tests {
         let mut g = Game::shell(1, RulesPreset::Classic);
         g.world.exit = Vec2::new(40.0, 40.0);
         g.world.spawn("oExit", Vec2::new(32.0, 32.0));
-        let mut e = Entity::new(1, "oDamsel", g.world.exit);
+        let mut e = Entity::new(99, "oDamsel", g.world.exit);
         init(&mut e);
         damsel(&mut g, &mut e);
         assert!(g.flags.contains("damsel_rescued"));
@@ -1213,14 +2079,14 @@ mod tests {
             g.step(&InputFrame::default());
         }
         assert_eq!(g.world.entity(id).unwrap().state, 3);
-        for frame_tick in 1..=20 {
+        for frame_tick in 1..=19 {
             g.step(&InputFrame::default());
             if frame_tick == 8 {
                 assert!(g.world.entities.iter().any(|e| e.object == "oYellHelp"));
             }
             assert_eq!(
                 g.world.entity(id).unwrap().state,
-                if frame_tick == 20 { 0 } else { 3 }
+                if frame_tick == 19 { 0 } else { 3 }
             );
         }
         assert_eq!(g.world.entity(id).unwrap().timer, 200);
@@ -1236,7 +2102,8 @@ mod tests {
         g.step(&InputFrame::default());
         assert_eq!(g.world.entity(id).unwrap().state, 3);
         assert_eq!(g.world.entity(id).unwrap().value("animation_speed"), 1.0);
-        for _ in 0..6 {
+        assert_eq!(g.world.entity(id).unwrap().animation, 1.0);
+        for _ in 0..5 {
             g.step(&InputFrame::default());
             assert_eq!(g.world.entity(id).unwrap().state, 3);
         }

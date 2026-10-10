@@ -1,63 +1,100 @@
 //! Kali's iron ball and presentation-room chain variants. Source: oBall/2,
 //! oChain/2 and the inherited oItem Step. Player tether limits run in player.rs.
-use crate::model::{Entity, Game, PlayerState, Rect, Vec2};
+use crate::model::{Entity, Game, Rect, Vec2};
 
-pub(super) fn tick(game: &mut Game) {
-    // oLevel Create restores the punishment on each new campaign room, including
-    // after the prior ball was destroyed by lava. Never regenerate it mid-room.
-    if game.level_tick == 1
-        && !game.flags.contains("hub")
-        && game.data.get("kali_punish").copied().unwrap_or(0.0) >= 2.0
-        && !game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.alive && e.object == "oBall")
-    {
+pub(super) fn handles(object: &str) -> bool {
+    matches!(object, "oBall" | "oBall2" | "oChain" | "oChain2")
+}
+
+/// oLevel Create restores a campaign punishment before the room starts.
+/// This is a room initializer, never a ball's Step or a mid-room repair.
+pub(super) fn initialize_level(game: &mut Game) {
+    if !game.flags.contains("hub") && game.data.get("kali_punish").copied().unwrap_or(0.0) >= 2.0 {
         spawn_chain(game, game.player.pos, false);
+    }
+}
+
+pub(super) fn init_entity(entity: &mut Entity) {
+    if matches!(entity.object.as_str(), "oBall" | "oBall2") {
+        init(entity);
+    } else if matches!(entity.object.as_str(), "oChain" | "oChain2") {
+        entity.data.entry("linkVal".into()).or_insert(2.0);
+    }
+}
+
+pub(super) fn create_instance(game: &mut Game, instance: crate::dispatcher::Instance) {
+    let crate::dispatcher::Instance::Entity(id) = instance else {
+        return;
+    };
+    let Some(entity) = game.world.entity_mut(id) else {
+        return;
+    };
+    if matches!(entity.object.as_str(), "oBall" | "oBall2") {
+        crate::items::init_entity(entity);
+    }
+    init_entity(entity);
+}
+
+pub(super) fn step_instance(game: &mut Game, instance: crate::dispatcher::Instance) {
+    let crate::dispatcher::Instance::Entity(id) = instance else {
+        return;
+    };
+    let Some(index) = game
+        .world
+        .entities
+        .iter()
+        .position(|e| e.id == id && e.alive)
+    else {
+        return;
+    };
+    let mut entity = game.world.entities[index].clone();
+    match entity.object.as_str() {
+        "oBall" | "oBall2" => {
+            init(&mut entity);
+            crate::items::tick_inherited_ball_body(game, &mut entity);
+            if entity.alive {
+                // Child follow still runs when the inherited parent is gated.
+                if entity.object == "oBall" {
+                    follow_player(game, &mut entity);
+                } else if let Some(dummy) = game
+                    .world
+                    .entities
+                    .iter()
+                    .find(|e| e.alive && e.object == "oPDummy")
+                {
+                    if bounds_distance(
+                        sprite_edges(&entity.sprite, entity.pos, entity.bounds()),
+                        sprite_edges(&dummy.sprite, dummy.pos, dummy.bounds()),
+                    ) >= 24.0
+                    {
+                        entity.pos.x = dummy.pos.x - 24.0;
+                    }
+                }
+            }
+        }
+        "oChain" | "oChain2" => chain_step(game, &mut entity),
+        _ => return,
+    }
+    if let Some(slot) = game.world.entities.iter_mut().find(|e| e.id == id) {
+        *slot = entity;
+    }
+}
+
+#[cfg(test)]
+pub(super) fn tick(game: &mut Game) {
+    if game.level_tick == 1 {
+        initialize_level(game);
     }
     let ids: Vec<_> = game
         .world
         .entities
         .iter()
-        .filter(|e| e.alive && matches!(e.object.as_str(), "oBall" | "oBall2"))
+        .filter(|e| e.alive && handles(&e.object))
         .map(|e| e.id)
         .collect();
     for id in ids {
-        let Some(index) = game
-            .world
-            .entities
-            .iter()
-            .position(|e| e.id == id && e.alive)
-        else {
-            continue;
-        };
-        let mut ball = game.world.entities[index].clone();
-        init(&mut ball);
-        item_physics(game, &mut ball);
-        if ball.alive {
-            // Inherited item impacts occur before the child ball-follow event.
-            impact(game, &ball);
-            if ball.object == "oBall" {
-                follow_player(game, &mut ball);
-            } else if let Some(dummy) = game
-                .world
-                .entities
-                .iter()
-                .find(|e| e.alive && e.object == "oPDummy")
-            {
-                if bounds_distance(
-                    sprite_edges(&ball.sprite, ball.pos, ball.bounds()),
-                    sprite_edges(&dummy.sprite, dummy.pos, dummy.bounds()),
-                ) >= 24.0
-                {
-                    ball.pos.x = dummy.pos.x - 24.0;
-                }
-            }
-        }
-        game.world.entities[index] = ball;
+        step_instance(game, crate::dispatcher::Instance::Entity(id));
     }
-    chains(game);
 }
 
 fn init(ball: &mut Entity) {
@@ -71,6 +108,10 @@ fn init(ball: &mut Entity) {
     ball.data.insert("bounceFactor".into(), 0.5);
     ball.data.insert("frictionFactor".into(), 0.3);
     for (key, value) in [
+        ("bboxLeft", -5.0),
+        ("bboxTop", -5.0),
+        ("bboxRight", 5.0),
+        ("bboxBottom", 5.0),
         ("collision_left", -5.0),
         ("collision_top", -5.0),
         ("collision_right", 5.0),
@@ -91,169 +132,7 @@ fn spawn_chain(game: &mut Game, pos: Vec2, presentation: bool) {
             .entity_mut(id)
             .unwrap()
             .data
-            .insert("link_val".into(), f64::from(link));
-    }
-}
-
-fn bounds_at(pos: Vec2) -> Rect {
-    Rect::new(pos.x - 5.0, pos.y - 5.0, 10.0, 10.0)
-}
-fn blocked(game: &Game, ball: &Entity, pos: Vec2) -> bool {
-    game.world.collides_except(bounds_at(pos), ball.id)
-}
-fn displacement(v: f64, tick: u64) -> i32 {
-    let f = v.abs().fract();
-    let period = if f > 0.0 {
-        (1.0 / f).round_ties_even() as u64
-    } else {
-        0
-    };
-    (v.abs().floor() as i32 + i32::from(period > 0 && tick.is_multiple_of(period)))
-        * if v < 0.0 { -1 } else { 1 }
-}
-fn liquid(game: &Game, pos: Vec2, name: &str) -> bool {
-    game.world
-        .tile((pos.x / 16.0).floor() as i32, (pos.y / 16.0).floor() as i32)
-        .is_some_and(|t| t.object == name)
-        || game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.alive && e.object == name && e.sprite_bounds().contains(pos))
-}
-fn item_physics(game: &Game, ball: &mut Entity) {
-    let active = ball.pos.x > game.camera.x - 16.0
-        && ball.pos.x < game.camera.x + 336.0
-        && ball.pos.y > game.camera.y - 16.0
-        && ball.pos.y < game.camera.y + 256.0;
-    if !active {
-        return;
-    }
-    if ball.held {
-        ball.vel = Vec2::default();
-        ball.pos = Vec2::new(
-            game.player.pos.x + f64::from(game.player.facing) * 4.0,
-            game.player.pos.y
-                - if game.player.state == PlayerState::Ducking && game.player.vel.x.abs() < 2.0 {
-                    2.0
-                } else {
-                    4.0
-                },
-        );
-        if game.player.held != Some(ball.id) {
-            ball.held = false;
-        }
-        return;
-    }
-    if game.world.solid_at(ball.pos.x, ball.pos.y) {
-        let left = blocked(game, ball, Vec2::new(ball.pos.x - 1.0, ball.pos.y));
-        let right = blocked(game, ball, Vec2::new(ball.pos.x + 1.0, ball.pos.y));
-        let top = blocked(game, ball, Vec2::new(ball.pos.x, ball.pos.y - 1.0));
-        let bottom = blocked(game, ball, Vec2::new(ball.pos.x, ball.pos.y + 1.0));
-        if top && !bottom {
-            ball.pos.y += 1.0;
-        } else if left && !right {
-            ball.pos.x += 1.0;
-        } else if right && !left {
-            ball.pos.x -= 1.0;
-        } else {
-            ball.vel = Vec2::default();
-        }
-        return;
-    }
-    for (horizontal, v) in [(true, ball.vel.x), (false, ball.vel.y)] {
-        let d = displacement(v, game.engine_time());
-        for _ in 0..d.unsigned_abs() {
-            let p = Vec2::new(
-                ball.pos.x
-                    + if horizontal {
-                        f64::from(d.signum())
-                    } else {
-                        0.0
-                    },
-                ball.pos.y
-                    + if horizontal {
-                        0.0
-                    } else {
-                        f64::from(d.signum())
-                    },
-            );
-            if blocked(game, ball, p) {
-                break;
-            }
-            ball.pos = p;
-        }
-    }
-    let left = blocked(game, ball, Vec2::new(ball.pos.x - 1.0, ball.pos.y));
-    let right = blocked(game, ball, Vec2::new(ball.pos.x + 1.0, ball.pos.y));
-    let bottom = blocked(game, ball, Vec2::new(ball.pos.x, ball.pos.y + 1.0));
-    let top = blocked(game, ball, Vec2::new(ball.pos.x, ball.pos.y - 1.0));
-    ball.data.insert("colBot".into(), f64::from(bottom));
-    if !left && !right {
-        ball.data.insert("stuck".into(), 0.0);
-    }
-    if !bottom && ball.value("stuck") == 0.0 {
-        ball.vel.y = (ball.vel.y + ball.value("gravity")).min(8.0);
-    }
-    if left || right {
-        ball.vel.x *= -0.5;
-    }
-    if bottom {
-        ball.vel.y = if ball.vel.y > 1.0 {
-            -ball.vel.y * 0.5
-        } else {
-            0.0
-        };
-        ball.vel.x = if ball.vel.x.abs() < 0.1 {
-            0.0
-        } else {
-            ball.vel.x * 0.3
-        };
-        if ball.vel.y.abs() < 1.0 {
-            ball.pos.y -= 1.0;
-            if !blocked(game, ball, Vec2::new(ball.pos.x, ball.pos.y + 1.0)) {
-                ball.pos.y += 1.0;
-            }
-            ball.vel.y = 0.0;
-        }
-    }
-    if left && !right && ball.value("stuck") == 0.0 {
-        ball.pos.x += 1.0;
-    } else if right && ball.value("stuck") == 0.0 {
-        ball.pos.x -= 1.0;
-    }
-    if top {
-        if ball.vel.y < 0.0 {
-            ball.vel.y *= -0.8;
-        } else {
-            ball.pos.y += 1.0;
-        }
-    }
-    // oItem inherits no water drag: only lava arrests motion and destroys it
-    // when submerged beyond its upper point. This matters for curse escape.
-    let lava = Rect::new(ball.pos.x - 3.0, ball.pos.y - 3.0, 6.0, 6.0);
-    let in_lava = game.world.tiles.iter().enumerate().any(|(i, t)| {
-        t.object == "oLava"
-            && Rect::new(
-                (i % game.world.width) as f64 * 16.0,
-                (i / game.world.width) as f64 * 16.0,
-                16.0,
-                16.0,
-            )
-            .intersects(lava)
-    }) || game
-        .world
-        .entities
-        .iter()
-        .any(|e| e.alive && e.object == "oLava" && e.sprite_bounds().intersects(lava));
-    ball.data
-        .insert("gravity".into(), if in_lava { 0.0 } else { 0.6 });
-    if in_lava {
-        ball.vel = Vec2::default();
-        ball.pos.y += 0.05;
-    }
-    if liquid(game, Vec2::new(ball.pos.x, ball.pos.y - 5.0), "oLava") {
-        ball.alive = false;
+            .insert("linkVal".into(), f64::from(link));
     }
 }
 
@@ -315,148 +194,50 @@ fn follow_player(game: &Game, ball: &mut Entity) {
         ball.vel.x = 0.0;
     }
 }
-fn chains(game: &mut Game) {
-    let ball = game
+fn chain_step(game: &Game, chain: &mut Entity) {
+    let presentation = chain.object == "oChain2";
+    let Some(ball) = game
         .world
         .entities
         .iter()
-        .find(|e| e.alive && e.object == "oBall")
-        .map(|e| e.pos);
-    let ball2 = game
-        .world
-        .entities
-        .iter()
-        .find(|e| e.alive && e.object == "oBall2")
-        .map(|e| e.pos);
-    let dummy = game
-        .world
-        .entities
-        .iter()
-        .find(|e| e.alive && e.object == "oPDummy")
-        .map(|e| e.pos)
-        .unwrap_or(Vec2::new(280.0, 184.0));
-    for e in &mut game.world.entities {
-        if !e.alive || !matches!(e.object.as_str(), "oChain" | "oChain2") {
-            continue;
+        .find(|e| e.alive && e.object == if presentation { "oBall2" } else { "oBall" })
+    else {
+        // Only oChain explicitly destroys itself when its ball is absent.
+        if !presentation {
+            chain.alive = false;
         }
-        let (origin, end) = if e.object == "oChain" {
-            (ball, game.player.pos)
-        } else {
-            (ball2, dummy)
-        };
-        if let Some(origin) = origin {
-            let link = e
-                .data
-                .get("link_val")
-                .or_else(|| e.data.get("linkVal"))
-                .copied()
-                .unwrap_or(2.0);
-            e.pos = origin.lerp(end, link / 4.0);
-        } else {
-            e.alive = false;
-        }
-    }
-}
-fn impact(game: &mut Game, ball: &Entity) {
-    if ball.held || ball.vel.x.abs() <= 2.0 && ball.vel.y.abs() <= 2.0 {
         return;
-    }
-    let strike = Rect::new(ball.pos.x - 2.0, ball.pos.y - 2.0, 5.0, 5.0);
-    let mut sound = Vec::new();
-    let mut explosions = Vec::new();
-    for target in &mut game.world.entities {
-        if !target.alive
-            || target.id == ball.id
-            || !strike.intersects(target.sprite_bounds())
-            || target.value("invincible") != 0.0
-            || target.object == "oMagmaMan"
-        {
-            continue;
-        }
-        if !crate::enemies::is_enemy(&target.object) && target.object != "oDamsel" {
-            continue;
-        }
-        match target.object.as_str() {
-            "oGhost" | "oScarab" | "oOlmec" | "oMagma" => continue,
-            "oCaveman" | "oManTrap" | "oVampire" | "oYeti" | "oHawkman" => {
-                if target.state == 98 {
-                    continue;
-                }
-                target.health -= 1;
-                target.state = 98;
-                target.timer = target.value("stun_time") as u32;
-                target.vel.y = -6.0;
-            }
-            "oShopkeeper" => {
-                if target.state >= 98 {
-                    continue;
-                }
-                target.health -= 1;
-                target.state = 2;
-                target.vel.y = -6.0;
-                game.flags.insert("shopkeepers_angry".into());
-            }
-            "oDamsel" => {
-                if target.state == 99 || target.value("hit") > 0.0 {
-                    continue;
-                }
-                target.held = false;
-                target.health -= 1;
-                target.state = 2;
-                target.timer = 120;
-                target.data.insert("hit".into(), 10.0);
-                target.vel.y = -6.0;
-                if game.player.held == Some(target.id) {
-                    game.player.held = None;
-                }
-                if target.value("forSale") != 0.0 {
-                    game.flags.insert("shopkeepers_angry".into());
-                }
-            }
-            "oGiantSpider" | "oTombLord" => {
-                if target.value("hit_cooldown") > 0.0 {
-                    continue;
-                }
-                target.health -= 1;
-                target.data.insert(
-                    "hit_cooldown".into(),
-                    if target.object == "oGiantSpider" {
-                        10.0
-                    } else {
-                        20.0
-                    },
-                );
-            }
-            "oAlienBoss" => {
-                if target.state == 99 || target.sprite == "sAlienBossHurt" {
-                    continue;
-                }
-                target.health -= 1;
-                target.sprite = "sAlienBossHurt".into();
-                target.data.insert("animation_speed".into(), 0.8);
-            }
-            "oUFO" => {
-                target.alive = false;
-                target.health = 0;
-                explosions.push(Vec2::new(target.pos.x + 8.0, target.pos.y + 8.0));
-            }
-            _ => {
-                target.health -= 1;
-            }
-        }
-        target.vel.x = ball.vel.x * 0.3;
-        target.data.insert("assaulted".into(), 1.0);
-        if target.health <= 0 {
-            target.data.insert("killed_by_player".into(), 1.0);
-        }
-        sound.push(target.pos);
-    }
-    for pos in sound {
-        game.sound("sndHit", pos);
-    }
-    for pos in explosions {
-        game.world.spawn("oExplosion", pos);
-        game.sound("sndExplosion", pos);
+    };
+    let endpoint = if presentation {
+        game.world
+            .entities
+            .iter()
+            .find(|e| e.alive && e.object == "oPDummy")
+            .map(|e| e.pos)
+            .unwrap_or(Vec2::new(280.0, 184.0))
+    } else {
+        game.player.pos
+    };
+    let link = chain
+        .data
+        .get("link_val")
+        .or_else(|| chain.data.get("linkVal"))
+        .copied()
+        .unwrap_or(2.0);
+    chain.pos = ball.pos.lerp(endpoint, link / 4.0);
+}
+
+#[cfg(test)]
+fn chains(game: &mut Game) {
+    let ids: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|e| e.alive && matches!(e.object.as_str(), "oChain" | "oChain2"))
+        .map(|e| e.id)
+        .collect();
+    for id in ids {
+        step_instance(game, crate::dispatcher::Instance::Entity(id));
     }
 }
 
@@ -470,14 +251,228 @@ mod tests {
         g
     }
     #[test]
+    fn instance_step_advances_only_its_curse() {
+        let mut g = room();
+        let first = g.world.spawn("oBall2", Vec2::new(72., 72.));
+        let second = g.world.spawn("oBall2", Vec2::new(96., 72.));
+        g.world.entity_mut(first).unwrap().vel.x = 3.;
+        g.world.entity_mut(second).unwrap().vel.x = 3.;
+        let second_before = serde_json::to_value(g.world.entity(second).unwrap()).unwrap();
+        step_instance(&mut g, crate::dispatcher::Instance::Entity(first));
+        assert_eq!(g.world.entity(first).unwrap().pos.x, 75.);
+        assert_eq!(g.world.entity(second).unwrap().pos.x, 96.);
+        assert_eq!(
+            serde_json::to_value(g.world.entity(second).unwrap()).unwrap(),
+            second_before
+        );
+    }
+
+    #[test]
+    fn offscreen_parent_does_not_hit_but_child_follow_still_runs() {
+        let mut g = room();
+        let enemy = g.world.spawn("oBat", Vec2::new(492., 64.));
+        let health = g.world.entity(enemy).unwrap().health;
+        let ball = g.world.spawn("oBall", Vec2::new(500., 72.));
+        g.world.entity_mut(ball).unwrap().vel.x = 4.;
+        step_instance(&mut g, crate::dispatcher::Instance::Entity(ball));
+        assert_eq!(g.world.entity(enemy).unwrap().health, health);
+        assert_eq!(g.world.entity(ball).unwrap().pos, Vec2::new(500., 72.));
+        assert_eq!(
+            g.world.entity(ball).unwrap().vel.x,
+            -2.,
+            "child follows despite inactive parent body"
+        );
+    }
+
+    #[test]
+    fn full_step_ball_precedes_earlier_created_chain_and_moves_once() {
+        let mut g = room();
+        // Object resource order, not creation order: Ball2 926 precedes Chain2 927.
+        let chain = g.world.spawn("oChain2", Vec2::new(8., 8.));
+        g.world
+            .entity_mut(chain)
+            .unwrap()
+            .data
+            .insert("linkVal".into(), 1.);
+        let ball = g.world.spawn("oBall2", Vec2::new(72., 72.));
+        g.world.entity_mut(ball).unwrap().vel.x = 3.;
+        g.step(&crate::InputFrame::default());
+        let ball = g.world.entity(ball).unwrap();
+        assert_eq!(ball.pos.x, 75., "inherited item motion runs exactly once");
+        assert_eq!(
+            g.world.entity(chain).unwrap().pos,
+            ball.pos.lerp(Vec2::new(280., 184.), 0.25)
+        );
+    }
+
+    #[test]
+    fn actual_ball_pickup_uses_inherited_heavy_attachment() {
+        let mut level = crate::level::Level::default();
+        level.set_tile(6, 7, '@').unwrap();
+        for x in 0..40 {
+            level.set_tile(x, 8, '1').unwrap();
+        }
+        let mut g = Game::shell(11, RulesPreset::Classic);
+        g.load_custom(&level, "curse-held-route", "");
+        for _ in 0..8 {
+            g.step(&crate::InputFrame::default());
+        }
+        let ball = g
+            .world
+            .spawn("oBall", Vec2::new(g.player.pos.x, g.player.pos.y + 4.));
+        g.step(&crate::InputFrame {
+            down: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(g.player.held, Some(ball));
+        assert!(g.world.entity(ball).unwrap().held);
+        assert_eq!(g.world.entity(ball).unwrap().pos.y, g.player.pos.y - 2.);
+        g.step(&crate::InputFrame {
+            right: true,
+            ..Default::default()
+        });
+        let ball = g.world.entity(ball).unwrap();
+        assert_eq!(
+            ball.pos,
+            Vec2::new(
+                g.player.pos.x + f64::from(g.player.facing) * 4.,
+                g.player.pos.y - 4.
+            )
+        );
+        assert_eq!(ball.vel, Vec2::default());
+    }
+
+    #[test]
+    fn actual_altar_destroy_punishment_restores_once_in_next_room() {
+        let mut level = crate::level::Level::default();
+        level.set_tile(6, 7, '@').unwrap();
+        for x in 0..40 {
+            level.set_tile(x, 8, '1').unwrap();
+        }
+        let mut g = Game::shell(11, RulesPreset::Classic);
+        g.load_custom(&level, "curse-altar-route", "");
+        for _ in 0..8 {
+            g.step(&crate::InputFrame::default());
+        }
+        for offense in 1..=2 {
+            // Controlled unsupported altar; its ordinary Step and actual
+            // Destroy event must cause punishment, without editing Kali data.
+            g.world.spawn("oSacAltarLeft", Vec2::new(240., 64.));
+            g.world.spawn("oSacAltarRight", Vec2::new(256., 64.));
+            g.step(&crate::InputFrame::default());
+            assert_eq!(g.data.get("kali_punish").copied(), Some(f64::from(offense)));
+        }
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oBall")
+                .count(),
+            1
+        );
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oChain")
+                .count(),
+            4
+        );
+        g.next_level();
+        g.step(&crate::InputFrame::default());
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oBall")
+                .count(),
+            1
+        );
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oChain")
+                .count(),
+            4
+        );
+        for _ in 0..3 {
+            g.step(&crate::InputFrame::default());
+        }
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oBall")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn actual_ankh_pickup_relocates_before_ball_step_and_chain_sampling() {
+        let mut level = crate::level::Level::default();
+        level.set_tile(6, 7, '@').unwrap();
+        for x in 0..40 {
+            level.set_tile(x, 8, '1').unwrap();
+        }
+        let mut g = Game::shell(11, RulesPreset::Classic);
+        g.load_custom(&level, "curse-ankh-order", "");
+        for _ in 0..8 {
+            g.step(&crate::InputFrame::default());
+        }
+        let ankh = g
+            .world
+            .spawn("oAnkh", Vec2::new(g.player.pos.x, g.player.pos.y + 4.));
+        crate::items::init_entity(g.world.entity_mut(ankh).unwrap());
+        g.world
+            .entity_mut(ankh)
+            .unwrap()
+            .data
+            .insert("cost".into(), 0.);
+        g.world
+            .entity_mut(ankh)
+            .unwrap()
+            .data
+            .insert("forSale".into(), 0.);
+        g.step(&crate::InputFrame {
+            down: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert!(g.player.has("Ankh"));
+        let ball = g.world.spawn("oBall", Vec2::new(240., 40.));
+        g.world.entity_mut(ball).unwrap().vel.x = 2.;
+        let chain = g.world.spawn("oChain", Vec2::new(248., 48.));
+        g.world
+            .entity_mut(chain)
+            .unwrap()
+            .data
+            .insert("linkVal".into(), 1.);
+        // Controlled fatal producer after a real pickup; no injected player
+        // health, velocity, stun, or revival state.
+        g.world.spawn("oLava", g.player.pos);
+        g.step(&crate::InputFrame::default());
+        assert!(!g.player.has("Ankh"));
+        assert_eq!(g.player.health, 4);
+        assert_eq!(g.state, crate::RunState::Playing);
+        let ball = g.world.entity(ball).unwrap();
+        assert_eq!(
+            ball.pos.x,
+            g.player.pos.x + 2.,
+            "preserved ball velocity runs after oPlayer1 revival"
+        );
+        assert_eq!(
+            g.world.entity(chain).unwrap().pos,
+            ball.pos.lerp(g.player.pos, 0.25)
+        );
+    }
+
+    #[test]
     fn moving_curse_ball_hits_damsel_in_game_step() {
         let mut game = room();
         let damsel = game.world.spawn("oDamsel", Vec2::new(72.0, 80.0));
-        game.world
-            .entity_mut(damsel)
-            .unwrap()
-            .data
-            .insert("forSale".into(), 1.0);
         let ball = game.world.spawn("oBall", Vec2::new(72.0, 72.0));
         game.world.entity_mut(ball).unwrap().vel.y = 4.0;
         game.step(&crate::InputFrame::default());
@@ -485,9 +480,17 @@ mod tests {
         assert_eq!(damsel.health, 3);
         assert_eq!(damsel.state, 2);
         assert_eq!(damsel.timer, 120);
-        assert_eq!(damsel.value("hit"), 10.0);
+        assert_eq!(damsel.value("hit_cooldown"), 10.0);
         assert_eq!(damsel.vel.y, -6.0);
-        assert!(game.flags.contains("shopkeepers_angry"));
+        let damsel_id = damsel.id;
+        for _ in 0..10 {
+            game.step(&crate::InputFrame::default());
+        }
+        assert_eq!(
+            game.world.entity(damsel_id).unwrap().value("hit_cooldown"),
+            0.,
+            "Damsel child Step must expire the inherited real-impact cooldown"
+        );
     }
 
     #[test]
@@ -562,7 +565,7 @@ mod tests {
         let mut e = Entity::new(1, "oBall", Vec2::new(72.0, 72.0));
         init(&mut e);
         e.vel.y = 2.0;
-        item_physics(&g, &mut e);
+        crate::items::tick_inherited_ball_body(&mut g, &mut e);
         assert_eq!(e.pos.y, 74.0);
         assert_eq!(e.vel.y, 3.0);
         assert_eq!(e.value("gravity"), 0.6);
@@ -570,19 +573,22 @@ mod tests {
     #[test]
     fn falling_ball_stuns_body_enemy_once_without_hurting_magma() {
         let mut g = room();
-        let id = g.world.spawn("oCaveman", Vec2::new(64.0, 64.0));
-        let mut b = Entity::new(100, "oBall", Vec2::new(72.0, 72.0));
-        init(&mut b);
-        b.vel.y = 4.0;
-        impact(&mut g, &b);
-        assert_eq!(g.world.entity(id).unwrap().health, 2);
-        assert_eq!(g.world.entity(id).unwrap().state, 98);
-        impact(&mut g, &b);
-        assert_eq!(g.world.entity(id).unwrap().health, 2);
-        let magma = g.world.spawn("oMagmaMan", Vec2::new(64.0, 64.0));
-        let hp = g.world.entity(magma).unwrap().health;
-        impact(&mut g, &b);
-        assert_eq!(g.world.entity(magma).unwrap().health, hp);
+        let enemy = g.world.spawn("oCaveman", Vec2::new(64., 64.));
+        let ball = g.world.spawn("oBall", Vec2::new(72., 68.));
+        g.world.entity_mut(ball).unwrap().vel.y = 4.;
+        step_instance(&mut g, crate::dispatcher::Instance::Entity(ball));
+        assert_eq!(g.world.entity(enemy).unwrap().health, 2);
+        assert_eq!(g.world.entity(enemy).unwrap().state, 98);
+        step_instance(&mut g, crate::dispatcher::Instance::Entity(ball));
+        assert_eq!(g.world.entity(enemy).unwrap().health, 2);
+
+        let mut g = room();
+        let magma = g.world.spawn("oMagmaMan", Vec2::new(64., 64.));
+        let health = g.world.entity(magma).unwrap().health;
+        let ball = g.world.spawn("oBall", Vec2::new(72., 68.));
+        g.world.entity_mut(ball).unwrap().vel.y = 4.;
+        step_instance(&mut g, crate::dispatcher::Instance::Entity(ball));
+        assert_eq!(g.world.entity(magma).unwrap().health, health);
     }
     #[test]
     fn transition_variant_tracks_dummy_and_fallback_endpoint() {
@@ -593,7 +599,7 @@ mod tests {
             g.world
                 .entities
                 .iter()
-                .find(|e| e.object == "oChain2" && e.value("link_val") == 4.0)
+                .find(|e| e.object == "oChain2" && e.value("linkVal") == 4.0)
                 .unwrap()
                 .pos,
             Vec2::new(280.0, 184.0)
@@ -614,7 +620,7 @@ mod tests {
             g.world
                 .entities
                 .iter()
-                .find(|e| e.object == "oChain2" && e.value("link_val") == 4.0)
+                .find(|e| e.object == "oChain2" && e.value("linkVal") == 4.0)
                 .unwrap()
                 .pos,
             g.world.entity(dummy).unwrap().pos

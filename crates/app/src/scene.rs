@@ -31,6 +31,177 @@ pub fn text(
     font(quads, atlas, value, x, y, scale, color, "sFontSmall");
 }
 
+/// Classic's two independent centered message lines. Their lifetime belongs
+/// to the simulation; drawing at 240 Hz must not consume the source timer.
+pub fn source_message(
+    quads: &mut Vec<DrawQuad>,
+    atlas: &Atlas,
+    first: &str,
+    second: &str,
+    tutorial: bool,
+) {
+    for (value, y, color) in [
+        (first, 216.0, WHITE),
+        (
+            second,
+            224.0,
+            if tutorial {
+                WHITE
+            } else {
+                [1.0, 1.0, 0.0, 1.0]
+            },
+        ),
+    ] {
+        text(
+            quads,
+            atlas,
+            value,
+            ((320.0 - value.chars().count() as f32 * 8.0) / 2.0).ceil(),
+            y,
+            1.0,
+            color,
+        );
+    }
+}
+
+fn intro_narrative(
+    quads: &mut Vec<DrawQuad>,
+    atlas: &Atlas,
+    draw_status: i8,
+    fade_level: f64,
+    lines: &[String; 3],
+) {
+    // oIntro Draw places the story over the fade, so it remains legible while
+    // the authored desert and travelling actor are still completely black.
+    cinematic_fade(quads, fade_level);
+    for (index, value) in lines.iter().enumerate() {
+        if draw_status > index as i8 {
+            text(
+                quads,
+                atlas,
+                value,
+                ((320.0 - value.chars().count() as f32 * 8.0) / 2.0).ceil(),
+                100.0 + index as f32 * 16.0,
+                1.0,
+                WHITE,
+            );
+        }
+    }
+}
+
+fn title_opening_overlay(quads: &mut Vec<DrawQuad>, atlas: &Atlas, stage: u8, darkness: f64) {
+    // oScreen Begin Step retains this alpha for the presentation credit too.
+    let alpha = darkness.clamp(0.0, 1.0);
+    if alpha > 0.0 {
+        cinematic_fade(quads, alpha);
+    }
+    if stage == 1 {
+        text(
+            quads,
+            atlas,
+            "DEREK YU PRESENTS",
+            88.0,
+            48.0,
+            1.0,
+            [1.0, 1.0, 1.0, alpha as f32],
+        );
+    }
+}
+
+/// oGame Draw reads the simulation's reveal and countup. The host supplies the
+/// current keyboard/controller label for the source acknowledgment instruction.
+pub fn game_over_overlay(quads: &mut Vec<DrawQuad>, atlas: &Atlas, game: &Game, hint: &str) {
+    let game = game.presentation();
+    if game.state != spelunky_core::RunState::Dead {
+        return;
+    }
+    let challenge = ["hub_sun", "hub_moon", "hub_stars"]
+        .iter()
+        .any(|flag| game.flags.contains(*flag));
+    if game.flags.contains("hub_moon") && game.data.get("timer").copied().unwrap_or(0.0) >= 0.0 {
+        return;
+    }
+    if !challenge && !game.is_level() {
+        return;
+    }
+    game_over_text(
+        quads,
+        atlas,
+        game.game_over.draw_status,
+        game.game_over.money_count,
+        challenge,
+        hub_value(game, "challenge_highscore") != 0.0,
+        hint,
+    );
+}
+
+fn game_over_text(
+    quads: &mut Vec<DrawQuad>,
+    atlas: &Atlas,
+    status: u8,
+    money_count: u32,
+    challenge: bool,
+    highscore: bool,
+    hint: &str,
+) {
+    const YELLOW: [f32; 4] = [1.0, 1.0, 0.0, 1.0];
+    if status > 0 {
+        font(
+            quads,
+            atlas,
+            if challenge { "FINISHED!" } else { "GAME OVER" },
+            88.0,
+            48.0,
+            1.0,
+            YELLOW,
+            "sFont",
+        );
+    }
+    if challenge {
+        if status > 1 {
+            let message = if highscore {
+                "YOU SET A NEW RECORD!"
+            } else {
+                "BETTER LUCK NEXT TIME..."
+            };
+            text(
+                quads,
+                atlas,
+                message,
+                ((320.0 - message.len() as f32 * 8.0) / 2.0).ceil(),
+                80.0,
+                1.0,
+                YELLOW,
+            );
+        }
+    } else {
+        if status > 1 {
+            text(quads, atlas, "FINAL SCORE:", 88.0, 80.0, 1.0, YELLOW);
+        }
+        if status > 2 {
+            font(
+                quads,
+                atlas,
+                &format!("${money_count}"),
+                88.0,
+                88.0,
+                1.0,
+                WHITE,
+                "sFont",
+            );
+            text(
+                quads,
+                atlas,
+                hint,
+                ((320.0 - hint.chars().count() as f32 * 8.0) / 2.0).ceil(),
+                120.0,
+                1.0,
+                YELLOW,
+            );
+        }
+    }
+}
+
 fn font(
     quads: &mut Vec<DrawQuad>,
     atlas: &Atlas,
@@ -183,10 +354,11 @@ fn entity_mirrored(entity: &Entity, name: &str) -> bool {
     } else if entity.object == "oPDummy6" {
         // Its own Draw event unconditionally assigns image_xscale = -1.
         true
+    } else if matches!(entity.object.as_str(), "oPDummy" | "oPDummy2" | "oPDummy3") {
+        // These Draw events assign the scale from facing on every draw.
+        entity.facing > 0
     } else if entity.data.contains_key("image_xscale") {
         entity.value("image_xscale") < 0.0
-    } else if matches!(entity.object.as_str(), "oPDummy" | "oPDummy2") {
-        entity.facing > 0
     } else {
         (entity.object == "oAlien" || name.ends_with("Left") || name.ends_with('L'))
             && entity.facing > 0
@@ -328,6 +500,7 @@ fn entity_draw_extras(
 /// Alpha interpolates positions only. Sprite frames and all HUD values are
 /// simulation state, so presentation never changes gameplay or animation speed.
 pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> Vec<DrawQuad> {
+    let game = game.presentation();
     let alpha = if game.flags.contains("render_discontinuity") {
         1.0
     } else if alpha.is_finite() {
@@ -351,6 +524,7 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
         .iter()
         .filter(|entity| {
             entity.alive
+                && entity.engine_active
                 && entity.object == "oTerrainMetadata"
                 && entity.pos.x >= 0.0
                 && entity.pos.y >= 0.0
@@ -368,7 +542,7 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
         })
         .collect();
     for (index, tile) in game.world.tiles.iter().enumerate() {
-        if tile.object.is_empty() {
+        if tile.object.is_empty() || !tile.engine_active {
             continue;
         }
         let tile_x = index % game.world.width.max(1);
@@ -410,12 +584,9 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
         );
         layers.push((definition.map_or(100, |def| def.depth), index as u64, layer));
     }
-    for metadata in game
-        .world
-        .entities
-        .iter()
-        .filter(|entity| entity.alive && entity.object == "oTerrainMetadata")
-    {
+    for metadata in game.world.entities.iter().filter(|entity| {
+        entity.alive && entity.engine_active && entity.object == "oTerrainMetadata"
+    }) {
         let frozen = metadata.value("frozen_caveman") != 0.0;
         let embedded = metadata.value("embedded_treasure") != 0.0;
         if !frozen && !embedded {
@@ -465,7 +636,12 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
         sprite(&mut layer, atlas, name, 0.0, x, y, false, WHITE);
         layers.push((depth, 1_000_000 + metadata.id, layer));
     }
-    for entity in game.world.entities.iter().filter(|entity| entity.alive) {
+    for entity in game
+        .world
+        .entities
+        .iter()
+        .filter(|entity| entity.alive && entity.engine_active)
+    {
         if entity.data.get("visible") == Some(&0.0)
             || entity.data.get("hidden") == Some(&1.0)
             || entity.object == "oTerrainMetadata"
@@ -620,7 +796,7 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
                 .world
                 .entities
                 .iter()
-                .any(|entity| entity.alive && entity.object == "oCape")
+                .any(|entity| entity.alive && entity.engine_active && entity.object == "oCape")
         {
             let right = player.facing > 0;
             let open = player.data.get("cape_open").copied().unwrap_or(0.0) > 0.0;
@@ -657,7 +833,7 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
                 .world
                 .entities
                 .iter()
-                .any(|entity| entity.alive && entity.object == "oParachute")
+                .any(|entity| entity.alive && entity.engine_active && entity.object == "oParachute")
         {
             let mut canopy = Vec::with_capacity(1);
             sprite(
@@ -746,6 +922,7 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
     }
     if let Some(ending) = cinematic {
         use spelunky_core::ending::EndingStage;
+        let fade = interpolate_fade(ending.previous_fade_level, ending.fade_level, alpha);
         match ending.stage {
             EndingStage::Landing | EndingStage::Summary => ending_summary(
                 &mut quads,
@@ -756,12 +933,12 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
                 game.data.get("kills").copied().unwrap_or(0.0).max(0.0) as u32,
                 game.data.get("damsels").copied().unwrap_or(0.0).max(0.0) as u32,
                 ending.fade_out,
-                ending.fade_level,
+                fade,
             ),
             EndingStage::Credits => {
                 ending_credits(&mut quads, atlas, ending.credits_page);
                 if ending.fade_in || ending.fade_out {
-                    cinematic_fade(&mut quads, ending.fade_level);
+                    cinematic_fade(&mut quads, fade);
                 }
             }
             EndingStage::Transition => transition_text(
@@ -789,7 +966,29 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
                 && ending.stage == spelunky_core::ending::EndingStage::Exit
                 && ending.fade_out
         }) {
-            cinematic_fade(&mut quads, ending.fade_level);
+            cinematic_fade(
+                &mut quads,
+                interpolate_fade(ending.previous_fade_level, ending.fade_level, alpha),
+            );
+        }
+    }
+    if let Some(opening) = &game.opening {
+        match opening.kind {
+            spelunky_core::opening::OpeningKind::Intro => intro_narrative(
+                &mut quads,
+                atlas,
+                opening.draw_status,
+                interpolate_fade(opening.previous_fade_level, opening.fade_level, alpha),
+                &opening.lines,
+            ),
+            spelunky_core::opening::OpeningKind::Title => {
+                title_opening_overlay(
+                    &mut quads,
+                    atlas,
+                    opening.stage,
+                    interpolate_fade(opening.previous_darkness, opening.darkness, alpha),
+                );
+            }
         }
     }
     quads
@@ -872,6 +1071,12 @@ fn ending_summary(
             WHITE,
         );
     }
+}
+
+// Source opacity advances at 30 Hz. Only presentation reads the two actual
+// snapshots; source alarms, stage changes and draw reveals stay authoritative.
+fn interpolate_fade(previous: f64, current: f64, alpha: f64) -> f64 {
+    previous + (current - previous) * alpha
 }
 
 fn cinematic_fade(quads: &mut Vec<DrawQuad>, fade: f64) {
@@ -990,7 +1195,7 @@ fn transition_text(
         .world
         .entities
         .iter()
-        .find(|entity| entity.alive && entity.object == "oTunnelMan")
+        .find(|entity| entity.alive && entity.engine_active && entity.object == "oTunnelMan")
     {
         match tunnel.value("talk") as u8 {
             1 => {
@@ -1025,7 +1230,10 @@ fn transition_text(
             _ => {}
         }
     } else if game.world.entities.iter().any(|entity| {
-        entity.alive && entity.object == "oDamselKiss" && entity.value("kissed") != 0.0
+        entity.alive
+            && entity.engine_active
+            && entity.object == "oDamselKiss"
+            && entity.value("kissed") != 0.0
     }) {
         centered("MY HERO!", 216.0, WHITE);
     }
@@ -1095,7 +1303,7 @@ fn background(
         | "rTransition2x" | "rTransition3" | "rTransition3x" => ("bgCave", true),
         "rTransition4" => ("bgTemple", true),
         "rEnd3" | "rCredits2" => ("bgClouds", false),
-        "rCredits1" => ("backgroundNight", true),
+        "rIntro" | "rCredits1" => ("backgroundNight", true),
         // The volcano room is covered by its authored oEnd2BG instance.
         "rEnd2" => return,
         _ => (
@@ -1154,6 +1362,7 @@ fn darkness_enabled(game: &Game) -> bool {
 }
 
 fn scene_lights(game: &Game, alpha: f64) -> Vec<Light> {
+    let game = game.presentation();
     let player = interpolated(game.player.previous_pos, game.player.pos, alpha);
     let darkness = game
         .data
@@ -1178,7 +1387,12 @@ fn scene_lights(game: &Game, alpha: f64) -> Vec<Light> {
         radius: 96.0 - 64.0 * darkness,
         tint,
     }];
-    for entity in game.world.entities.iter().filter(|entity| entity.alive) {
+    for entity in game
+        .world
+        .entities
+        .iter()
+        .filter(|entity| entity.alive && entity.engine_active)
+    {
         let Some((radius, dx, dy)) = source_light(&entity.object) else {
             continue;
         };
@@ -1196,6 +1410,9 @@ fn scene_lights(game: &Game, alpha: f64) -> Vec<Light> {
         });
     }
     for (index, tile) in game.world.tiles.iter().enumerate() {
+        if !tile.engine_active {
+            continue;
+        }
         let Some((radius, dx, dy)) = source_light(&tile.object) else {
             continue;
         };
@@ -1213,19 +1430,20 @@ fn scene_lights(game: &Game, alpha: f64) -> Vec<Light> {
 }
 
 fn red_lamp_distances(game: &Game) -> [Option<f64>; 2] {
+    let game = game.presentation();
     let player_mask = game.player.sprite_bounds();
     ["oLampRed", "oLampRedItem"].map(|object| {
         game.world
             .entities
             .iter()
-            .filter(|e| e.alive && e.object == object)
+            .filter(|e| e.alive && e.engine_active && e.object == object)
             .map(|e| sprite_distance(player_mask, e.sprite_bounds()))
             .chain(
                 game.world
                     .tiles
                     .iter()
                     .enumerate()
-                    .filter(|(_, tile)| tile.object == object)
+                    .filter(|(_, tile)| tile.engine_active && tile.object == object)
                     .map(|(index, _)| {
                         sprite_distance(
                             player_mask,
@@ -1242,6 +1460,7 @@ fn red_lamp_distances(game: &Game) -> [Option<f64>; 2] {
 
 #[cfg(any(test, target_arch = "wasm32"))]
 pub(crate) fn lighting_diagnostics(game: &Game, alpha: f64) -> serde_json::Value {
+    let game = game.presentation();
     let lights = scene_lights(game, alpha);
     serde_json::json!({
         "active": darkness_enabled(game),
@@ -1366,7 +1585,7 @@ fn hub_value(game: &Game, key: &str) -> f64 {
         .max(0.0)
 }
 
-fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, atlas: &Atlas) {
+fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas) {
     let yellow = [1.0, 1.0, 0.0, 1.0];
     let (challenge, first_icon, first_value, second_icon, second_value) =
         if game.flags.contains("hub_sun") {
@@ -1429,6 +1648,22 @@ fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, atlas: &Atlas) {
         return;
     }
     if !game.flags.contains("hub_scores") {
+        if game.flags.contains("hub_title")
+            && game.player.data.get("hidden") != Some(&1.0)
+            && game.player.pos.x < 256.0
+            && game.camera.x <= 1.0
+        {
+            let message = "WELCOME TO THE SHORTCUT HOUSE!";
+            text(
+                quads,
+                atlas,
+                message,
+                ((320.0 - message.len() as f32 * 8.0) / 2.0).ceil() - camera.x as f32,
+                224.0 - camera.y as f32,
+                1.0,
+                WHITE,
+            );
+        }
         return;
     }
     if game.player.pos.y < 156.0 {
@@ -1491,7 +1726,7 @@ fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, atlas: &Atlas) {
             1.0,
             yellow,
         );
-        if game.flags.contains(flag) {
+        if game.flags.contains(flag) && !game.flags.contains("hub_records_erased") {
             for (line, value) in detail.iter().enumerate() {
                 text(
                     quads,
@@ -1524,7 +1759,7 @@ fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, atlas: &Atlas) {
             );
         }
         let seconds = hub_value(game, "best_time") as u64;
-        if seconds > 0 {
+        if hub_value(game, "total_wins") > 0.0 {
             text(
                 quads,
                 atlas,
@@ -1551,17 +1786,51 @@ fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, atlas: &Atlas) {
                 WHITE,
             );
         }
+        let clear_button = game.world.entities.iter().find(|entity| {
+            entity.alive && entity.engine_active && entity.object == "oButtonHighscore"
+        });
+        let block = game
+            .world
+            .entities
+            .iter()
+            .filter(|entity| {
+                entity.alive && entity.engine_active && catalog::is_a(&entity.object, "oPushBlock")
+            })
+            .min_by(|left, right| {
+                left.pos
+                    .distance(Vec2::new(160.0, 240.0))
+                    .total_cmp(&right.pos.distance(Vec2::new(160.0, 240.0)))
+            });
+        if clear_button.is_some_and(|button| button.value("pushed") == 0.0)
+            && block.is_some_and(|block| block.pos.x > 160.0)
+        {
+            let message = "THIS WILL CLEAR EVERYTHING!";
+            text(
+                quads,
+                atlas,
+                message,
+                ((320.0 - message.len() as f32 * 8.0) / 2.0).ceil(),
+                216.0,
+                1.0,
+                yellow,
+            );
+        }
     }
 }
 
 fn hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas) {
+    if game.opening.as_ref().is_some_and(|opening| {
+        opening.kind == spelunky_core::opening::OpeningKind::Intro || !opening.player_present
+    }) {
+        return;
+    }
     // oPlayer1's death handler clears global.drawHUD while the corpse and
     // surrounding actors continue to simulate behind the game-over text.
     if game.player.state == PlayerState::Dead {
         return;
     }
     if game.flags.contains("hub") {
-        hub_hud(quads, game, atlas);
+        hub_hud(quads, game, camera, atlas);
         return;
     }
     let player = &game.player;
@@ -1584,7 +1853,11 @@ fn hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas) {
         font(quads, atlas, &value, x + 16.0, 8.0, 1.0, WHITE, "sFont");
     }
     sprite(quads, atlas, "sHoldItemIcon", 0.0, 8.0, 24.0, false, WHITE);
-    if let Some(held) = player.held.and_then(|id| game.world.entity(id)) {
+    if let Some(held) = player
+        .held
+        .and_then(|id| game.world.entity(id))
+        .filter(|entity| entity.engine_active)
+    {
         if let Some(name) = entity_sprite(atlas, held) {
             sprite(quads, atlas, name, 0.0, 16.0, 32.0, false, WHITE);
         }
@@ -1680,6 +1953,683 @@ fn hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas) {
 mod tests {
     use super::*;
     use spelunky_core::RulesPreset;
+
+    fn source_draw_room() -> Game {
+        let mut level = spelunky_core::level::Level::default();
+        level.tiles[8 * 40 + 4] = '@';
+        for x in 0..40 {
+            level.tiles[10 * 40 + x] = '1';
+        }
+        for y in 5..10 {
+            level.tiles[y * 40 + 9] = '1';
+        }
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.load_custom(&level, "source-draw-order", "");
+        game
+    }
+
+    #[test]
+    fn actual_snake_whip_kill_draws_opaque_blood_at_fractional_refresh() {
+        use spelunky_core::InputFrame;
+
+        let atlas = Atlas::load().unwrap();
+        let mut level = spelunky_core::level::Level::default();
+        level.tiles[8 * 40 + 4] = '@';
+        level.tiles[8 * 40 + 6] = 'n';
+        for x in 0..40 {
+            level.tiles[9 * 40 + x] = '1';
+        }
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.load_custom(&level, "blood-draw", "");
+        let snake = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oSnake")
+            .unwrap()
+            .id;
+        game.step(&InputFrame {
+            right: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+
+        let mut blood_draw_ticks = 0;
+        let mut frames = std::collections::BTreeSet::new();
+        let mut saw_trail = false;
+        for _ in 0..30 {
+            let draw = game.presentation();
+            let blood: Vec<_> = draw
+                .world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.engine_active && entity.object == "oBlood")
+                .collect();
+            if !blood.is_empty() {
+                blood_draw_ticks += 1;
+            }
+            saw_trail |= draw.world.entities.iter().any(|entity| {
+                entity.alive && entity.engine_active && entity.object == "oBloodTrail"
+            });
+            let hash = game.state_hash();
+            let draw_hash = draw.state_hash();
+            for entity in blood {
+                let frame = atlas.sprite("sBlood", entity.animation).unwrap();
+                frames.insert(entity.animation.floor() as usize);
+                let atlas_x = (frame.uv[0] * atlas.width as f32).round() as usize;
+                let atlas_y = (frame.uv[1] * atlas.height as f32).round() as usize;
+                let mut red_texels = 0;
+                for y in atlas_y..atlas_y + frame.size[1] as usize {
+                    for x in atlas_x..atlas_x + frame.size[0] as usize {
+                        let offset = (y * atlas.width as usize + x) * 4;
+                        let pixel = &atlas.rgba()[offset..offset + 4];
+                        if pixel[3] != 0 {
+                            assert_eq!(pixel[3], 255);
+                            assert!(pixel[0] > pixel[1] && pixel[0] > pixel[2]);
+                            red_texels += 1;
+                        }
+                    }
+                }
+                assert!(
+                    red_texels >= 17,
+                    "all original blood frames contain opaque red"
+                );
+                for alpha in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                    let quads = game_scene(&game, alpha, false, &atlas);
+                    let position = entity_position(draw, entity, alpha);
+                    let camera = interpolated(draw.previous_camera, draw.camera, alpha);
+                    let expected = [
+                        (position.x - camera.x) as f32 - frame.origin[0],
+                        (position.y - camera.y) as f32 - frame.origin[1],
+                        frame.size[0],
+                        frame.size[1],
+                    ];
+                    let quad = quads
+                        .iter()
+                        .find(|quad| quad.uv == frame.uv && quad.rect == expected)
+                        .expect("natural death blood has its own interpolated scene quad");
+                    assert_eq!(quad.color, WHITE);
+                    assert_eq!(quad.blend, QuadBlend::Alpha);
+                    assert!(quad.rect[0] >= 0.0 && quad.rect[0] + quad.rect[2] <= 320.0);
+                    assert!(quad.rect[1] >= 0.0 && quad.rect[1] + quad.rect[3] <= 240.0);
+                    assert_eq!(game.state_hash(), hash);
+                    assert_eq!(game.presentation().state_hash(), draw_hash);
+                }
+            }
+            game.step(&InputFrame {
+                right: true,
+                ..Default::default()
+            });
+        }
+        assert!(
+            game.world.entity(snake).is_none(),
+            "actual player whip kills the snake"
+        );
+        assert!(
+            blood_draw_ticks >= 10,
+            "blood remains visible across actual Draw phases"
+        );
+        assert_eq!(frames, [0, 1, 2].into_iter().collect());
+        assert!(saw_trail, "actual blood alarms also produce visible trails");
+    }
+
+    #[test]
+    fn actual_animation_end_destruction_keeps_the_last_source_draw_frame() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = source_draw_room();
+        let id = game.spawn("oPoof", Vec2::new(112.0, 80.0));
+        for tick in 1..=15 {
+            game.step(&spelunky_core::InputFrame::default());
+            let draw = game.presentation().world.entity(id).unwrap();
+            assert_eq!(draw.sprite, "sPoof");
+            assert!((draw.animation - f64::from(tick - 1) * 0.4).abs() < 0.00001);
+            let frame = atlas.sprite("sPoof", draw.animation).unwrap();
+            let hash = game.state_hash();
+            let draw_hash = game.presentation().state_hash();
+            for alpha in [0.0, 0.5, 1.0] {
+                let quads = game_scene(&game, alpha, false, &atlas);
+                assert!(quads.iter().any(|quad| quad.uv == frame.uv));
+                assert_eq!(game.state_hash(), hash);
+                assert_eq!(game.presentation().state_hash(), draw_hash);
+            }
+        }
+        assert!(game.world.entity(id).is_none(), "source AnimationEnd ran");
+        assert!(game.presentation().world.entity(id).is_some());
+        game.step(&spelunky_core::InputFrame::default());
+        assert!(game.presentation().world.entity(id).is_none());
+        let last_frame = atlas.sprite("sPoof", 5.0).unwrap();
+        assert!(
+            game_scene(&game, 1.0, false, &atlas)
+                .iter()
+                .all(|quad| quad.uv != last_frame.uv)
+        );
+    }
+
+    #[test]
+    fn input_skipped_intro_dummy_uses_source_draw_phase_at_fractional_refresh() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        spelunky_core::opening::begin_intro(&mut game);
+        game.step(&spelunky_core::InputFrame {
+            attack_pressed: true,
+            ..Default::default()
+        });
+        for _ in 0..60 {
+            game.step(&spelunky_core::InputFrame::default());
+            let Some(draw) = game
+                .presentation()
+                .world
+                .entities
+                .iter()
+                .find(|entity| entity.object == "oPDummy3" && entity.pos.x > 16.0)
+            else {
+                continue;
+            };
+            assert_eq!(draw.sprite, "sRunLeft");
+            let live = game.world.entity(draw.id).unwrap();
+            let mut expected = draw.animation;
+            spelunky_core::animation::advance(
+                &mut expected,
+                draw.image_speed(),
+                catalog::sprite_frame_count(&draw.sprite),
+            );
+            assert!((live.animation - expected).abs() < 0.00001);
+            let frame = atlas.sprite(&draw.sprite, draw.animation).unwrap();
+            let mut uv = frame.uv;
+            uv[0] += uv[2];
+            uv[2] = -uv[2];
+            let hash = game.state_hash();
+            let draw_hash = game.presentation().state_hash();
+            for alpha in [0.0, 0.5, 1.0] {
+                let position = entity_position(game.presentation(), draw, alpha);
+                let quads = game_scene(&game, alpha, false, &atlas);
+                let quad = quads.iter().find(|quad| quad.uv == uv).unwrap();
+                assert_eq!(quad.rect[0], position.x as f32 - 8.0);
+                assert_eq!(game.state_hash(), hash);
+                assert_eq!(game.presentation().state_hash(), draw_hash);
+            }
+            return;
+        }
+        panic!("input skip must naturally start the travelling intro dummy");
+    }
+
+    #[test]
+    fn input_fired_web_cannon_draws_all_source_frames_before_animation_end_birth() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = source_draw_room();
+        let weapon = game.spawn(
+            "oWebCannon",
+            Vec2::new(game.player.pos.x, game.player.pos.y + 2.0),
+        );
+        game.step(&spelunky_core::InputFrame {
+            down: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.held, Some(weapon));
+        game.step(&spelunky_core::InputFrame::default());
+        game.step(&spelunky_core::InputFrame {
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        let ball = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oWebBall")
+            .expect("actual player fire creates source WebBall")
+            .id;
+        let mut visible_frames = Vec::new();
+        for _ in 0..60 {
+            if let Some(draw) = game
+                .presentation()
+                .world
+                .entity(ball)
+                .filter(|entity| entity.sprite == "sWebCreate")
+            {
+                let frame = draw.animation.floor() as u32;
+                visible_frames.push(frame);
+                let uv = atlas.sprite("sWebCreate", draw.animation).unwrap().uv;
+                let hash = game.state_hash();
+                let draw_hash = game.presentation().state_hash();
+                for alpha in [0.0, 0.5, 1.0] {
+                    assert!(
+                        game_scene(&game, alpha, false, &atlas)
+                            .iter()
+                            .any(|quad| quad.uv == uv)
+                    );
+                    assert_eq!(game.state_hash(), hash);
+                    assert_eq!(game.presentation().state_hash(), draw_hash);
+                }
+            }
+            if game.world.entity(ball).is_none() {
+                break;
+            }
+            game.step(&spelunky_core::InputFrame::default());
+        }
+        assert_eq!(visible_frames, vec![0, 1, 2, 3, 4]);
+        assert!(game.world.entity(ball).is_none());
+        let web = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oWeb")
+            .expect("actual AnimationEnd creates source Web")
+            .id;
+        assert!(game.presentation().world.entity(ball).is_some());
+        assert!(game.presentation().world.entity(web).is_none());
+        game.step(&spelunky_core::InputFrame::default());
+        assert!(game.presentation().world.entity(ball).is_none());
+        let draw = game.presentation().world.entity(web).unwrap();
+        let uv = atlas.sprite(&draw.sprite, draw.animation).unwrap().uv;
+        assert!(
+            game_scene(&game, 1.0, false, &atlas)
+                .iter()
+                .any(|quad| quad.uv == uv)
+        );
+    }
+
+    #[test]
+    fn restored_inactive_actors_and_terrain_never_draw_or_supply_light() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world.dark = true;
+        game.world.set_tile(5, 5, "oBrick");
+        game.world.tiles[5 * game.world.width + 5].engine_active = false;
+        for object in ["oLampRed", "oLampItem", "oScarab"] {
+            let id = game.world.spawn(object, Vec2::new(80.0, 80.0));
+            game.world.entity_mut(id).unwrap().engine_active = false;
+        }
+        let metadata = game.world.spawn("oTerrainMetadata", Vec2::new(88.0, 88.0));
+        let metadata = game.world.entity_mut(metadata).unwrap();
+        metadata.engine_active = false;
+        metadata.data.insert("frozen_caveman".into(), 1.0);
+        let game: Game = serde_json::from_str(&serde_json::to_string(&game).unwrap()).unwrap();
+        let hash = game.state_hash();
+        let quads = game_scene(&game, 1.0, false, &atlas);
+        for name in [
+            "sLampRed",
+            "sLampItem",
+            "sScarab",
+            "sBrick",
+            "sFrozenCaveman",
+        ] {
+            let uv = atlas.sprite(name, 0.0).unwrap().uv;
+            assert!(quads.iter().all(|quad| quad.uv != uv), "{name}");
+        }
+        assert_eq!(scene_lights(&game, 1.0).len(), 1);
+        assert_eq!(red_lamp_distances(&game), [None, None]);
+        assert_eq!(game.state_hash(), hash);
+    }
+
+    #[test]
+    fn source_game_over_reveals_score_and_bound_key_hint_at_original_positions() {
+        let atlas = Atlas::load().unwrap();
+        let mut quads = Vec::new();
+        game_over_text(
+            &mut quads,
+            &atlas,
+            0,
+            0,
+            false,
+            false,
+            "PRESS J FOR HIGH SCORES.",
+        );
+        assert!(quads.is_empty());
+        game_over_text(
+            &mut quads,
+            &atlas,
+            1,
+            0,
+            false,
+            false,
+            "PRESS J FOR HIGH SCORES.",
+        );
+        assert_eq!(quads[0].rect, [88.0, 48.0, 16.0, 16.0]);
+        assert!(
+            !quads
+                .iter()
+                .any(|quad| matches!(quad.rect[1], 80.0 | 88.0 | 120.0))
+        );
+        quads.clear();
+        game_over_text(
+            &mut quads,
+            &atlas,
+            3,
+            12300,
+            false,
+            false,
+            "PRESS J FOR HIGH SCORES.",
+        );
+        assert!(quads.iter().any(|quad| quad.rect == [88.0, 80.0, 8.0, 8.0]));
+        assert!(
+            quads
+                .iter()
+                .any(|quad| quad.rect == [88.0, 88.0, 16.0, 16.0] && quad.color == WHITE)
+        );
+        let hint: Vec<_> = quads.iter().filter(|quad| quad.rect[1] == 120.0).collect();
+        assert_eq!(hint.len(), "PRESS J FOR HIGH SCORES.".len());
+        assert_eq!(hint[0].rect[0], 64.0);
+    }
+
+    #[test]
+    fn source_challenge_finish_uses_record_message_without_campaign_score_or_hint() {
+        let atlas = Atlas::load().unwrap();
+        let mut quads = Vec::new();
+        game_over_text(
+            &mut quads,
+            &atlas,
+            3,
+            12300,
+            true,
+            true,
+            "PRESS J FOR HIGH SCORES.",
+        );
+        assert_eq!(quads[0].rect, [88.0, 48.0, 16.0, 16.0]);
+        assert!(
+            !quads
+                .iter()
+                .any(|quad| matches!(quad.rect[1], 88.0 | 120.0))
+        );
+        let record: Vec<_> = quads.iter().filter(|quad| quad.rect[1] == 80.0).collect();
+        assert_eq!(record.len(), "YOU SET A NEW RECORD!".len());
+        assert_eq!(record[0].rect[0], 76.0);
+    }
+
+    #[test]
+    fn moon_challenge_finish_waits_for_negative_source_timer() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.flags.insert("hub_moon".into());
+        game.state = spelunky_core::RunState::Dead;
+        game.game_over.draw_status = 2;
+        for (timer, visible) in [(1.0, false), (0.0, false), (-1.0, true)] {
+            game.data.insert("timer".into(), timer);
+            let mut quads = Vec::new();
+            game_over_overlay(&mut quads, &atlas, &game, "");
+            assert_eq!(!quads.is_empty(), visible);
+        }
+    }
+
+    #[test]
+    fn authored_intro_snapshot_keeps_source_story_and_simulation_stable_at_high_refresh() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        spelunky_core::opening::begin_intro(&mut game);
+        game.opening.as_mut().unwrap().draw_status = 2;
+        let lines = game.opening.as_ref().unwrap().lines.clone();
+        let hash = game.state_hash();
+        for alpha in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let quads = game_scene(&game, alpha, false, &atlas);
+            assert_eq!(
+                quads[0].uv,
+                atlas.sprite("backgroundNight", 0.0).unwrap().uv
+            );
+            let story: Vec<_> = quads
+                .iter()
+                .filter(|quad| {
+                    matches!(quad.rect[1], 100.0 | 116.0)
+                        && quad.rect[2] == 8.0
+                        && quad.rect[3] == 8.0
+                })
+                .collect();
+            assert_eq!(story.len(), lines[0].len() + lines[1].len());
+            assert!(
+                !quads
+                    .iter()
+                    .any(|quad| quad.uv == atlas.sprite("sHeart", 0.0).unwrap().uv)
+            );
+            assert_eq!(game.state_hash(), hash);
+        }
+    }
+
+    #[test]
+    fn reading_game_over_countup_never_advances_its_counter_or_source_alarms() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.state = spelunky_core::RunState::Dead;
+        game.game_over.draw_status = 3;
+        game.game_over.money_count = 12300;
+        game.player.money = 23000;
+        game.alarms[0] = 10;
+        let hash = game.state_hash();
+        for _ in 0..8 {
+            let mut quads = Vec::new();
+            game_over_overlay(&mut quads, &atlas, &game, "PRESS J FOR HIGH SCORES.");
+            assert!(!quads.is_empty());
+            assert_eq!(game.state_hash(), hash);
+        }
+    }
+
+    #[test]
+    fn source_dialogue_preserves_two_independent_lines_colors_and_full_size_font() {
+        let atlas = Atlas::load().unwrap();
+        let mut quads = Vec::new();
+        source_message(
+            &mut quads,
+            &atlas,
+            "WELCOME!",
+            "PRESS P TO PURCHASE.",
+            false,
+        );
+        assert_eq!(quads[0].rect, [128.0, 216.0, 8.0, 8.0]);
+        assert_eq!(quads[0].color, WHITE);
+        assert_eq!(quads[8].rect, [80.0, 224.0, 8.0, 8.0]);
+        assert_eq!(quads[8].color, [1.0, 1.0, 0.0, 1.0]);
+        assert_eq!(quads.len(), "WELCOME!".len() + "PRESS P TO PURCHASE.".len());
+        quads.clear();
+        source_message(&mut quads, &atlas, "", "TRY THE ROPE!", true);
+        assert!(quads.iter().all(|quad| quad.color == WHITE));
+        assert!(quads.iter().all(|quad| quad.rect[1] == 224.0));
+    }
+
+    #[test]
+    fn intro_story_reveals_source_lines_over_the_black_fade() {
+        let atlas = Atlas::load().unwrap();
+        let lines = [
+            "AS THE MOON BURNED BRIGHT ABOVE,".into(),
+            "I SQUINTED INTO THE DARKNESS,".into(),
+            "AND THAT'S WHEN IT ALL STARTED.".into(),
+        ];
+        let mut quads = Vec::new();
+        intro_narrative(&mut quads, &atlas, 2, 1.0, &lines);
+        assert_eq!(quads[0].rect, [0.0, 0.0, 320.0, 240.0]);
+        assert_eq!(quads[0].color, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(quads[1].rect[1], 100.0);
+        assert!(quads.iter().any(|quad| quad.rect[1] == 116.0));
+        assert!(!quads.iter().any(|quad| quad.rect[1] == 132.0));
+        assert!(quads.iter().skip(1).all(|quad| quad.color == WHITE));
+        quads.clear();
+        intro_narrative(&mut quads, &atlas, -1, 0.5, &lines);
+        assert_eq!(quads.len(), 1, "travelling actor stage hides narrative");
+    }
+
+    #[test]
+    fn title_presentation_credit_retains_source_overlay_alpha() {
+        let atlas = Atlas::load().unwrap();
+        let mut quads = Vec::new();
+        title_opening_overlay(&mut quads, &atlas, 1, 0.5);
+        assert_eq!(quads[0].color, [0.0, 0.0, 0.0, 0.5]);
+        assert_eq!(quads[1].rect, [88.0, 48.0, 8.0, 8.0]);
+        assert!(
+            quads
+                .iter()
+                .skip(1)
+                .all(|quad| quad.color == [1.0, 1.0, 1.0, 0.5])
+        );
+        quads.clear();
+        title_opening_overlay(&mut quads, &atlas, 2, 0.0);
+        assert!(quads.is_empty());
+    }
+
+    #[test]
+    fn source_opening_fades_interpolate_real_snapshots_without_advancing_simulation() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        spelunky_core::opening::begin_intro(&mut game);
+        let opening = game.opening.as_mut().unwrap();
+        opening.draw_status = 0;
+        opening.previous_fade_level = 0.8;
+        opening.fade_level = 0.4;
+        let hash = game.state_hash();
+        for (alpha, opacity) in [(0.0, 0.8), (0.5, 0.6), (1.0, 0.4)] {
+            let quads = game_scene(&game, alpha, false, &atlas);
+            let overlay = quads.last().unwrap();
+            assert_eq!(overlay.rect, [0.0, 0.0, 320.0, 240.0]);
+            assert!((overlay.color[3] - opacity).abs() < 0.00001);
+            assert_eq!(game.state_hash(), hash);
+        }
+
+        let opening = game.opening.as_mut().unwrap();
+        opening.kind = spelunky_core::opening::OpeningKind::Title;
+        opening.stage = 1;
+        opening.previous_darkness = 0.9;
+        opening.darkness = 0.3;
+        let hash = game.state_hash();
+        for (alpha, opacity) in [(0.0, 0.9), (0.5, 0.6), (1.0, 0.3)] {
+            let quads = game_scene(&game, alpha, false, &atlas);
+            let credit = quads.last().unwrap();
+            assert_eq!(credit.rect[1], 48.0);
+            assert!((credit.color[3] - opacity).abs() < 0.00001);
+            let overlay = &quads[quads.len() - "DEREK YU PRESENTS".len() - 1];
+            assert_eq!(overlay.rect, [0.0, 0.0, 320.0, 240.0]);
+            assert!((overlay.color[3] - opacity).abs() < 0.00001);
+            assert_eq!(game.state_hash(), hash);
+        }
+        // A room discontinuity selects the new authoritative frame even when
+        // the host's accumulator still contains a fractional render interval.
+        game.flags.insert("render_discontinuity".into());
+        let quads = game_scene(&game, 0.0, false, &atlas);
+        assert!((quads.last().unwrap().color[3] - 0.3).abs() < 0.00001);
+    }
+
+    #[test]
+    fn ending_fades_interpolate_real_snapshots_and_snap_at_room_discontinuities() {
+        use spelunky_core::ending::{EndingKind, EndingStage, EndingState};
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        for (kind, stage) in [
+            (EndingKind::Custom, EndingStage::Summary),
+            (EndingKind::Campaign, EndingStage::Credits),
+            (EndingKind::TitleCredits, EndingStage::Exit),
+        ] {
+            let mut ending = EndingState::new(&game, kind, stage);
+            ending.fade_out = true;
+            ending.previous_fade_level = 0.2;
+            ending.fade_level = 0.8;
+            game.ending = Some(ending);
+            game.state = spelunky_core::RunState::Ending;
+            let hash = game.state_hash();
+            for (alpha, opacity) in [(0.0, 0.2), (0.5, 0.5), (1.0, 0.8)] {
+                let quads = game_scene(&game, alpha, false, &atlas);
+                let overlay = quads.last().unwrap();
+                assert_eq!(overlay.rect, [0.0, 0.0, 320.0, 240.0]);
+                assert!((overlay.color[3] - opacity).abs() < 0.00001);
+                assert_eq!(game.state_hash(), hash);
+            }
+            // Core room entry resets the previous snapshot to the new room's
+            // initial opacity, so none of the old room's fade leaks through.
+            game.ending.as_mut().unwrap().previous_fade_level = 0.8;
+            for alpha in [0.0, 0.5, 1.0] {
+                let quads = game_scene(&game, alpha, false, &atlas);
+                assert!((quads.last().unwrap().color[3] - 0.8).abs() < 0.00001);
+            }
+        }
+        game.ending.as_mut().unwrap().previous_fade_level = 0.2;
+        game.flags.insert("render_discontinuity".into());
+        let quads = game_scene(&game, 0.0, false, &atlas);
+        assert!((quads.last().unwrap().color[3] - 0.8).abs() < 0.00001);
+    }
+
+    #[test]
+    fn title_shortcut_house_welcome_uses_source_room_and_camera_gate() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.flags.extend(["hub".into(), "hub_title".into()]);
+        game.player.pos.x = 255.0;
+        game.camera.x = 1.0;
+        let mut quads = Vec::new();
+        hub_hud(&mut quads, &game, game.camera, &atlas);
+        assert_eq!(quads[0].rect, [39.0, 224.0, 8.0, 8.0]);
+        assert_eq!(quads.len(), "WELCOME TO THE SHORTCUT HOUSE!".len());
+        for (x, camera) in [(256.0, 1.0), (255.0, 1.01)] {
+            game.player.pos.x = x;
+            game.camera.x = camera;
+            quads.clear();
+            hub_hud(&mut quads, &game, game.camera, &atlas);
+            assert!(quads.is_empty());
+        }
+    }
+
+    #[test]
+    fn scores_show_zero_time_after_a_win_and_the_source_clear_warning() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.flags.extend(["hub".into(), "hub_scores".into()]);
+        game.player.pos.y = 180.0;
+        game.data.insert("total_wins".into(), 1.0);
+        let button = game
+            .world
+            .spawn("oButtonHighscore", Vec2::new(224.0, 192.0));
+        let block = game.world.spawn("oPushBlock", Vec2::new(176.0, 192.0));
+        let mut quads = Vec::new();
+        hub_hud(&mut quads, &game, game.camera, &atlas);
+        let mut expected = Vec::new();
+        text(
+            &mut expected,
+            &atlas,
+            "TIME:   0:00",
+            128.0,
+            96.0,
+            1.0,
+            WHITE,
+        );
+        let time: Vec<_> = quads.iter().filter(|quad| quad.rect[1] == 96.0).collect();
+        assert_eq!(time.len(), expected.len());
+        for (actual, expected) in time.iter().zip(expected) {
+            assert_eq!(actual.uv, expected.uv);
+        }
+        assert!(quads.iter().any(|quad| quad.rect[1] == 216.0));
+        game.world.entity_mut(block).unwrap().pos.x = 160.0;
+        quads.clear();
+        hub_hud(&mut quads, &game, game.camera, &atlas);
+        assert!(!quads.iter().any(|quad| quad.rect[1] == 216.0));
+        game.world.entity_mut(block).unwrap().pos.x = 176.0;
+        game.world
+            .entity_mut(button)
+            .unwrap()
+            .data
+            .insert("pushed".into(), 1.0);
+        quads.clear();
+        hub_hud(&mut quads, &game, game.camera, &atlas);
+        assert!(!quads.iter().any(|quad| quad.rect[1] == 216.0));
+    }
+
+    #[test]
+    fn scores_button_erases_local_unlock_text_before_persisted_records_reset() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.flags
+            .extend(["hub".into(), "hub_scores".into(), "unlock_sun".into()]);
+        game.player.pos.y = 48.0;
+        game.data.insert("best_money".into(), 500000.0);
+        let mut quads = Vec::new();
+        hub_hud(&mut quads, &game, game.camera, &atlas);
+        assert_eq!(
+            quads.iter().filter(|quad| quad.rect[1] == 112.0).count(),
+            "KEEP YOURSELF AND".len()
+        );
+        // oButtonHighscore zeroes the oHighscores t* copies on its first
+        // pressed Step. Persistent highscore values clear later at counter1.
+        game.flags.insert("hub_records_erased".into());
+        quads.clear();
+        hub_hud(&mut quads, &game, game.camera, &atlas);
+        let locked: Vec<_> = quads.iter().filter(|quad| quad.rect[1] == 112.0).collect();
+        assert_eq!(locked.len(), "LOCKED.".len());
+        assert_eq!(game.data.get("best_money"), Some(&500000.0));
+    }
 
     #[test]
     fn cinematic_room_renders_interpolated_dummy_without_gameplay_player_hud_or_lighting() {
@@ -2095,7 +3045,9 @@ mod tests {
         for step in 1..=10 {
             game.step(&spelunky_core::InputFrame::default());
             let hand = game.world.entity(hand).unwrap();
-            let frame = atlas.sprite("sHintPoint", f64::from(step) * 0.5).unwrap();
+            let draw = game.presentation().world.entity(hand.id).unwrap();
+            assert!((draw.animation - f64::from(step - 1) * 0.5).abs() < 0.00001);
+            let frame = atlas.sprite("sHintPoint", draw.animation).unwrap();
             let quad = game_scene(&game, 1.0, false, &atlas)
                 .into_iter()
                 .find(|q| q.uv == frame.uv)
@@ -2103,6 +3055,9 @@ mod tests {
             assert_eq!(quad.rect, [64.0, 144.0, 16.0, 16.0]);
             assert_eq!(hand.sprite, "sHintPoint");
         }
+        // Check the strict Draw-coordinate gate on a standalone copy of the
+        // captured source frame, without modifying a running frame's snapshot.
+        let mut game = game.presentation().clone();
         let prompt_uv = atlas
             .sprite("sFontSmall", f64::from('P' as u32 - 32))
             .unwrap()
@@ -2479,13 +3434,17 @@ mod tests {
             game.step(&spelunky_core::InputFrame::default());
             let animation = game.world.entity(id).unwrap().animation;
             assert!((animation - f64::from(step) * 0.4).abs() < 0.0001);
-            let uv = atlas.sprite("sLavaTop", animation).unwrap().uv;
+            let draw_animation = game.presentation().world.entity(id).unwrap().animation;
+            assert!((draw_animation - f64::from(step - 1) * 0.4).abs() < 0.0001);
+            let uv = atlas.sprite("sLavaTop", draw_animation).unwrap().uv;
+            let hash = game.state_hash();
             for alpha in [0.0, 0.25, 0.5, 1.0] {
                 assert!(
                     game_scene(&game, alpha, false, &atlas)
                         .iter()
                         .any(|q| q.uv == uv)
                 );
+                assert_eq!(game.state_hash(), hash);
             }
             assert_eq!(game.world.entity(id).unwrap().animation, animation);
         }
@@ -2684,7 +3643,7 @@ mod tests {
         game.data.insert("best_mini1".into(), 42.0);
         game.data.insert("best_money".into(), 200000.0);
         let mut quads = Vec::new();
-        hub_hud(&mut quads, &game, &atlas);
+        hub_hud(&mut quads, &game, game.camera, &atlas);
         let mut expected = Vec::new();
         text(&mut expected, &atlas, "SUN:   42", 128.0, 48.0, 1.0, WHITE);
         assert_eq!(
@@ -2698,7 +3657,7 @@ mod tests {
         game.player.pos.y = 180.0;
         quads.clear();
         expected.clear();
-        hub_hud(&mut quads, &game, &atlas);
+        hub_hud(&mut quads, &game, game.camera, &atlas);
         text(
             &mut expected,
             &atlas,

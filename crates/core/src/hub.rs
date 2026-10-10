@@ -13,6 +13,22 @@ pub enum HubKind {
     Moon,
     Stars,
 }
+/// Source oPlayer1 pExit values for authored start-door descendants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HubPortal {
+    Start,
+    Scores,
+    Tutorial,
+    Title,
+    Shortcut5,
+    Shortcut9,
+    Shortcut13,
+    Sun,
+    Moon,
+    Stars,
+    Change,
+    Change2,
+}
 impl HubKind {
     pub fn key(self) -> &'static str {
         match self {
@@ -60,38 +76,49 @@ fn rooms() -> &'static Rooms {
     })
 }
 
-/// Build authored geometry without consuming gameplay randomness.
-pub fn world(kind: HubKind, unlocks: &BTreeSet<String>) -> World {
-    let room = &rooms().rooms[kind.room()];
+pub(crate) fn authored_world(name: &str) -> World {
+    let room = &rooms().rooms[name];
     let mut world = World::new(
         room.width.div_ceil(16),
         room.height.div_ceil(16),
         Area::Mines,
         0,
     );
-    world.name = kind.room().into();
-    world.entrance = Vec2::new(600.0, 184.0);
+    world.name = name.into();
+    world.entrance = Vec2::new(600., 184.);
     for instance in &room.instances {
         let pos = Vec2::new(instance.x, instance.y);
         if instance.object == "oPlayer1" {
             world.entrance = pos;
             continue;
         }
-        add_instance(&mut world, &instance.object, pos, kind.challenge());
+        add_instance(
+            &mut world,
+            &instance.object,
+            pos,
+            matches!(name, "rSun" | "rMoon" | "rStars"),
+        );
     }
+    world
+}
+
+/// Build authored geometry without consuming gameplay randomness.
+pub fn world(kind: HubKind, unlocks: &BTreeSet<String>) -> World {
+    let mut world = authored_world(kind.room());
     if kind == HubKind::Title {
-        // oTitle Create: initial completed-intro spawn and Tunnel Man shortcuts.
-        world.spawn("oFlare", Vec2::new(600.0, 188.0));
-        // This port enters the completed-intro spawn (source titleStart=2).
+        let title_start = unlocks
+            .iter()
+            .find_map(|flag| {
+                flag.strip_prefix("title_start:")
+                    .and_then(|value| value.parse::<u8>().ok())
+            })
+            .unwrap_or(2);
+        // Start zero has no source Flare/player until the introduction alarms.
+        if title_start != 0 {
+            world.spawn("oFlare", Vec2::new(600.0, 188.0));
+        }
         // Fresh storage alone enables the source onboarding hand and barriers.
         if unlocks.contains("first_time") {
-            let title_start = unlocks
-                .iter()
-                .find_map(|flag| {
-                    flag.strip_prefix("title_start:")
-                        .and_then(|value| value.parse::<u8>().ok())
-                })
-                .unwrap_or(2);
             if matches!(title_start, 1..=3) {
                 let hand = world.spawn("oHintHand", Vec2::new(384.0, 144.0));
                 world
@@ -137,10 +164,25 @@ pub fn world(kind: HubKind, unlocks: &BTreeSet<String>) -> World {
             world.spawn("oXChange2", Vec2::new(32.0, 128.0));
         } else {
             let id = world.spawn("oTunnelMan", Vec2::new(40.0, 136.0));
-            world.entity_mut(id).unwrap().sprite = "sTunnelManRight".into();
+            world.entity_mut(id).unwrap().set_sprite("sTunnelManRight");
         }
     }
     if kind == HubKind::Scores {
+        for (flag, source_flag, y) in [
+            ("new_money", "newMoney", 48.),
+            ("new_kills", "newKills", 64.),
+            ("new_saves", "newSaves", 80.),
+            ("new_time", "newTime", 96.),
+        ] {
+            if unlocks.contains(flag) || unlocks.contains(source_flag) {
+                let id = world.spawn("oNew", Vec2::new(272., y));
+                world
+                    .entity_mut(id)
+                    .unwrap()
+                    .data
+                    .insert("visible".into(), 1.);
+            }
+        }
         for (category, flag, door, x, y) in [
             ("money", "unlock_sun", "oXSun", 32.0, 48.0),
             ("time", "unlock_moon", "oXMoon", 64.0, 80.0),
@@ -157,12 +199,11 @@ pub fn world(kind: HubKind, unlocks: &BTreeSet<String>) -> World {
             };
             if rank > 0 {
                 let id = world.spawn("oTrophy", Vec2::new(x, y - 16.0));
-                world.entity_mut(id).unwrap().sprite = match rank {
+                world.entity_mut(id).unwrap().set_sprite(match rank {
                     3 => "sGoldTrophy",
                     2 => "sSilverTrophy",
                     _ => "sBronzeTrophy",
-                }
-                .into();
+                });
             }
             if unlocks.contains(flag) {
                 world.spawn(door, Vec2::new(x, y));
@@ -521,6 +562,18 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
         game.flags.remove("lake");
         game.flags.remove("cemetary");
         game.flags.remove("cemetery");
+        for flag in [
+            "new_money",
+            "new_time",
+            "new_kills",
+            "new_saves",
+            "newMoney",
+            "newTime",
+            "newKills",
+            "newSaves",
+        ] {
+            game.flags.remove(flag);
+        }
     }
     if kind == HubKind::Scores {
         for flag in ["dark", "darkLevel", "snake_pit", "snakePit"] {
@@ -560,6 +613,7 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
     }
     game.data.insert("hub_draw_status".into(), 0.0);
     if kind.challenge() {
+        game.data.insert("challenge_highscore".into(), 0.);
         game.player.health = 8;
         game.data.insert("points".into(), 0.0);
         game.data.insert("baskets".into(), 0.0);
@@ -584,6 +638,7 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
     if kind == HubKind::Title {
         game.camera = Vec2::new(320.0, 0.0);
         game.previous_camera = game.camera;
+        crate::opening::begin_title(game, title_start.unwrap_or(2));
     }
 }
 fn value(game: &Game, key: &str) -> f64 {
@@ -599,6 +654,9 @@ fn due(game: &mut Game, key: &str) -> bool {
 }
 fn record(game: &mut Game, key: &str, score: f64) {
     let score = score.clamp(0.0, 99.0);
+    let best = value(game, &format!("best_{key}"));
+    game.data
+        .insert("challenge_highscore".into(), f64::from(score > best));
     game.data.insert(key.into(), score);
     game.flags.insert("hub_challenge_finished".into());
     game.events.push(GameEvent::Message(format!(
@@ -607,12 +665,21 @@ fn record(game: &mut Game, key: &str, score: f64) {
     )));
 }
 
+/// oPlayer1's start-door branch, before inventory actions and hurt queries.
+pub(crate) fn player_portal_actions(game: &mut Game, input: &InputFrame) {
+    if (game.flags.contains("hub") || game.flags.contains("tutorial"))
+        && (input.up || input.exit_pressed)
+    {
+        activate_portal(game);
+    }
+}
+
 pub fn tick(game: &mut Game, input: &InputFrame) {
     if !game.flags.contains("hub") {
         // The authored tutorial also contains an oXStart-derived return door.
         // It uses the same portal input branch as the title and records rooms.
-        if game.flags.contains("tutorial") && (input.up || input.exit_pressed) {
-            activate_portal(game);
+        if !game.dispatcher.running {
+            player_portal_actions(game, input);
         }
         return;
     }
@@ -640,10 +707,121 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         HubKind::Stars => stars(game),
         _ => {}
     }
+    if kind == HubKind::Scores {
+        scores_step(game);
+    }
     basketball(game);
     static_targets(game);
-    if input.up || input.exit_pressed {
-        activate_portal(game);
+    if !game.dispatcher.running {
+        player_portal_actions(game, input);
+    }
+}
+
+fn clear_highscores(game: &mut Game) {
+    game.flags.retain(|flag| {
+        !flag.starts_with("trophy_")
+            && !matches!(
+                flag.as_str(),
+                "unlock_sun"
+                    | "unlock_moon"
+                    | "unlock_stars"
+                    | "unlock_damsel"
+                    | "unlock_tunnel_man"
+                    | "shortcut_5"
+                    | "shortcut_9"
+                    | "shortcut_13"
+            )
+    });
+    for key in [
+        "best_money",
+        "best_time",
+        "best_kills",
+        "best_saves",
+        "best_mini1",
+        "best_mini2",
+        "best_mini3",
+        "total_plays",
+        "total_wins",
+        "total_deaths",
+    ] {
+        game.data.insert(key.into(), 0.);
+    }
+    game.data.insert("tunnel1_remaining".into(), 100001.);
+    game.data.insert("tunnel2_remaining".into(), 200001.);
+    game.data.remove("tunnel3_remaining");
+    game.flags.insert("highscores_clear_requested".into());
+    game.data.insert("shake".into(), 60.);
+}
+fn scores_step(game: &mut Game) {
+    let ids: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|e| e.alive && e.object == "oButtonHighscore")
+        .map(|e| e.id)
+        .collect();
+    for id in ids {
+        let mut button = game.world.entity(id).unwrap().clone();
+        // Source rectangle includes both end pixels:226..237,203..207.
+        let region = Rect::new(button.pos.x + 2., button.pos.y + 11., 12., 5.);
+        let pressed = game.world.tiles_collide(region, "oSolid")
+            || game.world.entities.iter().any(|entity| {
+                entity.alive
+                    && crate::catalog::is_a(&entity.object, "oSolid")
+                    && entity.sprite_bounds().intersects(region)
+            });
+        if pressed && button.value("pushed") == 0. {
+            button.data.insert("counter".into(), 20.);
+            game.sound("sndClick", button.pos);
+        }
+        button.data.insert("pushed".into(), f64::from(pressed));
+        if pressed {
+            let counter = button.value("counter");
+            if counter > 0. {
+                button.data.insert("counter".into(), counter - 1.);
+            }
+            if button.value("counter") == 1. {
+                clear_highscores(game);
+                game.sound("sndThump", button.pos);
+            }
+            for e in &mut game.world.entities {
+                if matches!(
+                    e.object.as_str(),
+                    "oTrophy" | "oXSun" | "oXMoon" | "oXStars" | "oXChange"
+                ) {
+                    e.alive = false;
+                }
+            }
+            button.set_sprite("sButtonPushed");
+            for key in [
+                "hub_record_money",
+                "hub_record_time",
+                "hub_record_kills",
+                "hub_record_saves",
+            ] {
+                game.data.insert(key.into(), 0.);
+            }
+            game.flags.insert("hub_records_erased".into());
+        } else {
+            button.set_sprite("sButton");
+        }
+        *game.world.entity_mut(id).unwrap() = button;
+    }
+    // Source Draw mutates this visibility latch only in these two branches.
+    // Keeping it authoritative makes arbitrary presentation rates read-only.
+    let visible = if game.player.pos.y >= 156. {
+        Some(1.)
+    } else if game.player.pos.y >= 128. {
+        Some(0.)
+    } else {
+        None
+    };
+    if let Some(visible) = visible {
+        for e in &mut game.world.entities {
+            if e.object == "oNew" {
+                e.data.insert("visible".into(), visible);
+            }
+        }
     }
 }
 
@@ -673,6 +851,8 @@ fn activate_portal(game: &mut Game) {
         || game.state == RunState::Dead
         || game.player.is_stunned()
         || game.player.attack_timer > 0
+        || game.player.is_exiting()
+        || game.state != RunState::Playing
     {
         return;
     }
@@ -702,53 +882,70 @@ fn activate_portal(game: &mut Game) {
             item.held = false;
         }
     }
-    let destination = match portal.as_str() {
-        "oXScores" => "scores",
-        "oXTutorial" => "tutorial",
-        "oXStart" if game.flags.remove("first_time") => {
+    let portal = match portal.as_str() {
+        "oXScores" => HubPortal::Scores,
+        "oXTutorial" => HubPortal::Tutorial,
+        "oXTitle" => HubPortal::Title,
+        "oXShortcut5" => HubPortal::Shortcut5,
+        "oXShortcut9" => HubPortal::Shortcut9,
+        "oXShortcut13" => HubPortal::Shortcut13,
+        "oXSun" => HubPortal::Sun,
+        "oXMoon" => HubPortal::Moon,
+        "oXStars" => HubPortal::Stars,
+        "oXChange" => HubPortal::Change,
+        "oXChange2" => HubPortal::Change2,
+        _ => HubPortal::Start,
+    };
+    crate::ending::begin_hub_exit(game, portal);
+    game.sound("sndSteps", game.player.pos);
+}
+
+/// Animation End commits the source pExit branch after common collect payout.
+pub fn complete_portal(game: &mut Game, portal: HubPortal) {
+    if matches!(portal, HubPortal::Change | HubPortal::Change2) {
+        let (selected, other) = if portal == HubPortal::Change {
+            ("character_damsel", "character_tunnelman")
+        } else {
+            ("character_tunnelman", "character_damsel")
+        };
+        if !game.flags.remove(selected) {
+            game.flags.remove(other);
+            game.flags.insert(selected.into());
+        }
+        let character = crate::characters::selected(game);
+        let image_index = game.player.animation;
+        crate::characters::apply(game, character);
+        // Source character switches mutate inventory, not image_index. Its
+        // automatic animation pass has already wrapped the Exit index.
+        game.player.animation = image_index;
+        game.player.state = PlayerState::Standing;
+        game.player.vel.x = 0.;
+        game.player.invincible = 0;
+        game.player.data.insert("active".into(), 1.);
+        game.player.data.insert("depth".into(), 50.);
+        game.player.facing = if portal == HubPortal::Change { -1 } else { 1 };
+        game.player.set_sprite(match character {
+            crate::characters::Character::Damsel => "sDamselLeft",
+            crate::characters::Character::TunnelMan => "sTunnelLeft",
+            crate::characters::Character::Explorer => "sStandLeft",
+        });
+        game.state = RunState::Playing;
+        return;
+    }
+    let destination = match portal {
+        HubPortal::Scores => "scores",
+        HubPortal::Tutorial => "tutorial",
+        HubPortal::Start if game.flags.remove("first_time") => {
             game.flags.insert("onboarding_consumed".into());
             "tutorial"
         }
-        "oXTitle" => "title",
-        "oXShortcut5" => "shortcut5",
-        "oXShortcut9" => "shortcut9",
-        "oXShortcut13" => "shortcut13",
-        "oXSun" => "sun",
-        "oXMoon" => "moon",
-        "oXStars" => "stars",
-        "oXChange" | "oXChange2" => {
-            // Debounce held up: source exit animation temporarily disables control.
-            if value(game, "hub_character_cooldown") > game.level_tick as f64 {
-                return;
-            }
-            game.data.insert(
-                "hub_character_cooldown".into(),
-                game.level_tick as f64 + 20.0,
-            );
-            let (selected, other) = if portal == "oXChange" {
-                ("character_damsel", "character_tunnelman")
-            } else {
-                ("character_tunnelman", "character_damsel")
-            };
-            if !game.flags.remove(selected) {
-                game.flags.remove(other);
-                game.flags.insert(selected.into());
-            }
-            let character = if game.flags.contains("character_tunnelman") {
-                crate::characters::Character::TunnelMan
-            } else if game.flags.contains("character_damsel") {
-                crate::characters::Character::Damsel
-            } else {
-                crate::characters::Character::Explorer
-            };
-            crate::characters::apply(game, character);
-            game.player.state = PlayerState::Standing;
-            game.player.vel = Vec2::default();
-            game.player.invincible = 0;
-            game.player.facing = if portal == "oXChange" { -1 } else { 1 };
-            game.sound("sndSteps", game.player.pos);
-            return;
-        }
+        HubPortal::Title => "title",
+        HubPortal::Shortcut5 => "shortcut5",
+        HubPortal::Shortcut9 => "shortcut9",
+        HubPortal::Shortcut13 => "shortcut13",
+        HubPortal::Sun => "sun",
+        HubPortal::Moon => "moon",
+        HubPortal::Stars => "stars",
         _ => "campaign",
     };
     if destination == "tutorial" {
@@ -787,7 +984,7 @@ fn activate_portal(game: &mut Game) {
     }
     game.flags.retain(|f| !f.starts_with("hub_destination:"));
     game.flags.insert(format!("hub_destination:{destination}"));
-    game.sound("sndSteps", game.player.pos);
+    game.state = RunState::Transition;
 }
 fn poof_pair(game: &mut Game, pos: Vec2, horizontal: bool) {
     for sign in [-1.0, 1.0] {
@@ -869,7 +1066,7 @@ fn sun(game: &mut Game) {
         } else {
             let id = game.world.spawn("oBomb", Vec2::new(x, 32.0));
             let e = game.world.entity_mut(id).unwrap();
-            e.sprite = "sBombArmed".into();
+            e.set_sprite("sBombArmed");
             e.timer = 80;
             e.data.insert("armed".into(), 1.0);
             e.data.insert("safe_ticks".into(), 10.0);
@@ -936,7 +1133,7 @@ fn spawn_target(game: &mut Game, x: f64, y: f64) {
     e.data.insert("xMid".into(), x);
     e.data.insert("dir".into(), 1.0);
     if ufo {
-        e.sprite = "sUFO".into();
+        e.set_sprite("sUFO");
     }
 }
 fn moon(game: &mut Game) {
@@ -1186,18 +1383,19 @@ fn basketball(game: &mut Game) {
                         .total_cmp(&b.pos.distance(ball.pos))
                 })
             {
-                basket.sprite = "sBasketSwoosh".into();
+                basket.set_sprite("sBasketSwoosh");
                 basket.animation = 0.0;
             }
         } else if !inside {
             ball.data.insert("goingIn".into(), 0.0);
         }
-        ball.sprite = if ball.held && game.world.solid_at(ball.pos.x, ball.pos.y + 6.0) {
-            "sDribble"
-        } else {
-            "sBasketball"
-        }
-        .into();
+        ball.set_sprite(
+            if ball.held && game.world.solid_at(ball.pos.x, ball.pos.y + 6.0) {
+                "sDribble"
+            } else {
+                "sBasketball"
+            },
+        );
         game.world.entities[index] = ball;
     }
 }
@@ -1302,6 +1500,178 @@ mod tests {
         g.load_hub(kind);
         g
     }
+    fn finish_portal(g: &mut Game) {
+        for _ in 0..40 {
+            if g.state != RunState::Ending {
+                return;
+            }
+            g.step(&InputFrame::default());
+        }
+        panic!("source portal animation did not finish");
+    }
+    #[test]
+    fn challenge_record_snapshot_uses_strict_improvement_after_score_cap() {
+        for (score, best, expected) in [
+            (0., 0., 0.),
+            (12., 12., 0.),
+            (13., 12., 1.),
+            (100., 99., 0.),
+        ] {
+            let mut g = loaded(HubKind::Moon);
+            g.data.insert("best_mini2".into(), best);
+            record(&mut g, "mini2", score);
+            assert_eq!(g.data["challenge_highscore"], expected);
+            assert_eq!(g.data["mini2"], score.min(99.));
+        }
+    }
+    #[test]
+    fn authored_scores_block_inputs_clear_only_after_nineteen_contact_ticks() {
+        let mut g = Game::shell(13, RulesPreset::Classic);
+        g.flags.extend(record_unlocks(200000, Some(600.), 120, 8));
+        for flag in [
+            "shortcut_5",
+            "shortcut_9",
+            "shortcut_13",
+            "new_money",
+            "character_damsel",
+            "first_time",
+        ] {
+            g.flags.insert(flag.into());
+        }
+        g.load_hub(HubKind::Scores);
+        g.data.insert("best_money".into(), 200000.);
+        g.data.insert("best_mini2".into(), 42.);
+        let block = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oPushBlock")
+            .unwrap()
+            .id;
+        let button = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oButtonHighscore")
+            .unwrap()
+            .id;
+        let mut contacts = 0;
+        let mut clicks = 0;
+        let mut thumps = 0;
+        let mut warning_position_seen = false;
+        for _ in 0..500 {
+            g.step(&InputFrame {
+                right: true,
+                ..Default::default()
+            });
+            clicks += g
+                .events
+                .iter()
+                .filter(|event| matches!(event,GameEvent::Sound{name,..} if name=="sndClick"))
+                .count();
+            thumps += g
+                .events
+                .iter()
+                .filter(|event| matches!(event,GameEvent::Sound{name,..} if name=="sndThump"))
+                .count();
+            let pressed = g.world.entity(button).unwrap().value("pushed") != 0.;
+            warning_position_seen |= g.world.entity(block).unwrap().pos.x > 160. && !pressed;
+            if pressed {
+                contacts += 1;
+                assert!(!g.world.entities.iter().any(|e| e.alive
+                    && matches!(
+                        e.object.as_str(),
+                        "oTrophy" | "oXSun" | "oXMoon" | "oXStars" | "oXChange"
+                    )));
+                assert_eq!(g.world.entity(button).unwrap().sprite, "sButtonPushed");
+                if contacts < 19 {
+                    assert!(!g.flags.contains("highscores_clear_requested"));
+                    assert_eq!(g.data["best_money"], 200000.);
+                    assert!(g.flags.contains("unlock_damsel"));
+                }
+            } else {
+                contacts = 0;
+            }
+            if g.flags.contains("highscores_clear_requested") {
+                break;
+            }
+        }
+        assert!(
+            warning_position_seen,
+            "block must cross source warning threshold before button"
+        );
+        assert!(
+            g.flags.contains("highscores_clear_requested"),
+            "natural block route stalled player={:?} block={:?} bounds={:?} solid={} button={:?} counter={}",
+            g.player.pos,
+            g.world.entity(block).unwrap().pos,
+            g.world.entity(block).unwrap().sprite_bounds(),
+            g.world.entity(block).unwrap().solid,
+            g.world.entity(button).unwrap().pos,
+            g.world.entity(button).unwrap().value("counter")
+        );
+        assert_eq!(contacts, 19);
+        assert_eq!((clicks, thumps), (1, 1));
+        assert_eq!(g.data["shake"], 60.);
+        assert_eq!(g.data["best_money"], 0.);
+        assert_eq!(g.data["best_mini2"], 0.);
+        assert_eq!(g.data["tunnel1_remaining"], 100001.);
+        assert_eq!(g.data["tunnel2_remaining"], 200001.);
+        assert!(g.flags.contains("character_damsel"));
+        assert!(g.flags.contains("first_time"));
+        assert!(g.flags.contains("new_money"));
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oNew")
+        );
+        assert!(!g.flags.contains("shortcut_5"));
+        for _ in 0..40 {
+            g.step(&InputFrame::default());
+            assert!(
+                !g.events
+                    .iter()
+                    .any(|event| matches!(event,GameEvent::Sound{name,..} if name=="sndThump"))
+            );
+        }
+    }
+    #[test]
+    fn scores_new_markers_match_source_flags_and_title_clears_them() {
+        let mut g = Game::shell(14, RulesPreset::Classic);
+        for flag in ["new_money", "new_kills", "new_saves", "new_time"] {
+            g.flags.insert(flag.into());
+        }
+        g.load_hub(HubKind::Scores);
+        let positions: Vec<_> = g
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.object == "oNew")
+            .map(|e| e.pos)
+            .collect();
+        assert_eq!(
+            positions,
+            vec![
+                Vec2::new(272., 48.),
+                Vec2::new(272., 64.),
+                Vec2::new(272., 80.),
+                Vec2::new(272., 96.)
+            ]
+        );
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oNew")
+                .all(|e| e.value("visible") == 1.)
+        );
+        g.load_hub(HubKind::Title);
+        assert!(!g.flags.iter().any(|f| f.starts_with("new_")));
+        g.load_hub(HubKind::Scores);
+        assert!(!g.world.entities.iter().any(|e| e.object == "oNew"));
+    }
+
     #[test]
     fn campaign_door_is_reachable_from_source_title_spawn() {
         let mut g = loaded(HubKind::Title);
@@ -1323,6 +1693,9 @@ mod tests {
             up: true,
             ..InputFrame::default()
         });
+        assert!(g.player.is_exiting());
+        assert!(!g.flags.contains("hub_destination:campaign"));
+        finish_portal(&mut g);
         assert!(
             g.flags.contains("hub_destination:campaign"),
             "pos {:?} state {:?}",
@@ -1330,6 +1703,71 @@ mod tests {
             g.player.state
         );
     }
+    #[test]
+    fn natural_title_doors_keep_live_world_and_defer_destination_for_every_character() {
+        for character in [
+            crate::characters::Character::Explorer,
+            crate::characters::Character::Damsel,
+            crate::characters::Character::TunnelMan,
+        ] {
+            for (target, destination) in [(394., "campaign"), (440., "scores")] {
+                let mut g = Game::shell(9, RulesPreset::Classic);
+                crate::characters::apply(&mut g, character);
+                g.load_hub(HubKind::Title);
+                for _ in 0..200 {
+                    if g.player.pos.x <= target {
+                        break;
+                    }
+                    g.step(&InputFrame {
+                        left: true,
+                        ..Default::default()
+                    });
+                }
+                assert!(
+                    (g.player.pos.x - target).abs() <= 3.,
+                    "natural route {character:?} {:?}",
+                    g.player.pos
+                );
+                g.step(&InputFrame {
+                    up: true,
+                    ..Default::default()
+                });
+                assert!(g.player.is_exiting());
+                assert_eq!(g.state, RunState::Ending);
+                assert!(!g.flags.iter().any(|f| f.starts_with("hub_destination:")));
+                let exit_x = g.player.pos.x;
+                let entered = g.level_tick;
+                let flare = g
+                    .world
+                    .entities
+                    .iter()
+                    .find(|e| e.object == "oFlare")
+                    .unwrap()
+                    .id;
+                let age = g.world.entity(flare).unwrap().age;
+                g.step(&InputFrame {
+                    right: true,
+                    jump: true,
+                    jump_pressed: true,
+                    attack: true,
+                    attack_pressed: true,
+                    ..Default::default()
+                });
+                assert!(g.player.is_exiting());
+                assert_eq!(g.player.pos.x, exit_x);
+                assert_eq!(g.player.attack_timer, 0);
+                assert_eq!(g.world.name, "rTitle");
+                assert!(g.world.entity(flare).unwrap().age > age);
+                finish_portal(&mut g);
+                assert!((2..=32).contains(&(g.level_tick - entered)));
+                assert!(g.flags.contains(&format!("hub_destination:{destination}")));
+                assert_eq!(g.state, RunState::Transition);
+                assert_eq!(g.world.name, "rTitle");
+                assert!(g.ending.is_none());
+            }
+        }
+    }
+
     #[test]
     fn unlocked_title_ladder_can_be_climbed_in_integrated_steps() {
         let mut g = Game::shell(7, RulesPreset::Classic);
@@ -1493,6 +1931,11 @@ mod tests {
                 up: true,
                 ..InputFrame::default()
             });
+            assert!(g.player.is_exiting());
+            assert!(
+                !g.flags.contains("character_damsel") && !g.flags.contains("character_tunnelman")
+            );
+            finish_portal(&mut g);
             assert_eq!(g.player.health, health, "{kind:?}");
             assert_eq!(g.player.pos.x, pos.x + 8.0);
             assert_eq!(g.player.facing, facing);
@@ -1607,6 +2050,11 @@ mod tests {
             .unwrap()
             .health = 0;
         sun.step(&InputFrame::default());
+        // The room controller follows Player Step in source object order.
+        // Losing the damsel zeros health now; Player observes death next Step.
+        assert_eq!(sun.player.health, 0);
+        assert_eq!(sun.state, RunState::Playing);
+        sun.step(&InputFrame::default());
         assert_eq!(sun.state, RunState::Dead);
         assert_eq!(sun.data["mini1"], 42.0);
         let mut stars = loaded(HubKind::Stars);
@@ -1640,6 +2088,7 @@ mod tests {
             up: true,
             ..InputFrame::default()
         });
+        finish_portal(&mut g);
         assert!(g.flags.contains("hub_destination:scores"));
         assert!(g.flags.contains("scores_start:2"));
         g.flags.insert("unlock_moon".into());
@@ -1729,6 +2178,7 @@ mod tests {
                         ..InputFrame::default()
                     },
                 );
+                finish_portal(&mut g);
                 assert_eq!(
                     g.flags.contains(&format!("hub_destination:{destination}")),
                     unlocked,
@@ -1781,6 +2231,7 @@ mod tests {
                 ..InputFrame::default()
             },
         );
+        finish_portal(&mut g);
         assert!(g.flags.contains("hub_destination:campaign"));
         assert_eq!(g.world.level, 0);
     }
@@ -1903,6 +2354,7 @@ mod tests {
             up: true,
             ..Default::default()
         });
+        finish_portal(&mut g);
         assert!(g.flags.contains("hub_destination:title"));
         assert!(g.flags.contains("title_start:3"));
         g.load_hub(HubKind::Title);
@@ -2011,6 +2463,7 @@ mod tests {
             up: true,
             ..Default::default()
         });
+        finish_portal(&mut g);
         assert!(g.flags.contains("hub_destination:tutorial"));
         assert!(g.flags.contains("onboarding_consumed"));
         assert!(!g.flags.contains("first_time"));
@@ -2044,6 +2497,7 @@ mod tests {
             up: true,
             ..Default::default()
         });
+        finish_portal(&mut g);
         assert!(g.flags.contains("hub_destination:tutorial"));
         assert!(g.flags.contains("first_time"));
         assert!(!g.flags.contains("onboarding_consumed"));

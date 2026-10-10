@@ -1,6 +1,6 @@
 // Imported Classic levels and real keyboard input; telemetry is read-only.
 import assert from 'node:assert/strict';
-import { snapshot, state, press, returnToEditor, restoreDefaultSettings } from './movement.mjs';
+import { snapshot, state, press, reachTitleMenu, returnToEditor, restoreDefaultSettings } from './movement.mjs';
 
 export function level({ start = 6, floor = '1', health = 9, bombs = 2, ropes = 3, arrow = false,
   next = 'NONE', entrances, exit = 7, targets = [] } = {}) {
@@ -49,7 +49,7 @@ function finiteAndInside(path) {
 
 export async function startCustom(page, name) {
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await state(page, 'Title');
+  await reachTitleMenu(page);
   await page.locator('canvas').focus();
   await press(page, 'ArrowDown', 3);
   await page.keyboard.press('Enter');
@@ -127,7 +127,7 @@ export async function runAdversarialAcceptance({ page, result, screenshot }) {
   await screenshot(page, 'generated-boundary-route', result);
   generated.status = 'passed';
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await state(page, 'Title');
+  await reachTitleMenu(page);
   await page.locator('canvas').focus();
   await page.keyboard.press('F2');
   await state(page, 'Editor');
@@ -243,7 +243,7 @@ export async function runAdversarialAcceptance({ page, result, screenshot }) {
 
   // Reload resets the menu while preserving documents; import a real lethal trap.
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await state(page, 'Title');
+  await reachTitleMenu(page);
   await page.locator('canvas').focus();
   await page.keyboard.press('F2');
   await state(page, 'Editor');
@@ -258,14 +258,27 @@ export async function runAdversarialAcceptance({ page, result, screenshot }) {
   assert.equal(death.hit.screen, 'Playing', 'Death must show its reveal before the menu');
   assert.ok(death.hit.deathTicks < 100);
   await screenshot(page, 'death-reveal', result);
-  await state(page, 'Finished');
+  await page.waitForFunction(() => {
+    const value = window.__spelunkyTest;
+    return value?.state === 'Dead' && value.gameOver.drawStatus >= 3
+      && value.gameOver.moneyCount === value.money;
+  }, null, { timeout: 15000 });
   death.finished = await snapshot(page);
-  assert.ok(death.finished.deathTicks >= 100);
+  assert.equal(death.finished.screen, 'Playing', 'Source Game Over must wait for acknowledgement');
+  assert.equal(death.finished.gameOver.acknowledged, false);
+  assert.equal(death.finished.gameOver.destination, null);
   await page.waitForTimeout(180);
   death.later = await snapshot(page);
   assert.ok(death.later.tick > death.finished.tick, 'The source death menu must leave the corpse/world simulating');
+  assert.equal(death.later.screen, 'Playing', 'Ready Game Over must not acknowledge itself');
+  assert.equal(death.later.gameOver.acknowledged, false);
   await screenshot(page, 'death-menu', result);
   await page.keyboard.press('Enter');
+  await waitTicks(page, death.later.tick, 3);
+  death.enterIgnored = await snapshot(page);
+  assert.equal(death.enterIgnored.screen, 'Playing', 'Unbound Enter must not acknowledge source Game Over');
+  assert.equal(death.enterIgnored.gameOver.acknowledged, false);
+  await page.keyboard.press('x'); // Source hint uses the bound attack action.
   await state(page, 'Editor');
   death.restarted = await playtest(page);
   assert.equal(death.restarted.player.health, 1);

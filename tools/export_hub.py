@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export the exact authored Classic title and challenge-room layouts.
+"""Export the exact authored Classic introduction, title, and challenge-room layouts.
 
 Room and instance creation code is preserved as data, never executed. Instance,
 background, view, and tile ordering matches the source XML. Controller event
@@ -14,7 +14,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 
-ROOM_NAMES = ("rTitle", "rHighscores", "rSun", "rMoon", "rStars")
+ROOM_NAMES = ("rIntro", "rTitle", "rHighscores", "rSun", "rMoon", "rStars")
 
 
 def boolean(element: ET.Element, name: str) -> bool:
@@ -69,6 +69,7 @@ def room(path: Path) -> dict:
         "view_in_room": attributes(node, "viewInRoom"),
         "port_on_screen": attributes(node, "portOnScreen"),
         "object_following": attributes(node, "objectFollowing"),
+        "object_following_name": node.findtext("objectFollowing", "") or "",
     } for node in root.findall("views/view")]
     tiles = []
     for node in root.findall("tiles/tile"):

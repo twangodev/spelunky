@@ -63,7 +63,7 @@ pub(super) fn stamp_at(
                     _ => "oTemple",
                 };
                 world.set_tile(tx, ty + 1, floor);
-                let id = spawn(world, if is_start { "oEntrance" } else { "oExit" }, p);
+                let id = spawn(world, rng, if is_start { "oEntrance" } else { "oExit" }, p);
                 if is_start {
                     world.entrance = offset(p, 8.0, 8.0);
                 } else {
@@ -87,19 +87,19 @@ pub(super) fn stamp_at(
                     (_, _, b'L') => "oLadderOrange",
                     _ => "oLadderTop",
                 };
-                climbable(world, tx, ty, object, p);
+                climbable(world, rng, tx, ty, object, p);
             }
             b'7' => {
                 if (world.area == Area::Ice && !yeti) || rng.chance(1, 3) {
-                    spawn(world, "oSpikes", p);
+                    spawn(world, rng, "oSpikes", p);
                 }
             }
             b'4' => {
                 if world.area == Area::Jungle || rng.chance(1, 4) {
-                    spawn(world, "oPushBlock", p);
+                    spawn(world, rng, "oPushBlock", p);
                 }
             }
-            b'x' if world.area != Area::Boss => altar(world, p, true),
+            b'x' if world.area != Area::Boss => altar(world, rng, p, true),
             b'I' => {
                 let dy = if world.area == Area::Boss {
                     rng.range(1);
@@ -109,7 +109,7 @@ pub(super) fn stamp_at(
                 } else {
                     12.0
                 };
-                spawn(world, "oGoldIdol", offset(p, 16.0, dy));
+                spawn(world, rng, "oGoldIdol", offset(p, 16.0, dy));
             }
             b'.' if world.area != Area::Boss => {
                 if !occupied {
@@ -139,7 +139,7 @@ pub(super) fn stamp_at(
                     .insert("terrain_sprite".into(), "sIceBlock".into());
             }
             b'K' if world.area != Area::Boss => {
-                let id = spawn(world, "oShopkeeper", p);
+                let id = spawn(world, rng, "oShopkeeper", p);
                 world
                     .entity_mut(id)
                     .unwrap()
@@ -147,12 +147,13 @@ pub(super) fn stamp_at(
                     .insert("style".into(), shop_type.into());
             }
             b'k' if world.area != Area::Boss => {
-                let id = spawn(world, "oSign", p);
+                let id = spawn(world, rng, "oSign", p);
                 world.entity_mut(id).unwrap().sprite = format!("sSign{shop_type}");
             }
             b'l' if world.area != Area::Boss => {
                 spawn(
                     world,
+                    rng,
                     if shop_type == "Kissing" && world.area != Area::Temple && !market {
                         "oLampRed"
                     } else {
@@ -162,12 +163,12 @@ pub(super) fn stamp_at(
                 );
             }
             b'Q' if shop_type == "Craps" && world.area != Area::Boss => {
-                decoration(world, "bgDiceSign", p);
+                decoration(world, rng, "bgDiceSign", p);
             }
             // The coordinator applies run crime/character globals after room
             // stamping, retaining this exact template-authored position.
             b'W' => {
-                let id = decoration(world, "bgWanted", p);
+                let id = decoration(world, rng, "bgWanted", p);
                 world
                     .entity_mut(id)
                     .unwrap()
@@ -177,7 +178,7 @@ pub(super) fn stamp_at(
             b'q' if world.area != Area::Boss => {
                 rng.range(6); // Source's unused dice roll still consumes a draw.
                 let object = high_end(rng);
-                let id = spawn(world, object, offset(p, 8.0, 8.0));
+                let id = spawn(world, rng, object, offset(p, 8.0, 8.0));
                 world
                     .entity_mut(id)
                     .unwrap()
@@ -189,22 +190,22 @@ pub(super) fn stamp_at(
             }
             b'$' if world.area == Area::Ice => shop_item(world, rng, p, shop_type),
             b'd' if world.area == Area::Mines || yeti => {
-                let id = spawn(world, "oDice", offset(p, 8.0, 8.0));
+                let id = spawn(world, rng, "oDice", offset(p, 8.0, 8.0));
                 crate::items::initialize_dice(rng, world.entity_mut(id).unwrap());
             }
             b'u' if !yeti && matches!(world.area, Area::Jungle | Area::Ice | Area::Temple) => {
-                let id = spawn(world, "oDice", offset(p, 8.0, 8.0));
+                let id = spawn(world, rng, "oDice", offset(p, 8.0, 8.0));
                 crate::items::initialize_dice(rng, world.entity_mut(id).unwrap());
             }
             b'z' if market => {
-                let id = spawn(world, "oDice", offset(p, 8.0, 8.0));
+                let id = spawn(world, rng, "oDice", offset(p, 8.0, 8.0));
                 crate::items::initialize_dice(rng, world.entity_mut(id).unwrap());
             }
             b'D' if world.area == Area::Mines || yeti || world.area == Area::Jungle && !market => {
-                sale_damsel(world, p)
+                sale_damsel(world, rng, p)
             }
-            b'!' if world.area == Area::Ice && !yeti => sale_damsel(world, p),
-            b'A' if world.area == Area::Temple => sale_damsel(world, p),
+            b'!' if world.area == Area::Ice && !yeti => sale_damsel(world, rng, p),
+            b'A' if world.area == Area::Temple => sale_damsel(world, rng, p),
             b'b' if world.area != Area::Boss && (world.area != Area::Ice || yeti) => {
                 let tile = if world.area == Area::Temple {
                     "oTemple"
@@ -282,20 +283,20 @@ fn ground(area: Area, yeti: bool, certain: bool, rng: &mut Rng) -> &'static str 
 
 fn mines(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2) {
     match c {
-        b'A' => altar(w, p, false),
+        b'A' => altar(w, r, p, false),
         b'a' => {
-            spawn(w, "oChest", p);
+            spawn(w, r, "oChest", p);
         }
         b'B' => {
-            spawn(w, "oGiantTikiHead", offset(p, 16.0, 12.0));
-            let body = decoration(w, "bgTiki", offset(p, 0.0, 32.0));
+            spawn(w, r, "oGiantTikiHead", offset(p, 16.0, 12.0));
+            let body = decoration(w, r, "bgTiki", offset(p, 0.0, 32.0));
             w.entity_mut(body)
                 .unwrap()
                 .data
                 .insert("depth".into(), 10001.0);
             for (dx, source_y) in [(32.0, 0.0), (-16.0, 16.0)] {
                 let source_x = f64::from(r.range(3)) * 16.0;
-                let arm = decoration(w, "bgTikiArms", offset(p, dx, 32.0));
+                let arm = decoration(w, r, "bgTikiArms", offset(p, dx, 32.0));
                 let arm = w.entity_mut(arm).unwrap();
                 for (key, value) in [
                     ("depth", 10001.0),
@@ -310,20 +311,20 @@ fn mines(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2) {
         }
         b's' => {
             if r.chance(1, 10) {
-                spawn(w, "oSnake", p);
+                spawn(w, r, "oSnake", p);
             } else if r.chance(1, 2) {
                 w.set_tile(x, y, "oBrick");
             }
         }
         b'S' => {
-            spawn(w, "oSnake", p);
+            spawn(w, r, "oSnake", p);
         }
         b'T' => {
-            spawn(w, "oRubyBig", offset(p, 8.0, 8.0));
+            spawn(w, r, "oRubyBig", offset(p, 8.0, 8.0));
         }
         b'M' => {
             w.set_tile(x, y, "oBrick");
-            free_item(w, "oMattock", offset(p, 8.0, 8.0));
+            free_item(w, r, "oMattock", offset(p, 8.0, 8.0));
         }
         _ => {}
     }
@@ -346,45 +347,45 @@ fn jungle(
         }
         b'3' if !occupied => {
             if r.chance(1, 2) {
-                spawn(w, "oWaterSwim", p);
+                spawn(w, r, "oWaterSwim", p);
             } else {
                 w.set_tile(x, y, "oLush");
             }
         }
         b's' => {
-            spawn(w, "oSpikes", p);
+            spawn(w, r, "oSpikes", p);
         }
-        b'G' if market => climbable(w, x, y, "oLadderOrange", p),
-        b'H' if market => climbable(w, x, y, "oLadderTop", p),
+        b'G' if market => climbable(w, r, x, y, "oLadderOrange", p),
+        b'H' if market => climbable(w, r, x, y, "oLadderTop", p),
         b'c' => {
-            spawn(w, "oChest", p);
+            spawn(w, r, "oChest", p);
         }
         b'd' => {
-            spawn(w, "oWaterSwim", p);
-            spawn(w, "oChest", p);
+            spawn(w, r, "oWaterSwim", p);
+            spawn(w, r, "oChest", p);
         }
         b'w' => {
-            spawn(w, "oWaterSwim", p);
+            spawn(w, r, "oWaterSwim", p);
         }
         b'v' if !market => {
-            spawn(w, "oWaterSwim", p);
+            spawn(w, r, "oWaterSwim", p);
             w.set_tile(x, y, "oLush");
         }
         b',' if !market => {
-            spawn(w, "oWaterSwim", p);
+            spawn(w, r, "oWaterSwim", p);
             if r.chance(1, 2) {
                 w.set_tile(x, y, "oLush");
             }
         }
         b'J' if !market => {
-            spawn(w, "oWaterSwim", p);
-            spawn(w, "oJaws", p);
+            spawn(w, r, "oWaterSwim", p);
+            spawn(w, r, "oJaws", p);
         }
         b'C' if !market => {
-            spawn(w, "oCrystalSkull", offset(p, 16.0, 12.0));
+            spawn(w, r, "oCrystalSkull", offset(p, 16.0, 12.0));
         }
         b'A' if market => {
-            let id = spawn(w, "oAnkh", offset(p, 8.0, 8.0));
+            let id = spawn(w, r, "oAnkh", offset(p, 8.0, 8.0));
             w.entity_mut(id)
                 .unwrap()
                 .data
@@ -392,7 +393,7 @@ fn jungle(
             w.entity_mut(id).unwrap().data.insert("forSale".into(), 1.0);
         }
         b'B' => {
-            let id = spawn(w, "oTrapBlock", p);
+            let id = spawn(w, r, "oTrapBlock", p);
             if !market {
                 let idol = w
                     .entities
@@ -408,7 +409,7 @@ fn jungle(
         // rand(1,2) is always nonzero in the original condition: jars are unreachable here.
         b'p' => {
             r.range(2);
-            spawn(w, "oFakeBones", p);
+            spawn(w, r, "oFakeBones", p);
         }
         b'T' => tree(w, r, x, y, p),
         _ => {}
@@ -419,31 +420,31 @@ fn ice(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2, yeti: boo
     if yeti {
         match c {
             b't' if !occupied => {
-                spawn(w, "oThinIce", p);
+                spawn(w, r, "oThinIce", p);
             }
-            b'A' => altar(w, p, false),
+            b'A' => altar(w, r, p, false),
             b'a' => {
-                spawn(w, "oChest", p);
+                spawn(w, r, "oChest", p);
             }
             b'B' => {
-                spawn(w, "oGiantTikiHead", offset(p, 16.0, 12.0));
+                spawn(w, r, "oGiantTikiHead", offset(p, 16.0, 12.0));
             }
             b's' => {
-                spawn(w, "oSpikes", p);
+                spawn(w, r, "oSpikes", p);
             }
             b'S' => {
-                spawn(w, "oSnake", p);
+                spawn(w, r, "oSnake", p);
             }
             b'T' => {
-                spawn(w, "oRubyBig", offset(p, 8.0, 8.0));
+                spawn(w, r, "oRubyBig", offset(p, 8.0, 8.0));
             }
             b'i' => w.set_tile(x, y, "oIce"),
             b'j' if r.chance(1, 2) => w.set_tile(x, y, "oIce"),
             b'Y' => {
-                spawn(w, "oYetiKing", p);
+                spawn(w, r, "oYetiKing", p);
             }
             b'y' => {
-                spawn(w, "oYeti", p);
+                spawn(w, r, "oYeti", p);
             }
             _ => {}
         }
@@ -452,29 +453,29 @@ fn ice(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2, yeti: boo
     match c {
         b'a' => {
             r.range(1);
-            spawn(w, "oChest", p);
+            spawn(w, r, "oChest", p);
         }
         b'Y' => {
-            spawn(w, "oYeti", p);
+            spawn(w, r, "oYeti", p);
         }
-        b'A' => ship(w, x, y, p, "sAlienTop"),
-        b'B' => ship(w, x, y, p, "sAlienFloor"),
+        b'A' => ship(w, r, x, y, p, "sAlienTop"),
+        b'B' => ship(w, r, x, y, p, "sAlienFloor"),
         b'b' => {
             if r.chance(1, 2) {
                 let obj = ground(Area::Ice, false, true, r);
                 w.set_tile(x, y, obj);
             } else {
-                ship(w, x, y, p, "sAlienFloor");
+                ship(w, r, x, y, p, "sAlienFloor");
             }
         }
         b'C' => {
-            ship(w, x, y, p, "sAlienFront");
-            ship(w, x, y + 1, offset(p, 0.0, 16.0), "sAlienFront");
-            ship(w, x, y + 2, offset(p, 0.0, 32.0), "sAlienFront2");
+            ship(w, r, x, y, p, "sAlienFront");
+            ship(w, r, x, y + 1, offset(p, 0.0, 16.0), "sAlienFront");
+            ship(w, r, x, y + 2, offset(p, 0.0, 32.0), "sAlienFront2");
         }
-        b'D' => ship(w, x, y, p, "sAlienFront3"),
+        b'D' => ship(w, r, x, y, p, "sAlienFront3"),
         b'E' => {
-            let id = decoration(w, "bgAlienShip", p);
+            let id = decoration(w, r, "bgAlienShip", p);
             let frame = if r.chance(1, 3) { 1.0 } else { 0.0 };
             w.entity_mut(id)
                 .unwrap()
@@ -482,41 +483,41 @@ fn ice(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2, yeti: boo
                 .insert("variant".into(), frame);
         }
         b'G' => {
-            decoration(w, "bgAlienShip2", p);
+            decoration(w, r, "bgAlienShip2", p);
         }
         b'X' => {
-            spawn(w, "oAlienBoss", p);
+            spawn(w, r, "oAlienBoss", p);
         }
         b'T' => {
             w.set_tile(x, y, "oDark");
-            free_item(w, "oJetpack", offset(p, 8.0, 8.0));
+            free_item(w, r, "oJetpack", offset(p, 8.0, 8.0));
         }
         b't' => {
-            spawn(w, "oBarrierEmitter", p);
+            spawn(w, r, "oBarrierEmitter", p);
         }
         b'c' => {
-            spawn(w, "oThinIce", p);
+            spawn(w, r, "oThinIce", p);
         }
         b'M' if !occupied => {
             for (dx, object) in [(0, "oMoai"), (1, "oMoai2"), (2, "oMoai3")] {
-                let id = spawn(w, object, offset(p, dx as f64 * 16.0, 0.0));
+                let id = spawn(w, r, object, offset(p, dx as f64 * 16.0, 0.0));
                 w.entity_mut(id)
                     .unwrap()
                     .data
                     .insert("invincible".into(), 1.0);
             }
-            let id = spawn(w, "oMoaiInside", offset(p, 16.0, 16.0));
+            let id = spawn(w, r, "oMoaiInside", offset(p, 16.0, 16.0));
             w.entity_mut(id)
                 .unwrap()
                 .data
                 .insert("invincible".into(), 1.0);
-            spawn(w, "oThinIce", offset(p, 16.0, 32.0));
-            let id = spawn(w, "oExit", offset(p, 16.0, 48.0));
+            spawn(w, r, "oThinIce", offset(p, 16.0, 32.0));
+            let id = spawn(w, r, "oExit", offset(p, 16.0, 48.0));
             w.entity_mut(id)
                 .unwrap()
                 .text
                 .insert("type".into(), "Moai Exit".into());
-            free_item(w, "oCrown", offset(p, 24.0, 56.0));
+            free_item(w, r, "oCrown", offset(p, 24.0, 56.0));
         }
         b'm' if !occupied => {
             w.set_tile(x, y, "oDark");
@@ -525,10 +526,10 @@ fn ice(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2, yeti: boo
         b'i' => w.set_tile(x, y, "oIce"),
         b'j' if r.chance(1, 2) => w.set_tile(x, y, "oIce"),
         b'f' => {
-            spawn(w, "oDarkFall", p);
+            spawn(w, r, "oDarkFall", p);
         }
         b'w' => {
-            spawn(w, "oWaterSwim", p);
+            spawn(w, r, "oWaterSwim", p);
         }
         _ => {}
     }
@@ -538,7 +539,7 @@ fn temple(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2, occupi
     match c {
         b'3' if !occupied => {
             if r.chance(1, 2) {
-                spawn(w, "oLava", p);
+                spawn(w, r, "oLava", p);
             } else {
                 w.set_tile(x, y, "oTemple");
             }
@@ -548,11 +549,11 @@ fn temple(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2, occupi
             terrain_treasure(w, x, y, "Big Ruby");
         }
         b'a' => {
-            spawn(w, "oChest", offset(p, 8.0, 8.0));
+            spawn(w, r, "oChest", offset(p, 8.0, 8.0));
         }
         b'c' => {
             let object = if r.chance(1, 2) { "oChest" } else { "oCrate" };
-            spawn(w, object, offset(p, 8.0, 8.0));
+            spawn(w, r, object, offset(p, 8.0, 8.0));
         }
         b't' => {
             let object = if r.chance(1, 120) {
@@ -566,6 +567,7 @@ fn temple(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2, occupi
             };
             spawn(
                 w,
+                r,
                 object,
                 offset(p, 8.0, if object == "oGoldBars" { 8.0 } else { 12.0 }),
             );
@@ -586,6 +588,7 @@ fn temple(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2, occupi
                     }
                     let id = decoration(
                         w,
+                        r,
                         "bgLadyXoc",
                         offset(p, dx as f64 * 16.0, dy as f64 * 16.0),
                     );
@@ -603,25 +606,25 @@ fn temple(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2, occupi
             }
         }
         b';' => {
-            free_item(w, "oDamsel", offset(p, 8.0, 8.0));
-            spawn(w, "oGoldIdol", offset(p, 24.0, 12.0));
+            free_item(w, r, "oDamsel", offset(p, 8.0, 8.0));
+            spawn(w, r, "oGoldIdol", offset(p, 24.0, 12.0));
         }
         b'B' => {
             r.range(1);
-            spawn(w, "oTrapBlock", p);
+            spawn(w, r, "oTrapBlock", p);
         }
         b'C' => {
-            spawn(w, "oCeilingTrap", p);
+            spawn(w, r, "oCeilingTrap", p);
         }
-        b'D' => fake_door(w, p),
+        b'D' => fake_door(w, r, p),
         b'?' => {
-            spawn(w, "oTombLord", p);
+            spawn(w, r, "oTombLord", p);
         }
         b'p' => {
-            spawn(w, "oLampRed", p);
+            spawn(w, r, "oLampRed", p);
         }
         b'w' => {
-            spawn(w, "oLava", p);
+            spawn(w, r, "oLava", p);
         }
         b'd' => w.set_tile(x, y, "oLush"),
         b'e' if r.chance(1, 2) => w.set_tile(x, y, "oLush"),
@@ -634,21 +637,21 @@ fn boss(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2) {
     match c {
         b'a' => {
             r.range(1);
-            spawn(w, "oChest", offset(p, 8.0, 8.0));
+            spawn(w, r, "oChest", offset(p, 8.0, 8.0));
         }
         b'T' => {
             if r.chance(1, 15) {
-                spawn(w, "oChest", offset(p, 8.0, 8.0));
+                spawn(w, r, "oChest", offset(p, 8.0, 8.0));
             } else if r.chance(1, 6) {
-                spawn(w, "oGoldBars", offset(p, 8.0, 8.0));
+                spawn(w, r, "oGoldBars", offset(p, 8.0, 8.0));
             } else if r.chance(1, 6) {
-                spawn(w, "oEmeraldBig", offset(p, 8.0, 12.0));
+                spawn(w, r, "oEmeraldBig", offset(p, 8.0, 12.0));
             } else if r.chance(1, 8) {
-                spawn(w, "oSapphireBig", offset(p, 8.0, 12.0));
+                spawn(w, r, "oSapphireBig", offset(p, 8.0, 12.0));
             } else if r.chance(1, 10) {
-                spawn(w, "oRubyBig", offset(p, 8.0, 12.0));
+                spawn(w, r, "oRubyBig", offset(p, 8.0, 12.0));
             } else if r.chance(1, 10) {
-                spawn(w, "oCrate", offset(p, 8.0, 8.0));
+                spawn(w, r, "oCrate", offset(p, 8.0, 8.0));
             } else if r.chance(1, 10) {
                 w.set_tile(x, y, "oBlock");
             } else {
@@ -656,14 +659,14 @@ fn boss(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2) {
             }
         }
         b't' => {
-            spawn(w, "oThwompTrap", p);
+            spawn(w, r, "oThwompTrap", p);
         }
         b'C' => {
-            spawn(w, "oCeilingTrap", p);
+            spawn(w, r, "oCeilingTrap", p);
         }
-        b'D' => fake_door(w, p),
+        b'D' => fake_door(w, r, p),
         b'w' => {
-            spawn(w, "oWaterSwim", p);
+            spawn(w, r, "oWaterSwim", p);
         }
         _ => {}
     }
@@ -672,8 +675,8 @@ fn boss(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2) {
 fn offset(p: Vec2, x: f64, y: f64) -> Vec2 {
     Vec2::new(p.x + x, p.y + y)
 }
-fn spawn(w: &mut World, object: &str, p: Vec2) -> u64 {
-    let id = w.spawn(object, p);
+fn spawn(w: &mut World, r: &mut Rng, object: &str, p: Vec2) -> u64 {
+    let id = crate::creation::spawn_generated_entity(w, r, object, p);
     let e = w.entity_mut(id).unwrap();
     let sprite = match object {
         "oTreeBranch" => "sTreeBranchRight",
@@ -729,46 +732,46 @@ fn solid_point(world: &World, point: Vec2) -> bool {
     world.solid_point_except(point, 0)
 }
 
-fn climbable(world: &mut World, x: usize, y: usize, object: &str, point: Vec2) {
+fn climbable(world: &mut World, rng: &mut Rng, x: usize, y: usize, object: &str, point: Vec2) {
     // GameMaker can place a ladder atop an already created door support. Keep
     // both collision layers rather than replacing the support with a ladder.
     if world
         .tile(x as i32, y as i32)
         .is_some_and(|tile| tile.is_solid())
     {
-        spawn(world, object, point);
+        spawn(world, rng, object, point);
     } else {
         world.set_tile(x, y, object);
     }
 }
-fn free_item(w: &mut World, object: &str, p: Vec2) {
-    let id = spawn(w, object, p);
+fn free_item(w: &mut World, r: &mut Rng, object: &str, p: Vec2) {
+    let id = spawn(w, r, object, p);
     let e = w.entity_mut(id).unwrap();
     e.data.insert("cost".into(), 0.0);
     e.data.insert("forSale".into(), 0.0);
 }
-fn sale_damsel(w: &mut World, p: Vec2) {
+fn sale_damsel(w: &mut World, r: &mut Rng, p: Vec2) {
     let cost = 15000.0 * w.level as f64;
-    let id = spawn(w, "oDamsel", offset(p, 8.0, 8.0));
+    let id = spawn(w, r, "oDamsel", offset(p, 8.0, 8.0));
     let e = w.entity_mut(id).unwrap();
     e.data.insert("forSale".into(), 1.0);
     e.data.insert("status".into(), 5.0);
     e.state = 5;
     e.data.insert("cost".into(), cost);
 }
-fn fake_door(w: &mut World, p: Vec2) {
-    spawn(w, "oDoor", p);
-    spawn(w, "oTempleFake", p);
-    spawn(w, "oTempleFake", offset(p, 0.0, 16.0));
+fn fake_door(w: &mut World, r: &mut Rng, p: Vec2) {
+    spawn(w, r, "oDoor", p);
+    spawn(w, r, "oTempleFake", p);
+    spawn(w, r, "oTempleFake", offset(p, 0.0, 16.0));
 }
-fn decoration(w: &mut World, bg: &str, p: Vec2) -> u64 {
-    let id = spawn(w, "oGenerationDecoration", p);
+fn decoration(w: &mut World, r: &mut Rng, bg: &str, p: Vec2) -> u64 {
+    let id = spawn(w, r, "oGenerationDecoration", p);
     let e = w.entity_mut(id).unwrap();
     e.sprite = bg.into();
     e.data.insert("decoration".into(), 1.0);
     id
 }
-fn altar(w: &mut World, p: Vec2, sacrifice: bool) {
+fn altar(w: &mut World, r: &mut Rng, p: Vec2, sacrifice: bool) {
     let (left, right) = if sacrifice {
         ("oSacAltarLeft", "oSacAltarRight")
     } else {
@@ -779,8 +782,9 @@ fn altar(w: &mut World, p: Vec2, sacrifice: bool) {
         w.set_tile((q.x / 16.0) as usize, (q.y / 16.0) as usize, object);
     }
     if sacrifice {
-        decoration(w, "bgKaliBody", offset(p, -16.0, -48.0));
-        spawn(w, "oKaliHead", offset(p, 16.0, -64.0));
+        decoration(w, r, "bgKaliBody", offset(p, -16.0, -48.0));
+        let head = spawn(w, r, "oKaliHead", offset(p, 16.0, -64.0));
+        crate::traps::initialize_kali_head(w, r, head);
     }
 }
 
@@ -807,14 +811,14 @@ fn terrain_treasure(w: &mut World, x: usize, y: usize, treasure: &str) {
         .text
         .insert("treasure".into(), treasure.into());
 }
-fn ship(w: &mut World, x: usize, y: usize, p: Vec2, sprite: &str) {
+fn ship(w: &mut World, r: &mut Rng, x: usize, y: usize, p: Vec2, sprite: &str) {
     w.set_tile(x, y, "oAlienShip");
     let id = terrain_property(w, x, y, "alien_ship", 1.0);
     w.entity_mut(id)
         .unwrap()
         .text
         .insert("terrain_sprite".into(), sprite.into());
-    decoration(w, "bgAlienShip3", p);
+    decoration(w, r, "bgAlienShip3", p);
 }
 
 fn tree(w: &mut World, r: &mut Rng, x: usize, y: usize, p: Vec2) {
@@ -842,13 +846,13 @@ fn tree(w: &mut World, r: &mut Rng, x: usize, y: usize, p: Vec2) {
         crate::world_events::initialize_tree(w, x, ty as usize);
         if m < 4 {
             if r.range(5) < 3 && !right {
-                spawn(w, "oTreeBranch", Vec2::new(p.x + 16.0, ty as f64 * 16.0));
+                spawn(w, r, "oTreeBranch", Vec2::new(p.x + 16.0, ty as f64 * 16.0));
                 right = true;
             } else if right {
                 right = false;
             }
             if r.range(5) < 3 && !left {
-                spawn(w, "oTreeBranch", Vec2::new(p.x - 16.0, ty as f64 * 16.0));
+                spawn(w, r, "oTreeBranch", Vec2::new(p.x - 16.0, ty as f64 * 16.0));
                 left = true;
             } else if left {
                 left = false;
@@ -858,7 +862,7 @@ fn tree(w: &mut World, r: &mut Rng, x: usize, y: usize, p: Vec2) {
     }
     let top = Vec2::new(p.x, ty as f64 * 16.0 + 16.0);
     for dx in [-16.0, 16.0] {
-        let id = spawn(w, "oLeaves", offset(top, dx, 0.0));
+        let id = spawn(w, r, "oLeaves", offset(top, dx, 0.0));
         // Create chooses its orientation immediately, using only instances
         // already present. The coordinator applies the cemetery sprite variant
         // before the first frame, without changing these equal-sized masks.
@@ -981,7 +985,7 @@ fn shop_item(w: &mut World, r: &mut Rng, p: Vec2, style: &str) {
         "oRopePile" => 11.0,
         _ => 10.0,
     };
-    let id = spawn(w, object, offset(p, 8.0, dy));
+    let id = spawn(w, r, object, offset(p, 8.0, dy));
     let level = w.level;
     let e = w.entity_mut(id).unwrap();
     let base = match object {
@@ -1021,6 +1025,25 @@ mod tests {
             false,
             "General",
         );
+    }
+
+    #[test]
+    fn generated_damsel_create_precedes_free_and_shop_producer_overrides() {
+        let mut world = World::new(12, 12, Area::Jungle, 5);
+        let mut rng = Rng::new(17);
+        free_item(&mut world, &mut rng, "oDamsel", Vec2::new(40.0, 40.0));
+        sale_damsel(&mut world, &mut rng, Vec2::new(64.0, 32.0));
+        let free = &world.entities[0];
+        let shop = &world.entities[1];
+        for damsel in [free, shop] {
+            assert_eq!(damsel.value("npc_local_created"), 1.0);
+        }
+        assert_eq!(free.value("cost"), 0.0);
+        assert_eq!(free.value("forSale"), 0.0);
+        assert_eq!(shop.value("cost"), 75000.0);
+        assert_eq!(shop.value("forSale"), 1.0);
+        assert_eq!(shop.state, 5);
+        assert_eq!(rng.next_u64(), Rng::new(17).next_u64());
     }
 
     #[test]
@@ -1116,6 +1139,61 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn kali_create_draws_before_following_prize_in_normal_area_alphabets() {
+        for (area, name) in [
+            (Area::Mines, "Mines"),
+            (Area::Jungle, "Jungle"),
+            (Area::Ice, "Ice Caves"),
+            (Area::Temple, "Temple"),
+        ] {
+            // Each source scrRoomGen* creates the head synchronously for x;
+            // its Create rand(1,3) precedes q's unused rand(1,6) and item roll.
+            for seed in [1, 42, 123, 2026] {
+                let mut world = World::new(42, 34, area, 2);
+                world.name = name.into();
+                let mut actual = Rng::new(seed);
+                let mut source = actual.clone();
+                let sprite = format!("sKaliHead{}", source.range(3) + 1);
+                source.range(6);
+                let prize = high_end(&mut source);
+                stamp(
+                    &mut world,
+                    &mut actual,
+                    &format!("xq{:0<78}", ""),
+                    0,
+                    0,
+                    false,
+                    false,
+                    "Craps",
+                );
+                let head = world
+                    .entities
+                    .iter()
+                    .find(|e| e.object == "oKaliHead")
+                    .unwrap();
+                assert_eq!(head.sprite, sprite, "{name}, seed {seed}");
+                assert_eq!(head.value("kali_create_initialized"), 1.0);
+                let head_id = head.id;
+                let generated_prize = world
+                    .entities
+                    .iter()
+                    .find(|e| e.value("inDiceHouse") != 0.0)
+                    .unwrap();
+                assert_eq!(generated_prize.object, prize, "{name}, seed {seed}");
+                // The later dispatcher Create must retain this birth-time
+                // choice and consume no additional generation RNG draw.
+                crate::traps::initialize_kali_head(&mut world, &mut actual, head_id);
+                assert_eq!(
+                    actual.range(100000),
+                    source.range(100000),
+                    "{name}, seed {seed}"
+                );
+                assert_eq!(world.entity(head_id).unwrap().sprite, sprite);
+            }
+        }
     }
 
     #[test]
@@ -1355,7 +1433,7 @@ mod tests {
             ("oTempleFake", false),
         ] {
             let mut w = World::new(42, 34, Area::Mines, 1);
-            spawn(&mut w, object, Vec2::new(16.0, 16.0));
+            spawn(&mut w, &mut Rng::new(0), object, Vec2::new(16.0, 16.0));
             room(&mut w, "1");
             assert_eq!(
                 w.tile(1, 1).unwrap().object.is_empty(),
@@ -1423,7 +1501,12 @@ mod tests {
         use crate::model::{Game, InputFrame, PlayerState, RulesPreset};
         let mut game = Game::shell(0, RulesPreset::Classic);
         game.world = World::new(20, 20, Area::Jungle, 5);
-        let id = spawn(&mut game.world, "oTreeBranch", Vec2::new(80.0, 128.0));
+        let id = spawn(
+            &mut game.world,
+            &mut game.rng,
+            "oTreeBranch",
+            Vec2::new(80.0, 128.0),
+        );
         assert!(!game.world.entity(id).unwrap().solid);
         game.player.pos = Vec2::new(88.0, 148.0);
         game.player.state = PlayerState::Jumping;

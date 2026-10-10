@@ -158,6 +158,7 @@ struct App {
     message: String,
     message_until: f64,
     message_simulated: bool,
+    source_message: Option<spelunky_core::SourceMessage>,
     #[cfg(not(target_arch = "wasm32"))]
     epoch: std::time::Instant,
 }
@@ -166,6 +167,9 @@ impl App {
         let store = Store::load();
         let mut input = InputState::default();
         input.set_bindings(&store.data.settings.bindings);
+        let mut game = Game::shell(wall_seed(), store.data.settings.rules);
+        hydrate_run(&mut game, &store.data);
+        spelunky_core::opening::begin_intro(&mut game);
         Self {
             proxy,
             window: None,
@@ -175,8 +179,8 @@ impl App {
             audio: Audio::new(),
             store,
             timing: HostTiming::default(),
-            game: None,
-            screen: Screen::Title,
+            game: Some(game),
+            screen: Screen::Playing,
             settings_return: Screen::Title,
             selection: 0,
             settings_ui: SettingsUi::new(),
@@ -197,6 +201,7 @@ impl App {
             message: String::new(),
             message_until: 0.,
             message_simulated: false,
+            source_message: None,
             #[cfg(not(target_arch = "wasm32"))]
             epoch: std::time::Instant::now(),
         }
@@ -242,7 +247,13 @@ impl App {
     fn toast(&mut self, message: impl Into<String>) {
         self.message = message.into();
         self.message_simulated = false;
+        self.source_message = None;
         self.message_until = self.now() + 6.;
+    }
+    fn snapshot_lifetime_stats(&mut self) {
+        if let Some(game) = &self.game {
+            capture_lifetime_stats(game, &mut self.store.data);
+        }
     }
     fn settings_changed(&mut self) {
         let settings = &self.store.data.settings;
@@ -266,6 +277,8 @@ impl App {
         }
     }
     fn start_game(&mut self, tutorial: bool) {
+        self.snapshot_lifetime_stats();
+        self.source_message = None;
         let seed = (self.now() * 1_000_000.) as u64 ^ wall_seed();
         let mut game = if tutorial {
             Game::tutorial(seed, self.store.data.settings.rules)
@@ -282,7 +295,22 @@ impl App {
         self.recorded = false;
         self.screen(Screen::Playing);
     }
+    fn start_from_hub(&mut self, tutorial: bool, level: u32) {
+        self.snapshot_lifetime_stats();
+        self.source_message = None;
+        if let Some(game) = &mut self.game {
+            game.start_from_hub(tutorial, level);
+            donation_ui::hydrate(game, &self.store.data.tunnel_remaining);
+        } else {
+            self.start_game(tutorial);
+        }
+        self.editor_play = false;
+        self.recorded = false;
+        self.screen(Screen::Playing);
+    }
     fn open_hub(&mut self, kind: spelunky_core::hub::HubKind) {
+        self.snapshot_lifetime_stats();
+        self.source_message = None;
         if self.game.is_none() {
             self.start_game(false);
         }
@@ -391,9 +419,18 @@ impl App {
                 if self
                     .game
                     .as_ref()
+                    .and_then(|game| game.opening.as_ref())
+                    .is_some_and(|opening| !opening.can_pause)
+                {
+                    self.cinematic_action |= source_start_key(key, true);
+                    return;
+                }
+                if self
+                    .game
+                    .as_ref()
                     .is_some_and(|game| game.state == RunState::Ending)
                 {
-                    self.cinematic_action |= self.pause_key(key) || key == KeyCode::Enter;
+                    self.cinematic_action |= source_start_key(key, true);
                     return;
                 }
                 if self
@@ -401,15 +438,7 @@ impl App {
                     .as_ref()
                     .is_some_and(|game| game.state == RunState::Dead)
                 {
-                    if self.pause_key(key)
-                        || self.action_key("attack", key)
-                        || key == KeyCode::Enter
-                    {
-                        if let Some(game) = &mut self.game {
-                            skip_death_reveal(game);
-                        }
-                        self.input.clear_edges();
-                    }
+                    self.cinematic_action |= source_start_key(key, false);
                     return;
                 }
                 if self.pause_key(key) {
@@ -570,6 +599,8 @@ impl App {
         }
     }
     fn play_custom(&mut self, name: &str, editor: bool) {
+        self.snapshot_lifetime_stats();
+        self.source_message = None;
         let Some(contents) = self.store.data.custom_levels.get(name) else {
             return;
         };
@@ -647,6 +678,8 @@ impl App {
                 Err(error) => self.editor.message(error),
             },
             EditorCommand::Play(level) => {
+                self.snapshot_lifetime_stats();
+                self.source_message = None;
                 let mut game = Game::new(wall_seed(), self.store.data.settings.rules);
                 hydrate_run(&mut game, &self.store.data);
                 load_custom(&mut game, &level, self.editor.level_name(), "");
@@ -659,6 +692,7 @@ impl App {
         }
     }
     fn finish_record(&mut self) {
+        self.snapshot_lifetime_stats();
         let Some(game) = self.game.as_ref() else {
             return;
         };
@@ -672,6 +706,12 @@ impl App {
         if self.editor_play {
             return;
         }
+        self.game
+            .as_mut()
+            .unwrap()
+            .flags
+            .extend(record_improvements(&record, &self.store.data.records));
+        let game = self.game.as_ref().unwrap();
         self.store
             .data
             .unlocks
@@ -718,6 +758,7 @@ impl App {
                 self.open_hub(spelunky_core::hub::HubKind::Scores);
             }
             EndingKind::TitleCredits => {
+                self.snapshot_lifetime_stats();
                 if let Some(game) = &mut self.game {
                     game.flags.remove("app_exit_requested");
                 }
@@ -732,6 +773,48 @@ impl App {
                 }
             }
             EndingKind::Transition => self.transition(),
+            EndingKind::HubPortal => {
+                if self
+                    .game
+                    .as_ref()
+                    .is_some_and(|game| game.state == RunState::Transition)
+                {
+                    self.transition();
+                } else {
+                    if let Some(game) = &mut self.game {
+                        game.ending = None;
+                    }
+                    self.reset_room_timing();
+                }
+            }
+        }
+        true
+    }
+    fn finish_game_over(&mut self) -> bool {
+        use spelunky_core::progression::GameOverDestination;
+        let destination = self
+            .game
+            .as_ref()
+            .and_then(|game| game.game_over.destination);
+        let Some(destination) = destination else {
+            return false;
+        };
+        self.snapshot_lifetime_stats();
+        if let Some(game) = &self.game {
+            capture_challenge_records(game, &mut self.store.data.challenge_records);
+        }
+        if let Err(error) = self.store.save() {
+            self.toast(error);
+        }
+        match destination {
+            GameOverDestination::Editor => self.screen(Screen::Editor),
+            GameOverDestination::CustomLevels => self.screen(Screen::Custom),
+            GameOverDestination::Scores => {
+                if let Some(game) = &mut self.game {
+                    game.flags.insert("reset_run_on_hub".into());
+                }
+                self.open_hub(spelunky_core::hub::HubKind::Scores);
+            }
         }
         true
     }
@@ -761,21 +844,15 @@ impl App {
                 "sun" => self.open_hub(spelunky_core::hub::HubKind::Sun),
                 "moon" => self.open_hub(spelunky_core::hub::HubKind::Moon),
                 "stars" => self.open_hub(spelunky_core::hub::HubKind::Stars),
-                "tutorial" => self.start_game(true),
+                "tutorial" => self.start_from_hub(true, 1),
                 "shortcut5" | "shortcut9" | "shortcut13" => {
                     let level = destination
                         .trim_start_matches("shortcut")
                         .parse::<u32>()
                         .unwrap_or(1);
-                    self.start_game(false);
-                    if let Some(game) = &mut self.game {
-                        game.flags.insert("used_shortcut".into());
-                        game.data.insert("next_level".into(), f64::from(level));
-                        game.next_level();
-                    }
-                    self.reset_timing();
+                    self.start_from_hub(false, level);
                 }
-                _ => self.start_game(false),
+                _ => self.start_from_hub(false, 1),
             }
             return;
         }
@@ -854,6 +931,19 @@ impl App {
                 && self
                     .game
                     .as_ref()
+                    .and_then(|game| game.opening.as_ref())
+                    .is_some_and(|opening| !opening.can_pause)
+            {
+                self.cinematic_action |= matches!(
+                    button,
+                    UiButton::Confirm | UiButton::Cancel | UiButton::Pause
+                );
+                continue;
+            }
+            if self.screen == Screen::Playing
+                && self
+                    .game
+                    .as_ref()
                     .is_some_and(|game| game.state == RunState::Ending)
             {
                 self.cinematic_action |= matches!(
@@ -868,15 +958,7 @@ impl App {
                     .as_ref()
                     .is_some_and(|game| game.state == RunState::Dead)
             {
-                if matches!(
-                    button,
-                    UiButton::Confirm | UiButton::Cancel | UiButton::Pause
-                ) {
-                    if let Some(game) = &mut self.game {
-                        skip_death_reveal(game);
-                    }
-                    self.input.clear_edges();
-                }
+                self.cinematic_action |= button == UiButton::Pause;
                 continue;
             }
             if button == UiButton::Pause && self.screen == Screen::Playing {
@@ -918,13 +1000,6 @@ impl App {
             for _ in 0..frame.ticks {
                 let mut input = self.input.take_tick();
                 apply_cinematic_start(&mut input, &mut self.cinematic_action);
-                if self
-                    .game
-                    .as_ref()
-                    .is_some_and(|game| game.state == RunState::Dead)
-                {
-                    input = spelunky_core::InputFrame::default();
-                }
                 if let Some(game) = &mut self.game {
                     game.step(&input);
                     self.timing.history_ready = true;
@@ -944,12 +1019,33 @@ impl App {
                                     .data
                                     .get("message_timer")
                                     .is_some_and(|timer| *timer > 0.);
+                                self.source_message = self.message_simulated.then(|| {
+                                    let (first, second) =
+                                        message.split_once('\n').unwrap_or((message, ""));
+                                    spelunky_core::SourceMessage {
+                                        first: first.into(),
+                                        second: second.into(),
+                                        ticks: game
+                                            .data
+                                            .get("message_timer")
+                                            .copied()
+                                            .unwrap_or(0.)
+                                            .max(0.)
+                                            as u32,
+                                    }
+                                });
+                            }
+                            GameEvent::Dialogue(message) => {
+                                self.source_message = Some(message.clone());
                             }
                             _ => {}
                         }
                     }
                 }
                 if self.finish_cinematic() {
+                    break;
+                }
+                if self.finish_game_over() {
                     break;
                 }
                 let state = self.game.as_ref().map(|g| g.state);
@@ -967,10 +1063,6 @@ impl App {
                     // Source writes highscores on the lethal frame, before
                     // corpse/world simulation advances the room clock again.
                     self.finish_record();
-                    if self.game.as_ref().is_some_and(death_reveal_ready) {
-                        self.screen(Screen::Finished);
-                        break;
-                    }
                 } else if state == Some(RunState::Won) {
                     self.finish_record();
                     self.open_hub(spelunky_core::hub::HubKind::Scores);
@@ -1009,6 +1101,16 @@ impl App {
         if let Some(game) = &mut self.game {
             consume_onboarding(game, &mut self.store.data);
         }
+        let highscores_reset = self
+            .game
+            .as_mut()
+            .is_some_and(|game| consume_highscores_reset(game, &mut self.store.data));
+        if highscores_reset {
+            if let Err(error) = self.store.save() {
+                self.toast(error);
+            }
+        }
+        self.snapshot_lifetime_stats();
         if let Some(game) = &self.game {
             let previous = self.store.data.unlocks.clone();
             let previous_challenges = self.store.data.challenge_records.clone();
@@ -1016,7 +1118,7 @@ impl App {
             self.store
                 .data
                 .tunnel_remaining
-                .extend(donation_ui::progress(game));
+                .extend(tunnel_progress(game));
             capture_challenge_records(game, &mut self.store.data.challenge_records);
             if game.flags.contains("hub") {
                 self.store
@@ -1053,7 +1155,11 @@ impl App {
         } else {
             "title"
         };
-        if music.is_empty() && self.game.as_ref().is_some_and(|game| game.ending.is_some()) {
+        if music.is_empty()
+            && self.game.as_ref().is_some_and(|game| {
+                game.ending.is_some() || game.opening.is_some() || game.flags.contains("hub")
+            })
+        {
             self.audio.stop_music();
         } else {
             self.audio.music(music);
@@ -1091,10 +1197,12 @@ impl App {
                     .as_ref()
                     .filter(|game| game.state == RunState::Dead)
                 {
-                    text(&mut quads, atlas, "GAME OVER", 88., 48., 1., GOLD);
-                    if game.data.get("death_ticks").copied().unwrap_or(0.) >= 50. {
-                        text(&mut quads, atlas, "FINAL SCORE:", 88., 80., 0.75, GOLD);
-                    }
+                    let hint = source_game_over_hint(
+                        game,
+                        self.editor_play,
+                        &self.input.action_label("attack"),
+                    );
+                    scene::game_over_overlay(&mut quads, atlas, game, &hint);
                 }
             }
             Screen::Donation => {
@@ -1469,7 +1577,32 @@ impl App {
         } else {
             self.now() < self.message_until
         };
-        if !self.message.is_empty() && message_visible {
+        let source_visible = self.source_message.as_ref().is_some_and(|_| {
+            self.screen == Screen::Playing
+                && self.game.as_ref().is_some_and(|game| {
+                    game.data
+                        .get("message_timer")
+                        .is_some_and(|timer| *timer > 0.)
+                })
+        });
+        if source_visible {
+            let message = self.source_message.as_ref().unwrap();
+            let pay = self.input.action_label("pay");
+            scene::source_message(
+                &mut quads,
+                atlas,
+                &message.first.replace("{PAY}", &pay),
+                &message.second.replace("{PAY}", &pay),
+                self.game
+                    .as_ref()
+                    .is_some_and(|game| game.flags.contains("tutorial")),
+            );
+        }
+        if !source_visible
+            && !(self.message_simulated && self.source_message.is_some())
+            && !self.message.is_empty()
+            && message_visible
+        {
             let lines = wrap_message(&self.message, 54);
             let height = lines.len() as f32 * 9. + 8.;
             let top = 240. - height;
@@ -1500,12 +1633,18 @@ impl App {
         if !enabled {
             return;
         }
-        let snapshot = test_snapshot(
+        let mut snapshot = test_snapshot(
             self.screen,
             self.game.as_ref(),
             &self.timing,
             self.store.data.settings.pixel_snap,
         );
+        snapshot["sourceMessage"] = self.source_message.as_ref().map(|message| {
+            serde_json::json!({
+                "first": message.first, "second": message.second,
+                "timer": self.game.as_ref().and_then(|game| game.data.get("message_timer")).copied().unwrap_or(0.),
+            })
+        }).unwrap_or(serde_json::Value::Null);
         if let Ok(value) = js_sys::JSON::parse(&snapshot.to_string()) {
             let _ = js_sys::Reflect::set(&window, &"__spelunkyTest".into(), &value);
         }
@@ -1601,6 +1740,16 @@ fn test_snapshot(
         "deathTicks": game.data.get("death_ticks").copied().unwrap_or(0.),
         "money": player.money,
         "sourceTimeMs": game.source_elapsed_ms(),
+        "opening": game.opening.as_ref().map(|opening| serde_json::json!({
+            "kind": format!("{:?}", opening.kind), "stage": opening.stage,
+            "drawStatus": opening.draw_status, "canPause": opening.can_pause,
+            "playerPresent": opening.player_present, "fadeLevel": opening.fade_level,
+        })),
+        "gameOver": {
+            "drawStatus": game.game_over.draw_status, "moneyCount": game.game_over.money_count,
+            "acknowledged": game.game_over.acknowledged,
+            "destination": game.game_over.destination.map(|destination| format!("{destination:?}")),
+        },
         "ending": game.ending.as_ref().map(|ending| serde_json::json!({
             "kind": format!("{:?}", ending.kind), "stage": format!("{:?}", ending.stage),
             "stageTick": ending.stage_tick, "drawStatus": ending.draw_status,
@@ -1643,7 +1792,30 @@ fn game_music(game: &Game) -> &'static str {
         return match ending.music.as_str() {
             "musVictory" => "victory",
             "musCredits" => "credits",
+            "musTitle" => "title",
+            "musBoss" => "boss",
             _ => "",
+        };
+    }
+    if let Some(opening) = &game.opening {
+        return if opening.kind == spelunky_core::opening::OpeningKind::Title && opening.can_pause {
+            "title"
+        } else {
+            ""
+        };
+    }
+    if game.flags.contains("hub") {
+        return if game.flags.contains("hub_title") {
+            "title"
+        } else if ["hub_sun", "hub_moon", "hub_stars"]
+            .iter()
+            .any(|flag| game.flags.contains(*flag))
+            && game.level_tick >= 100
+            && game.state != RunState::Dead
+        {
+            "boss"
+        } else {
+            ""
         };
     }
     if game.state == RunState::Dead {
@@ -1674,6 +1846,7 @@ fn game_music(game: &Game) -> &'static str {
     }
 }
 fn hydrate_run(game: &mut Game, data: &crate::storage::SaveData) {
+    game.lifetime_stats = data.lifetime_stats.clone();
     donation_ui::hydrate(game, &data.tunnel_remaining);
     game.flags.extend(
         data.unlocks
@@ -1684,17 +1857,83 @@ fn hydrate_run(game: &mut Game, data: &crate::storage::SaveData) {
     if data.first_time {
         game.flags.insert("first_time".into());
     }
-    let character = if game.flags.contains("character_damsel")
-        && game.flags.contains("unlock_damsel")
-    {
-        spelunky_core::characters::Character::Damsel
-    } else if game.flags.contains("character_tunnelman") && game.flags.contains("unlock_tunnel_man")
-    {
-        spelunky_core::characters::Character::TunnelMan
-    } else {
-        spelunky_core::characters::Character::Explorer
-    };
+    let character = spelunky_core::characters::selected(game);
     spelunky_core::characters::apply(game, character);
+}
+fn tunnel_progress(game: &Game) -> std::collections::BTreeMap<String, u32> {
+    let mut progress = donation_ui::progress(game);
+    for (stage, maximum) in [(1, 100_000), (2, 200_000)] {
+        let key = format!("tunnel{stage}_remaining");
+        if game.data.get(&key) == Some(&f64::from(maximum + 1)) {
+            progress.insert(key, maximum + 1);
+        }
+    }
+    progress
+}
+fn capture_lifetime_stats(game: &Game, data: &mut crate::storage::SaveData) -> bool {
+    if data.lifetime_stats == game.lifetime_stats {
+        return false;
+    }
+    data.lifetime_stats = game.lifetime_stats.clone();
+    true
+}
+fn consume_highscores_reset(game: &mut Game, data: &mut crate::storage::SaveData) -> bool {
+    if !game.flags.remove("highscores_clear_requested") {
+        return false;
+    }
+    data.records.clear();
+    data.challenge_records.clear();
+    data.unlocks.retain(|flag| {
+        !flag.starts_with("unlock_")
+            && !flag.starts_with("trophy_")
+            && !flag.starts_with("shortcut_")
+    });
+    data.tunnel_remaining = std::collections::BTreeMap::from([
+        ("tunnel1_remaining".into(), 100_001),
+        ("tunnel2_remaining".into(), 200_001),
+    ]);
+    true
+}
+fn record_improvements(record: &Record, records: &[Record]) -> std::collections::BTreeSet<String> {
+    let previous: Vec<_> = records
+        .iter()
+        .filter(|old| old.rules == record.rules)
+        .collect();
+    let mut flags = std::collections::BTreeSet::new();
+    for (name, current, best) in [
+        (
+            "new_money",
+            record.score,
+            previous.iter().map(|old| old.score).max().unwrap_or(0),
+        ),
+        (
+            "new_kills",
+            record.kills,
+            previous.iter().map(|old| old.kills).max().unwrap_or(0),
+        ),
+        (
+            "new_saves",
+            record.rescues,
+            previous.iter().map(|old| old.rescues).max().unwrap_or(0),
+        ),
+    ] {
+        if current > best {
+            flags.insert(name.into());
+        }
+    }
+    let best_time = previous
+        .iter()
+        .filter(|old| old.won && old.fastest_eligible)
+        .map(|old| old.elapsed_seconds())
+        .min()
+        .unwrap_or(0);
+    if record.won
+        && record.fastest_eligible
+        && (best_time == 0 || record.elapsed_seconds() < best_time)
+    {
+        flags.insert("new_time".into());
+    }
+    flags
 }
 fn consume_onboarding(game: &mut Game, data: &mut crate::storage::SaveData) {
     if game.flags.remove("onboarding_consumed") {
@@ -1707,15 +1946,25 @@ fn prepare_tutorial_return(game: &mut Game) {
     game.flags.insert("title_start:3".into());
     game.flags.insert("reset_run_on_title".into());
 }
-fn death_reveal_ready(game: &Game) -> bool {
-    game.state == RunState::Dead && game.data.get("death_ticks").copied().unwrap_or(0.) >= 100.
-}
 fn source_elapsed_ms(game: &Game) -> u64 {
     game.source_elapsed_ms()
 }
 
 fn apply_cinematic_start(input: &mut spelunky_core::InputFrame, pending: &mut bool) {
     input.start_pressed |= std::mem::take(pending);
+}
+fn source_start_key(key: KeyCode, allow_enter: bool) -> bool {
+    key == KeyCode::Escape || (allow_enter && key == KeyCode::Enter)
+}
+fn source_game_over_hint(game: &Game, editor_play: bool, attack: &str) -> String {
+    let destination = if editor_play || game.flags.contains("editor_test") {
+        "TO EDIT LEVEL."
+    } else if game.flags.contains("custom") {
+        "TO LOAD ANOTHER LEVEL."
+    } else {
+        "FOR HIGH SCORES."
+    };
+    format!("PRESS {attack} {destination}")
 }
 
 fn campaign_record(game: &Game) -> Option<Record> {
@@ -1777,12 +2026,6 @@ fn prepare_challenge_scores(game: &mut Game) {
     };
     game.flags.retain(|flag| !flag.starts_with("scores_start:"));
     game.flags.insert(format!("scores_start:{start}"));
-}
-fn skip_death_reveal(game: &mut Game) {
-    if game.state == RunState::Dead {
-        let elapsed = game.data.entry("death_ticks".into()).or_default();
-        *elapsed = elapsed.max(100.);
-    }
 }
 
 fn runtime_level(level: &spelunky_core::level::Level) -> spelunky_core::level::Level {
@@ -2039,6 +2282,7 @@ impl ApplicationHandler<UserEvent> for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => {
+                self.snapshot_lifetime_stats();
                 let _ = self.store.save();
                 event_loop.exit()
             }
@@ -2138,6 +2382,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.update();
                 if self.exit_requested {
                     self.exit_requested = false;
+                    self.snapshot_lifetime_stats();
                     let _ = self.store.save();
                     event_loop.exit();
                     return;
@@ -2212,6 +2457,108 @@ fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scores_reset_persists_source_sentinels_and_preserves_the_selected_character_and_lifetime_stats()
+     {
+        let mut save = crate::storage::SaveData::default();
+        save.first_time = false;
+        save.lifetime_stats.total_crates = 17;
+        save.unlocks.extend(
+            [
+                "character_tunnelman",
+                "unlock_tunnel_man",
+                "unlock_sun",
+                "trophy_money_3",
+                "shortcut_5",
+            ]
+            .map(str::to_owned),
+        );
+        save.challenge_records.insert("mini1".into(), 42);
+        let mut game = Game::shell(7, save.settings.rules);
+        hydrate_run(&mut game, &save);
+        game.state = RunState::Dead;
+        save.records.push(campaign_record(&game).unwrap());
+        game.data.insert("tunnel1_remaining".into(), 100_001.);
+        game.data.insert("tunnel2_remaining".into(), 200_001.);
+        assert!(!consume_highscores_reset(&mut game, &mut save));
+        assert_eq!(save.records.len(), 1);
+        game.flags.insert("highscores_clear_requested".into());
+        assert!(consume_highscores_reset(&mut game, &mut save));
+        assert!(!consume_highscores_reset(&mut game, &mut save));
+        assert!(save.records.is_empty());
+        assert!(save.challenge_records.is_empty());
+        assert_eq!(
+            save.unlocks,
+            std::collections::BTreeSet::from(["character_tunnelman".into()])
+        );
+        save.tunnel_remaining.extend(tunnel_progress(&game));
+        assert_eq!(save.tunnel_remaining["tunnel1_remaining"], 100_001);
+        assert_eq!(save.tunnel_remaining["tunnel2_remaining"], 200_001);
+        let reopened = crate::storage::SaveData::from_json(&save.to_json().unwrap()).unwrap();
+        let mut next = Game::shell(8, reopened.settings.rules);
+        hydrate_run(&mut next, &reopened);
+        assert_eq!(
+            spelunky_core::characters::selected(&next),
+            spelunky_core::characters::Character::TunnelMan
+        );
+        assert_eq!(next.lifetime_stats.total_crates, 17);
+        assert!(!next.flags.contains("first_time"));
+    }
+    #[test]
+    fn source_record_markers_compare_previous_scores_and_eligible_winning_times() {
+        let old = Record {
+            seed: 1,
+            rules: spelunky_core::RulesPreset::Classic,
+            score: 100,
+            level: 16,
+            ticks: 0,
+            elapsed_ms: Some(500_000),
+            fastest_eligible: true,
+            won: true,
+            kills: 5,
+            rescues: 2,
+        };
+        assert!(record_improvements(&old, std::slice::from_ref(&old)).is_empty());
+        let mut next = old.clone();
+        next.score += 1;
+        next.kills += 1;
+        next.rescues += 1;
+        next.elapsed_ms = Some(499_000);
+        assert_eq!(
+            record_improvements(&next, std::slice::from_ref(&old)),
+            ["new_money", "new_kills", "new_saves", "new_time"]
+                .map(str::to_owned)
+                .into_iter()
+                .collect()
+        );
+        next.fastest_eligible = false;
+        assert!(!record_improvements(&next, std::slice::from_ref(&old)).contains("new_time"));
+        next.fastest_eligible = true;
+        next.won = false;
+        assert!(!record_improvements(&next, std::slice::from_ref(&old)).contains("new_time"));
+        next.won = true;
+        assert!(record_improvements(&next, &[]).contains("new_time"));
+    }
+    #[test]
+    fn lifetime_snapshots_survive_new_runs_without_aggregating_deaths() {
+        use spelunky_core::statistics::{EnemyKill, LifetimeCounter};
+        let mut save = crate::storage::SaveData::default();
+        save.lifetime_stats.enemy_kills[0] = 3;
+        let mut game = Game::shell(7, save.settings.rules);
+        hydrate_run(&mut game, &save);
+        assert_eq!(game.lifetime_stats.enemy_kills[0], 3);
+        game.lifetime_stats.enemy_kill(EnemyKill::Snake);
+        game.lifetime_stats.increment(LifetimeCounter::TotalCrates);
+        assert!(capture_lifetime_stats(&game, &mut save));
+        assert!(!capture_lifetime_stats(&game, &mut save));
+        let reopened = crate::storage::SaveData::from_json(&save.to_json().unwrap()).unwrap();
+        let mut next = Game::shell(8, reopened.settings.rules);
+        hydrate_run(&mut next, &reopened);
+        assert_eq!(next.lifetime_stats, game.lifetime_stats);
+        assert_eq!(next.lifetime_stats.level_deaths, [0; 16]);
+        assert_eq!(next.lifetime_stats.misc_deaths, [0; 12]);
+        assert_eq!(next.lifetime_stats.total_crates, 1);
+    }
     #[test]
     fn browser_snapshot_reports_cinematic_gates_without_advancing_them() {
         use spelunky_core::ending::{EndingKind, EndingStage, EndingState};
@@ -2425,7 +2772,7 @@ mod tests {
         }
     }
     #[test]
-    fn death_reveal_keeps_corpse_and_world_simulating_for_two_fifty_tick_stages() {
+    fn source_game_over_keeps_corpse_and_world_simulating_without_automatic_return() {
         use spelunky_core::{Area, InputFrame, RulesPreset, Vec2, World};
         let mut game = Game::shell(42, RulesPreset::Classic);
         game.world = World::new(30, 20, Area::Mines, 1);
@@ -2439,7 +2786,7 @@ mod tests {
         game.step(&InputFrame::default());
         let lethal_tick = game.tick;
         assert_eq!(game.state, RunState::Dead);
-        assert!(!death_reveal_ready(&game));
+        assert!(game.game_over.destination.is_none());
         assert_eq!(
             game.events
                 .iter()
@@ -2452,7 +2799,8 @@ mod tests {
         for elapsed in 1..=100 {
             game.step(&InputFrame::default());
             assert_eq!(game.tick, lethal_tick + elapsed);
-            assert_eq!(death_reveal_ready(&game), elapsed >= 100);
+            assert_eq!(game.state, RunState::Dead);
+            assert!(game.game_over.destination.is_none());
             assert!(
                 !game
                     .events
@@ -2479,12 +2827,11 @@ mod tests {
     }
 
     #[test]
-    fn entering_finished_cannot_consume_the_same_presentation_frame_twice() {
+    fn source_game_over_return_cannot_consume_the_same_presentation_frame_twice() {
         let mut game = Game::shell(42, spelunky_core::RulesPreset::Classic);
         game.player.health = 0;
         game.step(&spelunky_core::InputFrame::default());
-        game.data.insert("death_ticks".into(), 99.);
-        let tick_before_reveal = game.tick;
+        let tick_before_return = game.tick;
         let mut timing = HostTiming::default();
         timing.reset(1.);
         let now = 1. + 1. / 30.;
@@ -2492,34 +2839,58 @@ mod tests {
         for _ in 0..timing.advance(sampled).ticks {
             game.step(&spelunky_core::InputFrame::default());
         }
-        assert!(death_reveal_ready(&game));
-        assert_eq!(game.tick, tick_before_reveal + 1);
-        // App::screen(Finished) resets timing between the Playing and Finished
-        // update branches, which both see the frame sampled before the change.
+        assert_eq!(game.tick, tick_before_return + 1);
+        // A host route resets timing; an already sampled frame cannot advance
+        // the destination room a second time after that reset.
         timing.reset(now);
         for _ in 0..timing.advance(sampled).ticks {
             game.step(&spelunky_core::InputFrame::default());
         }
-        assert_eq!(game.tick, tick_before_reveal + 1);
+        assert_eq!(game.tick, tick_before_return + 1);
         assert_eq!(timing.alpha(), 1.);
     }
 
     #[test]
-    fn skipping_death_reveal_preserves_the_corpse_and_only_applies_after_death() {
+    fn source_start_acknowledges_game_over_after_hastening_without_a_death_aggregate() {
         let mut game = Game::shell(42, spelunky_core::RulesPreset::Classic);
-        skip_death_reveal(&mut game);
-        assert!(!game.data.contains_key("death_ticks"));
+        let mut save = crate::storage::SaveData::default();
         game.player.health = 0;
         game.step(&spelunky_core::InputFrame::default());
-        let body = (game.player.pos, game.player.vel);
-        let tick = game.tick;
-        skip_death_reveal(&mut game);
-        assert!(death_reveal_ready(&game));
-        assert_eq!((game.player.pos, game.player.vel), body);
-        assert_eq!(game.tick, tick);
+        capture_lifetime_stats(&game, &mut save);
+        assert_eq!(save.lifetime_stats.level_deaths[0], 0);
+        assert_eq!(game.lifetime_stats.level_deaths[0], 0);
+        let mut input = spelunky_core::InputFrame::default();
+        let mut pending = true;
+        apply_cinematic_start(&mut input, &mut pending);
+        game.step(&input);
+        assert!(game.game_over.destination.is_none());
+        assert_eq!(game.lifetime_stats.level_deaths[0], 0);
         game.step(&spelunky_core::InputFrame::default());
-        skip_death_reveal(&mut game);
-        assert_eq!(game.data["death_ticks"], 101.);
+        game.step(&input);
+        assert_eq!(
+            game.game_over.destination,
+            Some(spelunky_core::progression::GameOverDestination::Scores)
+        );
+        assert_eq!(game.lifetime_stats.level_deaths[0], 1);
+        assert!(capture_lifetime_stats(&game, &mut save));
+        let reopened = crate::storage::SaveData::from_json(&save.to_json().unwrap()).unwrap();
+        assert_eq!(reopened.lifetime_stats.level_deaths[0], 1);
+        game.step(&input);
+        assert_eq!(game.lifetime_stats.level_deaths[0], 1);
+    }
+
+    #[test]
+    fn source_game_over_start_uses_escape_without_inventing_an_enter_attack() {
+        assert!(source_start_key(KeyCode::Escape, false));
+        assert!(!source_start_key(KeyCode::Enter, false));
+        assert!(!source_start_key(KeyCode::KeyP, false));
+        assert!(source_start_key(KeyCode::Enter, true));
+        let mut input = spelunky_core::InputFrame::default();
+        let mut pending = source_start_key(KeyCode::Escape, false);
+        apply_cinematic_start(&mut input, &mut pending);
+        assert!(input.start_pressed);
+        assert!(!input.attack_pressed);
+        assert!(!pending);
     }
 
     #[test]
@@ -2659,6 +3030,18 @@ mod tests {
                 );
                 assert_eq!(game.world.name, "next");
                 assert_eq!(game.player.pos, Vec2::new(264., 184.));
+                assert!(!game.player.is_exiting());
+                let spawn_x = game.player.pos.x;
+                for _ in 0..3 {
+                    game.step(&InputFrame {
+                        right: true,
+                        ..Default::default()
+                    });
+                }
+                assert!(
+                    game.player.pos.x > spawn_x,
+                    "Linked-room arrival must restore player movement"
+                );
                 return;
             }
             game.step(&InputFrame {
@@ -2703,7 +3086,7 @@ mod tests {
         hydrate_run(&mut game, &save);
         assert_eq!(
             spelunky_core::characters::selected(&game),
-            spelunky_core::characters::Character::Explorer
+            spelunky_core::characters::Character::TunnelMan
         );
     }
     #[test]
@@ -2748,6 +3131,32 @@ mod tests {
             assert_eq!(game_music(&game), "");
         }
         panic!("Olmec intro never restored player control and boss music");
+    }
+
+    #[test]
+    fn source_opening_and_hub_music_follow_room_alarms() {
+        use spelunky_core::{InputFrame, RulesPreset, hub::HubKind, opening};
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        opening::begin_intro(&mut game);
+        assert_eq!(game_music(&game), "");
+        opening::begin_title(&mut game, 0);
+        for _ in 0..269 {
+            game.step(&InputFrame::default());
+            assert_eq!(game_music(&game), "");
+        }
+        game.step(&InputFrame::default());
+        assert_eq!(game_music(&game), "title");
+        game.load_hub(HubKind::Scores);
+        assert_eq!(game_music(&game), "");
+        for kind in [HubKind::Sun, HubKind::Moon, HubKind::Stars] {
+            game.load_hub(kind);
+            for _ in 0..99 {
+                game.step(&InputFrame::default());
+                assert_eq!(game_music(&game), "");
+            }
+            game.step(&InputFrame::default());
+            assert_eq!(game_music(&game), "boss");
+        }
     }
 
     #[test]

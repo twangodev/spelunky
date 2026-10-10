@@ -99,6 +99,9 @@ pub struct SaveData {
     pub first_time: bool,
     pub settings: Settings,
     pub records: Vec<Record>,
+    /// Original lifetime counters are independent of run records and unlocks.
+    #[serde(default)]
+    pub lifetime_stats: spelunky_core::statistics::LifetimeStats,
     /// Source minigame bests: mini1 = Sun survival seconds, mini2 = Moon archery
     /// hits, mini3 = Stars shopkeeper kills. Unknown keys remain compatible.
     #[serde(default)]
@@ -119,6 +122,7 @@ impl Default for SaveData {
             first_time: true,
             settings: Settings::default(),
             records: Vec::new(),
+            lifetime_stats: Default::default(),
             challenge_records: BTreeMap::new(),
             tunnel_remaining: BTreeMap::new(),
             unlocks: BTreeSet::new(),
@@ -182,8 +186,9 @@ impl SaveData {
             }
         }
         for (key, cost) in [
-            ("tunnel1_remaining", 100_000),
-            ("tunnel2_remaining", 200_000),
+            // scrResetHighscores uses max+1 to defer the first tunnel visit.
+            ("tunnel1_remaining", 100_001),
+            ("tunnel2_remaining", 200_001),
             ("tunnel3_remaining", 300_000),
         ] {
             if self
@@ -191,7 +196,7 @@ impl SaveData {
                 .get(key)
                 .is_some_and(|remaining| *remaining > cost)
             {
-                return Err(format!("{key} cannot exceed its original cost of {cost}"));
+                return Err(format!("{key} cannot exceed its source limit of {cost}"));
             }
         }
         Ok(())
@@ -504,8 +509,8 @@ mod tests {
     #[test]
     fn tunnel_donations_reject_out_of_bounds_values() {
         for (key, limit) in [
-            ("tunnel1_remaining", 100_000),
-            ("tunnel2_remaining", 200_000),
+            ("tunnel1_remaining", 100_001),
+            ("tunnel2_remaining", 200_001),
             ("tunnel3_remaining", 300_000),
         ] {
             for invalid in [
@@ -562,5 +567,39 @@ mod tests {
         assert!(store.save().is_err());
         assert!(store.data.unlocks.contains("earned-this-session"));
         assert!(store.warning.unwrap().contains("Storage access denied"));
+    }
+    #[test]
+    fn lifetime_statistics_migrate_and_preserve_all_89_source_counters() {
+        for json in ["{}", r#"{"version":0}"#, r#"{"version":1}"#] {
+            assert_eq!(
+                SaveData::from_json(json).unwrap().lifetime_stats,
+                spelunky_core::statistics::LifetimeStats::default()
+            );
+        }
+        let mut fields =
+            serde_json::to_value(spelunky_core::statistics::LifetimeStats::default()).unwrap();
+        let mut counter = 0u64;
+        for value in fields.as_object_mut().unwrap().values_mut() {
+            if let serde_json::Value::Array(entries) = value {
+                for entry in entries {
+                    counter += 1;
+                    *entry = counter.into();
+                }
+            } else {
+                counter += 1;
+                *value = counter.into();
+            }
+        }
+        assert_eq!(counter, 89);
+        let mut data = SaveData::default();
+        data.lifetime_stats = serde_json::from_value(fields.clone()).unwrap();
+        let reopened = SaveData::from_json(&data.to_json().unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(reopened.lifetime_stats).unwrap(),
+            fields
+        );
+        let partial = SaveData::from_json(r#"{"lifetime_stats":{"total_crates":17}}"#).unwrap();
+        assert_eq!(partial.lifetime_stats.total_crates, 17);
+        assert_eq!(partial.lifetime_stats.level_deaths, [0; 16]);
     }
 }

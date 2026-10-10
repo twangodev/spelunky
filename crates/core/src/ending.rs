@@ -4,14 +4,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-pub(crate) const EXIT_PHASE_BEFORE_PLAYER_STEP: &str = "exit_phase_before_player_step";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EndingKind {
     Campaign,
     Custom,
     TitleCredits,
     Transition,
+    HubPortal,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EndingStage {
@@ -32,6 +31,8 @@ pub struct EndingState {
     pub draw_status: u8,
     pub money_count: u32,
     pub fade_level: f64,
+    #[serde(default)]
+    pub previous_fade_level: f64,
     pub fade_in: bool,
     pub fade_out: bool,
     pub credits_page: u8,
@@ -46,8 +47,12 @@ pub struct EndingState {
     pub completed_level: u32,
     pub completed_name: String,
     pub music: String,
+    #[serde(default)]
+    pub portal: Option<crate::hub::HubPortal>,
     alarms: [i32; 12],
     actor_alarms: BTreeMap<u64, [i32; 12]>,
+    #[serde(default)]
+    animation_order: Vec<u64>,
     bonus_scheduled: bool,
     hurry_up: bool,
     draw_pos: Vec2,
@@ -71,6 +76,7 @@ impl EndingState {
             draw_status: 0,
             money_count: 0,
             fade_level: 0.,
+            previous_fade_level: 0.,
             fade_in: false,
             fade_out: false,
             credits_page: 0,
@@ -90,8 +96,10 @@ impl EndingState {
                 String::new()
             },
             music: String::new(),
+            portal: None,
             alarms: [-1; 12],
             actor_alarms: BTreeMap::new(),
+            animation_order: Vec::new(),
             bonus_scheduled: false,
             hurry_up: false,
             draw_pos: Vec2::new(100., 83.),
@@ -306,15 +314,15 @@ mod tests {
             let frames = crate::catalog::sprite_frame_count(&g.player.sprite);
             let ticks = ((frames as f64 - 3.5) / 0.5).ceil() as usize;
             for _ in 0..ticks.saturating_sub(1) {
-                tick(&mut g, &InputFrame::default());
+                g.step(&InputFrame::default());
                 assert_eq!(g.ending.as_ref().unwrap().stage, EndingStage::Exit);
             }
-            tick(&mut g, &InputFrame::default());
+            g.step(&InputFrame::default());
             assert_eq!(g.ending.as_ref().unwrap().stage, EndingStage::Chamber);
         }
     }
     #[test]
-    fn natural_right_and_up_walk_wraps_old_run_phase_before_door_animation() {
+    fn natural_right_and_up_walk_preserves_prior_phase_before_exit_animation() {
         let mut g = Game::shell(23, RulesPreset::Classic);
         g.world = World::new(40, 20, Area::Mines, 1);
         for x in 0..40 {
@@ -340,8 +348,8 @@ mod tests {
         }
         assert_eq!(g.state, RunState::Ending);
         assert!(
-            old_phase > old_frames,
-            "fixture must exercise unbounded running phase"
+            old_phase >= 0. && old_phase < old_frames,
+            "the canonical endframe phase already loops the old running sprite"
         );
         let phase = g.player.animation;
         let run_frames = crate::catalog::sprite_frame_count("sRunLeft") as f64;
@@ -603,11 +611,100 @@ mod tests {
         g.step(&InputFrame::default());
         assert!(g.world.entity(heart).is_none());
     }
+    fn activate_fixture_exit(g: &mut Game) {
+        for x in 0..g.world.width {
+            g.world.set_tile(x, 3, "oBlock");
+        }
+        g.player.pos = Vec2::new(40., 40.);
+        g.player.previous_pos = g.player.pos;
+        g.world.spawn("oExit", Vec2::new(32., 32.));
+        g.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        assert_eq!(g.ending.as_ref().unwrap().stage, EndingStage::Exit);
+    }
+    #[test]
+    fn cinematic_animation_keeps_stable_draw_depth_order_across_frames() {
+        let mut g = game();
+        begin_custom(&mut g);
+        let first = g.world.spawn("oPoof", Vec2::new(40., 40.));
+        let later = g.world.spawn("oPoof", Vec2::new(80., 40.));
+        g.world
+            .entity_mut(first)
+            .unwrap()
+            .data
+            .insert("depth".into(), 1.);
+        g.world
+            .entity_mut(later)
+            .unwrap()
+            .data
+            .insert("depth".into(), 100.);
+        g.step(&InputFrame::default());
+        let order = &g.ending.as_ref().unwrap().animation_order;
+        assert!(
+            order.iter().position(|id| *id == later) < order.iter().position(|id| *id == first)
+        );
+        g.world
+            .entity_mut(first)
+            .unwrap()
+            .data
+            .insert("depth".into(), 100.);
+        g.step(&InputFrame::default());
+        let order = &g.ending.as_ref().unwrap().animation_order;
+        assert!(
+            order.iter().position(|id| *id == later) < order.iter().position(|id| *id == first),
+            "equal depths preserve the prior global order rather than reverting to creation order"
+        );
+    }
+    #[test]
+    fn cinematic_draw_view_precedes_actor_animation() {
+        let mut g = game();
+        begin_exit(&mut g, EndingKind::Campaign);
+        until(&mut g, 100, |s| s.stage == EndingStage::Chamber);
+        let id = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oPDummy")
+            .unwrap()
+            .id;
+        let before = g.world.entity(id).unwrap().animation;
+        g.step(&InputFrame::default());
+        assert_eq!(g.presentation().world.entity(id).unwrap().animation, before);
+        assert!(g.presentation().ending.is_some());
+        assert_ne!(g.world.entity(id).unwrap().animation, before);
+    }
+    #[test]
+    fn cinematic_fade_snapshots_tick_start_and_resets_on_room_entry() {
+        let mut g = game();
+        begin_custom(&mut g);
+        assert_eq!(
+            g.ending.as_ref().unwrap().previous_fade_level,
+            g.ending.as_ref().unwrap().fade_level
+        );
+        let before = g.ending.as_ref().unwrap().fade_level;
+        g.step(&InputFrame::default());
+        assert_eq!(g.ending.as_ref().unwrap().previous_fade_level, before);
+        let mut state = g.ending.take().unwrap();
+        state.fade_level = 0.37;
+        state.previous_fade_level = 0.62;
+        enter(&mut g, &mut state, EndingStage::Credits, "rCredits1");
+        assert_eq!(state.previous_fade_level, state.fade_level);
+        assert_eq!(state.fade_level, 1.);
+    }
     #[test]
     fn tunnel_first_visit_sentinel_and_dialogue_hold_repeat_and_payment() {
         let mut first = Game::shell(24, RulesPreset::Classic);
         first.world.level = 4;
-        begin_exit(&mut first, EndingKind::Transition);
+        first.player.money = 100_000;
+        first.data.insert("tunnel1_remaining".into(), 100_001.);
+        assert_eq!(
+            crate::progression::apply_donation(&mut first, 1, 100_000),
+            0
+        );
+        assert_eq!(first.player.money, 100_000);
+        activate_fixture_exit(&mut first);
         until(&mut first, 100, |s| s.stage == EndingStage::Transition);
         assert_eq!(first.data["tunnel1_remaining"], 100_000.);
         assert!(
@@ -621,8 +718,9 @@ mod tests {
         let mut g = Game::shell(25, RulesPreset::Classic);
         g.world.level = 4;
         g.player.money = 100_000;
-        g.data.insert("tunnel1_remaining".into(), 100_000.);
-        begin_exit(&mut g, EndingKind::Transition);
+        g.data
+            .insert("tunnel1_remaining".into(), first.data["tunnel1_remaining"]);
+        activate_fixture_exit(&mut g);
         until(&mut g, 100, |s| s.stage == EndingStage::Transition);
         let tunnel = g
             .world
@@ -702,14 +800,12 @@ mod tests {
             (81_000, false),
         ] {
             let mut g = Game::shell(26, RulesPreset::Classic);
-            g.data.insert("xtime".into(), milliseconds as f64);
-            let mut s = EndingState::new(&g, EndingKind::Transition, EndingStage::Transition);
-            enter(&mut g, &mut s, EndingStage::Transition, "rTransition1");
-            g.ending = Some(s);
-            g.state = RunState::Ending;
-            for _ in 0..30 {
-                g.step(&InputFrame::default());
-            }
+            g.flags.insert("no_dark_level".into());
+            g.data.insert("xtime".into(), milliseconds as f64 - 960.);
+            activate_fixture_exit(&mut g);
+            until(&mut g, 100, |s| s.stage == EndingStage::Transition);
+            assert_eq!(g.ending.as_ref().unwrap().level_time_ms, milliseconds);
+            until(&mut g, 100, |s| s.draw_loot > -2);
             assert_eq!(
                 g.flags.contains("no_dark_level"),
                 disabled,
@@ -873,36 +969,18 @@ mod tests {
 }
 pub fn begin_exit(game: &mut Game, kind: EndingKind) {
     let ending = EndingState::new(game, kind, EndingStage::Exit);
-    // The simulation keeps an unbounded run phase for smooth presentation;
-    // GameMaker's image_index has already wrapped in the previous sprite.
-    // Retain that wrapped phase when the exit sprite changes, including its
-    // fraction, rather than mistaking a long run for a completed exit.
-    let previous_frames = crate::catalog::sprite_frame_count(&game.player.sprite) as f64;
-    if let Some(phase) = game.player.data.remove(EXIT_PHASE_BEFORE_PLAYER_STEP) {
-        // characterSprite assigns its sprite during Step, before the global
-        // animation phase. GM's setter preserves an in-range image_index and
-        // resets an index outside the newly selected sprite to zero. The live
-        // controller already animated that sprite, so use its pre-Step phase.
-        game.player.animation = if phase.floor() < previous_frames {
-            phase
-        } else {
-            0.
-        };
-    } else if previous_frames > 0. && game.player.animation.is_finite() {
-        game.player.animation = game.player.animation.rem_euclid(previous_frames);
-    }
-    game.player.sprite = selected_sprite(game, "sPExit", "sDamselExit", "sTunnelExit").into();
-    if game.player.animation.floor()
-        >= crate::catalog::sprite_frame_count(&game.player.sprite) as f64
-    {
-        game.player.animation = 0.;
-    }
-    game.player.vel = Vec2::default();
+    let sprite = selected_sprite(game, "sPExit", "sDamselExit", "sTunnelExit");
+    game.player.set_sprite(sprite);
+    game.player.set_image_speed(0.5);
     game.player.data.insert("active".into(), 0.);
     game.player.data.insert("depth".into(), 999.);
     game.player.invincible = 999;
     game.ending = Some(ending);
     game.state = RunState::Ending;
+}
+pub fn begin_hub_exit(game: &mut Game, portal: crate::hub::HubPortal) {
+    begin_exit(game, EndingKind::HubPortal);
+    game.ending.as_mut().unwrap().portal = Some(portal);
 }
 pub fn begin_custom(game: &mut Game) {
     if game
@@ -1011,6 +1089,7 @@ fn enter(game: &mut Game, s: &mut EndingState, stage: EndingStage, room: &str) {
     s.stage_tick = 0;
     s.alarms = [-1; 12];
     s.actor_alarms.clear();
+    s.animation_order.clear();
     s.music.clear();
     let ids: Vec<_> = game.world.entities.iter().map(|e| e.id).collect();
     for id in ids {
@@ -1075,6 +1154,7 @@ fn enter(game: &mut Game, s: &mut EndingState, stage: EndingStage, room: &str) {
         }
         _ => {}
     }
+    s.previous_fade_level = s.fade_level;
 }
 fn set_menu(game: &mut Game, visible: bool) {
     for e in &mut game.world.entities {
@@ -1261,8 +1341,44 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
 }
 /// Called after the live room has completed its original Step events during
 /// the player's exit animation. Keep its events, clocks and previous poses.
-pub(crate) fn tick_exit_after_world(game: &mut Game, input: &InputFrame) {
-    tick_inner(game, input, true);
+pub(crate) fn live_exit_step(game: &mut Game) {
+    if let Some(s) = &mut game.ending {
+        if s.stage == EndingStage::Exit && s.kind != EndingKind::TitleCredits {
+            s.stage_tick += 1;
+            s.source_time_ms = game.data.get("time").copied().unwrap_or(0.).max(0.) as u64;
+            s.level_time_ms = game.data.get("xtime").copied().unwrap_or(0.).max(0.) as u64;
+        }
+    }
+}
+
+/// Source Animation End callback after the common engine animation phase has
+/// advanced and wrapped the player's image_index exactly once.
+pub(crate) fn player_animation_end(game: &mut Game) {
+    let Some(mut s) = game.ending.take() else {
+        return;
+    };
+    if s.stage != EndingStage::Exit || s.kind == EndingKind::TitleCredits {
+        game.ending = Some(s);
+        return;
+    }
+    let collect = game.data.remove("collect").unwrap_or(0.).max(0.) as u32;
+    game.player.money = game.player.money.saturating_add(collect);
+    game.player.held = None;
+    if let Some(portal) = s.portal {
+        crate::hub::complete_portal(game, portal);
+        return;
+    }
+    if game.flags.contains("editor_test") {
+        game.state = RunState::Transition;
+        return;
+    }
+    if s.kind == EndingKind::Campaign {
+        enter(game, &mut s, EndingStage::Chamber, "rEnd");
+    } else {
+        let room = transition_room(game);
+        enter(game, &mut s, EndingStage::Transition, room);
+    }
+    game.ending = Some(s);
 }
 fn tick_inner(game: &mut Game, input: &InputFrame, world_already_ticked: bool) {
     let Some(mut s) = game.ending.take() else {
@@ -1272,6 +1388,7 @@ fn tick_inner(game: &mut Game, input: &InputFrame, world_already_ticked: bool) {
         game.ending = Some(s);
         return;
     }
+    s.previous_fade_level = s.fade_level;
     if !world_already_ticked {
         game.events.clear();
         game.tick = game.tick.wrapping_add(1);
@@ -1286,23 +1403,6 @@ fn tick_inner(game: &mut Game, input: &InputFrame, world_already_ticked: bool) {
     if s.stage == EndingStage::Exit && s.kind != EndingKind::TitleCredits {
         s.source_time_ms = game.data.get("time").copied().unwrap_or(0.).max(0.) as u64;
         s.level_time_ms = game.data.get("xtime").copied().unwrap_or(0.).max(0.) as u64;
-        game.player.animation += 0.5;
-        if game.player.animation >= crate::catalog::sprite_frame_count(&game.player.sprite) as f64 {
-            let collect = game.data.remove("collect").unwrap_or(0.).max(0.) as u32;
-            game.player.money = game.player.money.saturating_add(collect);
-
-            game.player.held = None;
-            if game.flags.contains("editor_test") {
-                game.state = RunState::Transition;
-                return;
-            }
-            if s.kind == EndingKind::Campaign {
-                enter(game, &mut s, EndingStage::Chamber, "rEnd");
-            } else {
-                let room = transition_room(game);
-                enter(game, &mut s, EndingStage::Transition, room);
-            }
-        }
         game.ending = Some(s);
         return;
     }
@@ -1366,16 +1466,17 @@ fn tick_inner(game: &mut Game, input: &InputFrame, world_already_ticked: bool) {
         }
         register_created(game, &mut queue, key, &mut next_id);
     }
-    // Image advancement and Animation End are a separate GM8 phase after
-    // Step, in global creation order. Snapshot that list on phase entry.
-    let mut animation_ids: Vec<_> = game
-        .world
-        .entities
-        .iter()
-        .filter(|entity| entity.alive)
-        .map(|entity| entity.id)
-        .collect();
-    animation_ids.sort_unstable();
+    prepare_draw_order(game, &mut s);
+    // Preserve the source Draw boundary before animation/callbacks mutate
+    // actors. The state is temporarily restored so the immutable view includes
+    // the same controller fields as the authored room's Draw event.
+    game.ending = Some(s.clone());
+    game.capture_draw_view();
+    game.ending = None;
+    // Animation traverses the same stable descending-depth global array as
+    // Draw. Its resource Step arrays remain separate, and equal-depth actors
+    // retain their preceding frame's global ordering.
+    let animation_ids = s.animation_order.clone();
     for id in animation_ids {
         if let Some(index) = game
             .world
@@ -1396,6 +1497,33 @@ fn tick_inner(game: &mut Game, input: &InputFrame, world_already_ticked: bool) {
     s.previous_down = input.down;
     game.world.entities.retain(|e| e.alive);
     game.ending = Some(s);
+}
+
+fn prepare_draw_order(game: &Game, state: &mut EndingState) {
+    state
+        .animation_order
+        .retain(|id| game.world.entity(*id).is_some());
+    let mut births: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|entity| entity.alive && !state.animation_order.contains(&entity.id))
+        .map(|entity| (entity.creation_serial, entity.id))
+        .collect();
+    births.sort_unstable();
+    state
+        .animation_order
+        .extend(births.into_iter().map(|(_, id)| id));
+    let depth = |id| {
+        game.world.entity(id).map_or(0., |entity| {
+            entity.data.get("depth").copied().unwrap_or_else(|| {
+                crate::catalog::object(&entity.object).map_or(0., |object| object.depth as f64)
+            })
+        })
+    };
+    state
+        .animation_order
+        .sort_by(|a, b| depth(*b).total_cmp(&depth(*a)));
 }
 
 #[derive(Clone, Copy)]
@@ -2309,6 +2437,11 @@ fn finish(game: &mut Game, s: &mut EndingState) {
         EndingKind::Transition => {
             game.state = RunState::Transition;
             game.flags.insert("transition_cinematic_complete".into());
+        }
+        EndingKind::HubPortal => {
+            if let Some(portal) = s.portal {
+                crate::hub::complete_portal(game, portal);
+            }
         }
     }
 }

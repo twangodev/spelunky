@@ -25,7 +25,8 @@ fn offcamera_bomb_fuse_and_age_freeze_then_resume_through_game_step() {
     let id = game.world.spawn("oBomb", Vec2::new(600.0, 152.0));
     let bomb = game.world.entity_mut(id).unwrap();
     bomb.data.insert("armed".into(), 1.0);
-    bomb.timer = 5;
+    bomb.alarms[0] = 5;
+    bomb.alarms[1] = -1;
     bomb.age = 7;
     for _ in 0..8 {
         game.step(&InputFrame::default());
@@ -34,12 +35,21 @@ fn offcamera_bomb_fuse_and_age_freeze_then_resume_through_game_step() {
         .world
         .entity(id)
         .expect("an inactive bomb must not explode");
-    assert_eq!((bomb.timer, bomb.age), (5, 7));
+    // Initial room actors participate in pre-Begin bookkeeping and alarms
+    // before oLevel553's first Normal Step deactivates the remote bomb.
+    assert_eq!((bomb.alarms[0], bomb.alarms[1], bomb.age), (4, -1, 8));
+    assert!(!bomb.engine_active);
     game.camera = Vec2::new(400.0, 0.0);
     game.player.pos = Vec2::new(440.0, 152.0);
     game.step(&InputFrame::default());
     let bomb = game.world.entity(id).unwrap();
-    assert_eq!((bomb.timer, bomb.age), (4, 8));
+    // Reactivation occurs after this frame's alarms and oBomb454 Step; the
+    // fuse resumes on the following frame, rather than retroactively ticking.
+    assert_eq!((bomb.alarms[0], bomb.age), (4, 8));
+    assert!(bomb.engine_active);
+    game.step(&InputFrame::default());
+    let bomb = game.world.entity(id).unwrap();
+    assert_eq!((bomb.alarms[0], bomb.alarms[1], bomb.age), (3, -1, 9));
 }
 
 #[test]

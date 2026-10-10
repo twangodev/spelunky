@@ -107,6 +107,13 @@ impl Game {
 
     fn reset_position(&mut self) {
         self.ending = None;
+        self.draw_view = None;
+        self.opening = None;
+        self.dispatcher = Default::default();
+        self.alarms = dispatcher::unset_alarms();
+        self.game_over = Default::default();
+        self.player.alarms = dispatcher::unset_alarms();
+        self.player.engine_active = true;
         self.data.insert("xmoney".into(), 0.);
         self.data.insert("xtime".into(), 0.);
         self.player.pos = self.world.entrance;
@@ -121,15 +128,15 @@ impl Game {
         self.player.coyote_ticks = 0;
         self.player.buffered_jump_ticks = 0;
         self.player.animation = 0.0;
-        self.player.data.clear();
-        // Rooms recreate oPlayer1 with its selected character's initial sprite.
-        // Retaining an exit sprite would keep the new controller disabled.
-        self.player.sprite = match characters::selected(self) {
+        // Recreate the selected character's initial sprite so the previous
+        // room's exit animation cannot keep the new controller disabled.
+        self.player.set_sprite(match characters::selected(self) {
             characters::Character::Explorer => "sStandLeft",
             characters::Character::Damsel => "sDamselLeft",
             characters::Character::TunnelMan => "sTunnelLeft",
-        }
-        .into();
+        });
+        self.player.data.clear();
+        self.player.data.insert("active".into(), 1.0);
         self.player.invincible = 0;
         self.data
             .insert("darkness".into(), if self.world.dark { 1.0 } else { 0.0 });
@@ -153,6 +160,7 @@ impl Game {
         for e in &mut self.world.entities {
             enemies::init_entity(e);
             items::init_entity(e);
+            world_events::init_entity(e);
             e.previous_pos = e.pos;
         }
         // oPlayer1 Create disables its controller only in the authored rOlmec
@@ -161,28 +169,29 @@ impl Game {
             self.player.data.insert("active".into(), 0.0);
             self.camera = Vec2::new(0.0, 400.0);
         }
+        player::initialize_level_alarms(self);
         self.update_camera();
         self.previous_camera = self.camera;
     }
 
-    /// Advance exactly one original 1/30-second tick. Rendering never calls RNG.
+    /// Advance exactly one original 1/30-second tick.
     pub fn step(&mut self, input: &InputFrame) {
-        // The live level continues while its inactive player walks through the
-        // exit. Authored cinematic rooms use their separate event controller.
-        let live_exit = self.state == RunState::Ending
-            && self.ending.as_ref().is_some_and(|ending| {
-                ending.stage == ending::EndingStage::Exit
-                    && ending.kind != ending::EndingKind::TitleCredits
-            });
+        self.draw_view = None;
+        if self.opening.is_some() {
+            opening::tick(self, input);
+            return;
+        }
+        let live_exit = self.ending.as_ref().is_some_and(|s| {
+            s.stage == ending::EndingStage::Exit && s.kind != ending::EndingKind::TitleCredits
+        });
         if self.state == RunState::Ending && !live_exit {
             ending::tick(self, input);
             return;
         }
-        // These rooms restore life before the player's other source Step
-        // actions and never enter its level/challenge death-latching branch.
-        let protected_hub = self.flags.contains("hub")
-            && (self.flags.contains("hub_title") || self.flags.contains("hub_scores"));
-        if protected_hub {
+        if !matches!(self.state, RunState::Playing | RunState::Dead) && !live_exit {
+            return;
+        }
+        if self.flags.contains("hub_title") || self.flags.contains("hub_scores") {
             self.player.health = if characters::selected(self) == characters::Character::TunnelMan {
                 2
             } else {
@@ -196,152 +205,42 @@ impl Game {
                 self.player.state = PlayerState::Falling;
             }
         }
-        if !matches!(self.state, RunState::Playing | RunState::Dead) && !live_exit {
-            return;
-        }
-        let was_dead = self.state == RunState::Dead;
-        if was_dead {
-            if input.attack_pressed
-                && self.data.get("death_ticks").copied().unwrap_or(0.) >= 100.
-                && self.flags.contains("hub")
-                && ["hub_sun", "hub_moon", "hub_stars"]
-                    .iter()
-                    .any(|flag| self.flags.contains(*flag))
-            {
-                let start = if self.flags.contains("hub_sun") {
-                    1
-                } else if self.flags.contains("hub_moon") {
-                    2
-                } else {
-                    3
-                };
-                self.flags.insert(format!("scores_start:{start}"));
-                self.flags.insert("reset_run_on_hub".into());
-                self.flags.insert("hub_destination:scores".into());
-                self.state = RunState::Transition;
-                return;
-            }
-            let ticks = self.data.entry("death_ticks".into()).or_default();
-            *ticks = if input.attack_pressed {
-                100.0
-            } else {
-                *ticks + 1.0
-            };
-        }
-        // The original dispatcher visits source object resources in ascending
-        // order: oGame (318) advances these counters before oPlayer1 (319).
-        // Its gate is the independent dead flag, rather than remaining life.
-        if !self.flags.contains("hub") && !was_dead && self.player.state != PlayerState::Dead {
-            *self.data.entry("time".into()).or_default() += 30.;
-            *self.data.entry("xtime".into()).or_default() += 30.;
-        }
         self.events.clear();
         self.flags.remove("render_discontinuity");
-        self.player.previous_pos = self.player.pos;
-        self.previous_camera = self.camera;
-        if hub::begin_title_exit(self) {
-            self.tick += 1;
-            self.level_tick += 1;
-            return;
-        }
-        world_events::fluid_tick(self);
-        progression::initialize_level(self);
-        let solids_before: Vec<_> = self
-            .world
-            .entities
-            .iter()
-            .filter(|entity| entity.alive && catalog::is_a(&entity.object, "oSolid"))
-            .map(|entity| entity.id)
-            .collect();
-        let room_tick_before = self.level_tick;
-        let frozen = activation::begin(self);
-        for e in &mut self.world.entities {
-            enemies::init_entity(e);
-            items::init_entity(e);
-            e.previous_pos = e.pos;
-            e.age = e.age.saturating_add(1);
-        }
-        self.tick += 1;
-        self.level_tick += 1;
-        enemies::olmec_intro_alarms(self);
-        traps::pre_tick(self);
-        items::pre_player_tick(self);
-        world_events::sample_light_distances(self);
-        // Source animation runs after Step, including a sprite selected by an
-        // exit later this frame. Preserve the phase before the controller's
-        // ordinary early animation so that Exit can apply the source order.
-        let frames = catalog::sprite_frame_count(&self.player.sprite) as f64;
-        let phase = if frames > 0. && self.player.animation.is_finite() {
-            self.player.animation.rem_euclid(frames)
-        } else {
-            0.
-        };
-        self.player
-            .data
-            .insert(ending::EXIT_PHASE_BEFORE_PLAYER_STEP.into(), phase);
-        player::tick(self, input);
-        world_events::lighting_tick(self);
-        // Inactive players retain world collisions and the hurt/dead physics
-        // controller, but cannot perform inventory actions during the intro.
-        let inactive_input = InputFrame::default();
-        let input = if self.player.data.get("active").copied().unwrap_or(1.0) != 0.0 {
-            input
-        } else {
-            &inactive_input
-        };
-        // Classic's dedicated inventory keys are gated by isLevel(), while
-        // attack and pickup remain available in the authored hub/challenges.
-        let mut item_input = *input;
-        if self.flags.contains("hub") {
-            item_input.cycle_pressed = false;
-            item_input.bomb_pressed = false;
-            item_input.rope_pressed = false;
-        }
-        items::tick(self, &item_input);
-        enemies::tick(self);
-        traps::tick(self);
-        world_events::tick(self, input);
-        items::explosives::end_tick(self);
-        hub::tick(self, input);
-        if self.player.pos.y > self.world.height as f64 * 16.0 + 16.0 {
-            self.player.health = 0;
-        }
-        economy::tick(self, input);
-        progression::tick(self, input);
-        if (self.player.health <= 0 || was_dead) && !protected_hub {
-            self.player.health = self.player.health.max(0);
-            self.player.state = PlayerState::Dead;
-            self.state = RunState::Dead;
-            if !was_dead {
-                self.data.insert("death_ticks".into(), 0.0);
-                self.events.push(GameEvent::Died);
-                self.sound("sndDie", self.player.pos);
-            }
-        }
-        enemies::finish_destroy_events(self);
-        self.world.entities.retain(|e| e.alive);
-        activation::finish(self, frozen);
-        if self.level_tick == room_tick_before + 1
-            && solids_before
-                .iter()
-                .any(|id| self.world.entity(*id).is_none())
-        {
-            self.world.fluid_dirty = true;
-        }
+        dispatcher::step(self, input);
         self.update_camera();
-        self.player
-            .data
-            .remove(ending::EXIT_PHASE_BEFORE_PLAYER_STEP);
-        if self.state == RunState::Ending
-            && self.ending.as_ref().is_some_and(|ending| {
-                ending.stage == ending::EndingStage::Exit
-                    && ending.kind != ending::EndingKind::TitleCredits
-            })
-        {
-            // Activation must restore distant instances before the animation
-            // boundary replaces the entire level with its cinematic room.
-            ending::tick_exit_after_world(self, input);
+    }
+
+    /// Start a destination using the existing source RNG and persistent profile.
+    pub fn start_from_hub(&mut self, tutorial: bool, level: u32) {
+        let character = characters::selected(self);
+        self.flags.retain(|f| {
+            f.starts_with("unlock_")
+                || f.starts_with("character_")
+                || f.starts_with("shortcut")
+                || f == "first_time"
+        });
+        self.data
+            .retain(|key, _| key.starts_with("tunnel") || key.starts_with("shortcut"));
+        self.ending = None;
+        self.opening = None;
+        self.tick = 0;
+        characters::apply(self, character);
+        self.player.money = 0;
+        self.player.equipment.clear();
+        if tutorial {
+            self.flags.insert("tutorial".into());
+            self.player.bombs = 0;
+            self.player.ropes = 2;
+            self.world = generation::tutorial();
+        } else {
+            if level > 1 {
+                self.flags.insert("used_shortcut".into());
+            }
+            self.flags.insert("no_dark_level".into());
+            self.world = generation::generate(&mut self.rng, level.clamp(1, 16), &self.flags);
         }
+        self.reset_position();
     }
 
     pub fn next_level(&mut self) {
@@ -468,6 +367,13 @@ impl Game {
     }
 
     pub fn update_camera(&mut self) {
+        if self
+            .opening
+            .as_ref()
+            .is_some_and(|opening| !opening.player_present)
+        {
+            return;
+        }
         if self.flags.contains("hub_title") {
             let target = if self.player.pos.x <= 320.0 {
                 0.0
@@ -880,7 +786,10 @@ mod tests {
             attack_pressed: true,
             ..InputFrame::default()
         });
-        assert_eq!(game.data.get("death_ticks"), Some(&100.0));
+        // Source game-over reveal is an independent controller, not the
+        // elapsed corpse-physics clock. The first action skips its reveal.
+        assert_eq!(game.data.get("death_ticks"), Some(&9.0));
+        assert_eq!(game.game_over.draw_status, 3);
     }
 
     #[test]
@@ -938,11 +847,15 @@ mod tests {
             };
             game.step(&action);
             assert_eq!(game.state, RunState::Dead);
-            assert_eq!(game.data["death_ticks"], 100.);
+            assert_eq!(game.game_over.draw_status, 3);
+            assert_eq!(game.game_over.money_count, game.player.money);
             game.step(&action);
             assert_eq!(game.state, RunState::Transition);
             assert!(game.flags.contains(&format!("scores_start:{start}")));
-            assert!(game.flags.contains("hub_destination:scores"));
+            assert_eq!(
+                game.game_over.destination,
+                Some(progression::GameOverDestination::Scores)
+            );
             assert!(game.flags.contains("reset_run_on_hub"));
         }
     }
@@ -1091,12 +1004,6 @@ mod tests {
                 assert_eq!(game.source_elapsed_ms(), 960);
                 game.step(&InputFrame::default());
                 assert_eq!(game.source_elapsed_ms(), 960);
-                assert!(
-                    !game
-                        .player
-                        .data
-                        .contains_key(ending::EXIT_PHASE_BEFORE_PLAYER_STEP)
-                );
             }
         }
     }

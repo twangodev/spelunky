@@ -76,7 +76,7 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
                 _ => None,
             };
             if let Some(sprite) = sprite {
-                e.sprite = sprite.into();
+                e.set_sprite(sprite);
             }
         }
     }
@@ -98,6 +98,14 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
         game.sound("sndSplash", e.pos);
     }
     e.data.insert("swimming".into(), f64::from(swimming));
+    if swimming && e.object == "oFireFrog" {
+        let id = game.spawn("oFrog", e.pos);
+        if let Some(frog) = game.world.entity_mut(id) {
+            frog.state = e.state;
+        }
+        e.alive = false;
+        return;
+    }
     let normal = if matches!(
         e.object.as_str(),
         "oFrog" | "oFireFrog" | "oSpider" | "oZombie" | "oVampire"
@@ -126,7 +134,7 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
         "oLava",
     ) {
         e.health = 0;
-        e.data.insert("environmental_death".into(), 1.0);
+        set_counts_as_kill(e, false);
         e.data.insert("burning".into(), 1.0);
         e.data.insert("depth".into(), 999.0);
         e.data.insert("inherited_gravity".into(), 0.0);
@@ -151,7 +159,7 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
         );
         if !stunned_body || e.health > 0 {
             e.health -= 2;
-            e.data.insert("environmental_death".into(), 1.0);
+            set_counts_as_kill(e, false);
             if stunned_body {
                 e.state = 98;
                 e.timer = e.value("stun_time") as u32;
@@ -170,7 +178,7 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
     {
         if e.health > 0 {
             e.health = 0;
-            e.data.insert("environmental_death".into(), 1.0);
+            set_counts_as_kill(e, false);
             if matches!(
                 e.object.as_str(),
                 "oCaveman" | "oManTrap" | "oYeti" | "oHawkman" | "oShopkeeper" | "oShopkeeper2"
@@ -181,6 +189,7 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
         e.vel = Vec2::new(0.0, 0.2);
         e.data.insert("inherited_gravity".into(), 0.0);
     }
+    crate::traps::altar::offering_entity(game, e);
     if e.state == 98 && (e.vel.x.abs() > 2.0 || e.vel.y.abs() > 2.0) {
         body_projectile(game, e);
     }
@@ -233,7 +242,7 @@ fn body_projectile(game: &mut Game, e: &Entity) {
         }
         "oAlienBoss" if target.state != 99 && target.sprite != "sAlienBossHurt" => {
             target.health -= 1;
-            target.sprite = "sAlienBossHurt".into();
+            target.set_sprite("sAlienBossHurt");
             target.data.insert("animation_speed".into(), 0.8);
             hit = true;
         }
@@ -241,6 +250,11 @@ fn body_projectile(game: &mut Game, e: &Entity) {
             explosion = Some(Vec2::new(target.pos.x + 8.0, target.pos.y + 8.0));
             target.alive = false;
             target.health = 0;
+            // This source oEnemy Step branch updates run totals only;
+            // unlike oItem's UFO branch it has no enemyKills[16] write.
+            target.data.insert("death_recorded".into(), 1.);
+            *game.data.entry("ufos".into()).or_default() += 1.;
+            *game.data.entry("kills".into()).or_default() += 1.;
             hit = true;
         }
         "oCaveman" | "oManTrap" | "oVampire" | "oYeti" | "oHawkman" | "oShopkeeper"
@@ -251,9 +265,9 @@ fn body_projectile(game: &mut Game, e: &Entity) {
         }
     }
     if let Some(pos) = explosion {
-        game.world.spawn("oExplosion", pos);
+        game.spawn("oExplosion", pos);
         if game.rng.range(3) == 0 {
-            game.world.spawn("oAlienEject", pos);
+            game.spawn("oAlienEject", pos);
         }
         game.sound("sndExplosion", pos);
     }
@@ -272,6 +286,25 @@ mod tests {
         g.player.previous_pos = g.player.pos;
         g
     }
+    #[test]
+    fn actual_step_fast_stunned_body_ufo_kill_has_run_credit_without_lifetime_row() {
+        let mut game = room();
+        let body = game.spawn("oCaveman", Vec2::new(80., 80.));
+        let actor = game.world.entity_mut(body).unwrap();
+        actor.state = 98;
+        actor.timer = 20;
+        actor.vel.x = 3.;
+        let ufo = game.spawn("oUFO", Vec2::new(80., 80.));
+        game.step(&InputFrame::default());
+        assert!(game.world.entity(ufo).is_none());
+        assert_eq!(game.data.get("ufos"), Some(&1.));
+        assert_eq!(game.data.get("kills"), Some(&1.));
+        assert_eq!(
+            game.lifetime_stats.enemy_kills[crate::statistics::EnemyKill::Ufo as usize],
+            0
+        );
+    }
+
     #[test]
     fn actual_step_inherited_lava_kills_without_player_kill_credit() {
         for object in [

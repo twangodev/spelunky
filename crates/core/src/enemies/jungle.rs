@@ -1,6 +1,8 @@
 //! Jungle behaviors translated from Classic 1.1 enemy events.
 //! Instances retain original GameMaker sprite origins; probes use collision centers.
-use super::{can_stomp, center, event_bounds, move_body, steer_toward, touches_player};
+#[cfg(test)]
+use super::event_bounds;
+use super::{center, move_body, steer_toward};
 use crate::model::{Area, Entity, Game, PlayerState, Rect, Vec2, World};
 
 pub fn matches(object: &str) -> bool {
@@ -26,15 +28,15 @@ pub fn init(e: &mut Entity) {
             0.5
         },
     );
-    e.sprite = match e.object.as_str() {
+    let sprite = match e.object.as_str() {
         "oFrog" => "sFrogLeft",
         "oFireFrog" => "sFireFrogLeft",
         "oMonkey" => "sMonkeyHangL",
         "oPiranha" => "sPiranhaRight",
         "oJaws" => "sJawsLeft",
         _ => "sManTrapLeft",
-    }
-    .into();
+    };
+    e.set_sprite(sprite);
     if e.object == "oJaws" {
         e.facing = -1;
     }
@@ -43,6 +45,36 @@ pub fn init(e: &mut Entity) {
     }
     if e.object == "oMonkey" {
         e.data.insert("throw_counter".into(), 60.0);
+    }
+    if e.object == "oPiranha" {
+        e.data.insert("can_bite".into(), 1.0);
+    }
+}
+
+pub(super) fn create(game: &mut Game, e: &mut Entity) {
+    create_local(
+        &mut crate::creation::EntityCreateContext {
+            world: &game.world,
+            rng: &mut game.rng,
+        },
+        e,
+    );
+}
+
+pub(super) fn create_local(ctx: &mut crate::creation::EntityCreateContext<'_>, e: &mut Entity) {
+    if !matches(&e.object) || e.value("jungle_context_created") != 0.0 {
+        return;
+    }
+    e.data.insert("jungle_context_created".into(), 1.0);
+    match e.object.as_str() {
+        "oFrog" | "oFireFrog" | "oMonkey" => {
+            e.facing = if ctx.rng.range(2) == 0 { -1 } else { 1 };
+            if water(ctx.world, e.pos) {
+                e.data.insert("swimming".into(), 1.0);
+            }
+        }
+        "oPiranha" => e.facing = if ctx.rng.range(2) == 0 { -1 } else { 1 },
+        _ => {}
     }
 }
 
@@ -102,25 +134,6 @@ fn ground(world: &World, e: &Entity) -> bool {
 }
 
 pub fn tick(game: &mut Game, e: &mut Entity) {
-    let swimming = water(&game.world, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
-    if matches!(
-        e.object.as_str(),
-        "oFrog" | "oFireFrog" | "oMonkey" | "oManTrap"
-    ) {
-        e.data.insert("swimming".into(), f64::from(swimming));
-    }
-    // oEnemy Step runs before oFireFrog Step: water converts even a mortally
-    // injured fire frog into a newly created ordinary frog, without a bomb.
-    if e.object == "oFireFrog" && swimming {
-        let id = game.world.spawn("oFrog", e.pos);
-        if let Some(frog) = game.world.entity_mut(id) {
-            super::init_entity(frog);
-            frog.state = e.state;
-        }
-        e.alive = false;
-        e.health = 1;
-        return;
-    }
     if e.health <= 0 && matches!(e.object.as_str(), "oPiranha" | "oJaws") {
         die(game, e);
         return;
@@ -135,12 +148,12 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
     }
 }
 
-pub(super) fn animation_end(e: &mut Entity, sprite: &str) {
+pub(super) fn animation_end(_game: &mut Game, e: &mut Entity, sprite: &str) {
     if e.object == "oJaws" {
         match sprite {
-            "sJawsTurnL" => e.sprite = "sJawsLeft".into(),
+            "sJawsTurnL" => e.set_sprite("sJawsLeft"),
             "sJawsTurnR" => {
-                e.sprite = "sJawsRight".into();
+                e.set_sprite("sJawsRight");
                 e.pos.x += 48.0;
                 e.previous_pos = e.pos;
             }
@@ -154,20 +167,24 @@ pub(super) fn animation_end(e: &mut Entity, sprite: &str) {
         return;
     }
     if e.state == 97 {
-        e.sprite = "sManTrapSleepL".into();
+        e.set_sprite("sManTrapSleepL");
         e.state = 96;
     } else if sprite == "sManTrapSleepL" {
-        e.sprite = "sManTrapStunL".into();
+        e.set_sprite("sManTrapStunL");
         e.state = 98;
-        e.timer = 400;
+        e.timer = (e.value("stun_time") * 2.0) as u32;
     }
 }
 
 fn die(game: &mut Game, e: &mut Entity) {
+    match e.object.as_str() {
+        "oFrog" | "oMonkey" => source_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 3),
+        "oPiranha" => source_blood(game, e, Vec2::new(e.pos.x + 4.0, e.pos.y + 4.0), 3),
+        _ => {}
+    }
+    super::record_death(game, e);
     if e.object == "oFireFrog" {
-        let id = game
-            .world
-            .spawn("oFireFrogBomb", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
+        let id = game.spawn("oFireFrogBomb", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
         if let Some(bomb) = game.world.entity_mut(id) {
             bomb.timer = 120;
             bomb.data.insert("armed".into(), 1.0);
@@ -203,9 +220,7 @@ fn die(game: &mut Game, e: &mut Entity) {
             crate::world_events::spawn_detritus(game, "oBone", bone);
         }
         for _ in 0..4 {
-            let id = game
-                .world
-                .spawn("oCrate", Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
+            let id = game.spawn("oCrate", Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
             let velocity = Vec2::new(
                 game.rng.range(4) as f64 - game.rng.range(4) as f64,
                 -(1.0 + game.rng.range(2) as f64),
@@ -215,8 +230,12 @@ fn die(game: &mut Game, e: &mut Entity) {
             }
         }
     }
-    if e.object == "oManTrap" && e.value("ate_shopkeeper") != 0.0 {
-        release_shopkeeper(game, e.pos);
+    if e.object == "oManTrap" {
+        mantrap_leaf_burst(game, e);
+        source_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 1);
+        if e.value("ate_shopkeeper") != 0.0 {
+            release_shopkeeper(game, e);
+        }
     }
     // Source instance_destroy is immediate. Mark removal so a death caused
     // earlier in this same tick cannot execute its spawn hook twice.
@@ -273,13 +292,13 @@ fn frog(game: &mut Game, e: &mut Entity) {
         e.vel.y = 1.0;
     }
     let fire = e.object == "oFireFrog";
-    e.sprite = match (fire, grounded) {
+    let sprite = match (fire, grounded) {
         (true, true) => "sFireFrogLeft",
         (true, false) => "sFireFrogJumpL",
         (false, true) => "sFrogLeft",
         (false, false) => "sFrogJumpL",
-    }
-    .into();
+    };
+    e.set_sprite(sprite);
 }
 
 fn monkey(game: &mut Game, e: &mut Entity) {
@@ -294,6 +313,12 @@ fn monkey(game: &mut Game, e: &mut Entity) {
     if game.world.solid_at(e.pos.x + 8.0, e.pos.y + 8.0) {
         e.health = -999;
     }
+    let swimming = water(&game.world, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
+    if swimming && e.value("swimming") == 0.0 {
+        game.spawn("oSplash", Vec2::new(e.pos.x + 8.0, e.pos.y));
+        game.sound("sndSplash", e.pos);
+    }
+    e.data.insert("swimming".into(), f64::from(swimming));
     if e.health <= 0 {
         die(game, e);
         return;
@@ -392,9 +417,7 @@ fn monkey(game: &mut Game, e: &mut Entity) {
                 game.player.pos.y + e.value("grab_y"),
             );
             e.facing = game.player.facing;
-            if game.player.health <= 0 {
-                release_monkey(game, e);
-            } else if e.timer > 0 {
+            if e.timer > 0 {
                 e.timer -= 1;
             } else {
                 monkey_steal(game, e);
@@ -407,72 +430,17 @@ fn monkey(game: &mut Game, e: &mut Entity) {
             e.vel.x = 0.0;
         }
     }
-    // Collision with oCharacter overrides ordinary contact damage. Defer
-    // source-eligible stomps to the parent; all other centered contacts grab.
-    if e.state != 7
-        && e.value("grab_counter") == 0.0
-        && game.player.invincible == 0
-        && game.player.health > 0
-        && (game.player.pos.x - (e.pos.x + 8.0)).abs() <= 4.0
-        && touches_player(game, e)
-        && !can_stomp(game, e)
-    {
-        e.state = 7;
-        e.vel = Vec2::default();
-        e.data.insert("grab_x".into(), e.pos.x - game.player.pos.x);
-        e.data.insert(
-            "grab_y".into(),
-            (e.pos.y + 8.0 - game.player.pos.y).clamp(-2.0, 2.0) - 8.0,
-        );
-        e.pos.y = game.player.pos.y + e.value("grab_y");
-        e.timer = 40 + game.rng.range(41);
-    }
-    // Collision with oItem applies to the source parent family, including jars
-    // and every weapon. A rope already falling into placement is exempt.
-    if e.state != 7 && e.value("throw_counter") == 0.0 {
-        let item = game
-            .world
-            .entities
-            .iter()
-            .find(|item| {
-                item.alive
-                    && !item.held
-                    && crate::catalog::is_a(&item.object, "oItem")
-                    && item.value("inactive") == 0.0
-                    && !(item.object == "oRopeThrow" && item.value("falling") != 0.0)
-                    && event_bounds(item).intersects(event_bounds(e))
-            })
-            .map(|item| (item.id, item.object == "oRopeThrow", item.pos));
-        if let Some((id, rope, pos)) = item {
-            let lift = !game
-                .world
-                .solid_at(pos.x, pos.y - if rope { 0.0 } else { 2.0 });
-            if let Some(item) = game.world.entity_mut(id) {
-                item.vel = Vec2::new(5.0 * e.facing as f64, -4.0);
-                if lift {
-                    item.pos.y = if rope {
-                        e.pos.y - 2.0
-                    } else {
-                        item.pos.y - 2.0
-                    };
-                }
-            }
-            e.data.insert("throw_counter".into(), 60.0);
-            e.state = 0;
-            e.timer = 20 + game.rng.range(41);
-        }
-    }
     if e.state != 7 && collision_offset(&game.world, e, 0.0, -1.0) {
         e.vel.y = 1.0;
     }
-    e.sprite = match e.state {
+    let sprite = match e.state {
         5 => "sMonkeyHangL",
         6 | 7 => "sMonkeyClimbL",
         3 if grounded => "sMonkeyWalkL",
         _ if !grounded => "sMonkeyJumpL",
         _ => "sMonkeyLeft",
-    }
-    .into();
+    };
+    e.set_sprite(sprite);
 }
 
 fn release_monkey(game: &mut Game, e: &mut Entity) {
@@ -501,11 +469,7 @@ fn monkey_steal(game: &mut Game, e: &Entity) {
         game.player.vel = Vec2::new(3.0 * game.player.facing as f64, -3.0);
         game.player.stun = 40;
         game.player.state = PlayerState::Stunned;
-        if let Some(id) = game.player.held.take() {
-            if let Some(item) = game.world.entity_mut(id) {
-                item.held = false;
-            }
-        }
+        crate::items::drop_held_with_velocity(game, Vec2::default());
         game.sound("sndHit", e.pos);
         return;
     } else if game.player.money >= money && game.rng.chance(8, 10) {
@@ -520,30 +484,34 @@ fn monkey_steal(game: &mut Game, e: &Entity) {
     } else {
         return;
     }
+    let id = game.spawn(object, e.pos);
     let armed = object == "oBomb" && game.rng.chance(1, 10);
     let velocity = Vec2::new(
         game.rng.range(3) as f64 - game.rng.range(3) as f64,
         -(3.0 + game.rng.range(2) as f64),
     );
-    let id = game.world.spawn(object, e.pos);
     if let Some(item) = game.world.entity_mut(id) {
         crate::items::init_entity(item);
         item.vel = velocity;
-        item.data.insert("collect_delay".into(), 20.0);
-        item.data.insert("source_monkey".into(), 1.0);
+        if object == "oGoldNugget" {
+            item.data.insert("canCollect".into(), 0.0);
+            item.alarms[0] = 20;
+        }
         if armed {
             item.data.insert("armed".into(), 1.0);
             item.timer = 40;
-            item.sprite = "sBombArmed".into();
+            item.alarms[1] = 40;
+            item.set_sprite("sBombArmed");
+            item.set_image_speed(1.0);
         }
     }
     game.sound("sndThrow", e.pos);
 }
 
 fn fish(game: &mut Game, e: &mut Entity) {
-    let target_swimming = super::player_alive(game) && water(&game.world, game.player.pos);
+    let target_swimming = super::player_alive(game)
+        && game.player.data.get("swimming").copied().unwrap_or(0.0) != 0.0;
     let near = center(e).distance(game.player.pos) < 90.0;
-    countdown(e, "bite_counter");
     match e.state {
         0 => {
             e.vel = Vec2::new(e.facing as f64, 0.0);
@@ -575,7 +543,7 @@ fn fish(game: &mut Game, e: &mut Entity) {
             }
         }
         2 => {
-            e.data.insert("bite_counter".into(), 0.0);
+            e.data.insert("can_bite".into(), 1.0);
             e.vel = Vec2::default();
             if e.timer > 0 {
                 e.timer -= 1;
@@ -596,12 +564,19 @@ fn fish(game: &mut Game, e: &mut Entity) {
                     e.state = 2;
                     e.timer = 20 + game.rng.range(21);
                 }
-                if center(e).distance(pos) < 4.0 && e.value("bite_counter") == 0.0 {
+                if center(e).distance(pos) < 4.0 {
+                    let bite = e.value("can_bite") != 0.0;
                     if let Some(target) = game.world.entity_mut(id) {
-                        target.health -= 1;
                         target.state = 2;
+                        if bite {
+                            target.health -= 1;
+                        }
                     }
-                    e.data.insert("bite_counter".into(), 10.0);
+                    if bite {
+                        e.data.insert("can_bite".into(), 0.0);
+                        e.alarms[0] = 10;
+                        source_blood(game, e, Vec2::new(e.pos.x + 4.0, e.pos.y + 4.0), 1);
+                    }
                 }
             } else {
                 e.state = 2;
@@ -612,15 +587,15 @@ fn fish(game: &mut Game, e: &mut Entity) {
             e.state = 0;
         }
     }
-    e.sprite = if e.facing < 0 {
+    let sprite = if e.facing < 0 {
         "sPiranhaLeft"
     } else {
         "sPiranhaRight"
-    }
-    .into();
+    };
+    e.set_sprite(sprite);
     bubbles(game, e, true);
     if !water(&game.world, Vec2::new(e.pos.x + 4.0, e.pos.y + 4.0)) {
-        game.world.spawn("oFishBone", e.pos);
+        game.spawn("oFishBone", e.pos);
         e.alive = false;
     }
 }
@@ -642,7 +617,7 @@ fn fish_target(world: &World, pos: Vec2) -> Option<u64> {
             .min_by(|a, b| a.pos.distance(pos).total_cmp(&b.pos.distance(pos)));
         if let Some(t) = target {
             if t.health > 0 {
-                return water(world, Vec2::new(t.pos.x + 8.0, t.pos.y + 8.0)).then_some(t.id);
+                return (t.value("swimming") != 0.0).then_some(t.id);
             }
         }
     }
@@ -667,7 +642,8 @@ fn jaws(game: &mut Game, e: &mut Entity) {
             return;
         }
     }
-    let swimming = super::player_alive(game) && water(&game.world, game.player.pos);
+    let swimming = super::player_alive(game)
+        && game.player.data.get("swimming").copied().unwrap_or(0.0) != 0.0;
     let turn_before = matches!(e.sprite.as_str(), "sJawsTurnL" | "sJawsTurnR");
     match e.state {
         0 => {
@@ -749,13 +725,13 @@ fn jaws(game: &mut Game, e: &mut Entity) {
         }
     }
     let turning = matches!(e.sprite.as_str(), "sJawsTurnL" | "sJawsTurnR");
-    e.sprite = match (turning, e.facing < 0) {
+    let sprite = match (turning, e.facing < 0) {
         (true, true) => "sJawsTurnL",
         (true, false) => "sJawsTurnR",
         (false, true) => "sJawsLeft",
         (false, false) => "sJawsRight",
-    }
-    .into();
+    };
+    e.set_sprite(sprite);
     // Turning sprites retain the previous collision rectangle in GameMaker.
     if !turning {
         jaws_bounds(e);
@@ -768,12 +744,12 @@ fn begin_jaws_turn(e: &mut Entity) {
     e.facing *= -1;
     e.vel = Vec2::default();
     e.animation = 0.0;
-    e.sprite = if e.facing < 0 {
+    let sprite = if e.facing < 0 {
         "sJawsTurnL"
     } else {
         "sJawsTurnR"
-    }
-    .into();
+    };
+    e.set_sprite(sprite);
     if e.facing < 0 {
         e.pos.x -= 48.0;
         e.previous_pos = e.pos;
@@ -800,7 +776,12 @@ fn bubbles(game: &mut Game, e: &mut Entity, jitter: bool) {
     if e.value("bubble_timer") > 0.0 {
         countdown(e, "bubble_timer");
     } else {
-        game.world.spawn("oBubble", e.pos);
+        let pos = if e.object == "oJaws" {
+            Vec2::new(e.pos.x, e.pos.y + 16.0)
+        } else {
+            e.pos
+        };
+        crate::world_events::spawn_effect(game, "oBubble", pos);
         e.data.insert(
             "bubble_timer".into(),
             if jitter {
@@ -812,13 +793,44 @@ fn bubbles(game: &mut Game, e: &mut Entity, jitter: bool) {
     }
 }
 
-fn release_shopkeeper(game: &mut Game, pos: Vec2) {
-    let id = game.world.spawn("oShopkeeper", pos);
+fn source_blood(game: &mut Game, e: &Entity, pos: Vec2, count: usize) {
+    if e.value("bloodless") != 0.0 {
+        return;
+    }
+    for _ in 0..count {
+        if game
+            .world
+            .entities
+            .iter()
+            .filter(|other| other.alive && crate::catalog::is_a(&other.object, "oDetritus"))
+            .count()
+            < 16
+        {
+            crate::world_events::spawn_detritus(game, "oBlood", pos);
+        }
+    }
+}
+
+fn mantrap_leaf_burst(game: &mut Game, e: &Entity) {
+    for _ in 0..3 {
+        let pos = Vec2::new(
+            e.pos.x + f64::from(game.rng.range(17)),
+            e.pos.y - 8.0 + f64::from(game.rng.range(17)),
+        );
+        crate::world_events::spawn_effect(game, "oLeaf", pos);
+    }
+}
+
+fn release_shopkeeper(game: &mut Game, e: &Entity) {
+    let pos = e.pos;
+    let id = game.spawn("oShopkeeper", pos);
     if let Some(shopkeeper) = game.world.entity_mut(id) {
         super::init_entity(shopkeeper);
         shopkeeper.state = 2;
         shopkeeper.data.insert("has_gun".into(), 0.0);
     }
+    mantrap_leaf_burst(game, e);
+    source_blood(game, e, Vec2::new(pos.x + 8.0, pos.y + 8.0), 1);
     game.sound("sndSmallExplode", pos);
 }
 
@@ -894,7 +906,7 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
                 if e.timer > 0 {
                     e.timer -= 1;
                 } else if e.value("ate_shopkeeper") != 0.0 {
-                    release_shopkeeper(game, e.pos);
+                    release_shopkeeper(game, e);
                     e.alive = false;
                     return;
                 } else {
@@ -959,127 +971,235 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
         e.pos.y -= 2.0;
     }
     if e.state == 98 {
-        e.sprite = "sManTrapStunL".into();
+        e.set_sprite("sManTrapStunL");
     } else if e.state < 96 {
-        e.sprite = "sManTrapLeft".into();
+        e.set_sprite("sManTrapLeft");
     }
 }
 
-/// Collision events run independently of the viewport guard around ManTrap Step.
-/// The original events target parent families, including oShopkeeper2 children.
-pub(super) fn tick_independent_events(game: &mut Game, e: &mut Entity) {
-    if !e.alive || e.object != "oManTrap" || matches!(e.state, 97 | 98) {
-        return;
+/// Original Alarm 0 is an engine event, independently of Piranha's Step.
+pub(super) fn alarm(_game: &mut Game, e: &mut Entity, index: u8) {
+    if e.object == "oPiranha" && index == 0 {
+        e.data.insert("can_bite".into(), 1.0);
     }
-    // An awake trap eats rather than dealing ordinary contact damage. Spike
-    // shoes permit the parent combat handler to resolve a stomp first.
-    if !matches!(e.state, 97 | 98)
-        && game.player.health > 0
-        && game.player.invincible == 0
-        && (game.player.pos.x - (e.pos.x + 8.0)).abs() <= 8.0
-        && touches_player(game, e)
-        && !can_stomp(game, e)
-    {
-        let sprite = if game.flags.contains("character_damsel") {
-            "sManTrapEatDamselL"
-        } else if game.flags.contains("character_tunnelman") {
-            "sManTrapEatTunnelL"
-        } else {
-            "sManTrapEatL"
-        };
-        eat(e, sprite, game.player.pos.x);
-        game.player.health = -99;
-        game.player.invincible = 9999;
-        game.player.data.insert("hidden".into(), 1.0);
-        if let Some(id) = game.player.held.take() {
-            if e.held {
-                e.held = false;
-            }
-            if let Some(item) = game.world.entity_mut(id) {
-                item.held = false;
-                item.vel = Vec2::new(e.facing as f64 * 2.0, -4.0);
-            }
+}
+
+/// Automatic collision dispatch already selected this exact overlapping pair.
+/// Return true for an overridden event, including source branches that ignore it.
+pub(super) fn collision(
+    game: &mut Game,
+    e: &mut Entity,
+    other: crate::dispatcher::Instance,
+) -> bool {
+    match e.object.as_str() {
+        "oManTrap" => mantrap_collision(game, e, other),
+        "oMonkey" => monkey_collision(game, e, other),
+        _ => false,
+    }
+}
+
+fn mantrap_collision(game: &mut Game, e: &mut Entity, other: crate::dispatcher::Instance) -> bool {
+    use crate::dispatcher::Instance;
+    if other == Instance::Player {
+        if !e.alive || (game.player.pos.x - (e.pos.x + 8.0)).abs() > 8.0 {
+            return true;
         }
-        game.sound("sndDie", game.player.pos);
-    }
-    if e.state == 97 {
-        return;
-    }
-    for (family, sprite) in [
-        ("oCaveman", "sManTrapEatCavemanL"),
-        ("oDamsel", "sManTrapEatDamselL"),
-        ("oShopkeeper", "sManTrapEatShopkeeperL"),
-    ] {
-        let victim = game
-            .world
-            .entities
-            .iter()
-            .find(|v| {
-                v.alive
-                    && v.id != e.id
-                    && crate::catalog::is_a(&v.object, family)
-                    && event_bounds(v).intersects(event_bounds(e))
-            })
-            .map(|v| {
-                (
-                    v.id,
-                    v.pos,
-                    v.vel.x,
-                    v.health,
-                    v.held,
-                    v.data.get("has_gun").copied().unwrap_or(1.0) != 0.0,
-                )
-            });
-        let Some((id, pos, velocity_x, health, held, has_gun)) = victim else {
-            continue;
-        };
-        eat(e, sprite, pos.x);
-        // NPC events compare instance origins; player contact compares x+8.
-        e.facing = if pos.x > e.pos.x { 1 } else { -1 };
-        if family == "oShopkeeper" {
-            if health > 0 {
-                e.data.insert("ate_shopkeeper".into(), 1.0);
+        let stomp = (game.player.has("SpikeShoes") || e.state == 97)
+            && super::player_alive(game)
+            && game.player.stun == 0
+            && matches!(
+                game.player.state,
+                PlayerState::Jumping | PlayerState::Falling
+            )
+            && game.player.pos.y < e.pos.y + 5.0
+            && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0;
+        if stomp {
+            let shoes = game.player.has("SpikeShoes");
+            let falls = game.player.data.get("fall_timer").copied().unwrap_or(0.0);
+            let damage = (falls / 16.0).floor() as i32 + 1;
+            game.player.vel.y = -6.0 - 0.2 * game.player.vel.y;
+            game.player.data.insert("fall_timer".into(), 0.0);
+            e.health -= damage * if shoes { 3 } else { 1 };
+            if shoes && e.value("bloodless") == 0.0 {
+                crate::world_events::spawn_detritus(
+                    game,
+                    "oBlood",
+                    Vec2::new(game.player.pos.x, game.player.pos.y + 8.0),
+                );
             }
-            if has_gun {
-                let gun = game
-                    .world
-                    .spawn("oShotgun", Vec2::new(pos.x + 8.0, pos.y + 8.0));
-                // Source creates the shotgun before drawing vertical, then
-                // horizontal launch velocity, both inclusive rand(4,6).
-                let vertical = f64::from(4 + game.rng.range(3));
-                let horizontal =
-                    f64::from(4 + game.rng.range(3)) * if velocity_x < 0.0 { -1.0 } else { 1.0 };
-                if let Some(gun) = game.world.entity_mut(gun) {
-                    gun.vel = Vec2::new(horizontal, vertical);
-                    gun.data.insert("cost".into(), 0.0);
-                    gun.data.insert("forSale".into(), 0.0);
-                    gun.data.insert("for_sale".into(), 0.0);
-                    // The gun is created by a Collision event after this
-                    // frame's oItem Step projectile checks have completed.
-                    gun.data
-                        .insert("released_by_enemy_tick".into(), game.tick as f64);
+            e.data.insert("counts_as_kill".into(), 1.0);
+            e.data.insert("environmental_death".into(), 0.0);
+            e.state = 98;
+            e.timer = e.value("stun_time") as u32;
+            e.vel.y = -6.0;
+            e.vel.x += if game.player.pos.x < e.pos.x + 8.0 {
+                1.0
+            } else {
+                -1.0
+            };
+            e.data.insert("animation_speed".into(), 0.5);
+            game.sound("sndHit", e.pos);
+        } else if game.player.data.get("hidden").copied().unwrap_or(0.0) == 0.0
+            && game.player.invincible == 0
+            && !matches!(e.state, 97 | 98)
+        {
+            let sprite = if game.flags.contains("character_damsel") {
+                "sManTrapEatDamselL"
+            } else if game.flags.contains("character_tunnelman") {
+                "sManTrapEatTunnelL"
+            } else {
+                "sManTrapEatL"
+            };
+            eat(e, sprite, game.player.pos.x);
+            game.player.health = -99;
+            game.player.invincible = 9999;
+            game.player.data.insert("hidden".into(), 1.0);
+            game.player.data.insert("bounced".into(), 1.0);
+            game.data.insert("draw_hud".into(), 0.0);
+            if crate::statistics::is_real_level(game) {
+                game.lifetime_stats
+                    .enemy_death(crate::statistics::EnemyDeath::ManTrap);
+            }
+            if let Some(id) = game.player.held.take() {
+                if e.held {
+                    e.held = false;
+                } else if let Some(item) = game.world.entity_mut(id) {
+                    item.held = false;
+                    item.vel = Vec2::new(e.facing as f64 * 2.0, -4.0);
                 }
             }
+            game.sound("sndDie", game.player.pos);
         }
-        if let Some(victim) = game.world.entity_mut(id) {
-            victim.alive = false;
-            if family == "oShopkeeper" {
-                victim.data.insert("has_gun".into(), 0.0);
+        return true;
+    }
+    let Instance::Entity(id) = other else {
+        return false;
+    };
+    let Some(victim) = game.world.entity(id) else {
+        return false;
+    };
+    let (family, sprite) = if crate::catalog::is_a(&victim.object, "oCaveman") {
+        ("oCaveman", "sManTrapEatCavemanL")
+    } else if crate::catalog::is_a(&victim.object, "oDamsel") {
+        ("oDamsel", "sManTrapEatDamselL")
+    } else if crate::catalog::is_a(&victim.object, "oShopkeeper") {
+        ("oShopkeeper", "sManTrapEatShopkeeperL")
+    } else {
+        return false;
+    };
+    if !e.alive || matches!(e.state, 97 | 98) {
+        return true;
+    }
+    let (pos, velocity_x, health, held, has_gun) = (
+        victim.pos,
+        victim.vel.x,
+        victim.health,
+        victim.held,
+        victim.data.get("has_gun").copied().unwrap_or(1.0) != 0.0,
+    );
+    eat(e, sprite, pos.x);
+    e.facing = if pos.x > e.pos.x { 1 } else { -1 };
+    if family == "oShopkeeper" {
+        if health > 0 {
+            e.data.insert("ate_shopkeeper".into(), 1.0);
+        }
+        if has_gun {
+            let gun = game.spawn("oShotgun", Vec2::new(pos.x + 8.0, pos.y + 8.0));
+            let vertical = f64::from(4 + game.rng.range(3));
+            let horizontal =
+                f64::from(4 + game.rng.range(3)) * if velocity_x < 0.0 { -1.0 } else { 1.0 };
+            if let Some(gun) = game.world.entity_mut(gun) {
+                gun.vel = Vec2::new(horizontal, vertical);
+                gun.data.insert("cost".into(), 0.0);
+                gun.data.insert("forSale".into(), 0.0);
+                gun.data.insert("for_sale".into(), 0.0);
+                gun.data
+                    .insert("released_by_enemy_tick".into(), game.tick as f64);
             }
         }
-        if family == "oDamsel" && held && game.player.held == Some(id) {
-            game.player.held = None;
-        }
-        break;
     }
+    if let Some(victim) = game.world.entity_mut(id) {
+        victim.alive = false;
+        if family == "oShopkeeper" {
+            victim.data.insert("has_gun".into(), 0.0);
+        }
+    }
+    if family == "oDamsel" && held {
+        game.player.held = None;
+    }
+    true
+}
+
+fn monkey_collision(game: &mut Game, e: &mut Entity, other: crate::dispatcher::Instance) -> bool {
+    use crate::dispatcher::Instance;
+    if other == Instance::Player {
+        if !e.alive || e.state == 7 || (game.player.pos.x - (e.pos.x + 8.0)).abs() > 4.0 {
+            return true;
+        }
+        if super::player_alive(game)
+            && matches!(
+                game.player.state,
+                PlayerState::Jumping | PlayerState::Falling
+            )
+            && game.player.pos.y < e.pos.y + 2.0
+            && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
+        {
+            game.player.vel.y = -6.0 - 0.2 * game.player.vel.y;
+            game.player.data.insert("fall_timer".into(), 0.0);
+            e.health -= 1;
+            game.sound("sndHit", e.pos);
+        } else if game.player.invincible == 0 && e.value("grab_counter") == 0.0 {
+            e.pos.y = (e.pos.y + 8.0).clamp(game.player.pos.y - 2.0, game.player.pos.y + 2.0) - 8.0;
+            e.state = 7;
+            e.vel = Vec2::default();
+            e.data.insert("grab_x".into(), e.pos.x - game.player.pos.x);
+            e.data.insert("grab_y".into(), e.pos.y - game.player.pos.y);
+            e.timer = 40 + game.rng.range(41);
+        }
+        return true;
+    }
+    let Instance::Entity(id) = other else {
+        return false;
+    };
+    let Some(item) = game.world.entity(id) else {
+        return false;
+    };
+    if !crate::catalog::is_a(&item.object, "oItem") {
+        return false;
+    }
+    if !e.alive
+        || e.state == 7
+        || e.value("throw_counter") != 0.0
+        || item.held
+        || item.data.get("active").copied().unwrap_or(1.0) == 0.0
+    {
+        return true;
+    }
+    let rope = item.object == "oRopeThrow";
+    if rope && item.value("falling") != 0.0 {
+        return true;
+    }
+    let pos = item.pos;
+    let lift = !game
+        .world
+        .solid_at(pos.x, pos.y - if rope { 0.0 } else { 2.0 });
+    if let Some(item) = game.world.entity_mut(id) {
+        item.vel = Vec2::new(5.0 * e.facing as f64, -4.0);
+        if lift {
+            item.pos.y = if rope { e.pos.y - 2.0 } else { pos.y - 2.0 };
+        }
+    }
+    e.data.insert("throw_counter".into(), 60.0);
+    e.state = 0;
+    e.timer = 20 + game.rng.range(41);
+    true
 }
 
 fn eat(e: &mut Entity, sprite: &str, x: f64) {
     e.state = 97;
     e.vel.x = 0.0;
-    e.animation = 0.0;
     e.facing = if x > center(e).x { 1 } else { -1 };
-    e.sprite = sprite.into();
+    e.set_sprite(sprite);
 }
 
 #[cfg(test)]
@@ -1096,9 +1216,10 @@ mod tests {
         entity
     }
     fn pond(game: &mut Game) {
+        game.player.data.insert("swimming".into(), 1.0);
         for y in 1..10 {
             for x in 1..10 {
-                game.world.set_tile(x, y, "oWater");
+                game.world.set_tile(x, y, "oWaterSwim");
             }
         }
     }
@@ -1154,6 +1275,7 @@ mod tests {
         game.player.pos = Vec2::new(50.0, 50.0);
         let mut e = entity("oMonkey", game.player.pos);
         tick(&mut game, &mut e);
+        collision(&mut game, &mut e, crate::dispatcher::Instance::Player);
         assert_eq!(e.state, 7);
         assert!((40..=80).contains(&e.timer));
         assert_eq!(game.player.health, 4);
@@ -1169,12 +1291,16 @@ mod tests {
         game.world.entity_mut(id).unwrap().vel = Vec2::default();
         game.step(&crate::InputFrame::default());
         assert_eq!(game.world.entity(id).unwrap().state, 97);
-        assert_eq!(game.state, crate::RunState::Dead);
-        for _ in 0..28 {
+        assert_eq!(game.player.health, -99);
+        // Automatic collision follows the player's Normal Step. Its dead
+        // latch is observed on the following frame; animation still advances.
+        let eat_ticks = crate::catalog::sprite_frame_count("sManTrapEatL") * 2;
+        for _ in 1..eat_ticks {
             game.step(&crate::InputFrame::default());
         }
+        assert_eq!(game.state, crate::RunState::Dead);
         assert_eq!(game.world.entity(id).unwrap().state, 96);
-        for _ in 0..32 {
+        for _ in 0..crate::catalog::sprite_frame_count("sManTrapSleepL") * 2 {
             game.step(&crate::InputFrame::default());
         }
         assert_eq!(game.world.entity(id).unwrap().state, 98);
@@ -1190,7 +1316,7 @@ mod tests {
         tick(&mut game, &mut e);
         assert_eq!(e.state, 3);
         let turn_sprite = e.sprite.clone();
-        animation_end(&mut e, &turn_sprite);
+        animation_end(&mut game, &mut e, &turn_sprite);
         assert_eq!(e.state, 2);
         assert_eq!(e.timer, 40);
     }
@@ -1228,9 +1354,8 @@ mod tests {
         game.player.pos = Vec2::new(55.0, 50.0);
         game.player.state = PlayerState::Standing;
         assert!(event_bounds(&e).intersects(game.player.bounds()));
-        game.world.entities.push(e);
-        super::super::tick(&mut game);
-        assert_ne!(game.world.entity(999).unwrap().state, 7);
+        collision(&mut game, &mut e, crate::dispatcher::Instance::Player);
+        assert_ne!(e.state, 7);
         assert_eq!(game.player.health, 4);
     }
 
@@ -1242,11 +1367,9 @@ mod tests {
         game.player.pos = Vec2::new(50.0, 41.0);
         game.player.state = PlayerState::Jumping;
         game.player.vel.y = -1.0;
-        game.world.entities.push(e);
-        super::super::tick(&mut game);
-        let monkey = game.world.entities.iter().find(|e| e.id == 999).unwrap();
-        assert_ne!(monkey.state, 7);
-        assert_eq!(monkey.health, 0);
+        collision(&mut game, &mut e, crate::dispatcher::Instance::Player);
+        assert_ne!(e.state, 7);
+        assert_eq!(e.health, 0);
         assert_eq!(game.player.health, 4);
         assert_eq!(game.player.vel.y, -5.8);
     }
@@ -1259,6 +1382,7 @@ mod tests {
         let mut e = Entity::new(999, "oMonkey", Vec2::new(42.0, 39.0));
         super::super::init_entity(&mut e);
         tick(&mut game, &mut e);
+        collision(&mut game, &mut e, crate::dispatcher::Instance::Player);
         assert_eq!(e.state, 7);
         assert_eq!(e.pos.y, 40.0);
         assert_eq!(e.value("grab_y"), -10.0);
@@ -1284,22 +1408,13 @@ mod tests {
             if spikes {
                 game.player.equipment.insert("SpikeShoes".into());
             }
-            game.world.entities.push(e);
-            super::super::tick(&mut game);
+            collision(&mut game, &mut e, crate::dispatcher::Instance::Player);
             assert_eq!(
                 game.player.health, expected_health,
                 "spikes={spikes} stun={stun}"
             );
             if spikes && stun == 0 {
-                assert_eq!(
-                    game.world
-                        .entities
-                        .iter()
-                        .find(|e| e.id == 999)
-                        .unwrap()
-                        .health,
-                    0
-                );
+                assert_eq!(e.health, 0);
             }
         }
     }
@@ -1311,6 +1426,13 @@ mod tests {
         game.player.pos = Vec2::new(60.0, 50.0);
         let first = game.world.spawn("oCaveman", Vec2::new(70.0, 42.0));
         let second = game.world.spawn("oCaveman", Vec2::new(100.0, 42.0));
+        for id in [first, second] {
+            game.world
+                .entity_mut(id)
+                .unwrap()
+                .data
+                .insert("swimming".into(), 1.0);
+        }
         let mut e = entity("oPiranha", Vec2::new(50.0, 50.0));
         tick(&mut game, &mut e);
         assert_eq!(e.state, 3);
@@ -1348,7 +1470,7 @@ mod tests {
         assert_eq!(e.state, 3);
         assert_eq!(e.pos.x, 48.0);
         let turn_sprite = e.sprite.clone();
-        animation_end(&mut e, &turn_sprite);
+        animation_end(&mut game, &mut e, &turn_sprite);
         assert_eq!(e.state, 2);
         assert_eq!(e.pos.x, 96.0);
         // Animation End changes the sprite; the next Step updates the
@@ -1449,7 +1571,7 @@ mod tests {
         assert_eq!(e.pos.x, 19.0);
         assert_eq!(e.state, 1);
         let turn_sprite = e.sprite.clone();
-        animation_end(&mut e, &turn_sprite);
+        animation_end(&mut game, &mut e, &turn_sprite);
         assert_eq!(e.state, 2);
         assert_eq!(e.sprite, "sJawsRight");
         assert_eq!(e.timer, 40);
@@ -1527,10 +1649,12 @@ mod tests {
         let trap = game.world.spawn("oManTrap", Vec2::new(370.0, 144.0));
         assert!(370.0 >= game.camera.x + crate::VIEW_WIDTH + 4.0);
         game.step(&crate::InputFrame::default());
-        assert_eq!(game.state, crate::RunState::Dead);
+        assert_eq!(game.player.health, -99);
         let trap = game.world.entity(trap).unwrap();
         assert_eq!(trap.state, 97);
         assert_eq!(trap.pos, Vec2::new(370.0, 144.0));
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.state, crate::RunState::Dead);
     }
 
     #[test]
@@ -1558,7 +1682,7 @@ mod tests {
         }
         for x in 29..42 {
             for y in 8..10 {
-                game.world.set_tile(x, y, "oWater");
+                game.world.set_tile(x, y, "oWaterSwim");
             }
         }
         let jaws = game.world.spawn("oJaws", Vec2::new(464.0, 128.0));
@@ -1642,16 +1766,464 @@ mod tests {
             assert_eq!(blood.previous_pos, blood_pos);
             assert_eq!(blood.value("world_effect_initialized"), 1.0);
         }
-        for (bone, (pos, velocity, gravity)) in effects[4..8].iter().zip(bones) {
-            assert_eq!(bone.previous_pos, pos);
-            assert_eq!(bone.vel, Vec2::new(velocity.x, velocity.y + gravity));
-            assert_eq!(bone.value("gravity"), gravity);
-            assert_eq!(bone.value("life"), 59.0);
+        let bone_ids: Vec<_> = effects[4..8].iter().map(|e| e.id).collect();
+        // These source resources precede Jaws in the Normal Step pass, so
+        // newborns retain their synchronous Create state until the next frame.
+        for (bone, (pos, velocity, gravity)) in effects[4..8].iter().zip(&bones) {
+            assert_eq!(bone.previous_pos, *pos);
+            assert_eq!(bone.vel, *velocity);
+            assert_eq!(bone.value("gravity"), *gravity);
+            assert_eq!(bone.value("life"), 60.0);
         }
         for (item, velocity) in effects[8..].iter().zip(crates) {
             assert_eq!(item.pos, Vec2::new(64.0, 64.0));
             assert_eq!(item.vel, velocity);
         }
         assert_eq!(game.rng.next_u64(), rng.next_u64());
+        game.step(&crate::InputFrame::default());
+        for (id, (_, velocity, gravity)) in bone_ids.into_iter().zip(bones) {
+            let bone = game.world.entity(id).unwrap();
+            assert_eq!(bone.vel, Vec2::new(velocity.x, velocity.y + gravity));
+            assert_eq!(bone.value("life"), 59.0);
+        }
+    }
+
+    #[test]
+    fn mantrap_collision_acts_only_on_the_supplied_npc_pair() {
+        let mut game = Game::shell(31, RulesPreset::Classic);
+        let mut trap = entity("oManTrap", Vec2::new(56.0, 56.0));
+        let first = game.world.spawn("oCaveman", trap.pos);
+        let second = game.world.spawn("oDamsel", trap.pos);
+        assert!(collision(
+            &mut game,
+            &mut trap,
+            crate::dispatcher::Instance::Entity(second)
+        ));
+        assert!(game.world.entity(first).unwrap().alive);
+        assert!(game.world.entity(second).is_none());
+        assert_eq!(trap.sprite, "sManTrapEatDamselL");
+    }
+
+    #[test]
+    fn monkey_collision_throws_only_the_supplied_item_pair() {
+        let mut game = Game::shell(32, RulesPreset::Classic);
+        let mut monkey = entity("oMonkey", Vec2::new(56.0, 56.0));
+        monkey.data.insert("throw_counter".into(), 0.0);
+        let first = game.world.spawn("oRock", monkey.pos);
+        let second = game.world.spawn("oRock", monkey.pos);
+        assert!(collision(
+            &mut game,
+            &mut monkey,
+            crate::dispatcher::Instance::Entity(second)
+        ));
+        assert_eq!(game.world.entity(first).unwrap().vel, Vec2::default());
+        assert_eq!(game.world.entity(second).unwrap().vel, Vec2::new(5.0, -4.0));
+        assert_eq!(monkey.value("throw_counter"), 60.0);
+    }
+
+    #[test]
+    fn monkey_item_collision_respects_source_active_property() {
+        let mut game = Game::shell(32, RulesPreset::Classic);
+        let mut monkey = entity("oMonkey", Vec2::new(56.0, 56.0));
+        monkey.data.insert("throw_counter".into(), 0.0);
+        let rock = game.world.spawn("oRock", monkey.pos);
+        game.world
+            .entity_mut(rock)
+            .unwrap()
+            .data
+            .insert("active".into(), 0.0);
+        assert!(collision(
+            &mut game,
+            &mut monkey,
+            crate::dispatcher::Instance::Entity(rock)
+        ));
+        assert_eq!(game.world.entity(rock).unwrap().vel, Vec2::default());
+        assert_eq!(monkey.value("throw_counter"), 0.0);
+    }
+
+    #[test]
+    fn mantrap_spike_stomp_remains_eligible_while_already_stunned() {
+        let mut game = Game::shell(33, RulesPreset::Classic);
+        let mut trap = entity("oManTrap", Vec2::new(56.0, 56.0));
+        trap.state = 98;
+        game.player.pos = Vec2::new(56.0, trap.pos.y + 4.0);
+        game.player.state = PlayerState::Falling;
+        game.player.equipment.insert("SpikeShoes".into());
+        collision(&mut game, &mut trap, crate::dispatcher::Instance::Player);
+        assert_eq!(trap.health, 0);
+        assert_eq!(game.player.health, 4);
+        assert!(trap.alive, "death belongs to the next child Step");
+        assert_eq!(game.lifetime_stats.enemy_kills[10], 0);
+    }
+
+    #[test]
+    fn mantrap_eating_preserves_image_index_and_sleep_uses_instance_stun_time() {
+        let mut game = Game::shell(34, RulesPreset::Classic);
+        let mut trap = entity("oManTrap", Vec2::new(56.0, 56.0));
+        trap.animation = 1.25;
+        game.player.pos = Vec2::new(56.0, 56.0);
+        collision(&mut game, &mut trap, crate::dispatcher::Instance::Player);
+        assert_eq!(trap.animation, 1.25);
+        trap.data.insert("stun_time".into(), 17.0);
+        animation_end(&mut game, &mut trap, "sManTrapEatL");
+        assert_eq!(trap.state, 96);
+        animation_end(&mut game, &mut trap, "sManTrapSleepL");
+        assert_eq!(trap.state, 98);
+        assert_eq!(trap.timer, 34);
+    }
+
+    #[test]
+    fn mantrap_lifetime_player_death_obeys_real_level_eligibility() {
+        for custom in [false, true] {
+            let mut game = Game::shell(35, RulesPreset::Classic);
+            if custom {
+                game.flags.insert("custom".into());
+            }
+            let mut trap = entity("oManTrap", Vec2::new(56.0, 56.0));
+            game.player.pos = Vec2::new(56.0, 56.0);
+            collision(&mut game, &mut trap, crate::dispatcher::Instance::Player);
+            assert_eq!(game.player.health, -99);
+            assert_eq!(game.lifetime_stats.enemy_deaths[10], u64::from(!custom));
+        }
+    }
+
+    #[test]
+    fn fish_targeting_uses_the_other_instances_stored_swimming_flag() {
+        for object in ["oPiranha", "oJaws"] {
+            let mut game = Game::shell(36, RulesPreset::Classic);
+            pond(&mut game);
+            game.player.pos = Vec2::new(70.0, 64.0);
+            game.player.data.insert("swimming".into(), 0.0);
+            let mut fish = Entity::new(999, object, Vec2::new(48.0, 48.0));
+            super::super::init_entity(&mut fish);
+            tick(&mut game, &mut fish);
+            assert_eq!(fish.state, 0, "{object} must use the stored flag");
+            game.player.data.insert("swimming".into(), 1.0);
+            tick(&mut game, &mut fish);
+            assert_eq!(fish.state, 1, "{object}");
+        }
+    }
+
+    #[test]
+    fn fish_bubble_create_consumes_rng_before_piranha_timer_and_uses_jaws_mouth() {
+        for object in ["oPiranha", "oJaws"] {
+            let mut game = Game::shell(37, RulesPreset::Classic);
+            let mut fish = Entity::new(999, object, Vec2::new(48.0, 48.0));
+            super::super::init_entity(&mut fish);
+            let mut expected = game.rng.clone();
+            let velocity = -f64::from(1 + expected.range(3)) * 0.1;
+            let timer = if object == "oPiranha" {
+                30.0 + f64::from(expected.range(21))
+            } else {
+                40.0
+            };
+            bubbles(&mut game, &mut fish, object == "oPiranha");
+            let bubble = game
+                .world
+                .entities
+                .iter()
+                .find(|e| e.object == "oBubble")
+                .unwrap();
+            assert_eq!(bubble.vel.y, velocity);
+            assert_eq!(
+                bubble.pos,
+                Vec2::new(48.0, if object == "oJaws" { 64.0 } else { 48.0 })
+            );
+            assert_eq!(fish.value("bubble_timer"), timer);
+            assert_eq!(game.rng.next_u64(), expected.next_u64());
+        }
+    }
+
+    #[test]
+    fn monkey_stolen_gold_uses_treasure_alarm_instead_of_age_delay() {
+        let mut found = false;
+        for seed in 0..32 {
+            let mut game = Game::shell(seed, RulesPreset::Classic);
+            game.player.money = 1000;
+            let monkey = entity("oMonkey", Vec2::new(56.0, 56.0));
+            monkey_steal(&mut game, &monkey);
+            if let Some(gold) = game
+                .world
+                .entities
+                .iter()
+                .find(|e| e.object == "oGoldNugget")
+            {
+                assert_eq!(gold.value("canCollect"), 0.0);
+                assert_eq!(gold.alarms[0], 20);
+                assert!(!gold.data.contains_key("collect_delay"));
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "fixture must reach the source gold theft branch");
+    }
+
+    #[test]
+    fn game_step_monkey_trip_drops_reserved_item_and_restores_the_stash() {
+        let mut game = collision_room();
+        game.player.pos = Vec2::new(56.0, 152.0);
+        let rock = game.spawn("oRock", game.player.pos);
+        let item = game.world.entity_mut(rock).unwrap();
+        item.held = true;
+        item.data.insert("stashed".into(), 1.0);
+        game.player.data.insert("stash_id".into(), rock as f64);
+        let bomb = game.spawn("oBomb", game.player.pos);
+        game.world.entity_mut(bomb).unwrap().held = true;
+        game.player.held = Some(bomb);
+        let monkey = game.spawn("oMonkey", Vec2::new(48.0, 144.0));
+        // Establish GRAB through the actual automatic Character collision pair.
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.world.entity(monkey).unwrap().state, 7);
+        game.world.entity_mut(monkey).unwrap().timer = 0;
+        let trip_seed = (0..32)
+            .find(|seed| crate::Rng::new(*seed).chance(1, 4))
+            .unwrap();
+        game.rng = crate::Rng::new(trip_seed);
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.player.stun, 40);
+        assert_eq!(game.player.held, Some(rock));
+        assert!(!game.player.data.contains_key("stash_id"));
+        let item = game.world.entity(bomb).unwrap();
+        assert!(!item.held);
+        assert_eq!(item.vel, Vec2::default());
+        let item = game.world.entity(rock).unwrap();
+        assert!(item.held);
+        assert!(!item.data.contains_key("stashed"));
+    }
+
+    #[test]
+    fn game_step_frog_death_and_blood_wait_for_its_source_viewport_step() {
+        let mut game = collision_room();
+        let id = game.world.spawn("oFrog", Vec2::new(370.0, 144.0));
+        game.world.entity_mut(id).unwrap().health = 0;
+        game.step(&crate::InputFrame::default());
+        assert!(game.world.entity(id).unwrap().alive);
+        assert_eq!(game.lifetime_stats.enemy_kills[8], 0);
+        assert!(!game.world.entities.iter().any(|e| e.object == "oBlood"));
+        game.world.entity_mut(id).unwrap().pos.x = 100.0;
+        game.step(&crate::InputFrame::default());
+        assert!(game.world.entity(id).is_none());
+        assert_eq!(game.lifetime_stats.enemy_kills[8], 1);
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oBlood")
+                .count(),
+            3
+        );
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.lifetime_stats.enemy_kills[8], 1);
+    }
+
+    #[test]
+    fn game_step_mantrap_stomp_credits_death_on_next_normal_step() {
+        let mut game = collision_room();
+        game.player.pos = Vec2::new(56.0, 139.0);
+        game.player.state = PlayerState::Falling;
+        game.player.vel.y = 1.0;
+        game.player.equipment.insert("SpikeShoes".into());
+        let id = game.spawn("oManTrap", Vec2::new(48.0, 144.0));
+        game.world.entity_mut(id).unwrap().vel = Vec2::default();
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().health, 0);
+        assert_eq!(game.lifetime_stats.enemy_kills[10], 0);
+        game.step(&crate::InputFrame::default());
+        assert!(game.world.entity(id).is_none());
+        assert_eq!(game.lifetime_stats.enemy_kills[10], 1);
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.lifetime_stats.enemy_kills[10], 1);
+    }
+
+    #[test]
+    fn jungle_create_randomizes_source_facing_once_and_latches_origin_water() {
+        for object in ["oFrog", "oFireFrog", "oMonkey", "oPiranha"] {
+            let mut game = Game::shell(39, RulesPreset::Classic);
+            game.world.set_tile(3, 3, "oWaterSwim");
+            let mut actor = Entity::new(999, object, Vec2::new(48.0, 48.0));
+            super::super::init_entity(&mut actor);
+            let mut expected = game.rng.clone();
+            let facing = if expected.range(2) == 0 { -1 } else { 1 };
+            create(&mut game, &mut actor);
+            assert_eq!(actor.facing, facing, "{object}");
+            if object != "oPiranha" {
+                assert_eq!(actor.value("swimming"), 1.0, "{object}");
+            }
+            create(&mut game, &mut actor);
+            assert_eq!(game.rng.next_u64(), expected.next_u64(), "{object}");
+        }
+    }
+
+    #[test]
+    fn local_jungle_create_preserves_producer_overrides_at_runtime_bootstrap() {
+        for object in ["oFrog", "oFireFrog", "oMonkey", "oPiranha"] {
+            let mut game = Game::shell(43, RulesPreset::Classic);
+            game.world.set_tile(3, 3, "oWaterSwim");
+            let mut actor = Entity::new(999, object, Vec2::new(48.0, 48.0));
+            super::super::init_entity(&mut actor);
+            let mut expected = game.rng.clone();
+            let facing = if expected.range(2) == 0 { -1 } else { 1 };
+            create_local(
+                &mut crate::creation::EntityCreateContext {
+                    world: &game.world,
+                    rng: &mut game.rng,
+                },
+                &mut actor,
+            );
+            assert_eq!(actor.facing, facing, "{object}");
+            assert_eq!(actor.value("swimming"), f64::from(object != "oPiranha"));
+            actor.facing = -facing;
+            actor.state = 3;
+            actor.timer = 88;
+            actor.health = 17;
+            actor.data.insert("swimming".into(), 0.0);
+            create_local(
+                &mut crate::creation::EntityCreateContext {
+                    world: &game.world,
+                    rng: &mut game.rng,
+                },
+                &mut actor,
+            );
+            create(&mut game, &mut actor);
+            assert_eq!(actor.facing, -facing, "{object}");
+            assert_eq!((actor.state, actor.timer, actor.health), (3, 88, 17));
+            assert_eq!(actor.value("swimming"), 0.0);
+            assert_eq!(game.rng.next_u64(), expected.next_u64(), "{object}");
+        }
+    }
+
+    #[test]
+    fn generated_jungle_spawn_runs_local_create_before_producer_overrides() {
+        for object in ["oFrog", "oFireFrog", "oMonkey", "oPiranha"] {
+            let mut game = Game::shell(44, RulesPreset::Classic);
+            game.world.set_tile(3, 3, "oWaterSwim");
+            let mut expected = game.rng.clone();
+            let facing = if expected.range(2) == 0 { -1 } else { 1 };
+            let id = crate::creation::spawn_generated_entity(
+                &mut game.world,
+                &mut game.rng,
+                object,
+                Vec2::new(48.0, 48.0),
+            );
+            let actor = game.world.entity_mut(id).unwrap();
+            assert_eq!(actor.value("jungle_context_created"), 1.0);
+            assert_eq!(actor.value("enemy_context_created"), 0.0);
+            assert_eq!(actor.facing, facing);
+            assert_eq!(actor.value("swimming"), f64::from(object != "oPiranha"));
+            actor.facing = -facing;
+            actor.state = 2;
+            actor.health = 5;
+            super::super::create_instance(&mut game, id);
+            super::super::create_instance(&mut game, id);
+            let actor = game.world.entity(id).unwrap();
+            assert_eq!((actor.facing, actor.state, actor.health), (-facing, 2, 5));
+            assert_eq!(game.rng.next_u64(), expected.next_u64(), "{object}");
+        }
+    }
+
+    #[test]
+    fn shortcut_game_api_generates_jungle_creates_before_runtime_bootstrap() {
+        let mut game = Game::shell(45, RulesPreset::Classic);
+        game.start_from_hub(false, 5);
+        let actors: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|e| matches(&e.object))
+            .map(|e| (e.id, e.facing, e.state))
+            .collect();
+        assert!(!actors.is_empty(), "fixture must generate a jungle family");
+        for (id, _, _) in &actors {
+            assert_eq!(
+                game.world
+                    .entity(*id)
+                    .unwrap()
+                    .value("jungle_context_created"),
+                1.0
+            );
+        }
+        let mut expected = game.rng.clone();
+        for (id, facing, state) in actors {
+            super::super::create_instance(&mut game, id);
+            let actor = game.world.entity(id).unwrap();
+            assert_eq!((actor.facing, actor.state), (facing, state));
+        }
+        assert_eq!(game.rng.next_u64(), expected.next_u64());
+    }
+
+    #[test]
+    fn game_step_piranha_alarm_reopens_bite_latch_before_normal_step() {
+        let mut game = collision_room();
+        game.world.set_tile(23, 9, "oWaterSwim");
+        let id = game.spawn("oPiranha", Vec2::new(370.0, 144.0));
+        let fish = game.world.entity_mut(id).unwrap();
+        fish.state = 3;
+        fish.data.insert("can_bite".into(), 0.0);
+        fish.alarms[0] = 1;
+        game.step(&crate::InputFrame::default());
+        let fish = game.world.entity(id).unwrap();
+        assert_eq!(fish.state, 2, "no eligible NPC target");
+        assert_eq!(
+            fish.value("can_bite"),
+            1.0,
+            "Alarm0 runs independently before Step"
+        );
+    }
+
+    #[test]
+    fn mantrap_death_creates_leaves_blood_keeper_then_second_leaf_blood_burst() {
+        let mut game = Game::shell(38, RulesPreset::Classic);
+        let mut trap = Entity::new(999, "oManTrap", Vec2::new(48.0, 48.0));
+        super::super::init_entity(&mut trap);
+        trap.health = 0;
+        trap.vel = Vec2::default();
+        trap.data.insert("ate_shopkeeper".into(), 1.0);
+        let mut expected = game.rng.clone();
+        let mut leaf_positions = Vec::new();
+        for _ in 0..2 {
+            for _ in 0..3 {
+                leaf_positions.push(Vec2::new(
+                    48.0 + f64::from(expected.range(17)),
+                    40.0 + f64::from(expected.range(17)),
+                ));
+            }
+            expected.unit();
+            expected.unit();
+            expected.unit();
+            expected.range(6);
+        }
+        tick(&mut game, &mut trap);
+        assert!(!trap.alive);
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .map(|e| e.object.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "oLeaf",
+                "oLeaf",
+                "oLeaf",
+                "oBlood",
+                "oShopkeeper",
+                "oLeaf",
+                "oLeaf",
+                "oLeaf",
+                "oBlood"
+            ]
+        );
+        for (leaf, pos) in game
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.object == "oLeaf")
+            .zip(leaf_positions)
+        {
+            assert_eq!(leaf.pos, pos);
+            assert_eq!(leaf.vel.y, 0.4);
+            assert_eq!(leaf.value("gravity"), 0.01);
+        }
+        assert_eq!(game.lifetime_stats.enemy_kills[10], 1);
+        assert_eq!(game.rng.next_u64(), expected.next_u64());
     }
 }
