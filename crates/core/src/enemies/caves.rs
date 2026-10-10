@@ -1,0 +1,697 @@
+//! Cave enemy state machines translated from the Classic 1.1 event sources.
+//!
+//! Positions retain original GameMaker instance origins. Collision uses the
+//! shared source sprite rectangles rather than per-pixel masks. Caveman sight uses an
+//! unobstructed forward ray rather than moving oEnemySight instances (which in
+//! Classic can alert other nearby cavemen). Animation-end transitions use the
+//! source sprite frame count and speed. Combat, death drops, and activation
+//! distance are owned by the parent enemy dispatcher.
+
+use super::{bounds, center, move_body, steer_toward};
+use crate::{Entity, Game, PlayerState, Rect, Vec2, World};
+
+pub fn matches(object: &str) -> bool {
+    matches!(
+        object,
+        "oSnake"
+            | "oBat"
+            | "oSpider"
+            | "oSpiderHang"
+            | "oGiantSpider"
+            | "oGiantSpiderHang"
+            | "oCaveman"
+            | "oCavemanWorship"
+    )
+}
+
+pub fn init(e: &mut Entity) {
+    e.state = 0;
+    e.facing = 1;
+    e.health = if e.object == "oCaveman" { 3 } else { 1 };
+    e.vel = Vec2::default();
+    e.data.insert("animation_speed".into(), 0.4);
+    let (width, height) = match e.object.as_str() {
+        "oBat" => (12.0, 12.0),
+        "oSpider" => (14.0, 11.0),
+        "oGiantSpider" => (28.0, 16.0),
+        _ => (12.0, 16.0),
+    };
+    e.data.insert("size_width".into(), width);
+    e.data.insert("size_height".into(), height);
+    e.data.insert(
+        "hit_cooldown".into(),
+        if e.object == "oGiantSpider" {
+            10.0
+        } else {
+            0.0
+        },
+    );
+    match e.object.as_str() {
+        "oSnake" => {
+            e.vel.x = 2.5;
+            e.sprite = "sSnakeWalkL".into();
+        }
+        "oBat" => {
+            e.sprite = "sBatHang".into();
+            e.data.insert("animation_speed".into(), 0.5);
+        }
+        "oSpider" => e.sprite = "sSpider".into(),
+        "oSpiderHang" => {
+            e.sprite = "sSpiderHang".into();
+            set_collision(e, [4.0, 0.0, 12.0, 12.0]);
+        }
+        "oGiantSpiderHang" => {
+            e.sprite = "sGiantSpiderHang".into();
+            e.health = 10;
+            e.data.insert("contact_damage".into(), 2.0);
+            set_collision(e, [0.0, 0.0, 32.0, 16.0]);
+        }
+        "oGiantSpider" => {
+            e.data.insert("contact_damage".into(), 2.0);
+            e.sprite = "sGiantSpider".into();
+            e.data.insert("animation_speed".into(), 0.8);
+            // Assigned using the game's RNG on the first active tick.
+            e.data.insert("squirt_timer".into(), -1.0);
+        }
+        "oCaveman" => {
+            e.vel.x = 2.5;
+            e.sprite = "sCavemanLeft".into();
+            e.data.insert("animation_speed".into(), 0.5);
+            e.data.insert("stun_time".into(), 200.0);
+        }
+        "oCavemanWorship" => {
+            // This source object has no enemy parent or gameplay events.
+            e.sprite = "sCavemanWorshipR".into();
+            e.data.insert("animation_speed".into(), 0.25);
+            e.data.insert("enemy".into(), 0.0);
+        }
+        _ => {}
+    }
+}
+
+pub fn tick(game: &mut Game, e: &mut Entity) {
+    match e.object.as_str() {
+        "oSnake" => snake(game, e),
+        "oBat" => bat(game, e),
+        "oSpider" => spider(game, e, false),
+        "oGiantSpider" => spider(game, e, true),
+        "oSpiderHang" => hanging_spider(game, e, false),
+        "oGiantSpiderHang" => hanging_spider(game, e, true),
+        "oCaveman" => caveman(game, e),
+        _ => {}
+    }
+}
+
+fn set_collision(e: &mut Entity, values: [f64; 4]) {
+    for (key, value) in [
+        "collision_left",
+        "collision_top",
+        "collision_right",
+        "collision_bottom",
+    ]
+    .into_iter()
+    .zip(values)
+    {
+        e.data.insert(key.into(), value);
+    }
+}
+
+fn hanging_spider(game: &mut Game, e: &mut Entity, giant: bool) {
+    // Original Create places these immediately. The Game-free initializer
+    // defers world spawning until the first active Step instead.
+    if giant && e.value("hanging_webs_created") == 0.0 {
+        game.world.spawn("oWeb", Vec2::new(e.pos.x, e.pos.y + 16.0));
+        game.world
+            .spawn("oWeb", Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
+        e.data.insert("hanging_webs_created".into(), 1.0);
+    }
+    let half = if giant { 16.0 } else { 8.0 };
+    let crush_y = if giant { 8.0 } else { 4.0 };
+    if game.world.solid_at(e.pos.x + half, e.pos.y + crush_y) {
+        e.health = 0;
+    }
+    if e.health <= 0 {
+        return;
+    }
+    let beneath = center(e).distance(game.player.pos) < 90.0
+        && game.player.pos.y > e.pos.y
+        && (game.player.pos.x - (e.pos.x + half)).abs() < 8.0;
+    if (giant && e.health < 10) || !game.world.solid_at(e.pos.x, e.pos.y - 16.0) || beneath {
+        // The source replaces the hanging instance with a new live spider at
+        // the same origin. Preserve the stable ID while replacing its state.
+        let health = e.health;
+        e.object = if giant { "oGiantSpider" } else { "oSpider" }.into();
+        e.data.remove("enemy_initialized");
+        super::init_entity(e);
+        e.health = health;
+    }
+}
+
+fn bottom(world: &World, e: &Entity) -> bool {
+    let r = bounds(e);
+    world.collides(Rect::new(r.x, r.y + r.h, r.w, 1.0))
+}
+
+fn top(world: &World, e: &Entity) -> bool {
+    let r = bounds(e);
+    world.collides(Rect::new(r.x, r.y - 1.0, r.w, 1.0))
+}
+
+fn side(world: &World, e: &Entity, direction: i8) -> bool {
+    let r = bounds(e);
+    world.collides(Rect::new(
+        if direction < 0 { r.x - 1.0 } else { r.x + r.w },
+        r.y,
+        1.0,
+        r.h,
+    ))
+}
+
+fn floor_ahead(world: &World, e: &Entity, direction: i8) -> bool {
+    world.solid_at(
+        e.pos.x + if direction < 0 { -1.0 } else { 16.0 },
+        e.pos.y + 16.0,
+    )
+}
+
+fn random_facing(game: &mut Game) -> i8 {
+    if game.rng.range(2) == 0 { -1 } else { 1 }
+}
+
+fn snake(game: &mut Game, e: &mut Entity) {
+    move_body(&game.world, e, 0.6);
+    if e.state == 0 {
+        if e.timer > 0 {
+            e.timer -= 1;
+        } else {
+            e.facing = random_facing(game);
+            e.state = 1;
+        }
+    } else if e.state == 1 {
+        if side(&game.world, e, -1) || side(&game.world, e, 1) {
+            e.facing *= -1;
+        }
+        if !floor_ahead(&game.world, e, e.facing) {
+            e.facing *= -1;
+        }
+        let blocked_left = !floor_ahead(&game.world, e, -1) || side(&game.world, e, -1);
+        let blocked_right = !floor_ahead(&game.world, e, 1) || side(&game.world, e, 1);
+        e.vel.x = if blocked_left && blocked_right {
+            0.0
+        } else {
+            f64::from(e.facing)
+        };
+        if game.rng.chance(1, 100) {
+            e.state = 0;
+            e.timer = 20 + game.rng.range(31);
+            e.vel.x = 0.0;
+        }
+    }
+    e.sprite = "sSnakeWalkL".into();
+    e.data.insert(
+        "animation_speed".into(),
+        if e.vel.x == 0.0 { 0.2 } else { 0.4 },
+    );
+}
+
+fn player_available(game: &Game) -> bool {
+    game.player.health > 0
+        && game.player.state != PlayerState::Dead
+        && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
+}
+
+fn bat(game: &mut Game, e: &mut Entity) {
+    move_body(&game.world, e, 0.0);
+    let body_center = center(e);
+    let distance = body_center.distance(game.player.pos);
+    let ceiling = game.world.solid_at(e.pos.x + 8.0, e.pos.y - 1.0);
+    if e.state == 0 {
+        e.sprite = "sBatHang".into();
+        if player_available(game)
+            && ((distance < 90.0 && game.player.pos.y > e.pos.y + 16.0) || !ceiling)
+        {
+            e.state = 1;
+            game.sound("sndBat", e.pos);
+        }
+        return;
+    }
+    if player_available(game) && distance < 160.0 {
+        let target = game.player.pos;
+        steer_toward(e, target, 1.0);
+        let target_side = if target.x < body_center.x { -1 } else { 1 };
+        if side(&game.world, e, target_side) {
+            e.vel = Vec2::new(0.0, if target.y < body_center.y { -1.0 } else { 1.0 });
+        }
+        if ((top(&game.world, e) && target.y < body_center.y)
+            || (bottom(&game.world, e) && target.y > body_center.y))
+            && (target.x - e.pos.x).abs() > 8.0
+        {
+            e.vel = Vec2::new(f64::from(target_side), 0.0);
+        }
+        // The original avoids chasing players into water.
+        if in_water(game, Vec2::new(e.pos.x + 8.0, e.pos.y + 16.0)) && e.vel.y > 0.0 {
+            e.vel = Vec2::new(0.0, -1.0);
+        }
+    } else if ceiling {
+        e.state = 0;
+        e.vel = Vec2::default();
+    } else {
+        e.vel = Vec2::new(0.0, -1.0);
+    }
+    e.facing = if game.player.pos.x < body_center.x {
+        -1
+    } else {
+        1
+    };
+    e.sprite = if e.facing < 0 {
+        "sBatLeft"
+    } else {
+        "sBatRight"
+    }
+    .into();
+}
+
+fn in_water(game: &Game, pos: Vec2) -> bool {
+    game.world.entities.iter().any(|other| {
+        other.alive
+            && matches!(other.object.as_str(), "oWater" | "oWaterSwim")
+            && other.bounds().contains(pos)
+    }) || game
+        .world
+        .tile((pos.x / 16.0).floor() as i32, (pos.y / 16.0).floor() as i32)
+        .is_some_and(|tile| matches!(tile.object.as_str(), "oWater" | "oWaterSwim"))
+}
+
+fn launch_spider(game: &mut Game, e: &mut Entity, low: u32) {
+    e.vel.y = -f64::from(low + game.rng.range(4));
+    e.facing = if game.player.pos.x < center(e).x {
+        -1
+    } else {
+        1
+    };
+    e.vel.x = f64::from(e.facing) * 2.5;
+}
+
+fn spider(game: &mut Game, e: &mut Entity, giant: bool) {
+    let (_, grounded) = move_body(&game.world, e, if giant { 0.3 } else { 0.2 });
+    let grounded = grounded || bottom(&game.world, e);
+    let ceiling = top(&game.world, e);
+    if !giant && e.state != 4 && in_water(game, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0)) {
+        e.state = 4;
+        e.timer = 30;
+        e.sprite = "sSpiderDrowning".into();
+        e.vel = Vec2::new(0.0, 0.2);
+        game.world
+            .spawn("oSplash", Vec2::new(e.pos.x + 8.0, e.pos.y));
+        game.sound("sndSplash", e.pos);
+    }
+    if e.state == 4 {
+        e.timer = e.timer.saturating_sub(1);
+        if e.timer == 0 {
+            e.alive = false;
+        }
+        return;
+    }
+    if side(&game.world, e, 1) {
+        e.vel.x = 1.0;
+    }
+    if side(&game.world, e, -1) {
+        e.vel.x = -1.0;
+    }
+
+    let mut squirt = e.value("squirt_timer");
+    if giant {
+        if squirt < 0.0 {
+            squirt = f64::from(100 + game.rng.range(901));
+            game.sound("sndGiantSpider", e.pos);
+        }
+        squirt = (squirt - 1.0).max(0.0);
+        if ceiling && grounded && e.state != 3 {
+            e.state = 3;
+            e.vel.x = if game.player.pos.x < center(e).x {
+                -1.0
+            } else {
+                1.0
+            };
+        }
+    }
+
+    // Alarm 0: source alarm expiry changes state before the Step event.
+    let mut alarm_launched = false;
+    if e.state == 2 {
+        e.timer = e.timer.saturating_sub(1);
+        if e.timer == 0 {
+            e.state = 1;
+            if grounded {
+                launch_spider(game, e, 2);
+                alarm_launched = true;
+            }
+        }
+    }
+    match e.state {
+        0 => {
+            e.timer = 5 + game.rng.range(16);
+            e.state = if giant && squirt == 0.0 { 5 } else { 2 };
+            if giant {
+                e.sprite = "sGiantSpider".into();
+            }
+            if e.state == 5 {
+                e.animation = 0.0;
+            }
+        }
+        1 if center(e).distance(game.player.pos) < if giant { 120.0 } else { 90.0 } => {
+            if giant {
+                e.sprite = "sGiantSpiderJump".into();
+            }
+            if grounded && !alarm_launched {
+                launch_spider(game, e, if giant { 3 } else { 2 });
+                if giant {
+                    e.sprite = "sGiantSpider".into();
+                    game.sound("sndSpiderJump", e.pos);
+                }
+                if game.rng.chance(1, 4) {
+                    e.state = 0;
+                    e.vel = Vec2::default();
+                }
+            }
+        }
+        2 => {
+            if grounded {
+                e.vel.x = 0.0;
+            }
+        }
+        3 if giant => {
+            e.sprite = "sGiantSpiderCrawl".into();
+            if !ceiling || !grounded {
+                e.state = 0;
+            } else if side(&game.world, e, 1) {
+                e.vel.x = -1.0;
+            } else if side(&game.world, e, -1) {
+                e.vel.x = 1.0;
+            }
+        }
+        5 if giant => {
+            e.sprite = "sGiantSpiderSquirt".into();
+            if e.animation >= 5.0 && squirt == 0.0 {
+                let id = game
+                    .world
+                    .spawn("oWebBall", Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
+                let velocity = Vec2::new(
+                    f64::from(1 + game.rng.range(3)) * f64::from(random_facing(game)),
+                    -(game.rng.unit() * 3.0 + 1.0),
+                );
+                let life = 20 + game.rng.range(81);
+                if let Some(web) = game.world.entity_mut(id) {
+                    web.vel = velocity;
+                    web.timer = life;
+                }
+                squirt = f64::from(100 + game.rng.range(901));
+            }
+            // Eight frames at the source's 0.4 image_speed.
+            if e.animation >= 8.0 {
+                e.state = 0;
+                e.animation = 0.0;
+                e.data.insert("animation_speed".into(), 0.4);
+            }
+        }
+        _ => {
+            e.state = 0;
+        }
+    }
+    if ceiling {
+        e.vel.y = 1.0;
+    }
+    if giant {
+        e.data.insert("squirt_timer".into(), squirt);
+    }
+}
+
+fn caveman_sees_player(game: &Game, e: &Entity) -> bool {
+    let origin = Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0);
+    let delta = Vec2::new(game.player.pos.x - origin.x, game.player.pos.y - origin.y);
+    if !player_available(game)
+        || delta.x * f64::from(e.facing) <= 0.0
+        || delta.y.abs() > 8.0
+        || center(e).distance(game.player.pos) >= 100.0
+    {
+        return false;
+    }
+    let steps = (delta.x.abs() / 4.0).ceil() as u32;
+    (1..=steps).all(|n| {
+        !game.world.solid_at(
+            origin.x + delta.x * f64::from(n) / f64::from(steps),
+            origin.y,
+        )
+    })
+}
+
+fn caveman(game: &mut Game, e: &mut Entity) {
+    let (_, grounded) = move_body(&game.world, e, if e.held { 0.0 } else { 0.6 });
+    let grounded = grounded || bottom(&game.world, e);
+    let hit_side = side(&game.world, e, -1) || side(&game.world, e, 1);
+    if e.health < 1 && e.state < 98 {
+        e.state = 99;
+    }
+    if e.state < 2 {
+        let sight_timer = e.value("sight_timer");
+        if sight_timer <= 0.0 {
+            e.data.insert("sight_timer".into(), 5.0);
+            if caveman_sees_player(game, e) {
+                e.state = 2;
+                game.sound("sndAlert", e.pos);
+            }
+        } else {
+            e.data.insert("sight_timer".into(), sight_timer - 1.0);
+        }
+    }
+    match e.state {
+        0 => {
+            if grounded && hit_side {
+                e.vel.y = -6.0;
+                e.vel.x = f64::from(e.facing);
+                e.timer = e.timer.saturating_sub(10);
+            }
+            if grounded {
+                e.timer = e.timer.saturating_sub(1);
+            }
+            if e.timer == 0 {
+                e.facing = random_facing(game);
+                e.state = 1;
+            }
+        }
+        1 => {
+            if hit_side {
+                e.facing *= -1;
+            }
+            if !floor_ahead(&game.world, e, e.facing) {
+                e.state = 0;
+                e.timer = 20 + game.rng.range(31);
+            }
+            // Source assigns walking speed even after its ledge state change.
+            e.vel.x = f64::from(e.facing) * 1.5;
+            if game.rng.chance(1, 100) {
+                e.state = 0;
+                e.timer = 20 + game.rng.range(31);
+                e.vel.x = 0.0;
+            }
+        }
+        2 => {
+            e.data.insert("animation_speed".into(), 1.0);
+            if hit_side {
+                e.facing *= -1;
+            }
+            e.vel.x = f64::from(e.facing) * 3.0;
+        }
+        98 => {
+            e.sprite = if e.vel.x == 0.0 && e.health > 0 {
+                "sCavemanStunL"
+            } else if e.vel.y < 0.0 {
+                "sCavemanBounceL"
+            } else {
+                "sCavemanFallL"
+            }
+            .into();
+            if grounded || e.held {
+                e.timer = e.timer.saturating_sub(1);
+                if e.timer == 0 && e.health > 0 {
+                    e.state = 0;
+                    e.held = false;
+                    if game.player.held == Some(e.id) {
+                        game.player.held = None;
+                    }
+                }
+            }
+            if grounded && e.vel.x.abs() < 0.5 && e.health < 1 {
+                e.state = 99;
+            }
+        }
+        99 => {
+            e.sprite = "sCavemanDeadL".into();
+            if e.value("death_sound") == 0.0 {
+                game.sound("sndCavemanDie", e.pos);
+                e.data.insert("death_sound".into(), 1.0);
+            }
+            if e.vel.x.abs() > 0.0 || e.vel.y.abs() > 0.0 {
+                e.state = 98;
+            }
+        }
+        _ => {}
+    }
+    e.vel.x = (e.vel.x.abs() - 0.1).max(0.0) * e.vel.x.signum();
+    if e.vel.x.abs() < 0.5 {
+        e.vel.x = 0.0;
+    }
+    if e.state < 98 {
+        e.sprite = if e.vel.x == 0.0 {
+            "sCavemanLeft"
+        } else {
+            "sCavemanRunLeft"
+        }
+        .into();
+    }
+    if e.held {
+        e.sprite = if e.health > 0 {
+            "sCavemanHeldL"
+        } else {
+            "sCavemanDHeldL"
+        }
+        .into();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::RulesPreset;
+
+    #[test]
+    fn cave_family_and_source_hitpoints() {
+        for name in ["oSnake", "oBat", "oSpider", "oGiantSpider", "oCaveman"] {
+            assert!(matches(name));
+            let mut enemy = Entity::new(1, name, Vec2::new(40.0, 40.0));
+            init(&mut enemy);
+            assert_eq!(enemy.health, if name == "oCaveman" { 3 } else { 1 });
+        }
+        assert!(!matches("oYeti"));
+    }
+
+    #[test]
+    fn bat_wakes_below_and_has_unit_flight_speed() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.world.set_tile(2, 1, "oSolid");
+        game.player.pos = Vec2::new(40.0, 70.0);
+        let mut bat = Entity::new(1, "oBat", Vec2::new(40.0, 39.0));
+        init(&mut bat);
+        tick(&mut game, &mut bat);
+        assert_eq!(bat.state, 1);
+        tick(&mut game, &mut bat);
+        assert!((bat.vel.x.hypot(bat.vel.y) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn caveman_forward_sight_is_occluded_by_tiles() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.player.pos = Vec2::new(90.0, 48.0);
+        let mut enemy = Entity::new(1, "oCaveman", Vec2::new(40.0, 40.0));
+        init(&mut enemy);
+        assert!(caveman_sees_player(&game, &enemy));
+        game.world.set_tile(4, 3, "oSolid");
+        assert!(!caveman_sees_player(&game, &enemy));
+        enemy.facing = -1;
+        assert!(!caveman_sees_player(&game, &enemy));
+    }
+
+    #[test]
+    fn patrol_ledge_probes_use_original_instance_origin() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let enemy = Entity::new(1, "oSnake", Vec2::new(32.0, 48.0));
+        game.world.set_tile(3, 4, "oSolid");
+        assert!(floor_ahead(&game.world, &enemy, 1));
+        assert!(!floor_ahead(&game.world, &enemy, -1));
+    }
+
+    #[test]
+    fn giant_web_spawn_uses_source_offsets_from_original_origin() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let mut enemy = Entity::new(100, "oGiantSpider", Vec2::new(64.0, 64.0));
+        init(&mut enemy);
+        enemy.state = 5;
+        enemy.animation = 5.0;
+        enemy.data.insert("squirt_timer".into(), 0.0);
+        tick(&mut game, &mut enemy);
+        let web = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oWebBall")
+            .unwrap();
+        assert_eq!(web.pos, Vec2::new(80.0, 80.0));
+        assert!((1.0..=3.0).contains(&web.vel.x.abs()));
+        assert!((-4.0..=-1.0).contains(&web.vel.y));
+        assert!((20..=100).contains(&web.timer));
+    }
+
+    #[test]
+    fn hanging_spider_drops_on_player_alignment_and_lost_ceiling() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world.set_tile(4, 3, "oSolid");
+        game.player.pos = Vec2::new(120.0, 110.0);
+        let mut enemy = Entity::new(100, "oSpiderHang", Vec2::new(64.0, 64.0));
+        super::super::init_entity(&mut enemy);
+        tick(&mut game, &mut enemy);
+        assert_eq!(enemy.object, "oSpiderHang");
+        assert_eq!(enemy.vel, Vec2::default());
+        game.player.pos = Vec2::new(72.0, 100.0);
+        tick(&mut game, &mut enemy);
+        assert_eq!(enemy.object, "oSpider");
+        assert_eq!(enemy.id, 100);
+        assert_eq!(enemy.pos, Vec2::new(64.0, 64.0));
+        assert_eq!(enemy.bounds(), Rect::new(65.0, 69.0, 14.0, 11.0));
+
+        let mut unsupported = Entity::new(101, "oSpiderHang", Vec2::new(96.0, 64.0));
+        super::super::init_entity(&mut unsupported);
+        game.player.pos = Vec2::new(200.0, 200.0);
+        tick(&mut game, &mut unsupported);
+        assert_eq!(unsupported.object, "oSpider");
+    }
+
+    #[test]
+    fn giant_hanger_starts_with_ten_health_and_releases_when_hurt() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world.set_tile(4, 3, "oSolid");
+        game.player.pos = Vec2::new(200.0, 200.0);
+        let mut enemy = Entity::new(100, "oGiantSpiderHang", Vec2::new(64.0, 64.0));
+        super::super::init_entity(&mut enemy);
+        assert_eq!(enemy.health, 10);
+        tick(&mut game, &mut enemy);
+        assert_eq!(enemy.object, "oGiantSpiderHang");
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oWeb")
+                .count(),
+            2
+        );
+        tick(&mut game, &mut enemy);
+        assert_eq!(game.world.entities.len(), 2);
+        enemy.health = 9;
+        tick(&mut game, &mut enemy);
+        assert_eq!(enemy.object, "oGiantSpider");
+        assert_eq!(enemy.health, 9);
+        assert_eq!(enemy.bounds(), Rect::new(66.0, 80.0, 28.0, 16.0));
+    }
+
+    #[test]
+    fn caveman_worship_is_stationary_decoration() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let mut decoration = Entity::new(100, "oCavemanWorship", Vec2::new(64.0, 64.0));
+        init(&mut decoration);
+        tick(&mut game, &mut decoration);
+        assert_eq!(decoration.pos, Vec2::new(64.0, 64.0));
+        assert_eq!(decoration.sprite, "sCavemanWorshipR");
+        assert_eq!(decoration.value("animation_speed"), 0.25);
+        assert_eq!(decoration.value("enemy"), 0.0);
+        assert!(game.events.is_empty());
+    }
+}

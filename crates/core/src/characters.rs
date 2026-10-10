@@ -1,0 +1,283 @@
+//! Original unlockable player characters and Tunnel Man's innate mattock.
+//!
+//! Source: scrClearGlobals, oPlayer1 Step/Animation End, characterStepEvent,
+//! characterSprite, and oMattockHit events in the Classic 1.1 reference.
+use crate::model::*;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Character {
+    #[default]
+    Explorer,
+    Damsel,
+    TunnelMan,
+}
+
+/// Select a character at run start or a title-room changing door.
+/// Unlock authorization belongs to the host; this also supports editor tests.
+pub fn apply(game: &mut Game, character: Character) {
+    game.flags.remove("character_damsel");
+    game.flags.remove("character_tunnelman");
+    match character {
+        Character::Explorer => {}
+        Character::Damsel => {
+            game.flags.insert("character_damsel".into());
+        }
+        Character::TunnelMan => {
+            game.flags.insert("character_tunnelman".into());
+        }
+    }
+    let tunnel = character == Character::TunnelMan;
+    game.player.health = if tunnel { 2 } else { 4 };
+    game.player.bombs = if tunnel { 0 } else { 4 };
+    game.player.ropes = if tunnel { 0 } else { 4 };
+    game.player.data.remove("character_attack_active");
+    game.player.data.remove("character_attack_elapsed");
+    game.player.attack_timer = 0;
+    game.player.animation = 0.0;
+    game.player.sprite = match character {
+        Character::Explorer => "sStandLeft",
+        Character::Damsel => "sDamselLeft",
+        Character::TunnelMan => "sTunnelLeft",
+    }
+    .into();
+}
+
+pub fn selected(game: &Game) -> Character {
+    if game.flags.contains("character_tunnelman") {
+        Character::TunnelMan
+    } else if game.flags.contains("character_damsel") {
+        Character::Damsel
+    } else {
+        Character::Explorer
+    }
+}
+
+fn swing_part(game: &mut Game, front: bool) {
+    let facing = game.player.facing;
+    let object = if front { "oMattockHit" } else { "oMattockPre" };
+    let id = game.world.spawn(
+        object,
+        Vec2::new(
+            game.player.pos.x + f64::from(facing) * if front { 16.0 } else { -16.0 },
+            game.player.pos.y,
+        ),
+    );
+    let part = game.world.entity_mut(id).unwrap();
+    part.facing = facing;
+    part.sprite = format!(
+        "sMattock{}{}",
+        if front { "Hit" } else { "Pre" },
+        if facing < 0 { "L" } else { "R" }
+    );
+    part.timer = if front { 5 } else { 3 };
+    part.data.insert("owner".into(), 1.0);
+    part.data.insert("owner_player".into(), 1.0);
+    part.data.insert("damage".into(), 2.0);
+    part.data.insert("character_mattock".into(), 1.0);
+    if front {
+        part.data.insert("puncture".into(), 1.0);
+    }
+}
+
+/// Called once from item handling after chest interactions and before projectile
+/// updates. The item's caller suppresses attack_pressed for consumed interactions.
+/// The first attack frame advances by 0.6; characterStepEvent sets whipping
+/// animation speed to 1 on subsequent ticks. No inventory item is granted.
+pub fn tick(game: &mut Game, input: &InputFrame) {
+    let active = game
+        .player
+        .data
+        .get("character_attack_active")
+        .copied()
+        .unwrap_or(0.0)
+        != 0.0;
+    if selected(game) != Character::TunnelMan
+        || game.player.health <= 0
+        || game.player.stun > 0
+        || game.player.held.is_some()
+    {
+        if active {
+            game.player.attack_timer = 0;
+            game.player.data.remove("character_attack_active");
+            game.player.data.remove("character_attack_elapsed");
+            for entity in &mut game.world.entities {
+                if entity.value("character_mattock") != 0.0 {
+                    entity.alive = false;
+                }
+            }
+        }
+        return;
+    }
+    if !active {
+        if !input.attack_pressed
+            || input.down
+            || !game.player.grounded
+            || game.player.state == PlayerState::Ducking
+            || game.player.attack_timer > 0
+            || game.player.data.get("duck_to_hang").copied().unwrap_or(0.0) > 0.0
+        {
+            return;
+        }
+        game.player
+            .data
+            .insert("character_attack_active".into(), 1.0);
+        game.player
+            .data
+            .insert("character_attack_elapsed".into(), 0.0);
+        game.player.animation = 0.0;
+        swing_part(game, false);
+    }
+    let elapsed = game
+        .player
+        .data
+        .entry("character_attack_elapsed".into())
+        .or_default();
+    *elapsed += 1.0;
+    let age = *elapsed as u32;
+    game.player.sprite = "sTunnelAttackL".into();
+    game.player.animation = 0.6 + f64::from(age.saturating_sub(1));
+    game.player.attack_timer = 12_u32.saturating_sub(age);
+    if (6..12).contains(&age)
+        && !game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.alive && matches!(e.object.as_str(), "oWhip" | "oMattockHit" | "oSlash"))
+    {
+        swing_part(game, true);
+        game.sound("sndWhip", game.player.pos);
+    }
+    if age >= 12 {
+        for entity in &mut game.world.entities {
+            if entity.value("character_mattock") != 0.0 {
+                entity.alive = false;
+            }
+        }
+        game.player.data.remove("character_attack_active");
+        game.player.data.remove("character_attack_elapsed");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn original_starting_stats_have_no_invented_equipment() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        for (character, health, bombs, ropes, sprite) in [
+            (Character::TunnelMan, 2, 0, 0, "sTunnelLeft"),
+            (Character::Damsel, 4, 4, 4, "sDamselLeft"),
+            (Character::Explorer, 4, 4, 4, "sStandLeft"),
+        ] {
+            apply(&mut game, character);
+            assert_eq!(selected(&game), character);
+            assert_eq!(
+                (game.player.health, game.player.bombs, game.player.ropes),
+                (health, bombs, ropes)
+            );
+            assert_eq!(game.player.sprite, sprite);
+            assert!(game.player.equipment.is_empty());
+            assert!(game.player.held.is_none());
+        }
+    }
+
+    #[test]
+    fn innate_mattock_requires_ground_and_empty_hands() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        apply(&mut game, Character::TunnelMan);
+        let attack = InputFrame {
+            attack_pressed: true,
+            ..Default::default()
+        };
+        tick(&mut game, &attack);
+        assert!(game.world.entities.is_empty());
+        game.player.grounded = true;
+        game.player.held = Some(game.world.spawn("oRock", game.player.pos));
+        tick(&mut game, &attack);
+        assert_eq!(game.player.attack_timer, 0);
+        game.player.held = None;
+        tick(
+            &mut game,
+            &InputFrame {
+                down: true,
+                ..attack
+            },
+        );
+        assert_eq!(game.player.attack_timer, 0);
+        tick(&mut game, &attack);
+        assert_eq!(game.player.attack_timer, 11);
+        assert_eq!(game.player.sprite, "sTunnelAttackL");
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oMattockPre")
+                .count(),
+            1
+        );
+        assert!(!game.player.data.contains_key("cantJump"));
+    }
+
+    #[test]
+    fn innate_mattock_uses_fast_original_swing_and_two_damage() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        apply(&mut game, Character::TunnelMan);
+        game.player.grounded = true;
+        game.player.facing = -1;
+        tick(
+            &mut game,
+            &InputFrame {
+                attack_pressed: true,
+                ..Default::default()
+            },
+        );
+        for _ in 0..4 {
+            tick(&mut game, &InputFrame::default());
+        }
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|e| e.object == "oMattockHit")
+        );
+        tick(&mut game, &InputFrame::default());
+        let hit = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oMattockHit")
+            .unwrap();
+        assert_eq!(hit.sprite, "sMattockHitL");
+        assert_eq!(hit.pos.x, game.player.pos.x - 16.0);
+        assert_eq!(hit.value("damage"), 2.0);
+        assert_eq!(hit.value("puncture"), 1.0);
+        for _ in 6..12 {
+            tick(&mut game, &InputFrame::default());
+        }
+        assert_eq!(game.player.attack_timer, 0);
+        assert!(!game.player.data.contains_key("character_attack_active"));
+        assert_eq!(game.player.health, 2);
+        assert!(game.player.equipment.is_empty());
+    }
+
+    #[test]
+    fn stun_cancels_innate_swing_and_hitboxes() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        apply(&mut game, Character::TunnelMan);
+        game.player.grounded = true;
+        tick(
+            &mut game,
+            &InputFrame {
+                attack_pressed: true,
+                ..Default::default()
+            },
+        );
+        game.player.stun = 2;
+        tick(&mut game, &InputFrame::default());
+        assert_eq!(game.player.attack_timer, 0);
+        assert!(game.world.entities.iter().all(|e| !e.alive));
+    }
+}

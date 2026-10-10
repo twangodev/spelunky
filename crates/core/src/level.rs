@@ -1,0 +1,1011 @@
+//! Classic 1.1 custom levels. Coordinates and spawn offsets follow scrCreateTileObj.
+use crate::model::{Area, Entity, Vec2, World};
+use serde::{Deserialize, Serialize};
+
+pub const LEVEL_WIDTH: usize = 40;
+pub const LEVEL_HEIGHT: usize = 32;
+const MAX_LEVEL_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Level {
+    pub tiles: Vec<char>,
+    pub author: String,
+    pub music: String,
+    pub starting_life: i32,
+    pub starting_bombs: i32,
+    pub starting_ropes: i32,
+    pub next_level: String,
+    /// Shared by BOTH @ and X cells in row-major order, as in Classic.
+    pub exit_targets: Vec<String>,
+    pub signs: Vec<String>,
+}
+
+impl Default for Level {
+    fn default() -> Self {
+        Self {
+            tiles: vec!['0'; LEVEL_WIDTH * LEVEL_HEIGHT],
+            author: "ANONYMOUS".into(),
+            music: "CAVE".into(),
+            starting_life: 4,
+            starting_bombs: 4,
+            starting_ropes: 4,
+            next_level: "NONE".into(),
+            exit_targets: vec![],
+            signs: vec![],
+        }
+    }
+}
+
+impl Level {
+    pub fn parse(text: &str) -> Result<Self, String> {
+        if text.len() > MAX_LEVEL_BYTES {
+            return Err("Level exceeds the 4 MiB import limit".into());
+        }
+        // split rather than lines: a final empty exit/sign is meaningful.
+        let lines: Vec<&str> = text
+            .split('\n')
+            .map(|line| line.strip_suffix('\r').unwrap_or(line))
+            .collect();
+        if lines.len() < LEVEL_HEIGHT + 6 {
+            return Err("Expected 32 map rows followed by six metadata lines".into());
+        }
+        let mut level = Self::default();
+        level.tiles.clear();
+        for (row, line) in lines[..LEVEL_HEIGHT].iter().enumerate() {
+            if line.chars().count() != LEVEL_WIDTH {
+                return Err(format!(
+                    "Map row {} must contain exactly 40 characters",
+                    row + 1
+                ));
+            }
+            if line.chars().any(char::is_control) {
+                return Err(format!("Map row {} contains a control character", row + 1));
+            }
+            // Unknown symbols are preserved and ignored by the world builder, just as Classic.
+            level.tiles.extend(line.chars());
+        }
+        level.author = lines[32].into();
+        level.music = lines[33].into();
+        level.starting_life = parse_inventory(lines[34], "life", 1)?;
+        level.starting_bombs = parse_inventory(lines[35], "bombs", 0)?;
+        level.starting_ropes = parse_inventory(lines[36], "ropes", 0)?;
+        level.next_level = lines[37].into();
+        let mut cursor = 38;
+        if cursor < lines.len() {
+            let first = lines[cursor];
+            cursor += 1;
+            // Original writer omitted a newline after zero exits: 00, 01, 012, etc.
+            let merged_zero = first.len() > 1
+                && first.starts_with('0')
+                && first.bytes().all(|b| b.is_ascii_digit());
+            if merged_zero {
+                let count = parse_count(&first[1..], "sign")?;
+                level.signs = read_records(&lines, &mut cursor, count, "sign")?;
+            } else {
+                let count = parse_count(first, "exit")?;
+                level.exit_targets = read_records(&lines, &mut cursor, count, "exit")?;
+                if cursor < lines.len() {
+                    let count = parse_count(lines[cursor], "sign")?;
+                    cursor += 1;
+                    level.signs = read_records(&lines, &mut cursor, count, "sign")?;
+                }
+            }
+        }
+        if lines[cursor..].iter().any(|line| !line.is_empty()) {
+            return Err("Unexpected data after level metadata".into());
+        }
+        Ok(level)
+    }
+
+    /// Emit a corrected Classic-compatible file, always separating both counts.
+    /// Embedded newlines in programmatically supplied metadata become spaces.
+    pub fn to_text(&self) -> String {
+        let mut lines = Vec::new();
+        for y in 0..LEVEL_HEIGHT {
+            lines.push(
+                (0..LEVEL_WIDTH)
+                    .map(|x| {
+                        self.get_tile(x, y)
+                            .filter(|c| !c.is_control())
+                            .unwrap_or('0')
+                    })
+                    .collect(),
+            );
+        }
+        lines.extend([
+            one_line(&self.author),
+            one_line(&self.music),
+            self.starting_life.clamp(1, 99).to_string(),
+            self.starting_bombs.clamp(0, 99).to_string(),
+            self.starting_ropes.clamp(0, 99).to_string(),
+            one_line(&self.next_level),
+        ]);
+        lines.push(self.exit_targets.len().to_string());
+        lines.extend(self.exit_targets.iter().map(|v| one_line(v)));
+        lines.push(self.signs.len().to_string());
+        lines.extend(self.signs.iter().map(|v| one_line(v)));
+        // No trailing newline: this preserves an empty final record unambiguously.
+        lines.join("\n")
+    }
+
+    pub fn get_tile(&self, x: usize, y: usize) -> Option<char> {
+        if x >= LEVEL_WIDTH || y >= LEVEL_HEIGHT {
+            None
+        } else {
+            self.tiles.get(y * LEVEL_WIDTH + x).copied()
+        }
+    }
+
+    pub fn set_tile(&mut self, x: usize, y: usize, tile: char) -> Result<(), String> {
+        if x >= LEVEL_WIDTH || y >= LEVEL_HEIGHT {
+            return Err("Tile coordinate is outside the 40x32 map".into());
+        }
+        if tile.is_control() {
+            return Err("Tile cannot be a control character".into());
+        }
+        let slot = self
+            .tiles
+            .get_mut(y * LEVEL_WIDTH + x)
+            .ok_or("Level has a malformed tile array")?;
+        *slot = tile;
+        Ok(())
+    }
+
+    pub fn exit_target(&self, index: usize) -> &str {
+        repeated_record(&self.exit_targets, index)
+    }
+    pub fn sign_message(&self, index: usize) -> &str {
+        repeated_record(&self.signs, index)
+    }
+
+    pub fn to_world(&self) -> World {
+        self.to_world_from(None)
+    }
+
+    /// A linked entrance leading back to the preceding level takes precedence.
+    pub fn to_world_from(&self, previous_level: Option<&str>) -> World {
+        let area = match self.music.to_uppercase().as_str() {
+            "JUNGLE" => Area::Jungle,
+            "ICE" => Area::Ice,
+            "TEMPLE" => Area::Temple,
+            _ => Area::Mines,
+        };
+        let mut world = World::new(42, 34, area, 1);
+        world.entrance = Vec2::new(24.0, 24.0);
+        world.name = "Custom level".into();
+        for y in 0..world.height {
+            for x in 0..world.width {
+                if x == 0 || y == 0 || x + 1 == world.width || y + 1 == world.height {
+                    world.set_tile(x, y, "oHardBlock");
+                }
+            }
+        }
+        let mut exit_index = 0;
+        let mut sign_index = 0;
+        let mut entrances = Vec::new();
+        let mut first_exit = true;
+        for y in 0..LEVEL_HEIGHT {
+            for x in 0..LEVEL_WIDTH {
+                let symbol = self.get_tile(x, y).unwrap_or('0');
+                let base = Vec2::new(16.0 + x as f64 * 16.0, 16.0 + y as f64 * 16.0);
+                for spawn in tile_spawns(symbol) {
+                    let pos = Vec2::new(base.x + spawn.offset.x, base.y + spawn.offset.y);
+                    let terrain = is_static_terrain(spawn.object);
+                    if terrain {
+                        let tx = (pos.x / 16.0) as usize;
+                        let ty = (pos.y / 16.0) as usize;
+                        if tx > 0 && ty > 0 && tx + 1 < world.width && ty + 1 < world.height {
+                            world.set_tile(tx, ty, spawn.object);
+                        }
+                        if spawn.sprite != Some("sTreeTop") {
+                            continue;
+                        }
+                    }
+                    let id = world.next_id;
+                    world.next_id += 1;
+                    let mut entity = Entity::new(id, spawn.object, pos);
+                    if let Some(sprite) = spawn.sprite {
+                        entity.sprite = sprite.into();
+                    }
+                    entity.state = spawn.state;
+                    if terrain {
+                        entity.data.insert("tile_entity".into(), 1.0);
+                    }
+                    if spawn.free_item {
+                        entity.data.insert("cost".into(), 0.0);
+                        entity.data.insert("forSale".into(), 0.0);
+                    }
+                    if spawn.object == "oPushBlock" {
+                        entity.solid = true;
+                    }
+                    if matches!(symbol, '@' | 'X') {
+                        entity
+                            .text
+                            .insert("leadsTo".into(), self.exit_target(exit_index).into());
+                        entity.data.insert("link_index".into(), exit_index as f64);
+                        if symbol == '@' {
+                            entrances.push((
+                                Vec2::new(pos.x + 8.0, pos.y + 8.0),
+                                self.exit_target(exit_index),
+                            ));
+                        } else if first_exit {
+                            world.exit = Vec2::new(pos.x + 8.0, pos.y + 8.0);
+                            first_exit = false;
+                        }
+                    }
+                    if symbol == 'I' {
+                        entity
+                            .text
+                            .insert("message".into(), self.sign_message(sign_index).into());
+                        entity.data.insert("sign_index".into(), sign_index as f64);
+                    }
+                    world.entities.push(entity);
+                }
+                if matches!(symbol, '@' | 'X') {
+                    exit_index += 1;
+                }
+                if symbol == 'I' {
+                    sign_index += 1;
+                }
+            }
+        }
+        if let Some((pos, _)) = entrances
+            .iter()
+            .min_by(|a, b| a.0.x.hypot(a.0.y).total_cmp(&b.0.x.hypot(b.0.y)))
+        {
+            world.entrance = *pos;
+        }
+        if let Some(previous) = previous_level {
+            if let Some((pos, _)) = entrances.iter().find(|(_, target)| *target == previous) {
+                world.entrance = *pos;
+            }
+        }
+        world
+    }
+}
+
+fn one_line(text: &str) -> String {
+    text.replace(['\r', '\n'], " ")
+}
+fn parse_inventory(text: &str, name: &str, min: i32) -> Result<i32, String> {
+    let number: f64 = text
+        .trim()
+        .parse()
+        .map_err(|_| format!("Invalid starting {name}: {text:?}"))?;
+    if !number.is_finite() {
+        return Err(format!("Starting {name} must be finite"));
+    }
+    Ok(number.floor().clamp(f64::from(min), 99.0) as i32)
+}
+fn parse_count(text: &str, name: &str) -> Result<usize, String> {
+    let count: usize = text
+        .trim()
+        .parse()
+        .map_err(|_| format!("Invalid {name} count"))?;
+    if count > LEVEL_WIDTH * LEVEL_HEIGHT {
+        return Err(format!("{name} count exceeds map capacity"));
+    }
+    Ok(count)
+}
+fn read_records(
+    lines: &[&str],
+    cursor: &mut usize,
+    count: usize,
+    name: &str,
+) -> Result<Vec<String>, String> {
+    if count > lines.len().saturating_sub(*cursor) {
+        return Err(format!("Truncated {name} records"));
+    }
+    let records = lines[*cursor..*cursor + count]
+        .iter()
+        .map(|v| (*v).to_owned())
+        .collect();
+    *cursor += count;
+    Ok(records)
+}
+fn repeated_record(records: &[String], index: usize) -> &str {
+    records
+        .get(index)
+        .or_else(|| records.last())
+        .map(String::as_str)
+        .unwrap_or("")
+}
+fn is_static_terrain(object: &str) -> bool {
+    matches!(
+        object,
+        "oBrick"
+            | "oLush"
+            | "oWaterSwim"
+            | "oDark"
+            | "oIce"
+            | "oTemple"
+            | "oLava"
+            | "oLadderOrange"
+            | "oLadderTop"
+            | "oVine"
+            | "oVineTop"
+            | "oTree"
+            | "oLeaves"
+            | "oTreeBranch"
+    )
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TileSpawn {
+    pub object: &'static str,
+    pub offset: Vec2,
+    pub sprite: Option<&'static str>,
+    pub state: i32,
+    pub free_item: bool,
+}
+
+/// Exact direct instance creation and overrides in Classic 1.1 scrCreateTileObj.
+pub fn tile_spawns(tile: char) -> Vec<TileSpawn> {
+    match tile {
+        '@' => vec![TileSpawn {
+            object: "oEntrance",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'X' => vec![TileSpawn {
+            object: "oExit",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'I' => vec![TileSpawn {
+            object: "oMsgSign",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '1' => vec![TileSpawn {
+            object: "oBrick",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: Some("sBrick"),
+            state: 0,
+            free_item: false,
+        }],
+        '2' => vec![TileSpawn {
+            object: "oLush",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: Some("sLush"),
+            state: 0,
+            free_item: false,
+        }],
+        'w' => vec![TileSpawn {
+            object: "oWaterSwim",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '3' => vec![TileSpawn {
+            object: "oDark",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: Some("sDark"),
+            state: 0,
+            free_item: false,
+        }],
+        'i' => vec![TileSpawn {
+            object: "oIce",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'd' => vec![TileSpawn {
+            object: "oDarkFall",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '4' => vec![TileSpawn {
+            object: "oTemple",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: Some("sTemple"),
+            state: 0,
+            free_item: false,
+        }],
+        'l' => vec![TileSpawn {
+            object: "oLava",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'L' => vec![TileSpawn {
+            object: "oLadderOrange",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'P' => vec![TileSpawn {
+            object: "oLadderTop",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'v' => vec![TileSpawn {
+            object: "oVine",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        't' => vec![TileSpawn {
+            object: "oVineTop",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '|' => vec![TileSpawn {
+            object: "oTree",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'x' => vec![TileSpawn {
+            object: "oTree",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: Some("sTreeTop"),
+            state: 0,
+            free_item: false,
+        }],
+        ')' => vec![TileSpawn {
+            object: "oLeaves",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'q' => vec![TileSpawn {
+            object: "oTreeBranch",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'B' => vec![TileSpawn {
+            object: "oPushBlock",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '&' => vec![TileSpawn {
+            object: "oWeb",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'r' => vec![TileSpawn {
+            object: "oRock",
+            offset: Vec2::new(8.0, 12.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'j' => vec![TileSpawn {
+            object: "oJar",
+            offset: Vec2::new(8.0, 10.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'k' => vec![
+            TileSpawn {
+                object: "oBones",
+                offset: Vec2::new(0.0, 0.0),
+                sprite: None,
+                state: 0,
+                free_item: false,
+            },
+            TileSpawn {
+                object: "oSkull",
+                offset: Vec2::new(12.0, 12.0),
+                sprite: None,
+                state: 0,
+                free_item: false,
+            },
+        ],
+        'b' => vec![TileSpawn {
+            object: "oBat",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'n' => vec![TileSpawn {
+            object: "oSnake",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        's' => vec![TileSpawn {
+            object: "oSpiderHang",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'S' => vec![TileSpawn {
+            object: "oGiantSpiderHang",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'K' => vec![TileSpawn {
+            object: "oSkeleton",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'h' => vec![TileSpawn {
+            object: "oCaveman",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '!' => vec![TileSpawn {
+            object: "oShopkeeper",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 4,
+            free_item: false,
+        }],
+        'f' => vec![TileSpawn {
+            object: "oFrog",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'F' => vec![TileSpawn {
+            object: "oFireFrog",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'z' => vec![TileSpawn {
+            object: "oZombie",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'A' => vec![TileSpawn {
+            object: "oVampire",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'p' => vec![
+            TileSpawn {
+                object: "oWaterSwim",
+                offset: Vec2::new(0.0, 0.0),
+                sprite: None,
+                state: 0,
+                free_item: false,
+            },
+            TileSpawn {
+                object: "oPiranha",
+                offset: Vec2::new(4.0, 4.0),
+                sprite: None,
+                state: 0,
+                free_item: false,
+            },
+        ],
+        '{' => vec![
+            TileSpawn {
+                object: "oWaterSwim",
+                offset: Vec2::new(0.0, 0.0),
+                sprite: None,
+                state: 0,
+                free_item: false,
+            },
+            TileSpawn {
+                object: "oWaterSwim",
+                offset: Vec2::new(16.0, 0.0),
+                sprite: None,
+                state: 0,
+                free_item: false,
+            },
+            TileSpawn {
+                object: "oWaterSwim",
+                offset: Vec2::new(32.0, 0.0),
+                sprite: None,
+                state: 0,
+                free_item: false,
+            },
+            TileSpawn {
+                object: "oWaterSwim",
+                offset: Vec2::new(48.0, 0.0),
+                sprite: None,
+                state: 0,
+                free_item: false,
+            },
+            TileSpawn {
+                object: "oWaterSwim",
+                offset: Vec2::new(0.0, 16.0),
+                sprite: None,
+                state: 0,
+                free_item: false,
+            },
+            TileSpawn {
+                object: "oWaterSwim",
+                offset: Vec2::new(16.0, 16.0),
+                sprite: None,
+                state: 0,
+                free_item: false,
+            },
+            TileSpawn {
+                object: "oWaterSwim",
+                offset: Vec2::new(32.0, 16.0),
+                sprite: None,
+                state: 0,
+                free_item: false,
+            },
+            TileSpawn {
+                object: "oWaterSwim",
+                offset: Vec2::new(48.0, 16.0),
+                sprite: None,
+                state: 0,
+                free_item: false,
+            },
+            TileSpawn {
+                object: "oJaws",
+                offset: Vec2::new(0.0, 0.0),
+                sprite: None,
+                state: 0,
+                free_item: false,
+            },
+        ],
+        'M' => vec![TileSpawn {
+            object: "oManTrap",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'm' => vec![TileSpawn {
+            object: "oMonkey",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'y' => vec![TileSpawn {
+            object: "oYeti",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'Y' => vec![TileSpawn {
+            object: "oYetiKing",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'a' => vec![TileSpawn {
+            object: "oAlien",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'U' => vec![TileSpawn {
+            object: "oUFO",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'E' => vec![TileSpawn {
+            object: "oAlienBoss",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'H' => vec![TileSpawn {
+            object: "oHawkman",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'T' => vec![TileSpawn {
+            object: "oTombLord",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '^' => vec![TileSpawn {
+            object: "oSpikes",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '<' => vec![TileSpawn {
+            object: "oArrowTrapLeft",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '>' => vec![TileSpawn {
+            object: "oArrowTrapRight",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        ']' => vec![TileSpawn {
+            object: "oSpearTrapTop",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '[' => vec![TileSpawn {
+            object: "oSpearTrapBottom",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '_' => vec![TileSpawn {
+            object: "oSpringTrap",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '+' => vec![TileSpawn {
+            object: "oSmashTrap",
+            offset: Vec2::new(0.0, 0.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '$' => vec![TileSpawn {
+            object: "oGoldBar",
+            offset: Vec2::new(8.0, 12.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '*' => vec![TileSpawn {
+            object: "oGoldBars",
+            offset: Vec2::new(8.0, 8.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '#' => vec![TileSpawn {
+            object: "oGoldIdol",
+            offset: Vec2::new(8.0, 12.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'O' => vec![TileSpawn {
+            object: "oCrystalSkull",
+            offset: Vec2::new(8.0, 12.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '5' => vec![TileSpawn {
+            object: "oEmeraldBig",
+            offset: Vec2::new(8.0, 12.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '6' => vec![TileSpawn {
+            object: "oSapphireBig",
+            offset: Vec2::new(8.0, 12.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '7' => vec![TileSpawn {
+            object: "oRubyBig",
+            offset: Vec2::new(8.0, 12.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '8' => vec![TileSpawn {
+            object: "oDiamond",
+            offset: Vec2::new(8.0, 12.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'c' => vec![TileSpawn {
+            object: "oChest",
+            offset: Vec2::new(8.0, 8.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'C' => vec![TileSpawn {
+            object: "oCrate",
+            offset: Vec2::new(8.0, 8.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        'D' => vec![TileSpawn {
+            object: "oDamsel",
+            offset: Vec2::new(8.0, 8.0),
+            sprite: None,
+            state: 0,
+            free_item: false,
+        }],
+        '.' => vec![TileSpawn {
+            object: "oBombBag",
+            offset: Vec2::new(8.0, 10.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        ':' => vec![TileSpawn {
+            object: "oBombBox",
+            offset: Vec2::new(8.0, 8.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        'u' => vec![TileSpawn {
+            object: "oPaste",
+            offset: Vec2::new(8.0, 10.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        'R' => vec![TileSpawn {
+            object: "oRopePile",
+            offset: Vec2::new(8.0, 11.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        '`' => vec![TileSpawn {
+            object: "oParaPickup",
+            offset: Vec2::new(8.0, 10.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        'o' => vec![TileSpawn {
+            object: "oCompass",
+            offset: Vec2::new(8.0, 10.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        '/' => vec![TileSpawn {
+            object: "oMachete",
+            offset: Vec2::new(8.0, 12.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        '~' => vec![TileSpawn {
+            object: "oSpringShoes",
+            offset: Vec2::new(8.0, 10.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        'V' => vec![TileSpawn {
+            object: "oSpikeShoes",
+            offset: Vec2::new(8.0, 10.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        '}' => vec![TileSpawn {
+            object: "oBow",
+            offset: Vec2::new(8.0, 12.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        '-' => vec![TileSpawn {
+            object: "oPistol",
+            offset: Vec2::new(8.0, 12.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        '=' => vec![TileSpawn {
+            object: "oShotgun",
+            offset: Vec2::new(8.0, 12.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        'W' => vec![TileSpawn {
+            object: "oWebCannon",
+            offset: Vec2::new(8.0, 12.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        '%' => vec![TileSpawn {
+            object: "oSpectacles",
+            offset: Vec2::new(8.0, 10.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        'G' => vec![TileSpawn {
+            object: "oGloves",
+            offset: Vec2::new(8.0, 8.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        'g' => vec![TileSpawn {
+            object: "oMitt",
+            offset: Vec2::new(8.0, 8.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        '?' => vec![TileSpawn {
+            object: "oTeleporter",
+            offset: Vec2::new(8.0, 12.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        '(' => vec![TileSpawn {
+            object: "oMattock",
+            offset: Vec2::new(8.0, 10.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        '\\' => vec![TileSpawn {
+            object: "oCapePickup",
+            offset: Vec2::new(8.0, 10.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        'J' => vec![TileSpawn {
+            object: "oJetpack",
+            offset: Vec2::new(8.0, 8.0),
+            sprite: None,
+            state: 0,
+            free_item: true,
+        }],
+        _ => vec![],
+    }
+}
