@@ -178,19 +178,31 @@ pub(crate) fn initialize_level(game: &mut Game) {
     if game.world.name == "Black Market" {
         game.flags.insert("made_black_market".into());
     }
-    if (game.flags.contains("murderer") || game.data.get("thiefLevel").copied().unwrap_or(0.) > 0.)
-        && !game.world.entities.iter().any(|e| {
-            e.alive
-                && e.object == "oShopkeeper"
-                && Vec2::new(e.pos.x + 8., e.pos.y + 8.).distance(game.world.exit) < 8.
-        })
-    {
-        let pos = Vec2::new(game.world.exit.x - 8., game.world.exit.y - 8.);
-        let id = game.world.spawn("oShopkeeper", pos);
-        let keeper = game.world.entity_mut(id).unwrap();
-        keeper.state = 4;
-        keeper.data.insert("angry".into(), 1.);
-        keeper.data.insert("angered".into(), 1.);
+    if game.flags.contains("murderer") || game.data.get("thiefLevel").copied().unwrap_or(0.) > 0. {
+        // scrInitLevel's with(oExit) visits every freshly created ordinary
+        // exit, even when a keeper already occupies it. oXGold inherits the
+        // parent's "Exit" type; oXMarket's Create changes it to "Market Exit".
+        let mut exits: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|e| {
+                e.alive
+                    && crate::catalog::is_a(&e.object, "oExit")
+                    && e.text
+                        .get("type")
+                        .map_or(e.object != "oXMarket", |kind| kind == "Exit")
+            })
+            .map(|e| (e.creation_serial, e.pos))
+            .collect();
+        // Initialization precedes activation/rebuilt instance lists. Preserve
+        // that room's initial birth order independently from entity storage.
+        exits.sort_by_key(|(serial, _)| *serial);
+        for (_, pos) in exits {
+            let id = game.spawn("oShopkeeper", pos);
+            // Source producer writes only PATROL after synchronous Create.
+            game.world.entity_mut(id).unwrap().state = 4;
+        }
     }
 }
 
@@ -821,6 +833,148 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
 mod tests {
     use super::*;
     use crate::model::RulesPreset;
+
+    fn wanted_exit_room(exits: &[usize], wanted: &str) -> Game {
+        let mut level = crate::level::Level::default();
+        level.set_tile(3, 8, '@').unwrap();
+        for x in 0..40 {
+            level.set_tile(x, 9, '1').unwrap();
+        }
+        for &x in exits {
+            level.set_tile(x, 8, 'X').unwrap();
+        }
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        if wanted == "murderer" {
+            game.flags.insert("murderer".into());
+        } else if wanted == "thief" {
+            game.data.insert("thiefLevel".into(), 1.);
+        }
+        game.load_custom(&level, "wanted-exits.lvl", "");
+        game
+    }
+
+    fn guards_by_birth(game: &Game) -> Vec<&crate::Entity> {
+        let mut guards: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.alive && e.object == "oShopkeeper")
+            .collect();
+        guards.sort_by_key(|e| e.creation_serial);
+        guards
+    }
+
+    #[test]
+    fn wanted_exit_actual_step_guards_every_authored_exit_once_in_birth_order() {
+        for wanted in ["murderer", "thief"] {
+            let mut game = wanted_exit_room(&[10, 30], wanted);
+            // Storage order must not replace the fresh source family's order.
+            game.world.entities.reverse();
+            game.step(&InputFrame::default());
+            let guards = guards_by_birth(&game);
+            assert_eq!(
+                guards.iter().map(|e| e.pos).collect::<Vec<_>>(),
+                [Vec2::new(176., 144.), Vec2::new(496., 144.)],
+                "{wanted}"
+            );
+            for guard in &guards {
+                assert_eq!(guard.value("enemy_context_created"), 1.);
+                assert_eq!(guard.value("angry"), 0.);
+                assert_eq!(guard.value("angered"), 0.);
+            }
+            let ids: Vec<_> = guards.iter().map(|e| e.id).collect();
+            game.step(&InputFrame::default());
+            assert_eq!(
+                guards_by_birth(&game)
+                    .iter()
+                    .map(|e| e.id)
+                    .collect::<Vec<_>>(),
+                ids,
+                "room initialization must not repeat"
+            );
+        }
+    }
+
+    #[test]
+    fn wanted_exit_actual_step_keeps_preexisting_keeper_and_adds_source_guard() {
+        let mut game = wanted_exit_room(&[30], "murderer");
+        let existing = game.spawn("oShopkeeper", Vec2::new(496., 144.));
+        game.step(&InputFrame::default());
+        let guards = guards_by_birth(&game);
+        assert_eq!(guards.len(), 2);
+        assert!(guards.iter().any(|e| e.id == existing));
+        assert!(guards.iter().all(|e| e.pos == Vec2::new(496., 144.)));
+    }
+
+    #[test]
+    fn wanted_exit_actual_step_has_no_fallback_guard_without_an_exit() {
+        let mut game = wanted_exit_room(&[], "murderer");
+        game.step(&InputFrame::default());
+        assert!(guards_by_birth(&game).is_empty());
+    }
+
+    #[test]
+    fn wanted_exit_actual_step_does_not_guard_olmecs_entrance_only_room() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.start_from_hub(false, 16);
+        game.flags.insert("murderer".into());
+        assert_eq!(game.world.area, Area::Boss);
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oEntrance")
+                .count(),
+            2
+        );
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|e| crate::catalog::is_a(&e.object, "oExit"))
+        );
+        game.step(&InputFrame::default());
+        assert!(guards_by_birth(&game).is_empty());
+    }
+
+    #[test]
+    fn wanted_exit_actual_step_leaves_nonwanted_custom_exits_unguarded() {
+        let mut game = wanted_exit_room(&[10, 30], "");
+        game.step(&InputFrame::default());
+        assert!(guards_by_birth(&game).is_empty());
+    }
+
+    #[test]
+    fn wanted_exit_actual_step_uses_inherited_create_type_and_runtime_overrides() {
+        let mut game = wanted_exit_room(&[], "murderer");
+        // oXMarket is produced before the guard pass by scrEntityGen. oXGold
+        // normally appears later; its injected initial instance is a bounded
+        // inherited-Create control, not a claim of a natural room-entry route.
+        game.spawn("oXMarket", Vec2::new(176., 144.));
+        game.spawn("oXGold", Vec2::new(240., 144.));
+        let ordinary = game.spawn("oExit", Vec2::new(304., 144.));
+        game.world
+            .entity_mut(ordinary)
+            .unwrap()
+            .text
+            .insert("type".into(), "Other Exit".into());
+        let overridden_market = game.spawn("oXMarket", Vec2::new(368., 144.));
+        game.world
+            .entity_mut(overridden_market)
+            .unwrap()
+            .text
+            .insert("type".into(), "Exit".into());
+        game.step(&InputFrame::default());
+        assert_eq!(
+            guards_by_birth(&game)
+                .iter()
+                .map(|e| e.pos)
+                .collect::<Vec<_>>(),
+            [Vec2::new(240., 144.), Vec2::new(368., 144.)]
+        );
+    }
+
     fn game_over_blast_fixture(flags: &[&str]) -> Game {
         let mut game = Game::shell(123, RulesPreset::Classic);
         game.flags
