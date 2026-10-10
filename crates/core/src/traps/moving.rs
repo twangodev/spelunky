@@ -13,7 +13,7 @@ pub(super) fn pre_tick(game: &mut Game) {
             }
             match entity.object.as_str() {
                 "oBoulder" | "oThwompTrap" | "oCeilingTrap" | "oDoor" | "oMovingSolid"
-                | "oDarkFall"
+                | "oDarkFall" | "oOlmec"
                     if phase == 0 =>
                 {
                     entity.solid = true;
@@ -33,7 +33,7 @@ pub(super) fn pre_tick(game: &mut Game) {
                     let velocity = entity.vel;
                     move_solid(game, &mut entity, velocity, &mut carried_horizontally);
                 }
-                "oPushBlock" if phase == 1 => {
+                "oPushBlock" | "oIceBlock" if phase == 1 => {
                     entity.solid = true;
                     // Source oMoveableSolid is a separate global gravity pass.
                     let active = entity.pos.x > game.camera.x - 16.0
@@ -70,6 +70,7 @@ pub(super) fn tick(game: &mut Game) {
             "oSmashTrap" | "oSmashTrapLit" => smash(game, &mut entity),
             "oBoulder" => boulder(game, &mut entity),
             "oPushBlock" => push_block(game, &mut entity),
+            "oIceBlock" => ice_block(game, &mut entity),
             "oSpringTrap" => spring(game, &mut entity),
             "oThinIce" => thin_ice(game, &mut entity),
             "oDarkFall" => dark_fall(game, &mut entity),
@@ -78,7 +79,11 @@ pub(super) fn tick(game: &mut Game) {
             "oDoor" => door(game, &mut entity),
             _ => continue,
         }
+        let destroyed = (!entity.alive).then_some(entity.id);
         game.world.entities[index] = entity;
+        if let Some(id) = destroyed {
+            crate::items::explosives::destroy_solid_instance(game, id);
+        }
     }
 }
 
@@ -90,9 +95,8 @@ fn bounds(entity: &Entity) -> Rect {
         }
         "oDoor" => Rect::new(entity.pos.x + 1.0, entity.pos.y, 14.0, 32.0),
         "oDarkFall" => Rect::new(entity.pos.x, entity.pos.y, 16.0, 8.0),
-        "oPushBlock" | "oMovingSolid" | "oPlatform" | "oThwompTrap" | "oCeilingTrap" => {
-            Rect::new(entity.pos.x, entity.pos.y, 16.0, 16.0)
-        }
+        "oPushBlock" | "oIceBlock" | "oMovingSolid" | "oPlatform" | "oThwompTrap"
+        | "oCeilingTrap" => Rect::new(entity.pos.x, entity.pos.y, 16.0, 16.0),
         _ => entity.bounds(),
     }
 }
@@ -106,6 +110,43 @@ fn shifted(mut rect: Rect, delta: Vec2) -> Rect {
 fn blocked(game: &Game, entity: &Entity, delta: Vec2) -> bool {
     let rect = shifted(bounds(entity), delta);
     collides_except(game, rect, entity.id)
+}
+
+/// The platform scripts query a single edge line, rather than translating the
+/// entire body. Existing overlap on another edge must not block this query.
+fn edge_blocked(game: &Game, entity: &Entity, direction: u8, distance: f64) -> bool {
+    let b = bounds(entity);
+    let left = b.x.round_ties_even();
+    let right = (b.x + b.w - 1.0).round_ties_even();
+    let top = b.y.round_ties_even();
+    let bottom = (b.y + b.h - 1.0).round_ties_even();
+    let line = match direction {
+        0 => Rect::new(
+            (b.x + b.w + distance - 1.0).round_ties_even(),
+            top,
+            1.0,
+            bottom - top + 1.0,
+        ),
+        1 => Rect::new(
+            left,
+            (b.y + b.h + distance - 1.0).round_ties_even(),
+            right - left + 1.0,
+            1.0,
+        ),
+        2 => Rect::new(
+            (b.x - distance).round_ties_even(),
+            top,
+            1.0,
+            bottom - top + 1.0,
+        ),
+        _ => Rect::new(
+            left,
+            (b.y - distance).round_ties_even(),
+            right - left + 1.0,
+            1.0,
+        ),
+    };
+    collides_except(game, line, entity.id)
 }
 
 fn collides_except(game: &Game, rect: Rect, excluded: u64) -> bool {
@@ -126,15 +167,17 @@ fn touches_lava(game: &Game, rect: Rect) -> bool {
 }
 
 fn smash(game: &mut Game, entity: &mut Entity) {
-    if entity.state == 99 {
+    let active = entity.pos.x > game.camera.x - 16.0
+        && entity.pos.x < game.camera.x + 336.0
+        && entity.pos.y > game.camera.y - 16.0
+        && entity.pos.y < game.camera.y + 256.0;
+    if entity.state == 99 && active {
         entity.vel = Vec2::default();
         entity.pos.y += 0.05;
         if touches_lava(game, Rect::new(entity.pos.x, entity.pos.y - 1.0, 1.0, 1.0)) {
             entity.alive = false;
         }
-        return;
-    }
-    if entity.state == 0 {
+    } else if entity.state == 0 && active {
         entity.timer = entity.timer.saturating_sub(1);
         if entity.timer == 0 && entity.pos.distance(game.player.pos) < 90.0 {
             let dx = game.player.pos.x - entity.pos.x - 8.0;
@@ -146,13 +189,7 @@ fn smash(game: &mut Game, entity: &mut Entity) {
                 (3, Vec2::new(0.0, -0.5), dx.abs() < 8.0 && dy < 0.0),
             ];
             for (direction, acceleration, aligned) in candidates {
-                if aligned
-                    && !blocked(
-                        game,
-                        entity,
-                        Vec2::new(acceleration.x * 4.0, acceleration.y * 4.0),
-                    )
-                {
+                if aligned && !edge_blocked(game, entity, direction, 2.0) {
                     entity.state = 1;
                     entity.data.insert("direction".into(), direction as f64);
                     entity.data.insert("xa".into(), acceleration.x);
@@ -161,47 +198,65 @@ fn smash(game: &mut Game, entity: &mut Entity) {
                 }
             }
         }
-    } else if entity.state == 1 {
+    } else if entity.state == 1 && active {
+        let contacts = [0, 1, 2, 3].map(|direction| edge_blocked(game, entity, direction, 1.0));
         if entity.vel.x.abs() < 4.0 {
             entity.vel.x += entity.value("xa");
         }
         if entity.vel.y.abs() < 4.0 {
             entity.vel.y += entity.value("ya");
         }
-        let velocity = entity.vel;
-        let hit = move_body(game, entity, velocity);
+        // Smash uses raw xv/yv, distinct from moveTo's quantized xVel/yVel.
+        entity.pos.x += entity.vel.x;
+        entity.pos.y += entity.vel.y;
+        let direction = entity.value("direction") as u8;
+        let mut hit = entity.value("hit") != 0.0;
+        if contacts[usize::from(direction.min(3))] {
+            let correction = if edge_blocked(game, entity, direction, 2.0) {
+                3.0
+            } else {
+                1.0
+            };
+            match direction {
+                0 => entity.pos.x -= correction,
+                1 => entity.pos.y -= correction,
+                2 => entity.pos.x += correction,
+                _ => entity.pos.y += correction,
+            }
+            hit = true;
+        }
+        let lord_probe = Rect::new(entity.pos.x - 1.0, entity.pos.y - 1.0, 19.0, 19.0);
+        hit |= game.world.entities.iter().any(|other| {
+            other.alive
+                && other.object == "oTombLord"
+                && other.sprite_bounds().intersects(lord_probe)
+        });
         if hit {
             entity.vel = Vec2::default();
             entity.data.insert("xa".into(), 0.0);
             entity.data.insert("ya".into(), 0.0);
             entity.data.insert("hit".into(), 1.0);
         }
-        if entity.value("hit") != 0.0
-            && ![
-                Vec2::new(-1.0, 0.0),
-                Vec2::new(1.0, 0.0),
-                Vec2::new(0.0, -1.0),
-                Vec2::new(0.0, 1.0),
-            ]
-            .iter()
-            .any(|&delta| blocked(game, entity, delta))
-        {
+        if hit && !contacts.into_iter().any(|contact| contact) {
             entity.state = 0;
             entity.timer = 50;
             entity.data.insert("hit".into(), 0.0);
         }
     }
-    if entity.sprite_bounds().intersects(Rect::new(
-        game.player.pos.x - 6.0,
-        game.player.pos.y - 6.0,
-        12.0,
-        13.0,
-    )) {
+    if game.player.health > 0
+        && entity.sprite_bounds().intersects(Rect::new(
+            game.player.pos.x - 6.0,
+            game.player.pos.y - 6.0,
+            13.0,
+            14.0,
+        ))
+    {
         trap_damage(game, 10);
+        let speed = 4.0 + f64::from(game.rng.range(3));
         game.player.vel.x = if entity.pos.x + 8.0 < game.player.pos.x {
-            -5.0
+            -speed
         } else {
-            5.0
+            speed
         };
         game.player.vel.y = if entity.value("direction") == 1.0 {
             4.0
@@ -214,7 +269,12 @@ fn smash(game: &mut Game, entity: &mut Entity) {
             }
         }
     }
-    if touches_lava(game, bounds(entity)) {
+    if active
+        && touches_lava(
+            game,
+            Rect::new(entity.pos.x + 1.0, entity.pos.y + 1.0, 15.0, 15.0),
+        )
+    {
         entity.state = 99;
     }
     if entity.object == "oSmashTrapLit" {
@@ -227,6 +287,7 @@ fn smash(game: &mut Game, entity: &mut Entity) {
 /// Only a side-pushed character blocked by another solid stops this pass.
 fn move_solid(game: &mut Game, entity: &mut Entity, delta: Vec2, carried: &mut bool) -> bool {
     let can_carry = !*carried;
+    let mut obstructed = false;
     let viscid =
         entity
             .data
@@ -253,20 +314,52 @@ fn move_solid(game: &mut Game, entity: &mut Entity, delta: Vec2, carried: &mut b
                 bounds(entity)
             };
             let player = game.player.bounds();
-            let horizontal_overlap = player.x < old.x + old.w && player.x + player.w > old.x;
-            let feet = player.y + player.h;
-            let rider = horizontal_overlap
-                && if horizontal {
-                    viscid && can_carry && (feet - old.y).abs() < 0.01
-                } else if step.y > 0.0 {
-                    viscid && feet <= old.y + 0.01 && feet + 1.0 >= old.y
-                } else {
-                    (feet - old.y).abs() < 0.01
-                };
-            let touching = shifted(old, step).intersects(player);
+            let lb = player.x.round_ties_even();
+            let rb = (player.x + player.w - 1.0).round_ties_even();
+            let tb = player.y.round_ties_even();
+            let bb = (player.y + player.h).round_ties_even();
+            let top_line = Rect::new(lb, bb, rb - lb + 1.0, 1.0);
+            let bottom_line = Rect::new(lb, tb - 1.0, rb - lb + 1.0, 1.0);
+            let rider = if horizontal {
+                viscid && can_carry && old.intersects(top_line)
+            } else if step.y > 0.0 {
+                viscid && old.intersects(shifted(top_line, Vec2::new(0.0, 1.0)))
+            } else {
+                old.intersects(top_line)
+            };
+            let side = if step.x > 0.0 {
+                Rect::new(lb - 1.0, tb, 1.0, (bb - 1.0).round_ties_even() - tb + 1.0)
+            } else {
+                Rect::new(rb + 1.0, tb, 1.0, (bb - 1.0).round_ties_even() - tb + 1.0)
+            };
+            let touching = if horizontal {
+                old.intersects(side)
+            } else {
+                old.intersects(bottom_line)
+            };
+            // oGame cancels variable jumping under a rising platform without
+            // attaching the character to its underside.
+            if !horizontal && step.y < 0.0 && touching && game.player.jump_time < 10 {
+                game.player.vel.y = -2.0;
+                game.player.jump_time = 10;
+            }
+            let obstruction = if horizontal {
+                Rect::new(
+                    if step.x > 0.0 { rb + 1.0 } else { lb - 1.0 },
+                    tb,
+                    1.0,
+                    bb - tb,
+                )
+            } else {
+                Rect::new(
+                    lb,
+                    if step.y > 0.0 { bb } else { tb - 1.0 },
+                    rb - lb + 1.0,
+                    1.0,
+                )
+            };
             if rider {
-                let next = shifted(player, step);
-                if !collides_except(game, next, entity.id) {
+                if !collides_except(game, obstruction, entity.id) {
                     game.player.pos.x += step.x;
                     game.player.pos.y += step.y;
                     game.player.grounded = true;
@@ -274,12 +367,13 @@ fn move_solid(game: &mut Game, entity: &mut Entity, delta: Vec2, carried: &mut b
                         *carried = true;
                     }
                 } else if !horizontal && step.y < 0.0 {
-                    return true;
+                    obstructed = true;
+                    break;
                 }
-            } else if touching {
-                let next = shifted(player, step);
-                if collides_except(game, next, entity.id) {
-                    return true;
+            } else if touching && (horizontal || step.y > 0.0) {
+                if collides_except(game, obstruction, entity.id) {
+                    obstructed = true;
+                    break;
                 }
                 game.player.pos.x += step.x;
                 game.player.pos.y += step.y;
@@ -288,14 +382,14 @@ fn move_solid(game: &mut Game, entity: &mut Entity, delta: Vec2, carried: &mut b
             entity.pos.y += step.y;
         }
     }
-    false
+    obstructed
 }
 
 fn scheduled_delta(speed: f64, tick: u64) -> f64 {
     let magnitude = speed.abs();
     let fraction = magnitude.fract();
     let period = if fraction > 0.0 {
-        (1.0 / fraction).round() as u64
+        (1.0 / fraction).round_ties_even() as u64
     } else {
         0
     };
@@ -337,23 +431,31 @@ fn move_body(game: &Game, entity: &mut Entity, delta: Vec2) -> bool {
 }
 
 fn thwomp(game: &mut Game, entity: &mut Entity) {
+    let source = entity.sprite_bounds();
+    let target = game.player.sprite_bounds();
+    let dx = (source.x - (target.x + target.w - 1.0))
+        .max(target.x - (source.x + source.w - 1.0))
+        .max(0.0);
+    let dy = (source.y - (target.y + target.h - 1.0))
+        .max(target.y - (source.y + source.h - 1.0))
+        .max(0.0);
     match entity.state {
         0 if game.player.pos.y > entity.pos.y
-            && entity.pos.distance(game.player.pos) < 96.0
+            && dx.hypot(dy) < 96.0
             && (game.player.pos.x - entity.pos.x).abs() < 8.0 =>
         {
             entity.state = 1
         }
         1 => {
             entity.vel.y = (entity.vel.y + 1.0).min(6.0);
-            if blocked(game, entity, Vec2::new(0.0, 1.0)) {
+            if edge_blocked(game, entity, 1, 1.0) {
                 entity.state = 2;
                 entity.vel.y = 0.0;
                 entity.timer = 100;
             }
         }
         2 => {
-            if blocked(game, entity, Vec2::new(0.0, 1.0)) {
+            if edge_blocked(game, entity, 1, 1.0) {
                 entity.pos.y -= 1.0;
             }
             if entity.timer > 0 {
@@ -363,7 +465,7 @@ fn thwomp(game: &mut Game, entity: &mut Entity) {
                 entity.vel.y = -1.0;
             }
         }
-        3 if blocked(game, entity, Vec2::new(0.0, -1.0)) => {
+        3 if edge_blocked(game, entity, 3, 1.0) => {
             entity.vel.y = 0.0;
             entity.state = 0;
         }
@@ -375,14 +477,14 @@ fn door(game: &mut Game, entity: &mut Entity) {
     match entity.state {
         1 => {
             entity.vel.y = (entity.vel.y + 1.0).min(6.0);
-            if blocked(game, entity, Vec2::new(0.0, 1.0)) {
+            if edge_blocked(game, entity, 1, 1.0) {
                 entity.state = 2;
                 entity.vel.y = 0.0;
                 entity.timer = 100;
             }
         }
         2 => {
-            if blocked(game, entity, Vec2::new(0.0, 1.0)) {
+            if edge_blocked(game, entity, 1, 1.0) {
                 entity.pos.y -= 1.0;
             }
         }
@@ -406,7 +508,10 @@ fn ceiling(game: &mut Game, entity: &mut Entity) {
             entity.pos.y += 1.0;
         }
         entity.vel.y = 0.0;
-        if blocked(game, entity, Vec2::new(0.0, 1.0)) {
+        if game.world.solid_point_except(
+            Vec2::new(entity.pos.x + 8.0, entity.pos.y + 17.0),
+            entity.id,
+        ) {
             entity.state = 2;
         }
         if entity.sprite == "sBlock" {
@@ -415,7 +520,7 @@ fn ceiling(game: &mut Game, entity: &mut Entity) {
         }
     } else if entity.state == 2 {
         entity.vel.y = 0.0;
-        if blocked(game, entity, Vec2::new(0.0, 1.0)) {
+        if edge_blocked(game, entity, 1, 1.0) {
             entity.pos.y -= 1.0;
         }
     }
@@ -430,8 +535,8 @@ fn ceiling(game: &mut Game, entity: &mut Entity) {
         && bounds(entity).intersects(Rect::new(
             game.player.pos.x - 2.0,
             game.player.pos.y - 9.0,
-            4.0,
-            2.0,
+            5.0,
+            3.0,
         ))
     {
         trap_damage(game, 10);
@@ -468,8 +573,6 @@ fn boulder(game: &mut Game, entity: &mut Entity) {
                             hard_collision = true;
                         }
                     }
-                } else {
-                    hard_collision = true;
                 }
             }
             if hard_collision {
@@ -486,10 +589,18 @@ fn boulder(game: &mut Game, entity: &mut Entity) {
     let vertical_distance = scheduled_delta(vertical_speed, game.engine_time());
     let vertical_hit = move_body(game, entity, Vec2::new(0.0, vertical_distance));
     entity.vel.y = (entity.vel.y + 0.6).min(8.0);
+    if entity.pos.x - 17.0 <= 16.0 && entity.vel.x < 0.0 {
+        entity.pos.x += 1.0;
+        entity.vel.x = -entity.vel.x;
+    }
+    if entity.pos.x + 17.0 >= 656.0 && entity.vel.x > 0.0 {
+        entity.pos.x -= 1.0;
+        entity.vel.x = -entity.vel.x;
+    }
     if vertical_hit && vertical_speed < 0.0 {
         entity.vel.y = -entity.vel.y * 0.8;
     }
-    if blocked(game, entity, Vec2::new(0.0, 1.0)) {
+    if edge_blocked(game, entity, 1, 1.0) {
         entity.vel.y = if entity.vel.y > 3.0 {
             -entity.vel.y * 0.3
         } else {
@@ -566,9 +677,26 @@ fn push_block(game: &mut Game, entity: &mut Entity) {
     }
 }
 
+fn ice_block(game: &mut Game, entity: &mut Entity) {
+    if touches_lava(
+        game,
+        Rect::new(entity.pos.x + 8.0, entity.pos.y + 16.0, 1.0, 1.0),
+    ) && !game.world.solid_point_except(
+        Vec2::new(entity.pos.x + 8.0, entity.pos.y + 17.0),
+        entity.id,
+    ) {
+        entity.vel.y = 0.0;
+        entity.data.insert("push_gravity".into(), 0.0);
+        entity.pos.y += 0.05;
+    }
+    if entity.pos.y > 576.0 {
+        entity.alive = false;
+    }
+}
+
 fn thin_ice(game: &mut Game, entity: &mut Entity) {
     let mut thickness = entity.data.get("thickness").copied().unwrap_or(60.0);
-    if Rect::new(entity.pos.x, entity.pos.y - 1.0, 16.0, 2.0)
+    if Rect::new(entity.pos.x, entity.pos.y - 1.0, 17.0, 3.0)
         .intersects(game.player.sprite_bounds())
     {
         thickness -= 2.0;
@@ -585,11 +713,15 @@ fn thin_ice(game: &mut Game, entity: &mut Entity) {
     }
 }
 fn dark_fall(game: &mut Game, entity: &mut Entity) {
-    let top = entity.pos.y;
     let player = game.player.bounds();
-    let touching = player.x < entity.pos.x + 16.0
-        && player.x + player.w > entity.pos.x
-        && (player.y + player.h - top).abs() < 0.01;
+    let left = player.x.round_ties_even();
+    let right = (player.x + player.w - 1.0).round_ties_even();
+    let touching = entity.sprite_bounds().intersects(Rect::new(
+        left,
+        (player.y + player.h).round_ties_even(),
+        right - left + 1.0,
+        1.0,
+    ));
     let mut time = entity.data.get("timeFall").copied().unwrap_or(20.0);
     if touching {
         time -= 1.0;
@@ -601,7 +733,7 @@ fn dark_fall(game: &mut Game, entity: &mut Entity) {
     }
     entity.data.insert("timeFall".into(), time);
     entity.vel.y = entity.vel.y.min(10.0);
-    if collides_except(game, bounds(entity), entity.id) {
+    if collides_except(game, entity.sprite_bounds(), entity.id) {
         entity.alive = false;
         game.sound("sndBreak", entity.pos);
         game.world.spawn(
@@ -624,7 +756,13 @@ fn dark_fall(game: &mut Game, entity: &mut Entity) {
 }
 
 fn spring(game: &mut Game, entity: &mut Entity) {
-    entity.timer = entity.timer.saturating_sub(1);
+    let active = entity.pos.x > game.camera.x - 16.0
+        && entity.pos.x < game.camera.x + 320.0
+        && entity.pos.y > game.camera.y - 16.0
+        && entity.pos.y < game.camera.y + 240.0;
+    if active {
+        entity.timer = entity.timer.saturating_sub(1);
+    }
     if entity.state == 1 {
         entity.animation += 1.0;
         if entity.animation >= 9.0 {
@@ -634,7 +772,8 @@ fn spring(game: &mut Game, entity: &mut Entity) {
         }
     }
     let support = Rect::new(entity.pos.x, entity.pos.y + 16.0, 1.0, 1.0);
-    if !game.world.collides(support)
+    if active
+        && !game.world.collides(support)
         && !game
             .world
             .entities
@@ -716,6 +855,214 @@ fn is_item(object: &str) -> bool {
 mod tests {
     use super::*;
     use crate::model::RulesPreset;
+
+    #[test]
+    fn rising_platform_ends_variable_jump_under_its_underside() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let id = game.world.spawn("oThwompTrap", Vec2::new(80.0, 64.0));
+        let trap = game.world.entity_mut(id).unwrap();
+        trap.state = 3;
+        trap.vel.y = -2.0;
+        game.player.pos = Vec2::new(88.0, 88.0);
+        game.player.state = PlayerState::Jumping;
+        game.player.vel.y = -4.0;
+        game.player.jump_time = 2;
+        game.step(&crate::InputFrame {
+            jump: true,
+            ..Default::default()
+        });
+        assert_eq!(game.world.entity(id).unwrap().pos.y, 62.0);
+        assert_eq!(game.player.jump_time, 10);
+        assert!(game.player.vel.y > -3.0);
+    }
+
+    #[test]
+    fn blocked_side_push_still_moves_platform_vertically() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world.set_tile(7, 5, "oHardBlock");
+        let id = game.world.spawn("oMovingSolid", Vec2::new(86.0, 80.0));
+        let platform = game.world.entity_mut(id).unwrap();
+        platform.sprite = "sBlock".into();
+        platform.vel = Vec2::new(1.0, 1.0);
+        game.player.pos = Vec2::new(107.0, 88.0);
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().pos, Vec2::new(86.0, 81.0));
+    }
+
+    #[test]
+    fn platform_carry_can_escape_an_existing_side_overlap() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world.set_tile(4, 4, "oHardBlock");
+        let id = game.world.spawn("oMovingSolid", Vec2::new(80.0, 80.0));
+        let platform = game.world.entity_mut(id).unwrap();
+        platform.sprite = "sBlock".into();
+        platform.vel.x = 1.0;
+        platform.data.insert("viscidTop".into(), 1.0);
+        game.player.pos = Vec2::new(83.0, 72.0);
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.player.pos.x, 84.0);
+    }
+
+    #[test]
+    fn frozen_ice_block_inherits_gravity_and_lava_sinking() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let id = game.world.spawn("oIceBlock", Vec2::new(80.0, 64.0));
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().pos.y, 65.0);
+        game.world.set_tile(5, 5, "oLava");
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().value("push_gravity"), 0.0);
+        assert_eq!(game.world.entity(id).unwrap().vel.y, 0.0);
+        assert!((game.world.entity(id).unwrap().pos.y - 67.05).abs() < 0.001);
+    }
+
+    #[test]
+    fn falling_platform_floor_event_uses_nine_pixel_sprite_mask() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world.set_tile(5, 6, "oHardBlock");
+        let id = game.world.spawn("oDarkFall", Vec2::new(80.0, 88.0));
+        game.step(&crate::InputFrame::default());
+        assert!(game.world.entity(id).is_none());
+        assert!(game.world.entities.iter().any(|e| e.object == "oSmokePuff"));
+    }
+
+    #[test]
+    fn thin_ice_self_destruction_runs_inherited_supported_fixture_cleanup() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let ice = game.world.spawn("oThinIce", Vec2::new(80.0, 80.0));
+        game.world
+            .entity_mut(ice)
+            .unwrap()
+            .data
+            .insert("thickness".into(), 2.0);
+        let spikes = game.world.spawn("oSpikes", Vec2::new(80.0, 64.0));
+        game.player.pos = Vec2::new(88.0, 72.0);
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        game.step(&crate::InputFrame::default());
+        assert!(game.world.entity(ice).is_none());
+        assert!(game.world.entity(spikes).is_none());
+    }
+
+    #[test]
+    fn offscreen_spring_preserves_cooldown_and_support_until_visible() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let id = game.world.spawn("oSpringTrap", Vec2::new(400.0, 80.0));
+        game.world.entity_mut(id).unwrap().timer = 4;
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().timer, 4);
+        game.camera.x = 200.0;
+        game.step(&crate::InputFrame::default());
+        assert!(game.world.entity(id).is_none());
+    }
+
+    #[test]
+    fn thwomp_activation_uses_sprite_distance_instead_of_origin_distance() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let id = game.world.spawn("oThwompTrap", Vec2::new(80.0, 80.0));
+        game.player.pos = Vec2::new(80.0, 184.0);
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().state, 1);
+    }
+
+    #[test]
+    fn offscreen_smash_trap_waits_for_source_viewport_activation() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let id = game.world.spawn("oSmashTrap", Vec2::new(400.0, 80.0));
+        let trap = game.world.entity_mut(id).unwrap();
+        trap.state = 1;
+        trap.vel.x = 2.0;
+        trap.data.insert("xa".into(), 0.5);
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().pos.x, 400.0);
+        assert_eq!(game.world.entity(id).unwrap().vel.x, 2.0);
+    }
+
+    #[test]
+    fn smash_uses_raw_velocity_then_source_contact_correction() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world.set_tile(6, 5, "oHardBlock");
+        let id = game.world.spawn("oSmashTrap", Vec2::new(81.0, 80.0));
+        let trap = game.world.entity_mut(id).unwrap();
+        trap.state = 1;
+        trap.vel.x = 4.0;
+        trap.data.insert("direction".into(), 0.0);
+        game.step(&crate::InputFrame::default());
+        let trap = game.world.entity(id).unwrap();
+        assert_eq!(trap.pos.x, 82.0); // 81 + xv4 - source correction3
+        assert_eq!(trap.vel.x, 0.0);
+        assert_eq!(trap.value("hit"), 1.0);
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().pos.x, 79.0);
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().state, 0);
+        assert_eq!(game.world.entity(id).unwrap().timer, 50);
+    }
+
+    #[test]
+    fn ceiling_drop_checks_source_center_point_seventeen_pixels_below_origin() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let id = game.world.spawn("oCeilingTrap", Vec2::new(80.0, 64.0));
+        game.world.entity_mut(id).unwrap().state = 1;
+        game.world.spawn("oDoor", Vec2::new(80.0, 81.0));
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().pos.y, 64.0);
+        assert_eq!(game.world.entity(id).unwrap().state, 2);
+    }
+
+    #[test]
+    fn boulder_uses_explicit_classic_side_limits_in_an_open_world() {
+        for (start, velocity, expected, expected_velocity) in
+            [(34.0, -1.0, 33.0, 1.0), (638.0, 1.0, 639.0, -1.0)]
+        {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            let id = game.world.spawn("oBoulder", Vec2::new(start, 80.0));
+            game.world.entity_mut(id).unwrap().vel.x = velocity;
+            game.step(&crate::InputFrame::default());
+            assert_eq!(game.world.entity(id).unwrap().pos.x, expected);
+            assert_eq!(game.world.entity(id).unwrap().vel.x, expected_velocity);
+        }
+    }
+
+    #[test]
+    fn olmec_receives_global_and_own_movement_and_both_source_carries() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let id = game.world.spawn("oOlmec", Vec2::new(80.0, 80.0));
+        let boss = game.world.entity_mut(id).unwrap();
+        crate::enemies::init_entity(boss);
+        boss.sprite = "sOlmec".into();
+        boss.state = 0;
+        boss.vel.x = 1.0;
+        boss.data.insert("carryPlayer".into(), 1.0);
+        game.player.pos = Vec2::new(112.0, 72.0);
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().pos.x, 82.0);
+        assert_eq!(game.player.pos.x, 114.0);
+        assert_eq!(game.world.entity(id).unwrap().value("carryPlayer"), 1.0);
+    }
+
+    #[test]
+    fn olmec_own_carry_uses_raw_fractional_velocity_before_quantized_move() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let id = game.world.spawn("oOlmec", Vec2::new(80.0, 80.0));
+        let boss = game.world.entity_mut(id).unwrap();
+        crate::enemies::init_entity(boss);
+        boss.sprite = "sOlmec".into();
+        boss.state = 0;
+        boss.vel.x = 0.25;
+        boss.data.insert("carryPlayer".into(), 1.0);
+        game.player.pos = Vec2::new(112.0, 72.0);
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        game.step(&crate::InputFrame::default());
+        assert_eq!(game.engine_time(), 2);
+        assert_eq!(game.world.entity(id).unwrap().pos.x, 80.0);
+        assert_eq!(game.player.pos.x, 112.25);
+    }
     #[test]
     fn spring_launch_matches_reference_and_cannot_retrigger_during_cooldown() {
         let mut game = Game::shell(1, RulesPreset::Classic);
@@ -747,7 +1094,7 @@ mod tests {
     fn boulder_first_landing_rolls_toward_player() {
         let mut game = Game::shell(1, RulesPreset::Classic);
         for x in 0..game.world.width {
-            game.world.set_tile(x, 8, "oSolid");
+            game.world.set_tile(x, 8, "oHardBlock");
         }
         let id = game.world.spawn("oBoulder", Vec2::new(160.0, 112.0));
         game.player.pos = Vec2::new(40.0, 112.0);

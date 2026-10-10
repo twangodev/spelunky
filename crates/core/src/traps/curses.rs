@@ -6,6 +6,7 @@ pub(super) fn tick(game: &mut Game) {
     // oLevel Create restores the punishment on each new campaign room, including
     // after the prior ball was destroyed by lava. Never regenerate it mid-room.
     if game.level_tick == 1
+        && !game.flags.contains("hub")
         && game.data.get("kali_punish").copied().unwrap_or(0.0) >= 2.0
         && !game
             .world
@@ -102,7 +103,11 @@ fn blocked(game: &Game, ball: &Entity, pos: Vec2) -> bool {
 }
 fn displacement(v: f64, tick: u64) -> i32 {
     let f = v.abs().fract();
-    let period = if f > 0.0 { (1.0 / f).round() as u64 } else { 0 };
+    let period = if f > 0.0 {
+        (1.0 / f).round_ties_even() as u64
+    } else {
+        0
+    };
     (v.abs().floor() as i32 + i32::from(period > 0 && tick.is_multiple_of(period)))
         * if v < 0.0 { -1 } else { 1 }
 }
@@ -356,7 +361,7 @@ fn impact(game: &mut Game, ball: &Entity) {
     if ball.held || ball.vel.x.abs() <= 2.0 && ball.vel.y.abs() <= 2.0 {
         return;
     }
-    let strike = Rect::new(ball.pos.x - 2.0, ball.pos.y - 2.0, 4.0, 4.0);
+    let strike = Rect::new(ball.pos.x - 2.0, ball.pos.y - 2.0, 5.0, 5.0);
     let mut sound = Vec::new();
     let mut explosions = Vec::new();
     for target in &mut game.world.entities {
@@ -368,7 +373,7 @@ fn impact(game: &mut Game, ball: &Entity) {
         {
             continue;
         }
-        if !crate::enemies::is_enemy(&target.object) {
+        if !crate::enemies::is_enemy(&target.object) && target.object != "oDamsel" {
             continue;
         }
         match target.object.as_str() {
@@ -403,6 +408,9 @@ fn impact(game: &mut Game, ball: &Entity) {
                 target.vel.y = -6.0;
                 if game.player.held == Some(target.id) {
                     game.player.held = None;
+                }
+                if target.value("forSale") != 0.0 {
+                    game.flags.insert("shopkeepers_angry".into());
                 }
             }
             "oGiantSpider" | "oTombLord" => {
@@ -460,6 +468,35 @@ mod tests {
         let mut g = Game::shell(1, RulesPreset::Classic);
         g.player.pos = Vec2::new(120.0, 80.0);
         g
+    }
+    #[test]
+    fn moving_curse_ball_hits_damsel_in_game_step() {
+        let mut game = room();
+        let damsel = game.world.spawn("oDamsel", Vec2::new(72.0, 80.0));
+        game.world
+            .entity_mut(damsel)
+            .unwrap()
+            .data
+            .insert("forSale".into(), 1.0);
+        let ball = game.world.spawn("oBall", Vec2::new(72.0, 72.0));
+        game.world.entity_mut(ball).unwrap().vel.y = 4.0;
+        game.step(&crate::InputFrame::default());
+        let damsel = game.world.entity(damsel).unwrap();
+        assert_eq!(damsel.health, 3);
+        assert_eq!(damsel.state, 2);
+        assert_eq!(damsel.timer, 120);
+        assert_eq!(damsel.value("hit"), 10.0);
+        assert_eq!(damsel.vel.y, -6.0);
+        assert!(game.flags.contains("shopkeepers_angry"));
+    }
+
+    #[test]
+    fn hub_room_does_not_restore_campaign_punishment_ball() {
+        let mut game = room();
+        game.load_hub(crate::hub::HubKind::Title);
+        game.data.insert("kali_punish".into(), 2.0);
+        game.step(&crate::InputFrame::default());
+        assert!(!game.world.entities.iter().any(|e| e.object == "oBall"));
     }
     #[test]
     fn links_interpolate_all_four_quarters_and_vanish_with_ball() {

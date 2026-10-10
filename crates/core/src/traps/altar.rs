@@ -70,7 +70,7 @@ fn altars(game: &mut Game) {
             && pos.x < game.camera.x + 324.0
             && pos.y > game.camera.y - 20.0
             && pos.y < game.camera.y + 244.0;
-        if visible && !game.world.solid_at(pos.x + 8.0, pos.y + 16.0) {
+        if visible && !game.world.solid_at(pos.x, pos.y + 16.0) {
             if let Some(id) = id {
                 if let Some(entity) = game.world.entity_mut(*id) {
                     entity.alive = false;
@@ -105,9 +105,12 @@ fn altars(game: &mut Game) {
             .copied()
             .unwrap_or(entity.state as f64);
         let damsel = entity.object == "oDamsel";
-        let dead = entity.health <= 0 || status == 99.0;
-        let stunned = status == 98.0 || entity.value("stun") > 0.0;
-        if !(dead || stunned || (damsel && status == 2.0)) {
+        let dead = status == 99.0;
+        if if damsel {
+            status != 2.0 && !dead
+        } else {
+            status < 98.0
+        } {
             continue;
         }
         let feet = if damsel {
@@ -130,7 +133,9 @@ fn altars(game: &mut Game) {
                 entity.alive = false;
                 let favor = entity.data.get("favor").copied().unwrap_or(base_favor);
                 let amount = if damsel {
-                    if dead { favor } else { favor * 1.5 }
+                    // Classic 1.1 admits only THROWN (2) and DEAD (99)
+                    // damsels; its status-98 multiplier is unreachable.
+                    favor
                 } else if dead {
                     favor / 2.0
                 } else {
@@ -154,7 +159,7 @@ fn altars(game: &mut Game) {
         } else {
             "KALI ACCEPTS THE SACRIFICE!".into()
         }));
-        reward(game, altar);
+        reward(game, altar, pos.y);
     }
 }
 
@@ -171,7 +176,7 @@ fn sacrifice_value(object: &str) -> Option<f64> {
     })
 }
 
-fn reward(game: &mut Game, altar: Vec2) {
+fn reward(game: &mut Game, altar: Vec2, offering_y: f64) {
     let favor = game.data.get("favor").copied().unwrap_or(0.0);
     let gift = game.data.get("kali_gift").copied().unwrap_or(0.0);
     let gift_pos = game
@@ -179,15 +184,15 @@ fn reward(game: &mut Game, altar: Vec2) {
         .entities
         .iter()
         .find(|e| e.alive && e.object == "oSacAltarRight")
-        .map(|e| Vec2::new(e.pos.x, altar.y - 8.0))
+        .map(|e| Vec2::new(e.pos.x, offering_y - 8.0))
         .or_else(|| {
             game.world
                 .tiles
                 .iter()
                 .position(|tile| tile.object == "oSacAltarRight")
-                .map(|index| Vec2::new((index % game.world.width) as f64 * 16.0, altar.y - 8.0))
+                .map(|index| Vec2::new((index % game.world.width) as f64 * 16.0, offering_y - 8.0))
         })
-        .unwrap_or(Vec2::new(altar.x + 16.0, altar.y - 8.0));
+        .unwrap_or(Vec2::new(altar.x + 16.0, offering_y - 8.0));
     let message = if favor <= -8.0 {
         "SHE SEEMS VERY ANGRY WITH YOU!"
     } else if favor < 0.0 {
@@ -459,22 +464,76 @@ mod tests {
     }
 
     #[test]
-    fn live_damsel_offering_grants_twelve_favor_after_twenty_ticks() {
+    fn thrown_damsel_offering_grants_source_eight_favor_after_twenty_ticks() {
         let mut game = altar_room();
         let id = game.world.spawn("oDamsel", Vec2::new(72.0, 56.0));
-        game.world.entity_mut(id).unwrap().state = 98;
+        game.world.entity_mut(id).unwrap().state = 2;
         for _ in 0..20 {
             tick(&mut game);
         }
         assert!(game.world.entity(id).is_some());
         tick(&mut game);
         assert!(game.world.entity(id).is_none());
-        assert_eq!(game.data["favor"], 12.0);
+        assert_eq!(game.data["favor"], 8.0);
         assert_eq!(game.data["kali_gift"], 1.0);
         let count = game.world.entities.len();
         tick(&mut game);
-        assert_eq!(game.data["favor"], 12.0);
+        assert_eq!(game.data["favor"], 8.0);
         assert_eq!(game.world.entities.len(), count);
+    }
+
+    #[test]
+    fn game_step_sacrifices_thrown_damsel_and_spawns_gift_at_offering_height() {
+        let mut game = altar_room();
+        let id = game.world.spawn("oDamsel", Vec2::new(72.0, 56.0));
+        let damsel = game.world.entity_mut(id).unwrap();
+        damsel.state = 2;
+        damsel.data.insert("sacrifice_count".into(), 0.0);
+        game.step(&crate::InputFrame::default());
+        assert!(game.world.entity(id).is_none());
+        assert_eq!(game.data["favor"], 8.0);
+        let gift = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.data.get("forSale") == Some(&0.0) && crate::items::is_item(&e.object))
+            .unwrap();
+        assert_eq!(gift.pos, Vec2::new(80.0, 48.0));
+    }
+
+    #[test]
+    fn game_step_enemy_gift_uses_enemy_origin_and_damsel_status_98_is_ineligible() {
+        let mut game = altar_room();
+        game.data.insert("favor".into(), 6.0);
+        let id = game.world.spawn("oCaveman", Vec2::new(64.0, 48.0));
+        let caveman = game.world.entity_mut(id).unwrap();
+        crate::enemies::init_entity(caveman);
+        caveman.state = 98;
+        caveman.vel = Vec2::default();
+        caveman.timer = 200;
+        caveman.data.insert("sacrifice_count".into(), 0.0);
+        game.step(&crate::InputFrame::default());
+        assert!(
+            game.world.entity(id).is_none(),
+            "{:?}",
+            game.world.entity(id)
+        );
+        assert_eq!(game.data["favor"], 8.0);
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .any(|e| { e.data.get("forSale") == Some(&0.0) && e.pos == Vec2::new(80.0, 40.0) })
+        );
+
+        let mut game = altar_room();
+        let id = game.world.spawn("oDamsel", Vec2::new(72.0, 56.0));
+        let damsel = game.world.entity_mut(id).unwrap();
+        damsel.state = 98;
+        damsel.data.insert("sacrifice_count".into(), 0.0);
+        game.step(&crate::InputFrame::default());
+        assert!(game.world.entity(id).is_some());
+        assert_eq!(game.data.get("favor"), None);
     }
 
     #[test]
@@ -524,7 +583,7 @@ mod tests {
         game.data.insert("favor".into(), -8.0);
         let id = game.world.spawn("oDamsel", Vec2::new(72.0, 56.0));
         let victim = game.world.entity_mut(id).unwrap();
-        victim.state = 98;
+        victim.state = 2;
         victim.data.insert("sacrifice_count".into(), 0.0);
         tick(&mut game);
         assert_eq!(game.data["favor"], -8.0);
