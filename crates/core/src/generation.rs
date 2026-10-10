@@ -16,6 +16,8 @@ mod tiles;
 #[cfg(test)]
 #[path = "generation/traversal.rs"]
 mod traversal;
+#[path = "generation/water.rs"]
+mod water;
 
 #[derive(Deserialize)]
 struct Archive {
@@ -548,6 +550,7 @@ pub fn generate(rng: &mut Rng, level: u32, flags: &BTreeSet<String>) -> World {
     }
     let mut world = World::new(42, 34, area, level);
     if special::generate_special(&mut world, rng, flags) {
+        world.fluid_dirty = false;
         return world;
     }
     let path = room_path(rng, area, level, &mut selected);
@@ -693,6 +696,8 @@ pub fn generate(rng: &mut Rng, level: u32, flags: &BTreeSet<String>) -> World {
     special::apply(&mut world, rng, &selected);
     terrain::initialize(&mut world, rng);
     population::populate(&mut world, rng, &selected);
+    // Construction/carving does not dispatch source Solid Destroy events.
+    world.fluid_dirty = false;
     world
 }
 
@@ -712,6 +717,13 @@ pub fn tutorial() -> World {
     let mut flags = BTreeSet::new();
     flags.insert("tutorial".into());
     generate(&mut Rng::new(0), 0, &flags)
+}
+
+/// Run custom-room terrain Create events without generated-room SetupWalls.
+/// scrCreateTileObj subsequently forces base sprites, while buried contents
+/// created before those assignments remain present.
+pub fn initialize_custom_terrain(world: &mut World, rng: &mut Rng) {
+    terrain::initialize_custom(world, rng);
 }
 
 #[cfg(test)]

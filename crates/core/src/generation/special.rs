@@ -216,9 +216,14 @@ fn boss_arena(world: &mut World) {
     for y in 48..54 {
         for x in 1..41 {
             world.set_tile(x, y, "");
-            let id = world.spawn("oLava", Vec2::new(x as f64 * 16.0, y as f64 * 16.0));
-            let lava = world.entity_mut(id).expect("new lava entity");
-            lava.sprite = if y == 48 { "sLavaTop" } else { "sLava" }.into();
+        }
+    }
+    // rOlmec instances 127721 onward are authored column by column, bottom
+    // first. Preserve their order: SetupWalls mutates surface sprite masks,
+    // and its exact-origin probes must see untouched lava above each layer.
+    for x in 1..41 {
+        for y in (48..54).rev() {
+            world.spawn("oLava", Vec2::new(x as f64 * 16.0, y as f64 * 16.0));
         }
     }
     for x in 1..41 {

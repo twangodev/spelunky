@@ -2,7 +2,7 @@
 //!
 //! Tile instances are represented by invisible, centered metadata entities.
 //! Their contents become available when the containing terrain is destroyed.
-use crate::model::{Rng, Vec2, World};
+use crate::model::{Entity, Rng, Vec2, World};
 
 const UNDERGROUND: [(&str, f64, f64); 19] = [
     ("oJetpack", 0.0, -2.0),
@@ -28,12 +28,21 @@ const UNDERGROUND: [(&str, f64, f64); 19] = [
 
 fn metadata(world: &mut World, x: usize, y: usize) -> u64 {
     let p = Vec2::new(x as f64 * 16.0 + 8.0, y as f64 * 16.0 + 8.0);
-    if let Some(e) = world
+    if let Some(id) = world
         .entities
         .iter()
-        .find(|e| e.alive && e.object == "oTerrainMetadata" && e.pos == p)
+        .find(|e| {
+            e.alive
+                && e.object == "oTerrainMetadata"
+                && (e.pos.x / 16.0).floor() as usize == x
+                && (e.pos.y / 16.0).floor() as usize == y
+        })
+        .map(|entity| entity.id)
     {
-        return e.id;
+        let entity = world.entity_mut(id).unwrap();
+        entity.pos = p;
+        entity.previous_pos = p;
+        return id;
     }
     let id = world.spawn("oTerrainMetadata", p);
     world.entity_mut(id).unwrap().sprite.clear();
@@ -145,6 +154,14 @@ fn edge_sprite(object: &str, city: bool, n: (bool, bool, bool, bool)) -> Option<
 /// Creation order is stable within this Rust port; it does not reproduce the
 /// GameMaker interleaving of room creation and individual Create events.
 pub(super) fn initialize(world: &mut World, rng: &mut Rng) {
+    initialize_terrain(world, rng, false);
+}
+
+pub(super) fn initialize_custom(world: &mut World, rng: &mut Rng) {
+    initialize_terrain(world, rng, true);
+}
+
+fn initialize_terrain(world: &mut World, rng: &mut Rng, custom: bool) {
     let city = world.name == "City of Gold";
     for y in 0..world.height {
         for x in 0..world.width {
@@ -185,8 +202,12 @@ pub(super) fn initialize(world: &mut World, rng: &mut Rng) {
             } else if object == "oIce" {
                 if rng.chance(1, 80) {
                     // FrozenCaveman Destroy releases this live caveman.
-                    treasure = Some(("oCaveman", -8.0, -8.0));
-                    frozen = true;
+                    if custom {
+                        release_custom_frozen(world, Vec2::new(x as f64 * 16.0, y as f64 * 16.0));
+                    } else {
+                        treasure = Some(("oCaveman", -8.0, -8.0));
+                        frozen = true;
+                    }
                 }
             } else {
                 let roll = rng.range(100) + 1;
@@ -223,7 +244,7 @@ pub(super) fn initialize(world: &mut World, rng: &mut Rng) {
             let sides = neighbors(world, x, y, &object);
             // SetupWalls overwrites gold sprites; their Destroy event then
             // releases no gold. City of Gold uses the global flag instead.
-            if let Some(edge) = edge_sprite(&object, city, sides) {
+            if !custom && let Some(edge) = edge_sprite(&object, city, sides) {
                 sprite = edge;
                 if !(object == "oTemple" && city) {
                     gold = 0;
@@ -234,6 +255,10 @@ pub(super) fn initialize(world: &mut World, rng: &mut Rng) {
                 if !(object == "oTemple" && city) {
                     gold = 0;
                 }
+            }
+            if custom {
+                sprite = format!("s{}", &object[1..]);
+                gold = 0;
             }
             let e = world.entity_mut(id).unwrap();
             e.sprite.clear();
@@ -258,12 +283,257 @@ pub(super) fn initialize(world: &mut World, rng: &mut Rng) {
             }
         }
     }
+    if !custom {
+        super::water::setup(world, rng);
+    }
+    for y in 0..world.height {
+        for x in 0..world.width {
+            if world.tile(x as i32, y as i32).unwrap().object != "oLava" {
+                continue;
+            }
+            let origin = Vec2::new(x as f64 * 16.0, y as f64 * 16.0);
+            let exposed = !custom && lava_exposed(world, origin);
+            let id = metadata(world, x, y);
+            if custom {
+                create_lava(world.entity_mut(id).unwrap(), rng);
+            } else {
+                setup_lava(world.entity_mut(id).unwrap(), rng, exposed, true);
+            }
+        }
+    }
+    let lava: Vec<_> = world
+        .entities
+        .iter()
+        .filter(|entity| entity.alive && entity.object == "oLava")
+        .map(|entity| entity.id)
+        .collect();
+    for id in lava {
+        let origin = world.entity(id).unwrap().pos;
+        if custom {
+            create_lava(world.entity_mut(id).unwrap(), rng);
+        } else {
+            let exposed = lava_exposed(world, origin);
+            setup_lava(world.entity_mut(id).unwrap(), rng, exposed, false);
+        }
+    }
+    if !custom {
+        super::water::propagate_surface(world);
+    } else {
+        initialize_custom_instances(world, rng);
+    }
+}
+
+fn release_custom_frozen(world: &mut World, origin: Vec2) {
+    // scrCreateTileObj destroys its freshly created FrozenCaveman. In
+    // rLoadLevel cleanSolids is false, so that Destroy event releases a live,
+    // stunned caveman; there is no frozen overlay left in the custom room.
+    let id = world.spawn("oCaveman", origin);
+    let caveman = world.entity_mut(id).unwrap();
+    caveman.data.insert("invincible".into(), 20.0);
+    caveman.state = 98;
+    caveman.timer = caveman.value("stun_time") as u32;
+}
+
+fn initialize_custom_instances(world: &mut World, rng: &mut Rng) {
+    // Custom compound symbols can overlap static terrain with pools or room
+    // borders. Those additional terrain instances live outside tile storage
+    // but still execute the same source Create events.
+    let ids: Vec<_> = world
+        .entities
+        .iter()
+        .filter(|entity| {
+            entity.alive
+                && matches!(
+                    entity.object.as_str(),
+                    "oBrick" | "oLush" | "oDark" | "oTemple" | "oIce"
+                )
+                && entity.value("terrain_initialized") == 0.0
+        })
+        .map(|entity| entity.id)
+        .collect();
+    for id in ids {
+        let entity = world.entity(id).unwrap();
+        let object = entity.object.clone();
+        let origin = entity.pos;
+        let mut treasure = None;
+        if object == "oIce" {
+            if rng.chance(1, 80) {
+                release_custom_frozen(world, origin);
+            }
+        } else {
+            if object == "oBrick" {
+                rng.range(10);
+            }
+            let roll = rng.range(100) + 1;
+            if roll >= 30
+                && origin.x > 1.0
+                && origin.x < (world.width - 1) as f64 * 16.0
+                && origin.y > 1.0
+                && origin.y < (world.height - 1) as f64 * 16.0
+            {
+                let chances = match object.as_str() {
+                    "oBrick" => [100, 120, 140],
+                    "oLush" => [80, 100, 120],
+                    "oDark" => [40, 60, 80],
+                    _ => [60, 80, 100],
+                };
+                for (name, chance) in ["oSapphireBig", "oEmeraldBig", "oRubyBig"]
+                    .into_iter()
+                    .zip(chances)
+                {
+                    if rng.chance(1, chance) {
+                        treasure = Some((name, 0.0, 0.0));
+                        break;
+                    }
+                }
+                if treasure.is_none() && rng.chance(1, 1200) {
+                    treasure = Some(UNDERGROUND[rng.range(19) as usize]);
+                }
+            }
+        }
+        if let Some((object, dx, dy)) = treasure {
+            world.spawn(object, Vec2::new(origin.x + 8.0 + dx, origin.y + 8.0 + dy));
+        }
+        let entity = world.entity_mut(id).unwrap();
+        entity.data.insert("terrain_initialized".into(), 1.0);
+        entity.sprite = format!("s{}", &object[1..]);
+    }
+}
+
+fn lava_exposed(world: &World, origin: Vec2) -> bool {
+    // scrSetupWalls probes the original instance origin, not its tile center.
+    // oLava itself inherits oWater, so this also suppresses buried lava layers.
+    let above = Vec2::new(origin.x, origin.y - 16.0);
+    !world.solid_point_except(above, 0)
+        && !world.tiles_point(above, "oWater")
+        && !world.entities.iter().any(|entity| {
+            entity.alive
+                && crate::catalog::is_a(&entity.object, "oWater")
+                && entity.sprite_bounds().contains(above)
+        })
+}
+
+fn setup_lava(entity: &mut Entity, rng: &mut Rng, exposed: bool, metadata: bool) {
+    if entity.value("lava_setup_initialized") != 0.0 {
+        return;
+    }
+    let explicit_spurt = entity.data.contains_key("spurt");
+    create_lava(entity, rng);
+    if exposed && !explicit_spurt && rng.chance(1, 4) {
+        entity.data.insert("spurt".into(), 1.0);
+    }
+    let sprite = if exposed { "sLavaTop" } else { "sLava" };
+    if metadata {
+        entity.text.insert("terrain_sprite".into(), sprite.into());
+    } else {
+        entity.sprite = sprite.into();
+    }
+    entity.data.insert("lava_setup_initialized".into(), 1.0);
+}
+
+fn create_lava(entity: &mut Entity, rng: &mut Rng) {
+    if entity.value("lava_initialized") == 0.0 {
+        let time = entity
+            .data
+            .get("spurt_time")
+            .copied()
+            .unwrap_or_else(|| 100.0 + f64::from(rng.range(201)));
+        entity.data.entry("spurt_time".into()).or_insert(time);
+        entity.data.entry("spurt_counter".into()).or_insert(time);
+        entity.data.entry("spurt".into()).or_insert(0.0);
+        entity.data.insert("lava_initialized".into(), 1.0);
+        entity.animation = 0.0;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::Area;
+
+    #[test]
+    fn lava_setup_uses_source_origins_water_ancestry_and_dynamic_solid_masks() {
+        for blocker in ["oBrick", "oWaterSwim", "oPushBlock", "oLava"] {
+            let mut world = World::new(4, 4, Area::Temple, 13);
+            let lava = world.spawn("oLava", Vec2::new(16.0, 32.0));
+            if matches!(blocker, "oBrick" | "oWaterSwim") {
+                world.set_tile(1, 1, blocker);
+            } else {
+                world.spawn(blocker, Vec2::new(16.0, 16.0));
+            }
+            initialize(&mut world, &mut Rng::new(42));
+            let lava = world.entity(lava).unwrap();
+            assert_eq!(lava.sprite, "sLava", "blocker {blocker}");
+            assert_eq!(lava.value("spurt"), 0.0);
+            assert!((100.0..=300.0).contains(&lava.value("spurt_time")));
+            assert_eq!(lava.value("spurt_counter"), lava.value("spurt_time"));
+        }
+    }
+
+    #[test]
+    fn exposed_lava_uses_source_spurt_roll_and_preserves_explicit_state() {
+        let mut spurts = 0;
+        for seed in 0..64 {
+            let mut world = World::new(4, 4, Area::Temple, 13);
+            let id = world.spawn("oLava", Vec2::new(16.0, 32.0));
+            let mut expected = Rng::new(seed);
+            let time = 100.0 + f64::from(expected.range(201));
+            let spurt = expected.chance(1, 4);
+            initialize(&mut world, &mut Rng::new(seed));
+            let lava = world.entity(id).unwrap();
+            assert_eq!(lava.sprite, "sLavaTop");
+            assert_eq!(lava.value("spurt_time"), time);
+            assert_eq!(lava.value("spurt"), f64::from(spurt));
+            spurts += usize::from(spurt);
+            let previous = serde_json::to_string(&world).unwrap();
+            initialize(&mut world, &mut Rng::new(999));
+            assert_eq!(serde_json::to_string(&world).unwrap(), previous);
+        }
+        assert!(spurts > 0 && spurts < 64);
+        let mut world = World::new(4, 4, Area::Temple, 13);
+        world.set_tile(1, 2, "oLava");
+        let id = metadata(&mut world, 1, 2);
+        let lava = world.entity_mut(id).unwrap();
+        lava.data.insert("spurt".into(), 1.0);
+        lava.data.insert("spurt_time".into(), 123.0);
+        lava.data.insert("spurt_counter".into(), 7.0);
+        initialize(&mut world, &mut Rng::new(42));
+        let lava = world.entity(id).unwrap();
+        assert_eq!(lava.text["terrain_sprite"], "sLavaTop");
+        assert_eq!(lava.value("spurt"), 1.0);
+        assert_eq!(lava.value("spurt_time"), 123.0);
+        assert_eq!(lava.value("spurt_counter"), 7.0);
+    }
+
+    #[test]
+    fn generated_olmec_lava_only_enables_exposed_surface_spurts() {
+        let world = crate::generation::generate(&mut Rng::new(42), 16, &Default::default());
+        let lava: Vec<_> = world
+            .entities
+            .iter()
+            .filter(|entity| entity.object == "oLava")
+            .collect();
+        assert_eq!(lava.len(), 240);
+        assert!(
+            lava.iter()
+                .filter(|entity| entity.pos.y == 768.0)
+                .any(|entity| entity.value("spurt") == 1.0)
+        );
+        for entity in lava {
+            assert_eq!(entity.value("lava_initialized"), 1.0);
+            assert_eq!(
+                entity.sprite,
+                if entity.pos.y == 768.0 {
+                    "sLavaTop"
+                } else {
+                    "sLava"
+                }
+            );
+            if entity.pos.y > 768.0 {
+                assert_eq!(entity.value("spurt"), 0.0);
+            }
+        }
+    }
 
     #[test]
     fn ice_and_temple_silhouettes_match_source_precedence() {
