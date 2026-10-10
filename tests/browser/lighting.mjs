@@ -1,6 +1,6 @@
 // Real UI-generated dark rooms and readback from the actual production WebGL pass.
 import assert from 'node:assert/strict';
-import { snapshot, state, press } from './movement.mjs';
+import { snapshot, state, press, reachTitleMenu } from './movement.mjs';
 
 export function installLightingProfile() {
   // Controlled persisted unlock, not injected room, equipment, darkness, or seed.
@@ -154,7 +154,7 @@ function analyzeCapture() {
 
 async function restart(page) {
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await state(page, 'Title');
+  await reachTitleMenu(page);
   await page.locator('canvas').focus();
 }
 
