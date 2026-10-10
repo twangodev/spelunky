@@ -48,6 +48,11 @@ pub fn object(name: &str) -> Option<&'static ObjectDef> {
     catalog().objects.get(name)
 }
 
+/// Immutable bundled lookup keys; callers cannot add query-time cache entries.
+pub(crate) fn object_names() -> impl Iterator<Item = &'static str> {
+    catalog().objects.keys().map(String::as_str)
+}
+
 /// True for the named object itself and for all descendants of `parent`.
 pub fn is_a(name: &str, parent: &str) -> bool {
     static ANCESTORS: OnceLock<BTreeMap<&'static str, Vec<&'static str>>> = OnceLock::new();
