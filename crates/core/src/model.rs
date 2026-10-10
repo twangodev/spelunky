@@ -38,16 +38,30 @@ impl Rect {
         Self { x, y, w, h }
     }
     pub fn intersects(self, other: Self) -> bool {
-        self.x < other.x + other.w
+        self.is_valid()
+            && other.is_valid()
+            && self.x < other.x + other.w
             && self.x + self.w > other.x
             && self.y < other.y + other.h
             && self.y + self.h > other.y
     }
     pub fn contains(self, point: Vec2) -> bool {
-        point.x >= self.x
+        self.is_valid()
+            && point.x >= self.x
             && point.x < self.x + self.w
             && point.y >= self.y
             && point.y < self.y + self.h
+    }
+    /// Empty, inverted and nonfinite geometry must never collide.
+    pub fn is_valid(self) -> bool {
+        self.x.is_finite()
+            && self.y.is_finite()
+            && self.w.is_finite()
+            && self.h.is_finite()
+            && self.w > 0.0
+            && self.h > 0.0
+            && (self.x + self.w).is_finite()
+            && (self.y + self.h).is_finite()
     }
 }
 
@@ -160,6 +174,30 @@ impl Default for Player {
     }
 }
 impl Player {
+    /// Current source sprite mask for collision events, separate from the
+    /// platform engine's custom rectangle returned by `bounds()`.
+    pub fn sprite_bounds(&self) -> Rect {
+        let xscale = self
+            .data
+            .get("image_xscale")
+            .copied()
+            .unwrap_or(if self.facing > 0 { -1.0 } else { 1.0 });
+        let yscale = self.data.get("image_yscale").copied().unwrap_or(1.0);
+        let angle = -self
+            .data
+            .get("image_angle")
+            .copied()
+            .unwrap_or(0.0)
+            .to_radians();
+        crate::catalog::instance_sprite_bounds(
+            "oPlayer1",
+            &self.sprite,
+            self.pos,
+            self.animation,
+            Vec2::new(xscale, yscale),
+            angle,
+        )
+    }
     pub fn bounds(&self) -> Rect {
         let half = self
             .data
@@ -195,6 +233,46 @@ pub struct Entity {
     pub text: BTreeMap<String, String>,
 }
 impl Entity {
+    /// Collision-event mask from the current sprite/object mask. Movement
+    /// overrides in `data["collision_*"]` deliberately do not affect this.
+    pub fn sprite_bounds(&self) -> Rect {
+        // Unlike enemy draw_sprite_ext mirroring, Damsel's Draw event writes
+        // the actual image_xscale property and therefore changes her mask.
+        let default_xscale = if matches!(
+            self.object.as_str(),
+            "oDamsel" | "oPDummy" | "oPDummy2" | "oPDummy3" | "oPDummy6"
+        ) && self.facing > 0
+        {
+            -1.0
+        } else {
+            1.0
+        };
+        let xscale = self
+            .data
+            .get("image_xscale")
+            .copied()
+            .unwrap_or(default_xscale);
+        let yscale = self.data.get("image_yscale").copied().unwrap_or(1.0);
+        let angle = self
+            .data
+            .get("image_angle")
+            .map(|angle| -angle.to_radians())
+            .unwrap_or_else(|| {
+                if matches!(self.object.as_str(), "oArrow" | "oFishBone") {
+                    self.value("rotation")
+                } else {
+                    0.0
+                }
+            });
+        crate::catalog::instance_sprite_bounds(
+            &self.object,
+            &self.sprite,
+            self.pos,
+            self.animation,
+            Vec2::new(xscale, yscale),
+            angle,
+        )
+    }
     pub fn new(id: u64, object: impl Into<String>, pos: Vec2) -> Self {
         let object = object.into();
         let sprite = crate::catalog::sprite(&object)
@@ -265,7 +343,7 @@ impl Tile {
         )
     }
     pub fn is_destructible(&self) -> bool {
-        self.is_solid() && !matches!(self.object.as_str(), "oSolid" | "oDark" | "oHardBlock")
+        self.is_solid() && !matches!(self.object.as_str(), "oSolid" | "oHardBlock")
     }
 }
 
@@ -332,20 +410,47 @@ impl World {
         }
     }
     pub fn solid_at(&self, x: f64, y: f64) -> bool {
+        self.solid_at_except(x, y, 0)
+    }
+    pub fn solid_point_except(&self, pos: Vec2, excluded: u64) -> bool {
+        self.solid_at_except(pos.x, pos.y, excluded)
+    }
+    /// Source collision_point(oSolid): authored tiles and alive, nonheld
+    /// dynamic solids. Outside-room space is open unless explicitly authored.
+    pub fn solid_at_except(&self, x: f64, y: f64, excluded: u64) -> bool {
+        if !x.is_finite() || !y.is_finite() {
+            return false;
+        }
         self.tile(
             (x / TILE_SIZE).floor() as i32,
             (y / TILE_SIZE).floor() as i32,
         )
-        .is_none_or(Tile::is_solid)
+        .is_some_and(Tile::is_solid)
+            || self.entities.iter().any(|e| {
+                e.id != excluded
+                    && e.alive
+                    && e.solid
+                    && !e.held
+                    && e.sprite_bounds().contains(Vec2::new(x, y))
+            })
     }
+    /// Tile-only rectangle query. Use collides_except for dynamic solids too.
     pub fn collides(&self, r: Rect) -> bool {
-        let x0 = (r.x / 16.0).floor() as i32;
-        let y0 = (r.y / 16.0).floor() as i32;
-        let x1 = ((r.x + r.w - 0.001) / 16.0).floor() as i32;
-        let y1 = ((r.y + r.h - 0.001) / 16.0).floor() as i32;
+        if !r.is_valid() {
+            return false;
+        }
+        // Only authored cells can collide. Clamp scans to room storage so a
+        // large valid probe through open space does not traverse billions of
+        // nonexistent cells.
+        let x0 = ((r.x / 16.0).floor() as i32).max(0);
+        let y0 = ((r.y / 16.0).floor() as i32).max(0);
+        let x1 = (((r.x + r.w - 0.001) / 16.0).floor() as i32)
+            .min((self.width as i32).saturating_sub(1));
+        let y1 = (((r.y + r.h - 0.001) / 16.0).floor() as i32)
+            .min((self.height as i32).saturating_sub(1));
         for y in y0..=y1 {
             for x in x0..=x1 {
-                if self.tile(x, y).is_none_or(Tile::is_solid) {
+                if self.tile(x, y).is_some_and(Tile::is_solid) {
                     return true;
                 }
             }
@@ -355,7 +460,7 @@ impl World {
     pub fn collides_except(&self, r: Rect, excluded: u64) -> bool {
         self.collides(r)
             || self.entities.iter().any(|e| {
-                e.id != excluded && e.alive && e.solid && !e.held && e.bounds().intersects(r)
+                e.id != excluded && e.alive && e.solid && !e.held && e.sprite_bounds().intersects(r)
             })
     }
     pub fn spawn(&mut self, object: impl Into<String>, pos: Vec2) -> u64 {
@@ -442,6 +547,11 @@ pub struct Game {
     pub data: BTreeMap<String, f64>,
 }
 impl Game {
+    /// Persistent oGame's source clock starts at 1 on every room entry, then
+    /// increments before simulation and wraps after 100,000,000.
+    pub fn engine_time(&self) -> u64 {
+        self.level_tick.wrapping_add(1) % 100_000_001
+    }
     pub fn shell(seed: u64, rules: RulesPreset) -> Self {
         Self {
             seed,
@@ -473,5 +583,122 @@ impl Game {
             self.events.push(GameEvent::Damage { amount });
             self.sound("sndHurt", self.player.pos);
         }
+    }
+}
+
+#[cfg(test)]
+mod geometry_tests {
+    use super::*;
+
+    #[test]
+    fn collision_events_use_current_sprite_not_movement_override() {
+        let mut e = Entity::new(1, "oSnake", Vec2::new(32.0, 48.0));
+        e.sprite = "sRunLeft".into();
+        e.animation = 2.0;
+        for (name, value) in [
+            ("collision_left", -2.0),
+            ("collision_top", -3.0),
+            ("collision_right", 4.0),
+            ("collision_bottom", 5.0),
+        ] {
+            e.data.insert(name.into(), value);
+        }
+        assert_eq!(e.bounds(), Rect::new(30.0, 45.0, 6.0, 8.0));
+        assert_eq!(e.sprite_bounds(), Rect::new(26.0, 42.0, 12.0, 14.0));
+        e.facing = -1;
+        assert_eq!(
+            e.sprite_bounds(),
+            Rect::new(26.0, 42.0, 12.0, 14.0),
+            "enemy draw mirroring does not write image_xscale"
+        );
+        e.data.insert("image_xscale".into(), -1.0);
+        assert_eq!(e.sprite_bounds(), Rect::new(27.0, 42.0, 12.0, 14.0));
+    }
+
+    #[test]
+    fn player_sprite_changes_and_source_mirroring_are_separate_from_movement() {
+        let mut p = Player {
+            pos: Vec2::new(32.0, 48.0),
+            facing: -1,
+            ..Player::default()
+        };
+        assert_eq!(p.bounds(), Rect::new(27.0, 40.0, 10.0, 16.0));
+        assert_eq!(p.sprite_bounds(), Rect::new(26.0, 40.0, 12.0, 16.0));
+        p.facing = 1;
+        assert_eq!(p.sprite_bounds(), Rect::new(27.0, 40.0, 12.0, 16.0));
+        p.sprite = "sDuckLeft".into();
+        assert_eq!(p.sprite_bounds(), Rect::new(25.0, 47.0, 15.0, 9.0));
+        assert_eq!(p.bounds(), Rect::new(27.0, 40.0, 10.0, 16.0));
+    }
+
+    #[test]
+    fn empty_or_nonfinite_rectangles_never_collide() {
+        let occupied = Rect::new(-10.0, -10.0, 20.0, 20.0);
+        for invalid in [
+            Rect::new(0.0, 0.0, 0.0, 1.0),
+            Rect::new(0.0, 0.0, 1.0, 0.0),
+            Rect::new(0.0, 0.0, -1.0, 2.0),
+            Rect::new(0.0, 0.0, f64::INFINITY, 1.0),
+            Rect::new(f64::NAN, 0.0, 1.0, 1.0),
+        ] {
+            assert!(!invalid.intersects(occupied));
+            assert!(!occupied.intersects(invalid));
+            assert!(!invalid.contains(Vec2::default()));
+        }
+    }
+
+    #[test]
+    fn solid_queries_include_live_dynamic_masks_and_open_room_void() {
+        let mut world = World::new(4, 4, Area::Ice, 9);
+        assert!(!world.solid_at(-1.0, 10.0));
+        assert!(!world.solid_at(65.0, 10.0));
+        assert!(!world.collides(Rect::new(-8.0, -8.0, 8.0, 8.0)));
+        world.set_tile(0, 0, "oHardBlock");
+        assert!(world.solid_at(1.0, 1.0));
+        let mut block = Entity::new(11, "oPushBlock", Vec2::new(32.0, 32.0));
+        // The probe must use the source sprite mask rather than this unrelated
+        // platform movement override.
+        for (name, value) in [
+            ("collision_left", 50.0),
+            ("collision_top", 50.0),
+            ("collision_right", 51.0),
+            ("collision_bottom", 51.0),
+        ] {
+            block.data.insert(name.into(), value);
+        }
+        world.entities.push(block);
+        let probe = Vec2::new(35.0, 35.0);
+        assert!(world.solid_at(probe.x, probe.y));
+        assert!(!world.solid_point_except(probe, 11));
+        assert!(!world.collides(Rect::new(35.0, 35.0, 1.0, 1.0)));
+        assert!(world.collides_except(Rect::new(35.0, 35.0, 1.0, 1.0), 0));
+        world.entities[0].held = true;
+        assert!(!world.solid_at(probe.x, probe.y));
+        world.entities[0].held = false;
+        world.entities[0].solid = false;
+        assert!(!world.solid_at(probe.x, probe.y));
+        world.entities[0].solid = true;
+        world.entities[0].alive = false;
+        assert!(!world.solid_at(probe.x, probe.y));
+        assert!(Tile::new("oDark").is_destructible());
+        assert!(!Tile::new("oHardBlock").is_destructible());
+    }
+
+    #[test]
+    fn engine_clock_starts_per_room_and_wraps_like_source() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        assert_eq!(game.engine_time(), 1);
+        game.level_tick = 1;
+        assert_eq!(game.engine_time(), 2);
+        game.tick = 999;
+        game.level_tick = 0;
+        assert_eq!(game.engine_time(), 1);
+        assert_eq!(game.tick, 999, "room clock does not modify replay lifetime");
+        game.level_tick = 99_999_999;
+        assert_eq!(game.engine_time(), 100_000_000);
+        game.level_tick = 100_000_000;
+        assert_eq!(game.engine_time(), 0);
+        game.level_tick = 100_000_001;
+        assert_eq!(game.engine_time(), 1);
     }
 }
