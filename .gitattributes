@@ -1,0 +1,3 @@
+# Reference checksums cover exact upstream bytes, including CRLF GML sources.
+references/** -text
+assets/** -text
