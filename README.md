@@ -27,6 +27,8 @@ Use arrow keys to move, **Z** to jump, **X** to whip/use/throw, **Shift** to run
 
 The campaign includes all four areas, special destinations and Olmec. The original hub, records room, Sun/Moon/Stars challenges, trophies, and unlockable characters are available from the title menu. Use F2 or the editor menu to paint levels, edit metadata/signs/door links, undo/redo, save, import/export Classic `.lvl` files, and playtest. Linux also accepts `.lvl` files as command-line arguments or dropped files.
 
+After eligible area exits, the Tunnel Man donation screen lets you fund shortcuts; partial payments persist between runs. Use up/down to select an amount, attack/purchase to donate, and Enter or Escape to continue.
+
 Classic rules are the default. The optional Assisted preset adds 100 ms jump buffering and coyote time and keeps separate run records.
 
 ## High-refresh presentation

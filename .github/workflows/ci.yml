@@ -30,6 +30,7 @@ jobs:
           python3 tools/export_catalog.py --check
           python3 tools/export_hub.py --check
           python3 tools/extract_templates.py --check
+          python3 tools/audit_coverage.py --check
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Test workspace

@@ -998,9 +998,11 @@ mod tests {
     }
     #[test]
     fn record_thresholds_and_valid_win_time() {
-        assert!(record_unlocks(199999, Some(601.0), 119, 7)
-            .iter()
-            .all(|f| !f.starts_with("unlock_")));
+        assert!(
+            record_unlocks(199999, Some(601.0), 119, 7)
+                .iter()
+                .all(|f| !f.starts_with("unlock_"))
+        );
         let flags = record_unlocks(200000, Some(600.0), 120, 8);
         for key in [
             "unlock_sun",
@@ -1012,9 +1014,11 @@ mod tests {
             assert!(flags.contains(key));
         }
         assert!(!record_unlocks(0, Some(0.0), 0, 0).contains("unlock_moon"));
-        assert!(!record_unlocks(0, Some(960.0), 0, 0)
-            .iter()
-            .any(|f| f.starts_with("trophy_time_")));
+        assert!(
+            !record_unlocks(0, Some(960.0), 0, 0)
+                .iter()
+                .any(|f| f.starts_with("trophy_time_"))
+        );
         assert!(record_unlocks(50000, Some(959.0), 80, 4).contains("trophy_money_1"));
     }
     #[test]
@@ -1063,10 +1067,11 @@ mod tests {
         assert_eq!((sun.width, sun.height), (20, 16));
         assert_eq!(sun.entrance, Vec2::new(56.0, 168.0));
         assert!(sun.entities.iter().any(|e| e.object == "oDamsel"));
-        assert!(sun
-            .entities
-            .iter()
-            .any(|e| e.object == "oTerrainMetadata" && e.value("invincible") == 1.0));
+        assert!(
+            sun.entities
+                .iter()
+                .any(|e| e.object == "oTerrainMetadata" && e.value("invincible") == 1.0)
+        );
     }
     #[test]
     fn gold_gates_are_independent() {
@@ -1110,11 +1115,12 @@ mod tests {
         tick_hub(&mut g);
         assert_eq!(g.data["mini2"], 99.0);
         assert_eq!(g.data["timer"], -1.0);
-        assert!(g
-            .world
-            .entities
-            .iter()
-            .any(|e| e.alive && e.object == "oXScores"));
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oXScores")
+        );
     }
     #[test]
     fn basketball_scores_dunk_shot_and_wall_bounce() {
