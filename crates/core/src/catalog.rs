@@ -3,7 +3,7 @@
 //! Positions use the original instance origin. Sprite bounds are inclusive in
 //! the source; [`bounds`] converts them to the core's half-open rectangles.
 
-use crate::{Rect, Vec2};
+use crate::{CollisionPrecision, Rect, Vec2};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -153,11 +153,16 @@ struct SpriteFrames {
 #[derive(Deserialize)]
 struct FrameBounds {
     bounds: Option<[i32; 4]>,
+    mask_offset: Option<usize>,
+    mask_stride: Option<usize>,
+    mask_width: Option<usize>,
+    mask_height: Option<usize>,
 }
 
 #[derive(Deserialize)]
 struct SpriteMask {
     separate: bool,
+    shape: String,
 }
 
 fn sprite_frames() -> &'static BTreeMap<String, SpriteFrames> {
@@ -198,6 +203,127 @@ pub fn instance_sprite_bounds(
         scale,
         angle,
     )
+}
+
+/// Source sprite mask and its instance transform. Bounding-box queries remain
+/// independent from precise queries, exactly as Classic's `prec` arguments.
+pub struct CollisionMask {
+    bounds: Rect,
+    frame: Option<&'static FrameBounds>,
+    precise: bool,
+    origin: [i32; 2],
+    pos: Vec2,
+    scale: Vec2,
+    angle: f64,
+}
+
+pub fn instance_mask(
+    object: &str,
+    current_sprite: &str,
+    pos: Vec2,
+    animation: f64,
+    scale: Vec2,
+    angle: f64,
+) -> CollisionMask {
+    let sprite = mask_sprite(object_mask(object), current_sprite);
+    let frames = sprite_frames().get(sprite);
+    let frame = frames.and_then(|frames| {
+        (!frames.frames.is_empty() && animation.is_finite()).then(|| {
+            let index = animation.floor().rem_euclid(frames.frames.len() as f64) as usize;
+            &frames.frames[index]
+        })
+    });
+    CollisionMask {
+        bounds: instance_sprite_bounds(object, current_sprite, pos, animation, scale, angle),
+        frame,
+        precise: frames.is_some_and(|frames| frames.mask.shape == "PRECISE"),
+        origin: sprite_def(sprite).map_or([0, 0], |sprite| sprite.origin),
+        pos,
+        scale,
+        angle,
+    }
+}
+
+impl CollisionMask {
+    pub fn bounds(&self) -> Rect {
+        self.bounds
+    }
+
+    /// Precise rasterization is verified for the source's unrotated unit-scale
+    /// masks and their horizontal/vertical mirrors. Other transforms retain
+    /// the existing bounding-box behavior pending GM8 rasterization evidence.
+    pub fn supports_precise_pixels(&self) -> bool {
+        self.angle == 0.0
+            && self.scale.x.abs() == 1.0
+            && self.scale.y.abs() == 1.0
+            && self.pos.x.fract() == 0.0
+            && self.pos.y.fract() == 0.0
+    }
+
+    fn pixel(&self, x: i32, y: i32) -> bool {
+        let Some(frame) = self.frame else {
+            return false;
+        };
+        let (Some(offset), Some(stride), Some(width), Some(height)) = (
+            frame.mask_offset,
+            frame.mask_stride,
+            frame.mask_width,
+            frame.mask_height,
+        ) else {
+            return false;
+        };
+        let image_x = self.origin[0] + if self.scale.x > 0.0 { x } else { -x };
+        let image_y = self.origin[1] + if self.scale.y > 0.0 { y } else { -y };
+        if image_x < 0 || image_y < 0 || image_x as usize >= width || image_y as usize >= height {
+            return false;
+        }
+        let index = offset + image_y as usize * stride + image_x as usize / 8;
+        include_bytes!("../../../assets/collision.bin")
+            .get(index)
+            .is_some_and(|byte| byte & (1 << (image_x as usize % 8)) != 0)
+    }
+
+    pub fn contains(&self, point: Vec2, precision: CollisionPrecision) -> bool {
+        if !self.bounds.contains(point) {
+            return false;
+        }
+        if precision == CollisionPrecision::BoundingBox
+            || !self.precise
+            || !self.supports_precise_pixels()
+        {
+            return true;
+        }
+        self.pixel(
+            (point.x - self.pos.x).floor() as i32,
+            (point.y - self.pos.y).floor() as i32,
+        )
+    }
+
+    pub fn intersects(&self, rect: Rect, precision: CollisionPrecision) -> bool {
+        if !self.bounds.intersects(rect) {
+            return false;
+        }
+        if precision == CollisionPrecision::BoundingBox
+            || !self.precise
+            || !self.supports_precise_pixels()
+        {
+            return true;
+        }
+        let left = (rect.x.max(self.bounds.x) - self.pos.x).floor() as i32;
+        let top = (rect.y.max(self.bounds.y) - self.pos.y).floor() as i32;
+        let right =
+            ((rect.x + rect.w).min(self.bounds.x + self.bounds.w) - self.pos.x).ceil() as i32;
+        let bottom =
+            ((rect.y + rect.h).min(self.bounds.y + self.bounds.h) - self.pos.y).ceil() as i32;
+        for y in top..bottom {
+            for x in left..right {
+                if self.pixel(x, y) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 fn mask_sprite<'a>(mask: &'a str, current_sprite: &'a str) -> &'a str {
@@ -414,5 +540,98 @@ mod tests {
             assert!(!rect.is_valid());
             assert!(!rect.intersects(Rect::new(0.0, 0.0, 100.0, 100.0)));
         }
+    }
+
+    #[test]
+    fn precise_queries_use_alpha_but_source_rectangles_keep_their_corners() {
+        let precise = CollisionPrecision::Precise;
+        let bbox = CollisionPrecision::BoundingBox;
+        let pos = Vec2::new(80.0, 80.0);
+        let mask = instance_mask("oDarkFall", "sDarkFall", pos, 0.0, Vec2::new(1.0, 1.0), 0.0);
+        // Original PNG row 0 is .##############. at alpha tolerance zero.
+        assert!(mask.contains(pos, bbox));
+        assert!(!mask.contains(pos, precise));
+        assert!(mask.contains(Vec2::new(81.0, 80.0), precise));
+        assert!(!mask.intersects(Rect::new(80.0, 80.0, 1.0, 1.0), precise));
+        assert!(mask.intersects(Rect::new(81.0, 80.0, 1.0, 1.0), precise));
+        // The boulder PNG has transparent corners, but its source mask is
+        // explicitly RECTANGLE. Even prec=1 must retain those corners.
+        let boulder = instance_mask("oBoulder", "sBoulder", pos, 0.0, Vec2::new(1.0, 1.0), 0.0);
+        assert!(boulder.contains(Vec2::new(64.0, 64.0), precise));
+    }
+
+    #[test]
+    fn precise_masks_select_current_frames_and_mirror_source_pixel_indices() {
+        let precise = CollisionPrecision::Precise;
+        let unit = Vec2::new(1.0, 1.0);
+        let p = Vec2::new(13.0, 1.0);
+        let frame0 = instance_mask(
+            "oAlienBoss",
+            "sAlienBossDie",
+            Vec2::default(),
+            0.0,
+            unit,
+            0.0,
+        );
+        let frame1 = instance_mask(
+            "oAlienBoss",
+            "sAlienBossDie",
+            Vec2::default(),
+            1.0,
+            unit,
+            0.0,
+        );
+        assert!(frame0.contains(p, CollisionPrecision::BoundingBox));
+        assert!(!frame0.contains(p, precise));
+        assert!(frame1.contains(p, precise));
+        let pos = Vec2::new(80.0, 80.0);
+        let mirror = instance_mask(
+            "oDarkFall",
+            "sDarkFall",
+            pos,
+            0.0,
+            Vec2::new(-1.0, 1.0),
+            0.0,
+        );
+        assert!(!mirror.contains(pos, precise));
+        assert!(mirror.contains(Vec2::new(79.0, 80.0), precise));
+        assert!(mirror.intersects(Rect::new(79.0, 80.0, 1.0, 1.0), precise));
+        assert!(!mirror.intersects(Rect::new(80.0, 80.0, 1.0, 1.0), precise));
+        let vertical = instance_mask(
+            "oDarkFall",
+            "sDarkFall",
+            pos,
+            0.0,
+            Vec2::new(1.0, -1.0),
+            0.0,
+        );
+        assert!(!vertical.contains(pos, precise));
+        assert!(vertical.contains(Vec2::new(80.0, 79.0), precise));
+    }
+
+    #[test]
+    fn bundled_precise_masks_have_valid_portable_bitset_ranges() {
+        let data = include_bytes!("../../../assets/collision.bin");
+        let mut precise_sprites = 0;
+        let mut precise_frames = 0;
+        for sprite in sprite_frames().values() {
+            if sprite.mask.shape != "PRECISE" {
+                continue;
+            }
+            precise_sprites += 1;
+            for frame in &sprite.frames {
+                let offset = frame.mask_offset.expect("precise frame offset");
+                let stride = frame.mask_stride.expect("precise frame stride");
+                let width = frame.mask_width.expect("precise frame width");
+                let height = frame.mask_height.expect("precise frame height");
+                assert_eq!(stride, width.div_ceil(8));
+                assert!(offset + stride * height <= data.len());
+                precise_frames += 1;
+            }
+        }
+        assert_eq!(
+            (precise_sprites, precise_frames, data.len()),
+            (373, 1039, 117054)
+        );
     }
 }

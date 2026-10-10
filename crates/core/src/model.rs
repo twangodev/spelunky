@@ -6,6 +6,15 @@ pub const TILE_SIZE: f64 = 16.0;
 pub const VIEW_WIDTH: f64 = 320.0;
 pub const VIEW_HEIGHT: f64 = 240.0;
 
+/// The source collision functions explicitly select either bounding boxes or
+/// the target sprite's precise mask. Rectangle sprites use their box in both.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum CollisionPrecision {
+    #[default]
+    BoundingBox,
+    Precise,
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Vec2 {
     pub x: f64,
@@ -182,6 +191,15 @@ impl Player {
     /// Current source sprite mask for collision events, separate from the
     /// platform engine's custom rectangle returned by `bounds()`.
     pub fn sprite_bounds(&self) -> Rect {
+        self.collision_mask().bounds()
+    }
+    pub fn mask_contains(&self, point: Vec2, precision: CollisionPrecision) -> bool {
+        self.collision_mask().contains(point, precision)
+    }
+    pub fn mask_intersects(&self, rect: Rect, precision: CollisionPrecision) -> bool {
+        self.collision_mask().intersects(rect, precision)
+    }
+    fn collision_mask(&self) -> crate::catalog::CollisionMask {
         let xscale = self
             .data
             .get("image_xscale")
@@ -194,7 +212,7 @@ impl Player {
             .copied()
             .unwrap_or(0.0)
             .to_radians();
-        crate::catalog::instance_sprite_bounds(
+        crate::catalog::instance_mask(
             "oPlayer1",
             &self.sprite,
             self.pos,
@@ -241,6 +259,15 @@ impl Entity {
     /// Collision-event mask from the current sprite/object mask. Movement
     /// overrides in `data["collision_*"]` deliberately do not affect this.
     pub fn sprite_bounds(&self) -> Rect {
+        self.collision_mask().bounds()
+    }
+    pub fn mask_contains(&self, point: Vec2, precision: CollisionPrecision) -> bool {
+        self.collision_mask().contains(point, precision)
+    }
+    pub fn mask_intersects(&self, rect: Rect, precision: CollisionPrecision) -> bool {
+        self.collision_mask().intersects(rect, precision)
+    }
+    fn collision_mask(&self) -> crate::catalog::CollisionMask {
         // Unlike enemy draw_sprite_ext mirroring, Damsel's Draw event writes
         // the actual image_xscale property and therefore changes her mask.
         let default_xscale = if matches!(
@@ -269,7 +296,7 @@ impl Entity {
                     0.0
                 }
             });
-        crate::catalog::instance_sprite_bounds(
+        crate::catalog::instance_mask(
             &self.object,
             &self.sprite,
             self.pos,
@@ -376,6 +403,9 @@ pub struct World {
     pub dark: bool,
     pub name: String,
     pub next_id: u64,
+    /// A destroyed solid requests the source global water/lava drainage pass.
+    #[serde(default)]
+    pub fluid_dirty: bool,
 }
 impl World {
     pub fn new(width: usize, height: usize, area: Area, level: u32) -> Self {
@@ -391,6 +421,7 @@ impl World {
             dark: false,
             name: String::new(),
             next_id: 1,
+            fluid_dirty: false,
         }
     }
     pub fn tile(&self, x: i32, y: i32) -> Option<&Tile> {
@@ -402,7 +433,14 @@ impl World {
     }
     pub fn set_tile(&mut self, x: usize, y: usize, object: impl Into<String>) {
         if x < self.width && y < self.height {
-            self.tiles[y * self.width + x] = Tile::new(object)
+            let replacement = Tile::new(object);
+            let previous = &self.tiles[y * self.width + x];
+            if previous.object != replacement.object
+                && crate::catalog::is_a(&previous.object, "oSolid")
+            {
+                self.fluid_dirty = true;
+            }
+            self.tiles[y * self.width + x] = replacement;
         }
     }
     /// Collision mask of the instance stored at this tile origin. Tiles retain
@@ -410,25 +448,35 @@ impl World {
     /// An explicit terrain sprite corresponds to source `sprite_index` writes
     /// (notably the otherwise sprite-less oSolid shop ice blocks).
     pub fn tile_bounds(&self, x: i32, y: i32) -> Rect {
+        self.tile_collision_mask(x, y).bounds()
+    }
+
+    pub fn tile_collision_mask(&self, x: i32, y: i32) -> crate::catalog::CollisionMask {
         let origin = Vec2::new(f64::from(x) * TILE_SIZE, f64::from(y) * TILE_SIZE);
         let Some(tile) = self.tile(x, y) else {
-            return Rect::new(origin.x, origin.y, 0.0, 0.0);
+            return crate::catalog::instance_mask("", "", origin, 0.0, Vec2::new(1.0, 1.0), 0.0);
         };
         let sprite = self.entities.iter().find_map(|metadata| {
             (metadata.alive
                 && metadata.object == "oTerrainMetadata"
                 && (metadata.pos.x / TILE_SIZE).floor() as i32 == x
                 && (metadata.pos.y / TILE_SIZE).floor() as i32 == y)
-                .then(|| metadata.text.get("terrain_sprite").map(String::as_str))
+                .then(|| {
+                    metadata
+                        .text
+                        .get("terrain_sprite")
+                        .map(|sprite| (sprite.as_str(), metadata.animation))
+                })
                 .flatten()
         });
-        crate::catalog::instance_sprite_bounds(
+        crate::catalog::instance_mask(
             &tile.object,
             sprite
+                .map(|(sprite, _)| sprite)
                 .or_else(|| crate::catalog::sprite(&tile.object))
                 .unwrap_or(""),
             origin,
-            0.0,
+            sprite.map_or(0.0, |(_, animation)| animation),
             Vec2::new(1.0, 1.0),
             0.0,
         )
@@ -438,24 +486,54 @@ impl World {
     /// masks, including portions extending beyond their storage cells. Dynamic
     /// instances are handled separately by callers that need them.
     pub fn tiles_collide(&self, r: Rect, group: &str) -> bool {
-        self.tiles_match(r, group, None)
+        self.tiles_collide_precision(r, group, CollisionPrecision::BoundingBox)
+    }
+
+    pub fn tiles_collide_precision(
+        &self,
+        r: Rect,
+        group: &str,
+        precision: CollisionPrecision,
+    ) -> bool {
+        self.tiles_match(r, group, None, precision)
     }
 
     /// Point form of the same tile-instance mask query, with exact half-open
     /// containment rather than a tiny rectangle that can touch a nearby edge.
     pub fn tiles_point(&self, point: Vec2, group: &str) -> bool {
+        self.tiles_point_precision(point, group, CollisionPrecision::BoundingBox)
+    }
+
+    pub fn tiles_point_precision(
+        &self,
+        point: Vec2,
+        group: &str,
+        precision: CollisionPrecision,
+    ) -> bool {
         self.tiles_match(
             Rect::new(point.x, point.y, 0.001, 0.001),
             group,
             Some(point),
+            precision,
         )
     }
 
-    fn tiles_match(&self, r: Rect, group: &str, point: Option<Vec2>) -> bool {
+    fn tiles_match(
+        &self,
+        r: Rect,
+        group: &str,
+        point: Option<Vec2>,
+        precision: CollisionPrecision,
+    ) -> bool {
         if !r.is_valid() || self.width == 0 {
             return false;
         }
-        let matches = |mask: Rect| point.map_or_else(|| mask.intersects(r), |p| mask.contains(p));
+        let matches = |mask: &crate::catalog::CollisionMask| {
+            point.map_or_else(
+                || mask.intersects(r, precision),
+                |p| mask.contains(p, precision),
+            )
+        };
         let envelope = crate::catalog::group_bounds(group).unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
         let x0 = (((r.x - envelope.x - envelope.w) / TILE_SIZE).floor() as i32).max(0);
         let y0 = (((r.y - envelope.y - envelope.h) / TILE_SIZE).floor() as i32).max(0);
@@ -484,19 +562,24 @@ impl World {
                 continue;
             }
             overrides[index / 64] |= bit;
-            let mask = crate::catalog::instance_sprite_bounds(
+            // Most point queries target a sparse family such as oWater. Reject
+            // unrelated terrain before resolving frame masks or pixel data.
+            if !crate::catalog::is_a(&tile.object, group) {
+                continue;
+            }
+            let mask = crate::catalog::instance_mask(
                 &tile.object,
                 sprite,
                 Vec2::new(f64::from(x) * TILE_SIZE, f64::from(y) * TILE_SIZE),
-                0.0,
+                metadata.animation,
                 Vec2::new(1.0, 1.0),
                 0.0,
             );
             let near = x >= x0 && x <= x1 && y >= y0 && y <= y1;
-            if (!near && !matches(mask)) || !crate::catalog::is_a(&tile.object, group) {
+            if !near && !matches(&mask) {
                 continue;
             }
-            if matches(mask) {
+            if matches(&mask) {
                 return true;
             }
         }
@@ -508,9 +591,13 @@ impl World {
                 }
                 if let Some(tile) = self.tile(x, y)
                     && crate::catalog::is_a(&tile.object, group)
-                    && matches(crate::catalog::bounds(
+                    && matches(&crate::catalog::instance_mask(
                         &tile.object,
+                        crate::catalog::sprite(&tile.object).unwrap_or(""),
                         Vec2::new(f64::from(x) * TILE_SIZE, f64::from(y) * TILE_SIZE),
+                        0.0,
+                        Vec2::new(1.0, 1.0),
+                        0.0,
                     ))
                 {
                     return true;
@@ -912,5 +999,45 @@ mod geometry_tests {
         }
         assert!(!Tile::new("oRopeTop").is_ladder());
         assert!(!Tile::new("oRopeSegment").is_ladder());
+    }
+
+    #[test]
+    fn tile_queries_follow_authoritative_terrain_animation_frame() {
+        let mut world = World::new(12, 12, Area::Boss, 16);
+        world.set_tile(5, 5, "oLavaSolid");
+        let id = world.spawn("oTerrainMetadata", Vec2::new(88.0, 88.0));
+        world
+            .entity_mut(id)
+            .unwrap()
+            .text
+            .insert("terrain_sprite".into(), "sLavaTop".into());
+        assert_eq!(world.tile_bounds(5, 5).y, 81.0);
+        assert!(!world.tiles_point(Vec2::new(80.0, 80.0), "oSolid"));
+        world.entity_mut(id).unwrap().animation = 1.0;
+        assert_eq!(world.tile_bounds(5, 5).y, 80.0);
+        assert!(world.tiles_point(Vec2::new(80.0, 80.0), "oSolid"));
+        assert!(world.tiles_collide(Rect::new(80.0, 80.0, 1.0, 1.0), "oSolid"));
+    }
+
+    #[test]
+    fn shared_world_queries_keep_explicit_source_precision() {
+        let mut world = World::new(12, 12, Area::Ice, 9);
+        world.set_tile(5, 5, "oDarkFall");
+        let p = Vec2::new(80.0, 80.0);
+        assert!(world.tiles_point(p, "oSolid"));
+        assert!(!world.tiles_point_precision(p, "oSolid", CollisionPrecision::Precise));
+        assert!(world.tiles_point_precision(
+            Vec2::new(81.0, 80.0),
+            "oSolid",
+            CollisionPrecision::Precise
+        ));
+        assert!(!world.tiles_collide_precision(
+            Rect::new(80.0, 80.0, 1.0, 1.0),
+            "oSolid",
+            CollisionPrecision::Precise
+        ));
+        let entity = Entity::new(1, "oDarkFall", p);
+        assert!(entity.mask_contains(p, CollisionPrecision::BoundingBox));
+        assert!(!entity.mask_contains(p, CollisionPrecision::Precise));
     }
 }

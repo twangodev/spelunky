@@ -111,6 +111,63 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True, ensure_ascii=True) + "\n", encoding="utf-8")
 
 
+def append_precise_masks(asset, images, collision):
+    """Append portable row-major LSB-first alpha masks without atlas gutters."""
+    if asset["mask"]["shape"] != "PRECISE":
+        return
+    separate = asset["mask"]["separate"]
+    tolerance = asset["mask"]["alpha_tolerance"]
+    groups = [[image] for image in images] if separate else [images]
+    masks = []
+    for group in groups:
+        width = max(image[0] for image in group)
+        height = max(image[1] for image in group)
+        stride = (width + 7) // 8
+        encoded = bytearray(stride * height)
+        for image_width, image_height, pixels in group:
+            for y in range(image_height):
+                for x in range(image_width):
+                    if pixels[(y * image_width + x) * 4 + 3] > tolerance:
+                        encoded[y * stride + x // 8] |= 1 << (x % 8)
+        bounds = union_bounds(alpha_bounds(w, h, pixels, tolerance) for w, h, pixels in group)
+        masks.append({"mask_offset": len(collision), "mask_stride": stride, "mask_width": width, "mask_height": height, "mask_bounds": bounds})
+        collision.extend(encoded)
+    for index, frame in enumerate(asset["frames"]):
+        frame.update(masks[index if separate else 0])
+
+
+def verify_precise_masks(asset, images, collision, expected_offset):
+    fields = {"mask_offset", "mask_stride", "mask_width", "mask_height", "mask_bounds"}
+    if asset["mask"]["shape"] != "PRECISE":
+        if any(fields.intersection(frame) for frame in asset["frames"]):
+            raise ValueError("Non-precise frame unexpectedly has a bitmask")
+        return expected_offset
+    separate = asset["mask"]["separate"]
+    tolerance = asset["mask"]["alpha_tolerance"]
+    union_offset = expected_offset
+    for index, frame in enumerate(asset["frames"]):
+        group = [images[index]] if separate else images
+        width, height = max(i[0] for i in group), max(i[1] for i in group)
+        stride = (width + 7) // 8
+        offset = expected_offset if separate else union_offset
+        expected_metadata = {"mask_offset": offset, "mask_stride": stride, "mask_width": width, "mask_height": height, "mask_bounds": union_bounds(alpha_bounds(w, h, p, tolerance) for w, h, p in group)}
+        if any(frame.get(key) != value or key not in frame for key, value in expected_metadata.items()):
+            raise ValueError(f"Precise mask metadata mismatch: resource {asset['id']}, frame {index}")
+        if offset < 0 or offset + stride * height > len(collision):
+            raise ValueError(f"Precise mask outside collision.bin: resource {asset['id']}, frame {index}")
+        # Check every stored bit independently against original alpha, including
+        # padding bits beyond the image width (which must all remain zero).
+        for y in range(height):
+            for x in range(stride * 8):
+                expected_bit = x < width and any(x < w and y < h and p[(y * w + x) * 4 + 3] > tolerance for w, h, p in group)
+                actual_bit = bool(collision[offset + y * stride + x // 8] & (1 << (x % 8)))
+                if actual_bit != expected_bit:
+                    raise ValueError(f"Precise mask bit mismatch: resource {asset['id']}, frame {index}, pixel ({x}, {y})")
+        if separate or index == 0:
+            expected_offset += stride * height
+    return expected_offset
+
+
 def verify(source, original, output):
     manifest = json.loads((output / "manifest.json").read_text())
     for relative, digest in manifest["generated_files"].items():
@@ -128,6 +185,10 @@ def verify(source, original, output):
         raise ValueError("Atlas dimension mismatch")
     if pixels[:4] != b"\xff\xff\xff\xff":
         raise ValueError("Missing white texel")
+    if metadata.get("collision_file") != "collision.bin" or metadata.get("collision_bit_order") != "lsb0":
+        raise ValueError("Unsupported or missing precise collision mask format")
+    collision = (output / "collision.bin").read_bytes()
+    collision_offset = 0
     checked = 0
     for group in ("Sprites", "Backgrounds"):
         for path in sorted((source / group).rglob("*.xml")):
@@ -153,8 +214,10 @@ def verify(source, original, output):
                 frame_paths = [path.with_suffix(".png")]
             if len(frame_paths) != len(asset["frames"]):
                 raise ValueError(f"Frame count mismatch: {path}")
+            source_images = []
             for image_path, record in zip(frame_paths, asset["frames"]):
                 frame_width, frame_height, expected = read_png(image_path)
+                source_images.append((frame_width, frame_height, expected))
                 if (frame_width, frame_height) != (record["w"], record["h"]):
                     raise ValueError(f"Frame dimension mismatch: {image_path}")
                 if root.tag == "sprite" and record["bounds"] != alpha_bounds(frame_width, frame_height, expected, asset["mask"]["alpha_tolerance"]):
@@ -167,15 +230,20 @@ def verify(source, original, output):
                 checked += 1
             if root.tag == "sprite" and asset["bounds"] != union_bounds(frame["bounds"] for frame in asset["frames"]):
                 raise ValueError(f"Combined collision bounds mismatch: {path}")
+            if root.tag == "sprite":
+                collision_offset = verify_precise_masks(asset, source_images, collision, collision_offset)
+    if collision_offset != len(collision):
+        raise ValueError("Trailing or missing precise collision bytes")
     audio = json.loads((output / "audio.json").read_text())["sounds"]
     for record in audio.values():
         if sha256(output / record["path"]) != sha256(original / "game/sound" / Path(record["path"]).name):
             raise ValueError(f"Audio mismatch: {record['path']}")
-    print(f"Verified {checked} images pixel-for-pixel, origins/IDs, {len(audio)} sounds, and all SHA-256 hashes")
+    print(f"Verified {checked} images pixel-for-pixel, origins/IDs, {len(collision)} precise collision bytes, {len(audio)} sounds, and all SHA-256 hashes")
 
 
 def export(source, original, output, atlas_width):
     frames, sprites, backgrounds, source_hashes = [], {}, {}, {}
+    collision = bytearray()
     for path in sorted((source / "Sprites").rglob("*.xml")):
         if path.name.startswith("_"):
             continue
@@ -199,13 +267,16 @@ def export(source, original, output, atlas_width):
             raise ValueError(f"Unsupported source mask bounds mode: {path}")
         sprites[path.stem] = metadata
         source_hashes[path.relative_to(source).as_posix()] = sha256(path)
+        sprite_images = []
         for index, image_path in enumerate(frame_paths):
             width, height, pixels = read_png(image_path)
+            sprite_images.append((width, height, pixels))
             record = {"x": 0, "y": 0, "w": width, "h": height, "bounds": alpha_bounds(width, height, pixels, metadata["mask"]["alpha_tolerance"])}
             metadata["frames"].append(record)
             frames.append((f"sprite:{path.stem}:{index:05}", record, pixels))
             source_hashes[image_path.relative_to(source).as_posix()] = sha256(image_path)
         metadata["bounds"] = union_bounds(frame["bounds"] for frame in metadata["frames"])
+        append_precise_masks(metadata, sprite_images, collision)
     for path in sorted((source / "Backgrounds").glob("*.xml")):
         if path.name.startswith("_"):
             continue
@@ -241,7 +312,8 @@ def export(source, original, output, atlas_width):
 
     output.mkdir(parents=True, exist_ok=True)
     (output / "atlas.png").write_bytes(png_bytes(atlas_width, atlas_height, atlas))
-    write_json(output / "atlas.json", {"version": 1, "width": atlas_width, "height": atlas_height, "white_pixel": [0, 0], "sprites": sprites, "backgrounds": backgrounds})
+    (output / "collision.bin").write_bytes(collision)
+    write_json(output / "atlas.json", {"version": 1, "width": atlas_width, "height": atlas_height, "white_pixel": [0, 0], "collision_file": "collision.bin", "collision_bit_order": "lsb0", "sprites": sprites, "backgrounds": backgrounds})
     audio = {}
     sound_dir = original / "game/sound"
     if not sound_dir.is_dir():
@@ -256,9 +328,10 @@ def export(source, original, output, atlas_width):
     shutil.copyfile(original / "source/COPYING.txt", output / "COPYING.txt")
     shutil.copyfile(original / "source/readme.txt", output / "ORIGINAL_README.txt")
     archives = {p.name: sha256(p) for p in sorted(original.glob("*.zip"))}
-    generated = {p.relative_to(output).as_posix(): sha256(p) for p in sorted(output.rglob("*")) if p.is_file() and p.name != "manifest.json"}
-    write_json(output / "manifest.json", {"version": 1, "source_archives": archives, "source_files": source_hashes, "generated_files": generated, "counts": {"sprites": len(sprites), "sprite_frames": sum(len(s["frames"]) for s in sprites.values()), "backgrounds": len(backgrounds), "audio": len(audio)}})
-    print(f"Exported {len(sprites)} sprites, {len(frames)} images, {len(audio)} sounds; atlas {atlas_width}x{atlas_height}")
+    generated_paths = ["atlas.png", "atlas.json", "collision.bin", "audio.json", "COPYING.txt", "ORIGINAL_README.txt"] + [record["path"] for record in audio.values()]
+    generated = {relative: sha256(output / relative) for relative in sorted(generated_paths)}
+    write_json(output / "manifest.json", {"version": 1, "source_archives": archives, "source_files": source_hashes, "generated_files": generated, "counts": {"sprites": len(sprites), "sprite_frames": sum(len(s["frames"]) for s in sprites.values()), "backgrounds": len(backgrounds), "audio": len(audio), "collision_bytes": len(collision), "precise_masks": sum(len(s["frames"]) if s["mask"]["separate"] else 1 for s in sprites.values() if s["mask"]["shape"] == "PRECISE")}})
+    print(f"Exported {len(sprites)} sprites, {len(frames)} images, {len(collision)} precise collision bytes, {len(audio)} sounds; atlas {atlas_width}x{atlas_height}")
 
 
 def main():
