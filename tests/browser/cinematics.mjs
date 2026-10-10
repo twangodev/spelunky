@@ -52,7 +52,7 @@ export async function runCinematicAcceptance({ page, result, screenshot }) {
   await page.locator('canvas').focus();
   await press(page, 'ArrowDown', 2);
   await page.keyboard.press('Enter');
-  await page.waitForFunction(() => window.__spelunkyTest?.world.name === 'rTitle', null, { timeout: 10000 });
+  await page.waitForFunction(() => window.__spelunkyTest?.world?.name === 'rTitle', null, { timeout: 10000 });
   const credits = { name: 'authored-rope-title-credits', status: 'failed', hub: await snapshot(page) };
   result.cinematics.push(credits);
   assert.equal(credits.hub.player.x, 600);

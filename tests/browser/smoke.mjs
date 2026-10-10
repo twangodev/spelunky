@@ -15,6 +15,7 @@ import { installLightingProfile, installLightingProbe, runLightingAcceptance } f
 import { runCinematicAcceptance } from './cinematics.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+const webRoot = path.resolve(process.env.BROWSER_WEB_ROOT || path.join(root, 'web'));
 const artifacts = path.resolve(process.env.BROWSER_ARTIFACTS || path.join(root, 'artifacts/browser'));
 const tools = process.env.SPELUNKY_TOOLS || path.join(root, 'target/debug/spelunky-tools');
 const require = createRequire(import.meta.url);
@@ -30,6 +31,8 @@ const engines = (process.env.BROWSERS || 'chromium,firefox,webkit').split(',');
 const report = {
   timestamp: new Date().toISOString(),
   suite: process.env.BROWSER_SUITE || 'full',
+  productionRevision: process.env.BROWSER_PRODUCTION_REVISION || null,
+  runnerRevision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
   scope: 'Automated browser engine acceptance, optionally using a virtual display; no physical 240 Hz display or Safari application validation.',
   engines: [],
 };
@@ -37,9 +40,9 @@ assert.ok(['full', 'adversarial', 'movement', 'onboarding', 'lighting', 'cinemat
 await mkdir(artifacts, { recursive: true });
 await access(tools);
 report.bundle = {
-  wasmSha256: createHash('sha256').update(await readFile(path.join(root, 'web/pkg/spelunky_bg.wasm'))).digest('hex'),
-  htmlSha256: createHash('sha256').update(await readFile(path.join(root, 'web/index.html'))).digest('hex'),
-  bindingsSha256: createHash('sha256').update(await readFile(path.join(root, 'web/pkg/spelunky.js'))).digest('hex'),
+  wasmSha256: createHash('sha256').update(await readFile(path.join(webRoot, 'pkg/spelunky_bg.wasm'))).digest('hex'),
+  htmlSha256: createHash('sha256').update(await readFile(path.join(webRoot, 'index.html'))).digest('hex'),
+  bindingsSha256: createHash('sha256').update(await readFile(path.join(webRoot, 'pkg/spelunky.js'))).digest('hex'),
   nativeSha256: createHash('sha256').update(await readFile(tools)).digest('hex'),
 };
 const native = [];
@@ -56,7 +59,6 @@ report.nativeReplays = native;
 let server;
 let base = process.env.BASE_URL;
 if (!base) {
-  const webRoot = path.join(root, 'web');
   const mime = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'application/wasm', '.json': 'application/json', '.txt': 'text/plain' };
   server = http.createServer(async (request, response) => {
     try {
@@ -83,6 +85,12 @@ if (!base) {
   base = `http://127.0.0.1:${server.address().port}/`;
 }
 report.url = base;
+report.webRoot = webRoot;
+report.runnerSha256 = Object.fromEntries(await Promise.all(
+  ['smoke.mjs', 'movement.mjs', 'adversarial.mjs', 'lighting.mjs', 'cinematics.mjs'].map(async filename => [
+    filename, createHash('sha256').update(await readFile(path.join(root, 'tests/browser', filename))).digest('hex'),
+  ]),
+));
 
 function instrument() {
   const probe = window.__smoke = { contexts: [], draws: 0, callbacks: 0, contextLost: 0 };
