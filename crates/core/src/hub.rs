@@ -82,9 +82,11 @@ pub fn world(kind: HubKind, unlocks: &BTreeSet<String>) -> World {
     if kind == HubKind::Title {
         // oTitle Create: initial completed-intro spawn and Tunnel Man shortcuts.
         world.spawn("oFlare", Vec2::new(600.0, 188.0));
-        let tunnel1 = unlocks.contains("shortcut_9") || unlocks.contains("tunnel1_complete");
-        let tunnel2 = unlocks.contains("shortcut_13") || unlocks.contains("tunnel2_complete");
-        if !tunnel1 || !tunnel2 {
+        // Source tunnel1/tunnel2 are remaining donation balances, not stage
+        // booleans. Stage two resets tunnel1 for stage three. Monotonic unlock
+        // flags therefore map to ladder, level-nine door, level-thirteen door.
+        let [stage1, stage2, stage3] = shortcut_stages(unlocks);
+        if stage1 {
             for (object, y) in [
                 ("oLadderOrange", 96.0),
                 ("oLadderTop", 112.0),
@@ -95,10 +97,10 @@ pub fn world(kind: HubKind, unlocks: &BTreeSet<String>) -> World {
             ] {
                 add_instance(&mut world, object, Vec2::new(352.0, y), false);
             }
-            if !tunnel2 {
+            if stage2 {
                 world.spawn("oLevel9Sign", Vec2::new(128.0, 112.0));
                 world.spawn("oXShortcut9", Vec2::new(144.0, 128.0));
-                if !tunnel1 {
+                if stage3 {
                     world.spawn("oLevel13Sign", Vec2::new(192.0, 112.0));
                     world.spawn("oXShortcut13", Vec2::new(208.0, 128.0));
                 }
@@ -147,6 +149,13 @@ pub fn world(kind: HubKind, unlocks: &BTreeSet<String>) -> World {
     setup_wall_sprites(&mut world);
     world
 }
+fn shortcut_stages(flags: &BTreeSet<String>) -> [bool; 3] {
+    let stage3 = flags.contains("shortcut_13") || flags.contains("tunnel3_complete");
+    let stage2 = stage3 || flags.contains("shortcut_9") || flags.contains("tunnel2_complete");
+    let stage1 = stage2 || flags.contains("shortcut_5") || flags.contains("tunnel1_complete");
+    [stage1, stage2, stage3]
+}
+
 /// Convert independent best run records to the source trophy and door gates.
 /// `seconds` must come from a completed winning run; absent/zero is not a medal.
 pub fn record_unlocks(
@@ -413,6 +422,13 @@ fn activate_portal(game: &mut Game) {
     let Some(portal) = portal else {
         return;
     };
+    let stages = shortcut_stages(&game.flags);
+    if matches!(portal.as_str(), "oXShortcut5") && !stages[0]
+        || matches!(portal.as_str(), "oXShortcut9") && !stages[1]
+        || matches!(portal.as_str(), "oXShortcut13") && !stages[2]
+    {
+        return;
+    }
     let destination = match portal.as_str() {
         "oXScores" => "scores",
         "oXTutorial" => "tutorial",
@@ -897,12 +913,94 @@ mod tests {
         g
     }
     #[test]
+    fn title_shortcut_geometry_matches_all_donation_stages() {
+        for (stage, flag) in [
+            (0, None),
+            (1, Some("shortcut_5")),
+            (2, Some("shortcut_9")),
+            (3, Some("shortcut_13")),
+        ] {
+            let mut flags = BTreeSet::new();
+            if let Some(flag) = flag {
+                flags.insert(flag.into());
+            }
+            let w = world(HubKind::Title, &flags);
+            let ladder = w
+                .tile(22, 6)
+                .is_some_and(|tile| tile.object == "oLadderOrange");
+            assert_eq!(ladder, stage >= 1, "stage {stage}: ladder");
+            assert_eq!(
+                w.tile(20, 6).is_some_and(|tile| tile.object == "oBrick"),
+                stage == 0,
+                "stage {stage}: blocking brick 320,96"
+            );
+            assert_eq!(
+                w.tile(21, 6).is_some_and(|tile| tile.object == "oBrick"),
+                stage == 0,
+                "stage {stage}: blocking brick 336,96"
+            );
+            assert!(
+                w.entities.iter().any(|e| e.object == "oXShortcut5"),
+                "source-authored first shortcut remains"
+            );
+            assert_eq!(
+                w.entities.iter().any(|e| e.object == "oXShortcut9"),
+                stage >= 2,
+                "stage {stage}: level9 door"
+            );
+            assert_eq!(
+                w.entities.iter().any(|e| e.object == "oLevel9Sign"),
+                stage >= 2,
+                "stage {stage}: level9 sign"
+            );
+            assert_eq!(
+                w.entities.iter().any(|e| e.object == "oXShortcut13"),
+                stage >= 3,
+                "stage {stage}: level13 door"
+            );
+            assert_eq!(
+                w.entities.iter().any(|e| e.object == "oLevel13Sign"),
+                stage >= 3,
+                "stage {stage}: level13 sign"
+            );
+        }
+    }
+    #[test]
+    fn each_shortcut_portal_requires_its_completed_stage() {
+        for (object, destination, flag) in [
+            ("oXShortcut5", "shortcut5", "shortcut_5"),
+            ("oXShortcut9", "shortcut9", "shortcut_9"),
+            ("oXShortcut13", "shortcut13", "shortcut_13"),
+        ] {
+            for unlocked in [false, true] {
+                let mut g = challenge(HubKind::Title);
+                let id = g.world.spawn(object, Vec2::new(600.0, 64.0));
+                let bounds = g.world.entity(id).unwrap().bounds();
+                g.player.pos = Vec2::new(bounds.x + bounds.w / 2.0, bounds.y + bounds.h / 2.0);
+                g.player.grounded = true;
+                if unlocked {
+                    g.flags.insert(flag.into());
+                }
+                tick(
+                    &mut g,
+                    &InputFrame {
+                        up: true,
+                        ..InputFrame::default()
+                    },
+                );
+                assert_eq!(
+                    g.flags.contains(&format!("hub_destination:{destination}")),
+                    unlocked,
+                    "{object} unlocked={unlocked}"
+                );
+            }
+        }
+    }
+    #[test]
     fn record_thresholds_and_valid_win_time() {
-        assert!(
-            record_unlocks(199999, Some(601.0), 119, 7)
-                .iter()
-                .all(|f| !f.starts_with("unlock_"))
-        );
+        assert!(record_unlocks(199999, Some(601.0), 119, 7)
+            .iter()
+            .all(|f| !f.starts_with("unlock_")));
         let flags = record_unlocks(200000, Some(600.0), 120, 8);
         for key in [
             "unlock_sun",
@@ -914,11 +1012,9 @@ mod tests {
             assert!(flags.contains(key));
         }
         assert!(!record_unlocks(0, Some(0.0), 0, 0).contains("unlock_moon"));
-        assert!(
-            !record_unlocks(0, Some(960.0), 0, 0)
-                .iter()
-                .any(|f| f.starts_with("trophy_time_"))
-        );
+        assert!(!record_unlocks(0, Some(960.0), 0, 0)
+            .iter()
+            .any(|f| f.starts_with("trophy_time_")));
         assert!(record_unlocks(50000, Some(959.0), 80, 4).contains("trophy_money_1"));
     }
     #[test]
@@ -967,11 +1063,10 @@ mod tests {
         assert_eq!((sun.width, sun.height), (20, 16));
         assert_eq!(sun.entrance, Vec2::new(56.0, 168.0));
         assert!(sun.entities.iter().any(|e| e.object == "oDamsel"));
-        assert!(
-            sun.entities
-                .iter()
-                .any(|e| e.object == "oTerrainMetadata" && e.value("invincible") == 1.0)
-        );
+        assert!(sun
+            .entities
+            .iter()
+            .any(|e| e.object == "oTerrainMetadata" && e.value("invincible") == 1.0));
     }
     #[test]
     fn gold_gates_are_independent() {
@@ -1015,12 +1110,11 @@ mod tests {
         tick_hub(&mut g);
         assert_eq!(g.data["mini2"], 99.0);
         assert_eq!(g.data["timer"], -1.0);
-        assert!(
-            g.world
-                .entities
-                .iter()
-                .any(|e| e.alive && e.object == "oXScores")
-        );
+        assert!(g
+            .world
+            .entities
+            .iter()
+            .any(|e| e.alive && e.object == "oXScores"));
     }
     #[test]
     fn basketball_scores_dunk_shot_and_wall_bounce() {
