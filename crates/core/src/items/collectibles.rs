@@ -280,22 +280,32 @@ pub fn player_step(game: &mut Game) {
     let contact = Rect::new(game.player.pos.x - 8., game.player.pos.y - 8., 17., 17.);
     // Source first tests contact with any treasure, then independently selects
     // instance_nearest across the whole treasure family (not only the hits).
-    let touching_treasure =
-        game.world.entities.iter().any(|e| {
-            e.alive && treasure_value(&e.object).is_some() && contact.intersects(bounds(e))
-        });
+    crate::dispatcher::register_instances(game);
+    let treasures: Vec<_> = crate::dispatcher::descendant_instances(game, "oTreasure")
+        .into_iter()
+        .filter_map(|instance| match instance {
+            crate::dispatcher::Instance::Entity(id) => game.world.entity(id),
+            _ => None,
+        })
+        .filter(|entity| entity.engine_active)
+        .collect();
+    let touching_treasure = treasures
+        .iter()
+        .any(|entity| contact.intersects(bounds(entity)));
     let treasure = touching_treasure
         .then(|| {
-            game.world
-                .entities
-                .iter()
-                .filter(|e| e.alive && treasure_value(&e.object).is_some())
-                .min_by(|a, b| {
-                    a.pos
-                        .distance(game.player.pos)
-                        .total_cmp(&b.pos.distance(game.player.pos))
+            treasures
+                .into_iter()
+                .fold(None, |nearest: Option<&Entity>, entity| {
+                    if nearest.is_none_or(|current| {
+                        entity.pos.distance(game.player.pos) < current.pos.distance(game.player.pos)
+                    }) {
+                        Some(entity)
+                    } else {
+                        nearest
+                    }
                 })
-                .map(|e| e.id)
+                .map(|entity| entity.id)
         })
         .flatten();
     if let Some(id) = treasure {
@@ -879,6 +889,109 @@ mod tests {
         g.player.grounded = true;
         g.player.state = crate::model::PlayerState::Standing;
         g
+    }
+
+    fn treasure_order(game: &Game) -> Vec<u64> {
+        crate::dispatcher::descendant_instances(game, "oTreasure")
+            .into_iter()
+            .filter_map(|instance| match instance {
+                crate::dispatcher::Instance::Entity(id) if game.world.entity(id).is_some() => {
+                    Some(id)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn game_step_treasure_ties_follow_natural_camera_reactivation_order() {
+        for start_x in [493.0, 499.0, 500.0] {
+            let mut g = Game::shell(42, crate::RulesPreset::Classic);
+            for x in 0..g.world.width {
+                g.world.set_tile(x, 20, "oBlock");
+                if !(4..=5).contains(&x) {
+                    g.world.set_tile(x, 10, "oBlock");
+                }
+            }
+            g.player.pos = Vec2::new(start_x, 152.0);
+            g.player.previous_pos = g.player.pos;
+            g.player.grounded = true;
+            let emerald = g.spawn("oEmerald", Vec2::new(72.0, 312.0));
+            let ruby = g.spawn("oRuby", Vec2::new(88.0, 312.0));
+            assert_eq!(treasure_order(&g), vec![emerald, ruby]);
+            let mut saw_inactive = false;
+            let mut collected = false;
+            for _ in 0..220 {
+                let order = treasure_order(&g);
+                let emerald_pos = g.world.entity(emerald).unwrap().pos;
+                let ruby_pos = g.world.entity(ruby).unwrap().pos;
+                let storage: Vec<_> = g
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oEmerald" || e.object == "oRuby")
+                    .map(|e| e.id)
+                    .collect();
+                saw_inactive |= !g.world.entity(emerald).unwrap().engine_active
+                    && !g.world.entity(ruby).unwrap().engine_active;
+                let before = g.player.pos;
+                g.step(&InputFrame {
+                    left: before.x > 80.0,
+                    right: before.x < 80.0,
+                    ..Default::default()
+                });
+                if g.world.entity(emerald).is_none() || g.world.entity(ruby).is_none() {
+                    assert!(saw_inactive, "start={start_x}");
+                    assert_eq!(order, vec![ruby, emerald], "start={start_x}");
+                    assert_eq!(storage, vec![emerald, ruby]);
+                    let emerald_distance = emerald_pos.distance(g.player.pos);
+                    let ruby_distance = ruby_pos.distance(g.player.pos);
+                    if start_x == 500.0 {
+                        assert!(ruby_distance < emerald_distance, "unique nearest control");
+                    } else {
+                        assert_eq!(emerald_distance, 10.0);
+                        assert_eq!(ruby_distance, 10.0);
+                    }
+                    assert!(g.world.entity(emerald).is_some());
+                    assert!(g.world.entity(ruby).is_none());
+                    assert!(g.events.iter().any(|event|matches!(event,GameEvent::Collected{object,value:400} if object=="oRuby")));
+                    collected = true;
+                    break;
+                }
+            }
+            assert!(collected, "start={start_x}");
+        }
+    }
+
+    #[test]
+    fn game_step_treasure_ties_ignore_reversed_storage_without_reactivation() {
+        for reverse_storage in [false, true] {
+            let mut g = Game::shell(42, crate::RulesPreset::Classic);
+            for x in 0..g.world.width {
+                g.world.set_tile(x, 20, "oBlock");
+            }
+            g.player.pos = Vec2::new(80.0, 312.0);
+            g.player.previous_pos = g.player.pos;
+            g.player.grounded = true;
+            let emerald = g.spawn("oEmerald", Vec2::new(72.0, 312.0));
+            let ruby = g.spawn("oRuby", Vec2::new(88.0, 312.0));
+            if reverse_storage {
+                g.world.entities.reverse();
+            }
+            let mut collected = false;
+            for _ in 0..25 {
+                assert_eq!(treasure_order(&g), vec![emerald, ruby]);
+                g.step(&InputFrame::default());
+                if g.world.entity(emerald).is_none() || g.world.entity(ruby).is_none() {
+                    assert!(g.world.entity(emerald).is_none());
+                    assert!(g.world.entity(ruby).is_some());
+                    assert!(g.events.iter().any(|event|matches!(event,GameEvent::Collected{object,value:200} if object=="oEmerald")));
+                    collected = true;
+                    break;
+                }
+            }
+            assert!(collected, "reverse storage={reverse_storage}");
+        }
     }
 
     #[test]
