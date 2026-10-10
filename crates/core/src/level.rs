@@ -1,5 +1,5 @@
 //! Classic 1.1 custom levels. Coordinates and spawn offsets follow scrCreateTileObj.
-use crate::model::{Area, Entity, Vec2, World};
+use crate::model::{Area, Vec2, World};
 use serde::{Deserialize, Serialize};
 
 pub const LEVEL_WIDTH: usize = 40;
@@ -71,7 +71,7 @@ impl Level {
         level.starting_ropes = parse_inventory(lines[36], "ropes", 0)?;
         level.next_level = lines[37].into();
         let mut cursor = 38;
-        if cursor < lines.len() {
+        if lines[cursor..].iter().any(|line| !line.is_empty()) {
             let first = lines[cursor];
             cursor += 1;
             // Original writer omitted a newline after zero exits: 00, 01, 012, etc.
@@ -84,7 +84,7 @@ impl Level {
             } else {
                 let count = parse_count(first, "exit")?;
                 level.exit_targets = read_records(&lines, &mut cursor, count, "exit")?;
-                if cursor < lines.len() {
+                if lines[cursor..].iter().any(|line| !line.is_empty()) {
                     let count = parse_count(lines[cursor], "sign")?;
                     cursor += 1;
                     level.signs = read_records(&lines, &mut cursor, count, "sign")?;
@@ -165,9 +165,10 @@ impl Level {
     /// A linked entrance leading back to the preceding level takes precedence.
     pub fn to_world_from(&self, previous_level: Option<&str>) -> World {
         let area = match self.music.to_uppercase().as_str() {
-            "JUNGLE" => Area::Jungle,
+            "LUSH" | "JUNGLE" => Area::Jungle,
             "ICE" => Area::Ice,
             "TEMPLE" => Area::Temple,
+            "BOSS" => Area::Boss,
             _ => Area::Mines,
         };
         let mut world = World::new(42, 34, area, 1);
@@ -197,19 +198,30 @@ impl Level {
                         if tx > 0 && ty > 0 && tx + 1 < world.width && ty + 1 < world.height {
                             world.set_tile(tx, ty, spawn.object);
                         }
-                        if spawn.sprite != Some("sTreeTop") {
-                            continue;
+                        if let Some(sprite) = spawn.sprite {
+                            let id = world.spawn("oTerrainMetadata", pos);
+                            if let Some(metadata) = world.entity_mut(id) {
+                                metadata.text.insert("terrain_sprite".into(), sprite.into());
+                            }
                         }
+                        continue;
                     }
-                    let id = world.next_id;
-                    world.next_id += 1;
-                    let mut entity = Entity::new(id, spawn.object, pos);
+                    // instance_create runs Create events before scrCreateTileObj's
+                    // state/sprite/free-item overrides. Use the same initializer path
+                    // as generated levels, so the first tick cannot undo those overrides.
+                    let id = world.spawn(spawn.object, pos);
+                    if symbol == 'X' && first_exit {
+                        world.exit = Vec2::new(pos.x + 8.0, pos.y + 8.0);
+                        first_exit = false;
+                    }
+                    let Some(entity) = world.entity_mut(id) else {
+                        continue;
+                    };
                     if let Some(sprite) = spawn.sprite {
                         entity.sprite = sprite.into();
                     }
-                    entity.state = spawn.state;
-                    if terrain {
-                        entity.data.insert("tile_entity".into(), 1.0);
+                    if symbol == '!' {
+                        entity.state = spawn.state;
                     }
                     if spawn.free_item {
                         entity.data.insert("cost".into(), 0.0);
@@ -228,9 +240,6 @@ impl Level {
                                 Vec2::new(pos.x + 8.0, pos.y + 8.0),
                                 self.exit_target(exit_index),
                             ));
-                        } else if first_exit {
-                            world.exit = Vec2::new(pos.x + 8.0, pos.y + 8.0);
-                            first_exit = false;
                         }
                     }
                     if symbol == 'I' {
@@ -239,7 +248,6 @@ impl Level {
                             .insert("message".into(), self.sign_message(sign_index).into());
                         entity.data.insert("sign_index".into(), sign_index as f64);
                     }
-                    world.entities.push(entity);
                 }
                 if matches!(symbol, '@' | 'X') {
                     exit_index += 1;
@@ -249,10 +257,11 @@ impl Level {
                 }
             }
         }
-        if let Some((pos, _)) = entrances
-            .iter()
-            .min_by(|a, b| a.0.x.hypot(a.0.y).total_cmp(&b.0.x.hypot(b.0.y)))
-        {
+        if let Some((pos, _)) = entrances.iter().min_by(|a, b| {
+            (a.0.x - 8.0)
+                .hypot(a.0.y - 8.0)
+                .total_cmp(&(b.0.x - 8.0).hypot(b.0.y - 8.0))
+        }) {
             world.entrance = *pos;
         }
         if let Some(previous) = previous_level {

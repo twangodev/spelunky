@@ -54,8 +54,12 @@ impl EditorState {
             return Ok(());
         }
         // Keep door/sign records attached to their cells when row-major order changes.
-        remap_records(&self.level, &mut next, true);
-        remap_records(&self.level, &mut next, false);
+        let previous = self.level.get_tile(x, y).unwrap_or('0');
+        for door in [true, false] {
+            if matches_record(previous, door) != matches_record(tile, door) {
+                remap_records(&self.level, &mut next, door);
+            }
+        }
         self.replace_level(next);
         Ok(())
     }
@@ -73,6 +77,9 @@ impl EditorState {
         }
         let index =
             record_index(&self.level, x, y, true).ok_or("Cell is not an entrance or exit")?;
+        if self.level.exit_target(index) == target {
+            return Ok(());
+        }
         let mut next = self.level.clone();
         materialize_records(&mut next, true);
         next.exit_targets[index] = target;
@@ -85,6 +92,9 @@ impl EditorState {
             return Err("Sign message must be a single line".into());
         }
         let index = record_index(&self.level, x, y, false).ok_or("Cell is not a sign")?;
+        if self.level.sign_message(index) == message {
+            return Ok(());
+        }
         let mut next = self.level.clone();
         materialize_records(&mut next, false);
         next.signs[index] = message;
@@ -159,7 +169,12 @@ fn materialize_records(level: &mut Level, door: bool) {
         .take(LEVEL_WIDTH * LEVEL_HEIGHT)
         .filter(|tile| matches_record(**tile, door))
         .count();
-    let records = (0..count)
+    let stored = if door {
+        level.exit_targets.len()
+    } else {
+        level.signs.len()
+    };
+    let records = (0..count.max(stored))
         .map(|index| {
             if door {
                 level.exit_target(index)
@@ -196,6 +211,16 @@ fn remap_records(old: &Level, next: &mut Level, door: bool) {
             }
         }
     }
+    // Extra imported records are ignored by Classic's loader, but belong to
+    // the custom file and must survive editing existing cells.
+    let old_count = old
+        .tiles
+        .iter()
+        .take(LEVEL_WIDTH * LEVEL_HEIGHT)
+        .filter(|tile| matches_record(**tile, door))
+        .count();
+    let old_records = if door { &old.exit_targets } else { &old.signs };
+    records.extend(old_records.iter().skip(old_count).cloned());
     if door {
         next.exit_targets = records;
     } else {

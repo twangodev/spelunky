@@ -211,3 +211,151 @@ fn malformed_user_input_cannot_panic() {
     let _ = invalid.to_text();
     let _ = invalid.to_world();
 }
+
+#[test]
+fn legacy_sections_accept_the_original_final_line_terminator() {
+    let oldest = Level::parse(&old_level("\n")).unwrap();
+    assert!(oldest.exit_targets.is_empty());
+    assert!(oldest.signs.is_empty());
+    let exit_only = Level::parse(&old_level("\n1\nlast-door\n")).unwrap();
+    assert_eq!(exit_only.exit_targets, ["last-door"]);
+    assert!(exit_only.signs.is_empty());
+    // The empty target is data, rather than a discarded line terminator.
+    let empty_exit = Level::parse(&old_level("\n1\n")).unwrap();
+    assert_eq!(empty_exit.exit_targets, [""]);
+}
+
+#[test]
+fn nearest_custom_entrance_uses_source_instance_origins() {
+    let mut level = Level::default();
+    // Source nearest(0, 0) selects (192, 80). Measuring the player centers
+    // would incorrectly select (208, 16) and visibly jump to the other door.
+    level.set_tile(11, 4, '@').unwrap();
+    level.set_tile(12, 0, '@').unwrap();
+    let world = level.to_world();
+    assert_eq!(world.entrance, spelunky_core::Vec2::new(200.0, 88.0));
+    level.exit_targets = vec!["back".into(), "other".into()];
+    assert_eq!(
+        level.to_world_from(Some("back")).entrance,
+        spelunky_core::Vec2::new(216.0, 24.0)
+    );
+}
+
+#[test]
+fn custom_creates_run_before_source_state_and_pickup_overrides() {
+    let mut level = Level::default();
+    for (x, tile) in ['!', 'h', 'S', 'R', 'J', '<', 'd', '+']
+        .into_iter()
+        .enumerate()
+    {
+        level.set_tile(x, 3, tile).unwrap();
+    }
+    let mut world = level.to_world();
+    let shop = world
+        .entities
+        .iter_mut()
+        .find(|e| e.object == "oShopkeeper")
+        .unwrap();
+    assert_eq!(shop.state, 4);
+    assert_eq!(shop.value("enemy_initialized"), 1.0);
+    spelunky_core::enemies::init_entity(shop);
+    assert_eq!(shop.state, 4);
+    let giant = world
+        .entities
+        .iter()
+        .find(|e| e.object == "oGiantSpiderHang")
+        .unwrap();
+    assert_eq!(giant.value("enemy_initialized"), 1.0);
+    assert_eq!(giant.bounds().w, 32.0);
+    let rope = world
+        .entities
+        .iter()
+        .find(|e| e.object == "oRopePile")
+        .unwrap();
+    assert_eq!(rope.value("items_initialized"), 1.0);
+    assert_eq!(rope.value("cost"), 0.0);
+    assert_eq!(rope.value("forSale"), 0.0);
+    assert_eq!(rope.pos, spelunky_core::Vec2::new(72.0, 75.0));
+    for name in ["oArrowTrapLeft", "oDarkFall", "oSmashTrap"] {
+        let entity = world.entities.iter().find(|e| e.object == name).unwrap();
+        assert!(entity.solid, "{name}");
+        assert_eq!(entity.pos.y, 64.0);
+    }
+}
+
+#[test]
+fn custom_tiles_retain_source_solid_platform_and_ladder_families() {
+    use spelunky_core::{Vec2, catalog};
+    let mut level = Level::default();
+    level.music = "LUSH".into();
+    for (x, tile) in ['|', 'x', 'q', ')', 'L', 'P', 'v', 't']
+        .into_iter()
+        .enumerate()
+    {
+        level.set_tile(x, 3, tile).unwrap();
+    }
+    let world = level.to_world();
+    assert_eq!(world.area, spelunky_core::Area::Jungle);
+    for (x, object, group) in [
+        (1, "oTree", "oSolid"),
+        (2, "oTree", "oSolid"),
+        (3, "oTreeBranch", "oPlatform"),
+        (4, "oLeaves", "oPlatform"),
+        (5, "oLadderOrange", "oLadder"),
+        (6, "oLadderTop", "oPlatform"),
+        (7, "oVine", "oLadder"),
+        (8, "oVineTop", "oLadder"),
+    ] {
+        assert_eq!(world.tile(x, 4).unwrap().object, object);
+        assert!(catalog::is_a(object, group));
+        assert_eq!(world.tile(x, 4).unwrap().is_solid(), group == "oSolid");
+    }
+    assert_eq!(
+        catalog::bounds("oTreeBranch", Vec2::new(48.0, 64.0)).h,
+        11.0
+    );
+    let top = world
+        .entities
+        .iter()
+        .find(|e| e.object == "oTerrainMetadata" && e.pos == Vec2::new(32.0, 64.0))
+        .unwrap();
+    assert_eq!(top.text["terrain_sprite"], "sTreeTop");
+    assert!(!top.solid);
+    assert!(!world.entities.iter().any(|e| e.object == "oTree"));
+}
+
+#[test]
+fn editing_keeps_unrelated_and_unused_custom_text_records() {
+    let mut level = Level::default();
+    level.set_tile(5, 0, 'X').unwrap();
+    level.set_tile(8, 0, 'I').unwrap();
+    level.exit_targets = vec!["LEVEL ONE".into(), "unused door 🦇".into()];
+    level.signs = vec!["EXISTING SIGN".into(), "unused sign #second line".into()];
+    let mut editor = EditorState::new(level.clone());
+    editor.set_tile(2, 2, '1').unwrap();
+    assert_eq!(editor.level.exit_targets, level.exit_targets);
+    assert_eq!(editor.level.signs, level.signs);
+    editor.set_tile(5, 0, '@').unwrap();
+    assert_eq!(editor.level.exit_targets, level.exit_targets);
+    editor.set_exit_target(5, 0, "changed".into()).unwrap();
+    assert_eq!(editor.level.exit_targets, ["changed", "unused door 🦇"]);
+    editor.set_sign(8, 0, "changed sign".into()).unwrap();
+    assert_eq!(
+        editor.level.signs,
+        ["changed sign", "unused sign #second line"]
+    );
+    editor.set_tile(1, 0, 'I').unwrap();
+    assert_eq!(
+        editor.level.signs,
+        ["", "changed sign", "unused sign #second line"]
+    );
+    let exported = Level::parse(&editor.level.to_text()).unwrap();
+    assert_eq!(exported.exit_targets, editor.level.exit_targets);
+    assert_eq!(exported.signs, editor.level.signs);
+    let mut absent = Level::default();
+    absent.set_tile(1, 0, '@').unwrap();
+    let mut editor = EditorState::new(absent);
+    editor.set_tile(3, 3, '1').unwrap();
+    assert!(editor.level.exit_targets.is_empty());
+    assert!(editor.level.signs.is_empty());
+}
