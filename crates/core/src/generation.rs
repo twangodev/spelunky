@@ -694,11 +694,90 @@ pub fn generate(rng: &mut Rng, level: u32, flags: &BTreeSet<String>) -> World {
                 && area != Area::Boss
                 && rng.chance(1, 12)));
     special::apply(&mut world, rng, &selected);
-    terrain::initialize(&mut world, rng);
+    apply_wanted_posters(&mut world, &selected);
+    let graphics_high = !has(&selected, "low_graphics");
+    terrain::initialize_with_graphics(&mut world, rng, graphics_high);
+    if graphics_high {
+        background_extras(&mut world, rng);
+    }
     population::populate(&mut world, rng, &selected);
     // Construction/carving does not dispatch source Solid Destroy events.
     world.fluid_dirty = false;
     world
+}
+
+/// oBricks Create calls scrSetupWalls(224) after authored hub construction.
+pub(crate) fn initialize_hub_fringe(world: &mut World, rng: &mut Rng) {
+    let origins: Vec<_> = world
+        .tiles
+        .iter()
+        .enumerate()
+        .filter_map(|(index, tile)| {
+            if tile.object != "oBrick" {
+                return None;
+            }
+            let x = (index % world.width) as i32;
+            let y = (index / world.width) as i32;
+            let up = y == 0
+                || world
+                    .tile(x, y - 1)
+                    .is_some_and(|tile| matches!(tile.object.as_str(), "oBrick" | "oHardBlock"));
+            (!up).then_some(Vec2::new(f64::from(x * 16), f64::from((y - 1) * 16)))
+        })
+        .collect();
+    for origin in origins {
+        let source_x = if rng.range(3) < 2 { 0.0 } else { 16.0 };
+        terrain::decoration(world, "bgCaveTop", origin, source_x, 16.0, 3.0);
+    }
+}
+
+fn background_extras(world: &mut World, rng: &mut Rng) {
+    // scrInitLevel:228–240, after SetupWalls and before entity generation.
+    for _ in 0..20 {
+        let background = match world.area {
+            Area::Jungle if rng.range(3) < 2 => "bgExtrasLush",
+            Area::Ice if rng.range(3) < 2 => "bgExtrasIce",
+            Area::Temple if rng.range(3) < 2 => "bgExtrasTemple",
+            _ => "bgExtras",
+        };
+        let source_x = f64::from(rng.range(2) * 32);
+        let origin = Vec2::new(
+            f64::from((1 + rng.range(42)) * 16),
+            f64::from((1 + rng.range(33)) * 16),
+        );
+        terrain::decoration(world, background, origin, source_x, 32.0, 10002.0);
+    }
+}
+
+fn apply_wanted_posters(world: &mut World, flags: &BTreeSet<String>) {
+    let wanted = flags.contains("murderer") || flags.contains("wanted");
+    let source_x = if flags.contains("character_damsel") {
+        32.0
+    } else if flags.contains("character_tunnelman") {
+        64.0
+    } else {
+        0.0
+    };
+    for poster in world
+        .entities
+        .iter_mut()
+        .filter(|entity| entity.value("wanted_marker") != 0.0)
+    {
+        if !wanted {
+            poster.alive = false;
+            continue;
+        }
+        for (key, value) in [
+            ("depth", 9004.0),
+            ("source_x", source_x),
+            ("source_y", 0.0),
+            ("source_w", 32.0),
+            ("source_h", 32.0),
+        ] {
+            poster.data.insert(key.into(), value);
+        }
+    }
+    world.entities.retain(|entity| entity.alive);
 }
 
 fn boundary_tile(world: &mut World, x: usize, y: usize, object: &str) {

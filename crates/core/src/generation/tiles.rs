@@ -164,8 +164,16 @@ pub(super) fn stamp_at(
             b'Q' if shop_type == "Craps" && world.area != Area::Boss => {
                 decoration(world, "bgDiceSign", p);
             }
-            // Wanted signs require run-level murderer/thief state; applied by the generation coordinator.
-            b'W' => {}
+            // The coordinator applies run crime/character globals after room
+            // stamping, retaining this exact template-authored position.
+            b'W' => {
+                let id = decoration(world, "bgWanted", p);
+                world
+                    .entity_mut(id)
+                    .unwrap()
+                    .data
+                    .insert("wanted_marker".into(), 1.0);
+            }
             b'q' if world.area != Area::Boss => {
                 rng.range(6); // Source's unused dice roll still consumes a draw.
                 let object = high_end(rng);
@@ -277,9 +285,25 @@ fn mines(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2) {
         }
         b'B' => {
             spawn(w, "oGiantTikiHead", offset(p, 16.0, 12.0));
-            decoration(w, "bgTiki", offset(p, 0.0, 32.0));
-            r.range(3);
-            r.range(3);
+            let body = decoration(w, "bgTiki", offset(p, 0.0, 32.0));
+            w.entity_mut(body)
+                .unwrap()
+                .data
+                .insert("depth".into(), 10001.0);
+            for (dx, source_y) in [(32.0, 0.0), (-16.0, 16.0)] {
+                let source_x = f64::from(r.range(3)) * 16.0;
+                let arm = decoration(w, "bgTikiArms", offset(p, dx, 32.0));
+                let arm = w.entity_mut(arm).unwrap();
+                for (key, value) in [
+                    ("depth", 10001.0),
+                    ("source_x", source_x),
+                    ("source_y", source_y),
+                    ("source_w", 16.0),
+                    ("source_h", 16.0),
+                ] {
+                    arm.data.insert(key.into(), value);
+                }
+            }
         }
         b's' => {
             if r.chance(1, 10) {
@@ -562,14 +586,16 @@ fn temple(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2, occupi
                         "bgLadyXoc",
                         offset(p, dx as f64 * 16.0, dy as f64 * 16.0),
                     );
-                    w.entity_mut(id)
-                        .unwrap()
-                        .data
-                        .insert("source_x".into(), dx as f64 * 16.0);
-                    w.entity_mut(id)
-                        .unwrap()
-                        .data
-                        .insert("source_y".into(), dy as f64 * 16.0);
+                    let mural = w.entity_mut(id).unwrap();
+                    for (key, value) in [
+                        ("source_x", dx as f64 * 16.0),
+                        ("source_y", dy as f64 * 16.0),
+                        ("source_w", 16.0),
+                        ("source_h", 16.0),
+                        ("depth", 99.0),
+                    ] {
+                        mural.data.insert(key.into(), value);
+                    }
                 }
             }
         }

@@ -554,6 +554,9 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
         }
     }
     initialize_brick_variants(game);
+    if !game.flags.contains("low_graphics") {
+        crate::generation::initialize_hub_fringe(&mut game.world, &mut game.rng);
+    }
     game.data.insert("hub_draw_status".into(), 0.0);
     if kind.challenge() {
         game.player.health = 8;

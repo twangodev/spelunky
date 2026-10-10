@@ -51,11 +51,20 @@ fn metadata(world: &mut World, x: usize, y: usize) -> u64 {
 
 fn neighbors(world: &World, x: usize, y: usize, object: &str) -> (bool, bool, bool, bool) {
     let connected = |dx: i32, dy: i32| {
+        let point = Vec2::new(
+            (x as f64 + f64::from(dx)) * 16.0,
+            (y as f64 + f64::from(dy)) * 16.0,
+        );
         world.tile(x as i32 + dx, y as i32 + dy).is_some_and(|t| {
             t.object == object
                 || (object == "oBrick" && t.object == "oHardBlock")
                 || (object == "oTemple" && t.object == "oTempleFake")
-        })
+        }) || (object == "oTemple"
+            && world.entities.iter().any(|entity| {
+                entity.alive
+                    && entity.object == "oTempleFake"
+                    && entity.sprite_bounds().contains(point)
+            }))
     };
     let boundary = object != "oIce";
     let bottom = if world.area == crate::model::Area::Boss {
@@ -74,7 +83,14 @@ fn neighbors(world: &World, x: usize, y: usize, object: &str) -> (bool, bool, bo
                 .is_some_and(|t| t.object == "oTemple")
             || world
                 .tile(x as i32, y as i32 + 1)
-                .is_some_and(|t| t.object == "oTempleFake");
+                .is_some_and(|t| t.object == "oTempleFake")
+            || world.entities.iter().any(|entity| {
+                entity.alive
+                    && entity.object == "oTempleFake"
+                    && entity
+                        .sprite_bounds()
+                        .contains(Vec2::new(x as f64 * 16.0, (y + 1) as f64 * 16.0))
+            });
     }
     (
         up,
@@ -153,15 +169,20 @@ fn edge_sprite(object: &str, city: bool, n: (bool, bool, bool, bool)) -> Option<
 
 /// Creation order is stable within this Rust port; it does not reproduce the
 /// GameMaker interleaving of room creation and individual Create events.
+#[cfg(test)]
 pub(super) fn initialize(world: &mut World, rng: &mut Rng) {
-    initialize_terrain(world, rng, false);
+    initialize_with_graphics(world, rng, true);
 }
 
 pub(super) fn initialize_custom(world: &mut World, rng: &mut Rng) {
-    initialize_terrain(world, rng, true);
+    initialize_terrain(world, rng, true, false);
 }
 
-fn initialize_terrain(world: &mut World, rng: &mut Rng, custom: bool) {
+pub(super) fn initialize_with_graphics(world: &mut World, rng: &mut Rng, graphics_high: bool) {
+    initialize_terrain(world, rng, false, graphics_high);
+}
+
+fn initialize_terrain(world: &mut World, rng: &mut Rng, custom: bool, graphics_high: bool) {
     let city = world.name == "City of Gold";
     for y in 0..world.height {
         for x in 0..world.width {
@@ -281,9 +302,30 @@ fn initialize_terrain(world: &mut World, rng: &mut Rng, custom: bool) {
                     e.text.insert("treasure".into(), name.into());
                 }
             }
+            if !custom && graphics_high {
+                setup_fringe(
+                    world,
+                    rng,
+                    &object,
+                    Vec2::new(x as f64 * 16.0, y as f64 * 16.0),
+                    sides,
+                );
+            }
+            if !custom && object == "oIce" && !sides.1 && rng.chance(1, 20) {
+                let below = Vec2::new(x as f64 * 16.0, (y + 1) as f64 * 16.0);
+                if !world.solid_point_except(below, 0) {
+                    let id = world.spawn("oIceBottom", below);
+                    world
+                        .entity_mut(id)
+                        .unwrap()
+                        .data
+                        .insert("drip_alarm".into(), f64::from(20 + rng.range(381)));
+                }
+            }
         }
     }
     if !custom {
+        setup_fake_temple(world, rng, city, graphics_high);
         super::water::setup(world, rng);
     }
     for y in 0..world.height {
@@ -320,6 +362,136 @@ fn initialize_terrain(world: &mut World, rng: &mut Rng, custom: bool) {
         super::water::propagate_surface(world);
     } else {
         initialize_custom_instances(world, rng);
+    }
+}
+
+/// Source tile_add decorations use background pixel rectangles, not sprites.
+pub(super) fn decoration(
+    world: &mut World,
+    background: &str,
+    origin: Vec2,
+    source_x: f64,
+    size: f64,
+    depth: f64,
+) {
+    let id = world.spawn("oGenerationDecoration", origin);
+    let entity = world.entity_mut(id).unwrap();
+    entity.sprite = background.into();
+    for (key, value) in [
+        ("decoration", 1.0),
+        ("source_x", source_x),
+        ("source_y", 0.0),
+        ("source_w", size),
+        ("source_h", size),
+        ("depth", depth),
+    ] {
+        entity.data.insert(key.into(), value);
+    }
+}
+
+fn setup_fringe(
+    world: &mut World,
+    rng: &mut Rng,
+    object: &str,
+    origin: Vec2,
+    sides: (bool, bool, bool, bool),
+) {
+    let (up, down, _, _) = sides;
+    if !up {
+        let choice = match object {
+            "oBrick" => Some(("bgCaveTop", if rng.range(3) < 2 { 0.0 } else { 16.0 })),
+            "oLush" => Some((
+                "bgCaveTop2",
+                if rng.chance(1, 8) {
+                    32.0
+                } else if rng.range(3) < 2 {
+                    0.0
+                } else {
+                    16.0
+                },
+            )),
+            "oDark" => Some(("bgCaveTop3", if rng.range(3) < 2 { 0.0 } else { 16.0 })),
+            "oTemple" => {
+                if rng.chance(1, 4) {
+                    Some(("bgCaveTop4", 0.0))
+                } else if rng.chance(1, 4) {
+                    Some(("bgCaveTop4", 16.0))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        if let Some((background, source_x)) = choice {
+            decoration(
+                world,
+                background,
+                Vec2::new(origin.x, origin.y - 16.0),
+                source_x,
+                16.0,
+                3.0,
+            );
+        }
+    }
+    if object == "oLush"
+        && !down
+        && !world.solid_point_except(Vec2::new(origin.x, origin.y + 16.0), 0)
+    {
+        let source_x = if rng.chance(1, 12) {
+            Some(48.0)
+        } else if rng.chance(1, 12) {
+            Some(64.0)
+        } else {
+            None
+        };
+        if let Some(source_x) = source_x {
+            decoration(
+                world,
+                "bgCaveTop2",
+                Vec2::new(origin.x, origin.y + 16.0),
+                source_x,
+                16.0,
+                3.0,
+            );
+        }
+    }
+}
+
+fn setup_fake_temple(world: &mut World, rng: &mut Rng, city: bool, graphics_high: bool) {
+    let ids: Vec<_> = world
+        .entities
+        .iter()
+        .filter(|entity| {
+            entity.alive
+                && entity.object == "oTempleFake"
+                && entity.value("fake_setup_initialized") == 0.0
+        })
+        .map(|entity| entity.id)
+        .collect();
+    for id in ids {
+        let origin = world.entity(id).unwrap().pos;
+        let connected = |point: Vec2| {
+            world.tiles_point(point, "oTemple")
+                || world.tiles_point(point, "oTempleFake")
+                || world.entities.iter().any(|entity| {
+                    entity.alive
+                        && matches!(entity.object.as_str(), "oTemple" | "oTempleFake")
+                        && entity.sprite_bounds().contains(point)
+                })
+        };
+        let up = origin.y == 0.0 || connected(Vec2::new(origin.x, origin.y - 16.0));
+        let down = connected(Vec2::new(origin.x, origin.y + 16.0));
+        let left = connected(Vec2::new(origin.x - 16.0, origin.y));
+        let right = connected(Vec2::new(origin.x + 16.0, origin.y));
+        if city && graphics_high {
+            setup_fringe(world, rng, "oTemple", origin, (up, down, left, right));
+        }
+        let sprite = edge_sprite("oTemple", city, (up, down, left, right));
+        let entity = world.entity_mut(id).unwrap();
+        if let Some(sprite) = sprite {
+            entity.sprite = sprite;
+        }
+        entity.data.insert("fake_setup_initialized".into(), 1.0);
     }
 }
 
@@ -452,6 +624,112 @@ mod tests {
     use crate::model::Area;
 
     #[test]
+    fn high_graphics_fringe_choices_follow_source_short_circuit_draw_order() {
+        for seed in 0..64 {
+            for object in ["oBrick", "oLush", "oDark", "oTemple"] {
+                let mut expected = Rng::new(seed);
+                let mut choices = Vec::new();
+                let upper = match object {
+                    "oBrick" | "oDark" => Some(if expected.range(3) < 2 { 0.0 } else { 16.0 }),
+                    "oLush" => Some(if expected.chance(1, 8) {
+                        32.0
+                    } else if expected.range(3) < 2 {
+                        0.0
+                    } else {
+                        16.0
+                    }),
+                    _ => {
+                        if expected.chance(1, 4) {
+                            Some(0.0)
+                        } else if expected.chance(1, 4) {
+                            Some(16.0)
+                        } else {
+                            None
+                        }
+                    }
+                };
+                if let Some(x) = upper {
+                    choices.push((x, 16.0));
+                }
+                if object == "oLush" {
+                    let lower = if expected.chance(1, 12) {
+                        Some(48.0)
+                    } else if expected.chance(1, 12) {
+                        Some(64.0)
+                    } else {
+                        None
+                    };
+                    if let Some(x) = lower {
+                        choices.push((x, 48.0));
+                    }
+                }
+                let mut world = World::new(4, 4, Area::Mines, 1);
+                let mut actual = Rng::new(seed);
+                setup_fringe(
+                    &mut world,
+                    &mut actual,
+                    object,
+                    Vec2::new(32.0, 32.0),
+                    (false, false, false, false),
+                );
+                let emitted: Vec<_> = world
+                    .entities
+                    .iter()
+                    .map(|e| (e.value("source_x"), e.pos.y))
+                    .collect();
+                assert_eq!(emitted, choices, "{object} seed {seed}");
+                assert_eq!(
+                    actual.range(100000),
+                    expected.range(100000),
+                    "{object} seed {seed}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fake_temple_keeps_source_gold_edge_and_covered_base_sprite_rules() {
+        for city in [false, true] {
+            for covered in [false, true] {
+                let mut world = World::new(5, 5, Area::Temple, 13);
+                let id = world.spawn("oTempleFake", Vec2::new(32.0, 32.0));
+                if covered {
+                    world.set_tile(2, 1, "oTemple");
+                    world.set_tile(2, 3, "oTemple");
+                }
+                let mut actual = Rng::new(42);
+                let mut expected = actual.clone();
+                setup_fake_temple(&mut world, &mut actual, city, false);
+                assert_eq!(
+                    actual.range(100000),
+                    expected.range(100000),
+                    "low graphics must consume no fringe RNG"
+                );
+                let entity = world.entity(id).unwrap();
+                assert_eq!(
+                    entity.sprite,
+                    if covered {
+                        "sTemple"
+                    } else if city {
+                        "sGTempleUp6"
+                    } else {
+                        "sTempleUp6"
+                    }
+                );
+                assert!(!entity.solid);
+            }
+        }
+        // Normal fake temple never adds fringes, even at high graphics.
+        let mut world = World::new(5, 5, Area::Temple, 13);
+        world.spawn("oTempleFake", Vec2::new(32.0, 32.0));
+        let mut actual = Rng::new(42);
+        let mut expected = actual.clone();
+        setup_fake_temple(&mut world, &mut actual, false, true);
+        assert_eq!(actual.range(100000), expected.range(100000));
+        assert!(!world.entities.iter().any(|e| e.sprite == "bgCaveTop4"));
+    }
+
+    #[test]
     fn lava_setup_uses_source_origins_water_ancestry_and_dynamic_solid_masks() {
         for blocker in ["oBrick", "oWaterSwim", "oPushBlock", "oLava"] {
             let mut world = World::new(4, 4, Area::Temple, 13);
@@ -571,7 +849,13 @@ mod tests {
         assert_eq!(e.value("gold_nuggets"), 1.0);
         assert_eq!(e.text["treasure"], "oRubyBig");
         assert_eq!(e.text["terrain_sprite"], "sGTempleUp6");
-        assert_eq!(w.entities.len(), 1);
+        assert_eq!(
+            w.entities
+                .iter()
+                .filter(|e| e.object == "oTerrainMetadata")
+                .count(),
+            1
+        );
         let previous = serde_json::to_string(&w).unwrap();
         initialize(&mut w, &mut Rng::new(100));
         assert_eq!(serde_json::to_string(&w).unwrap(), previous);
