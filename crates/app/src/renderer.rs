@@ -12,6 +12,13 @@ const LOGICAL_WIDTH: f32 = 320.0;
 const LOGICAL_HEIGHT: f32 = 240.0;
 const INITIAL_VERTEX_CAPACITY: usize = 4096;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum QuadBlend {
+    #[default]
+    Alpha,
+    Multiply,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DrawQuad {
     /// Logical x, y, width, height. Fractional coordinates are preserved.
@@ -24,6 +31,7 @@ pub struct DrawQuad {
     pub rotation: f32,
     /// Rotation origin in logical pixels relative to the rectangle's top left.
     pub pivot: [f32; 2],
+    pub blend: QuadBlend,
 }
 
 #[repr(C)]
@@ -55,6 +63,8 @@ pub struct Renderer {
     config: wgpu::SurfaceConfiguration,
     present_modes: Vec<wgpu::PresentMode>,
     pipeline: wgpu::RenderPipeline,
+    multiply_pipeline: wgpu::RenderPipeline,
+    render_format: wgpu::TextureFormat,
     atlas_bind_group: wgpu::BindGroup,
     vertex_buffer: wgpu::Buffer,
     vertex_capacity: usize,
@@ -120,7 +130,7 @@ impl Renderer {
             .formats
             .iter()
             .copied()
-            .find(wgpu::TextureFormat::is_srgb)
+            .find(|format| !format.is_srgb())
             .or_else(|| capabilities.formats.first().copied())
             .ok_or("Graphics surface has no supported color formats")?;
         let alpha_mode = capabilities
@@ -130,6 +140,9 @@ impl Renderer {
             .find(|mode| *mode == wgpu::CompositeAlphaMode::Opaque)
             .or_else(|| capabilities.alpha_modes.first().copied())
             .ok_or("Graphics surface has no supported alpha modes")?;
+        // GM8 blends the original RGB bytes directly. A linear UNORM render
+        // view avoids sRGB conversion making dark masks substantially brighter.
+        let render_format = format.remove_srgb_suffix();
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -138,7 +151,11 @@ impl Renderer {
             present_mode: wgpu::PresentMode::Fifo,
             desired_maximum_frame_latency: 2,
             alpha_mode,
-            view_formats: vec![],
+            view_formats: if render_format == format {
+                vec![]
+            } else {
+                vec![render_format]
+            },
         };
         surface.configure(&device, &config);
 
@@ -152,7 +169,7 @@ impl Renderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -225,31 +242,20 @@ impl Renderer {
             label: Some("Sprite shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Batched sprites"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vertex_main"),
-                buffers: &[Vertex::layout()],
-                compilation_options: Default::default(),
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fragment_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            multiview: None,
-            cache: None,
-        });
+        let pipeline = create_pipeline(
+            &device,
+            &pipeline_layout,
+            &shader,
+            render_format,
+            QuadBlend::Alpha,
+        );
+        let multiply_pipeline = create_pipeline(
+            &device,
+            &pipeline_layout,
+            &shader,
+            render_format,
+            QuadBlend::Multiply,
+        );
         let vertex_buffer = create_vertex_buffer(&device, INITIAL_VERTEX_CAPACITY);
         Ok(Self {
             surface,
@@ -258,6 +264,8 @@ impl Renderer {
             config,
             present_modes: capabilities.present_modes,
             pipeline,
+            multiply_pipeline,
+            render_format,
             atlas_bind_group,
             vertex_buffer,
             vertex_capacity: INITIAL_VERTEX_CAPACITY,
@@ -312,9 +320,10 @@ impl Renderer {
             self.queue
                 .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
         }
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.render_format),
+            ..Default::default()
+        });
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -350,16 +359,83 @@ impl Renderer {
             let bottom = (y + height).floor() as u32;
             if right > left && bottom > top {
                 pass.set_scissor_rect(left, top, right - left, bottom - top);
-                pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &self.atlas_bind_group, &[]);
                 pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-                pass.draw(0..self.vertices.len() as u32, 0..1);
+                for (blend, range) in draw_batches(quads) {
+                    pass.set_pipeline(match blend {
+                        QuadBlend::Alpha => &self.pipeline,
+                        QuadBlend::Multiply => &self.multiply_pipeline,
+                    });
+                    pass.draw(range, 0..1);
+                }
             }
         }
         self.queue.submit(Some(encoder.finish()));
         frame.present();
         Ok(())
     }
+}
+
+fn create_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+    blend: QuadBlend,
+) -> wgpu::RenderPipeline {
+    let blend = match blend {
+        QuadBlend::Alpha => wgpu::BlendState::ALPHA_BLENDING,
+        QuadBlend::Multiply => wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Dst,
+                dst_factor: wgpu::BlendFactor::Zero,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+        },
+    };
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Classic sprite/mask batch"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vertex_main"),
+            buffers: &[Vertex::layout()],
+            compilation_options: Default::default(),
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fragment_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(blend),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        multiview: None,
+        cache: None,
+    })
+}
+
+fn draw_batches(quads: &[DrawQuad]) -> Vec<(QuadBlend, std::ops::Range<u32>)> {
+    let mut batches: Vec<(QuadBlend, std::ops::Range<u32>)> = Vec::with_capacity(3);
+    for (index, quad) in quads.iter().enumerate() {
+        let end = (index as u32 + 1) * 6;
+        if let Some((_, range)) = batches.last_mut().filter(|(blend, _)| *blend == quad.blend) {
+            range.end = end;
+        } else {
+            batches.push((quad.blend, index as u32 * 6..end));
+        }
+    }
+    batches
 }
 
 fn create_vertex_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
@@ -413,8 +489,196 @@ fn append_quad(vertices: &mut Vec<Vertex>, quad: &DrawQuad) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// Executes the production shader, vertex assembly, blend pipelines and
+    /// batch ordering. The second target format exercises the linear-view
+    /// fallback used when a surface only advertises an sRGB format.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn gpu_pixels(quads: &[DrawQuad], srgb_texture: bool) -> Vec<u8> {
+        pollster::block_on(async {
+            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    force_fallback_adapter: true,
+                    ..Default::default()
+                })
+                .await
+                .expect("GPU pixel regression requires a software or native adapter");
+            let (device, queue) = adapter
+                .request_device(
+                    &wgpu::DeviceDescriptor {
+                        label: Some("source mask pixel regression"),
+                        required_features: wgpu::Features::empty(),
+                        required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                        memory_hints: wgpu::MemoryHints::MemoryUsage,
+                    },
+                    None,
+                )
+                .await
+                .unwrap();
+            let atlas = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("white atlas texel"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                atlas.as_image_copy(),
+                &[255; 4],
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4),
+                    rows_per_image: Some(1),
+                },
+                atlas.size(),
+            );
+            let atlas_view = atlas.create_view(&Default::default());
+            let sampler = device.create_sampler(&Default::default());
+            let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: None,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &bind_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&atlas_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            });
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[&bind_layout],
+                push_constant_ranges: &[],
+            });
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: None,
+                source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+            });
+            let format = wgpu::TextureFormat::Rgba8Unorm;
+            let alpha = create_pipeline(&device, &layout, &shader, format, QuadBlend::Alpha);
+            let multiply = create_pipeline(&device, &layout, &shader, format, QuadBlend::Multiply);
+            let target = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("mask readback"),
+                size: wgpu::Extent3d {
+                    width: 320,
+                    height: 240,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: if srgb_texture {
+                    wgpu::TextureFormat::Rgba8UnormSrgb
+                } else {
+                    format
+                },
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[format],
+            });
+            let view = target.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(format),
+                ..Default::default()
+            });
+            let mut vertices = Vec::new();
+            for quad in quads {
+                append_quad(&mut vertices, quad);
+            }
+            let buffer = create_vertex_buffer(&device, vertices.len().max(1));
+            queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&vertices));
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                for (blend, range) in draw_batches(quads) {
+                    pass.set_pipeline(if blend == QuadBlend::Multiply {
+                        &multiply
+                    } else {
+                        &alpha
+                    });
+                    pass.draw(range, 0..1);
+                }
+            }
+            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: 320 * 240 * 4,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(
+                target.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &readback,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(1280),
+                        rows_per_image: Some(240),
+                    },
+                },
+                target.size(),
+            );
+            queue.submit(Some(encoder.finish()));
+            let (sender, receiver) = std::sync::mpsc::channel();
+            readback
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    sender.send(result).unwrap();
+                });
+            device.poll(wgpu::Maintain::Wait);
+            receiver
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .unwrap()
+                .unwrap();
+            readback.slice(..).get_mapped_range().to_vec()
+        })
+    }
 
     #[test]
     fn letterbox_preserves_aspect_ratio() {
@@ -448,6 +712,7 @@ mod tests {
             rotation: std::f32::consts::FRAC_PI_2,
             uv: [0.2, 0.3, 0.1, 0.15],
             color: [0.5, 0.75, 1.0, 0.25],
+            blend: QuadBlend::Alpha,
         };
         let mut vertices = Vec::new();
         append_quad(&mut vertices, &quad);

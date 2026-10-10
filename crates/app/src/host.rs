@@ -96,7 +96,11 @@ impl HostTiming {
         step
     }
     fn alpha(&self) -> f64 {
-        if self.history_ready { self.alpha } else { 1. }
+        if self.history_ready {
+            self.alpha
+        } else {
+            1.
+        }
     }
 }
 
@@ -1502,14 +1506,32 @@ fn test_snapshot(
     } else {
         screen_pos.y
     };
+    let flares: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|entity| entity.alive && spelunky_core::catalog::is_a(&entity.object, "oFlare"))
+        .map(|entity| {
+            serde_json::json!({
+                "id": entity.id, "x": entity.pos.x, "y": entity.pos.y,
+                "dist_to_player": entity.data.get("dist_to_player"),
+            })
+        })
+        .collect();
     serde_json::json!({
         "screen": format!("{screen:?}"), "state": format!("{:?}", game.state),
         "tick": game.tick, "levelTick": game.level_tick, "alpha": alpha,
+        "seed": game.seed.to_string(),
         "deathTicks": game.data.get("death_ticks").copied().unwrap_or(0.),
         "money": player.money,
+        "darkness": game.data.get("darkness"),
+        "darkness_lerp": game.data.get("darkness_lerp"),
+        "flares": flares,
+        "lighting": scene::lighting_diagnostics(game, alpha),
         "world": {
             "name": game.world.name, "width": game.world.width, "height": game.world.height,
             "level": game.world.level, "entityCount": game.world.entities.len(),
+            "dark": game.world.dark,
         },
         "player": {
             "x": player.pos.x, "y": player.pos.y,
@@ -1518,6 +1540,7 @@ fn test_snapshot(
             "grounded": player.grounded, "sprite": player.sprite,
             "health": player.health, "stun": player.stun, "invincible": player.invincible,
             "bombs": player.bombs, "ropes": player.ropes,
+            "dist_to_nearest_light_source": player.data.get("dist_to_nearest_light_source"),
         },
         "rendered": { "x": rendered.x, "y": rendered.y, "screenX": screen_x, "screenY": screen_y },
         "camera": {
@@ -2029,6 +2052,7 @@ mod tests {
         };
         let snapshot = test_snapshot(Screen::Playing, Some(&game), &timing, false);
         assert_eq!(snapshot["screen"], "Playing");
+        assert_eq!(snapshot["seed"], "42");
         assert_eq!(snapshot["player"]["x"], 100.);
         assert_eq!(snapshot["rendered"]["x"], 97.);
         assert_eq!(snapshot["rendered"]["screenX"], 16.);
@@ -2051,6 +2075,47 @@ mod tests {
         let teleported = test_snapshot(Screen::Playing, Some(&game), &timing, false);
         assert_eq!(teleported["alpha"], 1.);
         assert_eq!(teleported["rendered"]["x"], teleported["player"]["x"]);
+    }
+    #[test]
+    fn browser_snapshot_preserves_source_darkness_and_cached_light_distances() {
+        let mut game = Game::tutorial(42, spelunky_core::RulesPreset::Classic);
+        game.world.dark = true;
+        game.data.insert("darkness".into(), -0.3);
+        game.data.insert("darkness_lerp".into(), 0.7);
+        game.player
+            .data
+            .insert("dist_to_nearest_light_source".into(), 37.);
+        let flare = game
+            .world
+            .spawn("oFlare", spelunky_core::Vec2::new(96., 96.));
+        game.world
+            .entity_mut(flare)
+            .unwrap()
+            .data
+            .insert("dist_to_player".into(), 18.);
+        let hash = game.state_hash();
+        let snapshot = test_snapshot(Screen::Playing, Some(&game), &HostTiming::default(), false);
+        assert_eq!(snapshot["world"]["dark"], true);
+        assert_eq!(snapshot["darkness"], -0.3);
+        assert_eq!(snapshot["darkness_lerp"], 0.7);
+        assert_eq!(snapshot["player"]["dist_to_nearest_light_source"], 37.);
+        assert_eq!(snapshot["flares"][0]["id"], flare);
+        assert_eq!(snapshot["flares"][0]["dist_to_player"], 18.);
+        assert_eq!(
+            snapshot["lighting"]["final_tint_rgb"],
+            serde_json::json!([76, 77, 0])
+        );
+        assert_eq!(snapshot["lighting"]["circles"][0]["x"], game.player.pos.x);
+        assert_eq!(snapshot["lighting"]["circles"][0]["radius"], 115.2);
+        assert_eq!(
+            snapshot["lighting"]["red_lamp_distances"],
+            serde_json::json!([null, null])
+        );
+        assert_eq!(game.state_hash(), hash);
+        game.data.remove("darkness");
+        let uninitialized =
+            test_snapshot(Screen::Playing, Some(&game), &HostTiming::default(), false);
+        assert!(uninitialized["darkness"].is_null());
     }
     #[test]
     fn reset_keeps_current_snapshot_until_a_new_tick_at_high_refresh() {
@@ -2125,17 +2190,14 @@ mod tests {
             game.step(&InputFrame::default());
             assert_eq!(game.tick, lethal_tick + elapsed);
             assert_eq!(death_reveal_ready(&game), elapsed >= 100);
-            assert!(
-                !game
-                    .events
-                    .iter()
-                    .any(|event| matches!(event, GameEvent::Died))
-            );
-            assert!(
-                !game.events.iter().any(
-                    |event| matches!(event, GameEvent::Sound { name, .. } if name == "sndDie")
-                )
-            );
+            assert!(!game
+                .events
+                .iter()
+                .any(|event| matches!(event, GameEvent::Died)));
+            assert!(!game
+                .events
+                .iter()
+                .any(|event| matches!(event, GameEvent::Sound { name, .. } if name == "sndDie")));
             if elapsed == 5 {
                 assert_ne!(game.player.pos, corpse_start);
                 assert_ne!(game.world.entity(rock).unwrap().pos, rock_start);

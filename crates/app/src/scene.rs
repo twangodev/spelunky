@@ -2,7 +2,10 @@
 use spelunky_core::{Area, Entity, Game, PlayerState, TICK_RATE, Vec2, catalog};
 use std::collections::BTreeMap;
 
-use crate::{atlas::Atlas, renderer::DrawQuad};
+use crate::{
+    atlas::Atlas,
+    renderer::{DrawQuad, QuadBlend},
+};
 
 const WHITE: [f32; 4] = [1.0; 4];
 
@@ -437,19 +440,32 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
             text(&mut layer, atlas, message, text_x, text_y, 1.0, WHITE);
         }
         if entity.object == "oGenerationDecoration" {
-            let region = if name == "bgAlienShip" {
-                atlas.region(
-                    name,
-                    [
-                        if entity.value("variant") > 0.0 { 32 } else { 0 },
-                        0,
-                        32,
-                        64,
-                    ],
-                )
-            } else {
-                atlas.sprite(name, 0.0)
-            };
+            let region =
+                if entity.data.contains_key("source_x") || entity.data.contains_key("source_y") {
+                    let crop = [
+                        entity.value("source_x"),
+                        entity.value("source_y"),
+                        entity.data.get("source_w").copied().unwrap_or(16.0),
+                        entity.data.get("source_h").copied().unwrap_or(16.0),
+                    ];
+                    if crop.iter().all(|value| value.is_finite() && *value >= 0.0) {
+                        atlas.region(name, crop.map(|value| value as u32))
+                    } else {
+                        None
+                    }
+                } else if name == "bgAlienShip" {
+                    atlas.region(
+                        name,
+                        [
+                            if entity.value("variant") > 0.0 { 32 } else { 0 },
+                            0,
+                            32,
+                            64,
+                        ],
+                    )
+                } else {
+                    atlas.sprite(name, 0.0)
+                };
             if let Some(frame) = region {
                 layer.push(DrawQuad {
                     rect: [x, y, frame.size[0], frame.size[1]],
@@ -463,6 +479,8 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
                     .copied()
                     .unwrap_or(if name == "bgKaliBody" {
                         10001.0
+                    } else if name == "bgLadyXoc" {
+                        99.0
                     } else if name == "bgDiceSign" {
                         9004.0
                     } else {
@@ -647,7 +665,7 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
     for (_, _, layer) in layers {
         quads.extend(layer);
     }
-    if game.world.dark {
+    if darkness_enabled(game) {
         darkness(&mut quads, game, camera, alpha);
     }
     hud(&mut quads, game, camera, atlas);
@@ -695,33 +713,30 @@ struct Light {
     tint: [f64; 3],
 }
 
+fn darkness_enabled(game: &Game) -> bool {
+    game.world.dark
+        && game.player.state != PlayerState::Dead
+        && game.state != spelunky_core::RunState::Dead
+}
+
 fn scene_lights(game: &Game, alpha: f64) -> Vec<Light> {
     let player = interpolated(game.player.previous_pos, game.player.pos, alpha);
     let darkness = game
         .data
         .get("darkness")
         .copied()
-        .unwrap_or(1.0)
-        .clamp(0.0, 1.0);
-    let mut tint = [1.0; 3];
-    for entity in game.world.entities.iter().filter(|entity| entity.alive) {
-        let range = entity.data.get("red_light_range").copied().unwrap_or(
-            if matches!(entity.object.as_str(), "oLampRed" | "oLampRedItem") {
-                96.0
-            } else {
-                0.0
-            },
-        );
-        let distance = player.distance(entity_position(game, entity, alpha));
-        if range > 0.0 && distance <= range {
-            // oScreen's red lamp changes the nearby player's light color;
-            // it does not create a separate white light circle.
-            let source_distance = distance / range * 96.0;
-            tint = [
-                (255.0 - source_distance) / 255.0,
-                (24.0 + source_distance) / 255.0,
-                (24.0 + source_distance) / 255.0,
-            ];
+        .filter(|value| value.is_finite())
+        .unwrap_or(1.0);
+    // GM8 packs rounded components by addition before extracting RGB bytes.
+    // Negative explosion darkness therefore carries overflow into other
+    // channels instead of clamping to white.
+    let channel = 255.0 - 255.0 * darkness;
+    let mut tint = source_mask_rgb(channel, channel, 255.0);
+    // Source selects the nearest static red lamp, then the nearest carried-lamp
+    // class. The latter overrides the former; instance creation order does not.
+    for distance in red_lamp_distances(game).into_iter().flatten() {
+        if distance <= 96.0 {
+            tint = source_mask_rgb(255.0 - distance, 24.0 + distance, 24.0 + distance);
         }
     }
     let mut lights = vec![Light {
@@ -730,87 +745,181 @@ fn scene_lights(game: &Game, alpha: f64) -> Vec<Light> {
         tint,
     }];
     for entity in game.world.entities.iter().filter(|entity| entity.alive) {
-        if matches!(entity.object.as_str(), "oLampRed" | "oLampRedItem") {
+        let Some((radius, dx, dy)) = source_light(&entity.object) else {
             continue;
-        }
-        let default_radius = match entity.object.as_str() {
-            "oLamp" | "oLampItem" | "oFlare" | "oFlareCrate" => 96.0,
-            "oArrowTrapLeftLit" | "oArrowTrapRightLit" => 32.0,
-            "oTorch" | "oExplosion" => 64.0,
-            _ => 0.0,
         };
-        let radius = entity
-            .data
-            .get("light_radius")
-            .copied()
-            .unwrap_or(default_radius);
+        let radius = entity.data.get("light_radius").copied().unwrap_or(radius);
         if !radius.is_finite() || radius <= 0.0 {
             continue;
         }
         let mut position = entity_position(game, entity, alpha);
-        let static_lamp = matches!(
-            entity.object.as_str(),
-            "oLamp" | "oArrowTrapLeftLit" | "oArrowTrapRightLit"
-        );
-        position.x += entity
-            .data
-            .get("light_offset_x")
-            .copied()
-            .unwrap_or(if static_lamp { 8.0 } else { 0.0 });
-        position.y += entity
-            .data
-            .get("light_offset_y")
-            .copied()
-            .unwrap_or(if static_lamp {
-                8.0
-            } else if entity.object == "oLampItem" {
-                -4.0
-            } else {
-                0.0
-            });
+        position.x += entity.data.get("light_offset_x").copied().unwrap_or(dx);
+        position.y += entity.data.get("light_offset_y").copied().unwrap_or(dy);
         lights.push(Light {
             position,
             radius,
-            tint: [1.0; 3],
+            tint,
+        });
+    }
+    for (index, tile) in game.world.tiles.iter().enumerate() {
+        let Some((radius, dx, dy)) = source_light(&tile.object) else {
+            continue;
+        };
+        let position = Vec2::new(
+            (index % game.world.width.max(1)) as f64 * 16.0 + dx,
+            (index / game.world.width.max(1)) as f64 * 16.0 + dy,
+        );
+        lights.push(Light {
+            position,
+            radius,
+            tint,
         });
     }
     lights
 }
 
-fn illumination(lights: &[Light], point: Vec2) -> [f64; 3] {
-    let mut result = [0.0_f64; 3];
-    for light in lights {
-        let strength = (1.0 - point.distance(light.position) / light.radius).clamp(0.0, 1.0);
-        for (channel, tint) in result.iter_mut().zip(light.tint) {
-            *channel = channel.max(strength * tint);
-        }
+fn red_lamp_distances(game: &Game) -> [Option<f64>; 2] {
+    let player_mask = game.player.sprite_bounds();
+    ["oLampRed", "oLampRedItem"].map(|object| {
+        game.world
+            .entities
+            .iter()
+            .filter(|e| e.alive && e.object == object)
+            .map(|e| sprite_distance(player_mask, e.sprite_bounds()))
+            .chain(
+                game.world
+                    .tiles
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, tile)| tile.object == object)
+                    .map(|(index, _)| {
+                        sprite_distance(
+                            player_mask,
+                            game.world.tile_bounds(
+                                (index % game.world.width.max(1)) as i32,
+                                (index / game.world.width.max(1)) as i32,
+                            ),
+                        )
+                    }),
+            )
+            .min_by(f64::total_cmp)
+    })
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+pub(crate) fn lighting_diagnostics(game: &Game, alpha: f64) -> serde_json::Value {
+    let lights = scene_lights(game, alpha);
+    serde_json::json!({
+        "active": darkness_enabled(game),
+        "final_tint_rgb": lights[0].tint.map(|channel| (channel * 255.0).round() as u8),
+        "final_tint": lights[0].tint,
+        "red_lamp_distances": red_lamp_distances(game),
+        "circles": lights.iter().map(|light| serde_json::json!({
+            "x": light.position.x, "y": light.position.y, "radius": light.radius,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn source_mask_rgb(red: f64, green: f64, blue: f64) -> [f64; 3] {
+    // Canonical Spelunky.exe initializes x87 rounding to nearest-even.
+    // make_color_rgb at VA 0x55359c rounds to signed 64-bit integers, then
+    // adds r + 256*g + 65536*b without per-channel masks. draw_set_color's
+    // VA 0x49c813..0x49c833 extracts the three low bytes; alpha is separate.
+    // Source mask inputs are finite and small; special/out-of-i64 inputs are
+    // outside this narrowly reproduced runtime contract.
+    let packed = (red.round_ties_even() as i64)
+        .wrapping_add((green.round_ties_even() as i64).wrapping_mul(256))
+        .wrapping_add((blue.round_ties_even() as i64).wrapping_mul(65536));
+    [0, 8, 16].map(|shift| ((packed >> shift) & 255) as f64 / 255.0)
+}
+
+fn sprite_distance(a: spelunky_core::Rect, b: spelunky_core::Rect) -> f64 {
+    if !a.is_valid() || !b.is_valid() {
+        return f64::INFINITY;
     }
-    result
+    let x = (a.x - (b.x + b.w - 1.0))
+        .max(b.x - (a.x + a.w - 1.0))
+        .max(0.0);
+    let y = (a.y - (b.y + b.h - 1.0))
+        .max(b.y - (a.y + a.h - 1.0))
+        .max(0.0);
+    x.hypot(y)
+}
+
+fn source_light(object: &str) -> Option<(f64, f64, f64)> {
+    Some(match object {
+        "oFlare" | "oFlareCrate" | "oExplosion" => (96.0, 0.0, 0.0),
+        // oScreen's `with oLamp` includes its red-lamp child. The carried red
+        // lamp has oItem as parent and therefore supplies no separate circle.
+        "oLamp" | "oLampRed" => (96.0, 8.0, 8.0),
+        "oLampItem" => (96.0, 0.0, -4.0),
+        "oArrowTrapLeftLit" | "oArrowTrapRightLit" | "oTikiTorch" | "oFireFrog"
+        | "oSpearTrapLit" | "oSmashTrapLit" | "oLava" => (32.0, 8.0, 8.0),
+        "oScarab" => (16.0, 8.0, 8.0),
+        "oGhost" => (64.0, 16.0, 16.0),
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+fn illumination(lights: &[Light], point: Vec2) -> [f64; 3] {
+    lights
+        .iter()
+        .find(|light| light.position.distance(point) <= light.radius)
+        .map_or([0.0; 3], |light| light.tint)
 }
 
 fn darkness(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, alpha: f64) {
     let lights = scene_lights(game, alpha);
-    // Source light radii/colors with a cheap soft falloff. Exact GameMaker
-    // surface blending remains a separate visual parity task.
-    for y in (0..240).step_by(8) {
-        for x in (0..320).step_by(8) {
-            let point = Vec2::new(camera.x + x as f64 + 4.0, camera.y + y as f64 + 4.0);
-            let [red, green, blue] = illumination(&lights, point);
-            let light = red.max(green).max(blue);
-            let bounds = [x as f32, y as f32, 8.0, 8.0];
-            rect(
-                quads,
-                bounds,
-                [0.0, 0.0, 0.0, (0.96 * (1.0 - light)) as f32],
-            );
-            if red > green {
-                rect(
-                    quads,
-                    bounds,
-                    [0.65, 0.0, 0.0, ((red - green) * 0.65) as f32],
-                );
+    let tint = lights[0].tint.map(|channel| channel as f32);
+    let mut intervals: Vec<(i32, i32)> = Vec::with_capacity(lights.len());
+    // oScreen builds one colored union of filled circles, then multiplies that
+    // mask into the scene. Intersections must not multiply the scene twice.
+    // Scanline runs retain logical-pixel edges without an offscreen framebuffer
+    // or an arbitrary GPU light-count limit. GM8's polygon edge rasterization
+    // has not been verified; these use analytic circles at pixel centers.
+    for y in 0..240 {
+        intervals.clear();
+        for light in &lights {
+            let dy = camera.y + f64::from(y) + 0.5 - light.position.y;
+            if dy.abs() > light.radius {
+                continue;
+            }
+            let half = (light.radius * light.radius - dy * dy).sqrt();
+            let center = light.position.x - camera.x;
+            let start = (center - half - 0.5).ceil().clamp(0.0, 320.0) as i32;
+            let end = ((center + half - 0.5).floor() + 1.0).clamp(0.0, 320.0) as i32;
+            if start < end {
+                intervals.push((start, end));
             }
         }
+        intervals.sort_unstable();
+        let mut cursor = 0;
+        let mut active: Option<(i32, i32)> = None;
+        for (start, end) in intervals.iter().copied().chain(std::iter::once((321, 321))) {
+            if let Some((left, right)) = active {
+                if start <= right {
+                    active = Some((left, right.max(end)));
+                    continue;
+                }
+                mask_run(quads, cursor, left, y, [0.0; 3]);
+                mask_run(quads, left, right, y, tint);
+                cursor = right;
+            }
+            active = (start < 320).then_some((start, end));
+        }
+        mask_run(quads, cursor, 320, y, [0.0; 3]);
+    }
+}
+
+fn mask_run(quads: &mut Vec<DrawQuad>, left: i32, right: i32, y: i32, color: [f32; 3]) {
+    if right > left {
+        quads.push(DrawQuad {
+            rect: [left as f32, y as f32, (right - left) as f32, 1.0],
+            color: [color[0], color[1], color[2], 1.0],
+            blend: QuadBlend::Multiply,
+            ..DrawQuad::default()
+        });
     }
 }
 
@@ -1137,6 +1246,262 @@ fn hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas) {
 mod tests {
     use super::*;
     use spelunky_core::RulesPreset;
+
+    #[test]
+    fn darkness_mask_covers_every_pixel_once_with_a_flat_union_and_exact_black_outside() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.player.pos = Vec2::new(80.0, 120.0);
+        game.player.previous_pos = game.player.pos;
+        game.data.insert("darkness".into(), 0.5);
+        game.world.spawn("oLamp", Vec2::new(96.0, 112.0));
+        let mut quads = Vec::new();
+        darkness(&mut quads, &game, Vec2::default(), 1.0);
+        let mut coverage = vec![0; 320 * 240];
+        let mut colors = vec![[0.0; 4]; 320 * 240];
+        for quad in &quads {
+            assert_eq!(quad.blend, QuadBlend::Multiply);
+            assert_eq!(quad.rect[3], 1.0);
+            for x in quad.rect[0] as usize..(quad.rect[0] + quad.rect[2]) as usize {
+                let index = quad.rect[1] as usize * 320 + x;
+                coverage[index] += 1;
+                colors[index] = quad.color;
+            }
+        }
+        assert!(
+            coverage.iter().all(|count| *count == 1),
+            "overlap must multiply only once"
+        );
+        let tint = [128.0 / 255.0, 128.0 / 255.0, 1.0, 1.0];
+        assert_eq!(colors[120 * 320 + 80], tint);
+        assert_eq!(colors[120 * 320 + 180], tint);
+        assert_eq!(colors[220 * 320 + 300], [0.0, 0.0, 0.0, 1.0]);
+        assert!(
+            quads.len() < 1200,
+            "single lamp needs fewer quads than the old 8px overlay"
+        );
+    }
+
+    #[test]
+    fn source_mask_rgb_rounds_to_even_and_adds_overflow_before_extracting_bytes() {
+        assert_eq!(
+            source_mask_rgb(127.5, 178.5, 255.0),
+            [128.0 / 255.0, 178.0 / 255.0, 1.0]
+        );
+        assert_eq!(
+            source_mask_rgb(331.5, 331.5, 255.0),
+            [76.0 / 255.0, 77.0 / 255.0, 0.0]
+        );
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    #[ignore = "requires a native or software GPU; run explicitly for renderer acceptance"]
+    fn gpu_darkness_multiplies_rgb_bytes_once_and_preserves_hud_on_linear_and_srgb_targets() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.player.pos = Vec2::new(80.0, 120.0);
+        game.player.previous_pos = game.player.pos;
+        game.world.spawn("oLamp", Vec2::new(96.0, 112.0));
+        for (level_darkness, lit_pixel) in [(0.5, [102, 51, 51, 255]), (-0.3, [61, 31, 0, 255])] {
+            game.data.insert("darkness".into(), level_darkness);
+            let mut quads = vec![DrawQuad {
+                rect: [0.0, 0.0, 320.0, 240.0],
+                color: [0.8, 0.4, 0.2, 1.0],
+                ..Default::default()
+            }];
+            darkness(&mut quads, &game, Vec2::default(), 1.0);
+            rect(&mut quads, [280.0, 8.0, 16.0, 16.0], [1.0, 0.5, 0.0, 1.0]);
+            for srgb in [false, true] {
+                let pixels = crate::renderer::tests::gpu_pixels(&quads, srgb);
+                for (x, y, expected) in [
+                    (80, 120, lit_pixel),
+                    (180, 120, lit_pixel),
+                    (300, 220, [0, 0, 0, 255]),
+                    (288, 16, [255, 128, 0, 255]),
+                ] {
+                    let actual = &pixels[(y * 320 + x) * 4..(y * 320 + x) * 4 + 4];
+                    assert!(
+                        actual
+                            .iter()
+                            .zip(expected)
+                            .all(|(a, b)| (i32::from(*a) - b).abs() <= 1),
+                        "darkness={level_darkness}, target sRGB={srgb}, pixel({x},{y}): {actual:?} expected{expected:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn source_emitter_families_and_authored_lava_tiles_supply_their_original_circles() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        for (index, object) in [
+            "oGhost",
+            "oScarab",
+            "oFireFrog",
+            "oSpearTrapLit",
+            "oSmashTrapLit",
+            "oExplosion",
+            "oFlare",
+            "oTikiTorch",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let position = Vec2::new(40.0 + index as f64 * 20.0, 100.0);
+            game.world.spawn(object, position);
+        }
+        game.world.set_tile(10, 8, "oLava");
+        let lights = scene_lights(&game, 1.0);
+        for (position, radius) in [
+            (Vec2::new(56.0, 116.0), 64.0),
+            (Vec2::new(68.0, 108.0), 16.0),
+            (Vec2::new(88.0, 108.0), 32.0),
+            (Vec2::new(108.0, 108.0), 32.0),
+            (Vec2::new(128.0, 108.0), 32.0),
+            (Vec2::new(140.0, 100.0), 96.0),
+            (Vec2::new(160.0, 100.0), 96.0),
+            (Vec2::new(188.0, 108.0), 32.0),
+            (Vec2::new(168.0, 136.0), 32.0),
+        ] {
+            assert!(
+                lights
+                    .iter()
+                    .any(|light| light.position == position && light.radius == radius),
+                "missing source emitter at{position:?}"
+            );
+        }
+        assert!(lights.iter().all(|light| light.tint == lights[0].tint));
+    }
+
+    #[test]
+    fn game_step_updates_player_circle_for_crown_near_lamps_and_throwable_flares() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world.dark = true;
+        game.player.pos = Vec2::new(80.0, 120.0);
+        game.player.previous_pos = game.player.pos;
+        game.step(&spelunky_core::InputFrame::default());
+        assert!((scene_lights(&game, 1.0)[0].radius - 38.4).abs() < 1e-9);
+        game.player.equipment.insert("Crown".into());
+        game.step(&spelunky_core::InputFrame::default());
+        assert_eq!(scene_lights(&game, 1.0)[0].radius, 96.0);
+        assert_eq!(scene_lights(&game, 1.0)[0].tint, [1.0; 3]);
+        game.player.equipment.remove("Crown");
+        let lamp = game.world.spawn("oLamp", game.player.pos);
+        game.step(&spelunky_core::InputFrame::default());
+        assert_eq!(
+            scene_lights(&game, 1.0)[0].radius,
+            96.0,
+            "nearby lamp expands player light"
+        );
+        game.world.entity_mut(lamp).unwrap().alive = false;
+        let flare = game.world.spawn("oFlare", Vec2::new(200.0, 120.0));
+        game.step(&spelunky_core::InputFrame::default());
+        let position = game.world.entity(flare).unwrap().pos;
+        assert!(
+            scene_lights(&game, 1.0)
+                .iter()
+                .any(|light| light.position == position && light.radius == 96.0),
+            "actual flare uses its source light radius after item update"
+        );
+    }
+
+    #[test]
+    fn explosion_flash_retains_negative_source_darkness_and_expanded_player_radius() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world.dark = true;
+        game.player.health = 20;
+        game.player.pos = Vec2::new(80.0, 120.0);
+        game.player.previous_pos = game.player.pos;
+        let id = game.world.spawn("oExplosion", game.player.pos);
+        spelunky_core::items::init_entity(game.world.entity_mut(id).unwrap());
+        game.world.entity_mut(id).unwrap().animation = 3.0;
+        game.step(&spelunky_core::InputFrame::default());
+        assert_eq!(game.data.get("darkness"), Some(&-0.3));
+        assert!((scene_lights(&game, 1.0)[0].radius - 115.2).abs() < 1e-9);
+        assert_eq!(
+            scene_lights(&game, 1.0)[0].tint,
+            [76.0 / 255.0, 77.0 / 255.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn latched_dead_players_are_not_obscured_by_darkness_even_after_kapala_healing() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world.dark = true;
+        assert!(
+            game_scene(&game, 1.0, false, &atlas)
+                .iter()
+                .any(|q| q.blend == QuadBlend::Multiply)
+        );
+        game.state = spelunky_core::RunState::Dead;
+        game.player.state = PlayerState::Dead;
+        game.player.health = 1;
+        assert!(
+            !game_scene(&game, 1.0, false, &atlas)
+                .iter()
+                .any(|q| q.blend == QuadBlend::Multiply)
+        );
+    }
+
+    #[test]
+    fn generated_xoc_mural_draws_thirty_cropped_fragments_above_matching_blocks() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let flags = std::collections::BTreeSet::from([
+            "city_of_gold".into(),
+            "murderer".into(),
+            "character_damsel".into(),
+        ]);
+        game.world =
+            spelunky_core::generation::generate(&mut spelunky_core::Rng::new(0), 13, &flags);
+        let fragments: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|entity| entity.sprite == "bgLadyXoc")
+            .cloned()
+            .collect();
+        assert_eq!(fragments.len(), 30, "source 5-by-6 mural");
+        game.camera = Vec2::new(fragments[0].pos.x - 32.0, fragments[0].pos.y - 32.0);
+        game.previous_camera = game.camera;
+        let quads = game_scene(&game, 1.0, false, &atlas);
+        for fragment in fragments {
+            let frame = atlas
+                .region(
+                    "bgLadyXoc",
+                    [
+                        fragment.value("source_x") as u32,
+                        fragment.value("source_y") as u32,
+                        16,
+                        16,
+                    ],
+                )
+                .unwrap();
+            let rect = [
+                (fragment.pos.x - game.camera.x) as f32,
+                (fragment.pos.y - game.camera.y) as f32,
+                16.0,
+                16.0,
+            ];
+            let mural = quads
+                .iter()
+                .position(|q| q.uv == frame.uv && q.rect == rect)
+                .expect("one original mural segment");
+            let block_uv = atlas
+                .sprite(catalog::sprite("oXocBlock").unwrap(), 0.0)
+                .unwrap()
+                .uv;
+            let block = quads
+                .iter()
+                .position(|q| q.uv == block_uv && q.rect[..2] == rect[..2])
+                .unwrap();
+            assert!(
+                mural > block,
+                "source mural depth99 must cover depth100 block"
+            );
+        }
+    }
 
     #[test]
     fn authored_title_hint_uses_source_animation_and_strict_world_proximity_prompt() {
@@ -1822,39 +2187,44 @@ mod tests {
                 .iter()
                 .any(|light| light.position == Vec2::new(153.0, 146.0) && light.radius == 96.0)
         );
-        assert_eq!(illumination(&lights, Vec2::new(153.0, 146.0)), [1.0; 3]);
+        assert_eq!(
+            illumination(&lights, Vec2::new(153.0, 146.0)),
+            lights[0].tint
+        );
     }
 
     #[test]
-    fn red_lamp_range_tints_player_light_without_emitting_white_circle() {
+    fn red_lamp_range_uses_nearest_class_and_tints_every_circle() {
         let mut game = Game::shell(1, RulesPreset::Classic);
+        game.data.insert("darkness".into(), 0.9);
         game.player.pos = Vec2::new(100.0, 100.0);
         game.player.previous_pos = game.player.pos;
-        let id = game.world.spawn("oLampRedItem", Vec2::new(110.0, 100.0));
-        game.world
-            .entity_mut(id)
-            .unwrap()
-            .data
-            .insert("red_light_range".into(), 8.0);
-        assert_eq!(scene_lights(&game, 1.0)[0].tint, [1.0; 3]);
-        game.world
-            .entity_mut(id)
-            .unwrap()
-            .data
-            .insert("red_light_range".into(), 16.0);
+        let item = game.world.spawn("oLampRedItem", Vec2::new(400.0, 400.0));
+        let initial = scene_lights(&game, 1.0)[0].tint;
+        assert_eq!(initial[0], 26.0 / 255.0);
+        assert_eq!(initial[2], 1.0);
+        game.world.spawn("oLampRed", Vec2::new(104.0, 100.0));
+        // A far lamp created later must not suppress the nearer static lamp.
+        game.world.spawn("oLampRed", Vec2::new(400.0, 400.0));
+        game.world.spawn("oLamp", Vec2::new(120.0, 120.0));
+        let static_tint = scene_lights(&game, 1.0)[0].tint;
+        assert!(static_tint[0] > static_tint[1]);
+        game.world.entity_mut(item).unwrap().pos = Vec2::new(150.0, 100.0);
+        let distance = sprite_distance(
+            game.player.sprite_bounds(),
+            game.world.entity(item).unwrap().sprite_bounds(),
+        );
         let lights = scene_lights(&game, 1.0);
-        assert_eq!(lights.len(), 1);
-        assert!(lights[0].tint[0] > lights[0].tint[1]);
-        let lamp = game.world.entity_mut(id).unwrap();
-        lamp.object = "oLampRed".into();
-        lamp.data.insert("light_radius".into(), 96.0);
-        assert_eq!(scene_lights(&game, 1.0).len(), 1);
-        let mut quads = Vec::new();
-        darkness(&mut quads, &game, Vec2::default(), 1.0);
-        assert!(
-            quads
-                .iter()
-                .any(|quad| quad.color[0] > 0.0 && quad.color[1] == 0.0 && quad.color[3] > 0.0)
+        let expected = source_mask_rgb(255.0 - distance, 24.0 + distance, 24.0 + distance);
+        assert_eq!(
+            lights.len(),
+            4,
+            "static red lamps inherit Lamp circles; carried red lamps only tint"
+        );
+        assert!(lights.iter().all(|light| light.tint == expected));
+        assert_ne!(
+            expected, static_tint,
+            "carried-lamp class overrides the static class"
         );
     }
 
