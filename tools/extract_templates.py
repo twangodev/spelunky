@@ -178,11 +178,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--reference", type=Path, default=Path("references/classic-1.1"))
     parser.add_argument("--output", type=Path, default=Path("assets/generation.json"))
+    parser.add_argument("--check", action="store_true", help="Verify generated data without writing")
     args = parser.parse_args()
     data = export(args.reference)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"Exported {sum(len(s['records']) for s in data['scripts'].values())} literals "
+    contents = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    if args.check:
+        if not args.output.exists() or args.output.read_text(encoding="utf-8") != contents:
+            raise SystemExit(f"{args.output} is out of date")
+    else:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(contents, encoding="utf-8")
+    print(f"{'Verified' if args.check else 'Exported'} {sum(len(s['records']) for s in data['scripts'].values())} literals "
           f"from {len(data['scripts'])} scripts and {len(data['title']['instances'])} title instances")
 
 

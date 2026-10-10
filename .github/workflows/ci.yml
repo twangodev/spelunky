@@ -1,0 +1,70 @@
+name: Rust and web
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  native:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+          components: rustfmt
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install Linux development libraries
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev
+      - name: Verify original assets
+        run: |
+          python3 tools/export_assets.py --verify
+          python3 tools/export_catalog.py --check
+          python3 tools/export_hub.py --check
+          python3 tools/extract_templates.py --check
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Test workspace
+        run: cargo test --workspace --locked
+      - name: Build Linux application
+        run: cargo build -p spelunky --release --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spelunky-linux-x86_64
+          path: |
+            target/release/spelunky
+            assets
+            COPYING.txt
+            README.md
+          if-no-files-found: error
+
+  web:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --version 0.15.0 --locked
+      - name: Check Wasm application
+        run: cargo check -p spelunky --lib --target wasm32-unknown-unknown --locked
+      - name: Build static web bundle
+        run: ./tools/build_web.sh --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spelunky-web
+          path: web
+          if-no-files-found: error
