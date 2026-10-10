@@ -1,0 +1,990 @@
+{
+  "version": 1,
+  "source": "references/classic-1.1",
+  "events": [
+    {
+      "owner": "oPlayer1",
+      "owner_id": 319,
+      "target": "oBlood",
+      "target_id": 370,
+      "source": "Objects/oPlayer1.events/Collision with oBlood.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oCaveman",
+      "owner_id": 325,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Enemies/oCaveman.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oCaveman",
+      "owner_id": 325,
+      "target": "oWhip",
+      "target_id": 576,
+      "source": "Objects/Enemies/oCaveman.events/Collision with oWhip.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oCaveman",
+      "owner_id": 325,
+      "target": "oWhipPre",
+      "target_id": 596,
+      "source": "Objects/Enemies/oCaveman.events/Collision with oWhipPre.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oEnemy",
+      "owner_id": 358,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Basis/oEnemy.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oEnemy",
+      "owner_id": 358,
+      "target": "oWhip",
+      "target_id": 576,
+      "source": "Objects/Basis/oEnemy.events/Collision with oWhip.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oEnemy",
+      "owner_id": 358,
+      "target": "oWhipPre",
+      "target_id": 596,
+      "source": "Objects/Basis/oEnemy.events/Collision with oWhipPre.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oExplosion",
+      "owner_id": 391,
+      "target": "oSolid",
+      "target_id": 126,
+      "source": "Objects/Effects/oExplosion.events/Collision with oSolid.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oExplosion",
+      "owner_id": 391,
+      "target": "oEnemy",
+      "target_id": 358,
+      "source": "Objects/Effects/oExplosion.events/Collision with oEnemy.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oExplosion",
+      "owner_id": 391,
+      "target": "oItem",
+      "target_id": 451,
+      "source": "Objects/Effects/oExplosion.events/Collision with oItem.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oExplosion",
+      "owner_id": 391,
+      "target": "oBoulder",
+      "target_id": 521,
+      "source": "Objects/Effects/oExplosion.events/Collision with oBoulder.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oExplosion",
+      "owner_id": 391,
+      "target": "oDamsel",
+      "target_id": 556,
+      "source": "Objects/Effects/oExplosion.events/Collision with oDamsel.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oExplosion",
+      "owner_id": 391,
+      "target": "oWeb",
+      "target_id": 751,
+      "source": "Objects/Effects/oExplosion.events/Collision with oWeb.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oExplosion",
+      "owner_id": 391,
+      "target": "oBarrierEmitter",
+      "target_id": 762,
+      "source": "Objects/Effects/oExplosion.events/Collision with oBarrierEmitter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oFlame",
+      "owner_id": 456,
+      "target": "oWater",
+      "target_id": 304,
+      "source": "Objects/Effects/oFlame.events/Collision with oWater.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oRubyBig",
+      "owner_id": 484,
+      "target": "oGhost",
+      "target_id": 736,
+      "source": "Objects/Collectibles/oRubyBig.events/Collision with oGhost.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oSapphireBig",
+      "owner_id": 485,
+      "target": "oGhost",
+      "target_id": 736,
+      "source": "Objects/Collectibles/oSapphireBig.events/Collision with oGhost.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oEmeraldBig",
+      "owner_id": 486,
+      "target": "oGhost",
+      "target_id": 736,
+      "source": "Objects/Collectibles/oEmeraldBig.events/Collision with oGhost.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oDarkFall",
+      "owner_id": 516,
+      "target": "oSolid",
+      "target_id": 126,
+      "source": "Objects/Blocks/oDarkFall.events/Collision with oSolid.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oBoulder",
+      "owner_id": 521,
+      "target": "oSolid",
+      "target_id": 126,
+      "source": "Objects/Traps/oBoulder.events/Collision with oSolid.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oManTrap",
+      "owner_id": 532,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Enemies/oManTrap.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oManTrap",
+      "owner_id": 532,
+      "target": "oCaveman",
+      "target_id": 325,
+      "source": "Objects/Enemies/oManTrap.events/Collision with oCaveman.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oManTrap",
+      "owner_id": 532,
+      "target": "oDamsel",
+      "target_id": 556,
+      "source": "Objects/Enemies/oManTrap.events/Collision with oDamsel.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oManTrap",
+      "owner_id": 532,
+      "target": "oWhip",
+      "target_id": 576,
+      "source": "Objects/Enemies/oManTrap.events/Collision with oWhip.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oManTrap",
+      "owner_id": 532,
+      "target": "oWhipPre",
+      "target_id": 596,
+      "source": "Objects/Enemies/oManTrap.events/Collision with oWhipPre.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oManTrap",
+      "owner_id": 532,
+      "target": "oShopkeeper",
+      "target_id": 666,
+      "source": "Objects/Enemies/oManTrap.events/Collision with oShopkeeper.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oLaser",
+      "owner_id": 534,
+      "target": "oSolid",
+      "target_id": 126,
+      "source": "Objects/Effects/oLaser.events/Collision with oSolid.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oLaser",
+      "owner_id": 534,
+      "target": "oEnemy",
+      "target_id": 358,
+      "source": "Objects/Effects/oLaser.events/Collision with oEnemy.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oLaser",
+      "owner_id": 534,
+      "target": "oDamsel",
+      "target_id": 556,
+      "source": "Objects/Effects/oLaser.events/Collision with oDamsel.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oDamsel",
+      "owner_id": 556,
+      "target": "oWhip",
+      "target_id": 576,
+      "source": "Objects/Characters/oDamsel.events/Collision with oWhip.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oDamsel",
+      "owner_id": 556,
+      "target": "oWhipPre",
+      "target_id": 596,
+      "source": "Objects/Characters/oDamsel.events/Collision with oWhipPre.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oEnemySight",
+      "owner_id": 558,
+      "target": "oSolid",
+      "target_id": 126,
+      "source": "Objects/Enemies/oEnemySight.events/Collision with oSolid.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oEnemySight",
+      "owner_id": 558,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Enemies/oEnemySight.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oOlmecSlam",
+      "owner_id": 560,
+      "target": "oSolid",
+      "target_id": 126,
+      "source": "Objects/Enemies/oOlmecSlam.events/Collision with oSolid.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oYeti",
+      "owner_id": 572,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Enemies/oYeti.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oYeti",
+      "owner_id": 572,
+      "target": "oWhip",
+      "target_id": 576,
+      "source": "Objects/Enemies/oYeti.events/Collision with oWhip.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oYeti",
+      "owner_id": 572,
+      "target": "oWhipPre",
+      "target_id": 596,
+      "source": "Objects/Enemies/oYeti.events/Collision with oWhipPre.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oYellowBall",
+      "owner_id": 579,
+      "target": "oSolid",
+      "target_id": 126,
+      "source": "Objects/Effects/oYellowBall.events/Collision with oSolid.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oHawkman",
+      "owner_id": 588,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Enemies/oHawkman.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oHawkman",
+      "owner_id": 588,
+      "target": "oWhip",
+      "target_id": 576,
+      "source": "Objects/Enemies/oHawkman.events/Collision with oWhip.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oHawkman",
+      "owner_id": 588,
+      "target": "oWhipPre",
+      "target_id": 596,
+      "source": "Objects/Enemies/oHawkman.events/Collision with oWhipPre.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oEntranceCheck",
+      "owner_id": 625,
+      "target": "oSolid",
+      "target_id": 126,
+      "source": "Objects/Enemies/oEntranceCheck.events/Collision with oSolid.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oJar",
+      "owner_id": 635,
+      "target": "oWhip",
+      "target_id": 576,
+      "source": "Objects/Items/oJar.events/Collision with oWhip.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oJar",
+      "owner_id": 635,
+      "target": "oBullet",
+      "target_id": 669,
+      "source": "Objects/Items/oJar.events/Collision with oBullet.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oAlienEject",
+      "owner_id": 637,
+      "target": "oPlayer1",
+      "target_id": 319,
+      "source": "Objects/Enemies/oAlienEject.events/Collision with oPlayer1.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oAlienEject",
+      "owner_id": 637,
+      "target": "oWeb",
+      "target_id": 751,
+      "source": "Objects/Enemies/oAlienEject.events/Collision with oWeb.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oMagmaMan",
+      "owner_id": 648,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Enemies/oMagmaMan.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oMagmaMan",
+      "owner_id": 648,
+      "target": "oEnemy",
+      "target_id": 358,
+      "source": "Objects/Enemies/oMagmaMan.events/Collision with oEnemy.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oMagmaMan",
+      "owner_id": 648,
+      "target": "oBomb",
+      "target_id": 454,
+      "source": "Objects/Enemies/oMagmaMan.events/Collision with oBomb.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oMagmaMan",
+      "owner_id": 648,
+      "target": "oWhip",
+      "target_id": 576,
+      "source": "Objects/Enemies/oMagmaMan.events/Collision with oWhip.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oMagma",
+      "owner_id": 649,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Enemies/oMagma.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oMagma",
+      "owner_id": 649,
+      "target": "oWater",
+      "target_id": 304,
+      "source": "Objects/Enemies/oMagma.events/Collision with oWater.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oMagma",
+      "owner_id": 649,
+      "target": "oEnemy",
+      "target_id": 358,
+      "source": "Objects/Enemies/oMagma.events/Collision with oEnemy.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oAlienBoss",
+      "owner_id": 658,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Enemies/oAlienBoss.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oSkull",
+      "owner_id": 663,
+      "target": "oBullet",
+      "target_id": 669,
+      "source": "Objects/Items/oSkull.events/Collision with oBullet.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oPsychicWave",
+      "owner_id": 664,
+      "target": "oEnemy",
+      "target_id": 358,
+      "source": "Objects/Effects/oPsychicWave.events/Collision with oEnemy.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oPsychicWave",
+      "owner_id": 664,
+      "target": "oDamsel",
+      "target_id": 556,
+      "source": "Objects/Effects/oPsychicWave.events/Collision with oDamsel.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oShopkeeper",
+      "owner_id": 666,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Characters/oShopkeeper.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oShopkeeper",
+      "owner_id": 666,
+      "target": "oWhip",
+      "target_id": 576,
+      "source": "Objects/Characters/oShopkeeper.events/Collision with oWhip.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oShopkeeper",
+      "owner_id": 666,
+      "target": "oWhipPre",
+      "target_id": 596,
+      "source": "Objects/Characters/oShopkeeper.events/Collision with oWhipPre.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oShopkeeper",
+      "owner_id": 666,
+      "target": "oShotgun",
+      "target_id": 670,
+      "source": "Objects/Characters/oShopkeeper.events/Collision with oShotgun.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oBullet",
+      "owner_id": 669,
+      "target": "oSolid",
+      "target_id": 126,
+      "source": "Objects/Effects/oBullet.events/Collision with oSolid.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oBullet",
+      "owner_id": 669,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Effects/oBullet.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oBullet",
+      "owner_id": 669,
+      "target": "oEnemy",
+      "target_id": 358,
+      "source": "Objects/Effects/oBullet.events/Collision with oEnemy.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oBullet",
+      "owner_id": 669,
+      "target": "oDamsel",
+      "target_id": 556,
+      "source": "Objects/Effects/oBullet.events/Collision with oDamsel.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oParachute",
+      "owner_id": 703,
+      "target": "oItem",
+      "target_id": 451,
+      "source": "Objects/Items/oParachute.events/Collision with oItem.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oGhost",
+      "owner_id": 736,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Enemies/oGhost.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oGhost",
+      "owner_id": 736,
+      "target": "oWhip",
+      "target_id": 576,
+      "source": "Objects/Enemies/oGhost.events/Collision with oWhip.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oGiantSpider",
+      "owner_id": 749,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Enemies/oGiantSpider.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oGiantSpider",
+      "owner_id": 749,
+      "target": "oWhip",
+      "target_id": 576,
+      "source": "Objects/Enemies/oGiantSpider.events/Collision with oWhip.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oWebBall",
+      "owner_id": 750,
+      "target": "oSolid",
+      "target_id": 126,
+      "source": "Objects/Effects/oWebBall.events/Collision with oSolid.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oWebBall",
+      "owner_id": 750,
+      "target": "oWater",
+      "target_id": 304,
+      "source": "Objects/Effects/oWebBall.events/Collision with oWater.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oWebBall",
+      "owner_id": 750,
+      "target": "oEnemy",
+      "target_id": 358,
+      "source": "Objects/Effects/oWebBall.events/Collision with oEnemy.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oWebBall",
+      "owner_id": 750,
+      "target": "oItem",
+      "target_id": 451,
+      "source": "Objects/Effects/oWebBall.events/Collision with oItem.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oWebBall",
+      "owner_id": 750,
+      "target": "oWeb",
+      "target_id": 751,
+      "source": "Objects/Effects/oWebBall.events/Collision with oWeb.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oWeb",
+      "owner_id": 751,
+      "target": "oWater",
+      "target_id": 304,
+      "source": "Objects/Effects/oWeb.events/Collision with oWater.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oWeb",
+      "owner_id": 751,
+      "target": "oEnemy",
+      "target_id": 358,
+      "source": "Objects/Effects/oWeb.events/Collision with oEnemy.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oWeb",
+      "owner_id": 751,
+      "target": "oItem",
+      "target_id": 451,
+      "source": "Objects/Effects/oWeb.events/Collision with oItem.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oWeb",
+      "owner_id": 751,
+      "target": "oLaser",
+      "target_id": 534,
+      "source": "Objects/Effects/oWeb.events/Collision with oLaser.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oWeb",
+      "owner_id": 751,
+      "target": "oTreasure",
+      "target_id": 590,
+      "source": "Objects/Effects/oWeb.events/Collision with oTreasure.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oWeb",
+      "owner_id": 751,
+      "target": "oRubblePiece",
+      "target_id": 600,
+      "source": "Objects/Effects/oWeb.events/Collision with oRubblePiece.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oWeb",
+      "owner_id": 751,
+      "target": "oSlash",
+      "target_id": 706,
+      "source": "Objects/Effects/oWeb.events/Collision with oSlash.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oMsgSign",
+      "owner_id": 759,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Blocks/oMsgSign.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oBarrierEmitter",
+      "owner_id": 762,
+      "target": "oItem",
+      "target_id": 451,
+      "source": "Objects/Enemies/oBarrierEmitter.events/Collision with oItem.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oBarrierEmitter",
+      "owner_id": 762,
+      "target": "oBullet",
+      "target_id": 669,
+      "source": "Objects/Enemies/oBarrierEmitter.events/Collision with oBullet.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oBarrier",
+      "owner_id": 763,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Enemies/oBarrier.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oBarrier",
+      "owner_id": 763,
+      "target": "oItem",
+      "target_id": 451,
+      "source": "Objects/Enemies/oBarrier.events/Collision with oItem.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oBarrier",
+      "owner_id": 763,
+      "target": "oBullet",
+      "target_id": 669,
+      "source": "Objects/Enemies/oBarrier.events/Collision with oBullet.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oBarrier",
+      "owner_id": 763,
+      "target": "oWebBall",
+      "target_id": 750,
+      "source": "Objects/Enemies/oBarrier.events/Collision with oWebBall.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oTarget",
+      "owner_id": 771,
+      "target": "oArrow",
+      "target_id": 465,
+      "source": "Objects/Other/Title/oTarget.events/Collision with oArrow.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oScarab",
+      "owner_id": 772,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Enemies/oScarab.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oTombLord",
+      "owner_id": 775,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Enemies/oTombLord.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oTombLord",
+      "owner_id": 775,
+      "target": "oWhip",
+      "target_id": 576,
+      "source": "Objects/Enemies/oTombLord.events/Collision with oWhip.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oFly",
+      "owner_id": 776,
+      "target": "oSolid",
+      "target_id": 126,
+      "source": "Objects/Effects/oFly.events/Collision with oSolid.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oFly",
+      "owner_id": 776,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Effects/oFly.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oFly",
+      "owner_id": 776,
+      "target": "oEnemy",
+      "target_id": 358,
+      "source": "Objects/Effects/oFly.events/Collision with oEnemy.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oFly",
+      "owner_id": 776,
+      "target": "oDamsel",
+      "target_id": 556,
+      "source": "Objects/Effects/oFly.events/Collision with oDamsel.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oMonkey",
+      "owner_id": 778,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Enemies/oMonkey.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oMonkey",
+      "owner_id": 778,
+      "target": "oItem",
+      "target_id": 451,
+      "source": "Objects/Enemies/oMonkey.events/Collision with oItem.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oLockedChest",
+      "owner_id": 779,
+      "target": "oKey",
+      "target_id": 780,
+      "source": "Objects/Collectibles/oLockedChest.events/Collision with oKey.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oPsychicWaveP",
+      "owner_id": 792,
+      "target": "oEnemy",
+      "target_id": 358,
+      "source": "Objects/Effects/oPsychicWaveP.events/Collision with oEnemy.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oPsychicWaveP",
+      "owner_id": 792,
+      "target": "oDamsel",
+      "target_id": 556,
+      "source": "Objects/Effects/oPsychicWaveP.events/Collision with oDamsel.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oPsychicCreateP",
+      "owner_id": 793,
+      "target": "oSolid",
+      "target_id": 126,
+      "source": "Objects/Effects/oPsychicCreateP.events/Collision with oSolid.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oGoldDoor",
+      "owner_id": 794,
+      "target": "oSceptre",
+      "target_id": 788,
+      "source": "Objects/Blocks/oGoldDoor.events/Collision with oSceptre.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oUFOCrash",
+      "owner_id": 797,
+      "target": "oSolid",
+      "target_id": 126,
+      "source": "Objects/Enemies/oUFOCrash.events/Collision with oSolid.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oUFOCrash",
+      "owner_id": 797,
+      "target": "oEnemy",
+      "target_id": 358,
+      "source": "Objects/Enemies/oUFOCrash.events/Collision with oEnemy.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oSpringTrap",
+      "owner_id": 875,
+      "target": "oPlayer1",
+      "target_id": 319,
+      "source": "Objects/Traps/oSpringTrap.events/Collision with oPlayer1.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oSpringTrap",
+      "owner_id": 875,
+      "target": "oEnemy",
+      "target_id": 358,
+      "source": "Objects/Traps/oSpringTrap.events/Collision with oEnemy.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oSpringTrap",
+      "owner_id": 875,
+      "target": "oItem",
+      "target_id": 451,
+      "source": "Objects/Traps/oSpringTrap.events/Collision with oItem.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oYetiKing",
+      "owner_id": 877,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Enemies/oYetiKing.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oYetiKing",
+      "owner_id": 877,
+      "target": "oWhip",
+      "target_id": 576,
+      "source": "Objects/Enemies/oYetiKing.events/Collision with oWhip.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oVampire",
+      "owner_id": 915,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Enemies/oVampire.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oVampire",
+      "owner_id": 915,
+      "target": "oBlood",
+      "target_id": 370,
+      "source": "Objects/Enemies/oVampire.events/Collision with oBlood.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oVampire",
+      "owner_id": 915,
+      "target": "oWhip",
+      "target_id": 576,
+      "source": "Objects/Enemies/oVampire.events/Collision with oWhip.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oVampire",
+      "owner_id": 915,
+      "target": "oWhipPre",
+      "target_id": 596,
+      "source": "Objects/Enemies/oVampire.events/Collision with oWhipPre.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oArrowTrapTest",
+      "owner_id": 934,
+      "target": "oMoveableSolid",
+      "target_id": 145,
+      "source": "Objects/Traps/oArrowTrapTest.events/Collision with oMoveableSolid.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oArrowTrapTest",
+      "owner_id": 934,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Traps/oArrowTrapTest.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oArrowTrapTest",
+      "owner_id": 934,
+      "target": "oEnemy",
+      "target_id": 358,
+      "source": "Objects/Traps/oArrowTrapTest.events/Collision with oEnemy.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oArrowTrapTest",
+      "owner_id": 934,
+      "target": "oItem",
+      "target_id": 451,
+      "source": "Objects/Traps/oArrowTrapTest.events/Collision with oItem.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oArrowTrapTest",
+      "owner_id": 934,
+      "target": "oBoulder",
+      "target_id": 521,
+      "source": "Objects/Traps/oArrowTrapTest.events/Collision with oBoulder.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oArrowTrapTest",
+      "owner_id": 934,
+      "target": "oTreasure",
+      "target_id": 590,
+      "source": "Objects/Traps/oArrowTrapTest.events/Collision with oTreasure.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oBatTarget",
+      "owner_id": 940,
+      "target": "oCharacter",
+      "target_id": 271,
+      "source": "Objects/Other/Title/oBatTarget.events/Collision with oCharacter.xml",
+      "action_count": 1
+    },
+    {
+      "owner": "oBatTarget",
+      "owner_id": 940,
+      "target": "oArrow",
+      "target_id": 465,
+      "source": "Objects/Other/Title/oBatTarget.events/Collision with oArrow.xml",
+      "action_count": 1
+    }
+  ]
+}
