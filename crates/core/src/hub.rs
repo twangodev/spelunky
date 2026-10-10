@@ -368,7 +368,9 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
     });
     // Death returns clear run inventory in scrClearGlobals. load_hub resets
     // RunState before this hook, so health retains the evidence of that death.
-    if game.player.health <= 0 {
+    let reset_tutorial_run = kind == HubKind::Title && game.flags.remove("reset_run_on_title");
+    let reset_dead_run = game.flags.remove("reset_run_on_hub");
+    if game.player.health <= 0 || reset_tutorial_run || reset_dead_run {
         let selected = crate::characters::selected(game);
         crate::characters::apply(game, selected);
         game.player.money = 0;
@@ -384,6 +386,19 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
                     | "made_udjat_eye"
                     | "made_moai"
                     | "made_market_entrance"
+                    | "made_black_market"
+                    | "made_gold_entrance"
+                    | "genUdjatEye"
+                    | "genMarketEntrance"
+                    | "genGoldEntrance"
+                    | "marketEntrance"
+                    | "goldEntrance"
+                    | "ghost_exists"
+                    | "ghost_warning"
+                    | "udjat_blink"
+                    | "olmec_dead"
+                    | "boss_door_open"
+                    | "won"
                     | "black_market"
                     | "genBlackMarket"
                     | "blackMarket"
@@ -409,13 +424,60 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
             "damsels",
             "collect",
             "collect_counter",
+            "collectCounter",
+            "gold",
+            "goldbar",
+            "goldbars",
+            "nuggets",
+            "rubies",
+            "bigrubies",
+            "sapphires",
+            "bigsapphires",
+            "emeralds",
+            "bigemeralds",
+            "diamonds",
+            "scarabs",
+            "idols",
+            "skulls",
+            "xmoney",
+            "xdamsels",
+            "crapsPoint",
+            "bats",
+            "snakes",
+            "spiders",
+            "skeletons",
+            "frogs",
+            "firefrogs",
+            "piranhas",
+            "mantraps",
+            "yetis",
+            "aliens",
+            "ufos",
+            "cavemen",
+            "hawkmen",
+            "monkeys",
+            "zombies",
+            "vampires",
+            "deadfish",
+            "alienbosses",
+            "giantspiders",
+            "yetikings",
+            "megamouths",
+            "tomblords",
+            "shopkeepers",
+            "damselsKilled",
             "favor",
             "kaliGift",
             "kaliPunish",
+            "kali_gift",
+            "kali_punish",
             "arrows",
             "darkness",
             "bloodLevel",
             "thiefLevel",
+            "pending_damsel_kisses",
+            "time",
+            "xtime",
         ] {
             game.data.remove(key);
         }
@@ -430,7 +492,18 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
     });
     game.flags
         .retain(|f| !f.starts_with("scores_start:") && !f.starts_with("title_start:"));
+    // These Create-event resets apply on every visit, including living returns
+    // from a challenge. They are independent of the death inventory reset.
+    if kind == HubKind::Title {
+        game.flags.remove("lake");
+        game.flags.remove("cemetary");
+        game.flags.remove("cemetery");
+    }
     if kind == HubKind::Scores {
+        for flag in ["dark", "darkLevel", "snake_pit", "snakePit"] {
+            game.flags.remove(flag);
+        }
+        game.player.equipment.remove("Jordans");
         game.data.insert("arrows".into(), 0.0);
         for key in ["mini1", "mini2", "mini3"] {
             game.data.remove(key);
@@ -510,6 +583,11 @@ fn record(game: &mut Game, key: &str, score: f64) {
 
 pub fn tick(game: &mut Game, input: &InputFrame) {
     if !game.flags.contains("hub") {
+        // The authored tutorial also contains an oXStart-derived return door.
+        // It uses the same portal input branch as the title and records rooms.
+        if game.flags.contains("tutorial") && (input.up || input.exit_pressed) {
+            activate_portal(game);
+        }
         return;
     }
     let kind = if game.flags.contains("hub_sun") {
@@ -545,7 +623,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
 fn activate_portal(game: &mut Game) {
     if !game.player.grounded
         || game.player.health <= 0
-        || game.player.stun > 0
+        || game.player.state == PlayerState::Dead
+        || game.state == RunState::Dead
+        || game.player.is_stunned()
         || game.player.attack_timer > 0
     {
         return;
@@ -634,9 +714,19 @@ fn activate_portal(game: &mut Game) {
         game.flags.retain(|f| !f.starts_with("scores_start:"));
         game.flags.insert(format!("scores_start:{start}"));
     }
-    if destination == "title" && game.flags.contains("hub_scores") {
-        game.flags.retain(|f| !f.starts_with("title_start:"));
-        game.flags.insert("title_start:1".into());
+    if destination == "title" {
+        if game.flags.contains("hub_scores") || game.flags.contains("tutorial") {
+            let start = if game.flags.contains("tutorial") {
+                3
+            } else {
+                1
+            };
+            if game.flags.contains("tutorial") {
+                game.flags.insert("reset_run_on_title".into());
+            }
+            game.flags.retain(|f| !f.starts_with("title_start:"));
+            game.flags.insert(format!("title_start:{start}"));
+        }
     }
     game.flags.retain(|f| !f.starts_with("hub_destination:"));
     game.flags.insert(format!("hub_destination:{destination}"));
@@ -675,7 +765,10 @@ fn sun(game: &mut Game) {
     {
         game.player.health = 0;
     }
-    if game.player.health <= 0 {
+    if game.player.health <= 0
+        || game.player.state == PlayerState::Dead
+        || game.state == RunState::Dead
+    {
         if !game.flags.contains("hub_challenge_finished") {
             record(game, "mini1", value(game, "points"));
         }
@@ -730,7 +823,10 @@ fn sun(game: &mut Game) {
     }
 }
 fn stars(game: &mut Game) {
-    if game.player.health <= 0 {
+    if game.player.health <= 0
+        || game.player.state == PlayerState::Dead
+        || game.state == RunState::Dead
+    {
         if !game.flags.contains("hub_challenge_finished") {
             record(game, "mini3", value(game, "stars_kills"));
         }
@@ -792,7 +888,9 @@ fn moon(game: &mut Game) {
             spawn_target(game, x, y);
         }
     }
-    let died = game.player.health <= 0;
+    let died = game.player.health <= 0
+        || game.player.state == PlayerState::Dead
+        || game.state == RunState::Dead;
     if !game.flags.contains("hub_challenge_finished")
         && (died
             || due(game, "hub_alarm11") && {
@@ -905,13 +1003,18 @@ fn moon(game: &mut Game) {
             }
             game.sound("sndHit", target.pos);
             game.sound("sndCoin", target.pos);
-        } else if touching && game.player.invincible == 0 {
+        } else if touching
+            && game.player.invincible == 0
+            && game.player.state != PlayerState::Dead
+            && game.state != RunState::Dead
+        {
             // oBatTarget contact sets blink/invulnerability, not stunned.
             game.player.health -= 1;
             game.events.push(GameEvent::Damage { amount: 1 });
             game.sound("sndHurt", game.player.pos);
             blood(game, Vec2::new(target.pos.x + 4.0, target.pos.y + 4.0), 1);
             game.player.invincible = 30;
+            game.player.data.insert("blink".into(), 30.);
             game.player.vel.x = if game.player.pos.x < target.pos.x {
                 -6.0
             } else {
@@ -1372,6 +1475,7 @@ mod tests {
         assert_eq!(g.player.health, 7);
         assert_eq!(g.player.stun, 0);
         assert_eq!(g.player.invincible, 30);
+        assert_eq!(g.player.data["blink"], 30.);
         assert_eq!(g.data["baskets"], 0.0);
     }
     #[test]
@@ -1722,5 +1826,93 @@ mod tests {
             basketball(&mut g);
             assert_eq!(g.data["baskets"], score);
         }
+    }
+    #[test]
+    fn actual_tutorial_return_door_preserves_unlocks_and_clears_run() {
+        let mut g = Game::tutorial(11, RulesPreset::Classic);
+        g.flags.insert("shortcut_5".into());
+        g.flags.insert("wanted".into());
+        g.player.money = 12345;
+        g.data.insert("kali_punish".into(), 1.);
+        g.data.insert("kali_gift".into(), 1.);
+        g.player.bombs = 33;
+        g.player.equipment.insert("Jetpack".into());
+        for _ in 0..5 {
+            g.step(&InputFrame::default());
+        }
+        assert!(g.player.grounded);
+        assert_eq!(g.player.pos, Vec2::new(24., 72.));
+        g.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        assert!(g.flags.contains("hub_destination:title"));
+        assert!(g.flags.contains("title_start:3"));
+        g.load_hub(HubKind::Title);
+        assert_eq!(g.player.pos, Vec2::new(344., 184.));
+        assert_eq!((g.player.health, g.player.bombs, g.player.ropes), (4, 4, 4));
+        assert_eq!(g.player.money, 0);
+        assert!(g.player.equipment.is_empty());
+        assert!(!g.flags.contains("wanted"));
+        assert!(g.flags.contains("shortcut_5"));
+        assert!(!g.data.contains_key("kali_punish"));
+        assert!(!g.data.contains_key("kali_gift"));
+        g.step(&InputFrame::default());
+        assert!(
+            !g.world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oBall")
+        );
+    }
+
+    #[test]
+    fn living_hub_entries_apply_room_specific_source_resets() {
+        let mut g = Game::shell(3, RulesPreset::Classic);
+        for flag in ["lake", "cemetary", "cemetery"] {
+            g.flags.insert(flag.into());
+        }
+        g.load_hub(HubKind::Title);
+        for flag in ["lake", "cemetary", "cemetery"] {
+            assert!(!g.flags.contains(flag));
+        }
+        for flag in ["dark", "darkLevel", "snake_pit", "snakePit"] {
+            g.flags.insert(flag.into());
+        }
+        g.player.equipment.insert("Jordans".into());
+        g.player.equipment.insert("Compass".into());
+        g.load_hub(HubKind::Scores);
+        for flag in ["dark", "darkLevel", "snake_pit", "snakePit"] {
+            assert!(!g.flags.contains(flag));
+        }
+        assert!(!g.player.has("Jordans"));
+        assert!(
+            g.player.has("Compass"),
+            "room reset must not wipe unrelated equipment"
+        );
+    }
+    #[test]
+    fn healed_dead_corpse_cannot_use_portals_and_hub_return_resets_inventory() {
+        let mut g = loaded(HubKind::Title);
+        let portal = g
+            .world
+            .entities
+            .iter()
+            .find(|e| crate::catalog::is_a(&e.object, "oXStart"))
+            .unwrap()
+            .pos;
+        g.player.pos = Vec2::new(portal.x + 8., portal.y + 8.);
+        g.player.grounded = true;
+        g.player.health = 1;
+        g.player.state = PlayerState::Dead;
+        g.state = RunState::Dead;
+        g.player.money = 10000;
+        g.player.equipment.insert("Kapala".into());
+        activate_portal(&mut g);
+        assert!(!g.flags.iter().any(|f| f.starts_with("hub_destination:")));
+        g.load_hub(HubKind::Scores);
+        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.money, 0);
+        assert!(g.player.equipment.is_empty());
     }
 }

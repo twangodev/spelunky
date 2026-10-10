@@ -4,8 +4,8 @@ use crate::model::{Game, GameEvent, InputFrame, Rect, RunState, Vec2};
 
 fn room(pos: Vec2) -> (i32, i32) {
     (
-        ((pos.x - 16.).max(0.) / 160.).floor() as i32,
-        ((pos.y - 16.).max(0.) / 128.).floor() as i32,
+        (((pos.x - 16.).max(0.) / 160.).floor() as i32).min(3),
+        (((pos.y - 16.).max(0.) / 128.).floor() as i32).min(4),
     )
 }
 fn in_shop(game: &Game, pos: Vec2) -> bool {
@@ -25,12 +25,14 @@ fn in_shop(game: &Game, pos: Vec2) -> bool {
     })
 }
 fn rect_distance(a: Rect, b: Rect) -> f64 {
-    let x = (a.x - b.x - b.w).max(b.x - a.x - a.w).max(0.);
-    let y = (a.y - b.y - b.h).max(b.y - a.y - a.h).max(0.);
+    let x = (a.x - b.x - b.w + 1.).max(b.x - a.x - a.w + 1.).max(0.);
+    let y = (a.y - b.y - b.h + 1.).max(b.y - a.y - a.h + 1.).max(0.);
     x.hypot(y)
 }
 fn count(game: &mut Game, key: &str) {
-    *game.data.entry(key.into()).or_default() += 1.;
+    if !game.flags.contains("custom_level") && !game.flags.contains("tutorial") {
+        *game.data.entry(key.into()).or_default() += 1.;
+    }
 }
 
 /// Make the closest living keeper hostile; repeated reports do not add bounty.
@@ -69,6 +71,21 @@ fn clear_sale(game: &mut Game, id: u64) {
         entity.data.insert("cost".into(), 0.);
         entity.data.insert("forSale".into(), 0.);
     }
+}
+
+fn acquire_sale_damsel(game: &mut Game, id: u64) -> bool {
+    if !game
+        .world
+        .entity(id)
+        .is_some_and(|e| e.object == "oDamsel" && e.value("cost") > 0.)
+    {
+        return false;
+    }
+    *game.data.entry("damselsBought".into()).or_default() += 1.;
+    game.sound("sndPickup", game.player.pos);
+    game.events
+        .push(GameEvent::Message("YOU MUST BE IN LOVE!".into()));
+    true
 }
 
 fn craps_keeper(game: &Game) -> bool {
@@ -121,6 +138,7 @@ fn settle_dice(game: &mut Game) {
                 && e.health > 0
                 && e.object == "oShopkeeper"
                 && e.text.get("style").is_some_and(|style| style == "Craps")
+                && e.state == 0
         })
     {
         return;
@@ -185,7 +203,7 @@ fn settle_dice(game: &mut Game) {
 }
 
 pub fn tick(game: &mut Game, input: &InputFrame) {
-    if game.state != RunState::Playing || game.flags.contains("hub") {
+    if !matches!(game.state, RunState::Playing | RunState::Dead) || game.flags.contains("hub") {
         return;
     }
     // Source membership uses immutable roomPath entries, not the keeper's
@@ -247,6 +265,19 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         .map(|e| (e.id, e.pos))
         .collect();
     for (id, pos) in stock {
+        if game.player.held == Some(id) && !in_shop(game, game.player.pos) {
+            // oPlayer1's held-item theft check uses the player's room, before
+            // the item's inherited Step has necessarily attached its offset.
+            acquire_sale_damsel(game, id);
+            clear_sale(game, id);
+            if keepers_exist {
+                anger(game, game.player.pos, "COME BACK HERE, THIEF!");
+            }
+            continue;
+        }
+        if game.player.held == Some(id) && (wanted || !keepers_exist) {
+            acquire_sale_damsel(game, id);
+        }
         if wanted || !keepers_exist {
             clear_sale(game, id);
             count(game, "itemsStolen");
@@ -266,8 +297,10 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         }
     }
     if !input.pay_pressed
+        || game.state == RunState::Dead
         || game.player.health <= 0
-        || game.player.stun > 0
+        || game.player.state == crate::model::PlayerState::Dead
+        || game.player.is_stunned()
         || !in_shop(game, game.player.pos)
     {
         return;
@@ -290,10 +323,13 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             return;
         }
         if price > 0 {
+            let damsel = acquire_sale_damsel(game, id);
             game.player.money -= price;
             clear_sale(game, id);
             count(game, "itemsBought");
-            crate::items::collectibles::grant(game, id);
+            if !damsel {
+                crate::items::collectibles::grant(game, id);
+            }
             return;
         }
     }
@@ -320,6 +356,21 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         }
         return;
     }
+    if !game.world.entities.iter().any(|keeper| {
+        keeper.alive
+            && keeper.health > 0
+            && keeper.object == "oShopkeeper"
+            && keeper
+                .text
+                .get("style")
+                .is_some_and(|style| style == "Kissing")
+            && (
+                keeper.value("shop_room_x") as i32,
+                keeper.value("shop_room_y") as i32,
+            ) == room(game.player.pos)
+    }) {
+        return;
+    }
     let kiss = game
         .world
         .entities
@@ -332,8 +383,8 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
                 && !e.held
                 && rect_distance(e.sprite_bounds(), game.player.sprite_bounds()) < 16.
         })
-        .map(|e| e.pos);
-    if let Some(pos) = kiss {
+        .map(|e| e.id);
+    if let Some(id) = kiss {
         if wanted {
             return;
         }
@@ -342,9 +393,25 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             game.player.money -= cost;
             game.player.health += 1;
             count(game, "kissesBought");
-            game.sound("sndKiss", pos);
-            game.events
-                .push(GameEvent::Message("NOW AIN'T SHE SWEET!".into()));
+            let damsel_character = game.flags.contains("character_damsel");
+            let damsel = game.world.entity_mut(id).expect("kiss target");
+            damsel.state = 6;
+            damsel.animation = 0.;
+            damsel.sprite = if damsel_character {
+                "sPKissL"
+            } else {
+                "sDamselKissL"
+            }
+            .into();
+            // The NPC animation emits sndKiss and the heart at frame 7.
+            game.events.push(GameEvent::Message(
+                if damsel_character {
+                    "NOW AIN'T HE SWEET!"
+                } else {
+                    "NOW AIN'T SHE SWEET!"
+                }
+                .into(),
+            ));
         } else {
             game.events
                 .push(GameEvent::Message(format!("YOU NEED ${cost}!")));
@@ -537,5 +604,164 @@ mod tests {
         tick(&mut g, &InputFrame::default());
         assert!(!g.flags.contains("wanted"));
         assert!(!g.data.contains_key("thiefLevel"));
+    }
+    fn stepping_shop(object: &str, style: &str) -> (Game, u64) {
+        let mut g = Game::shell(19, RulesPreset::Classic);
+        for x in 0..g.world.width {
+            g.world.set_tile(x, 4, "oTemple");
+        }
+        g.player.pos = Vec2::new(88., 56.);
+        g.player.previous_pos = g.player.pos;
+        g.player.grounded = true;
+        g.player.money = 100000;
+        let keeper = g.world.spawn("oShopkeeper", Vec2::new(128., 48.));
+        g.world
+            .entity_mut(keeper)
+            .unwrap()
+            .text
+            .insert("style".into(), style.into());
+        let id = g.world.spawn(object, Vec2::new(96., 56.));
+        let item = g.world.entity_mut(id).unwrap();
+        item.held = true;
+        item.data.insert("cost".into(), 15000.);
+        item.data.insert("forSale".into(), 1.);
+        g.player.held = Some(id);
+        (g, id)
+    }
+
+    #[test]
+    fn actual_step_damsel_purchase_keeps_her_in_hand_and_records_purchase() {
+        let (mut g, id) = stepping_shop("oDamsel", "Kissing");
+        g.step(&InputFrame {
+            pay_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(g.player.money, 85000);
+        assert_eq!(g.player.held, Some(id));
+        assert_eq!(g.data["damselsBought"], 1.);
+        assert_eq!(g.data["itemsBought"], 1.);
+        assert_eq!(g.world.entity(id).unwrap().value("cost"), 0.);
+        assert!(g.events.iter().any(|event| matches!(event,
+            GameEvent::Message(message) if message == "YOU MUST BE IN LOVE!")));
+    }
+
+    #[test]
+    fn actual_step_kiss_requires_kissing_shop_and_starts_npc_animation() {
+        for (style, expected_health) in [("Bomb", 4), ("Kissing", 5)] {
+            let (mut g, id) = stepping_shop("oDamsel", style);
+            g.player.held = None;
+            g.world.entity_mut(id).unwrap().held = false;
+            g.world.entity_mut(id).unwrap().state = 5;
+            g.step(&InputFrame {
+                pay_pressed: true,
+                ..Default::default()
+            });
+            assert_eq!(g.player.health, expected_health, "shop style {style}");
+            if style == "Kissing" {
+                assert_eq!(g.world.entity(id).unwrap().state, 6);
+                assert_eq!(g.world.entity(id).unwrap().sprite, "sDamselKissL");
+                assert!(
+                    !g.events.iter().any(|event| matches!(event,
+                    GameEvent::Sound { name, .. } if name == "sndKiss")),
+                    "kiss sound belongs to NPC frame 7, not the payment tick"
+                );
+            } else {
+                assert_eq!(g.player.money, 100000);
+            }
+        }
+    }
+
+    #[test]
+    fn actual_step_custom_purchase_does_not_change_campaign_item_statistics() {
+        let (mut g, _) = stepping_shop("oBombBag", "Bomb");
+        g.flags.insert("custom_level".into());
+        g.step(&InputFrame {
+            pay_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(g.player.bombs, 7);
+        assert!(!g.data.contains_key("itemsBought"));
+    }
+
+    #[test]
+    fn attacking_craps_keeper_does_not_settle_pending_wager() {
+        let (mut g, _) = stepping_shop("oRock", "Craps");
+        g.player.held = None;
+        let keeper = g
+            .world
+            .entities
+            .iter_mut()
+            .find(|e| e.object == "oShopkeeper")
+            .unwrap();
+        keeper.state = 2;
+        keeper.data.insert("angry".into(), 1.);
+        keeper.data.insert("angered".into(), 1.);
+        g.flags.insert("wanted".into());
+        g.data.insert("thiefLevel".into(), 2.);
+        g.player.data.insert("bet".into(), 1500.);
+        for x in [80., 104.] {
+            let id = g.world.spawn("oDice", Vec2::new(x, 56.));
+            let die = g.world.entity_mut(id).unwrap();
+            die.data.insert("rolled".into(), 1.);
+            die.data.insert("value".into(), 5.);
+        }
+        tick(&mut g, &InputFrame::default());
+        assert_eq!(g.player.data["bet"], 1500.);
+        assert_eq!(g.data.get("collect").copied().unwrap_or(0.), 0.);
+        assert!(!g.data.contains_key("diceGamesWon"));
+    }
+
+    #[test]
+    fn shop_room_coordinates_match_source_outer_room_clamps() {
+        assert_eq!(room(Vec2::new(-100., -100.)), (0, 0));
+        assert_eq!(room(Vec2::new(176., 144.)), (1, 1));
+        assert_eq!(room(Vec2::new(10000., 10000.)), (3, 4));
+    }
+    #[test]
+    fn held_theft_uses_player_room_before_attachment_and_counts_damsel_once() {
+        let (mut g, id) = stepping_shop("oDamsel", "Kissing");
+        g.player.pos.x = 177.;
+        // Left-facing held offset remains inside the previous shop room.
+        g.world.entity_mut(id).unwrap().pos.x = 173.;
+        tick(&mut g, &InputFrame::default());
+        assert!(g.flags.contains("wanted"));
+        assert_eq!(g.world.entity(id).unwrap().value("cost"), 0.);
+        assert_eq!(g.data["damselsBought"], 1.);
+        tick(&mut g, &InputFrame::default());
+        assert_eq!(g.data["damselsBought"], 1.);
+        assert_eq!(g.data["thiefLevel"], 2.);
+    }
+    #[test]
+    fn zero_timer_airborne_stun_still_blocks_shop_payment() {
+        let (mut g, id) = stepping_shop("oBombBag", "Bomb");
+        g.player.stun = 0;
+        g.player.state = crate::model::PlayerState::Stunned;
+        g.player.sprite = "sDieLBounce".into();
+        tick(
+            &mut g,
+            &InputFrame {
+                pay_pressed: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(g.player.money, 100000);
+        assert_eq!(g.player.bombs, 4);
+        assert_eq!(g.world.entity(id).unwrap().value("forSale"), 1.);
+    }
+    #[test]
+    fn healed_latched_dead_player_cannot_pay_for_shop_item() {
+        let (mut g, id) = stepping_shop("oBombBag", "Bomb");
+        g.player.health = 1;
+        g.player.state = crate::model::PlayerState::Dead;
+        g.state = RunState::Dead;
+        tick(
+            &mut g,
+            &InputFrame {
+                pay_pressed: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(g.player.money, 100000);
+        assert_eq!(g.world.entity(id).unwrap().value("forSale"), 1.);
     }
 }

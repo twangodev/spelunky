@@ -5,21 +5,37 @@ use crate::model::{
 };
 
 fn sprite_gap(a: Rect, b: Rect) -> f64 {
-    let x = (a.x - b.x - b.w).max(b.x - a.x - a.w).max(0.);
-    let y = (a.y - b.y - b.h).max(b.y - a.y - a.h).max(0.);
+    let x = (a.x - b.x - b.w + 1.).max(b.x - a.x - a.w + 1.).max(0.);
+    let y = (a.y - b.y - b.h + 1.).max(b.y - a.y - a.h + 1.).max(0.);
     x.hypot(y)
 }
 fn count(game: &mut Game, key: &str) {
     *game.data.entry(key.into()).or_default() += 1.;
 }
 
-fn initialize_level(game: &mut Game) {
-    let level = game.world.level as f64;
-    // level_tick also distinguishes restarting an editor level at the same index.
-    if game.data.get("progression_level").copied() == Some(level) && game.level_tick > 1 {
+/// Source room Create work must run before inactive instances are partitioned.
+/// The host clears this marker in reset_position for every new authored world.
+pub(crate) fn initialize_level(game: &mut Game) {
+    if game.flags.contains("hub") || game.data.contains_key("progression_initialized") {
         return;
     }
-    game.data.insert("progression_level".into(), level);
+    game.data.insert("progression_initialized".into(), 1.);
+    game.data
+        .insert("progression_level".into(), game.world.level as f64);
+    // The Ankh branch activates oEntrance before selecting its first instance.
+    // Cache that room-Create anchor while every entrance is still accessible;
+    // ordinary activation need not expose distant doors during other queries.
+    if let Some(entrance) = game
+        .world
+        .entities
+        .iter()
+        .find(|e| e.alive && e.object == "oEntrance")
+    {
+        game.data
+            .insert("progression_entrance_x".into(), entrance.pos.x + 8.);
+        game.data
+            .insert("progression_entrance_y".into(), entrance.pos.y + 8.);
+    }
     game.flags.remove("ghost_exists");
     game.flags.remove("ghost_warning");
     game.flags.remove("udjat_blink");
@@ -27,18 +43,24 @@ fn initialize_level(game: &mut Game) {
     if game.world.dark {
         game.flags.insert("had_dark_level".into());
     }
-    if game.world.tiles.iter().any(|t| t.object == "oMoai") {
+    if game.world.tiles.iter().any(|t| t.object == "oMoai")
+        || game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.alive && e.object == "oMoai")
+    {
         game.flags.insert("made_moai".into());
     }
     if game.world.name == "Black Market" {
         game.flags.insert("made_black_market".into());
     }
     if (game.flags.contains("murderer") || game.data.get("thiefLevel").copied().unwrap_or(0.) > 0.)
-        && !game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.object == "oShopkeeper" && e.pos.distance(game.world.exit) < 8.)
+        && !game.world.entities.iter().any(|e| {
+            e.alive
+                && e.object == "oShopkeeper"
+                && Vec2::new(e.pos.x + 8., e.pos.y + 8.).distance(game.world.exit) < 8.
+        })
     {
         let pos = Vec2::new(game.world.exit.x - 8., game.world.exit.y - 8.);
         let id = game.world.spawn("oShopkeeper", pos);
@@ -93,20 +115,34 @@ fn final_boss(game: &mut Game) {
 }
 
 fn revive(game: &mut Game) {
-    if game.player.health > 0 || !game.player.equipment.remove("Ankh") {
+    if game.state == RunState::Dead
+        || game.player.health > 0
+        || !game.player.equipment.remove("Ankh")
+    {
         return;
     }
     let moai = game
         .world
         .entities
         .iter()
-        .find(|e| e.alive && e.object == "oMoaiInside")
-        .map(|e| Vec2::new(e.pos.x + 8., e.pos.y + 8.));
+        .find(|e| e.alive && e.object == "oMoai")
+        .map(|e| Vec2::new(e.pos.x + 24., e.pos.y + 24.));
     let destination = moai.unwrap_or_else(|| {
         if game.world.area == Area::Boss {
             Vec2::new(24., 552.)
         } else {
-            game.world.entrance
+            game.data
+                .get("progression_entrance_x")
+                .zip(game.data.get("progression_entrance_y"))
+                .map(|(&x, &y)| Vec2::new(x, y))
+                .or_else(|| {
+                    game.world
+                        .entities
+                        .iter()
+                        .find(|e| e.alive && e.object == "oEntrance")
+                        .map(|e| Vec2::new(e.pos.x + 8., e.pos.y + 8.))
+                })
+                .unwrap_or(game.world.entrance)
         }
     });
     if moai.is_some() {
@@ -123,8 +159,28 @@ fn revive(game: &mut Game) {
     game.player.vel = Vec2::default();
     game.player.health = 4;
     game.player.invincible = 60;
-    game.player.stun = 0;
-    game.player.state = PlayerState::Falling;
+    game.player.data.insert("blink".into(), 60.);
+    // Revival resets death, not the separate stun flag or its countdown.
+    // A fatal explosion therefore retains its source 100-tick stun.
+    if game.player.state == PlayerState::Dead {
+        // The Rust health controller can select its corpse enum earlier in the
+        // fatal frame, before Classic's separate dead flag is latched. An Ankh
+        // cancels that pending death while retaining any independent stun.
+        game.player.state = if game.player.stun > 0 {
+            PlayerState::Stunned
+        } else {
+            PlayerState::Falling
+        };
+    }
+    // oPlayer1's Ankh branch resets the accumulated fall before resuming.
+    game.player.data.insert("fall_timer".into(), 0.);
+    game.player.data.insert("fall_ticks".into(), 0.);
+    for entity in &mut game.world.entities {
+        if entity.alive && matches!(entity.object.as_str(), "oBall" | "oChain") {
+            entity.pos = destination;
+            entity.previous_pos = destination;
+        }
+    }
     game.camera = Vec2::new(
         (destination.x - VIEW_WIDTH / 2.).max(0.),
         (destination.y - VIEW_HEIGHT / 2.).max(0.),
@@ -364,6 +420,95 @@ fn donate(game: &mut Game, input: &InputFrame) {
     }
 }
 
+/// A damsel enters the door independently of the player. Each rescue produces
+/// one transition kiss, including several rescues in the same room.
+fn rescue_held_damsel(game: &mut Game, id: u64, door_center: Vec2) {
+    let Some(damsel) = game.world.entity_mut(id) else {
+        return;
+    };
+    if damsel.health <= 0 || damsel.state == 4 {
+        return;
+    }
+    damsel.state = 4;
+    damsel.pos = door_center;
+    damsel.previous_pos = door_center;
+    damsel.vel = Vec2::default();
+    damsel.held = false;
+    damsel.sprite = if game.flags.contains("character_damsel") {
+        "sPExit".into()
+    } else {
+        "sDamselExit2".into()
+    };
+    damsel.data.insert("inactive".into(), 1.);
+    damsel.data.insert("canPickUp".into(), 0.);
+    game.player.held = None;
+    count(game, "damsels");
+    count(game, "pending_damsel_kisses");
+    game.flags.insert("damsel_rescued".into());
+    game.sound("sndSteps", door_center);
+}
+
+fn redeem_held_idol(game: &mut Game, id: u64, immediate: bool) {
+    let Some(idol) = game.world.entity(id) else {
+        return;
+    };
+    let crystal = idol.object == "oCrystalSkull" || idol.sprite == "sCrystalSkull";
+    let value = idol.value("value").max(0.) as u32;
+    let multiplier = match game.world.area {
+        Area::Mines => 1,
+        Area::Jungle => 2,
+        Area::Ice => 3,
+        _ => 4,
+    };
+    let amount = value.saturating_mul(multiplier);
+    if immediate {
+        game.player.money = game.player.money.saturating_add(amount);
+    } else {
+        *game.data.entry("collect".into()).or_default() += f64::from(amount);
+        let counter = game.data.entry("collectCounter".into()).or_default();
+        *counter = (*counter + 20.).min(100.);
+    }
+    if !game.flags.contains("custom_level") && !game.flags.contains("tutorial") {
+        count(game, "idolsConverted");
+    }
+    count(game, if crystal { "skulls" } else { "idols" });
+    if let Some(idol) = game.world.entity_mut(id) {
+        idol.alive = false;
+        idol.held = false;
+    }
+    game.player.held = None;
+    game.sound("sndCoin", game.player.pos);
+}
+
+/// Source oPlayer1 Step also deposits idols and live damsels merely by touching
+/// an exit. This does not require Up, standing on the floor, or leaving the room.
+fn deposit_at_exit(game: &mut Game) {
+    let Some(id) = game.player.held else {
+        return;
+    };
+    let Some(center) = game
+        .world
+        .entities
+        .iter()
+        .find(|e| {
+            e.alive
+                && matches!(e.object.as_str(), "oExit" | "oXMarket" | "oXGold" | "oXEnd")
+                && e.sprite_bounds().contains(game.player.pos)
+        })
+        .map(|e| Vec2::new(e.pos.x + 8., e.pos.y + 8.))
+    else {
+        return;
+    };
+    let Some(object) = game.world.entity(id).map(|e| e.object.clone()) else {
+        return;
+    };
+    if object == "oDamsel" {
+        rescue_held_damsel(game, id, center);
+    } else if matches!(object.as_str(), "oGoldIdol" | "oCrystalSkull") {
+        redeem_held_idol(game, id, false);
+    }
+}
+
 fn complete(game: &mut Game, door_id: u64) {
     let Some(door) = game.world.entity(door_id) else {
         return;
@@ -386,45 +531,15 @@ fn complete(game: &mut Game, door_id: u64) {
             (
                 e.object.clone(),
                 e.health,
-                e.value("value"),
                 e.value("heavy") > 0.,
                 e.value("armed") > 0.,
-                e.state,
             )
         });
-        if let Some((object, health, value, heavy, armed, state)) = carried {
+        if let Some((object, health, heavy, armed)) = carried {
             if object == "oDamsel" && health > 0 {
-                if state != 4 {
-                    count(game, "damsels");
-                }
-                game.flags.insert("damsel_rescued".into());
-                if let Some(e) = game.world.entity_mut(id) {
-                    e.alive = false;
-                }
+                rescue_held_damsel(game, id, door_center);
             } else if matches!(object.as_str(), "oGoldIdol" | "oCrystalSkull") {
-                let multiplier = match game.world.area {
-                    Area::Mines => 1,
-                    Area::Jungle => 2,
-                    Area::Ice => 3,
-                    _ => 4,
-                };
-                game.player.money = game
-                    .player
-                    .money
-                    .saturating_add((value.max(0.) as u32).saturating_mul(multiplier));
-                count(game, "idolsConverted");
-                count(
-                    game,
-                    if object == "oCrystalSkull" {
-                        "skulls"
-                    } else {
-                        "idols"
-                    },
-                );
-                game.sound("sndCoin", game.player.pos);
-                if let Some(e) = game.world.entity_mut(id) {
-                    e.alive = false;
-                }
+                redeem_held_idol(game, id, true);
             } else if object == "oDamsel" || heavy {
                 if let Some(item) = game.world.entity_mut(id) {
                     item.held = false;
@@ -493,13 +608,16 @@ fn complete(game: &mut Game, door_id: u64) {
 }
 
 pub fn tick(game: &mut Game, input: &InputFrame) {
-    if game.state != RunState::Playing || game.flags.contains("hub") {
+    if !matches!(game.state, RunState::Playing | RunState::Dead) || game.flags.contains("hub") {
         return;
     }
     initialize_level(game);
     final_boss(game);
+    if game.state == RunState::Dead {
+        return;
+    }
     revive(game);
-    if game.player.health <= 0 {
+    if game.player.health <= 0 || game.player.state == PlayerState::Dead {
         return;
     }
     *game.data.entry("time".into()).or_default() += 30.;
@@ -508,9 +626,10 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     donate(game, input);
     if !(input.up || input.exit_pressed)
         || !game.player.grounded
-        || game.player.stun > 0
+        || game.player.is_stunned()
         || game.player.attack_timer > 0
     {
+        deposit_at_exit(game);
         return;
     }
     let door = game
@@ -526,6 +645,8 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         .map(|e| e.id);
     if let Some(id) = door {
         complete(game, id);
+    } else {
+        deposit_at_exit(game);
     }
 }
 
@@ -562,6 +683,7 @@ mod tests {
         g.player.health = 0;
         g.player.equipment.insert("Ankh".into());
         let p = Vec2::new(100., 100.);
+        g.world.spawn("oMoai", Vec2::new(p.x - 16., p.y - 16.));
         let id = g.world.spawn("oMoaiInside", p);
         tick(&mut g, &InputFrame::default());
         assert_eq!(g.player.health, 4);
@@ -572,6 +694,15 @@ mod tests {
         g.player.health = 0;
         tick(&mut g, &InputFrame::default());
         assert_eq!(g.player.health, 0);
+        g.player.equipment.insert("Ankh".into());
+        g.player.pos = g.world.entrance;
+        tick(&mut g, &InputFrame::default());
+        assert_eq!(g.player.health, 4);
+        assert_eq!(
+            g.player.pos,
+            Vec2::new(p.x + 8., p.y + 8.),
+            "the Moai remains the revival anchor after its inner blocker is removed"
+        );
     }
     #[test]
     fn ghost_uses_original_counter_and_spawns_once() {
@@ -1010,5 +1141,144 @@ mod tests {
         assert!(g.world.entity(door).is_none());
         assert!(g.world.entity(sceptre).is_none());
         assert!(g.world.entities.iter().any(|e| e.object == "oXGold"));
+    }
+    #[test]
+    fn actual_step_deposits_idol_and_damsel_without_exiting() {
+        let (mut g, id) = carried_exit("oGoldIdol");
+        g.step(&InputFrame::default());
+        assert_eq!(g.state, RunState::Playing);
+        assert!(g.world.entity(id).is_none());
+        assert!(g.player.held.is_none());
+        assert_eq!(g.data["collect"], 5000.);
+        assert_eq!(g.data["idols"], 1.);
+
+        let (mut g, id) = carried_exit("oDamsel");
+        g.step(&InputFrame::default());
+        assert_eq!(g.state, RunState::Playing);
+        assert!(g.player.held.is_none());
+        let rescued = g.world.entity(id).expect("damsel plays its exit animation");
+        assert_eq!(rescued.state, 4);
+        assert_eq!(rescued.pos, Vec2::new(88., 56.));
+        assert_eq!(g.data["pending_damsel_kisses"], 1.);
+        g.step(&InputFrame::default());
+        assert_eq!(g.data["damsels"], 1., "rescue must be counted only once");
+    }
+
+    #[test]
+    fn actual_step_multiple_damsels_each_restore_one_life() {
+        let (mut g, _) = carried_exit("oDamsel");
+        g.step(&InputFrame::default());
+        let id = g.world.spawn("oDamsel", g.player.pos);
+        g.world.entity_mut(id).unwrap().held = true;
+        g.player.held = Some(id);
+        g.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        assert_eq!(g.state, RunState::Transition);
+        assert_eq!(g.data["damsels"], 2.);
+        assert_eq!(g.data["pending_damsel_kisses"], 2.);
+        g.next_level();
+        assert_eq!(g.player.health, 6);
+        assert!(!g.data.contains_key("pending_damsel_kisses"));
+    }
+
+    #[test]
+    fn actual_step_ankh_relocates_curse_and_clears_fall_history() {
+        let mut g = Game::shell(8, RulesPreset::Classic);
+        g.world.entrance = Vec2::new(88., 56.);
+        for x in 0..g.world.width {
+            g.world.set_tile(x, 4, "oTemple");
+        }
+        g.player.pos = Vec2::new(240., 56.);
+        g.player.previous_pos = g.player.pos;
+        g.player.health = 0;
+        g.player.equipment.insert("Ankh".into());
+        g.player.data.insert("fall_timer".into(), 80.);
+        g.player.data.insert("fall_ticks".into(), 80.);
+        let ball = g.world.spawn("oBall", Vec2::new(240., 40.));
+        let chain = g.world.spawn("oChain", Vec2::new(248., 48.));
+        g.step(&InputFrame::default());
+        assert_eq!(g.state, RunState::Playing);
+        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.pos, g.world.entrance);
+        assert_eq!(g.player.data["blink"], 60.);
+        assert_eq!(g.player.data["fall_timer"], 0.);
+        assert_eq!(g.player.data["fall_ticks"], 0.);
+        for id in [ball, chain] {
+            let curse = g.world.entity(id).unwrap();
+            assert_eq!(curse.pos, g.player.pos);
+            assert_eq!(curse.previous_pos, curse.pos);
+        }
+        for _ in 0..8 {
+            g.step(&InputFrame::default());
+        }
+        assert_eq!(
+            g.player.health, 4,
+            "old fall must not hurt the revived player"
+        );
+        assert!(
+            (g.player.pos.x - 88.).abs() < 8.,
+            "old ball must not pull player away"
+        );
+    }
+    #[test]
+    fn actual_step_fatal_explosion_ankh_preserves_stun_and_sets_blink() {
+        let mut g = Game::shell(5, RulesPreset::Classic);
+        g.world.entrance = Vec2::new(88., 56.);
+        g.player.pos = Vec2::new(240., 120.);
+        g.player.previous_pos = g.player.pos;
+        g.player.health = 1;
+        g.player.equipment.insert("Ankh".into());
+        g.world.spawn("oExplosion", g.player.pos);
+        g.step(&InputFrame::default());
+        assert_eq!(g.state, RunState::Playing);
+        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.pos, g.world.entrance);
+        assert_eq!(g.player.invincible, 60);
+        assert_eq!(g.player.data["blink"], 60.);
+        assert_eq!(
+            g.player.stun, 100,
+            "Ankh must preserve the explosion's independent stun"
+        );
+        assert!(g.player.is_stunned());
+        assert_eq!(
+            g.player.state,
+            PlayerState::Falling,
+            "revival preserves the pre-existing movement controller rather than overwriting it"
+        );
+    }
+
+    #[test]
+    fn actual_step_ankh_uses_first_entrance_even_when_linked_spawn_and_activation_differ() {
+        let mut g = Game::shell(7, RulesPreset::Classic);
+        g.world = crate::model::World::new(80, 20, Area::Mines, 1);
+        g.world.spawn("oEntrance", Vec2::new(24., 48.));
+        g.world.spawn("oEntrance", Vec2::new(700., 48.));
+        g.world.entrance = Vec2::new(708., 56.);
+        g.flags.insert("custom_level".into());
+        g.player.pos = g.world.entrance;
+        g.player.previous_pos = g.player.pos;
+        g.player.health = 0;
+        g.player.equipment.insert("Ankh".into());
+        g.update_camera();
+        assert!(g.camera.x > 400.);
+        g.step(&InputFrame::default());
+        assert_eq!(g.state, RunState::Playing);
+        assert_eq!(g.player.pos, Vec2::new(32., 56.));
+    }
+
+    #[test]
+    fn healed_latched_dead_player_cannot_activate_level_exit() {
+        let (mut g, _) = carried_exit("oRock");
+        g.player.health = 1;
+        g.player.state = PlayerState::Dead;
+        g.state = RunState::Dead;
+        g.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        assert_eq!(g.state, RunState::Dead);
+        assert!(!g.events.contains(&GameEvent::LevelComplete));
     }
 }

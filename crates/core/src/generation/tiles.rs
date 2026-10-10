@@ -724,6 +724,7 @@ fn sale_damsel(w: &mut World, p: Vec2) {
     let e = w.entity_mut(id).unwrap();
     e.data.insert("forSale".into(), 1.0);
     e.data.insert("status".into(), 5.0);
+    e.state = 5;
     e.data.insert("cost".into(), cost);
 }
 fn fake_door(w: &mut World, p: Vec2) {
