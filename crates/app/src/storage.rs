@@ -77,6 +77,10 @@ pub struct SaveData {
     /// hits, mini3 = Stars shopkeeper kills. Unknown keys remain compatible.
     #[serde(default)]
     pub challenge_records: BTreeMap<String, u32>,
+    /// Outstanding shortcut donations, keyed by tunnel1_remaining through
+    /// tunnel3_remaining. Missing keys use original costs (100k, 200k, 300k).
+    #[serde(default)]
+    pub tunnel_remaining: BTreeMap<String, u32>,
     pub unlocks: BTreeSet<String>,
     /// Original .lvl text, keyed by the user-visible level name.
     pub custom_levels: BTreeMap<String, String>,
@@ -89,6 +93,7 @@ impl Default for SaveData {
             settings: Settings::default(),
             records: Vec::new(),
             challenge_records: BTreeMap::new(),
+            tunnel_remaining: BTreeMap::new(),
             unlocks: BTreeSet::new(),
             custom_levels: BTreeMap::new(),
         }
@@ -144,6 +149,19 @@ impl SaveData {
         if let Some(cap) = self.settings.frame_cap {
             if !(1..=1000).contains(&cap) {
                 return Err("Frame cap must be between 1 and 1000, or unlimited".into());
+            }
+        }
+        for (key, cost) in [
+            ("tunnel1_remaining", 100_000),
+            ("tunnel2_remaining", 200_000),
+            ("tunnel3_remaining", 300_000),
+        ] {
+            if self
+                .tunnel_remaining
+                .get(key)
+                .is_some_and(|remaining| *remaining > cost)
+            {
+                return Err(format!("{key} cannot exceed its original cost of {cost}"));
             }
         }
         Ok(())
@@ -390,6 +408,44 @@ mod tests {
         for invalid in ["-1", "1.5", "4294967296", "null", "\"8\""] {
             let json = format!(r#"{{"version":1,"challenge_records":{{"mini1":{invalid}}}}}"#);
             assert!(SaveData::from_json(&json).is_err(), "{json}");
+        }
+    }
+
+    #[test]
+    fn tunnel_donations_migrate_and_round_trip_without_version_change() {
+        for json in ["{}", r#"{"version":0}"#, r#"{"version":1}"#] {
+            let mut data = SaveData::from_json(json).unwrap();
+            assert!(data.tunnel_remaining.is_empty());
+            data.tunnel_remaining.extend([
+                ("tunnel1_remaining".into(), 0),
+                ("tunnel2_remaining".into(), 125_000),
+                ("tunnel3_remaining".into(), 300_000),
+            ]);
+            let decoded = SaveData::from_json(&data.to_json().unwrap()).unwrap();
+            assert_eq!(decoded.version, SAVE_VERSION);
+            assert_eq!(decoded.tunnel_remaining, data.tunnel_remaining);
+        }
+    }
+
+    #[test]
+    fn tunnel_donations_reject_out_of_bounds_values() {
+        for (key, limit) in [
+            ("tunnel1_remaining", 100_000),
+            ("tunnel2_remaining", 200_000),
+            ("tunnel3_remaining", 300_000),
+        ] {
+            for invalid in [
+                "-1".into(),
+                "1.5".into(),
+                "null".into(),
+                (limit + 1).to_string(),
+            ] {
+                let json = format!(r#"{{"version":1,"tunnel_remaining":{{"{key}":{invalid}}}}}"#);
+                assert!(SaveData::from_json(&json).is_err(), "{json}");
+            }
+            let mut data = SaveData::default();
+            data.tunnel_remaining.insert(key.into(), limit + 1);
+            assert!(data.to_json().is_err());
         }
     }
 

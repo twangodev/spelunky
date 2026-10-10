@@ -2,6 +2,7 @@
 use crate::{
     atlas::Atlas,
     audio::Audio,
+    donation_ui::{self, TransitionDonation},
     editor_ui::{EditorCommand, EditorUi},
     input::{InputState, UiButton},
     renderer::{DrawQuad, Renderer},
@@ -34,6 +35,7 @@ enum Screen {
     Records,
     About,
     Finished,
+    Donation,
 }
 enum UserEvent {
     Ready(Result<(Renderer, Atlas), String>),
@@ -86,6 +88,8 @@ struct App {
     settings_ui: SettingsUi,
     editor: EditorUi,
     editor_play: bool,
+    donation: Option<TransitionDonation>,
+    donation_confirm: bool,
     recorded: bool,
     focused: bool,
     occluded: bool,
@@ -123,6 +127,8 @@ impl App {
             settings_ui: SettingsUi::new(),
             editor: EditorUi::new(),
             editor_play: false,
+            donation: None,
+            donation_confirm: false,
             recorded: false,
             focused: true,
             occluded: false,
@@ -154,6 +160,7 @@ impl App {
         }
     }
     fn reset_timing(&mut self) {
+        self.donation_confirm = false;
         self.clock.reset();
         self.input.clear_gameplay();
         self.last_frame = self.now();
@@ -199,6 +206,7 @@ impl App {
         } else {
             Game::new(seed, self.store.data.settings.rules)
         };
+        donation_ui::hydrate(&mut game, &self.store.data.tunnel_remaining);
         game.flags.extend(
             self.store
                 .data
@@ -308,6 +316,11 @@ impl App {
             return;
         }
         match self.screen {
+            Screen::Donation => {
+                if matches!(key, KeyCode::Enter | KeyCode::Escape) {
+                    self.continue_transition();
+                }
+            }
             Screen::Playing => {
                 if self.pause_key(key) {
                     self.screen(Screen::Pause)
@@ -682,9 +695,23 @@ impl App {
                 }
             }
         } else {
-            game.next_level();
-            self.reset_timing();
+            if let Some(donation) = TransitionDonation::begin(game) {
+                self.donation = Some(donation);
+                self.donation_confirm = false;
+                self.screen(Screen::Donation);
+            } else {
+                game.next_level();
+                self.reset_timing();
+            }
         }
+    }
+    fn continue_transition(&mut self) {
+        self.donation = None;
+        self.donation_confirm = false;
+        if let Some(game) = &mut self.game {
+            game.next_level();
+        }
+        self.screen(Screen::Playing);
     }
     fn shortcuts(&self) -> Vec<u32> {
         [5, 9, 13]
@@ -709,6 +736,14 @@ impl App {
             self.audio.unlock();
         }
         for button in buttons {
+            if self.screen == Screen::Donation {
+                match button {
+                    UiButton::Confirm => self.donation_confirm = true,
+                    UiButton::Cancel | UiButton::Pause => self.continue_transition(),
+                    _ => {}
+                }
+                continue;
+            }
             if button == UiButton::Pause && self.screen == Screen::Playing {
                 self.screen(Screen::Pause);
                 continue;
@@ -725,6 +760,22 @@ impl App {
                     },
                     None,
                 )
+            }
+        }
+        if self.screen == Screen::Donation && self.focused && !self.occluded {
+            let frame = self.clock.advance(elapsed);
+            for _ in 0..frame.ticks {
+                let mut input = self.input.take_tick();
+                input.pay_pressed |= self.donation_confirm;
+                self.donation_confirm = false;
+                if let (Some(ui), Some(game)) = (&mut self.donation, &mut self.game) {
+                    let paid = ui.tick(game, &input);
+                    if paid > 0 {
+                        self.message = format!("THANKS FOR THE ${paid} DONATION!");
+                        self.message_simulated = false;
+                        self.message_until = now + 4.;
+                    }
+                }
             }
         }
         if self.screen == Screen::Playing && self.focused && !self.occluded {
@@ -772,6 +823,11 @@ impl App {
         if let Some(game) = &self.game {
             let previous = self.store.data.unlocks.clone();
             let previous_challenges = self.store.data.challenge_records.clone();
+            let previous_tunnels = self.store.data.tunnel_remaining.clone();
+            self.store
+                .data
+                .tunnel_remaining
+                .extend(donation_ui::progress(game));
             if game.flags.contains("hub") {
                 for key in ["mini1", "mini2", "mini3"] {
                     if let Some(value) = game.data.get(key).filter(|value| value.is_finite()) {
@@ -800,6 +856,7 @@ impl App {
             );
             if self.store.data.unlocks != previous
                 || self.store.data.challenge_records != previous_challenges
+                || self.store.data.tunnel_remaining != previous_tunnels
             {
                 if let Err(error) = self.store.save() {
                     self.toast(error)
@@ -814,7 +871,7 @@ impl App {
             "title"
         } else if matches!(
             self.screen,
-            Screen::Playing | Screen::Pause | Screen::Finished
+            Screen::Playing | Screen::Pause | Screen::Finished | Screen::Donation
         ) {
             self.game
                 .as_ref()
@@ -844,7 +901,7 @@ impl App {
         };
         let mut quads = if matches!(
             self.screen,
-            Screen::Playing | Screen::Pause | Screen::Finished
+            Screen::Playing | Screen::Pause | Screen::Finished | Screen::Donation
         ) {
             self.game
                 .as_ref()
@@ -859,6 +916,99 @@ impl App {
         };
         match self.screen {
             Screen::Playing => {}
+            Screen::Donation => {
+                rect(
+                    &mut quads,
+                    [22., 25., 276., 190.],
+                    [0.035, 0.02, 0.015, 0.97],
+                );
+                text(&mut quads, atlas, "TUNNEL MAN", 99., 38., 1.5, GOLD);
+                if let Some(frame) = atlas.sprite("sTunnelManLeft", 0.) {
+                    quads.push(DrawQuad {
+                        rect: [38., 76., frame.size[0] * 2., frame.size[1] * 2.],
+                        uv: frame.uv,
+                        color: WHITE,
+                        ..Default::default()
+                    });
+                }
+                if let (Some(ui), Some(game)) = (&self.donation, &self.game) {
+                    text(
+                        &mut quads,
+                        atlas,
+                        &format!("SHORTCUT TO LEVEL {}", ui.destination),
+                        91.,
+                        75.,
+                        1.,
+                        WHITE,
+                    );
+                    text(
+                        &mut quads,
+                        atlas,
+                        &format!("STILL NEEDED: ${}", ui.remaining(game)),
+                        91.,
+                        94.,
+                        0.9,
+                        WHITE,
+                    );
+                    text(
+                        &mut quads,
+                        atlas,
+                        &format!("YOUR GOLD: ${}", game.player.money),
+                        91.,
+                        111.,
+                        0.9,
+                        WHITE,
+                    );
+                    if ui.complete(game) {
+                        text(
+                            &mut quads,
+                            atlas,
+                            "THE SHORTCUT IS OPEN!",
+                            60.,
+                            141.,
+                            1.,
+                            GOLD,
+                        );
+                    } else {
+                        text(
+                            &mut quads,
+                            atlas,
+                            &format!("DONATE: ${}", ui.amount),
+                            83.,
+                            141.,
+                            1.4,
+                            GOLD,
+                        );
+                    }
+                }
+                text(
+                    &mut quads,
+                    atlas,
+                    "UP/DOWN SELECT (HOLD TO SPEED UP)",
+                    35.,
+                    173.,
+                    0.85,
+                    WHITE,
+                );
+                text(
+                    &mut quads,
+                    atlas,
+                    "ATTACK / PAY / A: DONATE",
+                    56.,
+                    188.,
+                    0.85,
+                    WHITE,
+                );
+                text(
+                    &mut quads,
+                    atlas,
+                    "ENTER / ESC / B: CONTINUE",
+                    54.,
+                    201.,
+                    0.85,
+                    WHITE,
+                );
+            }
             Screen::Editor => self.editor.draw(atlas, &mut quads),
             Screen::Settings => self
                 .settings_ui
@@ -1118,7 +1268,7 @@ impl App {
         let message_visible = if self.message_simulated {
             matches!(
                 self.screen,
-                Screen::Playing | Screen::Pause | Screen::Finished
+                Screen::Playing | Screen::Pause | Screen::Finished | Screen::Donation
             ) && self.game.as_ref().is_some_and(|game| {
                 game.data
                     .get("message_timer")
@@ -1367,7 +1517,7 @@ impl ApplicationHandler<UserEvent> for App {
                     if pressed {
                         self.audio.unlock();
                     }
-                    if self.screen == Screen::Playing {
+                    if matches!(self.screen, Screen::Playing | Screen::Donation) {
                         self.input.key(key, pressed, event.repeat);
                     }
                     if pressed && !event.repeat {

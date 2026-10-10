@@ -220,6 +220,89 @@ fn ghost(game: &mut Game) {
     }
 }
 
+/// A source-cost shortcut donation offered after an area boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TunnelOffer {
+    pub stage: u8,
+    pub remaining: u32,
+    pub destination: u32,
+}
+
+fn tunnel_stage(game: &Game) -> Option<u8> {
+    if !game.flags.contains("shortcut_5") {
+        Some(1)
+    } else if !game.flags.contains("shortcut_9") {
+        Some(2)
+    } else if !game.flags.contains("shortcut_13") {
+        Some(3)
+    } else {
+        None
+    }
+}
+
+fn tunnel_remaining(game: &Game, stage: u8) -> u32 {
+    let cost = u32::from(stage) * 100000;
+    game.data
+        .get(&format!("tunnel{stage}_remaining"))
+        .copied()
+        .unwrap_or(f64::from(cost))
+        .clamp(0., f64::from(cost)) as u32
+}
+
+/// Host transition UI can inspect an offer without replacing the ended world.
+/// Classic's introductory max+1 sentinel delay is intentionally omitted.
+pub fn tunnel_offer(game: &Game) -> Option<TunnelOffer> {
+    if game.state != RunState::Transition
+        || game.flags.contains("custom_level")
+        || game.flags.contains("tutorial")
+        || game.flags.contains("hub")
+    {
+        return None;
+    }
+    let stage = tunnel_stage(game)?;
+    if game.world.level != u32::from(stage) * 4 {
+        return None;
+    }
+    Some(TunnelOffer {
+        stage,
+        remaining: tunnel_remaining(game, stage),
+        destination: u32::from(stage) * 4 + 1,
+    })
+}
+
+fn apply_donation(game: &mut Game, stage: u8, requested: u32) -> u32 {
+    let remaining = tunnel_remaining(game, stage);
+    let amount = requested.min(remaining).min(game.player.money);
+    if amount == 0 {
+        return 0;
+    }
+    game.player.money -= amount;
+    game.data.insert(
+        format!("tunnel{stage}_remaining"),
+        f64::from(remaining - amount),
+    );
+    if amount == remaining {
+        game.flags
+            .insert(format!("shortcut_{}", u32::from(stage) * 4 + 1));
+        game.events.push(GameEvent::Message(
+            "THANKS! THE SHORTCUT IS COMPLETE!".into(),
+        ));
+    } else {
+        game.events
+            .push(GameEvent::Message("THANKS FOR THE DONATION!".into()));
+    }
+    amount
+}
+
+/// Pay only an eligible transition's offer, clamped to money and remaining cost.
+/// Returns the amount actually paid; simulation, world and carried items stay intact.
+pub fn donate_to_tunnel(game: &mut Game, amount: u32) -> u32 {
+    let Some(offer) = tunnel_offer(game) else {
+        return 0;
+    };
+    apply_donation(game, offer.stage, amount)
+}
+
 fn donate(game: &mut Game, input: &InputFrame) {
     let tunnel = game
         .world
@@ -230,20 +313,10 @@ fn donate(game: &mut Game, input: &InputFrame) {
     let Some(id) = tunnel else {
         return;
     };
-    let stage = if !game.flags.contains("shortcut_5") {
-        1
-    } else if !game.flags.contains("shortcut_9") {
-        2
-    } else if !game.flags.contains("shortcut_13") {
-        3
-    } else {
+    let Some(stage) = tunnel_stage(game) else {
         return;
     };
-    let key = format!("tunnel{stage}_remaining");
-    let remaining = *game
-        .data
-        .entry(key.clone())
-        .or_insert(stage as f64 * 100000.);
+    let remaining = f64::from(tunnel_remaining(game, stage));
     let entity = game.world.entity_mut(id).unwrap();
     let mut amount = entity.value("donate");
     // Preserve the 20-tick initial delay and 100-tick accelerated hold.
@@ -260,29 +333,12 @@ fn donate(game: &mut Game, input: &InputFrame) {
     amount = amount.max(0.).min(remaining).min(game.player.money as f64);
     entity.data.insert("donate".into(), amount);
     if input.pay_pressed && amount > 0. {
-        game.player.money -= amount as u32;
-        game.data.insert(key, remaining - amount);
+        apply_donation(game, stage, amount as u32);
         game.world
             .entity_mut(id)
             .unwrap()
             .data
             .insert("donate".into(), 0.);
-        if amount >= remaining {
-            game.flags.insert(format!(
-                "shortcut_{}",
-                match stage {
-                    1 => 5,
-                    2 => 9,
-                    _ => 13,
-                }
-            ));
-            game.events.push(GameEvent::Message(
-                "THANKS! THE SHORTCUT IS COMPLETE!".into(),
-            ));
-        } else {
-            game.events
-                .push(GameEvent::Message("THANKS FOR THE DONATION!".into()));
-        }
     }
 }
 
@@ -637,5 +693,88 @@ mod tests {
                 .count(),
             1
         );
+    }
+    #[test]
+    fn tunnel_offers_follow_source_stages_and_area_boundaries() {
+        let mut g = game(4);
+        g.state = RunState::Transition;
+        assert_eq!(
+            tunnel_offer(&g),
+            Some(TunnelOffer {
+                stage: 1,
+                remaining: 100000,
+                destination: 5
+            })
+        );
+        g.world.level = 8;
+        assert_eq!(tunnel_offer(&g), None);
+        g.flags.insert("shortcut_5".into());
+        assert_eq!(
+            tunnel_offer(&g),
+            Some(TunnelOffer {
+                stage: 2,
+                remaining: 200000,
+                destination: 9
+            })
+        );
+        g.world.level = 12;
+        assert_eq!(tunnel_offer(&g), None);
+        g.flags.insert("shortcut_9".into());
+        assert_eq!(
+            tunnel_offer(&g),
+            Some(TunnelOffer {
+                stage: 3,
+                remaining: 300000,
+                destination: 13
+            })
+        );
+        g.flags.insert("shortcut_13".into());
+        assert_eq!(tunnel_offer(&g), None);
+    }
+    #[test]
+    fn partial_transition_donation_preserves_world_and_carry_and_survives_runs() {
+        let mut g = game(4);
+        g.state = RunState::Transition;
+        g.player.money = 30000;
+        let id = g.world.spawn("oShotgun", g.player.pos);
+        g.world.entity_mut(id).unwrap().held = true;
+        g.player.held = Some(id);
+        g.flags.insert("carry:oShotgun".into());
+        let world = serde_json::to_string(&g.world).unwrap();
+        let tick = g.tick;
+        assert_eq!(donate_to_tunnel(&mut g, 50000), 30000);
+        assert_eq!(g.player.money, 0);
+        assert_eq!(g.data["tunnel1_remaining"], 70000.);
+        assert_eq!(g.state, RunState::Transition);
+        assert_eq!(g.tick, tick);
+        assert_eq!(g.player.held, Some(id));
+        assert!(g.flags.contains("carry:oShotgun"));
+        assert_eq!(serde_json::to_string(&g.world).unwrap(), world);
+        let mut next = game(4);
+        next.state = RunState::Transition;
+        next.flags = g.flags.clone();
+        next.data = g.data.clone();
+        next.player.money = 80000;
+        assert_eq!(tunnel_offer(&next).unwrap().remaining, 70000);
+        assert_eq!(donate_to_tunnel(&mut next, u32::MAX), 70000);
+        assert_eq!(next.player.money, 10000);
+        assert!(next.flags.contains("shortcut_5"));
+        assert_eq!(donate_to_tunnel(&mut next, 1000), 0);
+    }
+    #[test]
+    fn donation_rejects_playing_custom_tutorial_and_wrong_boundary() {
+        let mut g = game(4);
+        g.player.money = 100000;
+        assert_eq!(donate_to_tunnel(&mut g, 100), 0);
+        g.state = RunState::Transition;
+        g.flags.insert("custom_level".into());
+        assert_eq!(donate_to_tunnel(&mut g, 100), 0);
+        g.flags.clear();
+        g.flags.insert("tutorial".into());
+        assert_eq!(donate_to_tunnel(&mut g, 100), 0);
+        g.flags.clear();
+        g.world.level = 3;
+        assert_eq!(donate_to_tunnel(&mut g, 100), 0);
+        assert_eq!(g.player.money, 100000);
     }
 }
