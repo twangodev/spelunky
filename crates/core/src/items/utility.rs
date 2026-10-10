@@ -75,6 +75,20 @@ pub fn init_entity(entity: &mut Entity) {
     }
 }
 
+/// Complete oDice Create while the caller still owns the creation RNG order.
+/// In particular room generation must draw before stamping its next character,
+/// even when this die will remain deactivated outside the initial view.
+pub(crate) fn initialize_dice(rng: &mut Rng, entity: &mut Entity) {
+    if entity.object != "oDice" || entity.value("dice_create_initialized") != 0.0 {
+        return;
+    }
+    init_entity(entity);
+    entity
+        .data
+        .insert("value".into(), f64::from(1 + rng.range(6)));
+    entity.data.insert("dice_create_initialized".into(), 1.0);
+}
+
 /// Returns whether the held object consumed this use. Down is handled by the
 /// common drop/throw path; a teleporter is never thrown by a normal activation.
 pub fn use_utility(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
@@ -260,9 +274,9 @@ pub fn tick(game: &mut Game) {
             }
             "oDice" => {
                 if entity.value("value") == 0.0 {
-                    entity
-                        .data
-                        .insert("value".into(), f64::from(1 + game.rng.range(6)));
+                    // Compatibility for directly authored/test instances;
+                    // generated dice have already run Create synchronously.
+                    initialize_dice(&mut game.rng, &mut entity);
                 }
                 if entity.vel.x.abs() > 2.0 || entity.vel.y.abs() > 2.0 {
                     entity.sprite = "sDiceRoll".into();
@@ -353,6 +367,30 @@ mod tests {
         game.world.entity_mut(id).unwrap().held = true;
         game.player.held = Some(id);
         (game, id)
+    }
+
+    #[test]
+    fn dice_create_draws_once_and_first_step_retains_that_face() {
+        let mut game = Game::shell(123, RulesPreset::Classic);
+        let id = game.world.spawn("oDice", Vec2::new(96.0, 88.0));
+        game.world.set_tile(6, 6, "oBlock");
+        let mut expected_rng = game.rng.clone();
+        let face = 1 + expected_rng.range(6);
+        initialize_dice(&mut game.rng, game.world.entity_mut(id).unwrap());
+        initialize_dice(&mut game.rng, game.world.entity_mut(id).unwrap());
+        let entity = game.world.entity(id).unwrap();
+        assert_eq!(entity.value("value"), f64::from(face));
+        assert_eq!(entity.value("heavy"), 1.0);
+        assert_eq!(entity.value("rolled"), 0.0);
+        assert_eq!(entity.value("rolling"), 0.0);
+        assert_eq!(entity.value("bboxLeft"), -6.0);
+        assert_eq!(entity.value("bboxBottom"), 8.0);
+        game.step(&InputFrame::default());
+        assert_eq!(
+            game.world.entity(id).unwrap().sprite,
+            format!("sDice{face}")
+        );
+        assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
     }
 
     #[test]

@@ -8,6 +8,7 @@ pub mod explosives;
 pub mod utility;
 #[path = "items/weapons.rs"]
 pub mod weapons;
+pub(crate) use utility::initialize_dice;
 
 pub fn is_item(name: &str) -> bool {
     collectibles::is_collectible(name)
@@ -38,6 +39,7 @@ pub fn is_item(name: &str) -> bool {
                 | "oWebCannon"
                 | "oMachete"
                 | "oMattock"
+                | "oMattockHead"
                 | "oTeleporter"
                 | "oFlare"
                 | "oChest"
@@ -85,6 +87,16 @@ pub fn init_entity(entity: &mut Entity) {
             ("bboxTop", 0.0),
             ("bboxRight", 6.0),
             ("bboxBottom", 8.0),
+        ] {
+            entity.data.insert(key.into(), value);
+        }
+    }
+    if entity.object == "oMattockHead" {
+        for (key, value) in [
+            ("bboxLeft", -6.0),
+            ("bboxTop", -4.0),
+            ("bboxRight", 6.0),
+            ("bboxBottom", 4.0),
         ] {
             entity.data.insert(key.into(), value);
         }
@@ -1106,6 +1118,41 @@ mod tests {
         let rock = game.world.entity(id).unwrap();
         assert_eq!(rock.vel, Vec2::new(14.0, -0.4));
         assert_eq!(rock.value("gravity"), 0.1);
+    }
+    #[test]
+    fn game_step_mattock_head_inherits_motion_pickup_and_throw() {
+        let mut game = game();
+        game.player.pos = Vec2::new(200.0, 80.0);
+        let id = game.world.spawn("oMattockHead", Vec2::new(100.0, 80.0));
+        game.world.entity_mut(id).unwrap().vel = Vec2::new(2.0, -2.0);
+        game.step(&InputFrame::default());
+        let head = game.world.entity(id).unwrap();
+        assert_eq!(head.pos, Vec2::new(102.0, 78.0));
+        assert!((head.vel.y + 1.4).abs() < 1e-9);
+        assert_eq!(head.value("canPickUp"), 1.0);
+        assert_eq!(head.value("bboxLeft"), -6.0);
+        assert_eq!(head.value("bboxRight"), 6.0);
+        assert_eq!(head.value("bboxTop"), -4.0);
+        assert_eq!(head.value("bboxBottom"), 4.0);
+
+        game.player.pos = head.pos;
+        game.player.vel = Vec2::default();
+        game.step(&InputFrame {
+            down: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.held, Some(id));
+        assert!(game.world.entity(id).unwrap().held);
+        game.step(&InputFrame {
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.held, None);
+        let head = game.world.entity(id).unwrap();
+        assert!(!head.held);
+        assert!(head.vel.x > 0.0 && head.vel.y < 0.0);
+        assert_eq!(head.value("armed"), 1.0);
     }
     #[test]
     fn game_step_mitt_throw_returns_to_source_item_gravity_after_first_tick() {

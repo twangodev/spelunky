@@ -1081,8 +1081,8 @@ fn solid_destroy_family(object: &str) -> &str {
 
 fn solid_outputs_enabled(game: &Game, entity: &Entity) -> bool {
     let family = solid_destroy_family(&entity.object);
-    if family == "oGrave" {
-        return true; // Its own event has no clean-death guard.
+    if matches!(family, "oGrave" | "oAlienShip" | "oAlienShipFloor") {
+        return true; // These own events have no clean-death guard.
     }
     entity.value("cleanDeath") == 0.0
         && (matches!(family, "oBlock" | "oXocBlock")
@@ -1112,9 +1112,8 @@ fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
     let center = Vec2::new(entity.pos.x + 8.0, entity.pos.y + 8.0);
     let rubble_style = match family {
         "oBrick" | "oTree" => Some(("sRubble", "sRubbleSmall")),
-        "oBrickSmooth" | "oGrave" | "oSign" | "oAltarLeft" | "oAltarRight" | "oSacAltarLeft" => {
-            Some(("sRubbleTan", "sRubbleTanSmall"))
-        }
+        "oBrickSmooth" | "oGrave" | "oSign" | "oAltarLeft" | "oAltarRight" | "oSacAltarLeft"
+        | "oArrowTrapLeft" | "oArrowTrapRight" => Some(("sRubbleTan", "sRubbleTanSmall")),
         "oLush" | "oTemple" => Some(("sRubbleLush", "sRubbleLushSmall")),
         "oBlock" | "oPushBlock" | "oXocBlock" if !city => Some(("sRubbleLush", "sRubbleLushSmall")),
         _ => None,
@@ -1142,8 +1141,34 @@ fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
             game.world.spawn("oDrip", pos);
         }
     }
-    // Dark and AlienShip source events contain malformed one-argument
-    // rand(0-8) calls. Their offsets/RNG coercion remain explicitly unaudited.
+    if matches!(family, "oDark" | "oAlienShip" | "oAlienShipFloor") {
+        for object in ["oRubbleDark", "oRubbleDarkSmall", "oRubbleDarkSmall"] {
+            // Preserve the source's literal rand(0-8), not rand(0,8).
+            // Its omitted argument1 is zero, so rand(-8) evaluates rand(-8,0).
+            let pos = Vec2::new(
+                center.x + f64::from(game.rng.range(9)) - (f64::from(game.rng.range(9)) - 8.0),
+                center.y + f64::from(game.rng.range(9)) - (f64::from(game.rng.range(9)) - 8.0),
+            );
+            game.world.spawn(object, pos);
+        }
+    }
+    if matches!(family, "oArrowTrapLeft" | "oArrowTrapRight") {
+        let key = if entity.id == 0 {
+            let x = (entity.pos.x / 16.0).floor() as usize;
+            let y = (entity.pos.y / 16.0).floor() as usize;
+            format!("hazard:{}:fired", y * game.world.width + x)
+        } else {
+            format!("hazard_entity:{}:fired", entity.id)
+        };
+        let fired = game
+            .data
+            .get(&key)
+            .copied()
+            .unwrap_or(entity.value("fired"));
+        if fired == 0.0 {
+            game.world.spawn("oArrow", center);
+        }
+    }
     if release_gold {
         let gold_sprite = matches!(
             entity.sprite.as_str(),
@@ -2286,6 +2311,137 @@ mod destruction_callbacks {
                 assert_eq!(fragments, 3);
             } else {
                 assert!((1..=2).contains(&fragments));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod literal_dark_and_arrow_destroy_regressions {
+    use super::*;
+
+    #[test]
+    fn game_step_dark_debris_preserves_literal_negative_rand_offsets_and_rng_order() {
+        for object in ["oDark", "oAlienShip", "oAlienShipFloor"] {
+            let mut game = Game::shell(7, RulesPreset::Classic);
+            game.player.pos = Vec2::new(160.0, 160.0);
+            let target = game.world.spawn(object, Vec2::new(80.0, 80.0));
+            game.world.spawn("oExplosion", Vec2::new(88.0, 88.0));
+            let mut expected_rng = game.rng.clone();
+            let expected: Vec<_> = (0..3)
+                .map(|_| {
+                    Vec2::new(
+                        88.0 + f64::from(expected_rng.range(9))
+                            - (f64::from(expected_rng.range(9)) - 8.0),
+                        88.0 + f64::from(expected_rng.range(9))
+                            - (f64::from(expected_rng.range(9)) - 8.0),
+                    )
+                })
+                .collect();
+            game.step(&InputFrame::default());
+            assert!(game.world.entity(target).is_none());
+            let rubble: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|entity| {
+                    matches!(entity.object.as_str(), "oRubbleDark" | "oRubbleDarkSmall")
+                })
+                .collect();
+            assert_eq!(rubble.len(), 3, "{object}");
+            assert_eq!(rubble[0].object, "oRubbleDark");
+            for (rubble, expected) in rubble.iter().zip(expected) {
+                assert_eq!(rubble.pos, expected, "{object}");
+                assert!((88.0..=104.0).contains(&rubble.pos.x));
+                assert!((88.0..=104.0).contains(&rubble.pos.y));
+            }
+            assert_eq!(
+                game.rng.range(100_000),
+                expected_rng.range(100_000),
+                "{object}"
+            );
+        }
+    }
+
+    #[test]
+    fn game_step_dark_and_alien_destroy_keep_their_distinct_clean_guards() {
+        for object in ["oDark", "oAlienShip", "oAlienShipFloor"] {
+            for clean_global in [false, true] {
+                let mut game = Game::shell(7, RulesPreset::Classic);
+                game.player.pos = Vec2::new(160.0, 160.0);
+                let target = game.world.spawn(object, Vec2::new(80.0, 80.0));
+                if clean_global {
+                    game.flags.insert("cleanSolids".into());
+                } else {
+                    game.world
+                        .entity_mut(target)
+                        .unwrap()
+                        .data
+                        .insert("cleanDeath".into(), 1.0);
+                }
+                game.world.spawn("oExplosion", Vec2::new(88.0, 88.0));
+                game.step(&InputFrame::default());
+                let count = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|entity| {
+                        matches!(entity.object.as_str(), "oRubbleDark" | "oRubbleDarkSmall")
+                    })
+                    .count();
+                assert_eq!(
+                    count,
+                    if object == "oDark" { 0 } else { 3 },
+                    "{object}/{clean_global}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn game_step_mattock_recovers_only_unfired_arrow_traps_for_tiles_and_instances() {
+        for dynamic in [false, true] {
+            for fired in [false, true] {
+                let mut game = Game::shell(7, RulesPreset::Classic);
+                game.player.pos = Vec2::new(72.0, 88.0);
+                game.world.set_tile(4, 6, "oHardBlock");
+                let fired_key = if dynamic {
+                    let target = game.world.spawn("oArrowTrapRight", Vec2::new(80.0, 80.0));
+                    format!("hazard_entity:{target}:fired")
+                } else {
+                    game.world.set_tile(5, 5, "oArrowTrapRight");
+                    format!("hazard:{}:fired", 5 * game.world.width + 5)
+                };
+                game.data.insert(fired_key, f64::from(fired));
+                let hit = game.world.spawn("oMattockHit", Vec2::new(88.0, 88.0));
+                game.world.entity_mut(hit).unwrap().timer = 0;
+                game.step(&InputFrame::default());
+                let arrows: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|entity| entity.object == "oArrow")
+                    .collect();
+                assert_eq!(arrows.len(), usize::from(!fired), "{dynamic}/{fired}");
+                if !fired {
+                    assert_eq!(arrows[0].pos, Vec2::new(88.0, 88.0));
+                }
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(|entity| entity.object == "oRubble")
+                        .count(),
+                    1
+                );
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(|entity| entity.object == "oRubbleSmall")
+                        .count(),
+                    2
+                );
             }
         }
     }

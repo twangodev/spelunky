@@ -122,6 +122,24 @@ pub fn init_entity(e: &mut Entity) {
     }
 }
 
+/// Synchronous oWebBall Create. Callers must run this before applying their
+/// launch overrides: its four random draws also affect later gameplay RNG.
+pub(crate) fn initialize_web_ball(game: &mut Game, e: &mut Entity) {
+    if e.value("web_create_initialized") != 0.0 {
+        return;
+    }
+    init_entity(e);
+    e.vel.y = -(game.rng.unit() * 3.0 + 1.0);
+    e.vel.x = f64::from(1 + game.rng.range(3));
+    if game.rng.chance(1, 2) {
+        e.vel.x *= -1.0;
+    }
+    e.data
+        .insert("life".into(), f64::from(20 + game.rng.range(81)));
+    e.data.remove("web_life_pending");
+    e.data.insert("web_create_initialized".into(), 1.0);
+}
+
 /// Returns true for recognized weapons, including when blocked by cooldown.
 /// The host supplies continuous attack state in player.data["attack_held"].
 pub fn use_weapon(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
@@ -192,6 +210,17 @@ pub fn use_weapon(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
             spawn_pre(game, mattock);
         }
         "oSceptre" => {
+            for _ in 0..3 {
+                let velocity = Vec2::new(
+                    facing * f64::from(1 + game.rng.range(3)),
+                    -game.rng.unit() * 2.0,
+                );
+                crate::world_events::spawn_psychic_create_p(
+                    game,
+                    Vec2::new(pos.x + 12.0 * facing, pos.y + 4.0),
+                    velocity,
+                );
+            }
             let id = game.world.spawn(
                 "oPsychicWaveP",
                 Vec2::new(pos.x + 12.0 * facing, pos.y - 2.0),
@@ -214,16 +243,21 @@ pub fn use_weapon(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
                 8.0
             };
             for _ in 0..if shotgun { 6 } else { 1 } {
+                let id = game.world.spawn(
+                    if web { "oWebBall" } else { "oBullet" },
+                    Vec2::new(pos.x + muzzle_x, pos.y - 2.0),
+                );
+                if web {
+                    let mut projectile = game.world.entity(id).unwrap().clone();
+                    initialize_web_ball(game, &mut projectile);
+                    *game.world.entity_mut(id).unwrap() = projectile;
+                }
                 let speed = (6.0 + f64::from(game.rng.range(3))) * facing + game.player.vel.x;
                 let y_speed = if shotgun {
                     game.rng.unit() - game.rng.unit()
                 } else {
                     0.0
                 };
-                let id = game.world.spawn(
-                    if web { "oWebBall" } else { "oBullet" },
-                    Vec2::new(pos.x + muzzle_x, pos.y - 2.0),
-                );
                 let e = game.world.entity_mut(id).unwrap();
                 init_entity(e);
                 owned(e, if web { 0.0 } else { 4.0 });
@@ -654,7 +688,9 @@ fn mattock_dig(game: &mut Game, e: &Entity) {
                 game.player.held = None;
             }
             let id = game.world.spawn("oMattockHead", e.pos);
-            game.world.entity_mut(id).unwrap().vel.y = -2.0;
+            let head = game.world.entity_mut(id).unwrap();
+            super::init_entity(head);
+            head.vel.y = -2.0;
             game.sound("sndMattockBreak", e.pos);
         } else {
             game.sound("sndCrunch", e.pos);
@@ -977,9 +1013,19 @@ pub fn tick(game: &mut Game) {
                 e.animation += 0.25;
             }
             "oWebBall" => {
-                if e.data.remove("web_life_pending").is_some() {
-                    e.data
-                        .insert("life".into(), f64::from(20 + game.rng.range(81)));
+                if e.value("web_create_initialized") == 0.0 {
+                    // Raw authored/fixture spawns may already carry explicit
+                    // post-Create launch/lifetime overrides. Initialize the
+                    // source defaults once, then retain those supplied values.
+                    let life = e.data.get("life").copied();
+                    let velocity = (e.vel != Vec2::default() || life.is_some()).then_some(e.vel);
+                    initialize_web_ball(game, &mut e);
+                    if let Some(life) = life {
+                        e.data.insert("life".into(), life);
+                    }
+                    if let Some(velocity) = velocity {
+                        e.vel = velocity;
+                    }
                 }
                 if e.state == 0 {
                     let collided = move_projectile(game, &mut e);
@@ -1265,12 +1311,11 @@ mod tests {
         }
         assert!(!game.world.entities.iter().any(|e| e.object == "oSlash"));
         tick(&mut game);
-        assert!(
-            game.world
-                .entities
-                .iter()
-                .any(|e| e.object == "oSlash" && e.alive && e.value("damage") == 2.0)
-        );
+        assert!(game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.object == "oSlash" && e.alive && e.value("damage") == 2.0));
     }
     #[test]
     fn mattock_requires_ground_and_only_slows_the_onset_tick() {
@@ -1287,20 +1332,17 @@ mod tests {
         for _ in 0..3 {
             tick(&mut game);
         }
-        assert!(
-            !game
-                .world
-                .entities
-                .iter()
-                .any(|e| e.object == "oMattockHit")
-        );
+        assert!(!game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.object == "oMattockHit"));
         tick(&mut game);
-        assert!(
-            game.world
-                .entities
-                .iter()
-                .any(|e| e.object == "oMattockHit" && e.alive)
-        );
+        assert!(game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.object == "oMattockHit" && e.alive));
     }
     #[test]
     fn bomb_arrow_requires_but_does_not_consume_bomb_and_preserves_cooked_fuse() {
@@ -1366,12 +1408,11 @@ mod tests {
         assert!(!game.world.entities.iter().any(|e| e.object == "oExplosion"));
         pre_tick(&mut game);
         tick(&mut game);
-        assert!(
-            game.world
-                .entities
-                .iter()
-                .any(|e| e.object == "oExplosion" && e.pos == game.player.pos)
-        );
+        assert!(game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.object == "oExplosion" && e.pos == game.player.pos));
         assert_eq!(game.player.data["bow_bomb_armed"], 0.0);
     }
 
@@ -1994,5 +2035,130 @@ mod tests {
         assert_eq!(game.player.data["dist_to_nearest_light_source"], 0.0);
         assert_eq!(game.data["darkness"], 0.0);
         assert_eq!(game.player.data["bow_bomb_armed"], 0.0);
+    }
+
+    #[test]
+    fn game_step_web_cannon_executes_create_randomness_before_launch_override() {
+        let (mut game, _) = flat_room("oWebCannon");
+        let mut expected = game.rng.clone();
+        expected.unit(); // WebBall Create yVel
+        expected.range(3); // WebBall Create xVel
+        expected.range(2); // WebBall Create sign
+        let life = 20 + expected.range(81);
+        let speed = f64::from(6 + expected.range(3)); // scrUseItem override
+        game.step(&InputFrame {
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        let web = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oWebBall")
+            .unwrap();
+        assert_eq!(web.vel.x, speed);
+        assert_eq!(web.vel.y, 0.2);
+        assert_eq!(web.value("life"), f64::from(life - 1));
+        assert_eq!(web.value("web_create_initialized"), 1.0);
+        assert_eq!(game.rng.next_u64(), expected.next_u64());
+    }
+
+    #[test]
+    fn web_ball_create_defaults_follow_source_y_x_sign_life_order_once() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let mut expected = game.rng.clone();
+        let y = -(expected.unit() * 3.0 + 1.0);
+        let mut x = f64::from(1 + expected.range(3));
+        if expected.chance(1, 2) {
+            x *= -1.0;
+        }
+        let life = f64::from(20 + expected.range(81));
+        let mut web = Entity::new(1, "oWebBall", Vec2::new(80.0, 80.0));
+        initialize_web_ball(&mut game, &mut web);
+        assert_eq!(web.vel, Vec2::new(x, y));
+        assert_eq!(web.value("life"), life);
+        initialize_web_ball(&mut game, &mut web);
+        assert_eq!(game.rng.next_u64(), expected.next_u64());
+    }
+
+    #[test]
+    fn game_step_natural_mattock_break_creates_an_active_pickup_head() {
+        let (mut game, id) = flat_room("oMattock");
+        game.rng = Rng::new(38);
+        game.world.set_tile(6, 9, "oBlock");
+        let hit = game.world.spawn("oMattockHit", Vec2::new(96.0, 152.0));
+        game.world
+            .entity_mut(hit)
+            .unwrap()
+            .data
+            .insert("weapon_id".into(), id as f64);
+        game.step(&InputFrame::default());
+        let head = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oMattockHead")
+            .unwrap();
+        let (head_id, y) = (head.id, head.pos.y);
+        assert_eq!(
+            head.value("canPickUp"),
+            1.0,
+            "Create completes before caller's upward launch"
+        );
+        assert_eq!(head.value("bboxLeft"), -6.0);
+        assert_eq!(head.vel.y, -2.0);
+        assert!(game.player.held.is_none());
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(head_id).unwrap().pos.y, y - 2.0);
+    }
+
+    #[test]
+    fn game_step_sceptre_creates_three_source_particles_before_the_wave() {
+        for facing in [-1, 1] {
+            let (mut game, _) = flat_room("oSceptre");
+            game.player.facing = facing;
+            let origin = Vec2::new(
+                game.player.pos.x + 12.0 * f64::from(facing),
+                game.player.pos.y + 4.0,
+            );
+            let mut expected = game.rng.clone();
+            let velocities: Vec<_> = (0..3)
+                .map(|_| {
+                    Vec2::new(
+                        f64::from(facing) * f64::from(1 + expected.range(3)),
+                        -expected.unit() * 2.0,
+                    )
+                })
+                .collect();
+            game.step(&InputFrame {
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            let particles: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oPsychicCreateP")
+                .collect();
+            assert_eq!(particles.len(), 3);
+            for (particle, velocity) in particles.iter().zip(velocities) {
+                assert_eq!(
+                    particle.pos,
+                    Vec2::new(origin.x + velocity.x, origin.y + velocity.y)
+                );
+                assert_eq!(particle.vel, Vec2::new(velocity.x, velocity.y + 0.6));
+                assert_eq!(particle.animation, 0.2);
+            }
+            let wave = game
+                .world
+                .entities
+                .iter()
+                .find(|e| e.object == "oPsychicWaveP")
+                .unwrap();
+            assert!(particles.iter().all(|particle| particle.id < wave.id));
+            assert_eq!(game.rng.next_u64(), expected.next_u64());
+        }
     }
 }
