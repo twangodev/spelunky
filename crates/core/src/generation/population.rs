@@ -128,6 +128,15 @@ struct TreasureState {
     cemetery: bool,
 }
 
+fn source_point_family(world: &World, point: Vec2, family: &str) -> bool {
+    world.tiles_point(point, family)
+        || world.entities.iter().any(|entity| {
+            entity.alive
+                && crate::catalog::is_a(&entity.object, family)
+                && entity.sprite_bounds().contains(point)
+        })
+}
+
 fn treasure(
     world: &mut World,
     rng: &mut Rng,
@@ -143,22 +152,42 @@ fn treasure(
             .entities
             .iter()
             .any(|e| e.object == "oGoldIdol" && e.pos.distance(pos) < 64.0)
-        || solid(world, x, y - 1)
-        || occupied(world, x, y - 1)
     {
         return;
     }
-    if rng.chance(1, 100) {
-        spawn(world, rng, "oRock", x, y - 1);
-        return;
+    // scrTreasureGen.gml:34–57 probes named source families at distinct
+    // coordinates. Enemies do not block loot; oTreasure blocks the alcove /
+    // tunnel branches but deliberately does not block the normal fallback.
+    let origin = Vec2::new(f64::from(x) * 16.0, f64::from(y) * 16.0);
+    let above = Vec2::new(origin.x, origin.y - 16.0);
+    let middle = Vec2::new(origin.x, origin.y - 8.0);
+    let clear_normal = !source_point_family(world, above, "oSolid")
+        && ["oChest", "oSpikes", "oEntrance", "oExit"]
+            .iter()
+            .all(|family| !source_point_family(world, middle, family));
+    let col_stuff = !clear_normal
+        || source_point_family(world, Vec2::new(origin.x, origin.y - 1.0), "oTreasure");
+    if !col_stuff {
+        if rng.chance(1, 100) {
+            spawn(world, rng, "oRock", x, y - 1);
+            return;
+        }
+        if rng.chance(1, 40) {
+            spawn(world, rng, "oJar", x, y - 1);
+            return;
+        }
     }
-    if rng.chance(1, 40) {
-        spawn(world, rng, "oJar", x, y - 1);
-        return;
-    }
-    let side = solid(world, x - 1, y - 1) || solid(world, x + 1, y - 1);
-    let alcove = solid(world, x, y - 2) && side;
-    let tunnel = solid(world, x - 1, y - 1) && solid(world, x + 1, y - 1);
+    let left = Vec2::new(origin.x - 16.0, origin.y - 16.0);
+    let right = Vec2::new(origin.x + 16.0, origin.y - 16.0);
+    let side = [left, right].iter().any(|point| {
+        source_point_family(world, *point, "oSolid") || source_point_family(world, *point, "oBlock")
+    });
+    let alcove = !col_stuff
+        && source_point_family(world, Vec2::new(origin.x, origin.y - 32.0), "oSolid")
+        && side;
+    let tunnel = !col_stuff
+        && source_point_family(world, left, "oSolid")
+        && source_point_family(world, right, "oSolid");
     let bonus = if state.cemetery { 10 } else { 0 };
     let level = world.level;
     if alcove {
@@ -206,17 +235,41 @@ fn treasure(
         } else if rng.chance(1, 10) {
             spawn(world, rng, "oRubyBig", x, y - 1);
         }
-    } else if rng.chance(1, 40) {
-        spawn(world, rng, "oGoldBar", x, y - 1);
-    } else if rng.chance(1, 50) {
-        spawn(world, rng, "oGoldBars", x, y - 1);
-    } else if rng.chance(1 + bonus, 140_u32.saturating_sub(2 * level).max(1)) {
-        bones(world, rng, x, y - 1);
+    } else if clear_normal {
+        if rng.chance(1, 40) {
+            spawn(world, rng, "oGoldBar", x, y - 1);
+        } else if rng.chance(1, 50) {
+            spawn(world, rng, "oGoldBars", x, y - 1);
+        } else if rng.chance(1 + bonus, 140_u32.saturating_sub(2 * level).max(1)) {
+            bones(world, rng, x, y - 1);
+        }
     }
 }
 
 fn schedule(rng: &mut Rng, level: u32, first: u32, last: u32) -> bool {
     level >= first && level <= last && (level == last || rng.chance(1, last - level + 1))
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PopulationPhase {
+    Enemies,
+    Treasure,
+}
+
+#[cfg(test)]
+thread_local! {
+    static POPULATION_PHASE_TRACE: std::cell::RefCell<Option<Vec<(u32, i32, i32, PopulationPhase)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn trace_population_phase(world: &World, x: i32, y: i32, phase: PopulationPhase) {
+    POPULATION_PHASE_TRACE.with(|trace| {
+        if let Some(trace) = trace.borrow_mut().as_mut() {
+            trace.push((world.level, x, y, phase));
+        }
+    });
 }
 
 pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String>) {
@@ -270,9 +323,15 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
             && !water.wet(x, y + 1)
             && !water.wet(x, y + 2);
         let far = at(x, y).distance(world.entrance) > 64.0;
-        if !altar && !tree {
+        // Mines/Jungle call scrTreasureGen before their enemy statements;
+        // Ice/Temple call it after them (scrEntityGen.gml:376,478).
+        if matches!(world.area, Area::Mines | Area::Jungle) && !altar && !tree {
+            #[cfg(test)]
+            trace_population_phase(world, x, y, PopulationPhase::Treasure);
             treasure(world, rng, &water, &mut state, x, y);
         }
+        #[cfg(test)]
+        trace_population_phase(world, x, y, PopulationPhase::Enemies);
         match world.area {
             Area::Mines => {
                 if start_room(world, x, y - 1) {
@@ -441,6 +500,11 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
                 }
             }
             Area::Boss => {}
+        }
+        if matches!(world.area, Area::Ice | Area::Temple) && !altar {
+            #[cfg(test)]
+            trace_population_phase(world, x, y, PopulationPhase::Treasure);
+            treasure(world, rng, &water, &mut state, x, y);
         }
     }
     if udjat && !exists(world, "oLockedChest") {
@@ -697,6 +761,192 @@ mod tests {
             }
         }
         world
+    }
+
+    fn treasure_state() -> TreasureState {
+        TreasureState {
+            udjat: false,
+            chest_chance: 8,
+            damsel: false,
+            cemetery: false,
+        }
+    }
+
+    #[test]
+    fn ice_ufo_create_draw_precedes_same_support_treasure_draws() {
+        // scrEntityGen:359 calls UFO Create (shiftToggle rand(0,1)) before
+        // scrTreasureGen:376. Seed is selected from those literal statements,
+        // not a generated layout. One support isolates their complete stream.
+        let mut world = World::new(42, 38, Area::Ice, 9);
+        world.entrance = at(1, 1);
+        world.exit = at(37, 30);
+        world.set_tile(10, 36, "oDark");
+        let mut actual = Rng::new(1297);
+        let mut source = actual.clone();
+        assert_eq!(source.range(30), 0); // UFO chance succeeds.
+        let shift = source.range(2); // Synchronous UFO Create.
+        assert_eq!(source.range(100), 0); // Following treasure Rock succeeds.
+        populate(&mut world, &mut actual, &BTreeSet::new());
+        let ufo = world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oUFO")
+            .unwrap();
+        let rock = world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oRock")
+            .unwrap();
+        assert_eq!(ufo.value("shift_toggle"), f64::from(shift));
+        assert_eq!(ufo.pos, Vec2::new(160.0, 560.0));
+        assert_eq!(rock.pos, Vec2::new(168.0, 572.0));
+        assert!(ufo.creation_serial < rock.creation_serial);
+        assert_eq!(actual.next_u64(), source.next_u64());
+    }
+
+    #[test]
+    fn temple_enemy_precedes_same_support_treasure_draws() {
+        // At level13 genTombLord is unconditionally true. The only support
+        // cannot make a spear or ceiling enemy: TombLord rand(1,40), then
+        // scrTreasureGen's Rock rand(1,100) are the complete source sequence.
+        let mut world = World::new(42, 34, Area::Temple, 13);
+        world.entrance = at(1, 1);
+        world.exit = at(37, 30);
+        world.set_tile(10, 32, "oTemple");
+        let mut actual = Rng::new(6491);
+        let mut source = actual.clone();
+        assert_eq!(source.range(40), 0);
+        assert_eq!(source.range(100), 0);
+        populate(&mut world, &mut actual, &BTreeSet::new());
+        let enemy = world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oTombLord")
+            .unwrap();
+        let rock = world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oRock")
+            .unwrap();
+        assert_eq!(enemy.pos, Vec2::new(160.0, 480.0));
+        assert_eq!(rock.pos, Vec2::new(168.0, 508.0));
+        assert!(enemy.creation_serial < rock.creation_serial);
+        assert_eq!(actual.next_u64(), source.next_u64());
+    }
+
+    #[test]
+    fn treasure_source_family_guards_block_named_masks_but_allow_enemy_overlap() {
+        for blocker in ["oPushBlock", "oChest", "oSpikes", "oEntrance", "oExit"] {
+            let mut world = World::new(42, 34, Area::Ice, 9);
+            world.entrance = at(1, 1);
+            world.exit = at(37, 30);
+            world.set_tile(10, 10, "oDark");
+            let pos = if blocker == "oChest" {
+                Vec2::new(160.0, 152.0)
+            } else {
+                Vec2::new(160.0, 144.0)
+            };
+            world.spawn(blocker, pos);
+            let water = WaterMasks::new(&world);
+            let mut actual = Rng::new(1297);
+            let mut source = actual.clone();
+            treasure(
+                &mut world,
+                &mut actual,
+                &water,
+                &mut treasure_state(),
+                10,
+                10,
+            );
+            assert_eq!(world.entities.len(), 1, "{blocker}");
+            assert_eq!(
+                actual.next_u64(),
+                source.next_u64(),
+                "{blocker} consumes no loot draw"
+            );
+        }
+        let mut world = World::new(42, 34, Area::Ice, 9);
+        world.entrance = at(1, 1);
+        world.exit = at(37, 30);
+        world.set_tile(10, 10, "oDark");
+        world.spawn("oUFO", Vec2::new(160.0, 144.0));
+        let water = WaterMasks::new(&world);
+        let mut actual = Rng::new(6491);
+        let mut source = actual.clone();
+        // Enemy presence must not skip any of the source's normal loot rolls.
+        if source.range(100) != 0
+            && source.range(40) != 0
+            && source.range(40) != 0
+            && source.range(50) != 0
+            && source.range(122) == 0
+        {
+            source.range(8);
+        }
+        treasure(
+            &mut world,
+            &mut actual,
+            &water,
+            &mut treasure_state(),
+            10,
+            10,
+        );
+        assert_eq!(actual.next_u64(), source.next_u64());
+    }
+
+    #[test]
+    fn existing_treasure_skips_col_stuff_branches_but_keeps_source_normal_fallback() {
+        let mut world = World::new(42, 34, Area::Ice, 9);
+        world.entrance = at(1, 1);
+        world.exit = at(37, 30);
+        world.set_tile(10, 10, "oDark");
+        world.spawn("oGoldBars", Vec2::new(160.0, 152.0));
+        let water = WaterMasks::new(&world);
+        let mut actual = Rng::new(6491);
+        let mut source = actual.clone();
+        assert_eq!(source.range(40), 0); // No Rock/ Jar rolls when colStuff=true.
+        treasure(
+            &mut world,
+            &mut actual,
+            &water,
+            &mut treasure_state(),
+            10,
+            10,
+        );
+        assert_eq!(world.entities.len(), 2);
+        assert_eq!(world.entities[1].object, "oGoldBar");
+        assert_eq!(actual.next_u64(), source.next_u64());
+    }
+
+    #[test]
+    fn natural_game_api_runs_area_specific_population_phase_order() {
+        use crate::{Game, RulesPreset};
+        let mut game = Game::new(0, RulesPreset::Classic);
+        for level in [1, 5, 9, 13] {
+            POPULATION_PHASE_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
+            game.start_from_hub(false, level);
+            let trace = POPULATION_PHASE_TRACE.with(|trace| trace.borrow_mut().take().unwrap());
+            let mut supports =
+                std::collections::BTreeMap::<(i32, i32), Vec<PopulationPhase>>::new();
+            for (destination, x, y, phase) in trace {
+                assert_eq!(destination, level);
+                supports.entry((x, y)).or_default().push(phase);
+            }
+            let expected = if level < 9 {
+                [PopulationPhase::Treasure, PopulationPhase::Enemies]
+            } else {
+                [PopulationPhase::Enemies, PopulationPhase::Treasure]
+            };
+            let mut compared = 0;
+            for phases in supports.values().filter(|phases| phases.len() == 2) {
+                assert_eq!(phases.as_slice(), expected);
+                compared += 1;
+            }
+            assert!(
+                compared > 0,
+                "actual level {level} must exercise ordinary supports"
+            );
+            assert_eq!(game.level_tick, 0);
+        }
     }
 
     fn assert_local_create_completed(entity: &crate::Entity) {
