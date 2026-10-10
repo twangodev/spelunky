@@ -1,6 +1,6 @@
 //! Classic room-path construction and the original 10×8 room/obstacle templates.
 //! The checked-in template archive is extracted from the licensed GML source.
-use crate::model::{Area, Rng, World};
+use crate::model::{Area, Rng, Vec2, World};
 use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
@@ -593,15 +593,36 @@ pub fn generate(rng: &mut Rng, level: u32, flags: &BTreeSet<String>) -> World {
         }
     }
     .into();
-    // Boundaries remain oSolid so collision cannot accidentally make them destructible.
+    // scrInitLevel creates concrete, invincible terrain, never the sprite-less
+    // oSolid parent. The controller queries the source sprite mask, so a bare
+    // oSolid cell is not a substitute for these authored wall instances.
+    let boundary_object = match area {
+        Area::Mines => "oBrick",
+        Area::Jungle => "oLush",
+        Area::Ice => "oDark",
+        Area::Temple | Area::Boss => "oTemple",
+    };
     for y in 0..height {
-        world.set_tile(0, y, "oSolid");
-        world.set_tile(41, y, "oSolid");
+        boundary_tile(&mut world, 0, y, boundary_object);
+        boundary_tile(&mut world, 41, y, boundary_object);
     }
-    for x in 0..42 {
-        world.set_tile(x, 0, "oSolid");
+    for x in 1..41 {
+        boundary_tile(&mut world, x, 0, boundary_object);
         if area != Area::Ice {
-            world.set_tile(x, height - 1, "oSolid");
+            boundary_tile(&mut world, x, height - 1, boundary_object);
+        }
+    }
+    if area == Area::Ice {
+        // Source j<=38 also authors the two side-wall instances at y=608,
+        // beyond rLevel2's storage height. Keep that last wall segment without
+        // creating a floor across the open abyss or moving its death threshold.
+        for x in [0.0, 656.0] {
+            let id = world.spawn("oDark", Vec2::new(x, 608.0));
+            world
+                .entity_mut(id)
+                .unwrap()
+                .data
+                .insert("invincible".into(), 1.0);
         }
     }
     let script_name = match area {
@@ -675,6 +696,18 @@ pub fn generate(rng: &mut Rng, level: u32, flags: &BTreeSet<String>) -> World {
     world
 }
 
+fn boundary_tile(world: &mut World, x: usize, y: usize, object: &str) {
+    world.set_tile(x, y, object);
+    let id = world.spawn(
+        "oTerrainMetadata",
+        Vec2::new(x as f64 * 16.0 + 8.0, y as f64 * 16.0 + 8.0),
+    );
+    let metadata = world.entity_mut(id).unwrap();
+    metadata.sprite.clear();
+    metadata.data.insert("invincible".into(), 1.0);
+    metadata.data.insert("source_boundary".into(), 1.0);
+}
+
 pub fn tutorial() -> World {
     let mut flags = BTreeSet::new();
     flags.insert("tutorial".into());
@@ -684,6 +717,43 @@ pub fn tutorial() -> World {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn campaign_perimeters_have_concrete_source_masks_and_invincible_metadata() {
+        let source = include_str!(
+            "../../../references/classic-1.1/Scripts/Level Generation/scrInitLevel.gml"
+        );
+        for object in ["oBrick", "oLush", "oDark", "oTemple"] {
+            assert!(source.contains(&format!("instance_create(i*16, j*16, {object})")));
+        }
+        for (level, flags, object) in [
+            (1, BTreeSet::new(), "oBrick"),
+            (5, BTreeSet::new(), "oLush"),
+            (5, BTreeSet::from(["lake".into()]), "oLush"),
+            (5, BTreeSet::from(["black_market".into()]), "oLush"),
+            (9, BTreeSet::from(["yeti_lair".into()]), "oDark"),
+            (13, BTreeSet::from(["city_of_gold".into()]), "oTemple"),
+            (16, BTreeSet::new(), "oTemple"),
+        ] {
+            let world = generate(&mut Rng::new(42), level, &flags);
+            for y in 0..world.height {
+                for x in [0, world.width - 1] {
+                    assert_eq!(world.tile(x as i32, y as i32).unwrap().object, object);
+                    assert!(
+                        crate::catalog::bounds(object, Vec2::new(x as f64 * 16.0, y as f64 * 16.0))
+                            .is_valid()
+                    );
+                    let center = Vec2::new(x as f64 * 16.0 + 8.0, y as f64 * 16.0 + 8.0);
+                    let metadata = world
+                        .entities
+                        .iter()
+                        .find(|entity| entity.object == "oTerrainMetadata" && entity.pos == center)
+                        .unwrap();
+                    assert_eq!(metadata.value("invincible"), 1.0);
+                }
+            }
+        }
+    }
+
     #[test]
     fn source_templates_are_complete_ascii_rooms() {
         for script in archive().scripts.values() {

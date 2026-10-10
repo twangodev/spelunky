@@ -165,7 +165,8 @@ pub(super) fn initialize(world: &mut World, rng: &mut Rng) {
                 .text
                 .get("terrain_sprite")
                 .cloned();
-            let mut sprite = if object == "oBrick" && rng.chance(1, 10) {
+            let source_boundary = world.entity(id).unwrap().value("source_boundary") != 0.0;
+            let mut sprite = if object == "oBrick" && !source_boundary && rng.chance(1, 10) {
                 "sBrick2".into()
             } else {
                 format!("s{}", &object[1..])
@@ -173,7 +174,15 @@ pub(super) fn initialize(world: &mut World, rng: &mut Rng) {
             let mut gold = 0;
             let mut treasure = None;
             let mut frozen = false;
-            if object == "oIce" {
+            if source_boundary {
+                // scrInitLevel explicitly replaces boundary Create-event
+                // variants with the area's base sprite. Preserve the port's
+                // established interior RNG stream while applying SetupWalls
+                // silhouettes below; exact GameMaker RNG remains unaudited.
+                if object == "oTemple" && city {
+                    sprite = "sGTemple".into();
+                }
+            } else if object == "oIce" {
                 if rng.chance(1, 80) {
                     // FrozenCaveman Destroy releases this live caveman.
                     treasure = Some(("oCaveman", -8.0, -8.0));
