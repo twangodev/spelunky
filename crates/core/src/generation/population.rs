@@ -82,7 +82,7 @@ fn room(pos: Vec2) -> (i32, i32) {
 fn start_room(world: &World, x: i32, y: i32) -> bool {
     room(at(x, y)) == room(world.entrance)
 }
-fn spawn(world: &mut World, name: &str, x: i32, y: i32) {
+fn spawn(world: &mut World, rng: &mut Rng, name: &str, x: i32, y: i32) {
     // `x,y` denotes the tile, while these offsets are the literal
     // instance_create offsets used by the source population scripts.
     let offset = match name {
@@ -93,7 +93,9 @@ fn spawn(world: &mut World, name: &str, x: i32, y: i32) {
         "oPiranha" | "oDeadFish" => Vec2::new(4.0, 4.0),
         _ => Vec2::default(),
     };
-    let id = world.spawn(
+    let id = crate::creation::spawn_generated_entity(
+        world,
+        rng,
         name,
         Vec2::new(x as f64 * 16.0 + offset.x, y as f64 * 16.0 + offset.y),
     );
@@ -109,9 +111,9 @@ fn exists(world: &World, name: &str) -> bool {
 }
 fn bones(world: &mut World, rng: &mut Rng, x: i32, y: i32) {
     if rng.chance(1, 8) {
-        spawn(world, "oFakeBones", x, y);
+        spawn(world, rng, "oFakeBones", x, y);
     } else {
-        spawn(world, "oBones", x, y);
+        spawn(world, rng, "oBones", x, y);
         world.spawn(
             "oSkull",
             Vec2::new(x as f64 * 16.0 + 12.0, y as f64 * 16.0 + 12.0),
@@ -147,11 +149,11 @@ fn treasure(
         return;
     }
     if rng.chance(1, 100) {
-        spawn(world, "oRock", x, y - 1);
+        spawn(world, rng, "oRock", x, y - 1);
         return;
     }
     if rng.chance(1, 40) {
-        spawn(world, "oJar", x, y - 1);
+        spawn(world, rng, "oJar", x, y - 1);
         return;
     }
     let side = solid(world, x - 1, y - 1) || solid(world, x + 1, y - 1);
@@ -161,53 +163,53 @@ fn treasure(
     let level = world.level;
     if alcove {
         if world.area != Area::Ice && rng.chance(1, 60) {
-            spawn(world, "oWeb", x, y - 1);
+            spawn(world, rng, "oWeb", x, y - 1);
         } else if state.udjat && !exists(world, "oLockedChest") {
             if rng.chance(1, state.chest_chance) {
-                spawn(world, "oLockedChest", x, y - 1);
+                spawn(world, rng, "oLockedChest", x, y - 1);
             } else {
                 state.chest_chance = state.chest_chance.saturating_sub(1).max(1);
             }
         } else if rng.chance(1, 10) {
-            spawn(world, "oCrate", x, y - 1);
+            spawn(world, rng, "oCrate", x, y - 1);
         } else if rng.chance(1, 15) {
-            spawn(world, "oChest", x, y - 1);
+            spawn(world, rng, "oChest", x, y - 1);
         } else if !state.damsel && rng.chance(1, 8) && !water.wet(x, y - 1) {
-            spawn(world, "oDamsel", x, y - 1);
+            spawn(world, rng, "oDamsel", x, y - 1);
             state.damsel = true;
         } else if rng.chance(1 + bonus, 40_u32.saturating_sub(2 * level).max(1)) {
             bones(world, rng, x, y - 1);
         } else if rng.chance(1, 3) {
-            spawn(world, "oGoldBar", x, y - 1);
+            spawn(world, rng, "oGoldBar", x, y - 1);
         } else if rng.chance(1, 6) {
-            spawn(world, "oGoldBars", x, y - 1);
+            spawn(world, rng, "oGoldBars", x, y - 1);
         } else if rng.chance(1, 6) {
-            spawn(world, "oEmeraldBig", x, y - 1);
+            spawn(world, rng, "oEmeraldBig", x, y - 1);
         } else if rng.chance(1, 8) {
-            spawn(world, "oSapphireBig", x, y - 1);
+            spawn(world, rng, "oSapphireBig", x, y - 1);
         } else if rng.chance(1, 10) {
-            spawn(world, "oRubyBig", x, y - 1);
+            spawn(world, rng, "oRubyBig", x, y - 1);
         }
     } else if tunnel {
         if world.area != Area::Ice && rng.chance(1, 60) {
-            spawn(world, "oWeb", x, y - 1);
+            spawn(world, rng, "oWeb", x, y - 1);
         } else if rng.chance(1, 4) {
-            spawn(world, "oGoldBar", x, y - 1);
+            spawn(world, rng, "oGoldBar", x, y - 1);
         } else if rng.chance(1, 8) {
-            spawn(world, "oGoldBars", x, y - 1);
+            spawn(world, rng, "oGoldBars", x, y - 1);
         } else if rng.chance(1 + bonus, 80_u32.saturating_sub(level).max(1)) {
             bones(world, rng, x, y - 1);
         } else if rng.chance(1, 8) {
-            spawn(world, "oEmeraldBig", x, y - 1);
+            spawn(world, rng, "oEmeraldBig", x, y - 1);
         } else if rng.chance(1, 9) {
-            spawn(world, "oSapphireBig", x, y - 1);
+            spawn(world, rng, "oSapphireBig", x, y - 1);
         } else if rng.chance(1, 10) {
-            spawn(world, "oRubyBig", x, y - 1);
+            spawn(world, rng, "oRubyBig", x, y - 1);
         }
     } else if rng.chance(1, 40) {
-        spawn(world, "oGoldBar", x, y - 1);
+        spawn(world, rng, "oGoldBar", x, y - 1);
     } else if rng.chance(1, 50) {
-        spawn(world, "oGoldBars", x, y - 1);
+        spawn(world, rng, "oGoldBars", x, y - 1);
     } else if rng.chance(1 + bonus, 140_u32.saturating_sub(2 * level).max(1)) {
         bones(world, rng, x, y - 1);
     }
@@ -283,22 +285,22 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
                         && !solid(world, x + 1, y + 2)
                         && rng.chance(1, 40)
                     {
-                        spawn(world, "oGiantSpiderHang", x, y + 1);
+                        spawn(world, rng, "oGiantSpiderHang", x, y + 1);
                     } else if world.dark && rng.chance(1, 60) {
-                        spawn(world, "oLamp", x, y + 1);
+                        spawn(world, rng, "oLamp", x, y + 1);
                     } else if world.dark && rng.chance(1, 40) {
-                        spawn(world, "oScarab", x, y + 1);
+                        spawn(world, rng, "oScarab", x, y + 1);
                     } else if rng.chance(1, 60) {
-                        spawn(world, "oBat", x, y + 1);
+                        spawn(world, rng, "oBat", x, y + 1);
                     } else if rng.chance(1, 80) {
-                        spawn(world, "oSpiderHang", x, y + 1);
+                        spawn(world, rng, "oSpiderHang", x, y + 1);
                     }
                 }
                 if floor && !occupied(world, x, y - 1) {
                     if rng.chance(1, 60) {
-                        spawn(world, "oSnake", x, y - 1);
+                        spawn(world, rng, "oSnake", x, y - 1);
                     } else if rng.chance(1, 800) {
-                        spawn(world, "oCaveman", x, y - 1);
+                        spawn(world, rng, "oCaveman", x, y - 1);
                     }
                 }
             }
@@ -311,7 +313,7 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
                     && !altar
                 {
                     if rng.chance(1, market_chance) {
-                        spawn(world, "oXMarket", x, y - 1);
+                        spawn(world, rng, "oXMarket", x, y - 1);
                     } else {
                         market_chance = market_chance.saturating_sub(1).max(1);
                     }
@@ -323,14 +325,14 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
                     && x % 10 != 1
                     && rng.chance(1, 20)
                 {
-                    spawn(world, "oGrave", x, y - 1);
+                    spawn(world, rng, "oGrave", x, y - 1);
                     if !exists(world, "oShotgun") && rng.chance(1, 40) {
                         if let Some(grave) = world.entities.last_mut() {
                             grave.sprite = "sGraveAsh".into();
                         }
-                        spawn(world, "oShotgun", x, y);
+                        spawn(world, rng, "oShotgun", x, y);
                     } else if rng.chance(1, 2) {
-                        spawn(world, "oGoldNugget", x, y);
+                        spawn(world, rng, "oGoldNugget", x, y);
                     } else if rng.chance(1, 4) {
                         world.spawn("oSapphireBig", at(x, y));
                     } else if rng.chance(1, 6) {
@@ -345,26 +347,26 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
                 }
                 if ceiling {
                     if world.dark && rng.chance(1, 40) {
-                        spawn(world, "oScarab", x, y + 1);
+                        spawn(world, rng, "oScarab", x, y + 1);
                     } else if rng.chance(1, if cemetery { 60 } else { 80 }) {
-                        spawn(world, "oBat", x, y + 1);
+                        spawn(world, rng, "oBat", x, y + 1);
                     }
                 }
                 if y > 1 && floor && !occupied(world, x, y - 1) {
                     if cemetery {
                         if rng.chance(1, 25) {
-                            spawn(world, "oZombie", x, y - 1);
+                            spawn(world, rng, "oZombie", x, y - 1);
                         } else if rng.chance(1, 160) {
-                            spawn(world, "oVampire", x, y - 1);
+                            spawn(world, rng, "oVampire", x, y - 1);
                         }
                     } else if !water.wet(x, y - 1) && !(market && y % 8 == 0) && rng.chance(1, 60) {
-                        spawn(world, "oManTrap", x, y - 1);
+                        spawn(world, rng, "oManTrap", x, y - 1);
                     } else if !water.wet(x, y - 1) && rng.chance(1, 60) {
-                        spawn(world, "oCaveman", x, y - 1);
+                        spawn(world, rng, "oCaveman", x, y - 1);
                     } else if rng.chance(1, 120) {
-                        spawn(world, "oFireFrog", x, y - 1);
+                        spawn(world, rng, "oFireFrog", x, y - 1);
                     } else if rng.chance(1, 30) {
-                        spawn(world, "oFrog", x, y - 1);
+                        spawn(world, rng, "oFrog", x, y - 1);
                     }
                 }
             }
@@ -372,7 +374,7 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
                 if !start_room(world, x, y - 1) {
                     if ceiling {
                         if world.dark && rng.chance(1, 40) {
-                            spawn(world, "oScarab", x, y + 1);
+                            spawn(world, rng, "oScarab", x, y + 1);
                         }
                     } else if floor
                         && y > 1
@@ -380,7 +382,7 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
                         && !occupied(world, x, y - 1)
                         && rng.chance(1, if yeti { 90 } else { 30 })
                     {
-                        spawn(world, "oUFO", x, y - 1);
+                        spawn(world, rng, "oUFO", x, y - 1);
                     }
                 }
                 if floor && y > 1 && y < 37 && far && !occupied(world, x, y - 1) {
@@ -391,16 +393,16 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
                         && at(x, y).distance(world.exit) > 64.0
                         && rng.chance(1, 10)
                     {
-                        spawn(world, "oSpringTrap", x, y - 1);
+                        spawn(world, rng, "oSpringTrap", x, y - 1);
                     } else if rng.chance(1, 20) {
-                        spawn(world, "oYeti", x, y - 1);
+                        spawn(world, rng, "oYeti", x, y - 1);
                     }
                 }
             }
             Area::Temple => {
                 if world.level == 14 && y > 2 && floor && !exists(world, "oGoldDoor") {
                     if rng.chance(1, gold_chance) {
-                        spawn(world, "oGoldDoor", x, y - 1);
+                        spawn(world, rng, "oGoldDoor", x, y - 1);
                     } else {
                         gold_chance = gold_chance.saturating_sub(1).max(1);
                     }
@@ -408,7 +410,7 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
                     spear(world, rng, &water, x, y, altar || tree, far);
                 }
                 if ceiling && world.dark && rng.chance(1, 40) {
-                    spawn(world, "oScarab", x, y + 1);
+                    spawn(world, rng, "oScarab", x, y + 1);
                 }
                 if !start_room(world, x, y - 1) && floor && y > 1 && !occupied(world, x, y - 1) {
                     if tomb_lord
@@ -418,14 +420,15 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
                         && !solid(world, x + 1, y - 1)
                         && rng.chance(1, 40)
                     {
-                        spawn(world, "oTombLord", x, y - 2);
+                        spawn(world, rng, "oTombLord", x, y - 2);
                     } else if rng.chance(1, 40) {
-                        spawn(world, "oCaveman", x, y - 1);
+                        spawn(world, rng, "oCaveman", x, y - 1);
                     } else if rng.chance(1, 40) {
-                        spawn(world, "oHawkman", x, y - 1);
+                        spawn(world, rng, "oHawkman", x, y - 1);
                     } else if rng.chance(1, 60) {
                         spawn(
                             world,
+                            rng,
                             if world.dark {
                                 "oSmashTrapLit"
                             } else {
@@ -473,7 +476,7 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
             .iter()
             .find(|&&(x, y)| y > 2 && solid(world, x, y - 1) && !in_shop(world, x, y))
         {
-            spawn(world, "oXMarket", x, y - 1);
+            spawn(world, rng, "oXMarket", x, y - 1);
         }
     }
     if world.area == Area::Temple && world.level == 14 && !exists(world, "oGoldDoor") {
@@ -481,7 +484,7 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
             .iter()
             .find(|&&(x, y)| y > 2 && !solid(world, x, y - 1) && !in_shop(world, x, y))
         {
-            spawn(world, "oGoldDoor", x, y - 1);
+            spawn(world, rng, "oGoldDoor", x, y - 1);
         }
     }
     if matches!(world.area, Area::Mines | Area::Temple) {
@@ -492,10 +495,16 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
             for x in 1..world.width as i32 - 1 {
                 let object = world.tile(x, y).map(|t| t.object.as_str()).unwrap_or("");
                 if object == "oVine" && rng.chance(1, 15) {
-                    spawn(world, "oMonkey", x, y);
+                    spawn(world, rng, "oMonkey", x, y);
                 }
                 if water.wet(x, y) && !solid(world, x, y) && rng.chance(1, 30) {
-                    spawn(world, if cemetery { "oDeadFish" } else { "oPiranha" }, x, y);
+                    spawn(
+                        world,
+                        rng,
+                        if cemetery { "oDeadFish" } else { "oPiranha" },
+                        x,
+                        y,
+                    );
                 }
             }
         }
@@ -541,14 +550,15 @@ fn spear(
         return;
     }
     if world.dark && world.area == Area::Jungle && !water.wet(x, y - 2) && rng.chance(1, 20) {
-        spawn(world, "oTikiTorch", x, y - 2);
+        spawn(world, rng, "oTikiTorch", x, y - 2);
     } else if rng.chance(1, 12) {
-        spawn(world, "oSpearTrapBottom", x, y);
+        spawn(world, rng, "oSpearTrapBottom", x, y);
         if let Some(e) = world.entities.last_mut() {
             e.solid = true;
         }
         spawn(
             world,
+            rng,
             if world.dark {
                 "oSpearTrapLit"
             } else {
@@ -587,7 +597,7 @@ fn arrows(world: &mut World, rng: &mut Rng, supports: &[(i32, i32)]) {
             (_, true, true) => "oArrowTrapRightLit",
             _ => continue,
         };
-        spawn(world, name, x, y);
+        spawn(world, rng, name, x, y);
         if let Some(e) = world.entities.last_mut() {
             e.solid = true;
         }
@@ -689,12 +699,154 @@ mod tests {
         world
     }
 
+    fn assert_local_create_completed(entity: &crate::Entity) {
+        let marker = match entity.object.as_str() {
+            "oFrog" | "oFireFrog" | "oMonkey" | "oPiranha" => "jungle_context_created",
+            "oUFO" => "ice_ufo_local_created",
+            "oDamsel" | "oScarab" => "npc_local_created",
+            "oZombie" => {
+                assert_eq!(entity.value("source_facing_pending"), 0.0);
+                return;
+            }
+            _ => panic!("not a scoped generated actor: {}", entity.object),
+        };
+        assert_eq!(
+            entity.value(marker),
+            1.0,
+            "{} at {:?}",
+            entity.object,
+            entity.pos
+        );
+    }
+
+    #[test]
+    fn generated_birth_runs_source_random_statement_before_the_next_producer_roll() {
+        // Independent source statements: Frog/FireFrog/Monkey/Zombie facing
+        // rand(0,1), Piranha dir rand(1,2), UFO shiftToggle rand(0,1),
+        // Scarab counter rand(10,30). Damsel Create has no random statement;
+        // scrTreasureGen clears its initial price after instance_create returns.
+        for seed in [0, 1, 23, u64::MAX] {
+            let mut world = World::new(12, 12, Area::Jungle, 5);
+            world.set_tile(4, 4, "oWater");
+            let mut actual = Rng::new(seed);
+            let mut source = actual.clone();
+            for object in [
+                "oFrog",
+                "oFireFrog",
+                "oMonkey",
+                "oPiranha",
+                "oZombie",
+                "oUFO",
+                "oScarab",
+                "oDamsel",
+            ] {
+                let expected = match object {
+                    "oDamsel" => 0,
+                    "oScarab" => 10 + source.range(21),
+                    _ => source.range(2),
+                };
+                spawn(&mut world, &mut actual, object, 4, 4);
+                let entity = world.entities.last().unwrap();
+                match object {
+                    "oUFO" => assert_eq!(entity.value("shift_toggle"), f64::from(expected)),
+                    "oScarab" => {
+                        assert_eq!(entity.timer, expected);
+                        assert_eq!(entity.value("value"), 8000.0);
+                    }
+                    "oDamsel" => assert_eq!(entity.value("cost"), 0.0),
+                    _ => assert_eq!(entity.facing, if expected == 0 { -1 } else { 1 }),
+                }
+                if matches!(object, "oFrog" | "oFireFrog" | "oMonkey") {
+                    assert_eq!(entity.value("swimming"), 1.0);
+                }
+                assert_local_create_completed(entity);
+                // This producer's later decision must use the next source draw,
+                // rather than accidentally supplying the pending Create value.
+                assert_eq!(actual.range(97), source.range(97), "{object} seed {seed}");
+            }
+            assert_eq!(actual.next_u64(), source.next_u64());
+        }
+    }
+
+    #[test]
+    fn natural_game_generation_completes_local_create_before_any_room_step() {
+        use crate::{Game, RulesPreset};
+        crate::creation::begin_generated_create_trace();
+        let mut game = Game::new(0, RulesPreset::Classic);
+        let mut checked = std::collections::BTreeSet::new();
+        let mut birth_counts = std::collections::BTreeMap::<String, usize>::new();
+        for level in 1..=9 {
+            assert_eq!(game.world.level, level);
+            assert_eq!(game.level_tick, 0);
+            for trace in crate::creation::take_generated_create_traces() {
+                let entity = trace.entity_after;
+                let mut source_rng = trace.rng_before;
+                match entity.object.as_str() {
+                    "oFrog" | "oFireFrog" | "oMonkey" | "oPiranha" | "oZombie" => {
+                        assert_eq!(entity.facing, if source_rng.range(2) == 0 { -1 } else { 1 });
+                    }
+                    "oUFO" => {
+                        assert_eq!(entity.value("shift_toggle"), f64::from(source_rng.range(2)))
+                    }
+                    "oScarab" => assert_eq!(entity.timer, 10 + source_rng.range(21)),
+                    "oDamsel" => assert_eq!(entity.value("cost"), 15000.0 * f64::from(level)),
+                    _ => continue,
+                }
+                assert_eq!(trace.level, level);
+                *birth_counts.entry(entity.object.clone()).or_default() += 1;
+                assert_local_create_completed(&entity);
+            }
+            let ids: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|entity| {
+                    matches!(
+                        entity.object.as_str(),
+                        "oFrog"
+                            | "oFireFrog"
+                            | "oMonkey"
+                            | "oPiranha"
+                            | "oZombie"
+                            | "oUFO"
+                            | "oScarab"
+                            | "oDamsel"
+                    )
+                })
+                .map(|entity| {
+                    assert_local_create_completed(entity);
+                    checked.insert(entity.object.clone());
+                    entity.id
+                })
+                .collect();
+            let mut source_rng = game.rng.clone();
+            for id in ids {
+                crate::enemies::create_instance(&mut game, id);
+            }
+            assert_eq!(
+                game.rng.clone().next_u64(),
+                source_rng.next_u64(),
+                "first-frame bootstrap must not repeat generated Create RNG"
+            );
+            if level < 9 {
+                crate::creation::begin_generated_create_trace();
+                game.next_level();
+            }
+        }
+        eprintln!("natural generated local Create births checked: {birth_counts:?}");
+        // The seed selects content; no fixed entity IDs, positions or room
+        // layouts encode the earlier, incorrectly deferred random stream.
+        for object in ["oFrog", "oUFO", "oDamsel"] {
+            assert!(checked.contains(object), "fixture must exercise {object}");
+        }
+    }
+
     #[test]
     fn source_instance_offsets_are_preserved() {
         let mut world = room_fixture(Area::Mines, 1);
-        spawn(&mut world, "oBat", 5, 6);
-        spawn(&mut world, "oGoldBar", 5, 6);
-        spawn(&mut world, "oLockedChest", 5, 6);
+        spawn(&mut world, &mut Rng::new(0), "oBat", 5, 6);
+        spawn(&mut world, &mut Rng::new(0), "oGoldBar", 5, 6);
+        spawn(&mut world, &mut Rng::new(0), "oLockedChest", 5, 6);
         assert_eq!(world.entities[0].pos, Vec2::new(80.0, 96.0));
         assert_eq!(world.entities[1].pos, Vec2::new(88.0, 108.0));
         assert_eq!(world.entities[2].pos, Vec2::new(88.0, 104.0));

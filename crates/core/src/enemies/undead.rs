@@ -31,7 +31,31 @@ pub fn init(e: &mut Entity) {
     });
 }
 
+pub(super) fn create_local(ctx: &mut crate::creation::EntityCreateContext<'_>, e: &mut Entity) {
+    if e.object == "oZombie" && e.value("source_facing_pending") > 0.0 {
+        e.facing = if ctx.rng.range(2) == 0 { -1 } else { 1 };
+        // Create uses collision_point(x, y, oWater, 0, 0), including descendants.
+        if ctx.world.tiles_point(e.pos, "oWater")
+            || ctx.world.entities.iter().any(|water| {
+                water.alive
+                    && crate::catalog::is_a(&water.object, "oWater")
+                    && water.sprite_bounds().contains(e.pos)
+            })
+        {
+            e.data.insert("swimming".into(), 1.0);
+        }
+        e.data.insert("source_facing_pending".into(), 0.0);
+    }
+}
+
 pub(super) fn create(game: &mut Game, e: &mut Entity) {
+    create_local(
+        &mut crate::creation::EntityCreateContext {
+            world: &game.world,
+            rng: &mut game.rng,
+        },
+        e,
+    );
     if e.value("source_facing_pending") > 0.0 {
         e.facing = match e.object.as_str() {
             "oSkeleton" => {
@@ -41,7 +65,6 @@ pub(super) fn create(game: &mut Game, e: &mut Entity) {
                     1
                 }
             }
-            "oZombie" => random_facing(game),
             _ => 1,
         };
         e.data.insert("source_facing_pending".into(), 0.0);
@@ -702,6 +725,99 @@ pub(super) fn absorb_blood(game: &mut Game, e: &mut Entity) {
 mod tests {
     use super::*;
     use crate::RulesPreset;
+    #[test]
+    fn zombie_local_create_consumes_one_source_draw_and_runtime_preserves_it() {
+        for seed in [1, 7, 42, 129] {
+            let mut game = Game::shell(seed, RulesPreset::Classic);
+            let mut zombie = Entity::new(1, "oZombie", Vec2::new(100.0, 40.0));
+            init(&mut zombie);
+            let mut source_rng = game.rng.clone();
+            let facing = if source_rng.range(2) == 0 { -1 } else { 1 };
+            for _ in 0..2 {
+                create_local(
+                    &mut crate::creation::EntityCreateContext {
+                        world: &game.world,
+                        rng: &mut game.rng,
+                    },
+                    &mut zombie,
+                );
+            }
+            assert_eq!(zombie.facing, facing);
+            assert_eq!(zombie.value("source_facing_pending"), 0.0);
+            assert_eq!(game.rng.clone().next_u64(), source_rng.clone().next_u64());
+            zombie.facing = -facing;
+            create(&mut game, &mut zombie);
+            create(&mut game, &mut zombie);
+            assert_eq!(zombie.facing, -facing);
+            assert_eq!(game.rng.next_u64(), source_rng.next_u64());
+        }
+    }
+
+    #[test]
+    fn zombie_local_create_preserves_skeleton_and_vampire_runtime_create() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.player.pos.x = 40.0;
+        let source_rng = game.rng.clone();
+        for (object, facing) in [("oSkeleton", -1), ("oVampire", 1)] {
+            let mut actor = Entity::new(1, object, Vec2::new(80.0, 80.0));
+            init(&mut actor);
+            create_local(
+                &mut crate::creation::EntityCreateContext {
+                    world: &game.world,
+                    rng: &mut game.rng,
+                },
+                &mut actor,
+            );
+            assert_eq!(actor.value("source_facing_pending"), 1.0, "{object}");
+            assert_eq!(actor.facing, 1, "local Zombie hook must ignore {object}");
+            create(&mut game, &mut actor);
+            assert_eq!(actor.facing, facing, "{object}");
+            assert_eq!(actor.value("source_facing_pending"), 0.0, "{object}");
+        }
+        assert_eq!(game.rng.next_u64(), source_rng.clone().next_u64());
+    }
+
+    #[test]
+    fn zombie_local_create_latches_origin_water_family_once() {
+        for object in ["oWaterSwim", "oLava"] {
+            for dynamic in [false, true] {
+                for (origin, wet) in [
+                    (Vec2::new(48.0, 48.0), true),
+                    (Vec2::new(47.0, 48.0), false),
+                    (Vec2::new(64.0, 48.0), false),
+                ] {
+                    let mut game = Game::shell(42, RulesPreset::Classic);
+                    if dynamic {
+                        game.world.spawn(object, Vec2::new(48.0, 48.0));
+                    } else {
+                        game.world.set_tile(3, 3, object);
+                    }
+                    let mut zombie = Entity::new(999, "oZombie", origin);
+                    init(&mut zombie);
+                    let mut expected_rng = game.rng.clone();
+                    expected_rng.range(2);
+                    create_local(
+                        &mut crate::creation::EntityCreateContext {
+                            world: &game.world,
+                            rng: &mut game.rng,
+                        },
+                        &mut zombie,
+                    );
+                    assert_eq!(
+                        zombie.value("swimming"),
+                        f64::from(wet),
+                        "{object}, dynamic={dynamic}, origin={origin:?}"
+                    );
+                    // Runtime bootstrap must preserve caller writes after local Create.
+                    zombie.data.insert("swimming".into(), f64::from(!wet));
+                    create(&mut game, &mut zombie);
+                    assert_eq!(zombie.value("swimming"), f64::from(!wet));
+                    assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
+                }
+            }
+        }
+    }
+
     #[test]
     fn source_health_and_skeleton_delay() {
         let mut game = Game::shell(42, RulesPreset::Classic);

@@ -181,8 +181,19 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
     });
 }
 
-/// Context-dependent Create runs synchronously from Game::spawn and once on
-/// authored/generated room bootstrap; fixed World Create already ran on insertion.
+/// The shared world/RNG-only Create bodies also run at generator birth sites.
+pub(crate) fn create_local(
+    context: &mut crate::creation::EntityCreateContext<'_>,
+    entity: &mut Entity,
+) {
+    jungle::create_local(context, entity);
+    ice::create_local(context, entity);
+    undead::create_local(context, entity);
+    npcs::create_local(context, entity);
+}
+
+/// Complete runtime Create without repeating generated local initialization.
+/// Game-dependent effects still run on authored/generated room bootstrap.
 pub(crate) fn create_instance(game: &mut Game, id: u64) {
     if !game
         .world
@@ -193,6 +204,13 @@ pub(crate) fn create_instance(game: &mut Game, id: u64) {
     }
     with_actor(game, id, |game, e| {
         e.data.insert("enemy_context_created".into(), 1.);
+        create_local(
+            &mut crate::creation::EntityCreateContext {
+                world: &game.world,
+                rng: &mut game.rng,
+            },
+            e,
+        );
         caves::create(game, e);
         jungle::create(game, e);
         ice::create(game, e);

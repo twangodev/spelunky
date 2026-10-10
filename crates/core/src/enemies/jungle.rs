@@ -52,18 +52,28 @@ pub fn init(e: &mut Entity) {
 }
 
 pub(super) fn create(game: &mut Game, e: &mut Entity) {
+    create_local(
+        &mut crate::creation::EntityCreateContext {
+            world: &game.world,
+            rng: &mut game.rng,
+        },
+        e,
+    );
+}
+
+pub(super) fn create_local(ctx: &mut crate::creation::EntityCreateContext<'_>, e: &mut Entity) {
     if !matches(&e.object) || e.value("jungle_context_created") != 0.0 {
         return;
     }
     e.data.insert("jungle_context_created".into(), 1.0);
     match e.object.as_str() {
         "oFrog" | "oFireFrog" | "oMonkey" => {
-            e.facing = if game.rng.range(2) == 0 { -1 } else { 1 };
-            if water(&game.world, e.pos) {
+            e.facing = if ctx.rng.range(2) == 0 { -1 } else { 1 };
+            if water(ctx.world, e.pos) {
                 e.data.insert("swimming".into(), 1.0);
             }
         }
-        "oPiranha" => e.facing = if game.rng.range(2) == 0 { -1 } else { 1 },
+        "oPiranha" => e.facing = if ctx.rng.range(2) == 0 { -1 } else { 1 },
         _ => {}
     }
 }
@@ -1327,13 +1337,11 @@ mod tests {
             .unwrap();
         assert_eq!(frog.state, 2);
         assert_eq!(frog.health, 1);
-        assert!(
-            !game
-                .world
-                .entities
-                .iter()
-                .any(|e| e.object == "oFireFrogBomb")
-        );
+        assert!(!game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.object == "oFireFrogBomb"));
     }
 
     #[test]
@@ -2042,6 +2050,103 @@ mod tests {
             create(&mut game, &mut actor);
             assert_eq!(game.rng.next_u64(), expected.next_u64(), "{object}");
         }
+    }
+
+    #[test]
+    fn local_jungle_create_preserves_producer_overrides_at_runtime_bootstrap() {
+        for object in ["oFrog", "oFireFrog", "oMonkey", "oPiranha"] {
+            let mut game = Game::shell(43, RulesPreset::Classic);
+            game.world.set_tile(3, 3, "oWaterSwim");
+            let mut actor = Entity::new(999, object, Vec2::new(48.0, 48.0));
+            super::super::init_entity(&mut actor);
+            let mut expected = game.rng.clone();
+            let facing = if expected.range(2) == 0 { -1 } else { 1 };
+            create_local(
+                &mut crate::creation::EntityCreateContext {
+                    world: &game.world,
+                    rng: &mut game.rng,
+                },
+                &mut actor,
+            );
+            assert_eq!(actor.facing, facing, "{object}");
+            assert_eq!(actor.value("swimming"), f64::from(object != "oPiranha"));
+            actor.facing = -facing;
+            actor.state = 3;
+            actor.timer = 88;
+            actor.health = 17;
+            actor.data.insert("swimming".into(), 0.0);
+            create_local(
+                &mut crate::creation::EntityCreateContext {
+                    world: &game.world,
+                    rng: &mut game.rng,
+                },
+                &mut actor,
+            );
+            create(&mut game, &mut actor);
+            assert_eq!(actor.facing, -facing, "{object}");
+            assert_eq!((actor.state, actor.timer, actor.health), (3, 88, 17));
+            assert_eq!(actor.value("swimming"), 0.0);
+            assert_eq!(game.rng.next_u64(), expected.next_u64(), "{object}");
+        }
+    }
+
+    #[test]
+    fn generated_jungle_spawn_runs_local_create_before_producer_overrides() {
+        for object in ["oFrog", "oFireFrog", "oMonkey", "oPiranha"] {
+            let mut game = Game::shell(44, RulesPreset::Classic);
+            game.world.set_tile(3, 3, "oWaterSwim");
+            let mut expected = game.rng.clone();
+            let facing = if expected.range(2) == 0 { -1 } else { 1 };
+            let id = crate::creation::spawn_generated_entity(
+                &mut game.world,
+                &mut game.rng,
+                object,
+                Vec2::new(48.0, 48.0),
+            );
+            let actor = game.world.entity_mut(id).unwrap();
+            assert_eq!(actor.value("jungle_context_created"), 1.0);
+            assert_eq!(actor.value("enemy_context_created"), 0.0);
+            assert_eq!(actor.facing, facing);
+            assert_eq!(actor.value("swimming"), f64::from(object != "oPiranha"));
+            actor.facing = -facing;
+            actor.state = 2;
+            actor.health = 5;
+            super::super::create_instance(&mut game, id);
+            super::super::create_instance(&mut game, id);
+            let actor = game.world.entity(id).unwrap();
+            assert_eq!((actor.facing, actor.state, actor.health), (-facing, 2, 5));
+            assert_eq!(game.rng.next_u64(), expected.next_u64(), "{object}");
+        }
+    }
+
+    #[test]
+    fn shortcut_game_api_generates_jungle_creates_before_runtime_bootstrap() {
+        let mut game = Game::shell(45, RulesPreset::Classic);
+        game.start_from_hub(false, 5);
+        let actors: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|e| matches(&e.object))
+            .map(|e| (e.id, e.facing, e.state))
+            .collect();
+        assert!(!actors.is_empty(), "fixture must generate a jungle family");
+        for (id, _, _) in &actors {
+            assert_eq!(
+                game.world
+                    .entity(*id)
+                    .unwrap()
+                    .value("jungle_context_created"),
+                1.0
+            );
+        }
+        let mut expected = game.rng.clone();
+        for (id, facing, state) in actors {
+            super::super::create_instance(&mut game, id);
+            let actor = game.world.entity(id).unwrap();
+            assert_eq!((actor.facing, actor.state), (facing, state));
+        }
+        assert_eq!(game.rng.next_u64(), expected.next_u64());
     }
 
     #[test]

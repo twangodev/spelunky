@@ -95,16 +95,28 @@ pub fn init(e: &mut Entity) {
     e.set_sprite(sprite);
 }
 
+/// Source Create fields requiring only the generated room and its RNG.
+pub(super) fn create_local(ctx: &mut crate::creation::EntityCreateContext<'_>, e: &mut Entity) {
+    if e.object == "oUFO" && e.value("ice_ufo_local_created") == 0.0 {
+        e.data
+            .insert("shift_toggle".into(), f64::from(ctx.rng.range(2)));
+        e.data.insert("ice_ufo_local_created".into(), 1.0);
+    }
+}
+
 /// Context-dependent Create code, called synchronously before caller writes.
 pub(super) fn create(game: &mut Game, e: &mut Entity) {
+    create_local(
+        &mut crate::creation::EntityCreateContext {
+            world: &game.world,
+            rng: &mut game.rng,
+        },
+        e,
+    );
     if e.value("ice_context_created") != 0.0 {
         return;
     }
     match e.object.as_str() {
-        "oUFO" => {
-            e.data
-                .insert("shift_toggle".into(), f64::from(game.rng.range(2)));
-        }
         "oAlienEject" => {
             e.facing = if game.rng.range(2) == 0 { -1 } else { 1 };
             e.data.remove("drift_unset");
@@ -1237,6 +1249,60 @@ mod tests {
     }
 
     #[test]
+    fn ufo_local_create_consumes_one_source_draw_and_runtime_does_not_repeat_it() {
+        for seed in [1, 7, 42, 129] {
+            let mut game = Game::shell(seed, RulesPreset::Classic);
+            let mut ufo = Entity::new(1, "oUFO", Vec2::new(100.0, 40.0));
+            init(&mut ufo);
+            let mut source_rng = game.rng.clone();
+            let toggle = f64::from(source_rng.range(2));
+            for _ in 0..2 {
+                create_local(
+                    &mut crate::creation::EntityCreateContext {
+                        world: &game.world,
+                        rng: &mut game.rng,
+                    },
+                    &mut ufo,
+                );
+            }
+            assert_eq!(ufo.value("shift_toggle"), toggle);
+            assert_eq!(ufo.value("ice_ufo_local_created"), 1.0);
+            assert_eq!(ufo.value("ice_context_created"), 0.0);
+            assert_eq!(game.rng.clone().next_u64(), source_rng.clone().next_u64());
+            // Caller overrides after Create must survive later runtime hooks.
+            ufo.data.insert("shift_toggle".into(), 7.0);
+            create(&mut game, &mut ufo);
+            create(&mut game, &mut ufo);
+            assert_eq!(ufo.value("shift_toggle"), 7.0);
+            assert_eq!(game.rng.next_u64(), source_rng.next_u64());
+        }
+    }
+
+    #[test]
+    fn local_ufo_create_leaves_eject_randomness_for_runtime_create() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        let mut eject = Entity::new(1, "oAlienEject", Vec2::new(100.0, 40.0));
+        init(&mut eject);
+        let mut source_rng = game.rng.clone();
+        create_local(
+            &mut crate::creation::EntityCreateContext {
+                world: &game.world,
+                rng: &mut game.rng,
+            },
+            &mut eject,
+        );
+        assert_eq!(eject.value("drift_unset"), 1.0);
+        assert_eq!(eject.value("ice_context_created"), 0.0);
+        assert_eq!(game.rng.clone().next_u64(), source_rng.clone().next_u64());
+        let facing = if source_rng.range(2) == 0 { -1 } else { 1 };
+        create(&mut game, &mut eject);
+        create(&mut game, &mut eject);
+        assert_eq!(eject.facing, facing);
+        assert_eq!(eject.value("drift_unset"), 0.0);
+        assert_eq!(game.rng.next_u64(), source_rng.next_u64());
+    }
+
+    #[test]
     fn source_stomp_restores_prior_false_credit_only_for_king_and_boss() {
         for (object, center_x, restores) in [
             ("oYeti", 8.0, false),
@@ -1724,11 +1790,9 @@ mod tests {
                         assert_eq!(target.player.stun, 0);
                         assert!(target.player.is_exiting());
                         assert_eq!(target.state, RunState::Ending);
-                        assert!(
-                            !target
-                                .events
-                                .contains(&GameEvent::Damage { amount: damage })
-                        );
+                        assert!(!target
+                            .events
+                            .contains(&GameEvent::Damage { amount: damage }));
                         let projectile = target
                             .world
                             .entity(id)
@@ -1755,11 +1819,9 @@ mod tests {
                         );
                         assert_eq!(target.player.stun, stun);
                         assert_eq!(target.player.vel.y, -4.0);
-                        assert!(
-                            target
-                                .events
-                                .contains(&GameEvent::Damage { amount: damage })
-                        );
+                        assert!(target
+                            .events
+                            .contains(&GameEvent::Damage { amount: damage }));
                         assert_eq!(target.world.entity(id).is_none(), object == "oLaser");
                     }
                 }

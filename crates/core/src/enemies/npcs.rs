@@ -58,24 +58,22 @@ pub fn init(e: &mut Entity) {
     }
 }
 
-/// Game-context parts of source Create, before producer overrides or RNG.
-pub(super) fn create(game: &mut Game, e: &mut Entity) {
-    if e.value("npc_created") != 0.0 {
+/// Source Create state that can run during generation, before producer writes.
+pub(super) fn create_local(ctx: &mut crate::creation::EntityCreateContext<'_>, e: &mut Entity) {
+    if !matches!(e.object.as_str(), "oDamsel" | "oScarab") || e.value("npc_local_created") != 0.0 {
         return;
     }
-    e.data.insert("npc_created".into(), 1.0);
+    e.data.insert("npc_local_created".into(), 1.0);
     match e.object.as_str() {
-        "oGhost" => game.sound("sndGhost", e.pos),
         "oDamsel" => {
-            // World generation has already applied its post-Create overrides
-            // when context-dependent authored instances are bootstrapped.
+            // Preserve post-Create overrides in authored-room bootstraps.
             e.data
                 .entry("cost".into())
-                .or_insert(15000.0 * f64::from(game.world.level));
+                .or_insert(15000.0 * f64::from(ctx.world.level));
         }
         "oScarab" => {
-            e.timer = 10 + game.rng.range(21);
-            if let Some(value) = match game.world.area {
+            e.timer = 10 + ctx.rng.range(21);
+            if let Some(value) = match ctx.world.area {
                 Area::Mines => Some(4000.0),
                 Area::Jungle => Some(8000.0),
                 Area::Temple => Some(12000.0),
@@ -85,6 +83,24 @@ pub(super) fn create(game: &mut Game, e: &mut Entity) {
             }
         }
         _ => {}
+    }
+}
+
+/// Remaining Game-context effects must run even after generated local Create.
+pub(super) fn create(game: &mut Game, e: &mut Entity) {
+    create_local(
+        &mut crate::creation::EntityCreateContext {
+            world: &game.world,
+            rng: &mut game.rng,
+        },
+        e,
+    );
+    if e.value("npc_created") != 0.0 {
+        return;
+    }
+    e.data.insert("npc_created".into(), 1.0);
+    if e.object == "oGhost" {
+        game.sound("sndGhost", e.pos);
     }
 }
 
@@ -1190,6 +1206,91 @@ fn barrier_item_collision(game: &mut Game, id: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_scarab_create_consumes_its_draw_before_caller_and_not_at_bootstrap() {
+        let mut game = actual_room();
+        game.world.area = Area::Temple;
+        game.world.level = 13;
+        let mut expected = game.rng.clone();
+        let expected_timer = 10 + expected.range(21);
+        let expected_caller_draw = expected.range(97);
+        let id = crate::creation::spawn_generated_entity(
+            &mut game.world,
+            &mut game.rng,
+            "oScarab",
+            Vec2::new(370.0, 128.0),
+        );
+        let scarab = game.world.entity(id).unwrap();
+        assert_eq!(scarab.timer, expected_timer);
+        assert_eq!(scarab.value("value"), 12000.0);
+        assert_eq!(scarab.value("npc_local_created"), 1.0);
+        assert_eq!(scarab.value("npc_created"), 0.0);
+        assert_eq!(game.rng.range(97), expected_caller_draw);
+
+        game.step(&InputFrame::default());
+
+        let scarab = game.world.entity(id).unwrap();
+        assert_eq!(scarab.value("npc_created"), 1.0);
+        assert_eq!(scarab.timer, expected_timer, "outside its narrow AI view");
+        assert_eq!(game.rng.range(10000), expected.range(10000));
+    }
+
+    #[test]
+    fn generated_damsel_local_price_precedes_free_override_without_skipping_runtime_create() {
+        let mut game = actual_room();
+        game.world.level = 7;
+        let mut expected = game.rng.clone();
+        let id = crate::creation::spawn_generated_entity(
+            &mut game.world,
+            &mut game.rng,
+            "oDamsel",
+            Vec2::new(370.0, 128.0),
+        );
+        let damsel = game.world.entity_mut(id).unwrap();
+        assert_eq!(damsel.value("cost"), 105000.0);
+        assert_eq!(damsel.value("npc_local_created"), 1.0);
+        assert_eq!(damsel.value("npc_created"), 0.0);
+        damsel.data.insert("cost".into(), 0.0);
+        damsel.data.insert("for_sale".into(), 0.0);
+
+        game.step(&InputFrame::default());
+
+        let damsel = game.world.entity(id).unwrap();
+        assert_eq!(damsel.value("cost"), 0.0);
+        assert_eq!(damsel.value("for_sale"), 0.0);
+        assert_eq!(damsel.value("npc_created"), 1.0);
+        assert_eq!(game.rng.range(10000), expected.range(10000));
+    }
+
+    #[test]
+    fn generated_local_create_does_not_mark_or_skip_ghost_runtime_sound() {
+        let mut game = actual_room();
+        let id = crate::creation::spawn_generated_entity(
+            &mut game.world,
+            &mut game.rng,
+            "oGhost",
+            Vec2::new(370.0, 128.0),
+        );
+        assert_eq!(
+            game.world.entity(id).unwrap().value("npc_local_created"),
+            0.0
+        );
+        assert_eq!(game.world.entity(id).unwrap().value("npc_created"), 0.0);
+        for expected_sound_count in [1, 0] {
+            game.step(&InputFrame::default());
+            assert_eq!(game.world.entity(id).unwrap().value("npc_created"), 1.0);
+            assert_eq!(
+                game.events
+                    .iter()
+                    .filter(|event| {
+                        matches!(event, GameEvent::Sound { name, .. } if name == "sndGhost")
+                    })
+                    .count(),
+                expected_sound_count
+            );
+        }
+    }
 
     #[test]
     fn actual_step_damsel_spear_gate_selects_nearest_from_the_whole_family() {
