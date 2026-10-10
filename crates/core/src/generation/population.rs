@@ -133,11 +133,28 @@ fn source_point_family(world: &World, point: Vec2, family: &str) -> bool {
         || world.entities.iter().any(|entity| {
             entity.alive
                 && crate::catalog::is_a(&entity.object, family)
-                && entity.sprite_bounds().contains(point)
+                && entity.mask_contains(point, crate::CollisionPrecision::BoundingBox)
         })
 }
 
-fn family_origins(world: &World, family: &str) -> Vec<Vec2> {
+fn source_rectangle_family(world: &World, rectangle: Rect, family: &str) -> bool {
+    // prec=false: test the current sprite/mask bounding boxes, including
+    // alive dynamic descendants even when their movement flags are changed.
+    world.tiles_collide(rectangle, family)
+        || world.entities.iter().any(|entity| {
+            entity.alive
+                && crate::catalog::is_a(&entity.object, family)
+                && entity.sprite_bounds().intersects(rectangle)
+        })
+}
+
+#[derive(Clone, Copy)]
+enum FamilyInstance {
+    Tile(usize),
+    Entity(u64),
+}
+
+fn family_instances(world: &World, family: &str) -> Vec<(u64, FamilyInstance, Vec2)> {
     let mut instances: Vec<_> = world
         .tiles
         .iter()
@@ -146,6 +163,7 @@ fn family_origins(world: &World, family: &str) -> Vec<Vec2> {
         .map(|(index, tile)| {
             (
                 tile.creation_serial,
+                FamilyInstance::Tile(index),
                 Vec2::new(
                     (index % world.width) as f64 * 16.0,
                     (index / world.width) as f64 * 16.0,
@@ -157,17 +175,46 @@ fn family_origins(world: &World, family: &str) -> Vec<Vec2> {
                 .entities
                 .iter()
                 .filter(|entity| entity.alive && crate::catalog::is_a(&entity.object, family))
-                .map(|entity| (entity.creation_serial, entity.pos)),
+                .map(|entity| {
+                    (
+                        entity.creation_serial,
+                        FamilyInstance::Entity(entity.id),
+                        entity.pos,
+                    )
+                }),
         )
         .collect();
     // Source generation's with-family arrays append at instance creation.
     // Merge the port's two storage forms by that order; this does not establish
     // equivalence of earlier authored births or post-Draw rebuilt arrays.
-    instances.sort_by_key(|(serial, _)| *serial);
+    instances.sort_by_key(|(serial, _, _)| *serial);
     instances
+}
+
+fn family_origins(world: &World, family: &str) -> Vec<Vec2> {
+    family_instances(world, family)
         .into_iter()
-        .map(|(_, position)| position)
+        .map(|(_, _, position)| position)
         .collect()
+}
+
+fn protect_gold_door_support(world: &mut World, instance: FamilyInstance) {
+    match instance {
+        FamilyInstance::Entity(id) => {
+            if let Some(support) = world.entity_mut(id) {
+                support.data.insert("invincible".into(), 1.0);
+            }
+        }
+        FamilyInstance::Tile(index) => {
+            super::tiles::terrain_property(
+                world,
+                index % world.width,
+                index / world.width,
+                "invincible",
+                1.0,
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -556,9 +603,22 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
                 }
             }
             Area::Temple => {
-                if world.level == 14 && y > 2 && floor && !exists(world, "oGoldDoor") {
+                if world.level == 14
+                    && y > 2
+                    && !source_point_family(
+                        world,
+                        Vec2::new(f64::from(x) * 16.0, f64::from(y - 1) * 16.0),
+                        "oSolid",
+                    )
+                    && !exists(world, "oGoldDoor")
+                {
                     if rng.chance(1, gold_chance) {
                         spawn(world, rng, "oGoldDoor", x, y - 1);
+                        // Source :406 writes to the `with oSolid` receiver.
+                        protect_gold_door_support(
+                            world,
+                            FamilyInstance::Tile(y as usize * world.width + x as usize),
+                        );
                     } else {
                         gold_chance = gold_chance.saturating_sub(1).max(1);
                     }
@@ -571,9 +631,13 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
                 if !start_room(world, x, y - 1) && floor && y > 1 && !occupied(world, x, y - 1) {
                     if tomb_lord
                         && !exists(world, "oTombLord")
-                        && !solid(world, x, y - 2)
-                        && !solid(world, x + 1, y - 2)
-                        && !solid(world, x + 1, y - 1)
+                        // scrEntityGen:460 includes both endpoints:
+                        // x..x+32, y-32..y-1 (33 by 32 pixels).
+                        && !source_rectangle_family(
+                            world,
+                            Rect::new(f64::from(x) * 16.0, f64::from(y - 2) * 16.0, 33.0, 32.0),
+                            "oSolid",
+                        )
                         && rng.chance(1, 40)
                     {
                         spawn(world, rng, "oTombLord", x, y - 2);
@@ -641,11 +705,29 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
         }
     }
     if world.area == Area::Temple && world.level == 14 && !exists(world, "oGoldDoor") {
-        if let Some(&(x, y)) = supports
-            .iter()
-            .find(|&&(x, y)| y > 2 && !solid(world, x, y - 1) && !in_shop(world, x, y))
+        // The second `with oSolid` is a fresh pass after enemy/treasure
+        // generation. It includes moving blocks and has no shop exclusion.
+        if let Some((_, support, origin)) =
+            family_instances(world, "oSolid")
+                .into_iter()
+                .find(|(_, _, origin)| {
+                    origin.y > 32.0
+                        && !source_point_family(
+                            world,
+                            Vec2::new(origin.x, origin.y - 16.0),
+                            "oSolid",
+                        )
+                })
         {
-            spawn(world, rng, "oGoldDoor", x, y - 1);
+            crate::creation::spawn_generated_entity(
+                world,
+                rng,
+                "oGoldDoor",
+                Vec2::new(origin.x, origin.y - 16.0),
+            );
+            // Source :491 protects exactly the selected instance, even when
+            // multiple solids occupy the same origin.
+            protect_gold_door_support(world, support);
         }
     }
     if matches!(world.area, Area::Mines | Area::Temple) {
@@ -752,6 +834,270 @@ fn arrows(world: &mut World, rng: &mut Rng, supports: &[(i32, i32)]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn isolated_temple_support(level: u32) -> World {
+        let mut world = World::new(42, 34, Area::Temple, level);
+        world.entrance = at(1, 1);
+        // Suppress unrelated treasure draws at the sole terrain support.
+        world.exit = at(10, 32);
+        world.set_tile(10, 32, "oTemple");
+        world
+    }
+
+    #[test]
+    fn tomb_lord_dynamic_solid_guard_precedes_its_chance_draw() {
+        for offset in [16.0, 32.0] {
+            let mut world = isolated_temple_support(13);
+            let block = world.spawn("oPushBlock", Vec2::new(160.0 + offset, 496.0));
+            // A named-family query does not use these movement filters.
+            world.entity_mut(block).unwrap().solid = false;
+            world.entity_mut(block).unwrap().held = true;
+            let mut actual = Rng::new(6491);
+            let mut source = actual.clone();
+            // scrEntityGen:460 rejects the rectangle before :461's roll.
+            // Within the modeled local chain, the first draw therefore
+            // belongs to Caveman at :466. This is not a full scrEntityGen
+            // RNG oracle: its background draws/primary family pass differ.
+            assert_eq!(source.range(40), 0);
+            populate(&mut world, &mut actual, &BTreeSet::new());
+            assert!(!exists(&world, "oTombLord"), "block offset {offset}");
+            assert!(exists(&world, "oCaveman"), "block offset {offset}");
+            assert_eq!(actual.next_u64(), source.next_u64());
+        }
+    }
+
+    #[test]
+    fn ordinary_gold_door_rejects_dynamic_solid_before_chance_draw() {
+        let seed = (0..100_000)
+            .find(|&seed| {
+                let mut rng = Rng::new(seed);
+                rng.range(4); // genTombLord on level fourteen.
+                rng.range(160) == 0 // Old tile-only guard would create the door.
+            })
+            .unwrap();
+        let mut world = isolated_temple_support(14);
+        world.spawn("oPushBlock", Vec2::new(160.0, 496.0));
+        let mut actual = Rng::new(seed);
+        let mut source = actual.clone();
+        source.range(4); // Modeled adapter's genTombLord statement.
+        populate(&mut world, &mut actual, &BTreeSet::new());
+        assert!(!world.entities.iter().any(|entity| {
+            entity.object == "oGoldDoor" && entity.pos == Vec2::new(160.0, 496.0)
+        }));
+        assert_eq!(
+            actual.next_u64(),
+            source.next_u64(),
+            "blocked ordinary placement consumes no goldChance draw"
+        );
+    }
+
+    #[test]
+    fn ordinary_gold_door_protects_its_terrain_receiver() {
+        let seed = (0..100_000)
+            .find(|&seed| {
+                let mut rng = Rng::new(seed);
+                rng.range(4);
+                rng.range(160) == 0
+            })
+            .unwrap();
+        let mut world = isolated_temple_support(14);
+        populate(&mut world, &mut Rng::new(seed), &BTreeSet::new());
+        let door = world
+            .entities
+            .iter()
+            .find(|e| e.object == "oGoldDoor")
+            .unwrap();
+        assert_eq!(door.pos, Vec2::new(160.0, 496.0));
+        assert_eq!(
+            door.value("invincible"),
+            0.0,
+            "source write targets the support, not the new door"
+        );
+        let metadata = world
+            .entities
+            .iter()
+            .find(|e| e.object == "oTerrainMetadata" && e.pos == at(10, 32))
+            .unwrap();
+        assert_eq!(metadata.value("invincible"), 1.0);
+        let mut game = crate::Game::shell(42, crate::RulesPreset::Classic);
+        game.world = world;
+        game.world.set_tile(11, 32, "oTemple");
+        crate::items::explosives::destroy_terrain(&mut game, 10, 32);
+        crate::items::explosives::destroy_terrain(&mut game, 11, 32);
+        assert_eq!(game.world.tile(10, 32).unwrap().object, "oTemple");
+        assert_eq!(game.world.tile(11, 32).unwrap().object, "");
+    }
+
+    #[test]
+    fn forced_gold_door_protects_exact_mixed_storage_receiver() {
+        for dynamic_first in [false, true] {
+            let mut world = World::new(42, 34, Area::Temple, 14);
+            let pos = Vec2::new(320.0, 320.0);
+            if !dynamic_first {
+                world.set_tile(20, 20, "oTemple");
+            }
+            let block = world.spawn("oPushBlock", pos);
+            if dynamic_first {
+                world.set_tile(20, 20, "oTemple");
+            }
+            // Exclude the ordinary terrain pass; forced source :488 has no
+            // shop exclusion and chooses between coincident real receivers.
+            world.spawn("oShopkeeper", pos);
+            let mut actual = Rng::new(42);
+            let mut source = actual.clone();
+            source.range(4);
+            populate(&mut world, &mut actual, &BTreeSet::new());
+            assert!(
+                world
+                    .entities
+                    .iter()
+                    .any(|e| e.object == "oGoldDoor" && e.pos == Vec2::new(320.0, 304.0))
+            );
+            assert_eq!(
+                world.entity(block).unwrap().value("invincible"),
+                f64::from(dynamic_first)
+            );
+            let protected_tile = world.entities.iter().any(|e| {
+                e.object == "oTerrainMetadata"
+                    && e.pos == at(20, 20)
+                    && e.value("invincible") == 1.0
+            });
+            assert_eq!(protected_tile, !dynamic_first);
+            assert_eq!(actual.next_u64(), source.next_u64());
+        }
+    }
+
+    #[test]
+    fn forced_gold_door_visits_dynamic_solids_in_birth_order_even_in_shops() {
+        let mut world = World::new(42, 34, Area::Temple, 14);
+        world.entrance = at(1, 1);
+        world.exit = at(37, 30);
+        // Dynamic-only supports keep the ordinary terrain pass empty.
+        let first = world.spawn("oPushBlock", Vec2::new(320.0, 320.0));
+        let duplicate = world.spawn("oPushBlock", Vec2::new(320.0, 320.0));
+        world.spawn("oPushBlock", Vec2::new(160.0, 320.0));
+        world.spawn("oShopkeeper", Vec2::new(320.0, 320.0));
+        let mut actual = Rng::new(42);
+        let mut source = actual.clone();
+        // The adapter's primary terrain pass is empty in this fixture.
+        // This oracle covers the forced pass, not the entire source script.
+        source.range(4); // Modeled adapter's genTombLord statement.
+        populate(&mut world, &mut actual, &BTreeSet::new());
+        let doors: Vec<_> = world
+            .entities
+            .iter()
+            .filter(|e| e.object == "oGoldDoor")
+            .collect();
+        assert_eq!(doors.len(), 1);
+        assert_eq!(doors[0].pos, Vec2::new(320.0, 304.0));
+        assert_eq!(actual.next_u64(), source.next_u64());
+        assert_eq!(world.entity(first).unwrap().value("invincible"), 1.0);
+        assert_eq!(world.entity(duplicate).unwrap().value("invincible"), 0.0);
+        let mut game = crate::Game::shell(42, crate::RulesPreset::Classic);
+        game.world = world;
+        // Use the real attack destruction service on coincident instances:
+        // protection applies to the selected receiver, not its neighbors.
+        assert!(!crate::items::explosives::destroy_solid_instance(
+            &mut game, first
+        ));
+        assert!(crate::items::explosives::destroy_solid_instance(
+            &mut game, duplicate
+        ));
+        assert!(game.world.entity(first).is_some());
+        assert!(game.world.entity(duplicate).is_none());
+    }
+
+    fn assert_campaign_temple_placement_clears_push_blocks(selected_level: u32) {
+        // Captured immediately before Game::next_level in the seed-two
+        // Market -> Ankh -> Moai -> Crown campaign interaction prefix.
+        // These are the natural runtime RNG states, not independent level
+        // seeds. The carried Sceptre flag is removed before level14 generation.
+        let flags = BTreeSet::from(
+            [
+                "made_black_market",
+                "made_market_entrance",
+                "made_moai",
+                "made_udjat_eye",
+                "moai_open",
+                "no_dark_level",
+                "render_discontinuity",
+                "transition_cinematic_complete",
+            ]
+            .map(str::to_owned),
+        );
+        for (level, rng_state, invalid_origin, blocker_origin) in [
+            (
+                13,
+                10778720839894840496_u64,
+                Vec2::new(224.0, 352.0),
+                Vec2::new(240.0, 368.0),
+            ),
+            (
+                14,
+                11972203220667455624_u64,
+                Vec2::new(448.0, 112.0),
+                Vec2::new(448.0, 112.0),
+            ),
+        ] {
+            if level != selected_level {
+                continue;
+            }
+            let mut rng: Rng =
+                serde_json::from_value(serde_json::json!({"state": rng_state})).unwrap();
+            let world = crate::generation::generate(&mut rng, level, &flags);
+            assert!(
+                world
+                    .entities
+                    .iter()
+                    .any(|e| e.alive && e.object == "oPushBlock" && e.pos == blocker_origin),
+                "level {level} must retain the natural blocking instance"
+            );
+            assert!(
+                !world.entities.iter().any(|e| e.alive
+                    && e.object
+                        == if level == 13 {
+                            "oTombLord"
+                        } else {
+                            "oGoldDoor"
+                        }
+                    && e.pos == invalid_origin),
+                "level {level} invalid original placement must be rejected"
+            );
+            if level == 14 {
+                assert!(exists(&world, "oGoldDoor"));
+            }
+            for entity in &world.entities {
+                let probe = match entity.object.as_str() {
+                    "oTombLord" => {
+                        // Literal source rectangle, including x+32.
+                        Rect::new(entity.pos.x, entity.pos.y, 33.0, 32.0)
+                    }
+                    "oGoldDoor" => Rect::new(entity.pos.x, entity.pos.y, 1.0, 1.0),
+                    _ => continue,
+                };
+                assert!(
+                    !world.entities.iter().any(|block| {
+                        block.alive
+                            && block.object == "oPushBlock"
+                            && block.sprite_bounds().intersects(probe)
+                    }),
+                    "campaign seed2, level {level}, {} at {:?}",
+                    entity.object,
+                    entity.pos
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn generated_temple_special_tomb_lord_clears_preexisting_push_blocks() {
+        assert_campaign_temple_placement_clears_push_blocks(13);
+    }
+
+    #[test]
+    fn generated_temple_special_gold_door_clears_preexisting_push_blocks() {
+        assert_campaign_temple_placement_clears_push_blocks(14);
+    }
 
     #[test]
     fn population_detects_water_descendants_and_source_masks() {

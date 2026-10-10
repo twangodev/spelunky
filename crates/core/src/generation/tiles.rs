@@ -789,7 +789,7 @@ fn altar(w: &mut World, r: &mut Rng, p: Vec2, sacrifice: bool) {
 }
 
 // World tiles currently carry names only. Invisible overlays preserve source per-instance properties.
-fn terrain_property(w: &mut World, x: usize, y: usize, key: &str, value: f64) -> u64 {
+pub(super) fn terrain_property(w: &mut World, x: usize, y: usize, key: &str, value: f64) -> u64 {
     let p = Vec2::new(x as f64 * 16.0 + 8.0, y as f64 * 16.0 + 8.0);
     let existing = w
         .entities
