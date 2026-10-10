@@ -1,6 +1,9 @@
 //! Positioned-interaction acceptance for generated campaign content.
 //! These checks teleport the player and grant survivability; they do not prove
 //! that the generated routes are physically traversable or source-equivalent.
+mod common;
+
+use common::complete_source_exit;
 use spelunky_core::{Area, Game, InputFrame, RulesPreset, RunState, Vec2};
 
 fn position_player(game: &mut Game, pos: Vec2) {
@@ -40,13 +43,7 @@ fn positioned_exit(game: &mut Game) {
         up: true,
         ..Default::default()
     });
-    assert_eq!(
-        game.state,
-        RunState::Transition,
-        "seed {}, level {}",
-        game.seed,
-        game.world.level
-    );
+    complete_source_exit(game);
 }
 
 #[test]
@@ -149,7 +146,7 @@ fn exposed_generated_market_ankh_moai_and_gold_door_form_a_reachable_state_chain
         up: true,
         ..Default::default()
     });
-    assert_eq!(game.state, RunState::Transition);
+    complete_source_exit(&mut game);
     game.next_level();
     assert_eq!(game.world.name, "Black Market");
 
@@ -268,7 +265,7 @@ fn exposed_generated_market_ankh_moai_and_gold_door_form_a_reachable_state_chain
         up: true,
         ..Default::default()
     });
-    assert_eq!(game.state, RunState::Transition);
+    complete_source_exit(&mut game);
     game.next_level();
     assert_eq!(game.world.name, "City of Gold");
     assert_eq!(game.world.level, 15);

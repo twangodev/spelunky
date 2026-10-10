@@ -60,11 +60,33 @@ pub struct Record {
     pub score: u32,
     pub level: u32,
     pub ticks: u64,
+    /// Classic stores room-speed units, adding 30 for each live level tick.
+    /// Older saves only retained ticks, so their duration is derived on read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
+    /// Shortcut wins count toward score and wins, but never fastest time.
+    #[serde(default = "eligible_legacy_record")]
+    pub fastest_eligible: bool,
     pub won: bool,
     #[serde(default)]
     pub kills: u32,
     #[serde(default)]
     pub rescues: u32,
+}
+
+fn eligible_legacy_record() -> bool {
+    true
+}
+
+impl Record {
+    pub fn elapsed_ms(&self) -> u64 {
+        self.elapsed_ms
+            .unwrap_or_else(|| self.ticks.saturating_mul(30))
+    }
+
+    pub fn elapsed_seconds(&self) -> u64 {
+        self.elapsed_ms() / 1000
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -365,6 +387,8 @@ mod tests {
             score: 4000,
             level: 3,
             ticks: 900,
+            elapsed_ms: Some(27_000),
+            fastest_eligible: true,
             won: false,
             kills: 12,
             rescues: 2,
@@ -375,6 +399,8 @@ mod tests {
             score: 6000,
             level: 4,
             ticks: 800,
+            elapsed_ms: Some(24_000),
+            fastest_eligible: false,
             won: false,
             kills: 15,
             rescues: 3,
@@ -391,6 +417,8 @@ mod tests {
         assert_eq!(decoded.records[0].rescues, 2);
         assert_eq!(decoded.records[1].kills, 15);
         assert_eq!(decoded.records[1].rescues, 3);
+        assert_eq!(decoded.records[0].elapsed_ms(), 27_000);
+        assert!(!decoded.records[1].fastest_eligible);
         assert_eq!(decoded.custom_levels, data.custom_levels);
         assert_eq!(decoded.unlocks, data.unlocks);
     }
@@ -422,6 +450,8 @@ mod tests {
             for record in &data.records {
                 assert_eq!(record.kills, 0);
                 assert_eq!(record.rescues, 0);
+                assert!(record.fastest_eligible);
+                assert_eq!(record.elapsed_ms(), record.ticks * 30);
             }
             assert_eq!(data.records[0].rules, RulesPreset::Classic);
             assert_eq!(data.records[1].rules, RulesPreset::Assisted);

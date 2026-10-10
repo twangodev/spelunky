@@ -17,6 +17,23 @@ pub(super) fn treasure_value(object: &str) -> Option<u32> {
     })
 }
 
+fn treasure_category(object: &str) -> &'static str {
+    match object {
+        "oGoldChunk" => "gold",
+        "oGoldNugget" => "nuggets",
+        "oGoldBar" => "goldbar",
+        "oGoldBars" => "goldbars",
+        "oEmerald" => "emeralds",
+        "oEmeraldBig" => "bigemeralds",
+        "oSapphire" => "sapphires",
+        "oSapphireBig" => "bigsapphires",
+        "oRuby" => "rubies",
+        "oRubyBig" => "bigrubies",
+        "oDiamond" => "diamonds",
+        _ => unreachable!("validated treasure family"),
+    }
+}
+
 fn equipment(object: &str) -> Option<&'static str> {
     Some(match object {
         "oParaPickup" => "Parachute",
@@ -306,6 +323,10 @@ pub fn tick(game: &mut Game) {
             *game.data.entry("collect".into()).or_default() += f64::from(value);
             let counter = game.data.entry("collectCounter".into()).or_default();
             *counter = (*counter + 20.).min(100.);
+            *game
+                .data
+                .entry(treasure_category(&object).into())
+                .or_default() += 1.;
             *game.data.entry(format!("collected:{object}")).or_default() += 1.;
             game.sound(
                 if object.starts_with("oGold") {
@@ -500,6 +521,50 @@ mod tests {
     use crate::model::RulesPreset;
     fn game() -> Game {
         Game::shell(7, RulesPreset::Classic)
+    }
+
+    #[test]
+    fn natural_treasure_pickups_record_source_categories_and_lifetime_totals_once() {
+        let families = [
+            ("oGoldChunk", "gold"),
+            ("oGoldNugget", "nuggets"),
+            ("oGoldBar", "goldbar"),
+            ("oGoldBars", "goldbars"),
+            ("oEmerald", "emeralds"),
+            ("oEmeraldBig", "bigemeralds"),
+            ("oSapphire", "sapphires"),
+            ("oSapphireBig", "bigsapphires"),
+            ("oRuby", "rubies"),
+            ("oRubyBig", "bigrubies"),
+            ("oDiamond", "diamonds"),
+        ];
+        for (object, category) in families {
+            let mut g = game();
+            for x in 0..g.world.width {
+                g.world.set_tile(x, 3, "oBlock");
+            }
+            for (_, key) in families {
+                g.data.insert(key.into(), 4.);
+            }
+            let lifetime_key = format!("collected:{object}");
+            g.data.insert(lifetime_key.clone(), 9.);
+            let id = g.world.spawn(object, g.player.pos);
+            for _ in 0..20 {
+                g.step(&InputFrame::default());
+            }
+            assert!(g.world.entity(id).is_none(), "{object}");
+            for (_, key) in families {
+                assert_eq!(
+                    g.data[key],
+                    if key == category { 5. } else { 4. },
+                    "{object}: {key}"
+                );
+            }
+            assert_eq!(g.data[&lifetime_key], 10., "{object}");
+            g.step(&InputFrame::default());
+            assert_eq!(g.data[category], 5., "{object} counted twice");
+            assert_eq!(g.data[&lifetime_key], 10., "{object} counted twice");
+        }
     }
 
     #[test]

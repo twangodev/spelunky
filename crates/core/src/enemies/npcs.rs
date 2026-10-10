@@ -100,12 +100,23 @@ pub(super) fn tick_independent_events(game: &mut Game, e: &mut Entity) {
     }
     if e.object == "oScarab" {
         if game.player.sprite_bounds().intersects(e.sprite_bounds()) {
-            let value = match game.world.area {
-                Area::Mines => 4000,
-                Area::Jungle => 8000,
-                _ => 12000,
-            };
-            game.player.money += value;
+            // Source Create assigns 4000/8000/12000 in Mines/Jungle/Temple.
+            // Retain caller overrides and the existing unsupported-area
+            // fallback; Ice/Boss have no explicit value assignment in source.
+            let value = e
+                .data
+                .get("value")
+                .copied()
+                .unwrap_or(match game.world.area {
+                    Area::Mines => 4000.0,
+                    Area::Jungle => 8000.0,
+                    _ => 12000.0,
+                })
+                .max(0.0) as u32;
+            *game.data.entry("collect".into()).or_default() += f64::from(value);
+            let counter = game.data.entry("collectCounter".into()).or_default();
+            *counter = (*counter + 20.0).min(100.0);
+            *game.data.entry("scarabs".into()).or_default() += 1.0;
             game.events.push(GameEvent::Collected {
                 object: "oScarab".into(),
                 value,
@@ -371,6 +382,7 @@ fn damsel(game: &mut Game, e: &mut Entity) {
         game.flags.insert("damsel_rescued".into());
         *game.data.entry("pending_damsel_kisses".into()).or_default() += 1.0;
         *game.data.entry("damsels".into()).or_default() += 1.0;
+        *game.data.entry("xdamsels".into()).or_default() += 1.0;
         game.sound("sndSteps", e.pos);
         return;
     }
@@ -1048,16 +1060,19 @@ mod tests {
         let id = g.world.spawn("oDamsel", g.world.exit);
         g.step(&InputFrame::default());
         assert!(!g.flags.contains("damsel_rescued"));
+        assert!(!g.data.contains_key("xdamsels"));
         g.world.spawn("oExit", Vec2::new(96.0, 96.0));
         g.step(&InputFrame::default());
         assert_eq!(g.world.entity(id).unwrap().state, 4);
         assert_eq!(g.data["damsels"], 1.0);
+        assert_eq!(g.data["xdamsels"], 1.0);
         assert_eq!(g.data["pending_damsel_kisses"], 1.0);
         for _ in 0..40 {
             g.step(&InputFrame::default());
         }
         assert!(g.world.entity(id).is_none());
         assert_eq!(g.data["damsels"], 1.0);
+        assert_eq!(g.data["xdamsels"], 1.0);
     }
     #[test]
     fn actual_step_damsel_water_and_lava_hazards() {
@@ -1360,7 +1375,15 @@ mod tests {
                 expected_sparks,
                 "collected={collected}, dead={dead}"
             );
-            assert_eq!(g.player.money, if collected { 4000 } else { 0 });
+            assert_eq!(g.player.money, 0);
+            assert_eq!(
+                g.data.get("collect").copied().unwrap_or(0.0),
+                if collected { 4000.0 } else { 0.0 }
+            );
+            assert_eq!(
+                g.data.get("scarabs").copied().unwrap_or(0.0),
+                if collected { 1.0 } else { 0.0 }
+            );
         }
     }
     #[test]
@@ -1372,7 +1395,9 @@ mod tests {
         assert_eq!(g.camera, Vec2::default());
         g.step(&InputFrame::default());
         assert!(g.world.entity(id).is_none());
-        assert_eq!(g.player.money, 12000);
+        assert_eq!(g.player.money, 0);
+        assert_eq!(g.data["collect"], 12000.0);
+        assert_eq!(g.data["scarabs"], 1.0);
         assert_eq!(
             g.world
                 .entities
@@ -1382,10 +1407,66 @@ mod tests {
             3
         );
         g.step(&InputFrame::default());
-        assert_eq!(g.player.money, 12000);
+        assert_eq!(g.player.money, 0);
+        assert_eq!(g.data["collect"], 12000.0);
+        assert_eq!(g.data["scarabs"], 1.0);
         assert!(!g.events.iter().any(|event| matches!(event,
             GameEvent::Collected { object, .. } if object == "oScarab"
         )));
+    }
+    #[test]
+    fn actual_step_scarab_queues_literal_area_value_then_counts_money_and_earnings() {
+        for (area, value) in [
+            (Area::Mines, 4000),
+            (Area::Jungle, 8000),
+            (Area::Temple, 12000),
+        ] {
+            let mut g = actual_room();
+            g.world.area = area;
+            for x in 0..30 {
+                g.world.set_tile(x, 9, "oBlock");
+            }
+            g.player.pos = Vec2::new(104.0, 128.0);
+            g.player.money = 500;
+            g.data.insert("xmoney".into(), 25.0);
+            let id = g.world.spawn("oScarab", Vec2::new(96.0, 120.0));
+            g.step(&InputFrame::default());
+            assert!(g.world.entity(id).is_none());
+            assert_eq!(g.player.money, 500);
+            assert_eq!(g.data["xmoney"], 25.0);
+            assert_eq!(g.data["collect"], f64::from(value));
+            assert_eq!(g.data["collectCounter"], 20.0);
+            assert_eq!(g.data["scarabs"], 1.0);
+            for _ in 0..20 {
+                g.step(&InputFrame::default());
+            }
+            assert_eq!(g.data["collectCounter"], 0.0);
+            assert_eq!(g.player.money, 500);
+            g.step(&InputFrame::default());
+            assert_eq!(g.player.money, 600);
+            assert_eq!(g.data["xmoney"], 125.0);
+            assert_eq!(g.data["collect"], f64::from(value - 100));
+            for _ in 1..value / 100 {
+                g.step(&InputFrame::default());
+            }
+            assert_eq!(g.player.money, 500 + value);
+            assert_eq!(g.data["xmoney"], 25.0 + f64::from(value));
+            assert_eq!(g.data["collect"], 0.0);
+            assert_eq!(g.data["scarabs"], 1.0);
+        }
+    }
+    #[test]
+    fn actual_step_scarab_queue_adds_to_existing_collection_and_caps_delay() {
+        let mut g = actual_room();
+        g.player.pos = Vec2::new(104.0, 128.0);
+        g.data.insert("collect".into(), 250.0);
+        g.data.insert("collectCounter".into(), 95.0);
+        g.world.spawn("oScarab", Vec2::new(96.0, 120.0));
+        g.step(&InputFrame::default());
+        assert_eq!(g.player.money, 0);
+        assert_eq!(g.data["collect"], 4250.0);
+        assert_eq!(g.data["collectCounter"], 100.0);
+        assert_eq!(g.data["scarabs"], 1.0);
     }
     #[test]
     fn actual_step_attacking_unarmed_keeper_consumes_shotgun_and_clears_holder() {

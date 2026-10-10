@@ -1,3 +1,6 @@
+mod common;
+
+use common::complete_source_exit;
 use spelunky_core::{
     Area, Game, InputFrame, PlayerState, RulesPreset, Vec2, World,
     activation::{self, Regions},
@@ -215,6 +218,8 @@ fn actual_inventory_cycle_idle_and_exit_preserve_the_hidden_weapon() {
     });
     assert!(game.flags.contains("carry:oShotgun"));
     assert!(!game.player.data.contains_key("stash_id"));
+    complete_source_exit(&mut game);
+    assert!(game.flags.contains("carry:oShotgun"));
     game.next_level();
     let weapon = game.world.entity(game.player.held.unwrap()).unwrap();
     assert_eq!(weapon.object, "oShotgun");

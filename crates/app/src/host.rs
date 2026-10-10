@@ -146,7 +146,8 @@ struct App {
     donation: Option<TransitionDonation>,
     donation_confirm: bool,
     recorded: bool,
-    finish_tick: Option<u64>,
+    cinematic_action: bool,
+    exit_requested: bool,
     focused: bool,
     occluded: bool,
     next_frame: f64,
@@ -184,7 +185,8 @@ impl App {
             donation: None,
             donation_confirm: false,
             recorded: false,
-            finish_tick: None,
+            cinematic_action: false,
+            exit_requested: false,
             focused: true,
             occluded: false,
             next_frame: 0.,
@@ -213,6 +215,7 @@ impl App {
         }
     }
     fn reset_timing(&mut self) {
+        self.cinematic_action = false;
         self.donation_confirm = false;
         self.timing.reset(self.now());
         self.input.clear_gameplay();
@@ -227,7 +230,11 @@ impl App {
     }
     fn screen(&mut self, screen: Screen) {
         self.screen = screen;
-        self.selection = 0;
+        self.selection = if screen == Screen::Finished && self.is_hub() {
+            1
+        } else {
+            0
+        };
         self.reset_timing();
         self.audio
             .pause(!self.focused || self.occluded || matches!(screen, Screen::Pause));
@@ -273,7 +280,6 @@ impl App {
         self.game = Some(game);
         self.editor_play = false;
         self.recorded = false;
-        self.finish_tick = None;
         self.screen(Screen::Playing);
     }
     fn open_hub(&mut self, kind: spelunky_core::hub::HubKind) {
@@ -309,11 +315,10 @@ impl App {
                     "best_time",
                     records
                         .iter()
-                        .filter(|record| record.won)
-                        .map(|record| record.ticks)
+                        .filter(|record| record.won && record.fastest_eligible)
+                        .map(|record| record.elapsed_seconds())
                         .min()
-                        .unwrap_or(0) as f64
-                        / 30.,
+                        .unwrap_or(0) as f64,
                 ),
                 (
                     "best_kills",
@@ -342,7 +347,6 @@ impl App {
         }
         self.editor_play = false;
         self.recorded = false;
-        self.finish_tick = None;
         self.screen(Screen::Playing);
     }
     fn is_hub(&self) -> bool {
@@ -354,6 +358,21 @@ impl App {
         self.game
             .as_ref()
             .is_some_and(|game| game.flags.contains("custom"))
+    }
+    fn return_from_challenge(&mut self) {
+        let changed = if let Some(game) = &mut self.game {
+            let changed = capture_challenge_records(game, &mut self.store.data.challenge_records);
+            prepare_challenge_scores(game);
+            changed
+        } else {
+            false
+        };
+        if changed {
+            if let Err(error) = self.store.save() {
+                self.toast(error);
+            }
+        }
+        self.open_hub(spelunky_core::hub::HubKind::Scores);
     }
     fn key(&mut self, key: KeyCode, text_value: Option<&str>) {
         if key == KeyCode::F4
@@ -369,6 +388,14 @@ impl App {
                 }
             }
             Screen::Playing => {
+                if self
+                    .game
+                    .as_ref()
+                    .is_some_and(|game| game.state == RunState::Ending)
+                {
+                    self.cinematic_action |= self.pause_key(key) || key == KeyCode::Enter;
+                    return;
+                }
                 if self
                     .game
                     .as_ref()
@@ -426,9 +453,7 @@ impl App {
             match self.screen {
                 Screen::Pause => self.screen(Screen::Playing),
                 Screen::Finished if self.editor_play => self.screen(Screen::Editor),
-                Screen::Finished if self.is_hub() => {
-                    self.open_hub(spelunky_core::hub::HubKind::Title)
-                }
+                Screen::Finished if self.is_hub() => self.return_from_challenge(),
                 _ => self.screen(Screen::Title),
             };
             return;
@@ -505,21 +530,7 @@ impl App {
                     if self.editor_play {
                         self.screen(Screen::Editor)
                     } else if self.is_hub() {
-                        let kind = if self
-                            .game
-                            .as_ref()
-                            .is_some_and(|game| game.flags.contains("hub_sun"))
-                        {
-                            spelunky_core::hub::HubKind::Sun
-                        } else if self
-                            .game
-                            .as_ref()
-                            .is_some_and(|game| game.flags.contains("hub_moon"))
-                        {
-                            spelunky_core::hub::HubKind::Moon
-                        } else {
-                            spelunky_core::hub::HubKind::Stars
-                        };
+                        let kind = self.game.as_ref().map(retry_hub).unwrap();
                         self.open_hub(kind);
                     } else if self.is_custom() {
                         self.screen(Screen::Custom)
@@ -527,7 +538,7 @@ impl App {
                         self.start_game(false)
                     }
                 }
-                1 if self.is_hub() => self.open_hub(spelunky_core::hub::HubKind::Title),
+                1 if self.is_hub() => self.return_from_challenge(),
                 1 => self.screen(Screen::Title),
                 _ => self.screen(Screen::Editor),
             },
@@ -536,6 +547,7 @@ impl App {
                 if let Some(&level) = levels.get(self.selection) {
                     self.start_game(false);
                     if let Some(game) = &mut self.game {
+                        game.flags.insert("used_shortcut".into());
                         game.data.insert("next_level".into(), f64::from(level));
                         game.next_level();
                     }
@@ -566,10 +578,12 @@ impl App {
                 let mut game = Game::new(wall_seed(), self.store.data.settings.rules);
                 hydrate_run(&mut game, &self.store.data);
                 load_custom(&mut game, &level, name, "");
+                if editor {
+                    game.flags.insert("editor_test".into());
+                }
                 self.game = Some(game);
                 self.editor_play = editor;
                 self.recorded = false;
-                self.finish_tick = None;
                 self.screen(Screen::Playing)
             }
             Err(error) => self.toast(error),
@@ -636,10 +650,10 @@ impl App {
                 let mut game = Game::new(wall_seed(), self.store.data.settings.rules);
                 hydrate_run(&mut game, &self.store.data);
                 load_custom(&mut game, &level, self.editor.level_name(), "");
+                game.flags.insert("editor_test".into());
                 self.game = Some(game);
                 self.editor_play = true;
                 self.recorded = false;
-                self.finish_tick = None;
                 self.screen(Screen::Playing)
             }
         }
@@ -651,25 +665,13 @@ impl App {
         if self.recorded {
             return;
         }
+        let Some(record) = campaign_record(game) else {
+            return;
+        };
         self.recorded = true;
-        self.finish_tick = Some(game.tick);
-        if self.editor_play
-            || game.flags.contains("custom")
-            || game.flags.contains("tutorial")
-            || game.flags.contains("hub")
-        {
+        if self.editor_play {
             return;
         }
-        let record = Record {
-            seed: game.seed,
-            rules: game.rules,
-            score: game.player.money,
-            level: game.world.level,
-            ticks: game.tick,
-            won: game.state == RunState::Won,
-            kills: game.data.get("kills").copied().unwrap_or(0.).max(0.) as u32,
-            rescues: game.data.get("damsels").copied().unwrap_or(0.).max(0.) as u32,
-        };
         self.store
             .data
             .unlocks
@@ -678,10 +680,10 @@ impl App {
             .data
             .unlocks
             .extend(spelunky_core::hub::record_unlocks(
-                game.player.money,
-                (game.state == RunState::Won).then_some(game.tick as f64 / 30.),
-                game.data.get("kills").copied().unwrap_or(0.).max(0.) as u32,
-                game.data.get("damsels").copied().unwrap_or(0.).max(0.) as u32,
+                record.score,
+                (record.won && record.fastest_eligible).then_some(record.elapsed_seconds() as f64),
+                record.kills,
+                record.rescues,
             ));
         if ["unlock_sun", "unlock_moon", "unlock_stars", "unlock_damsel"]
             .iter()
@@ -692,6 +694,46 @@ impl App {
         if let Err(error) = self.store.add_record(record) {
             self.toast(error)
         }
+    }
+    fn finish_cinematic(&mut self) -> bool {
+        use spelunky_core::ending::{EndingKind, EndingStage};
+        let Some(ending) = self.game.as_ref().and_then(|game| game.ending.as_ref()) else {
+            return false;
+        };
+        if ending.stage != EndingStage::Complete {
+            return false;
+        }
+        match ending.kind {
+            EndingKind::Campaign => {
+                self.finish_record();
+                if let Some(game) = &mut self.game {
+                    game.flags.insert("reset_run_on_hub".into());
+                }
+                self.open_hub(spelunky_core::hub::HubKind::Scores);
+            }
+            EndingKind::Custom => {
+                if let Some(game) = &mut self.game {
+                    game.flags.insert("reset_run_on_hub".into());
+                }
+                self.open_hub(spelunky_core::hub::HubKind::Scores);
+            }
+            EndingKind::TitleCredits => {
+                if let Some(game) = &mut self.game {
+                    game.flags.remove("app_exit_requested");
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.exit_requested = true;
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.game = None;
+                    self.screen(Screen::Title);
+                }
+            }
+            EndingKind::Transition => self.transition(),
+        }
+        true
     }
     fn transition(&mut self) {
         if self.game.as_ref().is_some_and(|game| {
@@ -727,6 +769,7 @@ impl App {
                         .unwrap_or(1);
                     self.start_game(false);
                     if let Some(game) = &mut self.game {
+                        game.flags.insert("used_shortcut".into());
                         game.data.insert("next_level".into(), f64::from(level));
                         game.next_level();
                     }
@@ -752,7 +795,14 @@ impl App {
                 }
             }
         } else {
-            if let Some(donation) = TransitionDonation::begin(game) {
+            let source_transition_complete = game.ending.as_ref().is_some_and(|ending| {
+                ending.kind == spelunky_core::ending::EndingKind::Transition
+                    && ending.stage == spelunky_core::ending::EndingStage::Complete
+            });
+            if let Some(donation) = (!source_transition_complete)
+                .then(|| TransitionDonation::begin(game))
+                .flatten()
+            {
                 self.donation = Some(donation);
                 self.donation_confirm = false;
                 self.screen(Screen::Donation);
@@ -798,6 +848,18 @@ impl App {
                     UiButton::Cancel | UiButton::Pause => self.continue_transition(),
                     _ => {}
                 }
+                continue;
+            }
+            if self.screen == Screen::Playing
+                && self
+                    .game
+                    .as_ref()
+                    .is_some_and(|game| game.state == RunState::Ending)
+            {
+                self.cinematic_action |= matches!(
+                    button,
+                    UiButton::Confirm | UiButton::Cancel | UiButton::Pause
+                );
                 continue;
             }
             if self.screen == Screen::Playing
@@ -855,6 +917,7 @@ impl App {
             let frame = self.timing.advance(host_frame);
             for _ in 0..frame.ticks {
                 let mut input = self.input.take_tick();
+                apply_cinematic_start(&mut input, &mut self.cinematic_action);
                 if self
                     .game
                     .as_ref()
@@ -870,6 +933,10 @@ impl App {
                             GameEvent::Sound { name, pos } => self
                                 .audio
                                 .play(name, ((pos.x - game.camera.x) / 320. * 2. - 1.) as f32),
+                            GameEvent::SoundIfIdle { name, pos } => self.audio.play_if_idle(
+                                name,
+                                ((pos.x - game.camera.x) / 320. * 2. - 1.) as f32,
+                            ),
                             GameEvent::Message(message) => {
                                 self.message = message.clone();
                                 self.message_until = now + 5.;
@@ -881,6 +948,9 @@ impl App {
                             _ => {}
                         }
                     }
+                }
+                if self.finish_cinematic() {
+                    break;
                 }
                 let state = self.game.as_ref().map(|g| g.state);
                 if state == Some(RunState::Transition)
@@ -903,7 +973,7 @@ impl App {
                     }
                 } else if state == Some(RunState::Won) {
                     self.finish_record();
-                    self.screen(Screen::Finished);
+                    self.open_hub(spelunky_core::hub::HubKind::Scores);
                     break;
                 }
             }
@@ -922,9 +992,15 @@ impl App {
                     game.step(&spelunky_core::InputFrame::default());
                     self.timing.history_ready = true;
                     for event in &game.events {
-                        if let GameEvent::Sound { name, pos } = event {
-                            self.audio
-                                .play(name, ((pos.x - game.camera.x) / 320. * 2. - 1.) as f32);
+                        match event {
+                            GameEvent::Sound { name, pos } => self
+                                .audio
+                                .play(name, ((pos.x - game.camera.x) / 320. * 2. - 1.) as f32),
+                            GameEvent::SoundIfIdle { name, pos } => self.audio.play_if_idle(
+                                name,
+                                ((pos.x - game.camera.x) / 320. * 2. - 1.) as f32,
+                            ),
+                            _ => {}
                         }
                     }
                 }
@@ -977,7 +1053,11 @@ impl App {
         } else {
             "title"
         };
-        self.audio.music(music);
+        if music.is_empty() && self.game.as_ref().is_some_and(|game| game.ending.is_some()) {
+            self.audio.stop_music();
+        } else {
+            self.audio.music(music);
+        }
         self.audio.update();
     }
     fn draw(&self) -> Vec<DrawQuad> {
@@ -1204,7 +1284,7 @@ impl App {
                             "${}  LEVEL {}  {:.1}S",
                             game.player.money,
                             game.world.level,
-                            self.finish_tick.unwrap_or(game.tick) as f64 / 30.
+                            (source_elapsed_ms(game) / 1000) as f64
                         ),
                         66.,
                         79.,
@@ -1295,7 +1375,7 @@ impl App {
                             "${:<7} L{:02} {:>5.1}S K{:03} R{:02} {} {}",
                             record.score,
                             record.level,
-                            record.ticks as f64 / 30.,
+                            record.elapsed_seconds() as f64,
                             record.kills,
                             record.rescues,
                             if record.rules == spelunky_core::RulesPreset::Classic {
@@ -1520,6 +1600,18 @@ fn test_snapshot(
         "seed": game.seed.to_string(),
         "deathTicks": game.data.get("death_ticks").copied().unwrap_or(0.),
         "money": player.money,
+        "sourceTimeMs": game.source_elapsed_ms(),
+        "ending": game.ending.as_ref().map(|ending| serde_json::json!({
+            "kind": format!("{:?}", ending.kind), "stage": format!("{:?}", ending.stage),
+            "stageTick": ending.stage_tick, "drawStatus": ending.draw_status,
+            "drawLoot": ending.draw_loot,
+            "levelMoney": ending.level_money(),
+            "moneyCount": ending.money_count, "bonusAwarded": ending.bonus_awarded,
+            "recordReady": ending.record_ready, "sourceTimeMs": ending.source_time_ms,
+            "shortcutUsed": ending.shortcut_used, "fadeLevel": ending.fade_level,
+            "fadeIn": ending.fade_in, "fadeOut": ending.fade_out,
+            "creditsPage": ending.credits_page,
+        })),
         "darkness": game.data.get("darkness"),
         "darkness_lerp": game.data.get("darkness_lerp"),
         "flares": flares,
@@ -1547,6 +1639,13 @@ fn test_snapshot(
     })
 }
 fn game_music(game: &Game) -> &'static str {
+    if let Some(ending) = &game.ending {
+        return match ending.music.as_str() {
+            "musVictory" => "victory",
+            "musCredits" => "credits",
+            _ => "",
+        };
+    }
     if game.state == RunState::Dead {
         ""
     } else if game.state == RunState::Won {
@@ -1610,6 +1709,74 @@ fn prepare_tutorial_return(game: &mut Game) {
 }
 fn death_reveal_ready(game: &Game) -> bool {
     game.state == RunState::Dead && game.data.get("death_ticks").copied().unwrap_or(0.) >= 100.
+}
+fn source_elapsed_ms(game: &Game) -> u64 {
+    game.source_elapsed_ms()
+}
+
+fn apply_cinematic_start(input: &mut spelunky_core::InputFrame, pending: &mut bool) {
+    input.start_pressed |= std::mem::take(pending);
+}
+
+fn campaign_record(game: &Game) -> Option<Record> {
+    if ["custom", "tutorial", "hub"]
+        .iter()
+        .any(|flag| game.flags.contains(*flag))
+    {
+        return None;
+    }
+    let won = game.ending.as_ref().is_some_and(|ending| {
+        ending.kind == spelunky_core::ending::EndingKind::Campaign && ending.record_ready
+    });
+    if game.state != RunState::Dead && !won {
+        return None;
+    }
+    Some(Record {
+        seed: game.seed,
+        rules: game.rules,
+        score: game.player.money,
+        level: game
+            .ending
+            .as_ref()
+            .map(|ending| ending.completed_level)
+            .unwrap_or(game.world.level),
+        ticks: game.tick,
+        elapsed_ms: Some(source_elapsed_ms(game)),
+        fastest_eligible: !game
+            .ending
+            .as_ref()
+            .map(|ending| ending.shortcut_used)
+            .unwrap_or_else(|| game.flags.contains("used_shortcut")),
+        won,
+        kills: game.data.get("kills").copied().unwrap_or(0.).max(0.) as u32,
+        rescues: game.data.get("damsels").copied().unwrap_or(0.).max(0.) as u32,
+    })
+}
+
+fn retry_hub(game: &Game) -> spelunky_core::hub::HubKind {
+    use spelunky_core::hub::HubKind;
+    if game.flags.contains("hub_sun") {
+        HubKind::Sun
+    } else if game.flags.contains("hub_moon") {
+        HubKind::Moon
+    } else if game.flags.contains("hub_stars") {
+        HubKind::Stars
+    } else if game.flags.contains("hub_scores") {
+        HubKind::Scores
+    } else {
+        HubKind::Title
+    }
+}
+
+fn prepare_challenge_scores(game: &mut Game) {
+    let start = match retry_hub(game) {
+        spelunky_core::hub::HubKind::Sun => 1,
+        spelunky_core::hub::HubKind::Moon => 2,
+        spelunky_core::hub::HubKind::Stars => 3,
+        _ => 0,
+    };
+    game.flags.retain(|flag| !flag.starts_with("scores_start:"));
+    game.flags.insert(format!("scores_start:{start}"));
 }
 fn skip_death_reveal(game: &mut Game) {
     if game.state == RunState::Dead {
@@ -1675,15 +1842,24 @@ fn custom_exit(
         .unwrap_or("")
         .to_owned();
     if target.is_empty() || target == "NONE" {
-        game.state = RunState::Won;
+        spelunky_core::ending::begin_custom(game);
         return CustomExit::Finished;
     }
-    let Some(level) = custom_level_source(levels, &target)
-        .and_then(|source| spelunky_core::level::Level::parse(source).ok())
-    else {
+    let Some(source) = custom_level_source(levels, &target) else {
+        // Source scrLoadLevel treats a missing continuation as the end of an
+        // active adventure. Initial imports still report missing/invalid files.
+        spelunky_core::ending::begin_custom(game);
+        return CustomExit::Finished;
+    };
+    let Ok(level) = spelunky_core::level::Level::parse(source) else {
         return CustomExit::Missing(target);
     };
-    let previous = game.world.name.clone();
+    let previous = game
+        .ending
+        .as_ref()
+        .filter(|ending| ending.kind == spelunky_core::ending::EndingKind::Transition)
+        .map(|ending| ending.completed_name.clone())
+        .unwrap_or_else(|| game.world.name.clone());
     continue_custom(game, &level, &target, &previous);
     CustomExit::Continued
 }
@@ -1960,6 +2136,12 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::RedrawRequested => {
                 let frame_started = self.now();
                 self.update();
+                if self.exit_requested {
+                    self.exit_requested = false;
+                    let _ = self.store.save();
+                    event_loop.exit();
+                    return;
+                }
                 let quads = self.draw();
                 #[cfg(target_arch = "wasm32")]
                 self.publish_test_snapshot();
@@ -2030,6 +2212,91 @@ fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn browser_snapshot_reports_cinematic_gates_without_advancing_them() {
+        use spelunky_core::ending::{EndingKind, EndingStage, EndingState};
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        game.data.insert("xmoney".into(), 123.);
+        game.data.insert("time".into(), 549_000.);
+        let mut ending = EndingState::new(&game, EndingKind::Transition, EndingStage::Transition);
+        ending.draw_loot = 2;
+        ending.money_count = 123;
+        game.ending = Some(ending);
+        game.state = RunState::Ending;
+        let hash = game.state_hash();
+        let snapshot = test_snapshot(Screen::Playing, Some(&game), &HostTiming::default(), false);
+        assert_eq!(snapshot["ending"]["kind"], "Transition");
+        assert_eq!(snapshot["ending"]["stage"], "Transition");
+        assert_eq!(snapshot["ending"]["drawLoot"], 2);
+        assert_eq!(snapshot["ending"]["levelMoney"], 123);
+        assert_eq!(snapshot["ending"]["moneyCount"], 123);
+        assert_eq!(snapshot["sourceTimeMs"], 549_000);
+        assert_eq!(hash, game.state_hash());
+    }
+    #[test]
+    fn cinematic_start_cannot_confirm_or_pay_a_tunnel_donation() {
+        use spelunky_core::{
+            InputFrame, RulesPreset,
+            ending::{self, EndingKind, EndingStage},
+        };
+        let mut game = Game::shell(25, RulesPreset::Classic);
+        game.world.level = 4;
+        game.player.money = 100_000;
+        game.data.insert("tunnel1_remaining".into(), 100_000.);
+        ending::begin_exit(&mut game, EndingKind::Transition);
+        for _ in 0..100 {
+            if game.ending.as_ref().unwrap().stage == EndingStage::Transition {
+                break;
+            }
+            game.step(&InputFrame::default());
+        }
+        let tunnel = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oTunnelMan")
+            .unwrap()
+            .id;
+        for _ in 0..100 {
+            if game.world.entity(tunnel).unwrap().value("talk") == 1. {
+                break;
+            }
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(game.world.entity(tunnel).unwrap().value("talk"), 1.);
+        let mut input = InputFrame::default();
+        let mut pending = true;
+        apply_cinematic_start(&mut input, &mut pending);
+        assert!(input.start_pressed);
+        assert!(!input.attack_pressed);
+        assert!(!pending);
+        game.step(&input);
+        assert_eq!(game.world.entity(tunnel).unwrap().value("talk"), 1.);
+        assert_eq!(game.player.money, 100_000);
+        let mut controls = InputState::default();
+        controls.key(KeyCode::KeyX, true, false);
+        let attack = controls.take_tick();
+        assert!(attack.attack_pressed);
+        game.step(&attack);
+        assert_eq!(game.world.entity(tunnel).unwrap().value("talk"), 2.);
+        game.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        assert_eq!(game.world.entity(tunnel).unwrap().value("donate"), 100.);
+        game.step(&input);
+        assert_eq!(game.world.entity(tunnel).unwrap().value("talk"), 2.);
+        assert_eq!(game.player.money, 100_000);
+        let donation = game.world.entity(tunnel).unwrap().value("donate") as u32;
+        game.step(&attack);
+        assert_eq!(game.world.entity(tunnel).unwrap().value("talk"), 3.);
+        assert_eq!(game.player.money, 100_000 - donation);
+        assert_eq!(
+            game.data["tunnel1_remaining"],
+            f64::from(100_000 - donation)
+        );
+        assert_eq!(game.state, RunState::Ending);
+    }
     #[test]
     fn browser_snapshot_is_read_only_and_tracks_effective_presentation() {
         let mut game = Game::tutorial(42, spelunky_core::RulesPreset::Classic);
@@ -2355,6 +2622,53 @@ mod tests {
         assert!(custom_level_source(&levels, "missing.lvl").is_none());
     }
     #[test]
+    fn linked_custom_exit_retains_filename_through_the_authored_transition_room() {
+        use spelunky_core::{InputFrame, RulesPreset, Vec2, World};
+        let mut next = spelunky_core::level::Level::default();
+        next.set_tile(1, 1, '@').unwrap();
+        next.set_tile(15, 10, '@').unwrap();
+        next.exit_targets = vec!["elsewhere".into(), "PREVIOUS.LVL".into()];
+        let levels = std::collections::BTreeMap::from([("Next".into(), next.to_text())]);
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.world = World::new(40, 20, Area::Mines, 2);
+        game.world.name = "previous".into();
+        game.flags.insert("custom".into());
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 4, "oBrick");
+        }
+        let exit = game.world.spawn("oExit", Vec2::new(128., 48.));
+        game.world
+            .entity_mut(exit)
+            .unwrap()
+            .text
+            .insert("leadsTo".into(), "NEXT.LVL".into());
+        game.player.pos = Vec2::new(136., 56.);
+        game.player.previous_pos = game.player.pos;
+        game.player.grounded = true;
+        game.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        for _ in 0..1_000 {
+            if game.state == RunState::Transition {
+                assert!(game.world.name.starts_with("rTransition"));
+                assert_eq!(game.ending.as_ref().unwrap().completed_name, "previous");
+                assert_eq!(
+                    custom_exit(&mut game, &levels, false),
+                    CustomExit::Continued
+                );
+                assert_eq!(game.world.name, "next");
+                assert_eq!(game.player.pos, Vec2::new(264., 184.));
+                return;
+            }
+            game.step(&InputFrame {
+                attack_pressed: true,
+                ..Default::default()
+            });
+        }
+        panic!("The linked adventure never completed its authored transition");
+    }
+    #[test]
     fn custom_and_editor_starts_preserve_the_unlocked_character_selection() {
         for (flag, unlock, expected) in [
             (
@@ -2473,7 +2787,12 @@ mod tests {
         assert!(game.player.equipment.contains("cape"));
         let gun = game.world.entity(game.player.held.unwrap()).unwrap();
         assert_eq!(gun.object, "oPistol");
-        assert_eq!(gun.value("ammo"), 3.);
+        assert!(
+            !gun.data.contains_key("ammo"),
+            "Source recreates a fresh unlimited-ammo pistol by type"
+        );
+        assert_eq!(gun.value("cost"), 0.);
+        assert_eq!(gun.value("new"), 0.);
         assert!(gun.held);
         assert_eq!(gun.previous_pos, gun.pos);
         assert_eq!(second, original);
@@ -2515,7 +2834,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_custom_exit_follows_links_and_reports_missing_or_final_rooms() {
+    fn ordinary_custom_exit_follows_links_and_ends_missing_or_final_rooms() {
         let level = spelunky_core::level::Level::default();
         let levels = std::collections::BTreeMap::from([("Next".into(), level.to_text())]);
         let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
@@ -2530,15 +2849,17 @@ mod tests {
         assert_eq!(game.world.name, "next");
         assert_eq!((game.player.health, game.player.bombs), (2, 1));
         game.flags.insert("custom_level:missing.lvl".into());
-        let original = game.state_hash();
+        assert_eq!(custom_exit(&mut game, &levels, false), CustomExit::Finished);
+        assert_eq!(game.state, RunState::Ending);
         assert_eq!(
-            custom_exit(&mut game, &levels, false),
-            CustomExit::Missing("missing.lvl".into())
+            game.ending.as_ref().unwrap().kind,
+            spelunky_core::ending::EndingKind::Custom
         );
-        assert_eq!(game.state_hash(), original);
+        assert!(campaign_record(&game).is_none());
+        continue_custom(&mut game, &level, "next.lvl", "first.lvl");
         game.flags.remove("custom_level:missing.lvl");
         assert_eq!(custom_exit(&mut game, &levels, false), CustomExit::Finished);
-        assert_eq!(game.state, RunState::Won);
+        assert_eq!(game.state, RunState::Ending);
     }
     #[test]
     fn challenge_score_is_captured_before_scores_room_clears_run_counters() {
@@ -2552,6 +2873,145 @@ mod tests {
         game.load_hub(spelunky_core::hub::HubKind::Scores);
         capture_challenge_records(&game, &mut records);
         assert_eq!(records["mini2"], 12);
+    }
+    #[test]
+    fn challenge_return_preserves_retry_and_source_scores_spawn() {
+        use spelunky_core::hub::HubKind;
+        for (kind, expected) in [
+            (HubKind::Sun, spelunky_core::Vec2::new(40., 56.)),
+            (HubKind::Moon, spelunky_core::Vec2::new(72., 88.)),
+            (HubKind::Stars, spelunky_core::Vec2::new(40., 120.)),
+        ] {
+            let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+            game.load_hub(kind);
+            assert_eq!(retry_hub(&game), kind);
+            game.state = RunState::Dead;
+            prepare_challenge_scores(&mut game);
+            game.load_hub(HubKind::Scores);
+            assert_eq!(game.player.pos, expected, "{kind:?}");
+            assert_eq!(retry_hub(&game), HubKind::Scores);
+        }
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        game.load_hub(HubKind::Title);
+        assert_eq!(retry_hub(&game), HubKind::Title);
+    }
+
+    #[test]
+    fn death_record_uses_live_source_clock_and_excludes_shortcut_fastest_time() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        game.tick = 18_300;
+        game.data.insert("time".into(), 549_000.);
+        game.state = RunState::Dead;
+        let record = campaign_record(&game).unwrap();
+        assert_eq!(record.elapsed_seconds(), 549);
+        assert!(!record.won);
+        game.flags.insert("used_shortcut".into());
+        assert!(!campaign_record(&game).unwrap().fastest_eligible);
+        for flag in ["custom", "tutorial", "hub"] {
+            game.flags.insert(flag.into());
+            assert!(campaign_record(&game).is_none(), "{flag}");
+            game.flags.remove(flag);
+        }
+        game.state = RunState::Won;
+        assert!(
+            campaign_record(&game).is_none(),
+            "A win without completed credits cannot be persisted"
+        );
+    }
+    #[test]
+    fn campaign_win_record_waits_for_bonus_and_credits_completion() {
+        use spelunky_core::{InputFrame, RulesPreset, Vec2, World};
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.world = World::new(40, 20, Area::Boss, 16);
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 4, "oTemple");
+        }
+        game.world.spawn("oXEnd", Vec2::new(128., 48.));
+        game.player.pos = Vec2::new(136., 56.);
+        game.player.previous_pos = game.player.pos;
+        game.player.grounded = true;
+        game.player.money = 150_000;
+        game.data.insert("time".into(), 549_000.);
+        game.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        assert_eq!(game.state, RunState::Ending);
+        assert_eq!(game.player.money, 150_000);
+        assert!(campaign_record(&game).is_none());
+        let mut clock = None;
+        let mut bonus_seen = false;
+        for _ in 0..3_000 {
+            game.step(&InputFrame {
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            if game.ending.as_ref().unwrap().stage != spelunky_core::ending::EndingStage::Exit {
+                assert_eq!(
+                    source_elapsed_ms(&game),
+                    *clock.get_or_insert(source_elapsed_ms(&game)),
+                    "Cinematics freeze the run clock"
+                );
+            }
+            bonus_seen |= game.player.money == 200_000;
+            if let Some(record) = campaign_record(&game) {
+                assert_eq!(game.state, RunState::Won);
+                assert!(bonus_seen);
+                assert_eq!(record.score, 200_000);
+                assert_eq!(record.elapsed_seconds(), 549);
+                let unlocks = spelunky_core::hub::record_unlocks(
+                    record.score,
+                    record
+                        .fastest_eligible
+                        .then_some(record.elapsed_seconds() as f64),
+                    record.kills,
+                    record.rescues,
+                );
+                assert!(unlocks.contains("unlock_sun"));
+                assert!(unlocks.contains("unlock_moon"));
+                game.flags.insert("used_shortcut".into());
+                game.ending.as_mut().unwrap().shortcut_used = true;
+                let shortcut = campaign_record(&game).unwrap();
+                let unlocks = spelunky_core::hub::record_unlocks(
+                    shortcut.score,
+                    shortcut
+                        .fastest_eligible
+                        .then_some(shortcut.elapsed_seconds() as f64),
+                    shortcut.kills,
+                    shortcut.rescues,
+                );
+                assert!(unlocks.contains("unlock_sun"));
+                assert!(!unlocks.contains("unlock_moon"));
+                return;
+            }
+        }
+        panic!("Campaign credits never reached the source record boundary");
+    }
+    #[test]
+    fn custom_summary_awards_its_bonus_without_a_campaign_record() {
+        let level = spelunky_core::level::Level::default();
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        load_custom(&mut game, &level, "final.lvl", "");
+        game.player.money = 150_000;
+        assert_eq!(
+            custom_exit(&mut game, &Default::default(), false),
+            CustomExit::Finished
+        );
+        for _ in 0..2_000 {
+            assert!(campaign_record(&game).is_none());
+            if game.ending.as_ref().unwrap().stage == spelunky_core::ending::EndingStage::Complete {
+                assert_eq!(game.player.money, 200_000);
+                assert!(game.ending.as_ref().unwrap().bonus_awarded);
+                assert!(!game.ending.as_ref().unwrap().record_ready);
+                return;
+            }
+            game.step(&spelunky_core::InputFrame {
+                attack_pressed: true,
+                ..Default::default()
+            });
+        }
+        panic!("Custom summary never completed");
     }
     #[test]
     fn pointer_letterbox_coordinates_match_renderer() {

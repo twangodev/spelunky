@@ -1,0 +1,2575 @@
+//! Source ending and inter-level cinematic controllers.
+use crate::model::{CollisionPrecision, Entity, Game, InputFrame, Rect, RunState, Vec2, World};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::sync::OnceLock;
+
+pub(crate) const EXIT_PHASE_BEFORE_PLAYER_STEP: &str = "exit_phase_before_player_step";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EndingKind {
+    Campaign,
+    Custom,
+    TitleCredits,
+    Transition,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EndingStage {
+    Exit,
+    Chamber,
+    Volcano,
+    Landing,
+    Transition,
+    Summary,
+    Credits,
+    Complete,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EndingState {
+    pub kind: EndingKind,
+    pub stage: EndingStage,
+    pub stage_tick: u64,
+    pub draw_status: u8,
+    pub money_count: u32,
+    pub fade_level: f64,
+    pub fade_in: bool,
+    pub fade_out: bool,
+    pub credits_page: u8,
+    pub source_time_ms: u64,
+    pub shortcut_used: bool,
+    pub bonus_awarded: bool,
+    pub record_ready: bool,
+    pub draw_loot: i8,
+    pub is_loot: bool,
+    pub is_kills: bool,
+    pub level_time_ms: u64,
+    pub completed_level: u32,
+    pub completed_name: String,
+    pub music: String,
+    alarms: [i32; 12],
+    actor_alarms: BTreeMap<u64, [i32; 12]>,
+    bonus_scheduled: bool,
+    hurry_up: bool,
+    draw_pos: Vec2,
+    level_money: u32,
+    pickup_item: String,
+    scrolling: bool,
+    scroll_started: bool,
+    previous_up: bool,
+    previous_down: bool,
+    transition_tunnel: bool,
+}
+impl EndingState {
+    pub fn level_money(&self) -> u32 {
+        self.level_money
+    }
+    pub fn new(game: &Game, kind: EndingKind, stage: EndingStage) -> Self {
+        Self {
+            kind,
+            stage,
+            stage_tick: 0,
+            draw_status: 0,
+            money_count: 0,
+            fade_level: 0.,
+            fade_in: false,
+            fade_out: false,
+            credits_page: 0,
+            source_time_ms: game.data.get("time").copied().unwrap_or(0.).max(0.) as u64,
+            shortcut_used: game.flags.contains("used_shortcut")
+                || game.flags.contains("usedShortcut"),
+            bonus_awarded: false,
+            record_ready: false,
+            draw_loot: -2,
+            is_loot: false,
+            is_kills: false,
+            level_time_ms: game.data.get("xtime").copied().unwrap_or(0.).max(0.) as u64,
+            completed_level: game.world.level,
+            completed_name: if game.flags.contains("custom") {
+                game.world.name.clone()
+            } else {
+                String::new()
+            },
+            music: String::new(),
+            alarms: [-1; 12],
+            actor_alarms: BTreeMap::new(),
+            bonus_scheduled: false,
+            hurry_up: false,
+            draw_pos: Vec2::new(100., 83.),
+            level_money: game.data.get("xmoney").copied().unwrap_or(0.).max(0.) as u32,
+            pickup_item: game
+                .player
+                .held
+                .and_then(|id| game.world.entity(id))
+                .map(|e| e.object.clone())
+                .or_else(|| {
+                    game.flags
+                        .iter()
+                        .find_map(|f| f.strip_prefix("carry:").map(str::to_owned))
+                })
+                .unwrap_or_default(),
+            scrolling: false,
+            scroll_started: false,
+            previous_up: false,
+            previous_down: false,
+            transition_tunnel: false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Area, RulesPreset};
+    fn game() -> Game {
+        let mut g = Game::shell(19, RulesPreset::Classic);
+        g.world.area = Area::Boss;
+        g.world.level = 16;
+        g.player.money = 150_000;
+        g.data.insert("kills".into(), 120.);
+        g.data.insert("damsels".into(), 8.);
+        g.data.insert("time".into(), 549_000.);
+        g
+    }
+    fn until(g: &mut Game, limit: usize, predicate: impl Fn(&EndingState) -> bool) {
+        for _ in 0..limit {
+            if predicate(g.ending.as_ref().unwrap()) {
+                return;
+            }
+            g.step(&InputFrame::default());
+        }
+        panic!(
+            "cinematic failed to reach source event: {:?}; actor states {:?}",
+            g.ending,
+            g.world
+                .entities
+                .iter()
+                .filter(|e| matches!(
+                    e.object.as_str(),
+                    "oPDummy" | "oPDummy2" | "oBigTreasure" | "oLavaSpray"
+                ))
+                .map(|e| (&e.object, e.pos, e.vel, e.state))
+                .collect::<Vec<_>>()
+        );
+    }
+    #[test]
+    fn natural_campaign_chamber_volcano_landing_bonus_and_credits_record_boundary() {
+        let mut g = game();
+        begin_exit(&mut g, EndingKind::Campaign);
+        until(&mut g, 100, |s| s.stage == EndingStage::Chamber);
+        assert_eq!(g.player.money, 150_000);
+        until(&mut g, 1000, |s| s.stage == EndingStage::Volcano);
+        until(&mut g, 300, |s| s.stage == EndingStage::Landing);
+        // Treasure (resource 603) runs before the landing dummy (612),
+        // although the dummy's Alarm 0 created it later in creation order.
+        for _ in 0..250 {
+            g.step(&InputFrame::default());
+            if g.world.entities.iter().any(|e| e.object == "oBigTreasure") {
+                break;
+            }
+        }
+        let treasure = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oBigTreasure")
+            .unwrap();
+        assert_eq!(treasure.pos.y, -32.);
+        assert_eq!(treasure.vel.y, 0.6);
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .find(|e| e.object == "oPDummy2")
+                .unwrap()
+                .state,
+            2,
+            "the dummy waits for the treasure to land instead of jumping on its birth frame"
+        );
+        until(&mut g, 1000, |s| {
+            s.stage == EndingStage::Summary && s.draw_status == 3
+        });
+        assert_eq!(g.player.money, 150_000);
+        assert!(!g.ending.as_ref().unwrap().record_ready);
+        until(&mut g, 500, |s| s.draw_status == 7);
+        assert_eq!(g.player.money, 200_000);
+        assert!(g.ending.as_ref().unwrap().bonus_awarded);
+        assert_eq!(g.state, RunState::Ending);
+        tick(
+            &mut g,
+            &InputFrame {
+                attack_pressed: true,
+                ..Default::default()
+            },
+        );
+        until(&mut g, 20, |s| s.draw_status == 8);
+        tick(
+            &mut g,
+            &InputFrame {
+                attack_pressed: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(g.ending.as_ref().unwrap().stage, EndingStage::Credits);
+        assert!(!g.ending.as_ref().unwrap().record_ready);
+        until(&mut g, 3000, |s| s.stage == EndingStage::Complete);
+        assert_eq!(g.state, RunState::Won);
+        assert!(g.ending.as_ref().unwrap().record_ready);
+        assert_eq!(g.player.money, 200_000);
+        assert_eq!(g.data["kills"], 120.);
+        assert_eq!(g.data["damsels"], 8.);
+        assert!(
+            crate::hub::record_unlocks(g.player.money, Some(549.), 120, 8).contains("unlock_sun")
+        );
+    }
+    #[test]
+    fn chamber_skip_is_gated_and_cannot_bypass_landing_or_bonus() {
+        let mut g = game();
+        begin_exit(&mut g, EndingKind::Campaign);
+        until(&mut g, 100, |s| s.stage == EndingStage::Chamber);
+        for _ in 0..50 {
+            tick(
+                &mut g,
+                &InputFrame {
+                    attack_pressed: true,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(g.ending.as_ref().unwrap().stage, EndingStage::Chamber);
+        }
+        tick(
+            &mut g,
+            &InputFrame {
+                attack_pressed: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(g.ending.as_ref().unwrap().stage, EndingStage::Landing);
+        assert_eq!(g.player.money, 150_000);
+        until(&mut g, 1000, |s| s.draw_status == 7);
+        for _ in 0..150 {
+            tick(&mut g, &InputFrame::default());
+        }
+        assert_eq!(g.player.money, 200_000);
+        assert!(!g.ending.as_ref().unwrap().record_ready);
+    }
+    #[test]
+    fn custom_bonus_and_summary_leave_without_campaign_record() {
+        let mut g = game();
+        g.flags.insert("custom".into());
+        begin_custom(&mut g);
+        for _ in 0..49 {
+            tick(
+                &mut g,
+                &InputFrame {
+                    attack_pressed: true,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(g.ending.as_ref().unwrap().draw_status, 0);
+        }
+        tick(&mut g, &InputFrame::default());
+        assert_eq!(g.ending.as_ref().unwrap().draw_status, 1);
+        until(&mut g, 500, |s| s.draw_status == 7);
+        assert_eq!(g.player.money, 200_000);
+        tick(
+            &mut g,
+            &InputFrame {
+                attack_pressed: true,
+                ..Default::default()
+            },
+        );
+        until(&mut g, 20, |s| s.draw_status == 8);
+        tick(
+            &mut g,
+            &InputFrame {
+                attack_pressed: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(g.ending.as_ref().unwrap().stage, EndingStage::Complete);
+        assert!(!g.ending.as_ref().unwrap().record_ready);
+        assert_eq!(g.state, RunState::Ending);
+        assert!(!g.events.contains(&crate::model::GameEvent::Won));
+    }
+    #[test]
+    fn exit_uses_existing_selected_animation_phase_not_fixed_delay() {
+        for character in [
+            crate::characters::Character::Explorer,
+            crate::characters::Character::Damsel,
+            crate::characters::Character::TunnelMan,
+        ] {
+            let mut g = game();
+            crate::characters::apply(&mut g, character);
+            g.player.sprite = selected_sprite(&g, "sRunLeft", "sDamselRunL", "sTunnelRunL").into();
+            g.player.animation = 3.5;
+            begin_exit(&mut g, EndingKind::Campaign);
+            let frames = crate::catalog::sprite_frame_count(&g.player.sprite);
+            let ticks = ((frames as f64 - 3.5) / 0.5).ceil() as usize;
+            for _ in 0..ticks.saturating_sub(1) {
+                tick(&mut g, &InputFrame::default());
+                assert_eq!(g.ending.as_ref().unwrap().stage, EndingStage::Exit);
+            }
+            tick(&mut g, &InputFrame::default());
+            assert_eq!(g.ending.as_ref().unwrap().stage, EndingStage::Chamber);
+        }
+    }
+    #[test]
+    fn natural_right_and_up_walk_wraps_old_run_phase_before_door_animation() {
+        let mut g = Game::shell(23, RulesPreset::Classic);
+        g.world = World::new(40, 20, Area::Mines, 1);
+        for x in 0..40 {
+            g.world.set_tile(x, 3, "oBlock");
+        }
+        g.player.pos = Vec2::new(40., 40.);
+        g.player.previous_pos = g.player.pos;
+        g.world.spawn("oExit", Vec2::new(280., 32.));
+        let input = InputFrame {
+            right: true,
+            up: true,
+            ..Default::default()
+        };
+        let mut old_phase = 0.;
+        let mut old_frames = 0.;
+        for _ in 0..250 {
+            old_phase = g.player.animation;
+            old_frames = crate::catalog::sprite_frame_count(&g.player.sprite) as f64;
+            g.step(&input);
+            if g.state == RunState::Ending {
+                break;
+            }
+        }
+        assert_eq!(g.state, RunState::Ending);
+        assert!(
+            old_phase > old_frames,
+            "fixture must exercise unbounded running phase"
+        );
+        let phase = g.player.animation;
+        let run_frames = crate::catalog::sprite_frame_count("sRunLeft") as f64;
+        assert!(
+            (phase - (old_phase.rem_euclid(old_frames) + 0.5)).abs() < 1e-9,
+            "entry frame advances the new Exit, rather than the old run sprite"
+        );
+        assert!(phase >= 0. && phase < run_frames);
+        let exit_frames = crate::catalog::sprite_frame_count(&g.player.sprite) as f64;
+        let duration = ((exit_frames - phase) / 0.5).ceil() as usize;
+        assert!(duration > 1);
+        for _ in 0..duration - 1 {
+            g.step(&input);
+            assert_eq!(g.ending.as_ref().unwrap().stage, EndingStage::Exit);
+        }
+        g.step(&input);
+        assert_eq!(g.ending.as_ref().unwrap().stage, EndingStage::Transition);
+    }
+    #[test]
+    fn custom_ending_preserves_completed_link_context_after_transition_room() {
+        let mut g = game();
+        g.flags.insert("custom".into());
+        g.world.name = "last playable level".into();
+        let previous = EndingState::new(&g, EndingKind::Transition, EndingStage::Complete);
+        g.ending = Some(previous);
+        g.world.name = "rTransition1".into();
+        g.world.level = 1;
+        g.data.insert("time".into(), 0.);
+        begin_custom(&mut g);
+        let s = g.ending.as_ref().unwrap();
+        assert_eq!(s.completed_name, "last playable level");
+        assert_eq!(s.completed_level, 16);
+        assert_eq!(s.source_time_ms, 549_000);
+        assert_eq!(g.world.name, "rEndCustom");
+    }
+    #[test]
+    fn title_rope_ascent_fade_night_credits_and_quit_never_record_a_win() {
+        let mut g = Game::shell(21, RulesPreset::Classic);
+        g.player.pos = Vec2::new(176., 31.);
+        begin_title_credits(&mut g);
+        assert!(g.world.entities.iter().any(|e| e.object == "oPDummy5"));
+        for _ in 0..63 {
+            tick(
+                &mut g,
+                &InputFrame {
+                    attack_pressed: true,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(g.ending.as_ref().unwrap().stage, EndingStage::Exit);
+        }
+        until(&mut g, 30, |s| s.stage == EndingStage::Credits);
+        assert_eq!(g.world.name, "rCredits1");
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .any(|e| e.object == "oDesertScroll" && e.sprite == "sDesertNight")
+        );
+        until(&mut g, 3000, |s| s.stage == EndingStage::Complete);
+        assert!(g.flags.contains("app_exit_requested"));
+        assert!(!g.ending.as_ref().unwrap().record_ready);
+        assert_eq!(g.state, RunState::Ending);
+    }
+    #[test]
+    fn alarm_number_passes_decrement_later_alarms_set_by_earlier_callbacks() {
+        let mut g = game();
+        begin_custom(&mut g);
+        for _ in 0..50 {
+            g.step(&InputFrame::default());
+        }
+        assert_eq!(g.ending.as_ref().unwrap().draw_status, 1);
+        assert_eq!(g.ending.as_ref().unwrap().alarms[1], 49);
+        for _ in 0..48 {
+            g.step(&InputFrame::default());
+        }
+        assert_eq!(g.ending.as_ref().unwrap().draw_status, 1);
+        g.step(&InputFrame::default());
+        assert_eq!(g.ending.as_ref().unwrap().draw_status, 2);
+        assert_eq!(g.ending.as_ref().unwrap().alarms[2], 49);
+    }
+    #[test]
+    fn credits_controller_interleaves_with_scroll_and_camel_resources() {
+        for kind in [EndingKind::TitleCredits, EndingKind::Campaign] {
+            let mut g = game();
+            let mut s = EndingState::new(&g, kind, EndingStage::Credits);
+            enter(
+                &mut g,
+                &mut s,
+                EndingStage::Credits,
+                if kind == EndingKind::TitleCredits {
+                    "rCredits1"
+                } else {
+                    "rCredits2"
+                },
+            );
+            s.fade_in = false;
+            s.alarms = [-1; 12];
+            let camel = spawn(&mut g, &mut s, "oCamel", Vec2::new(161., 144.));
+            let desert = g
+                .world
+                .entities
+                .iter()
+                .find(|e| e.object == "oDesertScroll")
+                .unwrap()
+                .id;
+            let x = g.world.entity(desert).unwrap().pos.x;
+            g.ending = Some(s);
+            g.state = RunState::Ending;
+            g.step(&InputFrame::default());
+            assert_eq!(g.world.entity(camel).unwrap().pos.x, 160.);
+            assert_eq!(g.world.entity(desert).unwrap().pos.x, x);
+            assert_eq!(
+                g.ending.as_ref().unwrap().scrolling,
+                kind == EndingKind::Campaign
+            );
+            g.step(&InputFrame::default());
+            assert!(g.ending.as_ref().unwrap().scrolling);
+            assert_eq!(
+                g.world.entity(desert).unwrap().pos.x,
+                x + if kind == EndingKind::Campaign { 1. } else { 0. }
+            );
+            g.step(&InputFrame::default());
+            assert_eq!(
+                g.world.entity(desert).unwrap().pos.x,
+                x + if kind == EndingKind::Campaign { 2. } else { 1. }
+            );
+        }
+    }
+    #[test]
+    fn higher_resource_newborn_steps_and_animation_follow_the_source_phases() {
+        let mut g = game();
+        begin_custom(&mut g);
+        let mut s = g.ending.take().unwrap();
+        let kiss = spawn(&mut g, &mut s, "oDamselKiss", Vec2::new(184., 184.));
+        let actor = g.world.entity_mut(kiss).unwrap();
+        actor.sprite = "sDamselKissL".into();
+        actor.animation = 7.;
+        g.ending = Some(s);
+        g.step(&InputFrame::default());
+        let heart = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oHeart")
+            .unwrap();
+        assert_eq!(
+            heart.pos,
+            Vec2::new(176., 175.),
+            "Heart624 steps on its birth frame after Kiss623"
+        );
+        assert_eq!(g.world.entity(kiss).unwrap().animation, 7.5);
+
+        let mut g = Game::shell(29, RulesPreset::Classic);
+        g.player.equipment.insert("Cape".into());
+        begin_exit(&mut g, EndingKind::Transition);
+        until(&mut g, 100, |s| s.stage == EndingStage::Transition);
+        let dummy = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oPDummy")
+            .unwrap()
+            .id;
+        let actor = g.world.entity_mut(dummy).unwrap();
+        actor.state = 99;
+        actor.sprite = "sPExit".into();
+        actor.animation = crate::catalog::sprite_frame_count("sPExit") as f64 - 1.;
+        let expected = Vec2::new(actor.pos.x, actor.pos.y + 4.);
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(dummy).is_none());
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .find(|e| e.object == "oCape")
+                .unwrap()
+                .pos,
+            expected,
+            "Cape Step runs before the later global AnimationEnd phase destroys Dummy"
+        );
+        g.step(&InputFrame::default());
+        assert!(!g.world.entities.iter().any(|e| e.object == "oCape"));
+    }
+    #[test]
+    fn transition_tally_hurry_and_kiss_reward_remain_independent_of_animation() {
+        let mut g = Game::shell(22, RulesPreset::Classic);
+        g.world.level = 2;
+        g.data.insert("gold".into(), 2.);
+        g.data.insert("bats".into(), 1.);
+        g.data.insert("xmoney".into(), 350.);
+        g.data.insert("pending_damsel_kisses".into(), 3.);
+        begin_exit(&mut g, EndingKind::Transition);
+        until(&mut g, 100, |s| s.stage == EndingStage::Transition);
+        tick(
+            &mut g,
+            &InputFrame {
+                attack_pressed: true,
+                ..Default::default()
+            },
+        );
+        for _ in 0..28 {
+            tick(&mut g, &InputFrame::default());
+            assert_eq!(g.ending.as_ref().unwrap().draw_loot, -2);
+        }
+        until(&mut g, 100, |s| s.draw_loot == 2 && s.money_count == 350);
+        assert!(g.ending.as_ref().unwrap().is_loot);
+        assert!(g.ending.as_ref().unwrap().is_kills);
+        assert_eq!(g.player.health, 4);
+        assert_eq!(g.data["pending_damsel_kisses"], 3.);
+        tick(
+            &mut g,
+            &InputFrame {
+                attack_pressed: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(g.state, RunState::Transition);
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .any(|e| e.object == "oDamselKiss" && e.value("kissed") == 0.)
+        );
+        g.next_level();
+        assert_eq!(g.player.health, 5);
+    }
+    #[test]
+    fn cinematic_particles_use_source_motion_and_event_lifetimes() {
+        let mut g = game();
+        begin_custom(&mut g);
+        let mut s = g.ending.take().unwrap();
+        let heart = spawn(&mut g, &mut s, "oHeart", Vec2::new(200., 80.));
+        let poof = spawn(&mut g, &mut s, "oPoof", Vec2::new(220., 80.));
+        let flame = spawn(&mut g, &mut s, "oVolcanoFlame", Vec2::new(240., 100.));
+        let initial = g.world.entity(flame).unwrap().clone();
+        assert!((-4.0..=4.0).contains(&initial.vel.x));
+        assert!((-3.0..=-1.0).contains(&initial.vel.y));
+        assert!((0.1..=0.6 + f64::EPSILON).contains(&initial.value("gravity")));
+        g.ending = Some(s);
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(heart).unwrap().pos.y, 79.);
+        let moved = g.world.entity(flame).unwrap();
+        assert_eq!(
+            moved.pos,
+            Vec2::new(initial.pos.x + initial.vel.x, initial.pos.y + initial.vel.y)
+        );
+        assert_eq!(moved.vel.y, initial.vel.y + initial.value("gravity"));
+        for _ in 1..14 {
+            g.step(&InputFrame::default());
+        }
+        assert!(g.world.entity(poof).is_some());
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(poof).is_none());
+        for _ in 15..29 {
+            g.step(&InputFrame::default());
+        }
+        assert_eq!(g.world.entity(heart).unwrap().pos.y, 51.);
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(heart).is_none());
+    }
+    #[test]
+    fn tunnel_first_visit_sentinel_and_dialogue_hold_repeat_and_payment() {
+        let mut first = Game::shell(24, RulesPreset::Classic);
+        first.world.level = 4;
+        begin_exit(&mut first, EndingKind::Transition);
+        until(&mut first, 100, |s| s.stage == EndingStage::Transition);
+        assert_eq!(first.data["tunnel1_remaining"], 100_000.);
+        assert!(
+            !first
+                .world
+                .entities
+                .iter()
+                .any(|e| e.object == "oTunnelMan")
+        );
+
+        let mut g = Game::shell(25, RulesPreset::Classic);
+        g.world.level = 4;
+        g.player.money = 100_000;
+        g.data.insert("tunnel1_remaining".into(), 100_000.);
+        begin_exit(&mut g, EndingKind::Transition);
+        until(&mut g, 100, |s| s.stage == EndingStage::Transition);
+        let tunnel = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oTunnelMan")
+            .unwrap()
+            .id;
+        for _ in 0..60 {
+            if g.world.entity(tunnel).unwrap().value("talk") == 1. {
+                break;
+            }
+            g.step(&InputFrame::default());
+        }
+        assert_eq!(g.world.entity(tunnel).unwrap().value("talk"), 1.);
+        let start = InputFrame {
+            start_pressed: true,
+            ..Default::default()
+        };
+        g.step(&start);
+        assert_eq!(
+            g.world.entity(tunnel).unwrap().value("talk"),
+            1.,
+            "Start accelerates the tally without advancing source Attack-only dialogue"
+        );
+        assert!(g.ending.as_ref().unwrap().hurry_up);
+        let attack = InputFrame {
+            attack_pressed: true,
+            ..Default::default()
+        };
+        g.step(&attack);
+        assert_eq!(g.world.entity(tunnel).unwrap().value("talk"), 2.);
+        let up = InputFrame {
+            up: true,
+            ..Default::default()
+        };
+        for _ in 0..20 {
+            g.step(&up);
+        }
+        assert_eq!(g.world.entity(tunnel).unwrap().value("donate"), 100.);
+        g.step(&up);
+        assert_eq!(g.world.entity(tunnel).unwrap().value("donate"), 200.);
+        for _ in 21..100 {
+            g.step(&up);
+        }
+        let before = g.world.entity(tunnel).unwrap().value("donate");
+        g.step(&up);
+        assert_eq!(
+            g.world.entity(tunnel).unwrap().value("donate"),
+            before + 1000.
+        );
+        let donation = g.world.entity(tunnel).unwrap().value("donate");
+        g.step(&start);
+        assert_eq!(g.world.entity(tunnel).unwrap().value("talk"), 2.);
+        assert_eq!(
+            g.player.money, 100_000,
+            "Start must not pay the requested donation"
+        );
+        g.step(&attack);
+        assert_eq!(g.world.entity(tunnel).unwrap().value("talk"), 3.);
+        assert_eq!(g.data["tunnel1_remaining"], 100_000. - donation);
+        assert_eq!(g.player.money as f64, 100_000. - donation);
+        assert_eq!(
+            g.state,
+            RunState::Ending,
+            "payment click cannot also advance the room"
+        );
+        g.step(&start);
+        assert_eq!(g.state, RunState::Transition);
+    }
+    #[test]
+    fn transition_dark_level_eligibility_uses_source_remainder_seconds() {
+        for (milliseconds, disabled) in [
+            (21_000, false),
+            (61_000, true),
+            (80_999, true),
+            (81_000, false),
+        ] {
+            let mut g = Game::shell(26, RulesPreset::Classic);
+            g.data.insert("xtime".into(), milliseconds as f64);
+            let mut s = EndingState::new(&g, EndingKind::Transition, EndingStage::Transition);
+            enter(&mut g, &mut s, EndingStage::Transition, "rTransition1");
+            g.ending = Some(s);
+            g.state = RunState::Ending;
+            for _ in 0..30 {
+                g.step(&InputFrame::default());
+            }
+            assert_eq!(
+                g.flags.contains("no_dark_level"),
+                disabled,
+                "source milliseconds {milliseconds}"
+            );
+        }
+    }
+    #[test]
+    fn natural_treasure_pickup_and_door_show_and_consume_transition_icon_once() {
+        for (object, category, sprite, lifetime, expected_money) in [
+            ("oRuby", "rubies", "sRuby", Some("collected:oRuby"), 400),
+            ("oScarab", "scarabs", "sScarabDisp", None, 4000),
+        ] {
+            let mut g = Game::shell(27, RulesPreset::Classic);
+            g.world = World::new(40, 20, Area::Mines, 1);
+            for x in 0..40 {
+                g.world.set_tile(x, 3, "oBlock");
+            }
+            g.player.pos = Vec2::new(40., 40.);
+            g.player.previous_pos = g.player.pos;
+            let pos = Vec2::new(32., 32.);
+            let item = g.world.spawn(object, pos);
+            g.world
+                .entity_mut(item)
+                .unwrap()
+                .data
+                .insert("gravity".into(), 0.);
+            g.world.spawn("oExit", Vec2::new(280., 32.));
+            g.step(&InputFrame::default());
+            assert_eq!(g.player.money, 0, "{object} queues its collection payout");
+            for _ in 1..75 {
+                g.step(&InputFrame::default());
+            }
+            assert_eq!(g.data[category], 1., "source category for {object}");
+            if let Some(key) = lifetime {
+                assert_eq!(g.data[key], 1.);
+            }
+            assert_eq!(g.player.money, expected_money, "source payout for {object}");
+            let walk = InputFrame {
+                right: true,
+                up: true,
+                ..Default::default()
+            };
+            for _ in 0..250 {
+                g.step(&walk);
+                if g.state == RunState::Ending {
+                    break;
+                }
+            }
+            until(&mut g, 100, |s| s.stage == EndingStage::Transition);
+            until(&mut g, 100, |s| s.draw_loot == 2);
+            assert_eq!(g.ending.as_ref().unwrap().level_money(), expected_money);
+            assert!(g.ending.as_ref().unwrap().is_loot);
+            assert_eq!(g.data[category], 0.);
+            if let Some(key) = lifetime {
+                assert_eq!(g.data[key], 1.);
+            }
+            assert_eq!(g.player.money, expected_money);
+            assert_eq!(
+                g.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oSprite" && e.sprite == sprite)
+                    .count(),
+                1,
+                "one source icon for {object}"
+            );
+        }
+    }
+    #[test]
+    fn transition_cape_and_punishment_ball_chain_follow_the_running_dummy() {
+        let mut g = Game::shell(28, RulesPreset::Classic);
+        g.player.equipment.insert("Cape".into());
+        g.data.insert("kali_punish".into(), 2.);
+        begin_exit(&mut g, EndingKind::Transition);
+        until(&mut g, 100, |s| s.stage == EndingStage::Transition);
+        let ball = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oBall2")
+            .unwrap()
+            .id;
+        let start = g.world.entity(ball).unwrap().pos;
+        for _ in 0..40 {
+            g.step(&InputFrame::default());
+        }
+        let dummy = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oPDummy")
+            .unwrap();
+        let cape = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oCape")
+            .unwrap();
+        assert_eq!(cape.pos, Vec2::new(dummy.pos.x - 4., dummy.pos.y - 2.));
+        assert_eq!(cape.sprite, "sCapeRight");
+        assert_eq!(cape.value("depth"), 100.);
+        let ball = g.world.entity(ball).unwrap();
+        assert!(
+            ball.pos.x > start.x,
+            "inherited physics plus tether must advance the ball"
+        );
+        assert!(
+            ball.pos.y > start.y,
+            "inherited gravity must lower the ball to the floor"
+        );
+        let links = g
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.object == "oChain2")
+            .collect::<Vec<_>>();
+        assert_eq!(links.len(), 4);
+        for link in links {
+            let fraction = link.value("linkVal") / 4.;
+            assert_eq!(
+                link.pos,
+                Vec2::new(
+                    ball.pos.x + (dummy.pos.x - ball.pos.x) * fraction,
+                    ball.pos.y + (dummy.pos.y - ball.pos.y) * fraction
+                )
+            );
+        }
+        for _ in 0..150 {
+            g.step(&InputFrame::default());
+        }
+        assert!(
+            !g.world
+                .entities
+                .iter()
+                .any(|e| e.object == "oPDummy" || e.object == "oCape")
+        );
+        let last = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oChain2" && e.value("linkVal") == 4.)
+            .unwrap();
+        assert_eq!(last.pos, Vec2::new(280., 184.));
+    }
+    #[test]
+    fn lava_spray_requests_flame_only_if_idle_each_source_step() {
+        let mut g = game();
+        begin_custom(&mut g);
+        let mut s = g.ending.take().unwrap();
+        spawn(&mut g, &mut s, "oLavaSpray", Vec2::new(40., 220.));
+        g.ending = Some(s);
+        for _ in 0..3 {
+            g.step(&InputFrame::default());
+            assert_eq!(g.events.iter().filter(|event|matches!(event,crate::model::GameEvent::SoundIfIdle{name,..} if name=="sndFlame")).count(),1);
+            assert!(!g.events.iter().any(
+                |event| matches!(event,crate::model::GameEvent::Sound{name,..} if name=="sndFlame")
+            ));
+        }
+    }
+}
+pub fn begin_exit(game: &mut Game, kind: EndingKind) {
+    let ending = EndingState::new(game, kind, EndingStage::Exit);
+    // The simulation keeps an unbounded run phase for smooth presentation;
+    // GameMaker's image_index has already wrapped in the previous sprite.
+    // Retain that wrapped phase when the exit sprite changes, including its
+    // fraction, rather than mistaking a long run for a completed exit.
+    let previous_frames = crate::catalog::sprite_frame_count(&game.player.sprite) as f64;
+    if let Some(phase) = game.player.data.remove(EXIT_PHASE_BEFORE_PLAYER_STEP) {
+        // characterSprite assigns its sprite during Step, before the global
+        // animation phase. GM's setter preserves an in-range image_index and
+        // resets an index outside the newly selected sprite to zero. The live
+        // controller already animated that sprite, so use its pre-Step phase.
+        game.player.animation = if phase.floor() < previous_frames {
+            phase
+        } else {
+            0.
+        };
+    } else if previous_frames > 0. && game.player.animation.is_finite() {
+        game.player.animation = game.player.animation.rem_euclid(previous_frames);
+    }
+    game.player.sprite = selected_sprite(game, "sPExit", "sDamselExit", "sTunnelExit").into();
+    if game.player.animation.floor()
+        >= crate::catalog::sprite_frame_count(&game.player.sprite) as f64
+    {
+        game.player.animation = 0.;
+    }
+    game.player.vel = Vec2::default();
+    game.player.data.insert("active".into(), 0.);
+    game.player.data.insert("depth".into(), 999.);
+    game.player.invincible = 999;
+    game.ending = Some(ending);
+    game.state = RunState::Ending;
+}
+pub fn begin_custom(game: &mut Game) {
+    if game
+        .ending
+        .as_ref()
+        .is_some_and(|s| s.kind == EndingKind::Custom)
+    {
+        return;
+    }
+    let mut ending = EndingState::new(game, EndingKind::Custom, EndingStage::Summary);
+    if let Some(previous) = &game.ending {
+        ending.completed_name = previous.completed_name.clone();
+        ending.completed_level = previous.completed_level;
+        ending.source_time_ms = previous.source_time_ms;
+        ending.level_time_ms = previous.level_time_ms;
+        ending.shortcut_used = previous.shortcut_used;
+        ending.pickup_item = previous.pickup_item.clone();
+    }
+    enter(game, &mut ending, EndingStage::Summary, "rEndCustom");
+    game.ending = Some(ending);
+    game.state = RunState::Ending;
+}
+pub fn begin_title_credits(game: &mut Game) {
+    let mut ending = EndingState::new(game, EndingKind::TitleCredits, EndingStage::Exit);
+    let id = spawn(game, &mut ending, "oPDummy5", game.player.pos);
+    let tunnel = crate::characters::selected(game) == crate::characters::Character::TunnelMan;
+    let actor = game.world.entity_mut(id).unwrap();
+    // The original has two independent ifs; the second else overwrites the
+    // Damsel sprite. Preserve that source behavior in this title-only dummy.
+    actor.sprite = if tunnel { "sTunnelClimb2" } else { "sClimbUp2" }.into();
+    actor.vel.y = -1.;
+    actor.data.insert("animation_speed".into(), 0.6);
+    game.player.data.insert("hidden".into(), 1.);
+    game.player.data.insert("active".into(), 0.);
+    game.ending = Some(ending);
+    game.state = RunState::Ending;
+}
+fn selected_sprite<'a>(
+    game: &Game,
+    explorer: &'a str,
+    damsel: &'a str,
+    tunnel: &'a str,
+) -> &'a str {
+    match crate::characters::selected(game) {
+        crate::characters::Character::Explorer => explorer,
+        crate::characters::Character::Damsel => damsel,
+        crate::characters::Character::TunnelMan => tunnel,
+    }
+}
+
+/// Load the authored instances, including their original offsets and layers.
+/// Gameplay counters intentionally survive until the host consumes the record.
+pub fn load_room(game: &mut Game, name: &str) {
+    static ROOMS: OnceLock<serde_json::Value> = OnceLock::new();
+    let rooms = ROOMS.get_or_init(|| {
+        serde_json::from_str(include_str!("../../../assets/cinematics.json"))
+            .expect("checked cinematic assets")
+    });
+    let room = &rooms["rooms"][name];
+    assert!(room.is_object(), "unknown cinematic room {name}");
+    let mut world = World::new(
+        room["width"].as_u64().unwrap() as usize / 16,
+        (room["height"].as_u64().unwrap() as usize).div_ceil(16),
+        game.world.area,
+        game.world.level,
+    );
+    world.name = name.into();
+    for instance in room["instances"].as_array().unwrap() {
+        if instance["object"].as_str() == Some("oEndPlat") {
+            // This authored oSolid is an eighty-pixel moving platform. A
+            // sixteen-pixel terrain cell loses both its mask and carry motion.
+            world.spawn(
+                "oEndPlat",
+                Vec2::new(
+                    instance["x"].as_f64().unwrap(),
+                    instance["y"].as_f64().unwrap(),
+                ),
+            );
+            continue;
+        }
+        crate::hub::add_instance(
+            &mut world,
+            instance["object"].as_str().unwrap(),
+            Vec2::new(
+                instance["x"].as_f64().unwrap(),
+                instance["y"].as_f64().unwrap(),
+            ),
+            false,
+        );
+    }
+    game.world = world;
+    crate::hub::initialize_brick_variants(game);
+    crate::hub::setup_wall_sprites(&mut game.world);
+    game.camera = Vec2::default();
+    game.previous_camera = game.camera;
+    game.level_tick = 0;
+    game.player.data.insert("hidden".into(), 1.);
+    game.data.insert("darkness".into(), 0.);
+    game.data.insert("darkness_lerp".into(), 0.);
+    game.flags.insert("render_discontinuity".into());
+}
+
+fn enter(game: &mut Game, s: &mut EndingState, stage: EndingStage, room: &str) {
+    load_room(game, room);
+    s.stage = stage;
+    s.stage_tick = 0;
+    s.alarms = [-1; 12];
+    s.actor_alarms.clear();
+    s.music.clear();
+    let ids: Vec<_> = game.world.entities.iter().map(|e| e.id).collect();
+    for id in ids {
+        init_actor(game, s, id);
+    }
+    match stage {
+        EndingStage::Chamber => {
+            if let Some(actor) = game
+                .world
+                .entities
+                .iter_mut()
+                .find(|e| e.object == "oPDummy")
+            {
+                actor.state = 2;
+            }
+            add_carry_ornaments(game, s);
+        }
+        EndingStage::Volcano => {
+            s.alarms[0] = 50;
+            s.alarms[2] = 10;
+        }
+        EndingStage::Landing | EndingStage::Summary => {
+            s.draw_status = 0;
+            s.money_count = 0;
+            s.fade_out = false;
+            s.fade_in = false;
+            s.fade_level = 0.;
+            s.bonus_scheduled = false;
+            s.alarms[0] = 50;
+            set_menu(game, false);
+        }
+        EndingStage::Credits => {
+            s.fade_in = true;
+            s.fade_out = false;
+            s.fade_level = 1.;
+            s.credits_page = 0;
+            s.scroll_started = false;
+            s.scrolling = false;
+            if s.kind == EndingKind::TitleCredits {
+                spawn(game, s, "oIntroBG", Vec2::new(-120., 112.));
+            }
+        }
+        EndingStage::Transition => {
+            s.draw_loot = -2;
+            s.money_count = 0;
+            s.hurry_up = false;
+            s.draw_pos = Vec2::new(100., 83.);
+            s.alarms[0] = 10;
+            s.alarms[1] = 30;
+            if game
+                .data
+                .get("pending_damsel_kisses")
+                .copied()
+                .unwrap_or(0.)
+                > 0.
+                || game.flags.contains("damsel_rescued")
+            {
+                spawn(game, s, "oDamselKiss", Vec2::new(184., 184.));
+            }
+            add_carry_ornaments(game, s);
+            setup_tunnel(game, s, room);
+        }
+        _ => {}
+    }
+}
+fn set_menu(game: &mut Game, visible: bool) {
+    for e in &mut game.world.entities {
+        if crate::catalog::is_a(&e.object, "oMenu") {
+            e.data.insert("visible".into(), f64::from(visible));
+        }
+    }
+}
+fn init_actor(game: &mut Game, s: &mut EndingState, id: u64) {
+    let run = selected_sprite(game, "sRunLeft", "sDamselRunL", "sTunnelRunL").to_owned();
+    let standing = selected_sprite(game, "sStandLeft", "sDamselLeft", "sTunnelLeft").to_owned();
+    let damsel = crate::characters::selected(game) == crate::characters::Character::Damsel;
+    let tunnel = crate::characters::selected(game) == crate::characters::Character::TunnelMan;
+    let has_damsels = game.data.get("damsels").copied().unwrap_or(0.) > 0.;
+    let flame = game
+        .world
+        .entity(id)
+        .is_some_and(|e| e.object == "oVolcanoFlame");
+    let flame_velocity = if flame {
+        Some((
+            Vec2::new(
+                game.rng.unit() * 4. - game.rng.unit() * 4.,
+                -1. - game.rng.unit() * 2.,
+            ),
+            (1 + game.rng.range(6)) as f64 * 0.1,
+        ))
+    } else {
+        None
+    };
+    let Some(e) = game.world.entity_mut(id) else {
+        return;
+    };
+    e.data.insert("animation_speed".into(), 1.);
+    match e.object.as_str() {
+        "oPDummy" => {
+            e.sprite = run;
+            e.facing = 1;
+            e.text.insert("pickup_item".into(), s.pickup_item.clone());
+        }
+        "oPDummy2" => {
+            e.sprite = run;
+            e.facing = -1;
+            e.text.insert("pickup_item".into(), s.pickup_item.clone());
+        }
+        "oPDummy6" => {
+            e.sprite = standing;
+            e.facing = -1;
+            e.text.insert("pickup_item".into(), s.pickup_item.clone());
+        }
+        "oDamselKiss" => {
+            e.sprite = if damsel { "sStandLeft" } else { "sDamselLeft" }.into();
+            e.facing = -1;
+            e.data.insert("animation_speed".into(), 0.5);
+        }
+        "oBigTreasure" => {
+            e.data.insert("gravity".into(), 0.6);
+        }
+        "oBall2" => {
+            crate::items::init_entity(e);
+            for (key, value) in [
+                ("bboxLeft", -5.),
+                ("bboxTop", -5.),
+                ("bboxRight", 5.),
+                ("bboxBottom", 5.),
+                ("heavy", 1.),
+                ("gravity", 1.),
+                ("depth", 101.),
+            ] {
+                e.data.insert(key.into(), value);
+            }
+        }
+        "oPlayerSil" | "oTreasureSil" => {
+            e.vel = Vec2::new(-6., -8.);
+            e.data.insert("gravity".into(), 0.6);
+        }
+        "oCamel" => {
+            if damsel {
+                e.sprite = "sCamelDamsel".into();
+            } else if tunnel {
+                e.sprite = "sCamelTunnel".into();
+            }
+            e.data.insert("animation_speed".into(), 0.5);
+        }
+        "oCaravan" => {
+            if has_damsels {
+                e.sprite = if damsel { "sCaravan3" } else { "sCaravan2" }.into();
+            }
+            e.data.insert("animation_speed".into(), 0.5);
+        }
+        "oWalDamsel" => {
+            e.data.insert("animation_speed".into(), 0.5);
+        }
+        "oVolcanoFlame" => {
+            e.data.insert("animation_speed".into(), 0.3);
+            let (velocity, gravity) = flame_velocity.unwrap();
+            e.vel = velocity;
+            e.data.insert("gravity".into(), gravity);
+        }
+        "oPoof" | "oBurn" => {
+            e.data.insert("animation_speed".into(), 0.4);
+            if e.object == "oBurn" {
+                e.vel.y = -0.1;
+            }
+        }
+        "oHeart" => {
+            alarm(s, id, 0, 30);
+        }
+        "oBGEnd3" => {
+            e.pos.x -= 64.;
+            e.previous_pos = e.pos;
+            e.data.insert("x_off".into(), -64.);
+        }
+        "oSprite" => {
+            e.data.insert("animation_speed".into(), 0.);
+        }
+        "oLavaSpray" => {
+            e.data.insert("y_acc".into(), 0.);
+        }
+        "oBricks" | "oGame" | "oEnd" | "oEnd2" | "oEnd3" | "oEndCustom" | "oTransition"
+        | "oCredits1" | "oCredits2" => {
+            e.data.insert("hidden".into(), 1.);
+        }
+        _ => {}
+    }
+    if s.kind == EndingKind::TitleCredits {
+        let night = match e.object.as_str() {
+            "oDesertScroll" => Some("sDesertNight"),
+            "oDesertScroll2" => Some("sDesertNight2"),
+            "oDesertTopScroll" => Some("sDesertTopNight"),
+            "oPalmTreeScroll" => Some("sPalmTreeDark"),
+            "oShrubScroll" => Some("sShrubDark"),
+            _ => None,
+        };
+        if let Some(sprite) = night {
+            e.sprite = sprite.into();
+        }
+    }
+    if e.object.starts_with("oPDummy") {
+        e.data
+            .insert("image_xscale".into(), if e.facing > 0 { -1. } else { 1. });
+    }
+}
+fn spawn(game: &mut Game, s: &mut EndingState, object: &str, pos: Vec2) -> u64 {
+    let id = game.world.spawn(object, pos);
+    init_actor(game, s, id);
+    id
+}
+fn add_carry_ornaments(game: &mut Game, s: &mut EndingState) {
+    let Some(pos) = game
+        .world
+        .entities
+        .iter()
+        .find(|e| e.object == "oPDummy")
+        .map(|e| e.pos)
+    else {
+        return;
+    };
+    if game.player.has("Cape") {
+        spawn(game, s, "oCape", Vec2::default());
+    }
+    if game.data.get("kali_punish").copied().unwrap_or(0.) >= 2. {
+        spawn(game, s, "oBall2", Vec2::new(pos.x, pos.y + 2.));
+        for link in 1..=4 {
+            let id = spawn(game, s, "oChain2", pos);
+            game.world
+                .entity_mut(id)
+                .unwrap()
+                .data
+                .insert("linkVal".into(), link as f64);
+        }
+    }
+}
+fn alarm(s: &mut EndingState, id: u64, index: usize, value: i32) {
+    s.actor_alarms.entry(id).or_insert([-1; 12])[index] = value;
+}
+fn action(input: &InputFrame) -> bool {
+    input.attack_pressed || input.start_pressed
+}
+
+/// Cinematics have their own source Step/Alarm events. They do not run enemy
+/// combat, hazard damage, campaign clocks, or normal player input.
+pub fn tick(game: &mut Game, input: &InputFrame) {
+    tick_inner(game, input, false);
+}
+/// Called after the live room has completed its original Step events during
+/// the player's exit animation. Keep its events, clocks and previous poses.
+pub(crate) fn tick_exit_after_world(game: &mut Game, input: &InputFrame) {
+    tick_inner(game, input, true);
+}
+fn tick_inner(game: &mut Game, input: &InputFrame, world_already_ticked: bool) {
+    let Some(mut s) = game.ending.take() else {
+        return;
+    };
+    if s.stage == EndingStage::Complete {
+        game.ending = Some(s);
+        return;
+    }
+    if !world_already_ticked {
+        game.events.clear();
+        game.tick = game.tick.wrapping_add(1);
+        game.level_tick = game.level_tick.wrapping_add(1);
+        game.previous_camera = game.camera;
+        game.player.previous_pos = game.player.pos;
+        for e in &mut game.world.entities {
+            e.previous_pos = e.pos;
+        }
+    }
+    s.stage_tick += 1;
+    if s.stage == EndingStage::Exit && s.kind != EndingKind::TitleCredits {
+        s.source_time_ms = game.data.get("time").copied().unwrap_or(0.).max(0.) as u64;
+        s.level_time_ms = game.data.get("xtime").copied().unwrap_or(0.).max(0.) as u64;
+        game.player.animation += 0.5;
+        if game.player.animation >= crate::catalog::sprite_frame_count(&game.player.sprite) as f64 {
+            let collect = game.data.remove("collect").unwrap_or(0.).max(0.) as u32;
+            game.player.money = game.player.money.saturating_add(collect);
+
+            game.player.held = None;
+            if game.flags.contains("editor_test") {
+                game.state = RunState::Transition;
+                return;
+            }
+            if s.kind == EndingKind::Campaign {
+                enter(game, &mut s, EndingStage::Chamber, "rEnd");
+            } else {
+                let room = transition_room(game);
+                enter(game, &mut s, EndingStage::Transition, room);
+            }
+        }
+        game.ending = Some(s);
+        return;
+    }
+    let room = game.world.name.clone();
+    // GM8 dispatches one alarm number across object resources before moving
+    // to the next alarm number. Fire immediately: a callback can set a later
+    // alarm which is then decremented during this same source frame.
+    for index in 0..12 {
+        let mut queue = dispatch_queue(game, &s);
+        let mut next_id = game.world.next_id;
+        while let Some((key, target)) = queue.pop_first() {
+            let due = match target {
+                DispatchTarget::Controller => advance_alarm(&mut s.alarms[index]),
+                DispatchTarget::Actor(id) => {
+                    game.world.entity(id).is_some()
+                        && s.actor_alarms
+                            .get_mut(&id)
+                            .is_some_and(|alarms| advance_alarm(&mut alarms[index]))
+                }
+            };
+            if due {
+                match target {
+                    DispatchTarget::Controller => controller_alarm(game, &mut s, index),
+                    DispatchTarget::Actor(id) => actor_alarm(game, &mut s, id, index),
+                }
+                if game.world.name != room || s.stage == EndingStage::Complete {
+                    game.ending = Some(s);
+                    return;
+                }
+                register_created(game, &mut queue, key, &mut next_id);
+            }
+        }
+    }
+    // Step follows the same resource/creation ordering. The controller is an
+    // instance at its own resource position, not a before/after-actor hook.
+    let mut queue = dispatch_queue(game, &s);
+    let mut next_id = game.world.next_id;
+    while let Some((key, target)) = queue.pop_first() {
+        match target {
+            DispatchTarget::Controller => controller_step(game, &mut s, input),
+            DispatchTarget::Actor(id) => {
+                if let Some(index) = game
+                    .world
+                    .entities
+                    .iter()
+                    .position(|e| e.id == id && e.alive)
+                {
+                    let mut entity = game.world.entities.remove(index);
+                    actor_step(game, &mut s, &mut entity, input);
+                    if game.world.name == room && s.stage != EndingStage::Complete && entity.alive {
+                        game.world
+                            .entities
+                            .insert(index.min(game.world.entities.len()), entity);
+                    }
+                }
+            }
+        }
+        if game.world.name != room || s.stage == EndingStage::Complete {
+            game.ending = Some(s);
+            return;
+        }
+        register_created(game, &mut queue, key, &mut next_id);
+    }
+    // Image advancement and Animation End are a separate GM8 phase after
+    // Step, in global creation order. Snapshot that list on phase entry.
+    let mut animation_ids: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|entity| entity.alive)
+        .map(|entity| entity.id)
+        .collect();
+    animation_ids.sort_unstable();
+    for id in animation_ids {
+        if let Some(index) = game
+            .world
+            .entities
+            .iter()
+            .position(|entity| entity.id == id && entity.alive)
+        {
+            let mut entity = game.world.entities.remove(index);
+            animate(game, &mut s, &mut entity);
+            if entity.alive {
+                game.world
+                    .entities
+                    .insert(index.min(game.world.entities.len()), entity);
+            }
+        }
+    }
+    s.previous_up = input.up;
+    s.previous_down = input.down;
+    game.world.entities.retain(|e| e.alive);
+    game.ending = Some(s);
+}
+
+#[derive(Clone, Copy)]
+enum DispatchTarget {
+    Controller,
+    Actor(u64),
+}
+type DispatchQueue = BTreeMap<(i32, u64), DispatchTarget>;
+fn resource_index(object: &str) -> i32 {
+    crate::catalog::object(object).map_or(i32::MAX, |definition| definition.id)
+}
+fn controller_object(state: &EndingState) -> &'static str {
+    match state.stage {
+        EndingStage::Exit => "oTitle",
+        EndingStage::Chamber => "oEnd",
+        EndingStage::Volcano => "oEnd2",
+        EndingStage::Landing => "oEnd3",
+        EndingStage::Summary if state.kind == EndingKind::Custom => "oEndCustom",
+        EndingStage::Summary => "oEnd3",
+        EndingStage::Transition => "oTransition",
+        EndingStage::Credits if state.kind == EndingKind::TitleCredits => "oCredits1",
+        EndingStage::Credits => "oCredits2",
+        EndingStage::Complete => "oEnd3",
+    }
+}
+fn dispatch_queue(game: &Game, state: &EndingState) -> DispatchQueue {
+    let controller = controller_object(state);
+    let mut queue = DispatchQueue::new();
+    let mut controller_id = 0;
+    for entity in game.world.entities.iter().filter(|entity| entity.alive) {
+        if entity.object == controller {
+            controller_id = entity.id;
+        } else {
+            queue.insert(
+                (resource_index(&entity.object), entity.id),
+                DispatchTarget::Actor(entity.id),
+            );
+        }
+    }
+    queue.insert(
+        (resource_index(controller), controller_id),
+        DispatchTarget::Controller,
+    );
+    queue
+}
+fn register_created(game: &Game, queue: &mut DispatchQueue, cursor: (i32, u64), next_id: &mut u64) {
+    if game.world.next_id == *next_id {
+        return;
+    }
+    for entity in game
+        .world
+        .entities
+        .iter()
+        .filter(|entity| entity.alive && entity.id >= *next_id)
+    {
+        let key = (resource_index(&entity.object), entity.id);
+        if key.0 > cursor.0 {
+            queue.insert(key, DispatchTarget::Actor(entity.id));
+        }
+    }
+    *next_id = game.world.next_id;
+}
+fn advance_alarm(value: &mut i32) -> bool {
+    if *value < 0 {
+        return false;
+    }
+    *value -= 1;
+    // Source leaves an expired alarm at zero for the rest of this frame;
+    // a subsequent alarm pass changes zero to -1 without another callback.
+    *value == 0
+}
+
+fn transition_room(game: &Game) -> &'static str {
+    let next = game
+        .data
+        .get("next_level")
+        .copied()
+        .unwrap_or(game.world.level as f64 + 1.) as u32;
+    match next {
+        5 => "rTransition1x",
+        9 => "rTransition2x",
+        13 => "rTransition3x",
+        _ => match game.world.area {
+            crate::model::Area::Mines => "rTransition1",
+            crate::model::Area::Jungle => "rTransition2",
+            crate::model::Area::Ice => "rTransition3",
+            _ => "rTransition4",
+        },
+    }
+}
+fn controller_alarm(game: &mut Game, s: &mut EndingState, i: usize) {
+    match s.stage {
+        EndingStage::Volcano => match i {
+            0 => {
+                spawn(game, s, "oPlayerSil", Vec2::new(240., 132.));
+                s.alarms[1] = 30;
+            }
+            1 => {
+                spawn(game, s, "oTreasureSil", Vec2::new(240., 132.));
+            }
+            2 => {
+                let x = 224. + game.rng.range(49) as f64;
+                let y = 144. + game.rng.range(9) as f64;
+                spawn(game, s, "oVolcanoFlame", Vec2::new(x, y));
+                s.alarms[2] = 10 + game.rng.range(11) as i32;
+            }
+            _ => {}
+        },
+        EndingStage::Landing if i == 0 => {
+            spawn(game, s, "oPDummy2", Vec2::new(144., -32.));
+            game.sound("sndPFall", Vec2::new(144., -32.));
+        }
+        EndingStage::Summary => match i {
+            0 => {
+                s.draw_status = 1;
+                s.alarms[1] = 50;
+                s.music = "musVictory".into();
+                set_menu(game, true);
+            }
+            1 => {
+                s.draw_status = 2;
+                s.alarms[2] = 50;
+            }
+            2 => s.draw_status = 3,
+            11 => {
+                s.draw_status = 4;
+                if !s.bonus_awarded {
+                    game.player.money = game.player.money.saturating_add(50_000);
+                    s.money_count = s.money_count.saturating_add(50_000);
+                    s.bonus_awarded = true;
+                    game.sound("sndThump", Vec2::new(160., 120.));
+                }
+                s.alarms[3] = 50;
+            }
+            3 => {
+                s.draw_status = 5;
+                s.alarms[4] = 10;
+            }
+            4 => {
+                s.draw_status = 6;
+                s.alarms[5] = 10;
+            }
+            5 => s.draw_status = 7,
+            _ => {}
+        },
+        EndingStage::Transition => match i {
+            0 => transition_icon(game, s),
+            1 => {
+                s.draw_loot += 1;
+                if s.draw_loot < 0 {
+                    s.alarms[1] = if s.hurry_up { 1 } else { 30 };
+                }
+            }
+            _ => {}
+        },
+        EndingStage::Credits => match i {
+            0 => {
+                spawn(game, s, "oCamel", Vec2::new(320., 144.));
+                if s.kind != EndingKind::TitleCredits {
+                    spawn(game, s, "oCaravan", Vec2::new(384., 128.));
+                }
+            }
+            1 => {
+                if s.scrolling {
+                    let scenery = if game.rng.chance(1, 8) {
+                        Some(("oShrubScroll", Vec2::new(-16., 176.)))
+                    } else if game.rng.chance(1, 12) {
+                        Some(("oPalmTreeScroll", Vec2::new(-32., 64.)))
+                    } else {
+                        None
+                    };
+                    if let Some((object, pos)) = scenery {
+                        spawn(game, s, object, pos);
+                    }
+                    for (object, y) in [
+                        ("oDesertTopScroll", 176.),
+                        ("oDesertScroll2", 192.),
+                        ("oDesertScroll", 208.),
+                        ("oDesertScroll", 224.),
+                    ] {
+                        spawn(game, s, object, Vec2::new(-16., y));
+                    }
+                    s.alarms[1] = 16;
+                }
+            }
+            2..=7 => {
+                s.credits_page = (i - 1) as u8;
+                s.alarms[11] = if i >= 6 { 240 } else { 140 };
+                s.alarms[i + 1] = if i >= 6 { 280 } else { 180 };
+            }
+            8 => {
+                s.scrolling = false;
+                for e in &mut game.world.entities {
+                    if matches!(e.object.as_str(), "oCamel" | "oCaravan") {
+                        e.state = 2;
+                    }
+                }
+            }
+            11 => s.credits_page = 0,
+            _ => {}
+        },
+        _ => {}
+    }
+}
+
+fn actor_alarm(game: &mut Game, s: &mut EndingState, id: u64, i: usize) {
+    let Some((object, pos)) = game.world.entity(id).map(|e| (e.object.clone(), e.pos)) else {
+        return;
+    };
+    match object.as_str() {
+        "oPDummy" => match i {
+            0 => alarm(s, id, 1, 100),
+            1 => {
+                if let Some(chest) = game
+                    .world
+                    .entities
+                    .iter_mut()
+                    .find(|e| e.object == "oBigChest")
+                {
+                    chest.sprite = "sBigChestOpen".into();
+                    let pos = chest.pos;
+                    let treasure = spawn(game, s, "oBigTreasure", pos);
+                    game.world.entity_mut(treasure).unwrap().vel = Vec2::new(-3., -4.);
+                }
+                game.sound("sndClick", pos);
+                alarm(s, id, 2, 20);
+            }
+            2 => {
+                if let Some(e) = game.world.entity_mut(id) {
+                    e.state = 3;
+                }
+            }
+            3 => {
+                if let Some(pos) = game
+                    .world
+                    .entities
+                    .iter()
+                    .find(|e| e.object == "oEndPlat")
+                    .map(|e| e.pos)
+                {
+                    spawn(game, s, "oLavaSpray", Vec2::new(pos.x, pos.y + 30.));
+                }
+                game.data.insert("shake".into(), 9999.);
+                alarm(s, id, 4, 10);
+            }
+            4 => {
+                if let Some(e) = game
+                    .world
+                    .entities
+                    .iter_mut()
+                    .find(|e| e.object == "oLavaSpray")
+                {
+                    e.data.insert("y_acc".into(), -0.1);
+                }
+            }
+            5 => {
+                let run =
+                    selected_sprite(game, "sRunLeft", "sDamselRunL", "sTunnelRunL").to_owned();
+                if let Some(e) = game.world.entity_mut(id) {
+                    e.state = 0;
+                    e.sprite = run;
+                }
+            }
+            _ => {}
+        },
+        "oPDummy2" => match i {
+            0 => {
+                spawn(game, s, "oBigTreasure", Vec2::new(160., -32.));
+                game.sound("sndTFall", Vec2::new(160., -32.));
+            }
+            1 => {
+                let sprite =
+                    selected_sprite(game, "sStandLeft", "sDamselLeft", "sTunnelLeft").to_owned();
+                if let Some(e) = game.world.entity_mut(id) {
+                    e.sprite = sprite;
+                }
+            }
+            2 => {
+                s.stage = EndingStage::Summary;
+                s.draw_status = 1;
+                s.alarms[1] = 50;
+                s.music = "musVictory".into();
+            }
+            _ => {}
+        },
+        "oLavaSpray" if i == 0 => enter(game, s, EndingStage::Volcano, "rEnd2"),
+        "oHeart" if i == 0 => {
+            if let Some(e) = game.world.entity_mut(id) {
+                e.alive = false;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn object_at(game: &Game, point: Vec2, object: &str) -> bool {
+    let tx = (point.x / 16.).floor() as i32;
+    let ty = (point.y / 16.).floor() as i32;
+    game.world
+        .tile(tx, ty)
+        .is_some_and(|t| crate::catalog::is_a(&t.object, object))
+        || game.world.entities.iter().any(|e| {
+            e.alive && crate::catalog::is_a(&e.object, object) && e.sprite_bounds().contains(point)
+        })
+}
+fn actor_step(game: &mut Game, s: &mut EndingState, e: &mut Entity, input: &InputFrame) {
+    match e.object.as_str() {
+        "oPDummy" => dummy_step(game, s, e),
+        "oPDummy2" => landing_step(game, s, e),
+        "oPDummy5" => {
+            e.pos.x += e.vel.x;
+            e.pos.y += e.vel.y;
+            if e.pos.y < -32. {
+                s.fade_out = true;
+            }
+        }
+        "oBigTreasure" => treasure_step(game, s, e),
+        "oBall2" => {
+            crate::items::tick_single_item_body(game, e);
+            if let Some(dummy) = game.world.entities.iter().find(|a| a.object == "oPDummy") {
+                let ball = e.sprite_bounds();
+                let target = dummy.sprite_bounds();
+                let dx = (ball.x - target.x - target.w + 1.)
+                    .max(target.x - ball.x - ball.w + 1.)
+                    .max(0.);
+                let dy = (ball.y - target.y - target.h + 1.)
+                    .max(target.y - ball.y - ball.h + 1.)
+                    .max(0.);
+                if dx.hypot(dy) >= 24. {
+                    e.pos.x = dummy.pos.x - 24.;
+                }
+            }
+        }
+        "oLavaSpray" => {
+            e.pos.y += e.vel.y;
+            if e.vel.y > -6. {
+                e.vel.y += e.value("y_acc");
+            }
+            if object_at(game, Vec2::new(e.pos.x, e.pos.y - 1.), "oEndPlat") {
+                for carried in &mut game.world.entities {
+                    if matches!(
+                        carried.object.as_str(),
+                        "oEndPlat" | "oPDummy" | "oBigTreasure"
+                    ) {
+                        carried.vel.y = e.vel.y;
+                        if carried.object == "oBigTreasure" {
+                            carried.data.insert("gravity".into(), 0.);
+                        }
+                    }
+                }
+            }
+            if e.pos.y < -16. && e.state == 0 {
+                e.vel.y = 0.;
+                e.data.insert("y_acc".into(), 0.);
+                alarm(s, e.id, 0, 40);
+                e.state = 1;
+            }
+            game.sound_if_idle("sndFlame", e.pos);
+        }
+        "oEndPlat" => e.pos.y += e.vel.y,
+        "oPlayerSil" | "oTreasureSil" => {
+            e.pos.x += e.vel.x;
+            e.pos.y += e.vel.y;
+            if e.vel.x < 0. {
+                e.vel.x += 0.1;
+            }
+            if e.vel.y < 6. {
+                e.vel.y += 0.6;
+            }
+            if e.object == "oTreasureSil" && e.pos.y > 240. {
+                enter(game, s, EndingStage::Landing, "rEnd3");
+            }
+        }
+        "oDamselKiss" => {
+            if matches!(e.sprite.as_str(), "sDamselKissL" | "sPKissL") && e.animation == 7. {
+                spawn(game, s, "oHeart", Vec2::new(e.pos.x - 8., e.pos.y - 8.));
+                game.sound("sndKiss", e.pos);
+            }
+        }
+        "oWalDamsel" => {
+            if e.animation == 11. {
+                spawn(game, s, "oHeart", Vec2::new(e.pos.x, e.pos.y + 16.));
+                if !s.fade_out {
+                    game.sound("sndKiss", e.pos);
+                }
+            }
+        }
+        "oCamel" | "oCaravan" => {
+            let limit = if e.object == "oCamel" { 160. } else { 224. };
+            match e.state {
+                0 => {
+                    e.pos.x -= 1.;
+                    if e.pos.x <= limit {
+                        e.state = 1;
+                        if e.object == "oCamel" {
+                            s.music = "musCredits".into();
+                        }
+                    }
+                }
+                1 => e.pos.x -= 0.01,
+                2 => e.pos.x -= 2.,
+                _ => {}
+            }
+            if e.pos.x < -64. && (e.object == "oCaravan" || s.kind == EndingKind::TitleCredits) {
+                s.fade_out = true;
+            }
+        }
+        "oBGEnd3" => {
+            if s.stage == EndingStage::Credits
+                && game.world.entities.iter().any(|e| e.object == "oCamel")
+            {
+                let offset = e.value("x_off");
+                e.pos.x = game.camera.x + offset;
+                e.data.insert("x_off".into(), offset + 0.02);
+            }
+        }
+        "oDesertScroll" | "oDesertScroll2" | "oDesertTopScroll" | "oShrubScroll"
+        | "oPalmTreeScroll" => {
+            if s.scrolling {
+                e.pos.x += 1.;
+            }
+            if e.pos.x > 320. {
+                e.alive = false;
+            }
+        }
+        "oTunnelMan" if s.stage == EndingStage::Transition => tunnel_step(game, s, e, input),
+        "oHeart" => e.pos.y -= 1.,
+        "oPoof" => {
+            e.pos.x += e.vel.x;
+            e.pos.y += e.vel.y;
+        }
+        "oBurn" => {
+            e.pos.y += e.vel.y;
+            if game.world.solid_at(e.pos.x, e.pos.y) {
+                e.alive = false;
+            }
+        }
+        "oVolcanoFlame" => {
+            e.pos.x += e.vel.x;
+            e.pos.y += e.vel.y;
+            if e.vel.y < 6. {
+                e.vel.y += e.value("gravity");
+            }
+            if !e.sprite_bounds().intersects(Rect::new(
+                0.,
+                0.,
+                game.world.width as f64 * 16.,
+                game.world.height as f64 * 16.,
+            )) {
+                e.alive = false;
+            }
+        }
+        "oCape" => {
+            if let Some(dummy) = game.world.entities.iter().find(|a| a.object == "oPDummy") {
+                let exit = matches!(
+                    dummy.sprite.as_str(),
+                    "sPExit" | "sDamselExit" | "sTunnelExit"
+                );
+                e.pos = Vec2::new(
+                    dummy.pos.x + if exit { 0. } else { -4. },
+                    dummy.pos.y + if exit { 4. } else { -2. },
+                );
+                e.sprite = if exit {
+                    "sCapeBack"
+                } else if matches!(
+                    dummy.sprite.as_str(),
+                    "sRunLeft" | "sDamselRunL" | "sTunnelRunL"
+                ) {
+                    "sCapeRight"
+                } else {
+                    "sCapeDR"
+                }
+                .into();
+                e.data.insert("depth".into(), if exit { 0. } else { 100. });
+            } else if s.stage == EndingStage::Transition {
+                e.alive = false;
+            }
+        }
+        "oChain2" => {
+            if let Some(ball) = game.world.entities.iter().find(|a| a.object == "oBall2") {
+                let target = game
+                    .world
+                    .entities
+                    .iter()
+                    .find(|a| a.object == "oPDummy")
+                    .map(|a| a.pos)
+                    .unwrap_or(Vec2::new(280., 184.));
+                e.pos = Vec2::new(
+                    ball.pos.x + (target.x - ball.pos.x) / 4. * e.value("linkVal"),
+                    ball.pos.y + (target.y - ball.pos.y) / 4. * e.value("linkVal"),
+                );
+            }
+        }
+        _ => {}
+    }
+}
+fn animate(_game: &mut Game, _s: &mut EndingState, e: &mut Entity) {
+    let speed = e.data.get("animation_speed").copied().unwrap_or(0.);
+    if speed <= 0. {
+        return;
+    }
+    e.animation += speed;
+    let count = crate::catalog::sprite_frame_count(&e.sprite) as f64;
+    if count > 0. && e.animation >= count {
+        e.animation -= count;
+        if e.object == "oPDummy"
+            && matches!(e.sprite.as_str(), "sPExit" | "sDamselExit" | "sTunnelExit")
+        {
+            e.alive = false;
+        }
+        if e.object == "oDamselKiss" && matches!(e.sprite.as_str(), "sDamselKissL" | "sPKissL") {
+            e.data.insert("kissed".into(), 1.);
+            e.sprite = if e.sprite == "sPKissL" {
+                "sStandLeft"
+            } else {
+                "sDamselLeft"
+            }
+            .into();
+        }
+        if matches!(e.object.as_str(), "oPoof" | "oBurn") {
+            e.alive = false;
+        }
+    }
+}
+
+fn dummy_step(game: &mut Game, s: &mut EndingState, e: &mut Entity) {
+    e.pos.y += e.vel.y;
+    if e.state != 99 {
+        let target = game
+            .world
+            .entities
+            .iter()
+            .find(|person| {
+                person.object == "oDamselKiss"
+                    && person.value("kissed") == 0.
+                    && person
+                        .sprite_bounds()
+                        .contains(Vec2::new(e.pos.x + 8., e.pos.y))
+            })
+            .map(|p| p.id);
+        if let Some(id) = target {
+            e.state = 99;
+            e.vel = Vec2::default();
+            e.sprite = selected_sprite(game, "sStandLeft", "sDamselLeft", "sTunnelLeft").into();
+            let sprite =
+                if crate::characters::selected(game) == crate::characters::Character::Damsel {
+                    "sPKissL"
+                } else {
+                    "sDamselKissL"
+                };
+            game.world.entity_mut(id).unwrap().sprite = sprite.into();
+            alarm(s, e.id, 5, 30);
+        }
+        let target = game
+            .world
+            .entities
+            .iter()
+            .find(|person| {
+                person.object == "oTunnelMan"
+                    && person.value("talk") == 0.
+                    && person
+                        .sprite_bounds()
+                        .contains(Vec2::new(e.pos.x + 8., e.pos.y))
+            })
+            .map(|p| p.id);
+        if let Some(id) = target {
+            e.state = 99;
+            e.vel = Vec2::default();
+            e.sprite = selected_sprite(game, "sStandLeft", "sDamselLeft", "sTunnelLeft").into();
+            game.world
+                .entity_mut(id)
+                .unwrap()
+                .data
+                .insert("talk".into(), 1.);
+        }
+    }
+    match e.state {
+        0 => {
+            if e.pos.x >= 280. {
+                if !matches!(e.sprite.as_str(), "sPExit" | "sDamselExit" | "sTunnelExit") {
+                    e.sprite = selected_sprite(game, "sPExit", "sDamselExit", "sTunnelExit").into();
+                    game.sound("sndSteps", e.pos);
+                }
+            } else {
+                e.pos.x += 2.;
+            }
+        }
+        2 => {
+            if !matches!(
+                e.sprite.as_str(),
+                "sStandLeft" | "sDamselLeft" | "sTunnelLeft"
+            ) {
+                if e.pos.x >= 456. {
+                    e.sprite =
+                        selected_sprite(game, "sStandLeft", "sDamselLeft", "sTunnelLeft").into();
+                    alarm(s, e.id, 0, 20);
+                } else {
+                    e.pos.x += 2.;
+                }
+            }
+        }
+        3 => {
+            alarm(s, e.id, 3, 50);
+            e.state = 4;
+        }
+        4 => {
+            if let Some(x) = game
+                .world
+                .entities
+                .iter()
+                .find(|a| a.object == "oEndPlat")
+                .map(|a| a.pos.x)
+            {
+                let offset = game.rng.range(81) as f64;
+                spawn(game, s, "oBurn", Vec2::new(x + offset, 224.));
+            }
+        }
+        _ => {}
+    }
+}
+fn landing_step(game: &mut Game, s: &mut EndingState, e: &mut Entity) {
+    e.pos.x += e.vel.x;
+    e.pos.y += e.vel.y;
+    match e.state {
+        0 => {
+            e.sprite = selected_sprite(game, "sDieLFall", "sDamselFallL", "sTunnelFallL").into();
+            e.vel.y = 6.;
+            if object_at(game, Vec2::new(e.pos.x, e.pos.y + 9.), "oDesert2") {
+                e.vel.y = 0.;
+                e.state = 1;
+                e.sprite = selected_sprite(game, "sStunL", "sDamselStunL", "sTunnelStunL").into();
+                game.sound("sndThud", e.pos);
+                for dx in [-4., 4.] {
+                    let id = spawn(game, s, "oPoof", Vec2::new(e.pos.x + dx, e.pos.y + 6.));
+                    game.world.entity_mut(id).unwrap().vel.x = dx.signum() * 0.4;
+                }
+            }
+        }
+        1 => {
+            alarm(s, e.id, 0, 70);
+            alarm(s, e.id, 1, 50);
+            e.state = 2;
+        }
+        2 => {
+            if game
+                .world
+                .entities
+                .iter()
+                .find(|a| a.object == "oBigTreasure")
+                .is_some_and(|a| a.vel.y == 0.)
+            {
+                e.vel.y = -4.;
+                e.state = 3;
+            }
+        }
+        3 => {
+            e.sprite = selected_sprite(game, "sJumpLeft", "sDamselDieLR", "sTunnelDieLR").into();
+            if e.vel.y < 4. {
+                e.vel.y += 0.6;
+            }
+            if object_at(game, Vec2::new(e.pos.x, e.pos.y + 6.), "oDesert2") {
+                e.vel.y = 0.;
+                e.state = 4;
+                alarm(s, e.id, 2, 50);
+                e.sprite = selected_sprite(game, "sStandLeft", "sDamselLeft", "sTunnelLeft").into();
+                e.facing = 1;
+                e.data.insert("image_xscale".into(), -1.);
+                set_menu(game, true);
+            }
+        }
+        _ => {}
+    }
+    if object_at(game, Vec2::new(e.pos.x, e.pos.y + 6.), "oDesert2") {
+        e.pos.y -= 2.;
+    }
+    if object_at(game, Vec2::new(e.pos.x, e.pos.y + 7.), "oDesert2") {
+        e.pos.y -= 1.;
+    }
+}
+fn treasure_step(game: &mut Game, s: &mut EndingState, e: &mut Entity) {
+    e.pos.x += e.vel.x;
+    e.pos.y += e.vel.y;
+    if e.vel.y < 6. {
+        e.vel.y += e.value("gravity");
+    }
+    let x = e.pos.x.round_ties_even();
+    let y = e.pos.y.round_ties_even();
+    let top = solid_edge(
+        &game.world,
+        Rect::new(x, (e.pos.y - 1.).round_ties_even(), 32., 1.),
+        e.id,
+    );
+    let left = solid_edge(
+        &game.world,
+        Rect::new((e.pos.x - 1.).round_ties_even(), y, 1., 32.),
+        e.id,
+    );
+    let right = solid_edge(
+        &game.world,
+        Rect::new((e.pos.x + 32.).round_ties_even(), y, 1., 32.),
+        e.id,
+    );
+    let bottom = solid_edge(
+        &game.world,
+        Rect::new(x, (e.pos.y + 32.).round_ties_even(), 32., 1.),
+        e.id,
+    );
+    if top && e.vel.y < 0. {
+        e.vel.y = -e.vel.y * 0.8;
+    }
+    if left || right {
+        e.vel.x = -e.vel.x * 0.5;
+    }
+    if bottom {
+        if e.vel.y > 5. {
+            for dx in [12., 20.] {
+                let id = spawn(game, s, "oPoof", Vec2::new(e.pos.x + dx, e.pos.y + 30.));
+                game.world.entity_mut(id).unwrap().vel.x = if dx == 12. { -0.4 } else { 0.4 };
+            }
+            game.sound("sndThump", e.pos);
+        }
+        e.vel.y = if e.vel.y > 1. { -e.vel.y * 0.5 } else { 0. };
+        e.vel.x = if e.vel.x.abs() < 0.1 {
+            0.
+        } else {
+            e.vel.x * 0.3
+        };
+    }
+    if solid_edge(
+        &game.world,
+        Rect::new(x, (e.pos.y + 31.).round_ties_even(), 32., 1.),
+        e.id,
+    ) && e.vel.y.abs() < 1.
+    {
+        e.pos.y -= 1.;
+        e.vel.y = 0.;
+    }
+}
+
+fn solid_edge(world: &World, probe: Rect, excluded: u64) -> bool {
+    world.tiles_collide_precision(probe, "oSolid", CollisionPrecision::Precise)
+        || world.entities.iter().any(|e| {
+            e.id != excluded
+                && e.alive
+                && e.solid
+                && !e.held
+                && e.mask_intersects(probe, CollisionPrecision::Precise)
+        })
+}
+
+fn controller_step(game: &mut Game, s: &mut EndingState, input: &InputFrame) {
+    match s.stage {
+        EndingStage::Exit if s.kind == EndingKind::TitleCredits => {
+            if s.fade_out {
+                if s.fade_level < 1. {
+                    s.fade_level += 0.1;
+                } else {
+                    enter(game, s, EndingStage::Credits, "rCredits1");
+                }
+            }
+        }
+        EndingStage::Chamber => {
+            if action(input) && s.stage_tick > 50 {
+                enter(game, s, EndingStage::Landing, "rEnd3");
+                return;
+            }
+            game.camera.x = (game.camera.x + 1.).min(game.world.width as f64 * 16. - 320.);
+            let shake = game.data.get("shake").copied().unwrap_or(0.);
+            if shake > 0. {
+                game.camera.y = if s.stage_tick % 2 == 0 {
+                    1. + game.rng.range(8) as f64
+                } else {
+                    0.
+                };
+                game.data.insert("shake".into(), shake - 1.);
+            } else {
+                game.camera.y = 0.;
+            }
+        }
+        EndingStage::Volcano => {
+            if action(input) {
+                enter(game, s, EndingStage::Landing, "rEnd3");
+            }
+        }
+        EndingStage::Summary => {
+            if action(input) {
+                if s.draw_status == 7 {
+                    if s.money_count < game.player.money {
+                        s.money_count = game.player.money;
+                    } else {
+                        s.fade_out = true;
+                    }
+                } else if s.draw_status == 8 {
+                    if s.kind == EndingKind::Custom {
+                        finish(game, s);
+                    } else {
+                        enter(game, s, EndingStage::Credits, "rCredits2");
+                    }
+                    return;
+                }
+            }
+            if s.draw_status > 2 {
+                let diff = game.player.money.saturating_sub(s.money_count);
+                s.money_count = s.money_count.saturating_add(if diff > 1000 {
+                    1000
+                } else if diff > 100 {
+                    100
+                } else {
+                    diff
+                });
+                if s.draw_status == 3 && diff == 0 && !s.bonus_scheduled {
+                    s.alarms[11] = 50;
+                    s.bonus_scheduled = true;
+                }
+            }
+            if s.fade_out {
+                if s.fade_level < 1. {
+                    s.fade_level += 0.1;
+                } else {
+                    s.draw_status = 8;
+                }
+            }
+        }
+        EndingStage::Credits => {
+            let camel = game
+                .world
+                .entities
+                .iter()
+                .find(|e| e.object == "oCamel")
+                .map(|e| e.pos.x);
+            if (input.attack || action(input)) && camel.is_some() {
+                if s.fade_in {
+                    s.fade_level = 0.;
+                } else {
+                    s.fade_out = true;
+                }
+            }
+            if camel.is_some_and(|x| x <= 160.) && !s.scroll_started {
+                s.alarms[1] = 1;
+                s.alarms[2] = 20;
+                s.scroll_started = true;
+                s.scrolling = true;
+            }
+            if s.fade_in {
+                if s.fade_level > 0. {
+                    s.fade_level -= 0.1;
+                } else {
+                    s.fade_in = false;
+                    s.alarms[0] = 20;
+                }
+            } else if s.fade_out {
+                if s.fade_level < 1. {
+                    s.fade_level += 0.1;
+                } else {
+                    finish(game, s);
+                }
+            }
+        }
+        EndingStage::Transition => {
+            // The source writes this gameplay flag in Draw after revealing
+            // the time. Apply it once per simulation step so display refresh
+            // rates cannot change level-generation eligibility.
+            if s.draw_loot > -2 {
+                if s.level_time_ms / 1000 % 60 <= 20 {
+                    game.flags.insert("no_dark_level".into());
+                } else {
+                    game.flags.remove("no_dark_level");
+                }
+            }
+            let gate = game
+                .world
+                .entities
+                .iter()
+                .find(|e| e.object == "oTunnelMan")
+                .is_none_or(|e| e.value("talk") >= 3.);
+            if action(input) {
+                if s.draw_loot == 2 && s.money_count == s.level_money && gate {
+                    finish(game, s);
+                    return;
+                } else {
+                    s.hurry_up = true;
+                }
+            }
+            if s.draw_loot == 2 && s.money_count < s.level_money {
+                s.money_count = if s.hurry_up {
+                    s.level_money
+                } else {
+                    s.money_count.saturating_add(100).min(s.level_money)
+                };
+            }
+        }
+        _ => {}
+    }
+}
+fn finish(game: &mut Game, s: &mut EndingState) {
+    s.stage = EndingStage::Complete;
+    s.stage_tick = 0;
+    s.music.clear();
+    match s.kind {
+        EndingKind::Campaign => {
+            s.record_ready = true;
+            game.state = RunState::Won;
+            game.flags.insert("won".into());
+            game.events.push(crate::model::GameEvent::Won);
+        }
+        EndingKind::Custom => game.state = RunState::Ending,
+        EndingKind::TitleCredits => {
+            game.flags.insert("app_exit_requested".into());
+            game.state = RunState::Ending;
+        }
+        EndingKind::Transition => {
+            game.state = RunState::Transition;
+            game.flags.insert("transition_cinematic_complete".into());
+        }
+    }
+}
+
+const LOOT: &[(&str, &str)] = &[
+    ("gold", "sGoldChunk"),
+    ("emeralds", "sEmerald"),
+    ("sapphires", "sSapphire"),
+    ("rubies", "sRuby"),
+    ("nuggets", "sGoldNugget"),
+    ("goldbar", "sGoldBarDraw"),
+    ("goldbars", "sGoldBarsDraw"),
+    ("bigemeralds", "sEmeraldBig"),
+    ("bigsapphires", "sSapphireBig"),
+    ("bigrubies", "sRubyBig"),
+    ("diamonds", "sDiamond"),
+    ("xdamsels", "sDamselLeft"),
+    ("scarabs", "sScarabDisp"),
+    ("idols", "sGoldIdolIco"),
+    ("skulls", "sCrystalSkullIco"),
+];
+const KILLS: &[(&str, &str)] = &[
+    ("bats", "sBatLeft"),
+    ("snakes", "sSnakeLeft"),
+    ("spiders", "sSpider"),
+    ("deadfish", "sDeadFishLeftIco"),
+    ("piranhas", "sPiranhaLeftIco"),
+    ("skeletons", "sSkeletonLeft"),
+    ("zombies", "sZombieLeft"),
+    ("vampires", "sVampireLeft"),
+    ("frogs", "sFrogLeft"),
+    ("firefrogs", "sFireFrogLeft"),
+    ("monkeys", "sMonkeyLeft"),
+    ("mantraps", "sManTrapLeft"),
+    ("yetis", "sYetiLeft"),
+    ("ufos", "sUFO"),
+    ("aliens", "sAlien"),
+    ("alienbosses", "sAlienBossDisp"),
+    ("cavemen", "sCavemanLeft"),
+    ("hawkmen", "sHawkLeft"),
+    ("giantspiders", "sGiantSpiderDisp"),
+    ("megamouths", "sMegaMouth"),
+    ("yetikings", "sYetiKingDisp"),
+    ("tomblords", "sTombLordDisp"),
+    ("damselsKilled", "sDamselLeftIco"),
+    ("shopkeepers", "sShopLeftIco"),
+];
+fn consume_icon(game: &mut Game, categories: &[(&str, &str)]) -> Option<String> {
+    for &(key, sprite) in categories {
+        if let Some(count) = game.data.get_mut(key).filter(|n| **n > 0.) {
+            *count -= 1.;
+            return Some(
+                if crate::characters::selected(game) == crate::characters::Character::Damsel {
+                    match key {
+                        "xdamsels" => "sStandLeft",
+                        "damselsKilled" => "sStandLeftIco",
+                        _ => sprite,
+                    }
+                } else {
+                    sprite
+                }
+                .into(),
+            );
+        }
+    }
+    None
+}
+fn transition_icon(game: &mut Game, s: &mut EndingState) {
+    if s.draw_loot == 0 {
+        if s.draw_pos.x > 272. {
+            s.draw_pos.x = 100.;
+            s.draw_pos.y += 2.;
+            if s.draw_pos.y > 87. {
+                s.draw_pos.y = 83.;
+            }
+        }
+    } else if s.draw_pos.x > 232. {
+        s.draw_pos.x = 96.;
+        s.draw_pos.y += 2.;
+        if s.draw_pos.y > 95. {
+            s.draw_pos.y = 91.;
+        }
+    }
+    let mut icon = None;
+    if s.draw_loot >= 0 {
+        icon = consume_icon(game, LOOT);
+        if icon.is_some() {
+            s.is_loot = true;
+        } else {
+            if s.draw_loot == 0 {
+                s.draw_loot = 1;
+                s.draw_pos = Vec2::new(96., 91.);
+            }
+            icon = consume_icon(game, KILLS);
+            if icon.is_some() {
+                s.is_kills = true;
+            } else {
+                s.draw_loot = 2;
+            }
+        }
+    }
+    if let Some(sprite) = icon {
+        let id = spawn(game, s, "oSprite", s.draw_pos);
+        game.world.entity_mut(id).unwrap().sprite = sprite;
+    }
+    if s.draw_loot >= 0 {
+        s.draw_pos.x += if s.draw_loot == 0 { 4. } else { 8. };
+    }
+    if s.draw_loot != 2 {
+        s.alarms[0] = if s.hurry_up { 1 } else { 3 };
+    }
+}
+fn setup_tunnel(game: &mut Game, s: &mut EndingState, room: &str) {
+    if ["hub", "custom", "custom_level", "tutorial"]
+        .iter()
+        .any(|f| game.flags.contains(*f))
+    {
+        return;
+    }
+    let stage = match room {
+        "rTransition1x" => 1,
+        "rTransition2x" => 2,
+        "rTransition3x" => 3,
+        _ => return,
+    };
+    let unlocked = |destination| game.flags.contains(&format!("shortcut_{destination}"));
+    let expected = if !unlocked(5) {
+        1
+    } else if !unlocked(9) {
+        2
+    } else if !unlocked(13) {
+        3
+    } else {
+        return;
+    };
+    if expected != stage {
+        return;
+    }
+    let key = format!("tunnel{stage}_remaining");
+    let cost = stage as f64 * 100_000.;
+    s.transition_tunnel = true;
+    // Fresh source scores use max+1, consumed on the first encounter without
+    // an offer. Missing persisted balance is the equivalent sentinel.
+    let Some(remaining) = game.data.get(&key).copied() else {
+        game.data.insert(key, cost);
+        return;
+    };
+    if remaining > cost {
+        game.data.insert(key, remaining - 1.);
+        return;
+    }
+    if remaining <= 0. {
+        return;
+    }
+    game.data.insert(
+        if stage == 2 { "tunnel2" } else { "tunnel1" }.into(),
+        remaining,
+    );
+    let id = spawn(game, s, "oTunnelMan", Vec2::new(104., 184.));
+    let e = game.world.entity_mut(id).unwrap();
+    e.data.insert("tunnel_stage".into(), stage as f64);
+    e.data.insert("talk".into(), 0.);
+    e.data.insert("donate".into(), 0.);
+}
+fn tunnel_step(game: &mut Game, s: &mut EndingState, e: &mut Entity, input: &InputFrame) {
+    let stage = e.value("tunnel_stage") as u8;
+    let remaining = game
+        .data
+        .get(&format!("tunnel{stage}_remaining"))
+        .copied()
+        .unwrap_or(stage as f64 * 100_000.);
+    let mut donate = e.value("donate");
+    if input.up && !s.previous_up {
+        donate += 100.;
+    } else if input.down && !s.previous_down {
+        donate -= 100.;
+    }
+    donate = donate.max(0.).min(remaining).min(game.player.money as f64);
+    let talk = e.value("talk") as u8;
+    if input.attack_pressed {
+        if talk == 1 {
+            e.data.insert("talk".into(), 2.);
+        } else if talk == 2 {
+            let new_talk = if donate > 0. {
+                if donate >= remaining { 5 } else { 3 }
+            } else {
+                4
+            };
+            e.data.insert("talk".into(), new_talk as f64);
+            if donate > 0. {
+                crate::progression::apply_donation(game, stage, donate as u32);
+                game.data.insert(
+                    if stage == 2 { "tunnel2" } else { "tunnel1" }.into(),
+                    (remaining - donate).max(0.),
+                );
+            }
+            let sprite = selected_sprite(game, "sRunLeft", "sDamselRunL", "sRunLeft").to_owned();
+            if let Some(dummy) = game
+                .world
+                .entities
+                .iter_mut()
+                .find(|a| a.object == "oPDummy")
+            {
+                dummy.state = 0;
+                dummy.sprite = sprite;
+            }
+        }
+    }
+    if e.value("talk") == 2. {
+        let direction = if input.up {
+            1.
+        } else if input.down {
+            -1.
+        } else {
+            0.
+        };
+        let counter_key = if direction > 0. {
+            "up_counter"
+        } else {
+            "down_counter"
+        };
+        let hold_key = if direction > 0. {
+            "up_held"
+        } else {
+            "down_held"
+        };
+        if direction != 0. {
+            let held = e.value(hold_key) + 1.;
+            let counter = e.value(counter_key);
+            e.data.insert(hold_key.into(), held);
+            if counter < 20. {
+                e.data.insert(counter_key.into(), counter + 1.);
+            } else {
+                donate += direction * if held > 100. { 1000. } else { 100. };
+            }
+            e.data.insert(
+                if direction > 0. {
+                    "down_counter"
+                } else {
+                    "up_counter"
+                }
+                .into(),
+                0.,
+            );
+            e.data.insert(
+                if direction > 0. {
+                    "down_held"
+                } else {
+                    "up_held"
+                }
+                .into(),
+                0.,
+            );
+        } else {
+            for key in ["up_counter", "down_counter", "up_held", "down_held"] {
+                e.data.insert(key.into(), 0.);
+            }
+        }
+    }
+    e.data.insert(
+        "donate".into(),
+        donate.max(0.).min(remaining).min(game.player.money as f64),
+    );
+}

@@ -94,6 +94,8 @@ pub struct InputFrame {
     pub jump_released: bool,
     pub attack: bool,
     pub attack_pressed: bool,
+    #[serde(default)]
+    pub start_pressed: bool,
     pub bomb_pressed: bool,
     pub rope_pressed: bool,
     pub flare_pressed: bool,
@@ -106,6 +108,7 @@ impl InputFrame {
         self.jump_pressed = false;
         self.jump_released = false;
         self.attack_pressed = false;
+        self.start_pressed = false;
         self.bomb_pressed = false;
         self.rope_pressed = false;
         self.flare_pressed = false;
@@ -183,6 +186,15 @@ impl Default for Player {
     }
 }
 impl Player {
+    /// oPlayer1's source hurt block excludes every character's exit sprite,
+    /// independently of the invincibility countdown used by contact damage.
+    pub fn is_exiting(&self) -> bool {
+        matches!(
+            self.sprite.as_str(),
+            "sPExit" | "sDamselExit" | "sTunnelExit"
+        )
+    }
+
     /// Classic stores the stunned flag independently from its countdown.
     /// Throws can remain stunned in flight after the countdown reaches zero.
     pub fn is_stunned(&self) -> bool {
@@ -693,10 +705,27 @@ impl Rng {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum GameEvent {
-    Sound { name: String, pos: Vec2 },
-    Damage { amount: i32 },
-    Collected { object: String, value: u32 },
-    Explosion { pos: Vec2, radius: f64 },
+    Sound {
+        name: String,
+        pos: Vec2,
+    },
+    /// Source SS_IsSoundPlaying gate: the audio host starts this clip only
+    /// after its previous playback has finished.
+    SoundIfIdle {
+        name: String,
+        pos: Vec2,
+    },
+    Damage {
+        amount: i32,
+    },
+    Collected {
+        object: String,
+        value: u32,
+    },
+    Explosion {
+        pos: Vec2,
+        radius: f64,
+    },
     Message(String),
     LevelComplete,
     Died,
@@ -708,6 +737,7 @@ pub enum RunState {
     Playing,
     Dead,
     Transition,
+    Ending,
     Won,
 }
 
@@ -722,6 +752,8 @@ pub struct Game {
     pub rng: Rng,
     pub events: Vec<GameEvent>,
     pub state: RunState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ending: Option<crate::ending::EndingState>,
     pub camera: Vec2,
     pub previous_camera: Vec2,
     pub flags: BTreeSet<String>,
@@ -744,6 +776,7 @@ impl Game {
             rng: Rng::new(seed),
             events: Vec::new(),
             state: RunState::Playing,
+            ending: None,
             camera: Vec2::default(),
             previous_camera: Vec2::default(),
             flags: BTreeSet::new(),
@@ -755,6 +788,12 @@ impl Game {
             name: name.into(),
             pos,
         })
+    }
+    pub fn sound_if_idle(&mut self, name: impl Into<String>, pos: Vec2) {
+        self.events.push(GameEvent::SoundIfIdle {
+            name: name.into(),
+            pos,
+        });
     }
     pub fn damage_player(&mut self, amount: i32) {
         if self.player.invincible == 0 && self.player.health > 0 {

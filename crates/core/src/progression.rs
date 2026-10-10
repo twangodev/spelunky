@@ -260,10 +260,9 @@ fn secrets(game: &mut Game) {
 }
 
 fn ghost(game: &mut Game) {
-    // The original increments xtime by room_speed (30), not delta milliseconds.
-    // Keep that source counter exactly; do not reinterpret its thresholds.
-    let elapsed = game.level_tick.saturating_mul(30);
-    game.data.insert("xtime".into(), elapsed as f64);
+    // The level clock advances only while its player is alive. Dead world
+    // ticks must not be reinterpreted as elapsed run time.
+    let elapsed = game.data.get("xtime").copied().unwrap_or(0.);
     if game.world.level <= 1
         || game.world.area == Area::Boss
         || game.flags.contains("custom_level")
@@ -272,12 +271,12 @@ fn ghost(game: &mut Game) {
     {
         return;
     }
-    if elapsed > 120000 && game.flags.insert("ghost_warning".into()) {
+    if elapsed > 120000. && game.flags.insert("ghost_warning".into()) {
         game.events.push(GameEvent::Message(
             "A CHILL RUNS UP YOUR SPINE... LET'S GET OUT OF HERE!".into(),
         ));
     }
-    if elapsed > 150000 && !game.flags.contains("ghost_exists") {
+    if elapsed > 150000. && !game.flags.contains("ghost_exists") {
         let x = if game.player.pos.x > game.world.width as f64 * 8. {
             game.camera.x + VIEW_WIDTH + 8.
         } else {
@@ -318,10 +317,14 @@ fn tunnel_remaining(game: &Game, stage: u8) -> u32 {
         .clamp(0., f64::from(cost)) as u32
 }
 
-/// Host transition UI can inspect an offer without replacing the ended world.
-/// Classic's introductory max+1 sentinel delay is intentionally omitted.
+/// Inspect the source transition's offer without advancing the ended level.
 pub fn tunnel_offer(game: &Game) -> Option<TunnelOffer> {
-    if game.state != RunState::Transition
+    let transition_cinematic = game.state == RunState::Ending
+        && game.ending.as_ref().is_some_and(|ending| {
+            ending.kind == crate::ending::EndingKind::Transition
+                && ending.stage == crate::ending::EndingStage::Transition
+        });
+    if (game.state != RunState::Transition && !transition_cinematic)
         || game.flags.contains("custom_level")
         || game.flags.contains("custom")
         || game.flags.contains("tutorial")
@@ -340,7 +343,7 @@ pub fn tunnel_offer(game: &Game) -> Option<TunnelOffer> {
     })
 }
 
-fn apply_donation(game: &mut Game, stage: u8, requested: u32) -> u32 {
+pub(crate) fn apply_donation(game: &mut Game, stage: u8, requested: u32) -> u32 {
     let remaining = tunnel_remaining(game, stage);
     let amount = requested.min(remaining).min(game.player.money);
     if amount == 0 {
@@ -444,6 +447,7 @@ fn rescue_held_damsel(game: &mut Game, id: u64, door_center: Vec2) {
     damsel.data.insert("canPickUp".into(), 0.);
     game.player.held = None;
     count(game, "damsels");
+    count(game, "xdamsels");
     count(game, "pending_damsel_kisses");
     game.flags.insert("damsel_rescued".into());
     game.sound("sndSteps", door_center);
@@ -570,9 +574,15 @@ fn complete(game: &mut Game, door_id: u64) {
                     item.held = false;
                 }
             } else {
-                // Keep a carried weapon for root's level transition adapter.
+                // Source stores only pickupItem's type, suppressing fragments
+                // and destroying the old instance before its exit animation.
                 game.flags.retain(|f| !f.starts_with("carry:"));
                 game.flags.insert(format!("carry:{object}"));
+                if let Some(item) = game.world.entity_mut(id) {
+                    item.data.insert("breakPieces".into(), 0.);
+                    item.held = false;
+                    item.alive = false;
+                }
             }
         }
         game.player.held = None;
@@ -583,7 +593,9 @@ fn complete(game: &mut Game, door_id: u64) {
         let stash = stash as u64;
         if let Some(item) = game.world.entity_mut(stash) {
             item.data.remove("stashed");
-            item.held = true;
+            item.held = false;
+            item.data.insert("breakPieces".into(), 0.);
+            item.alive = false;
             game.flags.retain(|flag| !flag.starts_with("carry:"));
             game.flags.insert(format!("carry:{}", item.object));
         }
@@ -592,11 +604,14 @@ fn complete(game: &mut Game, door_id: u64) {
     game.player.previous_pos = door_center;
     game.player.vel = Vec2::default();
     game.flags.insert("render_discontinuity".into());
-    let collect = game.data.remove("collect").unwrap_or(0.).max(0.) as u32;
-    game.player.money = game.player.money.saturating_add(collect);
     // Only the ordinary oExit branch advances the level and forgives theft.
     // xEND goes directly to the ending after the common collection payout.
     if !ending {
+        // oPlayer1 Step pays its pending collection immediately at an ordinary
+        // exit. The Animation End payout separately handles later collection.
+        let collect = game.data.remove("collect").unwrap_or(0.).max(0.) as u32;
+        game.player.money = game.player.money.saturating_add(collect);
+        *game.data.entry("xmoney".into()).or_default() += f64::from(collect);
         if let Some(thief) = game.data.get_mut("thiefLevel") {
             *thief = (*thief - 1.).max(0.);
         }
@@ -612,16 +627,26 @@ fn complete(game: &mut Game, door_id: u64) {
     }
     game.events.push(GameEvent::LevelComplete);
     game.sound("sndSteps", game.player.pos);
-    if object == "oXEnd" || (game.world.area == Area::Boss && object == "oExit") {
-        game.state = RunState::Won;
-        game.flags.insert("won".into());
-        game.events.push(GameEvent::Won);
+    let kind = if ending || (game.world.area == Area::Boss && object == "oExit") {
+        crate::ending::EndingKind::Campaign
     } else {
-        game.state = RunState::Transition;
-    }
+        crate::ending::EndingKind::Transition
+    };
+    crate::ending::begin_exit(game, kind);
 }
 
 pub fn tick(game: &mut Game, input: &InputFrame) {
+    if game.state == RunState::Ending
+        && game.ending.as_ref().is_some_and(|ending| {
+            ending.stage == crate::ending::EndingStage::Exit
+                && ending.kind != crate::ending::EndingKind::TitleCredits
+        })
+    {
+        // Source lava precedes the exit-sprite hurt exclusion. Its Ankh branch
+        // still runs afterward and restores life without clearing pExit/art.
+        revive(game);
+        return;
+    }
     if !matches!(game.state, RunState::Playing | RunState::Dead) {
         return;
     }
@@ -645,7 +670,6 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     if game.player.health <= 0 || game.player.state == PlayerState::Dead {
         return;
     }
-    *game.data.entry("time".into()).or_default() += 30.;
     secrets(game);
     ghost(game);
     donate(game, input);
@@ -699,7 +723,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(g.state, RunState::Transition);
+        assert_eq!(g.state, RunState::Ending);
         assert_eq!(g.data["next_level"], 3.);
     }
     #[test]
@@ -733,12 +757,15 @@ mod tests {
     fn ghost_uses_original_counter_and_spawns_once() {
         let mut g = game(2);
         g.level_tick = 4000;
+        g.data.insert("xtime".into(), 120000.);
         tick(&mut g, &InputFrame::default());
         assert!(!g.flags.contains("ghost_warning"));
         g.level_tick = 4001;
+        g.data.insert("xtime".into(), 120030.);
         tick(&mut g, &InputFrame::default());
         assert!(g.flags.contains("ghost_warning"));
         g.level_tick = 5001;
+        g.data.insert("xtime".into(), 150030.);
         tick(&mut g, &InputFrame::default());
         tick(&mut g, &InputFrame::default());
         assert_eq!(
@@ -754,6 +781,7 @@ mod tests {
     fn hedjet_suppresses_ghost() {
         let mut g = game(14);
         g.level_tick = 10000;
+        g.data.insert("xtime".into(), 300000.);
         g.player.equipment.insert("Crown".into());
         tick(&mut g, &InputFrame::default());
         assert!(!g.flags.contains("ghost_exists"));
@@ -792,7 +820,7 @@ mod tests {
         assert!(g.flags.contains("shortcut_5"));
     }
     #[test]
-    fn boss_exit_emits_win_and_custom_exit_keeps_link() {
+    fn boss_exit_begins_cinematic_and_custom_exit_keeps_link() {
         let mut g = game(16);
         g.world.area = Area::Boss;
         g.world.spawn("oExit", g.player.pos);
@@ -803,7 +831,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(g.state, RunState::Won);
+        assert_eq!(g.state, RunState::Ending);
         let mut g = game(1);
         let id = g.world.spawn("oExit", g.player.pos);
         g.world
@@ -821,7 +849,7 @@ mod tests {
         assert!(g.flags.contains("custom_level:next.lvl"));
     }
     #[test]
-    fn generated_olmec_lava_death_opens_protected_exit_and_wins() {
+    fn generated_olmec_lava_death_opens_protected_exit_and_begins_ending() {
         let mut g = Game::shell(17, RulesPreset::Classic);
         g.world = crate::generation::generate(&mut g.rng, 16, &g.flags);
         g.player.pos = g.world.exit;
@@ -911,8 +939,8 @@ mod tests {
             ..Default::default()
         });
         assert!(g.player.grounded);
-        assert_eq!(g.state, RunState::Won);
-        assert!(g.events.contains(&GameEvent::Won));
+        assert_eq!(g.state, RunState::Ending);
+        assert!(!g.events.contains(&GameEvent::Won));
         assert_eq!(
             g.world
                 .entities
@@ -1027,7 +1055,7 @@ mod tests {
                 up: true,
                 ..Default::default()
             });
-            assert_eq!(g.state, RunState::Transition);
+            assert_eq!(g.state, RunState::Ending);
             assert_eq!(g.player.pos, Vec2::new(88., 56.));
             assert!(g.flags.contains(&format!("carry:{object}")));
             g.next_level();
@@ -1040,7 +1068,7 @@ mod tests {
                 up: true,
                 ..Default::default()
             });
-            assert_eq!(g.state, RunState::Transition);
+            assert_eq!(g.state, RunState::Ending);
             assert!(!g.flags.iter().any(|f| f.starts_with("carry:")));
             assert!(!g.world.entity(id).unwrap().held);
         }
@@ -1053,7 +1081,7 @@ mod tests {
                 up: true,
                 ..Default::default()
             });
-            assert_eq!(g.state, RunState::Transition);
+            assert_eq!(g.state, RunState::Ending);
             assert_eq!((g.player.bombs, g.player.ropes), (bombs, ropes));
             assert!(g.world.entity(id).is_none());
             assert!(!g.flags.iter().any(|f| f.starts_with("carry:")));
@@ -1076,7 +1104,10 @@ mod tests {
             up: true,
             ..Default::default()
         });
-        assert_eq!(g.player.money, 30000);
+        assert_eq!(
+            g.player.money as f64 + g.data.get("collect").copied().unwrap_or(0.),
+            30000.
+        );
         assert!(g.world.entity(id).is_none());
         let (mut g, _) = carried_exit("oDamsel");
         g.step(&InputFrame {
@@ -1103,7 +1134,7 @@ mod tests {
             up: true,
             ..Default::default()
         });
-        assert_eq!(g.state, RunState::Transition);
+        assert_eq!(g.state, RunState::Ending);
         assert_eq!(g.player.bombs, 4);
         assert!(!g.player.data.contains_key("stash_id"));
         assert!(g.flags.contains("carry:oShotgun"));
@@ -1258,11 +1289,14 @@ mod tests {
                 up: true,
                 ..Default::default()
             });
-            assert_eq!(ordinary.state, RunState::Transition);
+            assert_eq!(ordinary.state, RunState::Ending);
             assert_eq!(ordinary.data["thiefLevel"], 0.);
             assert!(!ordinary.flags.contains("wanted"));
             assert_eq!(ordinary.data["next_level"], 2.);
-            assert_eq!(ordinary.player.money as f64, value);
+            assert_eq!(
+                ordinary.player.money as f64 + ordinary.data.get("collect").copied().unwrap_or(0.),
+                value
+            );
 
             let (mut ending, id) = walk_carried_item_to_portal(object, "oXEnd");
             // Merely touching the ending door is not an ordinary rescue or
@@ -1280,7 +1314,7 @@ mod tests {
                 up: true,
                 ..Default::default()
             });
-            assert_eq!(ending.state, RunState::Won);
+            assert_eq!(ending.state, RunState::Ending);
             assert_eq!(ending.player.held, None);
             let dropped = ending.world.entity(id).expect("heavy item is dropped");
             assert!(!dropped.held);
@@ -1299,7 +1333,54 @@ mod tests {
     }
 
     #[test]
-    fn actual_step_multiple_damsels_each_restore_one_life() {
+    fn natural_exit_destroys_carried_instance_and_recreates_only_its_source_type() {
+        for object in ["oRock", "oBow", "oShotgun"] {
+            let (mut g, old_id) = walk_carried_item_to_portal(object, "oExit");
+            g.data.insert("arrows".into(), 9.);
+            let old = g.world.entity_mut(old_id).unwrap();
+            old.data.insert("local_state_probe".into(), 31.);
+            old.data.insert("cost".into(), 6000.);
+            old.data.insert("new".into(), 1.);
+            old.timer = 23;
+            g.step(&InputFrame {
+                up: true,
+                ..Default::default()
+            });
+            assert_eq!(g.state, RunState::Ending);
+            assert_eq!(g.player.held, None);
+            assert!(
+                g.world.entity(old_id).is_none(),
+                "old carried {object} is destroyed on Up"
+            );
+            assert!(g.flags.contains(&format!("carry:{object}")));
+            // The public room continuation adapter implements scrHoldItem's
+            // creation boundary; its source globals survive the room change.
+            let mut without_carry = g.clone();
+            without_carry
+                .flags
+                .retain(|flag| !flag.starts_with("carry:"));
+            without_carry.next_level();
+            g.next_level();
+            assert_eq!(
+                serde_json::to_value(&g.rng).unwrap(),
+                serde_json::to_value(&without_carry.rng).unwrap(),
+                "source {object} recreation has no Create randomness"
+            );
+            let item = g.world.entity(g.player.held.unwrap()).unwrap();
+            assert_eq!(item.object, object);
+            assert!(item.held);
+            assert!(item.alive);
+            assert!(!item.data.contains_key("local_state_probe"));
+            assert_eq!(item.timer, 0);
+            assert_eq!(item.value("cost"), 0.);
+            assert_eq!(item.value("new"), 0.);
+            assert_eq!(item.value("items_initialized"), 1.);
+            assert_eq!(g.data["arrows"], 9., "Bow ammunition is a source global");
+        }
+    }
+
+    #[test]
+    fn actual_step_multiple_rescues_create_one_transition_kiss() {
         let (mut g, _) = carried_exit("oDamsel");
         g.step(&InputFrame::default());
         let id = g.world.spawn("oDamsel", g.player.pos);
@@ -1309,11 +1390,11 @@ mod tests {
             up: true,
             ..Default::default()
         });
-        assert_eq!(g.state, RunState::Transition);
+        assert_eq!(g.state, RunState::Ending);
         assert_eq!(g.data["damsels"], 2.);
         assert_eq!(g.data["pending_damsel_kisses"], 2.);
         g.next_level();
-        assert_eq!(g.player.health, 6);
+        assert_eq!(g.player.health, 5);
         assert!(!g.data.contains_key("pending_damsel_kisses"));
     }
 
@@ -1437,6 +1518,105 @@ mod tests {
     }
 
     #[test]
+    fn natural_ankh_pickup_then_exit_lava_revives_without_cancelling_pending_exit() {
+        for character in [
+            crate::characters::Character::Explorer,
+            crate::characters::Character::Damsel,
+            crate::characters::Character::TunnelMan,
+        ] {
+            let mut level = crate::level::Level::default();
+            level.set_tile(6, 7, '@').unwrap();
+            level.set_tile(7, 7, 'X').unwrap();
+            for x in 0..40 {
+                level.set_tile(x, 8, '1').unwrap();
+            }
+            let mut g = Game::shell(11, RulesPreset::Classic);
+            g.load_custom(&level, "exit-ankh", "");
+            crate::characters::apply(&mut g, character);
+            for _ in 0..8 {
+                g.step(&InputFrame::default());
+            }
+            let ankh = g
+                .world
+                .spawn("oAnkh", Vec2::new(g.player.pos.x, g.player.pos.y + 4.));
+            crate::items::init_entity(g.world.entity_mut(ankh).unwrap());
+            let item = g.world.entity_mut(ankh).unwrap();
+            item.data.insert("cost".into(), 0.);
+            item.data.insert("forSale".into(), 0.);
+            g.step(&InputFrame {
+                down: true,
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            assert!(g.player.has("Ankh"));
+            for _ in 0..30 {
+                g.step(&InputFrame {
+                    right: true,
+                    up: true,
+                    ..Default::default()
+                });
+                if g.player.is_exiting() {
+                    break;
+                }
+            }
+            assert_eq!(g.state, RunState::Ending);
+            assert!(g.player.is_exiting());
+            let sprite = g.player.sprite.clone();
+            let phase = g.player.animation;
+            // A controlled arriving lava tile tests the real hazard branch;
+            // the pickup, walk and exit interaction use normal controllers.
+            let lava = g
+                .world
+                .spawn("oLava", Vec2::new(g.player.pos.x - 8., g.player.pos.y - 8.));
+            let age = g.world.entity(lava).unwrap().age;
+            g.step(&InputFrame::default());
+            assert_eq!(g.state, RunState::Ending, "{character:?}");
+            assert_eq!(g.player.health, 4);
+            assert!(!g.player.has("Ankh"));
+            assert_eq!(g.player.data["active"], 1.);
+            assert_eq!(g.player.data["blink"], 60.);
+            assert_eq!(g.player.invincible, 60);
+            assert_eq!(g.player.pos, g.world.entrance);
+            assert_eq!(g.player.sprite, sprite);
+            assert_eq!(g.player.animation, phase + 0.5);
+            assert_eq!(
+                g.ending.as_ref().unwrap().stage,
+                crate::ending::EndingStage::Exit
+            );
+            assert!(
+                g.events.contains(&GameEvent::Damage { amount: 99 }),
+                "lava remains harmful"
+            );
+            assert!(!g.events.contains(&GameEvent::Died));
+            assert_eq!(g.world.entity(lava).unwrap().age, age + 1);
+            for _ in 0..40 {
+                g.step(&InputFrame {
+                    right: true,
+                    jump: true,
+                    jump_pressed: true,
+                    ..Default::default()
+                });
+                if g.ending.as_ref().unwrap().stage != crate::ending::EndingStage::Exit {
+                    break;
+                }
+                assert_eq!(
+                    g.player.pos, g.world.entrance,
+                    "source exit sprite still excludes character movement"
+                );
+                assert_eq!(g.player.sprite, sprite);
+                assert_eq!(g.player.health, 4);
+            }
+            assert_eq!(
+                g.ending.as_ref().unwrap().stage,
+                crate::ending::EndingStage::Transition
+            );
+            assert_eq!(g.player.health, 4);
+            assert!(!g.player.has("Ankh"));
+        }
+    }
+
+    #[test]
     fn controlled_challenge_entry_ankh_revives_only_in_source_challenge_rooms() {
         use crate::hub::HubKind;
         for kind in [
@@ -1479,7 +1659,10 @@ mod tests {
                 assert_eq!(g.player.health, 4);
                 assert!(!g.player.has("Ankh"));
             } else {
-                assert_eq!(g.state, RunState::Dead, "{kind:?}");
+                assert_eq!(g.state, RunState::Playing, "{kind:?}");
+                assert!(g.player.has("Ankh"));
+                g.step(&InputFrame::default());
+                assert_eq!(g.player.health, 4);
                 assert!(g.player.has("Ankh"));
             }
             assert_eq!(g.world.name, room);

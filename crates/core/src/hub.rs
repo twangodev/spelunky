@@ -263,7 +263,7 @@ fn all_gold(flags: &BTreeSet<String>) -> bool {
         .iter()
         .all(|key| flags.contains(*key))
 }
-fn add_instance(world: &mut World, object: &str, pos: Vec2, challenge: bool) {
+pub(crate) fn add_instance(world: &mut World, object: &str, pos: Vec2, challenge: bool) {
     let static_tile = (crate::catalog::is_solid(object)
         && !crate::catalog::is_a(object, "oMovingSolid")
         && !crate::catalog::is_a(object, "oMoveableSolid"))
@@ -294,7 +294,7 @@ fn add_instance(world: &mut World, object: &str, pos: Vec2, challenge: bool) {
         world.spawn(object, pos);
     }
 }
-fn setup_wall_sprites(world: &mut World) {
+pub(crate) fn setup_wall_sprites(world: &mut World) {
     let overrides: Vec<_> = world
         .tiles
         .iter()
@@ -332,7 +332,7 @@ fn setup_wall_sprites(world: &mut World) {
     }
 }
 
-fn initialize_brick_variants(game: &mut Game) {
+pub(crate) fn initialize_brick_variants(game: &mut Game) {
     let ids: Vec<_> = game
         .world
         .entities
@@ -397,6 +397,7 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
         crate::characters::apply(game, selected);
         game.player.money = 0;
         game.player.equipment.clear();
+        game.flags.insert("no_dark_level".into());
         game.flags.retain(|flag| {
             !matches!(
                 flag.as_str(),
@@ -645,6 +646,26 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         activate_portal(game);
     }
 }
+
+/// The player's Title Step replaces the climbing controller before input can
+/// release the rope. The dummy then ascends and fades into the exit credits.
+pub(crate) fn begin_title_exit(game: &mut Game) -> bool {
+    if !game.flags.contains("hub_title")
+        || game.player.state != PlayerState::Climbing
+        || game.player.pos.y >= 32.
+        || game.state != RunState::Playing
+    {
+        return false;
+    }
+    if let Some(id) = game.player.held.take() {
+        if let Some(item) = game.world.entity_mut(id) {
+            item.held = false;
+        }
+    }
+    crate::ending::begin_title_credits(game);
+    true
+}
+
 fn activate_portal(game: &mut Game) {
     if !game.player.grounded
         || game.player.health <= 0

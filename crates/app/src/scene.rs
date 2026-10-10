@@ -180,8 +180,13 @@ fn entity_mirrored(entity: &Entity, name: &str) -> bool {
     // directional sprite without the inherited horizontal flip.
     if matches!(entity.object.as_str(), "oJaws" | "oYetiKing" | "oTombLord") {
         false
+    } else if entity.object == "oPDummy6" {
+        // Its own Draw event unconditionally assigns image_xscale = -1.
+        true
     } else if entity.data.contains_key("image_xscale") {
         entity.value("image_xscale") < 0.0
+    } else if matches!(entity.object.as_str(), "oPDummy" | "oPDummy2") {
+        entity.facing > 0
     } else {
         (entity.object == "oAlien" || name.ends_with("Left") || name.ends_with('L'))
             && entity.facing > 0
@@ -196,6 +201,53 @@ fn entity_draw_extras(
     x: f32,
     y: f32,
 ) {
+    if matches!(entity.object.as_str(), "oPDummy" | "oPDummy2") {
+        // These source actors have their own Draw event. Equipment follows the
+        // cinematic actor rather than the frozen gameplay character.
+        let exiting = matches!(
+            entity.sprite.as_str(),
+            "sPExit" | "sDamselExit" | "sTunnelExit"
+        );
+        if game.player.has("Jetpack") && exiting {
+            sprite(layer, atlas, "sJetpackBack", 0.0, x, y, false, WHITE);
+        }
+        if !exiting {
+            // The gameplay world has been replaced. Its old held ID must not
+            // resolve to an unrelated authored cinematic instance.
+            let held = entity.text.get("pickup_item").map(String::as_str);
+            let name = match held.unwrap_or("") {
+                "Rock" | "oRock" => "sRock",
+                "Jar" | "oJar" => "sJar",
+                "Skull" | "oSkull" => "sSkull",
+                "Fish Bone" | "oFishBone" => "sFishBone",
+                "Arrow" | "oArrow" => "sArrowRight",
+                "Machete" | "oMachete" => "sMacheteRight",
+                "Mattock" | "oMattock" => "sMattockRight",
+                "Mattock Head" | "oMattockHead" => "sMattockHead",
+                "Pistol" | "oPistol" => "sPistolRight",
+                "Web Cannon" | "oWebCannon" => "sWebCannonR",
+                "Teleporter" | "oTeleporter" => "sTeleporter",
+                "Shotgun" | "oShotgun" => "sShotgunRight",
+                "Bow" | "oBow" => "sBowRight",
+                "Flare" | "oFlare" => "sFlare",
+                "Sceptre" | "oSceptre" => "sSceptreRight",
+                "Key" | "oKey" => "sKeyRight",
+                _ => "",
+            };
+            if !name.is_empty() {
+                sprite(
+                    layer,
+                    atlas,
+                    name,
+                    entity.animation,
+                    x + 4.0,
+                    y + 2.0,
+                    false,
+                    WHITE,
+                );
+            }
+        }
+    }
     if entity.object == "oJaws" {
         let damage = if entity.health < 10 {
             3
@@ -284,6 +336,12 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
         1.0
     };
     let camera = interpolated(game.previous_camera, game.camera, alpha);
+    // A cinematic uses the authored room's world, but its actors and Draw
+    // controller replace the gameplay character, HUD and lighting pass.
+    let cinematic = game
+        .ending
+        .as_ref()
+        .filter(|ending| ending.stage != spelunky_core::ending::EndingStage::Exit);
     let mut quads = Vec::with_capacity(1000);
     background(&mut quads, game, camera, pixel_snap, atlas);
     let mut layers: Vec<(i32, u64, Vec<DrawQuad>)> = Vec::new();
@@ -497,6 +555,24 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
             .copied()
             .unwrap_or(1.0)
             .clamp(0.0, 1.0) as f32;
+        if matches!(entity.object.as_str(), "oPDummy" | "oPDummy2")
+            && game.player.has("Jetpack")
+            && !matches!(
+                entity.sprite.as_str(),
+                "sPExit" | "sDamselExit" | "sTunnelExit"
+            )
+        {
+            sprite(
+                &mut layer,
+                atlas,
+                "sJetpackRight",
+                0.0,
+                x - 4.0,
+                y - 1.0,
+                false,
+                WHITE,
+            );
+        }
         sprite(
             &mut layer,
             atlas,
@@ -527,7 +603,10 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
         layers.push((depth, 1_000_000 + entity.id, layer));
     }
     let player = &game.player;
-    if player.data.get("hidden") != Some(&1.0) && player.data.get("blink_toggle") != Some(&1.0) {
+    if cinematic.is_none()
+        && player.data.get("hidden") != Some(&1.0)
+        && player.data.get("blink_toggle") != Some(&1.0)
+    {
         let [x, y] = screen(player.previous_pos, player.pos, camera, alpha, pixel_snap);
         let mut layer = Vec::with_capacity(3);
         let jetpack = player.has("Jetpack") || player.has("jetpack");
@@ -665,11 +744,343 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
     for (_, _, layer) in layers {
         quads.extend(layer);
     }
-    if darkness_enabled(game) {
-        darkness(&mut quads, game, camera, alpha);
+    if let Some(ending) = cinematic {
+        use spelunky_core::ending::EndingStage;
+        match ending.stage {
+            EndingStage::Landing | EndingStage::Summary => ending_summary(
+                &mut quads,
+                atlas,
+                ending.draw_status,
+                ending.money_count,
+                ending.source_time_ms,
+                game.data.get("kills").copied().unwrap_or(0.0).max(0.0) as u32,
+                game.data.get("damsels").copied().unwrap_or(0.0).max(0.0) as u32,
+                ending.fade_out,
+                ending.fade_level,
+            ),
+            EndingStage::Credits => {
+                ending_credits(&mut quads, atlas, ending.credits_page);
+                if ending.fade_in || ending.fade_out {
+                    cinematic_fade(&mut quads, ending.fade_level);
+                }
+            }
+            EndingStage::Transition => transition_text(
+                &mut quads,
+                atlas,
+                game,
+                ending.draw_loot,
+                ending.is_loot,
+                ending.is_kills,
+                ending.money_count,
+                ending.source_time_ms,
+                ending.level_time_ms,
+                ending.completed_level,
+                &ending.completed_name,
+            ),
+            _ => {}
+        }
+    } else {
+        if darkness_enabled(game) {
+            darkness(&mut quads, game, camera, alpha);
+        }
+        hud(&mut quads, game, camera, atlas);
+        if let Some(ending) = game.ending.as_ref().filter(|ending| {
+            ending.kind == spelunky_core::ending::EndingKind::TitleCredits
+                && ending.stage == spelunky_core::ending::EndingStage::Exit
+                && ending.fade_out
+        }) {
+            cinematic_fade(&mut quads, ending.fade_level);
+        }
     }
-    hud(&mut quads, game, camera, atlas);
     quads
+}
+
+/// Source oEnd3/oEndCustom Draw. Simulation owns every reveal and countup.
+fn ending_summary(
+    quads: &mut Vec<DrawQuad>,
+    atlas: &Atlas,
+    status: u8,
+    money: u32,
+    source_time_ms: u64,
+    kills: u32,
+    saves: u32,
+    fade_out: bool,
+    fade: f64,
+) {
+    const YELLOW: [f32; 4] = [1.0, 1.0, 0.0, 1.0];
+    if status > 0 {
+        font(
+            quads,
+            atlas,
+            "YOU MADE IT!",
+            64.0,
+            32.0,
+            1.0,
+            YELLOW,
+            "sFont",
+        );
+    }
+    if status > 1 {
+        text(quads, atlas, "FINAL SCORE:", 64.0, 64.0, 1.0, YELLOW);
+    }
+    if status > 2 {
+        font(
+            quads,
+            atlas,
+            &format!("${money}"),
+            64.0,
+            72.0,
+            1.0,
+            WHITE,
+            "sFont",
+        );
+    }
+    if status > 4 {
+        let seconds = source_time_ms / 1000;
+        text(quads, atlas, "TIME: ", 64.0, 96.0, 1.0, YELLOW);
+        text(
+            quads,
+            atlas,
+            &format!("{}:{:02}", seconds / 60, seconds % 60),
+            120.0,
+            96.0,
+            1.0,
+            WHITE,
+        );
+    }
+    if status > 5 {
+        text(quads, atlas, "KILLS: ", 64.0, 104.0, 1.0, YELLOW);
+        text(quads, atlas, &kills.to_string(), 120.0, 104.0, 1.0, WHITE);
+    }
+    if status > 6 {
+        text(quads, atlas, "SAVES: ", 64.0, 112.0, 1.0, YELLOW);
+        text(quads, atlas, &saves.to_string(), 120.0, 112.0, 1.0, WHITE);
+    }
+    if fade_out {
+        cinematic_fade(quads, fade);
+    }
+    // The hero inscription draws after the black fade in the original event.
+    if status == 8 {
+        let message = "YOU SHALL BE REMEMBERED AS A HERO.";
+        text(
+            quads,
+            atlas,
+            message,
+            ((320.0 - message.len() as f32 * 8.0) / 2.0).ceil(),
+            116.0,
+            1.0,
+            WHITE,
+        );
+    }
+}
+
+fn cinematic_fade(quads: &mut Vec<DrawQuad>, fade: f64) {
+    rect(
+        quads,
+        [0.0, 0.0, 320.0, 240.0],
+        [0.0, 0.0, 0.0, fade.clamp(0.0, 1.0) as f32],
+    );
+}
+
+/// Both source credits controllers use identical text, coordinates and fonts.
+fn ending_credits(quads: &mut Vec<DrawQuad>, atlas: &Atlas, page: u8) {
+    const YELLOW: [f32; 4] = [1.0, 1.0, 0.0, 1.0];
+    let mut line = |value: &str, x: f32, y: f32, yellow: bool| {
+        text(
+            quads,
+            atlas,
+            value,
+            x,
+            y,
+            1.0,
+            if yellow { YELLOW } else { WHITE },
+        );
+    };
+    match page {
+        1 => font(quads, atlas, "SPELUNKY", 16.0, 16.0, 1.0, YELLOW, "sFont"),
+        2 => {
+            line("A GAME BY", 16.0, 16.0, true);
+            line("DEREK YU", 64.0, 32.0, false);
+        }
+        3 => {
+            line("PLATFORM ENGINE", 16.0, 16.0, true);
+            line("MARTIN PIECYK", 16.0, 24.0, false);
+            line("SOUND EFFECTS MADE USING", 16.0, 40.0, true);
+            line("DR PETTER'S SFXR", 16.0, 48.0, false);
+            line("SCREEN SCALING CODE", 16.0, 64.0, true);
+            line("CHEVYRAY", 16.0, 72.0, false);
+        }
+        4 => {
+            line("MUSIC BY", 16.0, 16.0, true);
+            line("GEORGE BUZINKAI", 32.0, 32.0, false);
+            line("JONATHAN PERRY", 32.0, 48.0, false);
+        }
+        5 => {
+            line("BETA TESTING BY", 16.0, 16.0, true);
+            for (i, value) in [
+                "ANNABELLE K.",
+                "BENZIDO",
+                "CHUTUP",
+                "CORPUS",
+                "GENERALVALTER",
+                "GUERT",
+                "GRAHAM GORING",
+                "HAOWAN",
+                "HIDEOUS",
+                "INANE",
+            ]
+            .iter()
+            .enumerate()
+            {
+                line(value, 16.0, 24.0 + i as f32 * 8.0, false);
+            }
+            for (i, value) in [
+                "INCREPARE",
+                "KAO",
+                "MARK JOHNS",
+                "MELLY",
+                "PAUL ERES",
+                "SUPER JOE",
+                "TANTAN",
+                "TEAM QUIGGAN",
+                "TERRY",
+                "XION",
+                "ZAPHOS",
+            ]
+            .iter()
+            .enumerate()
+            {
+                line(value, 128.0, 24.0 + i as f32 * 8.0, false);
+            }
+        }
+        6 => {
+            line("THANKS FOR PLAYING!", 16.0, 16.0, true);
+            line("SEE YOU NEXT ADVENTURE!", 32.0, 32.0, false);
+        }
+        _ => {}
+    }
+}
+
+fn transition_text(
+    quads: &mut Vec<DrawQuad>,
+    atlas: &Atlas,
+    game: &Game,
+    draw_loot: i8,
+    is_loot: bool,
+    is_kills: bool,
+    money_count: u32,
+    source_time_ms: u64,
+    level_time_ms: u64,
+    completed_level: u32,
+    completed_name: &str,
+) {
+    const YELLOW: [f32; 4] = [1.0, 1.0, 0.0, 1.0];
+    let mut centered = |value: &str, y: f32, color| {
+        text(
+            quads,
+            atlas,
+            value,
+            ((320.0 - value.len() as f32 * 8.0) / 2.0).ceil(),
+            y,
+            1.0,
+            color,
+        );
+    };
+    if let Some(tunnel) = game
+        .world
+        .entities
+        .iter()
+        .find(|entity| entity.alive && entity.object == "oTunnelMan")
+    {
+        match tunnel.value("talk") as u8 {
+            1 => {
+                centered("HEY THERE! I'M THE TUNNEL MAN!", 208.0, WHITE);
+                centered("I DIG SHORTCUTS.", 216.0, WHITE);
+            }
+            2 => {
+                centered("CAN YOU LEND ME A LITTLE MONEY?", 208.0, WHITE);
+                let key = if matches!(game.world.name.as_str(), "rTransition1x" | "rTransition3x") {
+                    "tunnel1"
+                } else {
+                    "tunnel2"
+                };
+                let remaining = game.data.get(key).copied().unwrap_or(0.0).max(0.0) as u32;
+                let request = format!("I NEED ${remaining} FOR A NEW SHORTCUT.");
+                centered(&request, 216.0, WHITE);
+                // Source aligns the donation amount with the request, rather
+                // than centering the shorter amount independently.
+                text(
+                    quads,
+                    atlas,
+                    &format!("DONATE: {}", tunnel.value("donate") as u32),
+                    ((320.0 - request.len() as f32 * 8.0) / 2.0).ceil(),
+                    224.0,
+                    1.0,
+                    YELLOW,
+                );
+            }
+            3 => centered("THANKS! YOU WON'T REGRET IT!", 216.0, WHITE),
+            4 => centered("I'LL NEVER GET THIS SHORTCUT BUILT!", 216.0, WHITE),
+            5 => centered("ONE SHORTCUT, COMING UP!", 216.0, WHITE),
+            _ => {}
+        }
+    } else if game.world.entities.iter().any(|entity| {
+        entity.alive && entity.object == "oDamselKiss" && entity.value("kissed") != 0.0
+    }) {
+        centered("MY HERO!", 216.0, WHITE);
+    }
+    let heading = if !completed_name.is_empty() {
+        format!("{completed_name} COMPLETED!")
+    } else if completed_level == 0 {
+        "TUTORIAL CAVE COMPLETED!".into()
+    } else {
+        format!("LEVEL {completed_level} COMPLETED!")
+    };
+    text(quads, atlas, &heading, 32.0, 48.0, 1.0, YELLOW);
+    for (label, y) in [
+        ("TIME  = ", 64.0),
+        ("LOOT  = ", 80.0),
+        ("KILLS = ", 96.0),
+        ("MONEY = ", 112.0),
+    ] {
+        text(quads, atlas, label, 32.0, y, 1.0, WHITE);
+    }
+    if draw_loot >= 1 && !is_loot {
+        text(quads, atlas, "NONE", 96.0, 80.0, 1.0, WHITE);
+    }
+    if draw_loot > -2 {
+        let level = level_time_ms / 1000;
+        let total = source_time_ms / 1000;
+        text(
+            quads,
+            atlas,
+            &format!(
+                "{}:{:02} / {}:{:02}",
+                level / 60,
+                level % 60,
+                total / 60,
+                total % 60
+            ),
+            96.0,
+            64.0,
+            1.0,
+            WHITE,
+        );
+    }
+    if draw_loot == 2 {
+        if !is_kills {
+            text(quads, atlas, "NONE", 96.0, 96.0, 1.0, WHITE);
+        }
+        text(
+            quads,
+            atlas,
+            &format!("${money_count} / ${}", game.player.money),
+            96.0,
+            112.0,
+            1.0,
+            WHITE,
+        );
+    }
 }
 
 fn background(
@@ -679,16 +1090,39 @@ fn background(
     pixel_snap: bool,
     atlas: &Atlas,
 ) {
-    let name = match game.world.area {
-        // All three source level rooms start with the same cave background;
-        // the temple changes it in scrInitLevel.
-        Area::Mines | Area::Jungle | Area::Ice => "bgCave",
-        Area::Temple | Area::Boss => "bgTemple",
+    let (name, tiled) = match game.world.name.as_str() {
+        "rEnd" | "rEndCustom" | "rTransition1" | "rTransition1x" | "rTransition2"
+        | "rTransition2x" | "rTransition3" | "rTransition3x" => ("bgCave", true),
+        "rTransition4" => ("bgTemple", true),
+        "rEnd3" | "rCredits2" => ("bgClouds", false),
+        "rCredits1" => ("backgroundNight", true),
+        // The volcano room is covered by its authored oEnd2BG instance.
+        "rEnd2" => return,
+        _ => (
+            match game.world.area {
+                Area::Mines | Area::Jungle | Area::Ice => "bgCave",
+                Area::Temple | Area::Boss => "bgTemple",
+            },
+            true,
+        ),
     };
     let Some(frame) = atlas.sprite(name, 0.0) else {
         return;
     };
     let [width, height] = frame.size;
+    if !tiled {
+        sprite(
+            quads,
+            atlas,
+            name,
+            0.0,
+            -camera.x as f32,
+            -camera.y as f32,
+            false,
+            WHITE,
+        );
+        return;
+    }
     let mut start_x = -(camera.x as f32).rem_euclid(width);
     let mut start_y = -(camera.y as f32).rem_euclid(height);
     if pixel_snap {
@@ -1246,6 +1680,143 @@ fn hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas) {
 mod tests {
     use super::*;
     use spelunky_core::RulesPreset;
+
+    #[test]
+    fn cinematic_room_renders_interpolated_dummy_without_gameplay_player_hud_or_lighting() {
+        use spelunky_core::ending::{EndingKind, EndingStage, EndingState};
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world.name = "rEnd".into();
+        game.world.dark = true;
+        game.player.pos = Vec2::new(250.0, 100.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.sprite = "sStandLeft".into();
+        game.previous_camera = Vec2::new(0.0, 16.0);
+        game.camera = Vec2::new(2.0, 16.0);
+        let id = game.world.spawn("oPDummy", Vec2::new(84.0, 80.0));
+        let actor = game.world.entity_mut(id).unwrap();
+        actor.previous_pos = Vec2::new(80.0, 80.0);
+        actor.sprite = "sRunLeft".into();
+        actor.facing = 1;
+        game.ending = Some(EndingState::new(
+            &game,
+            EndingKind::Campaign,
+            EndingStage::Chamber,
+        ));
+        game.state = spelunky_core::RunState::Ending;
+        let quads = game_scene(&game, 0.5, false, &atlas);
+        let run = atlas.sprite("sRunLeft", 0.0).unwrap();
+        let actor = quads
+            .iter()
+            .find(|quad| quad.uv[1] == run.uv[1] && quad.uv[2] == -run.uv[2])
+            .unwrap();
+        assert_eq!(actor.rect, [73.0, 56.0, 16.0, 16.0]);
+        assert!(quads.iter().all(|quad| quad.blend != QuadBlend::Multiply));
+        assert!(
+            quads
+                .iter()
+                .all(|quad| quad.uv != atlas.sprite("sStandLeft", 0.0).unwrap().uv)
+        );
+        assert_eq!(game.world.entity(id).unwrap().pos, Vec2::new(84.0, 80.0));
+    }
+
+    #[test]
+    fn custom_ending_dummy_draw_always_faces_right() {
+        let mut actor = Entity::new(1, "oPDummy6", Vec2::new(144.0, 184.0));
+        actor.facing = -1;
+        actor.data.insert("image_xscale".into(), 1.0);
+        assert!(entity_mirrored(&actor, "sStandLeft"));
+    }
+
+    #[test]
+    fn title_rope_exit_fade_covers_the_authored_title_scene() {
+        use spelunky_core::ending::{EndingKind, EndingStage, EndingState};
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let mut ending = EndingState::new(&game, EndingKind::TitleCredits, EndingStage::Exit);
+        ending.fade_out = true;
+        ending.fade_level = 0.6;
+        game.ending = Some(ending);
+        game.state = spelunky_core::RunState::Ending;
+        let quads = game_scene(&game, 1.0, false, &atlas);
+        let overlay = quads.last().unwrap();
+        assert_eq!(overlay.rect, [0.0, 0.0, 320.0, 240.0]);
+        assert_eq!(overlay.color, [0.0, 0.0, 0.0, 0.6]);
+    }
+
+    #[test]
+    fn source_ending_summary_reveals_original_fonts_coordinates_and_clock() {
+        let atlas = Atlas::load().unwrap();
+        let mut hidden = Vec::new();
+        ending_summary(&mut hidden, &atlas, 0, 200000, 549000, 12, 3, false, 0.0);
+        assert!(hidden.is_empty());
+        let mut quads = Vec::new();
+        ending_summary(&mut quads, &atlas, 7, 200000, 549000, 12, 3, false, 0.0);
+        assert_eq!(quads[0].rect, [64.0, 32.0, 16.0, 16.0]);
+        assert_eq!(quads[0].color, [1.0, 1.0, 0.0, 1.0]);
+        let mut expected = Vec::new();
+        text(&mut expected, &atlas, "9:09", 120.0, 96.0, 1.0, WHITE);
+        let time: Vec<_> = quads
+            .iter()
+            .filter(|quad| quad.rect[1] == 96.0 && quad.rect[0] >= 120.0)
+            .collect();
+        assert_eq!(time.len(), 4);
+        for (actual, expected) in time.into_iter().zip(expected) {
+            assert_eq!(actual.rect, expected.rect);
+            assert_eq!(actual.uv, expected.uv);
+        }
+    }
+
+    #[test]
+    fn source_hero_inscription_draws_after_the_full_black_fade() {
+        let atlas = Atlas::load().unwrap();
+        let mut quads = Vec::new();
+        ending_summary(&mut quads, &atlas, 8, 200000, 549000, 12, 3, true, 1.0);
+        let fade = quads
+            .iter()
+            .position(|quad| quad.rect == [0.0, 0.0, 320.0, 240.0])
+            .unwrap();
+        assert_eq!(quads[fade].color, [0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(quads[fade + 1].rect, [24.0, 116.0, 8.0, 8.0]);
+        assert_eq!(
+            quads.len() - fade - 1,
+            "YOU SHALL BE REMEMBERED AS A HERO.".len()
+        );
+    }
+
+    #[test]
+    fn source_credits_render_each_page_without_advancing_the_world() {
+        let atlas = Atlas::load().unwrap();
+        let mut quads = Vec::new();
+        ending_credits(&mut quads, &atlas, 1);
+        assert_eq!(quads.len(), 8);
+        assert_eq!(quads[0].rect, [16.0, 16.0, 16.0, 16.0]);
+        quads.clear();
+        ending_credits(&mut quads, &atlas, 5);
+        let final_row: Vec<_> = quads.iter().filter(|quad| quad.rect[1] == 104.0).collect();
+        assert_eq!(final_row.len(), 6);
+        assert_eq!(final_row[0].rect, [128.0, 104.0, 8.0, 8.0]);
+        let mut expected = Vec::new();
+        text(&mut expected, &atlas, "ZAPHOS", 128.0, 104.0, 1.0, WHITE);
+        for (actual, expected) in final_row.into_iter().zip(expected) {
+            assert_eq!(actual.uv, expected.uv);
+        }
+    }
+
+    #[test]
+    fn ending_rooms_use_original_backgrounds_and_authored_volcano() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world.name = "rEnd3".into();
+        let mut quads = Vec::new();
+        background(&mut quads, &game, Vec2::default(), false, &atlas);
+        assert_eq!(quads.len(), 1);
+        assert_eq!(quads[0].uv, atlas.sprite("bgClouds", 0.0).unwrap().uv);
+        game.world.name = "rEnd2".into();
+        quads.clear();
+        background(&mut quads, &game, Vec2::default(), false, &atlas);
+        assert!(quads.is_empty(), "the source oEnd2BG supplies this room");
+    }
 
     #[test]
     fn darkness_mask_covers_every_pixel_once_with_a_flat_union_and_exact_black_outside() {

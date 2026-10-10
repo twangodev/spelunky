@@ -715,6 +715,200 @@ fn body_horizontal_move_contact(world: &World, entity: &Entity, dx: i8) -> bool 
     )
 }
 
+/// Run one inherited item body without advancing other world instances.
+/// Used by scripted actors whose source Step explicitly calls oItem Step.
+pub(crate) fn tick_single_item_body(game: &mut Game, entity: &mut Entity) {
+    init_entity(entity);
+    if advance_item_body(game, entity) {
+        entity.alive = false;
+    }
+}
+
+fn advance_item_body(game: &mut Game, entity: &mut Entity) -> bool {
+    if !entity.alive || entity.held {
+        return false;
+    }
+    let fragile = matches!(entity.object.as_str(), "oJar" | "oSkull");
+    let dice = entity.object == "oDice";
+    let overrides_parent = fragile || dice;
+    if !fragile && !item_body_active(game, entity) {
+        return false;
+    }
+    let velocity = entity.vel;
+    let mut destroy = entity.value("broken") > 0.0;
+    // moveTo resolves the complete quantized horizontal displacement first.
+    let dx = displacement(velocity.x, game.engine_time());
+    let dy = displacement(velocity.y, game.engine_time());
+    let mut hit_x = false;
+    let mut hit_y = false;
+    let embedded = game
+        .world
+        .solid_at_except(entity.pos.x, entity.pos.y, entity.id);
+    if embedded && !overrides_parent {
+        let top = body_contact(&game.world, entity, 0, -1);
+        let bottom = body_contact(&game.world, entity, 0, 1);
+        let left = body_contact(&game.world, entity, -1, 0);
+        let right = body_contact(&game.world, entity, 1, 0);
+        if top && !bottom {
+            entity.pos.y += 1.0;
+        } else if left && !right {
+            entity.pos.x += 1.0;
+        } else if right && !left {
+            entity.pos.x -= 1.0;
+        } else {
+            entity.vel = Vec2::default();
+        }
+        // The source's embedded escape is the final `else` of oItem Step;
+        // ordinary movement, gravity, bounces and lava run only outside it.
+        return false;
+    } else {
+        for _ in 0..dx.unsigned_abs() {
+            if body_horizontal_move_contact(&game.world, entity, dx.signum() as i8) {
+                hit_x = true;
+                break;
+            }
+            entity.pos.x += f64::from(dx.signum());
+        }
+        for _ in 0..dy.unsigned_abs() {
+            if body_contact(&game.world, entity, 0, dy.signum() as i8) {
+                hit_y = true;
+                break;
+            }
+            entity.pos.y += f64::from(dy.signum());
+        }
+    }
+    if entity.object == "oJar" && embedded {
+        destroy = true;
+    }
+    let left = body_contact(&game.world, entity, -1, 0);
+    let right = body_contact(&game.world, entity, 1, 0);
+    let bottom = body_contact(&game.world, entity, 0, 1);
+    let top = body_contact(&game.world, entity, 0, -1);
+    if fragile {
+        for (name, value) in [
+            ("colLeft", left),
+            ("colRight", right),
+            ("colTop", top),
+            ("colBot", bottom),
+        ] {
+            entity.data.insert(name.into(), f64::from(value));
+        }
+    }
+    hit_x |= left || right;
+    if fragile {
+        // Jar and skull override oItem: gravity precedes collision response.
+        if entity.vel.y < 6.0 {
+            entity.vel.y += entity.value("gravity");
+        }
+    } else if dice {
+        if !bottom && entity.vel.y < 6.0 {
+            entity.vel.y += entity.value("gravity");
+        }
+    } else {
+        if !bottom {
+            entity.vel.y += entity.value("gravity");
+        }
+        entity.vel.y = entity.vel.y.min(8.0);
+    }
+    if fragile && top && entity.vel.y < 0.0 {
+        if entity.object == "oSkull" || entity.vel.y < -3.0 {
+            destroy = true;
+        }
+        entity.vel.y = -entity.vel.y * 0.8;
+    }
+    if hit_x {
+        if fragile && velocity.x.abs() > if entity.object == "oSkull" { 2.0 } else { 3.0 } {
+            destroy = true;
+        }
+        entity.vel.x = -velocity.x * 0.5;
+        if !overrides_parent {
+            entity.data.insert("gravity".into(), 0.6);
+        }
+    }
+    if bottom || (hit_y && velocity.y > 0.0) {
+        if fragile && entity.vel.y > 3.0 {
+            destroy = true;
+        }
+        entity.vel.y = if entity.vel.y > 1.0 {
+            -entity.vel.y * entity.value("bounceFactor")
+        } else {
+            0.0
+        };
+        entity.vel.x = if entity.vel.x.abs() < 0.1 {
+            0.0
+        } else {
+            entity.vel.x * entity.value("frictionFactor")
+        };
+        if !overrides_parent {
+            entity.data.insert("gravity".into(), 0.6);
+        }
+        if !fragile && entity.vel.y.abs() < 1.0 {
+            entity.pos.y -= 1.0;
+            if !body_contact(&game.world, entity, 0, 1) {
+                entity.pos.y += 1.0;
+            }
+            entity.vel.y = 0.0;
+        }
+    }
+    if left && !right {
+        entity.pos.x += 1.0;
+        if fragile {
+            entity.vel.y = 0.0;
+        }
+    } else if right {
+        entity.pos.x -= 1.0;
+        if fragile {
+            entity.vel.y = 0.0;
+        }
+    }
+    if !fragile && body_contact(&game.world, entity, 0, -1) {
+        if entity.vel.y < 0.0 {
+            entity.vel.y = -entity.vel.y * 0.8;
+        } else {
+            entity.pos.y += 1.0;
+        }
+        if !dice {
+            entity.data.insert("gravity".into(), 0.6);
+        }
+    }
+    if fragile && entity.vel.y.abs() < 1.0 {
+        let bounds = body_bounds(entity, entity.pos);
+        if solid_edge(
+            &game.world,
+            Rect::new(
+                bounds.x.round_ties_even(),
+                (bounds.y + bounds.h - 1.0).round_ties_even(),
+                bounds.w,
+                1.0,
+            ),
+            entity.id,
+        ) {
+            entity.pos.y -= 1.0;
+            entity.vel.y = 0.0;
+        }
+    }
+    if lava_at(
+        game,
+        Rect::new(entity.pos.x - 3.0, entity.pos.y - 3.0, 7.0, 7.0),
+    ) {
+        entity.data.insert("gravity".into(), 0.0);
+        entity.vel = Vec2::default();
+        entity.pos.y += 0.05;
+    } else if !overrides_parent {
+        // oItem restores normal gravity after the movement response. A
+        // mitt changes this tick's acceleration; it is not permanent.
+        entity.data.insert("gravity".into(), 0.6);
+    }
+    if lava_at(
+        game,
+        Rect::new(entity.pos.x, entity.pos.y - 5.0, 0.001, 0.001),
+    ) && entity.object != "oSceptre"
+    {
+        destroy = true;
+    }
+    destroy
+}
+
 fn tick_bodies(game: &mut Game) {
     tick_treasures(game);
     let mut broken = Vec::new();
@@ -723,186 +917,7 @@ fn tick_bodies(game: &mut Game) {
         if !entity.alive || entity.held || !ordinary_body(&entity.object) {
             continue;
         }
-        let fragile = matches!(entity.object.as_str(), "oJar" | "oSkull");
-        let dice = entity.object == "oDice";
-        let overrides_parent = fragile || dice;
-        if !fragile && !item_body_active(game, &entity) {
-            continue;
-        }
-        let velocity = entity.vel;
-        let mut destroy = entity.value("broken") > 0.0;
-        // moveTo resolves the complete quantized horizontal displacement first.
-        let dx = displacement(velocity.x, game.engine_time());
-        let dy = displacement(velocity.y, game.engine_time());
-        let mut hit_x = false;
-        let mut hit_y = false;
-        let embedded = game
-            .world
-            .solid_at_except(entity.pos.x, entity.pos.y, entity.id);
-        if embedded && !overrides_parent {
-            let top = body_contact(&game.world, &entity, 0, -1);
-            let bottom = body_contact(&game.world, &entity, 0, 1);
-            let left = body_contact(&game.world, &entity, -1, 0);
-            let right = body_contact(&game.world, &entity, 1, 0);
-            if top && !bottom {
-                entity.pos.y += 1.0;
-            } else if left && !right {
-                entity.pos.x += 1.0;
-            } else if right && !left {
-                entity.pos.x -= 1.0;
-            } else {
-                entity.vel = Vec2::default();
-            }
-            // The source's embedded escape is the final `else` of oItem Step;
-            // ordinary movement, gravity, bounces and lava run only outside it.
-            game.world.entities[index] = entity;
-            continue;
-        } else {
-            for _ in 0..dx.unsigned_abs() {
-                if body_horizontal_move_contact(&game.world, &entity, dx.signum() as i8) {
-                    hit_x = true;
-                    break;
-                }
-                entity.pos.x += f64::from(dx.signum());
-            }
-            for _ in 0..dy.unsigned_abs() {
-                if body_contact(&game.world, &entity, 0, dy.signum() as i8) {
-                    hit_y = true;
-                    break;
-                }
-                entity.pos.y += f64::from(dy.signum());
-            }
-        }
-        if entity.object == "oJar" && embedded {
-            destroy = true;
-        }
-        let left = body_contact(&game.world, &entity, -1, 0);
-        let right = body_contact(&game.world, &entity, 1, 0);
-        let bottom = body_contact(&game.world, &entity, 0, 1);
-        let top = body_contact(&game.world, &entity, 0, -1);
-        if fragile {
-            for (name, value) in [
-                ("colLeft", left),
-                ("colRight", right),
-                ("colTop", top),
-                ("colBot", bottom),
-            ] {
-                entity.data.insert(name.into(), f64::from(value));
-            }
-        }
-        hit_x |= left || right;
-        if fragile {
-            // Jar and skull override oItem: gravity precedes collision response.
-            if entity.vel.y < 6.0 {
-                entity.vel.y += entity.value("gravity");
-            }
-        } else if dice {
-            if !bottom && entity.vel.y < 6.0 {
-                entity.vel.y += entity.value("gravity");
-            }
-        } else {
-            if !bottom {
-                entity.vel.y += entity.value("gravity");
-            }
-            entity.vel.y = entity.vel.y.min(8.0);
-        }
-        if fragile && top && entity.vel.y < 0.0 {
-            if entity.object == "oSkull" || entity.vel.y < -3.0 {
-                destroy = true;
-            }
-            entity.vel.y = -entity.vel.y * 0.8;
-        }
-        if hit_x {
-            if fragile && velocity.x.abs() > if entity.object == "oSkull" { 2.0 } else { 3.0 } {
-                destroy = true;
-            }
-            entity.vel.x = -velocity.x * 0.5;
-            if !overrides_parent {
-                entity.data.insert("gravity".into(), 0.6);
-            }
-        }
-        if bottom || (hit_y && velocity.y > 0.0) {
-            if fragile && entity.vel.y > 3.0 {
-                destroy = true;
-            }
-            entity.vel.y = if entity.vel.y > 1.0 {
-                -entity.vel.y * entity.value("bounceFactor")
-            } else {
-                0.0
-            };
-            entity.vel.x = if entity.vel.x.abs() < 0.1 {
-                0.0
-            } else {
-                entity.vel.x * entity.value("frictionFactor")
-            };
-            if !overrides_parent {
-                entity.data.insert("gravity".into(), 0.6);
-            }
-            if !fragile && entity.vel.y.abs() < 1.0 {
-                entity.pos.y -= 1.0;
-                if !body_contact(&game.world, &entity, 0, 1) {
-                    entity.pos.y += 1.0;
-                }
-                entity.vel.y = 0.0;
-            }
-        }
-        if left && !right {
-            entity.pos.x += 1.0;
-            if fragile {
-                entity.vel.y = 0.0;
-            }
-        } else if right {
-            entity.pos.x -= 1.0;
-            if fragile {
-                entity.vel.y = 0.0;
-            }
-        }
-        if !fragile && body_contact(&game.world, &entity, 0, -1) {
-            if entity.vel.y < 0.0 {
-                entity.vel.y = -entity.vel.y * 0.8;
-            } else {
-                entity.pos.y += 1.0;
-            }
-            if !dice {
-                entity.data.insert("gravity".into(), 0.6);
-            }
-        }
-        if fragile && entity.vel.y.abs() < 1.0 {
-            let bounds = body_bounds(&entity, entity.pos);
-            if solid_edge(
-                &game.world,
-                Rect::new(
-                    bounds.x.round_ties_even(),
-                    (bounds.y + bounds.h - 1.0).round_ties_even(),
-                    bounds.w,
-                    1.0,
-                ),
-                entity.id,
-            ) {
-                entity.pos.y -= 1.0;
-                entity.vel.y = 0.0;
-            }
-        }
-        if lava_at(
-            game,
-            Rect::new(entity.pos.x - 3.0, entity.pos.y - 3.0, 7.0, 7.0),
-        ) {
-            entity.data.insert("gravity".into(), 0.0);
-            entity.vel = Vec2::default();
-            entity.pos.y += 0.05;
-        } else if !overrides_parent {
-            // oItem restores normal gravity after the movement response. A
-            // mitt changes this tick's acceleration; it is not permanent.
-            entity.data.insert("gravity".into(), 0.6);
-        }
-        if lava_at(
-            game,
-            Rect::new(entity.pos.x, entity.pos.y - 5.0, 0.001, 0.001),
-        ) && entity.object != "oSceptre"
-        {
-            destroy = true;
-        }
-        if destroy {
+        if advance_item_body(game, &mut entity) {
             broken.push(entity.id);
         }
         game.world.entities[index] = entity;

@@ -425,6 +425,15 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     if !active {
         return;
     }
+    // Ankh revival can reactivate a player during the existing exit animation.
+    // oPlayer1 Step 331-337 still excludes that sprite from characterStepEvent;
+    // its Animation End retains ownership of the pending room transition.
+    if p.is_exiting() {
+        if p.state != PlayerState::Ducking && value(p, "duck_to_hang", 0.0) == 0.0 {
+            p.state = PlayerState::Standing;
+        }
+        return;
+    }
     // Classic keeps its platform state STANDING while the separate `stunned`
     // flag owns movement (oPlayer1 Step 331-337). Our explicit Stunned state
     // must leave that controller when its timer expires; otherwise it is
@@ -1327,6 +1336,93 @@ fn character_sprite<'a>(p: &Player, name: &'a str) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn real_ankh_pickup_then_exit_lava_revives_without_interrupting_exit_animation() {
+        use crate::characters::{self, Character};
+        use crate::ending::EndingStage;
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
+                let mut level = crate::level::Level::default();
+                level.set_tile(6, 7, '@').unwrap();
+                level.set_tile(7, 7, 'X').unwrap();
+                for x in 0..40 {
+                    level.set_tile(x, 8, '1').unwrap();
+                }
+                let mut game = Game::shell(11, rules);
+                game.load_custom(&level, "exit-ankh", "");
+                characters::apply(&mut game, character);
+                for _ in 0..8 {
+                    game.step(&InputFrame::default());
+                }
+                let entrance = game.player.pos;
+                let ankh = game.world.spawn(
+                    "oAnkh",
+                    Vec2::new(game.player.pos.x, game.player.pos.y + 4.),
+                );
+                crate::items::init_entity(game.world.entity_mut(ankh).unwrap());
+                let item = game.world.entity_mut(ankh).unwrap();
+                item.data.insert("cost".into(), 0.);
+                item.data.insert("forSale".into(), 0.);
+                game.step(&InputFrame {
+                    down: true,
+                    attack: true,
+                    attack_pressed: true,
+                    ..Default::default()
+                });
+                assert!(game.player.has("Ankh"));
+                for _ in 0..30 {
+                    game.step(&InputFrame {
+                        right: true,
+                        up: true,
+                        ..Default::default()
+                    });
+                    if game.player.is_exiting() {
+                        break;
+                    }
+                }
+                assert!(game.player.is_exiting());
+                assert_eq!(game.state, RunState::Ending);
+                let sprite = game.player.sprite.clone();
+                let animation = game.player.animation;
+                // Controlled arriving lava exercises the real hazard producer.
+                // Pickup and door entry use inputs, without player field writes.
+                let pos = game.player.pos;
+                let lava = game.world.spawn("oLava", Vec2::new(pos.x - 8., pos.y - 8.));
+                game.step(&InputFrame::default());
+                assert!(game.events.contains(&GameEvent::Damage { amount: 99 }));
+                assert_eq!(game.player.health, 4, "{rules:?}/{character:?}");
+                assert!(!game.player.has("Ankh"));
+                assert_eq!(value(&game.player, "active", 0.), 1.);
+                assert_eq!(game.player.pos, entrance);
+                assert_eq!(game.player.vel, Vec2::default());
+                assert_eq!(game.player.sprite, sprite);
+                assert_eq!(game.player.animation, animation + 0.5);
+                assert_eq!(game.state, RunState::Ending);
+                let age = game.world.entity(lava).unwrap().age;
+                game.step(&InputFrame {
+                    right: true,
+                    jump: true,
+                    jump_pressed: true,
+                    ..Default::default()
+                });
+                assert_eq!(game.player.pos, entrance);
+                assert_eq!(game.player.vel, Vec2::default());
+                assert_eq!(game.player.state, PlayerState::Standing);
+                assert_eq!(game.player.sprite, sprite);
+                assert_eq!(game.player.animation, animation + 1.);
+                assert!(game.world.entity(lava).unwrap().age > age);
+                for _ in 0..32 {
+                    if game.ending.as_ref().unwrap().stage != EndingStage::Exit {
+                        break;
+                    }
+                    game.step(&InputFrame::default());
+                }
+                assert_eq!(game.ending.as_ref().unwrap().stage, EndingStage::Transition);
+                assert_eq!(game.player.health, 4);
+            }
+        }
+    }
     #[test]
     fn natural_cape_open_then_jetpack_pickup_stops_cape_drag_on_following_tick() {
         for rules in [RulesPreset::Classic, RulesPreset::Assisted] {

@@ -3,6 +3,7 @@ pub mod activation;
 pub mod catalog;
 pub mod economy;
 pub mod editor;
+pub mod ending;
 pub mod enemies;
 mod game;
 pub mod generation;
