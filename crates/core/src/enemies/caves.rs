@@ -279,7 +279,11 @@ fn floor_ahead(world: &World, e: &Entity, direction: i8) -> bool {
 }
 
 fn random_facing(game: &mut Game) -> i8 {
-    if game.rng.range(2) == 0 { -1 } else { 1 }
+    if game.rng.range(2) == 0 {
+        -1
+    } else {
+        1
+    }
 }
 
 fn snake(game: &mut Game, e: &mut Entity) {
@@ -531,15 +535,12 @@ fn spider(game: &mut Game, e: &mut Entity, giant: bool) {
                 let id = game
                     .world
                     .spawn("oWebBall", Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
-                let velocity = Vec2::new(
-                    f64::from(1 + game.rng.range(3)) * f64::from(random_facing(game)),
-                    -(game.rng.unit() * 3.0 + 1.0),
-                );
-                let life = 20 + game.rng.range(81);
-                if let Some(web) = game.world.entity_mut(id) {
-                    web.vel = velocity;
-                    web.timer = life;
-                    web.data.insert("life".into(), f64::from(life));
+                if let Some(mut web) = game.world.entity(id).cloned() {
+                    // Source instance_create finishes WebBall Create before
+                    // the following squirtTimer draw in GiantSpider Step.
+                    crate::items::weapons::initialize_web_ball(game, &mut web);
+                    web.timer = web.value("life") as u32;
+                    *game.world.entity_mut(id).unwrap() = web;
                 }
                 squirt = f64::from(100 + game.rng.range(901));
             }
@@ -838,6 +839,54 @@ mod tests {
     }
 
     #[test]
+    fn actual_step_giant_spider_runs_web_create_before_squirt_timer_rng() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.player.pos = Vec2::new(200.0, 152.0);
+        game.world.set_tile(4, 6, "oBlock");
+        game.world.set_tile(5, 6, "oBlock");
+        let id = game.world.spawn("oGiantSpider", Vec2::new(64.0, 64.0));
+        let spider = game.world.entity_mut(id).unwrap();
+        spider.state = 5;
+        spider.animation = 5.0;
+        spider.data.insert("squirt_timer".into(), 0.0);
+        let mut expected = game.rng.clone();
+        let vy = -(expected.unit() * 3.0 + 1.0);
+        let mut vx = f64::from(1 + expected.range(3));
+        if expected.chance(1, 2) {
+            vx *= -1.0;
+        }
+        let life = f64::from(20 + expected.range(81));
+        let squirt = f64::from(100 + expected.range(901));
+
+        game.step(&crate::InputFrame::default());
+
+        let web = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oWebBall")
+            .unwrap();
+        assert_eq!(web.vel, Vec2::new(vx, vy));
+        assert_eq!(web.value("life"), life);
+        assert_eq!(web.value("web_create_initialized"), 1.0);
+        assert_eq!(game.world.entity(id).unwrap().value("squirt_timer"), squirt);
+        assert_eq!(game.rng.clone().unit(), expected.clone().unit());
+
+        game.step(&crate::InputFrame::default());
+
+        assert_eq!(game.rng.clone().unit(), expected.unit());
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .find(|e| e.object == "oWebBall")
+                .unwrap()
+                .value("life"),
+            life - 1.0
+        );
+    }
+
+    #[test]
     fn hanging_spider_drops_on_player_alignment_and_lost_ceiling() {
         let mut game = Game::shell(1, RulesPreset::Classic);
         game.world.set_tile(4, 3, "oBlock");
@@ -866,12 +915,11 @@ mod tests {
         game.player.pos = Vec2::new(200.0, 200.0);
         tick(&mut game, &mut unsupported);
         assert!(!unsupported.alive);
-        assert!(
-            game.world
-                .entities
-                .iter()
-                .any(|e| e.object == "oSpider" && e.pos == Vec2::new(96.0, 64.0))
-        );
+        assert!(game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.object == "oSpider" && e.pos == Vec2::new(96.0, 64.0)));
     }
 
     #[test]
@@ -963,12 +1011,11 @@ mod tests {
         let id = game.world.spawn("oSpiderHang", Vec2::new(64.0, 64.0));
         super::super::tick(&mut game);
         assert!(game.world.entity(id).is_none());
-        assert!(
-            game.world
-                .entities
-                .iter()
-                .any(|e| e.alive && e.object == "oSpider")
-        );
+        assert!(game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.alive && e.object == "oSpider"));
     }
 
     #[test]

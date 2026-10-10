@@ -175,12 +175,34 @@ fn die(game: &mut Game, e: &mut Entity) {
         }
     }
     if e.object == "oJaws" {
+        let blood = Vec2::new(
+            e.pos.x + 22.0 + f64::from(game.rng.range(5)),
+            e.pos.y + 14.0 + f64::from(game.rng.range(5)),
+        );
+        if e.value("bloodless") == 0.0 {
+            for _ in 0..4 {
+                if game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|other| other.alive && crate::catalog::is_a(&other.object, "oDetritus"))
+                    .count()
+                    < 16
+                {
+                    crate::world_events::spawn_detritus(game, "oBlood", blood);
+                }
+            }
+        }
+        // Original Step executes all four Bone Create events before drawing
+        // any crate launch velocity. Their random draws are synchronous.
         for _ in 0..4 {
             let bone = Vec2::new(
                 e.pos.x + 22.0 + game.rng.range(5) as f64,
                 e.pos.y + 14.0 + game.rng.range(7) as f64,
             );
-            game.world.spawn("oBone", bone);
+            crate::world_events::spawn_detritus(game, "oBone", bone);
+        }
+        for _ in 0..4 {
             let id = game
                 .world
                 .spawn("oCrate", Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
@@ -1559,5 +1581,77 @@ mod tests {
         assert_eq!(jaws.state, 2);
         assert_eq!(jaws.timer, 40);
         assert_eq!(jaws.pos, Vec2::new(512.0, 128.0));
+    }
+    #[test]
+    fn game_step_jaws_death_runs_blood_then_bone_creates_before_crate_launch_rng() {
+        let mut game = Game::shell(17, RulesPreset::Classic);
+        game.world = World::new(20, 20, Area::Jungle, 5);
+        game.player.pos = Vec2::new(200.0, 200.0);
+        let jaws = game.world.spawn("oJaws", Vec2::new(48.0, 48.0));
+        game.world.entity_mut(jaws).unwrap().health = 0;
+        let mut rng = game.rng.clone();
+        let blood_pos = Vec2::new(
+            70.0 + f64::from(rng.range(5)),
+            62.0 + f64::from(rng.range(5)),
+        );
+        // scrCreateBlood receives one shared coordinate pair. Each immediate
+        // oBlood Create consumes its three random() and one rand() draw.
+        for _ in 0..4 {
+            rng.unit();
+            rng.unit();
+            rng.unit();
+            rng.range(6);
+        }
+        let mut bones = Vec::new();
+        for _ in 0..4 {
+            let pos = Vec2::new(
+                70.0 + f64::from(rng.range(5)),
+                62.0 + f64::from(rng.range(7)),
+            );
+            let velocity = Vec2::new(rng.unit() * 4.0 - rng.unit() * 4.0, -1.0 - rng.unit() * 2.0);
+            let gravity = f64::from(1 + rng.range(6)) * 0.1;
+            bones.push((pos, velocity, gravity));
+        }
+        let crates: Vec<_> = (0..4)
+            .map(|_| {
+                Vec2::new(
+                    f64::from(rng.range(4)) - f64::from(rng.range(4)),
+                    -f64::from(1 + rng.range(2)),
+                )
+            })
+            .collect();
+        game.step(&crate::InputFrame::default());
+        assert!(game.world.entity(jaws).is_none());
+        let effects: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|e| matches!(e.object.as_str(), "oBlood" | "oBone" | "oCrate"))
+            .collect();
+        assert_eq!(
+            effects
+                .iter()
+                .map(|e| e.object.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "oBlood", "oBlood", "oBlood", "oBlood", "oBone", "oBone", "oBone", "oBone",
+                "oCrate", "oCrate", "oCrate", "oCrate",
+            ]
+        );
+        for blood in &effects[..4] {
+            assert_eq!(blood.previous_pos, blood_pos);
+            assert_eq!(blood.value("world_effect_initialized"), 1.0);
+        }
+        for (bone, (pos, velocity, gravity)) in effects[4..8].iter().zip(bones) {
+            assert_eq!(bone.previous_pos, pos);
+            assert_eq!(bone.vel, Vec2::new(velocity.x, velocity.y + gravity));
+            assert_eq!(bone.value("gravity"), gravity);
+            assert_eq!(bone.value("life"), 59.0);
+        }
+        for (item, velocity) in effects[8..].iter().zip(crates) {
+            assert_eq!(item.pos, Vec2::new(64.0, 64.0));
+            assert_eq!(item.vel, velocity);
+        }
+        assert_eq!(game.rng.next_u64(), rng.next_u64());
     }
 }

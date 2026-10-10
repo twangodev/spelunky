@@ -144,7 +144,7 @@ fn debris(game: &mut Game, e: &mut Entity) {
     e.data.insert("undead_debris".into(), 1.0);
     let p = Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0);
     for _ in 0..3 {
-        game.world.spawn("oBone", p);
+        crate::world_events::spawn_detritus(game, "oBone", p);
     }
     let id = game.world.spawn("oSkull", p);
     let y_velocity = -f64::from(1 + game.rng.range(3));
@@ -676,6 +676,85 @@ mod tests {
                 .count(),
             1
         );
+    }
+    #[test]
+    fn death_bone_creates_precede_skull_launch_draws_in_actual_steps() {
+        // oSkeleton/oVampire Step creates three oBones before assigning
+        // Skull yVel/xVel. Each Bone Create consumes random(4), random(4),
+        // random(2), then rand(1,6), synchronously inside instance_create.
+        for object in ["oSkeleton", "oVampire"] {
+            let mut game = Game::shell(42, RulesPreset::Classic);
+            game.player.pos = Vec2::new(200.0, 160.0);
+            let id = game.world.spawn(object, Vec2::new(80.0, 80.0));
+            let enemy = game.world.entity_mut(id).unwrap();
+            enemy.health = 0;
+            enemy.state = 99;
+            enemy.vel = Vec2::default();
+
+            let mut source_rng = game.rng.clone();
+            let bone_launches: Vec<_> = (0..3)
+                .map(|_| {
+                    let velocity = Vec2::new(
+                        source_rng.unit() * 4.0 - source_rng.unit() * 4.0,
+                        -1.0 - source_rng.unit() * 2.0,
+                    );
+                    let gravity = f64::from(1 + source_rng.range(6)) * 0.1;
+                    (velocity, gravity)
+                })
+                .collect();
+            let skull_y = -f64::from(1 + source_rng.range(3));
+            let skull_velocity = Vec2::new(
+                f64::from(source_rng.range(4)) - f64::from(source_rng.range(4)),
+                skull_y,
+            );
+
+            game.step(&crate::InputFrame::default());
+
+            assert!(game.world.entity(id).is_none(), "{object}");
+            let bones: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oBone")
+                .collect();
+            assert_eq!(bones.len(), 3, "{object}");
+            for (bone, (velocity, gravity)) in bones.iter().zip(&bone_launches) {
+                assert_eq!(bone.value("world_effect_initialized"), 1.0);
+                assert_eq!(bone.value("life"), 59.0);
+                assert_eq!(bone.value("gravity"), *gravity);
+                assert_eq!(bone.vel, Vec2::new(velocity.x, velocity.y + gravity));
+            }
+            let skull = game
+                .world
+                .entities
+                .iter()
+                .find(|e| e.alive && e.object == "oSkull")
+                .unwrap();
+            assert_eq!(skull.vel, skull_velocity, "{object}");
+            assert_eq!(game.rng.clone().next_u64(), source_rng.clone().next_u64());
+
+            game.step(&crate::InputFrame::default());
+
+            // Already initialized bones only run Step on the next frame;
+            // neither their Create RNG nor the death producer runs again.
+            assert_eq!(game.rng.clone().next_u64(), source_rng.next_u64());
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oBone")
+                    .count(),
+                3,
+                "{object}"
+            );
+            assert!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oBone")
+                    .all(|e| e.value("life") == 58.0)
+            );
+        }
     }
     #[test]
     fn vampire_absorbs_external_blood_without_health_cap() {

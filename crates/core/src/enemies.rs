@@ -601,12 +601,15 @@ fn combat(game: &mut Game, e: &mut Entity) {
         } else {
             event_bounds(projectile)
         };
-        // Monkey inherits the actual oEnemy Whip collision events, which use
-        // both sprite masks. Thrown-item collision_rectangle calls above
-        // explicitly request bounding boxes and retain that separate contract.
-        let overlaps = if e.object == "oMonkey"
-            && matches!(projectile.object.as_str(), "oWhip" | "oWhipPre")
-        {
+        // These objects have actual Collision events against the oEnemy
+        // family and Damsel (inherited or overridden). Their pair-mask contract
+        // is separate from explicit imprecise thrown-item rectangle queries.
+        let event_pair = (is_enemy(&e.object) || e.object == "oDamsel")
+            && matches!(
+                projectile.object.as_str(),
+                "oWhip" | "oWhipPre" | "oBullet" | "oPsychicWaveP"
+            );
+        let overlaps = if event_pair {
             projectile.event_intersects(e)
         } else {
             body.intersects(impact)
@@ -1320,6 +1323,54 @@ mod tests {
             assert!(target.sprite_bounds().intersects(weapon.sprite_bounds()));
             assert_eq!(weapon.event_intersects(target), expected_health == 0);
             assert_eq!(target.health, expected_health);
+        }
+    }
+
+    #[test]
+    fn actual_step_frog_inherited_whip_event_uses_the_precise_weapon_mask() {
+        for (player_y, expected_health) in [(79.0, 1), (81.0, 0)] {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            game.world = World::new(30, 20, Area::Jungle, 5);
+            game.player.pos = Vec2::new(61.0, player_y);
+            game.player.previous_pos = game.player.pos;
+            game.player.facing = 1;
+            game.player.attack_timer = 10;
+            game.player.data.insert("whip_elapsed".into(), 0.0);
+            let frog = game.world.spawn("oFrog", Vec2::new(80.0, 80.0));
+            let whip = game.world.spawn("oWhip", Vec2::new(77.0, player_y + 1.0));
+            let weapon = game.world.entity_mut(whip).unwrap();
+            weapon.sprite = "sWhipRight".into();
+            weapon.facing = 1;
+            weapon.timer = 7;
+            weapon.data.insert("damage".into(), 1.0);
+
+            game.step(&InputFrame::default());
+
+            let target = game.world.entity(frog).unwrap();
+            let weapon = game.world.entity(whip).unwrap();
+            assert!(target.sprite_bounds().intersects(weapon.sprite_bounds()));
+            assert_eq!(weapon.event_intersects(target), expected_health == 0);
+            assert_eq!(target.health, expected_health);
+        }
+    }
+
+    #[test]
+    fn actual_step_bullet_enemy_event_uses_shared_opaque_pixels() {
+        for (bullet_y, expected_health) in [(77.0, 1), (78.0, -3)] {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            game.world = World::new(30, 20, Area::Jungle, 5);
+            game.player.pos = Vec2::new(220.0, 152.0);
+            let frog = game.world.spawn("oFrog", Vec2::new(80.0, 80.0));
+            let bullet = game.world.spawn("oBullet", Vec2::new(80.0, bullet_y));
+            let mask = game.world.entity(bullet).unwrap().clone();
+
+            game.step(&InputFrame::default());
+
+            let target = game.world.entity(frog).unwrap();
+            assert!(mask.sprite_bounds().intersects(target.sprite_bounds()));
+            assert_eq!(mask.event_intersects(target), expected_health < 0);
+            assert_eq!(target.health, expected_health);
+            assert_eq!(game.world.entity(bullet).is_some(), expected_health == 1);
         }
     }
 }

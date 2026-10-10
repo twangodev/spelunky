@@ -137,11 +137,7 @@ fn countdown(e: &mut Entity, key: &str) {
     }
 }
 fn side(e: &Entity) -> &'static str {
-    if e.facing < 0 {
-        "L"
-    } else {
-        "R"
-    }
+    if e.facing < 0 { "L" } else { "R" }
 }
 fn spawn(game: &mut Game, object: &str, pos: Vec2) -> u64 {
     let id = game.world.spawn(object, pos);
@@ -151,6 +147,8 @@ fn spawn(game: &mut Game, object: &str, pos: Vec2) -> u64 {
             // Source instance_create finishes Create before the caller writes
             // the directional velocities used by Olmec's intro alarms.
             initialize_debris(&mut game.rng, e);
+        } else if object == "oYellowBall" {
+            initialize_yellow_ball(&mut game.rng, e);
         }
     }
     id
@@ -853,6 +851,14 @@ fn olmec(game: &mut Game, e: &mut Entity) {
             }
         }
         7 => {
+            let target = Vec2::new(e.pos.x + 32.0, e.pos.y + 16.0);
+            for _ in 0..6 {
+                let pos = Vec2::new(
+                    e.pos.x + 32.0 + f64::from(game.rng.range(33)) - f64::from(game.rng.range(33)),
+                    e.pos.y + 14.0 + f64::from(game.rng.range(33)) - f64::from(game.rng.range(33)),
+                );
+                crate::world_events::spawn_psychic_create_2(game, pos, target);
+            }
             for _ in 0..3 {
                 spawn(
                     game,
@@ -942,6 +948,19 @@ fn debris(game: &mut Game, e: &mut Entity) {
     }
     e.animation += 0.3;
 }
+fn initialize_yellow_ball(rng: &mut crate::Rng, e: &mut Entity) {
+    if e.value("launch") != 0.0 {
+        // Source Create consumes yVel, xVel, then the sign draw, immediately
+        // after its caller's preceding emissions have been created.
+        let vy = -4.0 - rng.unit() * 3.0;
+        let mut vx = f64::from(2 + rng.range(4));
+        if rng.chance(1, 2) {
+            vx = -vx;
+        }
+        e.vel = Vec2::new(vx, vy);
+        e.data.insert("launch".into(), 0.0);
+    }
+}
 fn yellow_ball(game: &mut Game, e: &mut Entity) {
     let alarm = e.value("trail_alarm") - 1.0;
     if alarm <= 0.0 {
@@ -959,14 +978,7 @@ fn yellow_ball(game: &mut Game, e: &mut Entity) {
     } else {
         e.data.insert("trail_alarm".into(), alarm);
     }
-    if e.value("launch") != 0.0 {
-        let direction = if game.rng.chance(1, 2) { -1.0 } else { 1.0 };
-        e.vel = Vec2::new(
-            (2 + game.rng.range(4)) as f64 * direction,
-            -4.0 - game.rng.unit() * 3.0,
-        );
-        e.data.insert("launch".into(), 0.0);
-    }
+    initialize_yellow_ball(&mut game.rng, e);
     let old = e.pos;
     e.pos.x += e.vel.x;
     e.pos.y += e.vel.y;
@@ -1233,11 +1245,13 @@ mod tests {
                 }
                 189 => {
                     assert_eq!(boss.sprite, "sOlmecStart2");
-                    assert!(!game
-                        .world
-                        .entities
-                        .iter()
-                        .any(|e| e.alive && e.object == "oHawkmanWorship"));
+                    assert!(
+                        !game
+                            .world
+                            .entities
+                            .iter()
+                            .any(|e| e.alive && e.object == "oHawkmanWorship")
+                    );
                     let cavemen: Vec<_> = game
                         .world
                         .entities
@@ -1245,9 +1259,11 @@ mod tests {
                         .filter(|e| e.alive && e.object == "oCavemanWorship")
                         .collect();
                     assert_eq!(cavemen.len(), 3);
-                    assert!(cavemen
-                        .iter()
-                        .all(|e| e.animation == 0.0 && e.value("animation_speed") == 0.0));
+                    assert!(
+                        cavemen
+                            .iter()
+                            .all(|e| e.animation == 0.0 && e.value("animation_speed") == 0.0)
+                    );
                 }
                 239 => assert_eq!(boss.sprite, "sOlmecStart3"),
                 289 => assert_eq!(boss.sprite, "sOlmec"),
@@ -1276,11 +1292,13 @@ mod tests {
                 scheduled_at = Some(tick);
             }
             if tick == 359 {
-                assert!(!game
-                    .world
-                    .entities
-                    .iter()
-                    .any(|e| e.alive && e.object == "oCavemanWorship"));
+                assert!(
+                    !game
+                        .world
+                        .entities
+                        .iter()
+                        .any(|e| e.alive && e.object == "oCavemanWorship")
+                );
                 assert_eq!(
                     game.world
                         .entities
@@ -1356,6 +1374,100 @@ mod tests {
             });
         }
         assert!(game.player.pos.x > before.x);
+    }
+    #[test]
+    fn actual_step_olmec_create_emits_source_positions_headings_and_rng_order() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.world = World::new(40, 30, Area::Mines, 1);
+        game.flags.insert("custom".into());
+        game.player.pos = Vec2::new(48.0, 152.0);
+        for x in 0..40 {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        let origin = Vec2::new(160.0, 96.0);
+        let target = Vec2::new(origin.x + 32.0, origin.y + 16.0);
+        let boss_id = spawn(&mut game, "oOlmec", origin);
+        game.world.entity_mut(boss_id).unwrap().state = 7;
+        let mut expected_rng = game.rng.clone();
+        let positions: Vec<_> = (0..6)
+            .map(|_| {
+                Vec2::new(
+                    origin.x + 32.0 + f64::from(expected_rng.range(33))
+                        - f64::from(expected_rng.range(33)),
+                    origin.y + 14.0 + f64::from(expected_rng.range(33))
+                        - f64::from(expected_rng.range(33)),
+                )
+            })
+            .collect();
+        let launches: Vec<_> = (0..3)
+            .map(|_| {
+                let vy = -4.0 - expected_rng.unit() * 3.0;
+                let mut vx = f64::from(2 + expected_rng.range(4));
+                if expected_rng.chance(1, 2) {
+                    vx = -vx;
+                }
+                Vec2::new(vx, vy)
+            })
+            .collect();
+        game.step(&crate::InputFrame::default());
+        let effects: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.object == "oPsychicCreate2")
+            .collect();
+        let balls: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.object == "oYellowBall")
+            .collect();
+        assert_eq!(effects.len(), 6);
+        assert_eq!(balls.len(), 3);
+        for (effect, pos) in effects.iter().zip(positions) {
+            assert_eq!(effect.previous_pos, pos, "source Create origin");
+            let angle = (target.y - pos.y).atan2(target.x - pos.x);
+            let velocity = Vec2::new(2.0 * angle.cos(), 2.0 * angle.sin());
+            assert_eq!(
+                effect.vel, velocity,
+                "heading must be fixed while the boss is detached"
+            );
+            assert_eq!(
+                effect.pos,
+                Vec2::new(pos.x + velocity.x, pos.y + velocity.y)
+            );
+            assert_eq!(effect.value("psychic_initialized"), 1.0);
+            assert!(effect.id < balls[0].id, "all six effects precede the balls");
+        }
+        let ball_ids: Vec<_> = balls.iter().map(|e| e.id).collect();
+        for (ball, velocity) in balls.iter().zip(&launches) {
+            assert_eq!(ball.pos, target);
+            assert_eq!(
+                ball.vel, *velocity,
+                "YellowBall Create must consume its own three draws eagerly"
+            );
+            assert_eq!(ball.value("launch"), 0.0);
+        }
+        assert_eq!(game.world.entity(boss_id).unwrap().state, 0);
+        assert_eq!(
+            game.rng.clone().next_u64(),
+            expected_rng.clone().next_u64(),
+            "six four-draw positions must precede three three-draw launches"
+        );
+        game.step(&crate::InputFrame::default());
+        for (id, launch) in ball_ids.into_iter().zip(launches) {
+            let ball = game.world.entity(id).unwrap();
+            assert_eq!(
+                ball.pos,
+                Vec2::new(target.x + launch.x, target.y + launch.y)
+            );
+            assert_eq!(ball.vel, Vec2::new(launch.x, launch.y + 0.15));
+        }
+        assert_eq!(
+            game.rng.clone().next_u64(),
+            expected_rng.next_u64(),
+            "first YellowBall Step must not rerun Create draws"
+        );
     }
     #[test]
     fn actual_step_olmec_intro_debris_preserves_alarm_launches_inside_boss() {
@@ -1434,7 +1546,7 @@ mod tests {
     #[test]
     fn actual_step_yellow_ball_outside_room_uses_full_sprite_at_top_and_side() {
         for above in [true, false] {
-            let mut game = Game::shell(42, RulesPreset::Classic);
+            let mut game = Game::shell(if above { 42 } else { 2 }, RulesPreset::Classic);
             game.world = World::new(40, 30, Area::Mines, 1);
             game.flags.insert("custom".into());
             for x in 0..40 {

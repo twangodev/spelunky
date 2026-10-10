@@ -98,7 +98,23 @@ pub(super) fn tick_independent_events(game: &mut Game, e: &mut Entity) {
     if !e.alive {
         return;
     }
-    if e.object == "oBarrierEmitter" {
+    if e.object == "oScarab" {
+        if game.player.sprite_bounds().intersects(e.sprite_bounds()) {
+            let value = match game.world.area {
+                Area::Mines => 4000,
+                Area::Jungle => 8000,
+                _ => 12000,
+            };
+            game.player.money += value;
+            game.events.push(GameEvent::Collected {
+                object: "oScarab".into(),
+                value,
+            });
+            game.sound("sndCoin", e.pos);
+            e.alive = false;
+            destroyed(game, e);
+        }
+    } else if e.object == "oBarrierEmitter" {
         if game.world.entities.iter().any(|item| {
             item.alive
                 && item.sprite_bounds().intersects(e.sprite_bounds())
@@ -242,9 +258,15 @@ fn ghost(game: &mut Game, e: &mut Entity) {
             .and_then(|id| game.world.entity_mut(id))
             .map(|held| held.held = false);
         for _ in 0..3 {
-            game.world.spawn("oBone", game.player.pos);
+            crate::world_events::spawn_detritus(game, "oBone", game.player.pos);
         }
-        game.world.spawn("oSkull", game.player.pos);
+        let skull = game.world.spawn(
+            "oSkull",
+            Vec2::new(game.player.pos.x, game.player.pos.y - 2.0),
+        );
+        let vy = -f64::from(1 + game.rng.range(3));
+        let vx = f64::from(game.rng.range(4)) - f64::from(game.rng.range(4));
+        game.world.entity_mut(skull).unwrap().vel = Vec2::new(vx, vy);
         game.sound("sndDie", game.player.pos);
         game.sound("sndGhost", e.pos);
         e.state = 0;
@@ -752,21 +774,6 @@ fn scarab(game: &mut Game, e: &mut Entity) {
             e.timer = 10 + game.rng.range(21);
         }
     }
-    if game.player.sprite_bounds().intersects(e.sprite_bounds()) {
-        let value = match game.world.area {
-            Area::Mines => 4000,
-            Area::Jungle => 8000,
-            _ => 12000,
-        };
-        game.player.money += value;
-        game.events.push(GameEvent::Collected {
-            object: "oScarab".into(),
-            value,
-        });
-        game.sound("sndCoin", e.pos);
-        e.alive = false;
-        destroyed(game, e);
-    }
 }
 
 fn water(game: &Game, pos: Vec2) -> bool {
@@ -783,8 +790,11 @@ fn water(game: &Game, pos: Vec2) -> bool {
 fn dead_fish(game: &mut Game, e: &mut Entity) {
     if e.health <= 0 {
         for _ in 0..3 {
-            game.world
-                .spawn("oBone", Vec2::new(e.pos.x + 4.0, e.pos.y + 4.0));
+            crate::world_events::spawn_detritus(
+                game,
+                "oBone",
+                Vec2::new(e.pos.x + 4.0, e.pos.y + 4.0),
+            );
         }
         e.alive = false;
         return;
@@ -923,6 +933,77 @@ mod tests {
         g.step(&InputFrame::default());
         assert_eq!(g.state, RunState::Dead);
     }
+    fn source_bone_create(rng: &mut Rng) -> (Vec2, f64) {
+        // oBone/Create.xml: xVel=random(4)-random(4),
+        // yVel=-1-random(2), grav=rand(1,6)*.1.
+        let velocity = Vec2::new(rng.unit() * 4.0 - rng.unit() * 4.0, -1.0 - rng.unit() * 2.0);
+        (velocity, f64::from(1 + rng.range(6)) * 0.1)
+    }
+    #[test]
+    fn actual_step_ghost_bone_creates_precede_skull_launch_draws() {
+        let mut g = actual_room();
+        for x in 0..30 {
+            g.world.set_tile(x, 9, "oBlock");
+        }
+        g.player.pos = Vec2::new(104.0, 136.0);
+        g.world.spawn("oGhost", Vec2::new(96.0, 120.0));
+        let mut source_rng = g.rng.clone();
+        let bones = (0..3)
+            .map(|_| source_bone_create(&mut source_rng))
+            .collect::<Vec<_>>();
+        let skull_vy = -f64::from(1 + source_rng.range(3));
+        let skull_vx = f64::from(source_rng.range(4)) - f64::from(source_rng.range(4));
+        g.step(&InputFrame::default());
+        assert_eq!(g.state, RunState::Dead);
+        let actual_bones = g
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.object == "oBone")
+            .collect::<Vec<_>>();
+        assert_eq!(actual_bones.len(), 3);
+        for (bone, (velocity, gravity)) in actual_bones.into_iter().zip(bones) {
+            assert_eq!(bone.value("world_effect_initialized"), 1.0);
+            assert_eq!(bone.vel.x, velocity.x);
+            assert!((bone.vel.y - (velocity.y + gravity)).abs() < 1e-9);
+            assert_eq!(bone.value("gravity"), gravity);
+        }
+        let skull = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oSkull")
+            .unwrap();
+        assert_eq!(skull.pos, Vec2::new(104.0, 134.0));
+        assert_eq!(skull.vel, Vec2::new(skull_vx, skull_vy));
+        assert_eq!(g.rng.next_u64(), source_rng.next_u64());
+    }
+    #[test]
+    fn actual_step_dead_fish_bone_create_matches_source_rng_order() {
+        let mut g = actual_room();
+        let id = g.world.spawn("oDeadFish", Vec2::new(96.0, 96.0));
+        g.world.entity_mut(id).unwrap().health = 0;
+        let mut source_rng = g.rng.clone();
+        let bones = (0..3)
+            .map(|_| source_bone_create(&mut source_rng))
+            .collect::<Vec<_>>();
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(id).is_none());
+        let actual_bones = g
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.object == "oBone")
+            .collect::<Vec<_>>();
+        assert_eq!(actual_bones.len(), 3);
+        for (bone, (velocity, gravity)) in actual_bones.into_iter().zip(bones) {
+            assert_eq!(bone.value("world_effect_initialized"), 1.0);
+            assert_eq!(bone.vel.x, velocity.x);
+            assert!((bone.vel.y - (velocity.y + gravity)).abs() < 1e-9);
+            assert_eq!(bone.value("gravity"), gravity);
+        }
+        assert_eq!(g.rng.next_u64(), source_rng.next_u64());
+    }
     #[test]
     fn actual_step_ghost_disappears_after_full_fourteen_frame_animation() {
         let mut g = actual_room();
@@ -1060,19 +1141,21 @@ mod tests {
         let mut g = Game::shell(1, RulesPreset::Classic);
         g.world.set_tile(5, 4, "oBlock");
         let id = g.world.spawn("oBarrierEmitter", Vec2::new(80.0, 80.0));
-        assert!(g
-            .world
-            .entities
-            .iter()
-            .any(|e| e.alive && e.object == "oBarrier"));
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oBarrier")
+        );
         g.world.spawn("oBullet", Vec2::new(88.0, 88.0));
         g.step(&InputFrame::default());
         assert!(g.world.entity(id).is_none());
-        assert!(!g
-            .world
-            .entities
-            .iter()
-            .any(|e| e.alive && e.object == "oBarrier"));
+        assert!(
+            !g.world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oBarrier")
+        );
     }
     #[test]
     fn actual_step_new_murderer_keeper_attacks_without_invented_patrol_wait() {
@@ -1279,6 +1362,30 @@ mod tests {
             );
             assert_eq!(g.player.money, if collected { 4000 } else { 0 });
         }
+    }
+    #[test]
+    fn actual_step_scarab_collection_runs_outside_ai_step_viewport() {
+        let mut g = actual_room();
+        g.world.area = Area::Temple;
+        g.player.pos = Vec2::new(338.0, 88.0);
+        let id = g.world.spawn("oScarab", Vec2::new(330.0, 80.0));
+        assert_eq!(g.camera, Vec2::default());
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(id).is_none());
+        assert_eq!(g.player.money, 12000);
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oFlareSpark")
+                .count(),
+            3
+        );
+        g.step(&InputFrame::default());
+        assert_eq!(g.player.money, 12000);
+        assert!(!g.events.iter().any(|event| matches!(event,
+            GameEvent::Collected { object, .. } if object == "oScarab"
+        )));
     }
     #[test]
     fn actual_step_attacking_unarmed_keeper_consumes_shotgun_and_clears_holder() {
