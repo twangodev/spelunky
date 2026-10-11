@@ -87,8 +87,7 @@ mod grave_create_tests {
 
     // Independent transcription of oGrave's five explicit source switch arms.
     // The oracle uses the port RNG; it does not establish GM8 seed equivalence.
-    const SOURCE_GRAVE_SPRITES: [&str; 5] =
-        ["sGrave2", "sGrave3", "sGrave4", "sGrave5", "sGrave6"];
+    const SOURCE_GRAVE_SPRITES: [&str; 5] = ["sGrave2", "sGrave3", "sGrave4", "sGrave5", "sGrave6"];
 
     #[test]
     fn grave_create_custom_game_birth_has_all_five_variants_and_does_not_reroll() {

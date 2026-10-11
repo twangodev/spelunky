@@ -613,8 +613,8 @@ pub(crate) fn idol_step(game: &mut Game, id: u64) {
     {
         return;
     }
-    let unsupported = entity.value("colBot") == 0.
-        && entity.data.get("trigger").copied().unwrap_or(1.) != 0.;
+    let unsupported =
+        entity.value("colBot") == 0. && entity.data.get("trigger").copied().unwrap_or(1.) != 0.;
     let feet = Vec2::new(pos.x, pos.y + 4.);
     let smooth_brick = game.world.tiles_point(feet, "oBrickSmooth")
         || game.world.entities.iter().any(|brick| {
@@ -702,20 +702,33 @@ mod tests {
     use super::*;
     use crate::model::RulesPreset;
 
-    fn idol_shop(preset: RulesPreset, object: &str, smooth: bool, keeper_x: f64) -> (Game, u64, u64) {
+    fn idol_shop(
+        preset: RulesPreset,
+        object: &str,
+        smooth: bool,
+        keeper_x: f64,
+    ) -> (Game, u64, u64) {
         let mut game = Game::shell(31, preset);
         for x in 0..game.world.width {
-            game.world.set_tile(x, 10, if smooth && (6..=10).contains(&x) {
-                "oBrickSmooth"
-            } else {
-                "oBlock"
-            });
+            game.world.set_tile(
+                x,
+                10,
+                if smooth && (6..=10).contains(&x) {
+                    "oBrickSmooth"
+                } else {
+                    "oBlock"
+                },
+            );
         }
         game.player.pos = Vec2::new(208., 152.);
         game.player.previous_pos = game.player.pos;
         game.player.grounded = true;
         let keeper = game.spawn("oShopkeeper", Vec2::new(keeper_x, 144.));
-        game.world.entity_mut(keeper).unwrap().text.insert("style".into(), "Bomb".into());
+        game.world
+            .entity_mut(keeper)
+            .unwrap()
+            .text
+            .insert("style".into(), "Bomb".into());
         let idol = game.spawn(object, Vec2::new(208., 156.));
         (game, keeper, idol)
     }
@@ -723,22 +736,35 @@ mod tests {
     fn carry_to_shop(game: &mut Game, idol: u64) {
         game.step(&crate::InputFrame::default());
         game.step(&crate::InputFrame {
-            down: true, attack: true, attack_pressed: true, ..Default::default()
+            down: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
         });
         assert_eq!(game.player.held, Some(idol));
         for _ in 0..60 {
-            if game.player.pos.x <= 144. { break; }
-            game.step(&crate::InputFrame { left: true, ..Default::default() });
+            if game.player.pos.x <= 144. {
+                break;
+            }
+            game.step(&crate::InputFrame {
+                left: true,
+                ..Default::default()
+            });
         }
         assert!((128. ..=144.).contains(&game.player.pos.x));
-        for _ in 0..16 { game.step(&crate::InputFrame::default()); }
+        for _ in 0..16 {
+            game.step(&crate::InputFrame::default());
+        }
         assert_eq!(game.player.held, Some(idol));
         assert_eq!(game.data.get("idols").copied().unwrap_or(0.), 0.);
     }
 
     fn drop_idol(game: &mut Game, idol: u64) -> Vec<crate::SourceMessage> {
         game.step(&crate::InputFrame {
-            down: true, attack: true, attack_pressed: true, ..Default::default()
+            down: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
         });
         assert_eq!(game.player.held, None);
         let mut messages = Vec::new();
@@ -747,7 +773,9 @@ mod tests {
                 GameEvent::Dialogue(message) => Some(message.clone()),
                 _ => None,
             }));
-            if game.world.entity(idol).is_none() { break; }
+            if game.world.entity(idol).is_none() {
+                break;
+            }
             game.step(&crate::InputFrame::default());
         }
         messages
@@ -761,14 +789,32 @@ mod tests {
                 carry_to_shop(&mut game, idol);
                 let messages = drop_idol(&mut game, idol);
                 assert!(game.world.entity(idol).is_none(), "{preset:?} {object}");
-                assert_eq!(f64::from(game.player.money) + game.data.get("collect").copied().unwrap_or(0.), value);
+                assert_eq!(
+                    f64::from(game.player.money) + game.data.get("collect").copied().unwrap_or(0.),
+                    value
+                );
                 assert_eq!(game.data["idols"], 1.);
                 assert_eq!(game.data.get("skulls").copied().unwrap_or(0.), 0.);
                 assert_eq!(game.lifetime_stats.idols_converted, 0);
                 assert_eq!(game.data.get("idolsConverted").copied().unwrap_or(0.), 0.);
-                assert!(game.world.entities.iter().any(|entity| entity.object == "oBigCollect"));
-                assert_eq!(messages.iter().filter(|message| message.first == "PLEASURE DOING BUSINESS!" && message.second.is_empty() && message.ticks == 100).count(), 1);
-                for _ in 0..30 { game.step(&crate::InputFrame::default()); }
+                assert!(
+                    game.world
+                        .entities
+                        .iter()
+                        .any(|entity| entity.object == "oBigCollect")
+                );
+                assert_eq!(
+                    messages
+                        .iter()
+                        .filter(|message| message.first == "PLEASURE DOING BUSINESS!"
+                            && message.second.is_empty()
+                            && message.ticks == 100)
+                        .count(),
+                    1
+                );
+                for _ in 0..30 {
+                    game.step(&crate::InputFrame::default());
+                }
                 assert_eq!(game.data["idols"], 1.);
             }
         }
@@ -787,7 +833,11 @@ mod tests {
                     assert!(game.world.entity(idol).is_some());
                     assert_eq!(game.data.get("collect").copied().unwrap_or(0.), 0.);
                     assert_eq!(game.data.get("idols").copied().unwrap_or(0.), 0.);
-                    assert!(!messages.iter().any(|message| message.first == "PLEASURE DOING BUSINESS!"));
+                    assert!(
+                        !messages
+                            .iter()
+                            .any(|message| message.first == "PLEASURE DOING BUSINESS!")
+                    );
                 }
             }
         }
@@ -809,35 +859,61 @@ mod tests {
                 stock.data.insert("forSale".into(), 1.);
             }
             carry_to_shop(&mut game, idol);
-            game.step(&crate::InputFrame { up: true, attack: true, attack_pressed: true, ..Default::default() });
+            game.step(&crate::InputFrame {
+                up: true,
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
             assert_eq!(game.player.held, None);
             game.step(&crate::InputFrame::default());
-            game.step(&crate::InputFrame { down: true, attack: true, attack_pressed: true, ..Default::default() });
-            let held = game.player.held.expect("natural stock pickup while idol is airborne");
+            game.step(&crate::InputFrame {
+                down: true,
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            let held = game
+                .player
+                .held
+                .expect("natural stock pickup while idol is airborne");
             assert_eq!(game.world.entity(held).unwrap().object, "oBombBag");
             let mut followed = false;
             let mut supported_in_range_while_following = false;
             for _ in 0..35 {
                 game.step(&crate::InputFrame::default());
                 let keeper_entity = game.world.entity(keeper).unwrap();
-                let idol_entity = game.world.entity(idol).expect("FOLLOW must keep the idol alive");
+                let idol_entity = game
+                    .world
+                    .entity(idol)
+                    .expect("FOLLOW must keep the idol alive");
                 followed |= keeper_entity.state == 5;
                 let pos = idol_entity.pos;
                 let eligible = !idol_entity.held
                     && idol_entity.value("colBot") != 0.
-                    && game.world.tiles_point(Vec2::new(pos.x, pos.y + 4.), "oBrickSmooth")
-                    && pos.x > game.camera.x - 8. && pos.x < game.camera.x + 328.
-                    && pos.y > game.camera.y - 8. && pos.y < game.camera.y + 248.
+                    && game
+                        .world
+                        .tiles_point(Vec2::new(pos.x, pos.y + 4.), "oBrickSmooth")
+                    && pos.x > game.camera.x - 8.
+                    && pos.x < game.camera.x + 328.
+                    && pos.y > game.camera.y - 8.
+                    && pos.y < game.camera.y + 248.
                     && (pos.x - keeper_entity.pos.x).abs() < 80.;
                 if eligible && keeper_entity.state == 5 {
-                    assert_eq!(crate::dispatcher::descendant_instances(&game, "oShopkeeper").first(), Some(&crate::dispatcher::Instance::Entity(keeper)));
+                    assert_eq!(
+                        crate::dispatcher::descendant_instances(&game, "oShopkeeper").first(),
+                        Some(&crate::dispatcher::Instance::Entity(keeper))
+                    );
                     assert_eq!(game.data.get("thiefLevel").copied().unwrap_or(0.), 0.);
                     assert!(!game.flags.contains("murderer"));
                     supported_in_range_while_following = true;
                 }
             }
             assert!(followed, "keeper enters FOLLOW from held priced stock");
-            assert!(supported_in_range_while_following, "dropped idol must reach on-camera smooth support within80px of the selected FOLLOW keeper");
+            assert!(
+                supported_in_range_while_following,
+                "dropped idol must reach on-camera smooth support within80px of the selected FOLLOW keeper"
+            );
             assert!(game.world.entity(idol).is_some());
             assert_eq!(game.data.get("idols").copied().unwrap_or(0.), 0.);
             assert_eq!(game.data.get("thiefLevel").copied().unwrap_or(0.), 0.);
@@ -850,10 +926,17 @@ mod tests {
         for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
             let (mut game, first, idol) = idol_shop(preset, "oGoldIdol", true, 320.);
             let nearby = game.spawn("oShopkeeper", Vec2::new(96., 144.));
-            game.world.entity_mut(nearby).unwrap().text.insert("style".into(), "Bomb".into());
+            game.world
+                .entity_mut(nearby)
+                .unwrap()
+                .text
+                .insert("style".into(), "Bomb".into());
             carry_to_shop(&mut game, idol);
             let current = crate::dispatcher::descendant_instances(&game, "oShopkeeper");
-            assert_eq!(current.first(), Some(&crate::dispatcher::Instance::Entity(first)));
+            assert_eq!(
+                current.first(),
+                Some(&crate::dispatcher::Instance::Entity(first))
+            );
             assert_eq!(game.world.entity(nearby).unwrap().state, 0);
             drop_idol(&mut game, idol);
             assert!(game.world.entity(idol).is_some());
@@ -864,7 +947,13 @@ mod tests {
     #[test]
     fn source_shop_idol_values_counter_cap_and_effect_create_do_not_draw_rng() {
         for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
-            for (area, multiplier) in [(Area::Mines, 1.), (Area::Jungle, 2.), (Area::Ice, 3.), (Area::Temple, 4.), (Area::Boss, 5.)] {
+            for (area, multiplier) in [
+                (Area::Mines, 1.),
+                (Area::Jungle, 2.),
+                (Area::Ice, 3.),
+                (Area::Temple, 4.),
+                (Area::Boss, 5.),
+            ] {
                 for (object, value) in [("oGoldIdol", 5000.), ("oCrystalSkull", 15000.)] {
                     let (mut game, _, idol) = idol_shop(preset, object, true, 96.);
                     // Authored arriving objects/counter; all behavior runs in
@@ -879,7 +968,12 @@ mod tests {
                     assert_eq!(game.data["collectCounter"], 100.);
                     assert_eq!(game.data["idols"], 1.);
                     assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
-                    let effect = game.world.entities.iter().find(|entity| entity.object == "oBigCollect").unwrap();
+                    let effect = game
+                        .world
+                        .entities
+                        .iter()
+                        .find(|entity| entity.object == "oBigCollect")
+                        .unwrap();
                     assert_eq!(effect.pos.x, 140.);
                     assert_eq!(effect.alarms[0], 30);
                 }
@@ -902,7 +996,10 @@ mod tests {
                     game.step(&crate::InputFrame::default());
                     assert!(game.world.entity(idol).is_none());
                     assert_eq!(game.data["idols"], 1.);
-                    assert_eq!(game.data.get("idols_grabbed").copied().unwrap_or(0.), grabbed);
+                    assert_eq!(
+                        game.data.get("idols_grabbed").copied().unwrap_or(0.),
+                        grabbed
+                    );
                     assert_eq!(game.lifetime_stats.idols_grabbed, grabbed as u64);
                 }
             }
@@ -912,21 +1009,37 @@ mod tests {
     #[test]
     fn natural_idol_exit_deposit_still_uses_existing_conversion_statistics() {
         for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
-            for (object, counter, value) in [("oGoldIdol", "idols", 5000.), ("oCrystalSkull", "skulls", 15000.)] {
+            for (object, counter, value) in [
+                ("oGoldIdol", "idols", 5000.),
+                ("oCrystalSkull", "skulls", 15000.),
+            ] {
                 let (mut game, _, idol) = idol_shop(preset, object, false, 16.);
                 game.spawn("oExit", Vec2::new(128., 144.));
                 // The route uses pickup and walking, never fabricated held state.
                 game.step(&crate::InputFrame::default());
-                game.step(&crate::InputFrame { down: true, attack: true, attack_pressed: true, ..Default::default() });
+                game.step(&crate::InputFrame {
+                    down: true,
+                    attack: true,
+                    attack_pressed: true,
+                    ..Default::default()
+                });
                 assert_eq!(game.player.held, Some(idol));
                 for _ in 0..60 {
-                    if game.world.entity(idol).is_none() { break; }
-                    game.step(&crate::InputFrame { left: true, ..Default::default() });
+                    if game.world.entity(idol).is_none() {
+                        break;
+                    }
+                    game.step(&crate::InputFrame {
+                        left: true,
+                        ..Default::default()
+                    });
                 }
                 assert!(game.world.entity(idol).is_none());
                 assert_eq!(game.data[counter], 1.);
                 assert_eq!(game.lifetime_stats.idols_converted, 1);
-                assert_eq!(f64::from(game.player.money) + game.data.get("collect").copied().unwrap_or(0.), value);
+                assert_eq!(
+                    f64::from(game.player.money) + game.data.get("collect").copied().unwrap_or(0.),
+                    value
+                );
             }
         }
     }
