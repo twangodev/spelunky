@@ -4,8 +4,12 @@ use spelunky_core::{
     Area, Game, GameEvent, InputFrame, PlayerState, Rng, RulesPreset, Vec2, World,
 };
 
-fn ready(preset: RulesPreset, object: &str, x: f64) -> (Game, u64) {
-    let mut game = Game::shell(7, preset);
+fn ready(preset: RulesPreset, object: &str, x: f64, legacy: bool, seed: u32) -> (Game, u64) {
+    let mut game = if legacy {
+        Game::legacy_shell(u64::from(seed), preset)
+    } else {
+        Game::shell(seed, preset)
+    };
     game.world = World::new(24, 20, Area::Mines, 1);
     game.world.name = "rLevel".into();
     for column in 0..24 {
@@ -26,9 +30,59 @@ fn ready(preset: RulesPreset, object: &str, x: f64) -> (Game, u64) {
     (game, id)
 }
 
+// Independent arithmetic oracle: copied state only, never production range/unit.
+// Canonical recurrence and multiply-high are EXE-derived static math; original
+// native generated-seed acceptance remains a separate unrun probe.
+struct LiteralRng {
+    state: u64,
+    canonical: bool,
+}
+impl LiteralRng {
+    fn from_snapshot(rng: &Rng) -> Self {
+        let json = serde_json::to_value(rng).unwrap();
+        let canonical = match json.get("algorithm").and_then(|x| x.as_str()) {
+            Some("gm8_lcg32_v1") => true,
+            None => false,
+            value => panic!("unexpected RNG algorithm: {value:?}"),
+        };
+        Self {
+            state: json["state"].as_u64().unwrap(),
+            canonical,
+        }
+    }
+    fn next_u64(&mut self) -> u64 {
+        if self.canonical {
+            self.state = u64::from(
+                (self.state as u32)
+                    .wrapping_mul(0x0808_8405)
+                    .wrapping_add(1),
+            );
+            self.state
+        } else {
+            self.state = self.state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = self.state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        }
+    }
+    fn range(&mut self, width: u64) -> u64 {
+        assert!(
+            width > 0 && width <= 500,
+            "authored crate/flaring source domain"
+        );
+        let raw = self.next_u64();
+        if self.canonical {
+            (raw * width) >> 32
+        } else {
+            raw % width
+        }
+    }
+}
+
 // Literal source loot tests, independent of the new Poof callback. The oracle
 // tracks existing loot RNG only: Poof + DrawnSprite Create consume no draws.
-fn source_crate_loot(rng: &mut Rng) -> &'static str {
+fn source_crate_loot(rng: &mut LiteralRng) -> &'static str {
     for (odds, object) in [
         (500, "oJetpack"),
         (200, "oCapePickup"),
@@ -59,9 +113,12 @@ fn source_crate_loot(rng: &mut Rng) -> &'static str {
 
 #[test]
 fn actual_up_attack_opens_crates_with_source_stationary_poof_after_loot() {
-    for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
+    for (preset, legacy, seed) in [RulesPreset::Classic, RulesPreset::Assisted]
+        .into_iter()
+        .flat_map(|preset| [(preset, true, 7_u32), (preset, false, 22_u32)])
+    {
         for object in ["oCrate", "oFlareCrate"] {
-            let (mut game, id) = ready(preset, object, 84.0);
+            let (mut game, id) = ready(preset, object, 84.0, legacy, seed);
             let origin = game.world.entity(id).unwrap().pos;
             assert_ne!(
                 origin.x, game.player.pos.x,
@@ -70,8 +127,37 @@ fn actual_up_attack_opens_crates_with_source_stationary_poof_after_loot() {
             let existing_ids: Vec<_> = game.world.entities.iter().map(|e| e.id).collect();
             let mut closed = game.clone();
             closed.step(&InputFrame::default());
-            let mut expected_rng = closed.rng.clone();
+            let mut expected_rng = LiteralRng::from_snapshot(&closed.rng);
+            assert_eq!(expected_rng.canonical, !legacy);
             let expected_loot = if object == "oCrate" {
+                // Neutral ordinary-Crate initialization/steps must not draw.
+                assert_eq!(expected_rng.state, u64::from(seed));
+                // Literal source selectors: historical seed7 and canonical
+                // seed22 first succeed at Bow (selector16), preserving the
+                // original observable-loot prerequisite and all its assertions.
+                let odds = [
+                    500, 200, 100, 100, 100, 90, 90, 80, 80, 80, 60, 60, 60, 60, 40, 40,
+                ];
+                let rolls = if legacy {
+                    [487, 4, 46, 3, 74, 75, 88, 62, 65, 25, 43, 16, 30, 4, 30, 0]
+                } else {
+                    [345, 56, 37, 75, 4, 81, 78, 63, 43, 69, 43, 34, 1, 39, 7, 0]
+                };
+                let mut tape = LiteralRng {
+                    state: u64::from(seed),
+                    canonical: !legacy,
+                };
+                for (width, expected) in odds.into_iter().zip(rolls) {
+                    assert_eq!(tape.range(width), expected);
+                }
+                assert_eq!(
+                    tape.state,
+                    if legacy {
+                        16_390_740_445_785_211_223
+                    } else {
+                        90_347_142
+                    }
+                );
                 let loot = source_crate_loot(&mut expected_rng);
                 // This quiet authored seed keeps loot observable, avoiding the
                 // source late-Player automatic Bag/Box/RopePile collection.
@@ -160,7 +246,10 @@ fn actual_up_attack_opens_crates_with_source_stationary_poof_after_loot() {
 
 #[test]
 fn closed_crates_emit_no_opening_poof_without_up_attack_contact() {
-    for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
+    for (preset, legacy, seed) in [RulesPreset::Classic, RulesPreset::Assisted]
+        .into_iter()
+        .flat_map(|preset| [(preset, true, 7_u32), (preset, false, 22_u32)])
+    {
         for object in ["oCrate", "oFlareCrate"] {
             for (x, input) in [
                 (
@@ -188,7 +277,7 @@ fn closed_crates_emit_no_opening_poof_without_up_attack_contact() {
                     },
                 ),
             ] {
-                let (mut game, id) = ready(preset, object, x);
+                let (mut game, id) = ready(preset, object, x, legacy, seed);
                 game.step(&input);
                 assert!(
                     game.world.entity(id).is_some(),

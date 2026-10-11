@@ -14,10 +14,10 @@ fn room(rules: RulesPreset) -> Game {
 
 fn literal_blood(rng: &mut Rng) -> (Vec2, f64) {
     fn random(rng: &mut Rng, n: f64) -> f64 {
-        ((rng.next_u64() >> 11) as f64 / (1_u64 << 53) as f64) * n
+        (rng.next_u64() as f64 / 4_294_967_296.0) * n
     }
     let velocity = Vec2::new(random(rng, 4.0) - random(rng, 4.0), -1.0 - random(rng, 2.0));
-    let gravity = (1 + rng.next_u64() % 6) as f64 * 0.1;
+    let gravity = (1 + ((rng.next_u64() * 6) >> 32)) as f64 * 0.1;
     (velocity, gravity)
 }
 
@@ -77,7 +77,7 @@ fn actual_default_smash_overlap_runs_crush_blood_before_smash_velocity_draw() {
         let first = g.world.next_id;
         let mut oracle = g.rng.clone();
         let mut expected: Vec<_> = (0..3).map(|_| literal_blood(&mut oracle)).collect();
-        let speed = (4 + oracle.next_u64() % 3) as f64;
+        let speed = (4 + ((oracle.next_u64() * 3) >> 32)) as f64;
         expected.push(literal_blood(&mut oracle));
         g.step(&InputFrame::default());
         assert!(g.events.contains(&GameEvent::Damage { amount: 99 }));

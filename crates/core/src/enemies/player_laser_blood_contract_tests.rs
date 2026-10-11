@@ -74,13 +74,13 @@ fn actual_default_ufo_laser_creates_player_blood_before_impact_then_hurt_sound()
             let expected: Vec<_> = (0..3)
                 .map(|_| {
                     let random = |rng: &mut crate::Rng, n: f64| {
-                        ((rng.next_u64() >> 11) as f64 / (1_u64 << 53) as f64) * n
+                        (rng.next_u64() as f64 / 4_294_967_296.0) * n
                     };
                     let velocity = Vec2::new(
                         random(&mut oracle, 4.0) - random(&mut oracle, 4.0),
                         -1.0 - random(&mut oracle, 2.0),
                     );
-                    let gravity = (1 + oracle.next_u64() % 6) as f64 * 0.1;
+                    let gravity = (1 + ((oracle.next_u64() * 6) >> 32)) as f64 * 0.1;
                     (velocity, gravity)
                 })
                 .collect();

@@ -42,7 +42,7 @@ impl Oracle {
 }
 
 fn room(low_graphics: bool) -> Game {
-    let mut game = Game::shell(0x89ab_cdef_1357_2468, RulesPreset::Classic);
+    let mut game = Game::legacy_shell(0x89ab_cdef_1357_2468, RulesPreset::Classic);
     game.world = World::new(40, 30, Area::Mines, 1);
     game.world.name = "rLevel".into();
     for x in 0..40 {

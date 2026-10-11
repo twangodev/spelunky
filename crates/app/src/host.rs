@@ -344,7 +344,7 @@ impl App {
     fn start_game(&mut self, tutorial: bool) {
         self.snapshot_lifetime_stats();
         self.source_message = None;
-        let seed = (self.now() * 1_000_000.) as u64 ^ wall_seed();
+        let seed = wall_seed() ^ fold_seed_entropy(u128::from(self.now().to_bits()));
         let mut game = if tutorial {
             Game::tutorial(seed, self.store.data.settings.rules)
         } else {
@@ -1961,6 +1961,9 @@ fn test_snapshot(
         "screen": format!("{screen:?}"), "state": format!("{:?}", game.state),
         "tick": game.tick, "levelTick": game.level_tick, "alpha": alpha,
         "seed": game.seed.to_string(),
+        "rngAlgorithm": game.rng.algorithm(),
+        "simulationVersion": spelunky_core::SIMULATION_VERSION,
+        "rngState": game.rng.state_bits().to_string(),
         "deathTicks": game.data.get("death_ticks").copied().unwrap_or(0.),
         "money": player.money,
         "sourceTimeMs": game.source_elapsed_ms(),
@@ -2367,6 +2370,8 @@ fn campaign_record(game: &Game) -> Option<Record> {
     }
     Some(Record {
         seed: game.seed,
+        rng_algorithm: game.rng.algorithm(),
+        simulation_version: spelunky_core::SIMULATION_VERSION,
         rules: game.rules,
         score: game.player.money,
         level: game
@@ -2569,17 +2574,27 @@ fn custom_level_source<'a>(
         })
         .map(String::as_str)
 }
-fn wall_seed() -> u64 {
+/// Fold host-provided automatic entropy into the canonical seed domain.
+/// This is a portable host policy, not the original runner's QPC randomize.
+/// External deterministic seeds use the core's checked constructors instead.
+fn fold_seed_entropy(entropy: u128) -> u32 {
+    let bytes = entropy.to_le_bytes();
+    bytes.chunks_exact(4).fold(0, |seed, word| {
+        seed ^ u32::from_le_bytes(word.try_into().unwrap())
+    })
+}
+
+fn wall_seed() -> u32 {
     #[cfg(not(target_arch = "wasm32"))]
     {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as u64)
+            .map(|d| fold_seed_entropy(d.as_nanos()))
             .unwrap_or(1)
     }
     #[cfg(target_arch = "wasm32")]
     {
-        (js_sys::Date::now() * 1000.) as u64
+        fold_seed_entropy(u128::from(js_sys::Date::now().to_bits()))
     }
 }
 
@@ -3712,6 +3727,53 @@ mod tests {
     }
 
     #[test]
+    fn automatic_seed_entropy_folds_all_words_without_float_saturation() {
+        assert_eq!(fold_seed_entropy(0), 0);
+        assert_eq!(fold_seed_entropy(u128::from(u32::MAX)), u32::MAX);
+        for word in 0..4 {
+            assert_eq!(
+                fold_seed_entropy(0x1234_5678_u128 << (word * 32)),
+                0x1234_5678
+            );
+        }
+        assert_eq!(fold_seed_entropy(u128::MAX), 0);
+        let early = fold_seed_entropy(u128::from(1.0_f64.to_bits()));
+        let later = fold_seed_entropy(u128::from(2.0_f64.to_bits()));
+        assert_ne!(early, later);
+        let seed = u32::MAX ^ later;
+        let game = Game::shell(seed, spelunky_core::RulesPreset::Classic);
+        assert_eq!(game.seed, u64::from(seed));
+        assert_eq!(
+            game.rng.algorithm(),
+            spelunky_core::RngAlgorithm::Gm8Lcg32V1
+        );
+    }
+
+    #[test]
+    fn new_record_captures_actual_rng_identity_and_simulation_version() {
+        use spelunky_core::{RngAlgorithm, RulesPreset};
+        let mut canonical = Game::shell(u32::MAX, RulesPreset::Classic);
+        canonical.state = RunState::Dead;
+        canonical.player.money = 12345;
+        canonical.data.insert("time".into(), 27000.);
+        let record = campaign_record(&canonical).unwrap();
+        assert_eq!(record.seed, u64::from(u32::MAX));
+        assert_eq!(record.rng_algorithm, RngAlgorithm::Gm8Lcg32V1);
+        assert_eq!(record.simulation_version, spelunky_core::SIMULATION_VERSION);
+        assert_eq!(record.score, 12345);
+        assert_eq!(record.elapsed_ms(), 27000);
+        assert!(record.fastest_eligible);
+
+        let mut legacy = Game::legacy(u64::MAX, RulesPreset::Classic);
+        legacy.state = RunState::Dead;
+        let record = campaign_record(&legacy).unwrap();
+        assert_eq!(record.seed, u64::MAX);
+        assert_eq!(record.rng_algorithm, RngAlgorithm::LegacySplitMix64V1);
+        assert_eq!(record.simulation_version, spelunky_core::SIMULATION_VERSION);
+        assert!(record.fastest_eligible);
+    }
+
+    #[test]
     fn render_alpha_eight_ms_work_is_read_only_for_actual_core_traces() {
         for rate in [60, 120, 144, 240] {
             let mut immediate = HostTiming::default();
@@ -4007,6 +4069,8 @@ mod tests {
     fn source_record_markers_compare_previous_scores_and_eligible_winning_times() {
         let old = Record {
             seed: 1,
+            rng_algorithm: spelunky_core::RngAlgorithm::LegacySplitMix64V1,
+            simulation_version: 0,
             rules: spelunky_core::RulesPreset::Classic,
             score: 100,
             level: 16,
@@ -4167,6 +4231,12 @@ mod tests {
         let snapshot = test_snapshot(Screen::Playing, Some(&game), timing.alpha(), false);
         assert_eq!(snapshot["screen"], "Playing");
         assert_eq!(snapshot["seed"], "42");
+        assert_eq!(snapshot["rngAlgorithm"], "gm8_lcg32_v1");
+        assert_eq!(
+            snapshot["simulationVersion"],
+            spelunky_core::SIMULATION_VERSION
+        );
+        assert_eq!(snapshot["rngState"], game.rng.state_bits().to_string());
         assert_eq!(snapshot["player"]["x"], 100.);
         assert_eq!(snapshot["rendered"]["x"], 97.);
         assert_eq!(snapshot["rendered"]["screenX"], 16.);

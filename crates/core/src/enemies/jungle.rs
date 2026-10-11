@@ -1334,7 +1334,7 @@ mod tests {
             TripStopsTheft,
         }
 
-        fn grabbed(seed: u64, money: u32) -> (Game, u64) {
+        fn grabbed(seed: u32, money: u32) -> (Game, u64) {
             let mut level = Level::default();
             level.starting_bombs = 0;
             level.starting_ropes = 0;

@@ -261,7 +261,7 @@ fn actual_pickups_and_walking_open_gold_door_without_entering_its_solid() {
     }
 }
 
-fn generated_market_ankh_moai_chain_to_temple(seed: u64) -> Game {
+fn generated_market_ankh_moai_chain_to_temple(seed: u32) -> Game {
     let mut game = Game::new(seed, RulesPreset::Classic);
     while !game.world.entities.iter().any(|e| e.object == "oXMarket") {
         assert!(

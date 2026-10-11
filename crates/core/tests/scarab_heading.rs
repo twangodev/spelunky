@@ -3,7 +3,7 @@
 //! original executable runtime capture or a naturally reached idle interval.
 use spelunky_core::*;
 
-fn room(seed: u64, rules: RulesPreset) -> Game {
+fn room(seed: u32, rules: RulesPreset) -> Game {
     let mut game = Game::shell(seed, rules);
     game.world = World::new(30, 20, Area::Mines, 1);
     game.player.pos = Vec2::new(240.0, 128.0);

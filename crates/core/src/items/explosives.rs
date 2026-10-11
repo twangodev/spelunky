@@ -3890,16 +3890,18 @@ mod literal_dark_and_arrow_destroy_regressions {
                 let expected_blood = if exit {
                     None
                 } else {
-                    expected_rng.range(3);
+                    let _speed_roll = (expected_rng.next_u64() * 3) >> 32;
                     // Player Step1683-1696 emits script Blood1 after speed.
                     // Literal own oBlood Create: three velocity random calls,
-                    // then rand(1,6) gravity; no source helper is called here.
+                    // then rand(1,6) gravity. Literal original raw32 scaling and
+                    // multiply-high selectors do not call production range/unit.
                     Some((
                         Vec2::new(
-                            expected_rng.unit() * 4.0 - expected_rng.unit() * 4.0,
-                            -1.0 - expected_rng.unit() * 2.0,
+                            (expected_rng.next_u64() as f64 / 4_294_967_296.0) * 4.0
+                                - (expected_rng.next_u64() as f64 / 4_294_967_296.0) * 4.0,
+                            -1.0 - (expected_rng.next_u64() as f64 / 4_294_967_296.0) * 2.0,
                         ),
-                        f64::from(1 + expected_rng.range(6)) * 0.1,
+                        (1.0 + ((expected_rng.next_u64() * 6) >> 32) as f64) * 0.1,
                     ))
                 };
                 game.events.clear();
@@ -4626,14 +4628,17 @@ mod source_player_explosion_step {
                         .spawn("oExplosion", Vec2::new(159.0 + 2.0 * f64::from(n), 160.0));
                 }
                 let mut expected_rng = game.rng.clone();
-                let speed = 4.0 + f64::from(expected_rng.range(3));
+                let speed = 4.0 + ((expected_rng.next_u64() * 3) >> 32) as f64;
                 // Source Player Step emits one Blood, independently of the
                 // number of overlapping blasts or whether damage is fatal.
+                // Original raw32/2^32 and multiply-high selectors form this
+                // independent oracle; each occurrence consumes one raw word.
                 let blood_velocity = Vec2::new(
-                    expected_rng.unit() * 4.0 - expected_rng.unit() * 4.0,
-                    -1.0 - expected_rng.unit() * 2.0,
+                    (expected_rng.next_u64() as f64 / 4_294_967_296.0) * 4.0
+                        - (expected_rng.next_u64() as f64 / 4_294_967_296.0) * 4.0,
+                    -1.0 - (expected_rng.next_u64() as f64 / 4_294_967_296.0) * 2.0,
                 );
-                let blood_gravity = f64::from(1 + expected_rng.range(6)) * 0.1;
+                let blood_gravity = (1.0 + ((expected_rng.next_u64() * 6) >> 32) as f64) * 0.1;
                 game.step(&InputFrame::default());
                 assert_eq!(
                     game.player.health,

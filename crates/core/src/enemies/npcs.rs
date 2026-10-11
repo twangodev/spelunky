@@ -1467,16 +1467,21 @@ mod tests {
 
     #[test]
     fn actual_step_generated_damsel_preserves_free_producer_override_at_bootstrap() {
-        // The eager InitLevel chance draws changed later population RNG;
-        // seed 0 retains this naturally generated free-Damsel precondition.
-        let mut g = Game::new(0, RulesPreset::Classic);
-        let id = g
-            .world
-            .entities
-            .iter()
-            .find(|e| e.object == "oDamsel" && e.value("for_sale") == 0.0)
-            .expect("seed 0 generates an ordinary free Damsel")
-            .id;
+        // Select only the natural pre-Step producer: scrTreasureGen creates
+        // an ordinary Damsel and then clears its sale flag and price. Do not
+        // select on bootstrap state, cost, or any post-Step behavior.
+        let (mut g, id) = (0..64)
+            .find_map(|seed| {
+                let game = Game::new(seed, RulesPreset::Classic);
+                let id = game
+                    .world
+                    .entities
+                    .iter()
+                    .find(|e| e.alive && e.object == "oDamsel" && e.value("for_sale") == 0.0)
+                    .map(|e| e.id)?;
+                Some((game, id))
+            })
+            .expect("canonical seeds 0..64 generate an ordinary free Damsel before Step");
         assert_eq!(g.world.entity(id).unwrap().data.get("cost"), Some(&0.0));
         assert_eq!(g.world.entity(id).unwrap().value("npc_created"), 0.0);
         g.step(&InputFrame::default());

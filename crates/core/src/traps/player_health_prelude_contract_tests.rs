@@ -19,11 +19,11 @@ fn lava_room(rules: RulesPreset) -> Game {
 
 fn literal_blood(rng: &mut Rng) -> (Vec2, f64) {
     fn random(rng: &mut Rng, n: f64) -> f64 {
-        ((rng.next_u64() >> 11) as f64 / (1_u64 << 53) as f64) * n
+        (rng.next_u64() as f64 / 4_294_967_296.0) * n
     }
     (
         Vec2::new(random(rng, 4.0) - random(rng, 4.0), -1.0 - random(rng, 2.0)),
-        (1 + rng.next_u64() % 6) as f64 * 0.1,
+        (1 + ((rng.next_u64() * 6) >> 32)) as f64 * 0.1,
     )
 }
 

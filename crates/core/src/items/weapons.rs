@@ -2655,7 +2655,10 @@ mod tests {
     #[test]
     fn game_step_natural_mattock_break_creates_an_active_pickup_head() {
         let (mut game, _) = flat_room("oMattock");
-        game.rng = Rng::new(38);
+        // oBlock Destroy consumes twelve rand(0,8) position draws. Canonical
+        // seed 9 then gives raw word 13_465_890: rand(1,20) == 1 at draw 13.
+        // Rubble and MattockHead Create callbacks consume no random draws.
+        game.rng = Rng::new(9);
         game.world.set_tile(6, 9, "oBlock");
         game.step(&InputFrame {
             attack: true,
@@ -2688,6 +2691,7 @@ mod tests {
         assert_eq!(head.value("bboxLeft"), -6.0);
         assert_eq!(head.vel.y, -2.0);
         assert!(game.player.held.is_none());
+        assert_eq!(game.rng.state_bits(), 13_465_890);
         game.step(&InputFrame::default());
         assert_eq!(game.world.entity(head_id).unwrap().pos.y, y - 2.0);
     }

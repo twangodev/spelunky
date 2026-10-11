@@ -1,21 +1,29 @@
 //! Natural whip death preserves the rest of Snake Step after synchronous Destroy.
-//! The literal RNG below maps source draw order onto this port's documented stream;
-//! it does not claim that an equal seed reproduces GameMaker's numerical RNG.
+//! The literal RNG independently maps source draw order for both tagged streams.
+//! Canonical arithmetic is EXE-derived; this is not original-game runtime parity.
 use spelunky_core::*;
 
 #[derive(Clone)]
-struct LiteralRng(u64);
+struct LiteralRng(u64, bool);
 
 impl LiteralRng {
     fn at(game: &Game) -> Self {
-        Self(
-            serde_json::to_value(&game.rng).unwrap()["state"]
-                .as_u64()
-                .unwrap(),
-        )
+        let wire = serde_json::to_value(&game.rng).unwrap();
+        let state = wire["state"].as_u64().unwrap();
+        let canonical = match wire.get("algorithm").and_then(|value| value.as_str()) {
+            None => false,
+            Some("gm8_lcg32_v1") => true,
+            other => panic!("unsupported literal RNG identity: {other:?}"),
+        };
+        assert!(!canonical || state <= u64::from(u32::MAX));
+        Self(state, canonical)
     }
 
     fn next(&mut self) -> u64 {
+        if self.1 {
+            self.0 = u64::from((self.0 as u32).wrapping_mul(0x0808_8405).wrapping_add(1));
+            return self.0;
+        }
         self.0 = self.0.wrapping_add(0x9e3779b97f4a7c15);
         let mut value = self.0;
         value = (value ^ (value >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
@@ -24,11 +32,22 @@ impl LiteralRng {
     }
 
     fn range(&mut self, upper: u64) -> u64 {
-        self.next() % upper
+        assert!((1..=u64::from(u32::MAX)).contains(&upper));
+        let raw = self.next();
+        if self.1 {
+            (raw * upper) >> 32
+        } else {
+            raw % upper
+        }
     }
 
     fn random(&mut self) -> f64 {
-        (self.next() >> 11) as f64 / (1_u64 << 53) as f64
+        let raw = self.next();
+        if self.1 {
+            raw as f64 / 4_294_967_296.0
+        } else {
+            (raw >> 11) as f64 / (1_u64 << 53) as f64
+        }
     }
 
     fn blood_create(&mut self) -> (Vec2, f64) {
@@ -189,4 +208,29 @@ fn natural_healthy_snake_keeps_idle_and_walk_roll_boundaries() {
         assert_eq!(game.data.get("snakes"), None);
         assert_eq!(game.player.health, 4);
     }
+}
+
+#[test]
+fn literal_rng_keeps_both_independent_streams_and_mappings() {
+    let mut canonical = LiteralRng(0, true);
+    assert_eq!(canonical.next(), 1);
+    assert_eq!(canonical.next(), 134_775_814);
+    assert_eq!(canonical.next(), 3_698_175_007);
+    let mut legacy = LiteralRng(0, false);
+    assert_eq!(legacy.next(), 16_294_208_416_658_607_535);
+    assert_eq!(legacy.next(), 7_960_286_522_194_355_700);
+    let mut canonical = LiteralRng(42, true);
+    assert_eq!(canonical.range(5), 1);
+    assert_eq!(canonical.0, 1_365_616_851);
+    let mut legacy = LiteralRng(42, false);
+    assert_eq!(legacy.range(5), 3);
+    assert_eq!(legacy.0, 11_400_714_819_323_198_527);
+    assert_eq!(
+        LiteralRng(0, true).random().to_bits(),
+        0x3df0_0000_0000_0000
+    );
+    assert_eq!(
+        LiteralRng(0, false).random().to_bits(),
+        0x3fec_4415_072f_63b9
+    );
 }

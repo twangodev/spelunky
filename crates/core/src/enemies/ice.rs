@@ -1650,7 +1650,7 @@ mod tests {
         }
     }
 
-    fn king_yell_room(seed: u64, position: Vec2) -> (Game, u64) {
+    fn king_yell_room(seed: u32, position: Vec2) -> (Game, u64) {
         let mut game = Game::shell(seed, RulesPreset::Classic);
         game.world = World::new(60, 30, Area::Ice, 9);
         game.world.name = "Yeti King source yell fixture".into();
@@ -2059,9 +2059,10 @@ mod tests {
         for _ in 0..detritus {
             g.spawn("oBone", Vec2::new(280.0, 48.0));
         }
-        // Reset only the fixture's RNG after synchronous Create callbacks.
-        // Independent source evaluation gives success on seed 6's first roll.
-        g.rng = crate::Rng::new(6);
+        // Historical SplitMix fixture: preserve its frozen 64-bit next words,
+        // blood velocities and branch outcomes, independently of the new default.
+        // Reset after synchronous Create; this is not a canonical GM8 RNG vector.
+        g.rng = crate::Rng::legacy(6);
         (g, id)
     }
 
@@ -2141,6 +2142,7 @@ mod tests {
 
     #[test]
     fn actual_step_boss_blood_uses_dying_sprite_and_source_half_probability() {
+        // Frozen historical SplitMix outcomes exercise sprite/branch guards.
         for (state, sprite, seed, expected_count, next_rng) in [
             (99, "sAlienBossDie", 0, 0, 7_960_286_522_194_355_700),
             (99, "sAlienBossDead", 6, 0, 13_647_215_125_184_110_592),
@@ -2154,7 +2156,7 @@ mod tests {
             }
             boss.state = state;
             boss.set_sprite(sprite);
-            g.rng = crate::Rng::new(seed);
+            g.rng = crate::Rng::legacy(seed);
             g.step(&crate::InputFrame::default());
             assert_eq!(
                 live_boss_blood(&g).len(),
@@ -2174,7 +2176,8 @@ mod tests {
         // Source Step's center-in-solid check kills a live boss naturally;
         // no health, dying sprite, or state is assigned by this fixture.
         g.world.set_tile(8, 6, "oBlock");
-        g.rng = crate::Rng::new(6);
+        // Preserve the historical SplitMix gem/blood tape and frozen next word.
+        g.rng = crate::Rng::legacy(6);
         g.step(&crate::InputFrame::default());
         let boss = g.world.entity(id).unwrap();
         assert_eq!(boss.health, 0);

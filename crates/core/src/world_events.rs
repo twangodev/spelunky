@@ -2207,6 +2207,10 @@ mod tests {
     fn lava_and_tile_metadata_animate_and_spurt_on_source_counter_boundary() {
         for terrain in [false, true] {
             let mut g = room();
+            // Canonical seed 10 selects Flame, whose resource 456 Step has
+            // already passed when Lava 573 creates it. This preserves the birth
+            // position witness; Magma 649 would move during this same Step.
+            g.rng = crate::Rng::new(10);
             let id = configured_lava(&mut g, Vec2::new(80.0, 96.0), terrain);
             g.step(&InputFrame::default());
             let lava = g.world.entity(id).unwrap();
@@ -2995,12 +2999,15 @@ mod tests {
     fn source_born_lava_flame_reaches_even_period_without_motion_overrides() {
         // scrSetupWalls enables top-lava spurts. Start at a legitimate elapsed
         // spurt timer, then let lava Step/Create and every particle Step run.
-        // Seed5 chooses Flame, grav=rand(1,6)*.1=.2 and launch=-rand(1,4)=-1.
+        // Canonical seed 10's six source-ordered raw draws are 1347758131,
+        // 1409029376, 1187014913, 3891171590, 1117777183, 609983900.
+        // rand(1,8) chooses Flame, then Create consumes three random calls;
+        // grav=rand(1,6)*.1=.2 and the producer launch=-rand(1,4)=-1.
         // No particle velocity, gravity, timer or state is written by the test.
         for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
             let mut game = room();
             game.rules = rules;
-            game.rng = crate::Rng::new(5);
+            game.rng = crate::Rng::new(10);
             let lava = configured_lava(&mut game, Vec2::new(80.0, 96.0), false);
             game.world
                 .entity_mut(lava)
@@ -3107,7 +3114,7 @@ mod grave_step_tests {
     use super::*;
     use crate::{Area, Rng, RulesPreset, World};
 
-    fn room(seed: u64) -> Game {
+    fn room(seed: u32) -> Game {
         let mut game = Game::shell(seed, RulesPreset::Classic);
         game.world = World::new(42, 34, Area::Jungle, 5);
         game.player.pos = Vec2::new(40.0, 40.0);

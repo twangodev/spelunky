@@ -67,7 +67,7 @@ fn leaf_create_has_left_neighbor(world: &World, leaf: &spelunky_core::Entity) ->
 
 fn generated_temple_with_layout(
     selected: &BTreeSet<String>,
-    known_seed: u64,
+    known_seed: u32,
     description: &str,
     has_layout: impl Fn(&World) -> bool,
 ) -> World {
@@ -145,7 +145,17 @@ fn natural_offscreen_casino() -> Game {
 
 #[test]
 fn generated_tiki_has_source_body_depth_and_both_random_arm_crops() {
-    let world = generation::generate(&mut Rng::new(0), 1, &flags(&[]));
+    // Select the source room's natural head before checking any decoration
+    // output. Corrected synchronous Create draws can change its seed layout.
+    let world = (0..64)
+        .map(|seed| generation::generate(&mut Rng::new(seed), 1, &flags(&[])))
+        .find(|world| {
+            world
+                .entities
+                .iter()
+                .any(|entity| entity.object == "oGiantTikiHead")
+        })
+        .expect("canonical seeds 0..64 generate a natural Mines Tiki head");
     let head = world
         .entities
         .iter()

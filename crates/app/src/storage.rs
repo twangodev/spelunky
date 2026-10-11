@@ -1,6 +1,6 @@
 //! Versioned settings and run history, shared by the native and web hosts.
 use serde::{Deserialize, Serialize};
-use spelunky_core::RulesPreset;
+use spelunky_core::{RngAlgorithm, RulesPreset};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const SAVE_VERSION: u32 = 1;
@@ -62,6 +62,13 @@ impl Default for Settings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Record {
     pub seed: u64,
+    /// Historical records retain their original generator even when new runs
+    /// use a different default. Missing identity never means the new default.
+    #[serde(default = "legacy_record_algorithm")]
+    pub rng_algorithm: RngAlgorithm,
+    /// Zero identifies historical records predating simulation metadata.
+    #[serde(default)]
+    pub simulation_version: u32,
     pub rules: RulesPreset,
     pub score: u32,
     pub level: u32,
@@ -82,6 +89,10 @@ pub struct Record {
 
 fn eligible_legacy_record() -> bool {
     true
+}
+
+fn legacy_record_algorithm() -> RngAlgorithm {
+    RngAlgorithm::LegacySplitMix64V1
 }
 
 impl Record {
@@ -179,6 +190,19 @@ impl SaveData {
     fn validate(&self) -> Result<(), String> {
         if self.version != SAVE_VERSION {
             return Err(format!("Cannot write save version {}", self.version));
+        }
+        for record in &self.records {
+            if record.rng_algorithm == RngAlgorithm::Gm8Lcg32V1 && record.simulation_version == 0 {
+                return Err("Canonical records require a positive simulation version".into());
+            }
+            if record.rng_algorithm == RngAlgorithm::Gm8Lcg32V1 && record.seed > u64::from(u32::MAX)
+            {
+                return Err(format!(
+                    "Canonical record seed {} exceeds {}",
+                    record.seed,
+                    u32::MAX
+                ));
+            }
         }
         for (name, volume) in [
             ("music", self.settings.music_volume),
@@ -396,6 +420,8 @@ mod tests {
         data.settings.frame_cap = Some(240);
         data.records.push(Record {
             seed: 42,
+            rng_algorithm: RngAlgorithm::Gm8Lcg32V1,
+            simulation_version: spelunky_core::SIMULATION_VERSION,
             rules: RulesPreset::Classic,
             score: 4000,
             level: 3,
@@ -408,6 +434,8 @@ mod tests {
         });
         data.records.push(Record {
             seed: 42,
+            rng_algorithm: RngAlgorithm::LegacySplitMix64V1,
+            simulation_version: 0,
             rules: RulesPreset::Assisted,
             score: 6000,
             level: 4,
@@ -426,6 +454,16 @@ mod tests {
         assert_eq!(decoded.settings.frame_cap, Some(240));
         assert_eq!(decoded.records[0].rules, RulesPreset::Classic);
         assert_eq!(decoded.records[1].rules, RulesPreset::Assisted);
+        assert_eq!(decoded.records[0].rng_algorithm, RngAlgorithm::Gm8Lcg32V1);
+        assert_eq!(
+            decoded.records[0].simulation_version,
+            spelunky_core::SIMULATION_VERSION
+        );
+        assert_eq!(
+            decoded.records[1].rng_algorithm,
+            RngAlgorithm::LegacySplitMix64V1
+        );
+        assert_eq!(decoded.records[1].simulation_version, 0);
         assert_eq!(decoded.records[0].kills, 12);
         assert_eq!(decoded.records[0].rescues, 2);
         assert_eq!(decoded.records[1].kills, 15);
@@ -528,6 +566,8 @@ mod tests {
             assert_eq!(data.version, SAVE_VERSION);
             assert_eq!(data.records.len(), 2);
             for record in &data.records {
+                assert_eq!(record.rng_algorithm, RngAlgorithm::LegacySplitMix64V1);
+                assert_eq!(record.simulation_version, 0);
                 assert_eq!(record.kills, 0);
                 assert_eq!(record.rescues, 0);
                 assert!(record.fastest_eligible);
@@ -539,6 +579,96 @@ mod tests {
             assert_eq!(decoded.records[0].score, 4000);
             assert_eq!(decoded.records[1].score, 8000);
         }
+    }
+
+    #[test]
+    fn historical_record_identity_preserves_full_width_seed_and_profile() {
+        let json = r#"{
+            "version":1,
+            "settings":{"rules":"Assisted","frame_cap":240,"bindings":{"jump":"KeyJ"}},
+            "records":[{"seed":18446744073709551615,"rules":"Classic","score":12345,
+                        "level":16,"ticks":900,"elapsed_ms":27000,"fastest_eligible":false,
+                        "won":true,"kills":12,"rescues":3}],
+            "lifetime_stats":{"total_crates":17},
+            "challenge_records":{"mini1":42},
+            "tunnel_remaining":{"tunnel1_remaining":12345},
+            "unlocks":["character_damsel","shortcut_5"],
+            "custom_levels":{"test":"level text\nkept verbatim\n"}
+        }"#;
+        let loaded = SaveData::from_json(json).unwrap();
+        let record = &loaded.records[0];
+        assert_eq!(record.seed, u64::MAX);
+        assert_eq!(record.rng_algorithm, RngAlgorithm::LegacySplitMix64V1);
+        assert_eq!(record.simulation_version, 0);
+        assert_eq!(record.score, 12345);
+        assert_eq!(record.level, 16);
+        assert_eq!(record.ticks, 900);
+        assert_eq!(record.elapsed_ms(), 27000);
+        assert_eq!((record.kills, record.rescues), (12, 3));
+        assert!(record.won);
+        assert!(!record.fastest_eligible);
+        assert_eq!(loaded.settings.rules, RulesPreset::Assisted);
+        assert_eq!(loaded.settings.frame_cap, Some(240));
+        assert_eq!(loaded.settings.bindings["jump"], "KeyJ");
+        assert_eq!(loaded.lifetime_stats.total_crates, 17);
+        assert_eq!(loaded.challenge_records["mini1"], 42);
+        assert_eq!(loaded.tunnel_remaining["tunnel1_remaining"], 12345);
+        let encoded = loaded.to_json().unwrap();
+        let reopened = SaveData::from_json(&encoded).unwrap();
+        assert_eq!(
+            serde_json::to_value(&reopened).unwrap(),
+            serde_json::to_value(&loaded).unwrap()
+        );
+        assert!(reopened.unlocks.contains("character_damsel"));
+        assert!(reopened.unlocks.contains("shortcut_5"));
+        assert_eq!(
+            reopened.custom_levels["test"],
+            "level text\nkept verbatim\n"
+        );
+    }
+
+    #[test]
+    fn canonical_record_history_requires_bounded_seed_and_explicit_version() {
+        let record = |seed: u64, metadata: &str| {
+            format!(
+                r#"{{"records":[{{"seed":{seed},"rules":"Classic","score":4000,"level":3,"ticks":900,"won":false,{metadata}}}]}}"#
+            )
+        };
+        for simulation_version in [1, u32::MAX] {
+            let json = record(
+                u64::from(u32::MAX),
+                &format!(
+                    r#""rng_algorithm":"gm8_lcg32_v1","simulation_version":{simulation_version}"#
+                ),
+            );
+            let saved = SaveData::from_json(&json).unwrap();
+            let reopened = SaveData::from_json(&saved.to_json().unwrap()).unwrap();
+            assert_eq!(reopened.records[0].rng_algorithm, RngAlgorithm::Gm8Lcg32V1);
+            assert_eq!(reopened.records[0].simulation_version, simulation_version);
+            assert_eq!(reopened.records[0].seed, u64::from(u32::MAX));
+            assert!(reopened.records[0].fastest_eligible);
+        }
+        for (seed, metadata) in [
+            (
+                u64::from(u32::MAX) + 1,
+                r#""rng_algorithm":"gm8_lcg32_v1","simulation_version":1"#,
+            ),
+            (42, r#""rng_algorithm":"gm8_lcg32_v1"#),
+            (
+                42,
+                r#""rng_algorithm":"gm8_lcg32_v1","simulation_version":0"#,
+            ),
+            (42, r#""rng_algorithm":"future_rng","simulation_version":1"#),
+        ] {
+            assert!(SaveData::from_json(&record(seed, metadata)).is_err());
+        }
+        let legacy = SaveData::from_json(&record(
+            u64::MAX,
+            r#""rng_algorithm":"legacy_splitmix64_v1","simulation_version":1"#,
+        ))
+        .unwrap();
+        assert_eq!(legacy.records[0].seed, u64::MAX);
+        assert_eq!(legacy.records[0].simulation_version, 1);
     }
 
     #[test]

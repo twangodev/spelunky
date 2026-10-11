@@ -89,9 +89,10 @@ fn source_displacement(v: f64, time: u64) -> f64 {
 
 // This oracle does not call production range(), unit(), spawn(), or Create.
 // It transcribes source rand=floor(random(n)) and the current pinned RNG's
-// raw output adapter. It checks ordering, not original PRNG equivalence.
+// raw32 / 2^32 adapter from the frozen original executable proof. It checks
+// source draw ordering; this is not an original gameplay runtime capture.
 fn literal_unit(rng: &mut Rng) -> f64 {
-    (rng.next_u64() >> 11) as f64 / (1_u64 << 53) as f64
+    rng.next_u64() as f64 / 4_294_967_296.0
 }
 
 #[test]
@@ -163,8 +164,8 @@ fn ordinary_pistol_shots_kill_authored_tomb_with_interleaved_bone_creates_and_la
             let mut expected = Vec::new();
             for _ in 0..4 {
                 let pos = Vec2::new(
-                    origin.x + 14.0 + (expected_rng.next_u64() % 5) as f64,
-                    origin.y + 12.0 + (expected_rng.next_u64() % 7) as f64,
+                    origin.x + 14.0 + ((expected_rng.next_u64() * 5) >> 32) as f64,
+                    origin.y + 12.0 + ((expected_rng.next_u64() * 7) >> 32) as f64,
                 );
                 // oDrawnSprite/oDetritus defaults then oBone's four RNG draws,
                 // completed before the following instance_create origin.
@@ -172,16 +173,17 @@ fn ordinary_pistol_shots_kill_authored_tomb_with_interleaved_bone_creates_and_la
                     literal_unit(&mut expected_rng) * 4.0 - literal_unit(&mut expected_rng) * 4.0,
                     -1.0 - literal_unit(&mut expected_rng) * 2.0,
                 );
-                let gravity = (1 + expected_rng.next_u64() % 6) as f64 * 0.1;
+                let gravity = (1 + ((expected_rng.next_u64() * 6) >> 32)) as f64 * 0.1;
                 expected.push((pos, vel, gravity));
             }
             let expected_fly = if actor.state == 3 && (7.0..=12.0).contains(&actor.animation) {
                 let pos = Vec2::new(
                     origin.x + if actor.facing < 0 { 8.0 } else { 24.0 },
-                    origin.y + 12.0 + (expected_rng.next_u64() % 5) as f64,
+                    origin.y + 12.0 + ((expected_rng.next_u64() * 5) >> 32) as f64,
                 );
                 let vy = 0.5 - 3.0 * literal_unit(&mut expected_rng); // own Fly Create
-                let vx = (3 + expected_rng.next_u64() % 3) as f64 * f64::from(actor.facing);
+                let vx =
+                    (3 + ((expected_rng.next_u64() * 3) >> 32)) as f64 * f64::from(actor.facing);
                 Some((pos, Vec2::new(vx, vy)))
             } else {
                 None
@@ -351,10 +353,10 @@ fn lethal_ordinary_pistol_during_attack_still_emits_source_post_destroy_fly() {
         }
         let pos = Vec2::new(
             origin.x + if target.facing < 0 { 8.0 } else { 24.0 },
-            origin.y + 12.0 + (expected_rng.next_u64() % 5) as f64,
+            origin.y + 12.0 + ((expected_rng.next_u64() * 5) >> 32) as f64,
         );
         let vy = 0.5 - 3.0 * literal_unit(&mut expected_rng);
-        let vx = (3 + expected_rng.next_u64() % 3) as f64 * f64::from(target.facing);
+        let vx = (3 + ((expected_rng.next_u64() * 3) >> 32)) as f64 * f64::from(target.facing);
         let vel = Vec2::new(vx, vy);
         game.step(&InputFrame::default());
         assert!(game.world.entity(lord).is_none());

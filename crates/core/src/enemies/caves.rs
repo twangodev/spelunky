@@ -1046,9 +1046,12 @@ mod tests {
 
     #[test]
     fn natural_caveman_sight_dies_at_a_wall_and_open_path_still_alerts() {
+        // oCaveman Step's first idle-to-walk transition draws rand(0,1).
+        // Canonical seed 16 first yields raw 2156413009, so multiply-high
+        // range(2) selects RIGHT and casts sight toward the authored wall.
         for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
             for wall in [false, true] {
-                let mut game = Game::shell(42, rules);
+                let mut game = Game::shell(16, rules);
                 for x in 0..game.world.width {
                     game.world.set_tile(x, 10, "oBlock");
                 }

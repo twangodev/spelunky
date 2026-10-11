@@ -903,6 +903,13 @@ mod tests {
             .find(|seed| crate::model::Rng::new(*seed).range(12) == 0)
             .unwrap();
         let mut g = Game::shell(seed, RulesPreset::Classic);
+        // Keep the player and bomb near the same camera region throughout the
+        // fuse. In an empty shell the falling player can deactivate the bomb,
+        // which correctly pauses its alarms rather than counting forty ticks.
+        for x in 0..g.world.width {
+            g.world.set_tile(x, 10, "oHardBlock");
+        }
+        g.player.pos = Vec2::new(160.0, 152.0);
         let pos = g.player.pos;
         g.spawn("oChest", pos);
         assert!(interact(
@@ -926,8 +933,12 @@ mod tests {
         assert_eq!(bomb.alarms[1], 40);
         assert_eq!(bomb.image_speed(), 1.);
         assert_eq!(bomb.sprite, "sBombArmed");
-        for _ in 0..39 {
+        for elapsed in 1..=39 {
+            assert!(g.world.entity(bomb_id).unwrap().engine_active);
             g.step(&InputFrame::default());
+            let bomb = g.world.entity(bomb_id).unwrap();
+            assert!(bomb.engine_active, "fuse tick {elapsed}");
+            assert_eq!(bomb.alarms[1], 40 - elapsed, "fuse tick {elapsed}");
         }
         assert!(g.world.entity(bomb_id).is_some());
         assert!(

@@ -1308,13 +1308,21 @@ mod tests {
     fn temple_exit_smash_moves_away_and_allows_a_local_exit_interaction() {
         use crate::model::{Game, InputFrame, RulesPreset, RunState};
 
-        let mut game = Game::shell(37, RulesPreset::Classic);
+        // A bounded canonical search selected seed 118 solely for its natural
+        // exit-origin LEFT SmashTrap and clear, supported local approach,
+        // before any player or trap steps. The approach is checked below.
+        let mut game = Game::shell(118, RulesPreset::Classic);
         // Retain the natural exit-trap layout with both features made earlier:
         // scrInitLevel:180,188 skips each scheduling chain once already made.
         game.flags.insert("made_udjat_eye".into());
         game.flags.insert("made_market_entrance".into());
         game.world = generate(&mut game.rng, 13, &game.flags);
-        assert_eq!(game.world.exit, Vec2::new(424.0, 472.0));
+        // The static canonical discovery pins this natural layout before
+        // any movement. Source doors are created at a tile origin and the
+        // logical interaction position is its center.
+        assert_eq!(game.world.exit, Vec2::new(584.0, 472.0));
+        assert_eq!(game.world.exit.x % 16.0, 8.0);
+        assert_eq!(game.world.exit.y % 16.0, 8.0);
         let door_origin = Vec2::new(game.world.exit.x - 8.0, game.world.exit.y - 8.0);
         let trap = game
             .world
@@ -1326,11 +1334,24 @@ mod tests {
         assert_eq!(trap.data.get("direction"), Some(&2.0));
         assert!(game.world.solid_at(door_origin.x, door_origin.y));
         assert!(!game.world.tiles_point(door_origin, "oSolid"));
+        assert!(!game.world.collides_except(
+            crate::model::Rect::new(game.world.exit.x - 38., game.world.exit.y - 40., 30., 48.,),
+            trap_id,
+        ));
+        for offset in -37..=-8 {
+            assert!(game.world.tiles_point(
+                Vec2::new(
+                    game.world.exit.x + f64::from(offset),
+                    game.world.exit.y + 8.
+                ),
+                "oSolid",
+            ));
+        }
 
         // This is a focused interaction fixture near the generated exit, not
         // an entrance-to-exit navigation replay. Retain every generated object
         // and the post-generation RNG; only ordinary inputs follow this pose.
-        game.player.pos = Vec2::new(392.0, 472.0);
+        game.player.pos = Vec2::new(game.world.exit.x - 32.0, game.world.exit.y);
         game.player.previous_pos = game.player.pos;
         let initial_health = game.player.health;
         let mut vacated = false;
@@ -1338,7 +1359,7 @@ mod tests {
             game.step(&InputFrame {
                 jump_pressed: tick == 2,
                 jump: (2..10).contains(&tick),
-                right: tick >= 2 && game.player.pos.x < 422.0,
+                right: tick >= 2 && game.player.pos.x < game.world.exit.x - 2.0,
                 up: true,
                 ..InputFrame::default()
             });

@@ -2089,11 +2089,12 @@ mod tests {
 
     #[test]
     fn skull_creation_precedes_launch_overrides_and_loop_condition_is_resampled() {
-        let mut game = Game::shell(2, RulesPreset::Classic);
+        let mut game = Game::shell(194, RulesPreset::Classic);
         game.player.pos = Vec2::new(200.0, 200.0);
         let mut expected_rng = game.rng.clone();
-        // Seed 2 executes two bodies: each has four Bone Create draws plus
-        // three launch draws, with three separate loop-condition draws.
+        // Canonical seed 194 gives loop bounds 1, 2, 1 at draws 1, 9, 17:
+        // resampling runs two bodies even though the first bound was one.
+        // Each body consumes four Bone Create draws before three launch draws.
         for _ in 0..17 {
             expected_rng.next_u64();
         }
@@ -2114,6 +2115,7 @@ mod tests {
                 .all(|e| e.value("world_effect_initialized") == 1.0)
         );
         let ids = [bones[0].id, bones[1].id];
+        assert_eq!(game.rng.state_bits(), 1_451_304_187);
         assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
         game.step(&InputFrame::default());
         assert_eq!(
@@ -2824,7 +2826,7 @@ mod jar_collision_source_tests {
         }
         literal_loot(rng, pos, left, right, out)
     }
-    fn branch_seeds() -> BTreeSet<u64> {
+    fn branch_seeds() -> BTreeSet<u32> {
         let mut first = BTreeMap::new();
         let mut second = BTreeMap::new();
         let mut bullet = BTreeMap::new();

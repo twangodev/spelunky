@@ -1523,15 +1523,18 @@ mod tests {
     }
 
     #[test]
-    fn jungle_column_natural_dark_seed86_keeps_tiki_at_spear_banned_column() {
-        // Fixed from a bounded real generate(0..512, Jungle5, default flags)
-        // discovery. Seed27 was the historical counterexample before the
+    fn historical_jungle_column_dark_seed86_keeps_tiki_at_spear_banned_column() {
+        // Historical SplitMix layout counterexample, fixed from a bounded
+        // real generate(0..512, Jungle5, default flags) discovery. Seed27 was
+        // the historical counterexample before the
         // corrected InitLevel Udjat/Market draws shifted later population RNG.
         // This is an unmodified natural layout/darkness selection,
-        // not a guard-entry RNG state or a carved room fixture. scrEntityGen
-        // :236 permits Tiki at rawx496; only the separate :240 spear is banned.
+        // not a canonical seed-layout claim or a carved room fixture.
+        // Canonical authored-column controls separately preserve branch coverage.
+        // scrEntityGen:236 permits Tiki at rawx496; only the separate :240
+        // spear is banned.
         // The generated support satisfies the source side-clearance OR.
-        let world = super::super::generate(&mut Rng::new(86), 5, &BTreeSet::new());
+        let world = super::super::generate(&mut Rng::legacy(86), 5, &BTreeSet::new());
         assert!(world.dark, "darkness is selected naturally for this seed");
         assert_eq!(world.tile(31, 31).unwrap().object, "oLush");
         assert_eq!(world.tile(31, 32).unwrap().object, "oLush");
@@ -1575,20 +1578,24 @@ mod tests {
         dynamic.unwrap_or_else(|| world.spawn("oTerrainMetadata", at(20, 5)))
     }
 
-    fn arrow_source_winning_seed(area: Area) -> u64 {
-        // Independent literal seed controls: Mines6=>rand4=1, Temple11=>rand3=1.
-        if area == Area::Mines { 6 } else { 11 }
+    fn arrow_source_winning_seed(area: Area) -> u32 {
+        // Independent canonical guard-entry controls from the unsigned LCG:
+        // Mines0 wins, consumes twelve debris draws, then loses on a second
+        // receiver. Temple1 wins then loses, with no clean-death debris draws.
+        if area == Area::Mines { 0 } else { 1 }
     }
 
     #[test]
-    fn source_arrow_near_then_far_seed6_consumes_protected_guard() {
+    fn source_arrow_near_then_far_canonical_control_consumes_protected_guard() {
         let mut world = World::new(42, 34, Area::Mines, 1);
         world.entrance = at(1, 1);
         world.spawn("oEntrance", Vec2::new(16.0, 16.0));
         world.set_tile(3, 1, "oBlock");
         world.set_tile(11, 1, "oBlock");
         world.set_tile(12, 1, "oHardBlock");
-        let mut actual = Rng::new(6);
+        // Independent canonical seed4 yields range4=[0,1]: the near
+        // protected receiver consumes its winning roll before the far loss.
+        let mut actual = Rng::new(4);
         let mut expected = actual.clone();
         assert_eq!(1 + expected.range(4), 1);
         assert_eq!(1 + expected.range(4), 2);
@@ -2043,14 +2050,14 @@ mod tests {
     fn jungle_spear_guard_bright_room_consumes_tiki_roll_before_spear() {
         // scrEntityGen:236-241 after the outer candidate statement matched.
         // GM8 evaluates rand20 even when darkLevel is false, then enters the
-        // separate else-if rand12 statement. Seed19 is guard-entry RNG state,
-        // not a generated-world seed or a claim about the complete GM stream.
+        // separate else-if rand12 statement. Canonical seed2 is guard-entry
+        // RNG state, not a generated-world seed or complete GM stream claim.
         let mut world = jungle_spear_guard_fixture(false, false);
         let water = WaterMasks::new(&world);
-        let mut actual = Rng::new(19);
+        let mut actual = Rng::new(2);
         let mut source = actual.clone();
-        assert_eq!(source.range(20), 16);
-        assert_eq!(source.range(12), 2);
+        assert_eq!(source.range(20), 1);
+        assert_eq!(source.range(12), 8);
         spear(&mut world, &mut actual, &water, 5, 5, false, true);
         assert!(
             world.entities.is_empty(),
@@ -2068,10 +2075,10 @@ mod tests {
         let water = WaterMasks::new(&world);
         assert!(water.wet(5, 3), "upper water must have a source mask");
         assert!(!water.wet(5, 4), "outer spear cell stays dry");
-        let mut actual = Rng::new(19);
+        let mut actual = Rng::new(2);
         let mut source = actual.clone();
-        assert_eq!(source.range(20), 16);
-        assert_eq!(source.range(12), 2);
+        assert_eq!(source.range(20), 1);
+        assert_eq!(source.range(12), 8);
         spear(&mut world, &mut actual, &water, 5, 5, false, true);
         assert!(world.entities.is_empty());
         assert_eq!(actual.next_u64(), source.next_u64());
@@ -2081,7 +2088,8 @@ mod tests {
     fn jungle_spear_guard_tiki_success_skips_separate_spear_statement() {
         let mut world = jungle_spear_guard_fixture(true, false);
         let water = WaterMasks::new(&world);
-        let mut actual = Rng::new(29);
+        // Canonical seed0 wins the first Tiki guard; no Spear draw follows.
+        let mut actual = Rng::new(0);
         let mut source = actual.clone();
         assert_eq!(source.range(20), 0);
         spear(&mut world, &mut actual, &water, 5, 5, false, true);
@@ -2097,9 +2105,10 @@ mod tests {
         for dark in [false, true] {
             let mut world = jungle_spear_guard_fixture(dark, false);
             let water = WaterMasks::new(&world);
-            let mut actual = Rng::new(0);
+            // Independently frozen canonical range20/12=[3,0].
+            let mut actual = Rng::new(6);
             let mut source = actual.clone();
-            assert_ne!(source.range(20), 0);
+            assert_eq!(source.range(20), 3);
             assert_eq!(source.range(12), 0);
             spear(&mut world, &mut actual, &water, 5, 5, false, true);
             let births: Vec<_> = world
@@ -2149,10 +2158,11 @@ mod tests {
             for dark in [false, true] {
                 let mut world = World::new(42, 34, Area::Mines, 1);
                 world.dark = dark;
+                // Independently frozen canonical seed39: five failed guards,
+                // exact literal rolls and tail; original no-birth checks remain.
                 let mut actual = Rng::new(39);
                 let mut oracle = actual.clone();
-                for (denominator, literal_value) in
-                    [(40, 5), (60, 21), (40, 31), (60, 42), (80, 15)]
+                for (denominator, literal_value) in [(40, 9), (60, 24), (40, 8), (60, 57), (80, 66)]
                 {
                     assert_eq!(1 + oracle.range(denominator), literal_value);
                 }
@@ -2174,9 +2184,10 @@ mod tests {
     fn mines_ceiling_eager_lamp_success_stops_later_statement_rolls() {
         let mut world = World::new(42, 34, Area::Mines, 1);
         world.dark = true;
-        let mut actual = Rng::new(0);
+        // Canonical seed6 independently yields the two-guard tape [8,1].
+        let mut actual = Rng::new(6);
         let mut oracle = actual.clone();
-        assert_eq!(1 + oracle.range(40), 16); // giant flag false, still evaluated
+        assert_eq!(1 + oracle.range(40), 8); // giant flag false, still evaluated
         assert_eq!(1 + oracle.range(60), 1); // Lamp succeeds: later else-if bodies wait
         mines_ceiling(&mut world, &mut actual, false, 20, 5);
         assert_eq!(world.entities.len(), 1);
@@ -2189,7 +2200,8 @@ mod tests {
     fn mines_ceiling_eager_giant_success_stops_all_later_rolls() {
         let mut world = World::new(42, 34, Area::Mines, 1);
         world.dark = true;
-        let mut actual = Rng::new(29);
+        // Canonical seed0 wins the first guard and suppresses later draws.
+        let mut actual = Rng::new(0);
         let mut oracle = actual.clone();
         assert_eq!(1 + oracle.range(40), 1);
         mines_ceiling(&mut world, &mut actual, true, 20, 5);
@@ -2207,9 +2219,10 @@ mod tests {
                 world.set_tile(21, 6, "oBlock");
             }
             let before = world.entities.len();
+            // The canonical seed39 tape reaches all five losing conditions.
             let mut actual = Rng::new(39);
             let mut oracle = actual.clone();
-            for (denominator, literal_value) in [(40, 5), (60, 21), (40, 31), (60, 42), (80, 15)] {
+            for (denominator, literal_value) in [(40, 9), (60, 24), (40, 8), (60, 57), (80, 66)] {
                 assert_eq!(1 + oracle.range(denominator), literal_value);
             }
             mines_ceiling(&mut world, &mut actual, true, 20, 5);
@@ -2244,7 +2257,8 @@ mod tests {
             let mut world = World::new(42, 34, Area::Temple, 13);
             world.set_tile(20, 20, "oTemple");
             world.spawn("oShopkeeper", Vec2::new(320.0, 320.0));
-            let mut actual = Rng::new(29);
+            // Canonical seed0 independently wins the first range100 guard.
+            let mut actual = Rng::new(0);
             let mut oracle = actual.clone();
             // Literal :395 precedes :397. The shop suppresses every later
             // receiver statement, so this source-statement oracle is complete.
@@ -2571,7 +2585,8 @@ mod tests {
                 source_family_distance(&world, saved, "oEntrance"),
                 1_000_000.0
             );
-            let mut actual = Rng::new(29);
+            // Canonical seed0 independently wins the first range100 guard.
+            let mut actual = Rng::new(0);
             let mut oracle = actual.clone();
             if !blocked {
                 assert_eq!(oracle.range(100), 0);
@@ -3432,14 +3447,17 @@ mod tests {
 
     #[test]
     fn eager_ice_web_exclusion_still_changes_downstream_treasure() {
+        // Independent canonical controls preserve the complete source branch
+        // vectors: all twelve alcove rolls lose; tunnel GoldBar wins only
+        // after Rock/Jar and the eager Ice-excluded web roll have been consumed.
         for (alcove, seed, limits, expected_object) in [
             (
                 true,
-                13,
+                3,
                 vec![100, 40, 5, 10, 15, 8, 22, 3, 6, 6, 8, 10],
                 None,
             ),
-            (false, 2, vec![100, 40, 10, 4], Some("oGoldBar")),
+            (false, 12, vec![100, 40, 10, 4], Some("oGoldBar")),
         ] {
             let mut world = World::new(16, 16, Area::Ice, 9);
             world.entrance = at(1, 1);
@@ -3472,10 +3490,12 @@ mod tests {
 
     #[test]
     fn eager_web_roll_waits_for_rock_jar_returns_and_udjat_branch_stops() {
+        // Canonical guard tapes were derived independently from raw LCG
+        // states, preserving the Rock/Jar early returns and failed Udjat body.
         for (seed, limits, object, udjat, chest_chance) in [
-            (29, vec![100], Some("oRock"), false, 8),
-            (25, vec![100, 40], Some("oJar"), false, 8),
-            (0, vec![100, 40, 5, 8], None, true, 7),
+            (0, vec![100], Some("oRock"), false, 8),
+            (6, vec![100, 40], Some("oJar"), false, 8),
+            (1, vec![100, 40, 5, 8], None, true, 7),
         ] {
             let mut world = World::new(16, 16, Area::Mines, 2);
             world.entrance = at(1, 1);
@@ -3515,14 +3535,16 @@ mod tests {
             let water = WaterMasks::new(&world);
             let mut state = treasure_state();
             state.damsel = existing;
-            let mut actual = Rng::new(6);
+            // Independent canonical seed67 wins Damsel after five losses;
+            // existing Damsel suppresses its body, then bones loses and gold wins.
+            let mut actual = Rng::new(67);
             let mut source = actual.clone();
             // Source :45/46/56/66/70/74. The Damsel roll succeeds here.
-            for (limit, value) in [(100, 92), (40, 33), (5, 1), (10, 8), (15, 12), (8, 0)] {
+            for (limit, value) in [(100, 10), (40, 24), (5, 3), (10, 9), (15, 14), (8, 0)] {
                 assert_eq!(source.range(limit), value);
             }
             let expected_object = if existing {
-                assert_eq!(source.range(38), 18);
+                assert_eq!(source.range(38), 30);
                 assert_eq!(source.range(3), 0);
                 "oGoldBar"
             } else {
@@ -3629,7 +3651,8 @@ mod tests {
         world.entrance = at(1, 1);
         world.exit = at(37, 30);
         world.set_tile(10, 36, "oDark");
-        let mut actual = Rng::new(1297);
+        // Independent canonical seed2741: range30, range2, range100=[0,0,0].
+        let mut actual = Rng::new(2741);
         let mut source = actual.clone();
         assert_eq!(source.range(30), 0); // UFO chance succeeds.
         let shift = source.range(2); // Synchronous UFO Create.
@@ -3756,7 +3779,8 @@ mod tests {
         world.set_tile(10, 10, "oDark");
         world.spawn("oGoldBars", Vec2::new(160.0, 152.0));
         let water = WaterMasks::new(&world);
-        let mut actual = Rng::new(6491);
+        // Canonical seed0 wins the first normal-fallback range40 guard.
+        let mut actual = Rng::new(0);
         let mut source = actual.clone();
         assert_eq!(source.range(40), 0); // No Rock/ Jar rolls when colStuff=true.
         treasure(
@@ -3830,7 +3854,9 @@ mod tests {
         // rand(0,1), Piranha dir rand(1,2), UFO shiftToggle rand(0,1),
         // Scarab counter rand(10,30). Damsel Create has no random statement;
         // scrTreasureGen clears its initial price after instance_create returns.
-        for seed in [0, 1, 23, u64::MAX] {
+        // New canonical seeds use the full valid u32 boundary; legacy u64
+        // import and raw vectors have separate explicit compatibility tests.
+        for seed in [0, 1, 23, u32::MAX] {
             let mut world = World::new(12, 12, Area::Jungle, 5);
             world.set_tile(4, 4, "oWater");
             let mut actual = Rng::new(seed);
@@ -4062,9 +4088,10 @@ mod tests {
     fn eager_market_schedule_reaches_actual_entrance_placement() {
         // InitLevel :187-193 has only the made flag as its outer guard.
         // Udjat is already completed here, isolating the Market chain's
-        // guard-entry RNG. SplitMix tapes are independent of placement:
+        // guard-entry RNG. Historical SplitMix tapes are independent of placement:
         // seed3 => range3=0; seed0 => range3=1, range2=0;
-        // seed1 => range3=2, range2=1. These are not GM8 PRNG claims.
+        // seed1 => range3=2, range2=1. Explicit Legacy preserves these frozen
+        // outcomes; canonical scheduling is covered by the literal-source tests.
         for (level, seed, made, forced, black_market, expected) in [
             (5, 3, false, false, false, true),
             (5, 0, false, false, false, false),
@@ -4076,7 +4103,7 @@ mod tests {
             (5, 0, false, true, false, true),
             (5, 3, true, true, false, false),
         ] {
-            let mut source = Rng::new(seed);
+            let mut source = Rng::legacy(seed);
             let scheduled = if made {
                 false
             } else {
@@ -4103,7 +4130,7 @@ mod tests {
             if black_market {
                 flags.insert("black_market".into());
             }
-            populate(&mut world, &mut Rng::new(seed), &flags);
+            populate(&mut world, &mut Rng::legacy(seed), &flags);
             let entrances: Vec<_> = world
                 .entities
                 .iter()

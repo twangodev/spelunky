@@ -68,7 +68,7 @@ fn actual_fire_frog_bomb_alarm_creates_player_blood_after_velocity_rng() {
             for _ in 0..24 {
                 oracle.next_u64();
             }
-            let _speed = 4 + oracle.next_u64() % 3;
+            let _speed = 4 + ((oracle.next_u64() * 3) >> 32);
             for _ in 0..4 {
                 oracle.next_u64();
             }
@@ -117,7 +117,7 @@ fn naturally_explosion_killed_player_still_receives_source_explosion_callback() 
         let mut callback = g.clone();
         let first = callback.world.next_id;
         let mut oracle = callback.rng.clone();
-        let speed = (4 + oracle.next_u64() % 3) as f64;
+        let speed = (4 + ((oracle.next_u64() * 3) >> 32)) as f64;
         for _ in 0..4 {
             oracle.next_u64();
         }

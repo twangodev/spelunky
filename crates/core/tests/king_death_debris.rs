@@ -1,8 +1,10 @@
 //! Literal oYetiKing Step.xml42-73 death-prefix oracle. Public ordinary Pistol
 //! pickup/fire drives every HP change; no actor/RNG writes occur after birth.
-use spelunky_core::{Game, InputFrame, Rng, RulesPreset, Vec2, catalog, level::Level};
+use spelunky_core::{
+    Game, InputFrame, Rng, RngAlgorithm, RulesPreset, Vec2, catalog, level::Level,
+};
 
-fn arena(seed: u64, rules: RulesPreset) -> (Game, u64) {
+fn arena(seed: u32, rules: RulesPreset) -> (Game, u64) {
     let mut level = Level {
         music: "TEMPLE".into(),
         starting_life: 99, // ordinary authored level metadata, no mid-combat healing
@@ -129,13 +131,30 @@ fn displacement(value: f64, time: u64) -> f64 {
     (value.abs().floor() + f64::from(extra)) * value.signum()
 }
 
+// Independent arithmetic over one raw draw, not production range()/unit().
+// Canonical mapping follows frozen EXE-derived math; Legacy retains historical
+// SplitMix mapping. These controls are not original gameplay runtime captures.
+fn rand(rng: &mut Rng, width: u64) -> u32 {
+    assert!((1..=u64::from(u32::MAX)).contains(&width));
+    let algorithm = rng.algorithm();
+    let raw = rng.next_u64();
+    match algorithm {
+        RngAlgorithm::Gm8Lcg32V1 => ((raw * width) >> 32) as u32,
+        RngAlgorithm::LegacySplitMix64V1 => (raw % width) as u32,
+    }
+}
 fn unit(rng: &mut Rng) -> f64 {
-    (rng.next_u64() >> 11) as f64 / (1_u64 << 53) as f64
+    let algorithm = rng.algorithm();
+    let raw = rng.next_u64();
+    match algorithm {
+        RngAlgorithm::Gm8Lcg32V1 => raw as f64 / 4_294_967_296.0,
+        RngAlgorithm::LegacySplitMix64V1 => (raw >> 11) as f64 / 9_007_199_254_740_992.0,
+    }
 }
 
 fn launch(rng: &mut Rng) -> (Vec2, f64) {
     let velocity = Vec2::new(unit(rng) * 4.0 - unit(rng) * 4.0, -1.0 - unit(rng) * 2.0);
-    let gravity = (1 + rng.next_u64() % 6) as f64 * 0.1;
+    let gravity = (1 + rand(rng, 6)) as f64 * 0.1;
     (velocity, gravity)
 }
 
@@ -190,8 +209,8 @@ fn ordinary_pistol_kills_king_with_three_blood_four_bones_before_four_loot_rolls
             let mut expected = game.rng.clone();
             // Caller argument draws occur once, even if the Blood script were capped.
             let blood_pos = Vec2::new(
-                origin.x + 14.0 + (expected.next_u64() % 5) as f64,
-                origin.y + 14.0 + (expected.next_u64() % 5) as f64,
+                origin.x + 14.0 + (rand(&mut expected, 5)) as f64,
+                origin.y + 14.0 + (rand(&mut expected, 5)) as f64,
             );
             let mut particles = Vec::new();
             for _ in 0..3 {
@@ -200,24 +219,24 @@ fn ordinary_pistol_kills_king_with_three_blood_four_bones_before_four_loot_rolls
             }
             for _ in 0..4 {
                 let pos = Vec2::new(
-                    origin.x + 14.0 + (expected.next_u64() % 5) as f64,
-                    origin.y + 14.0 + (expected.next_u64() % 7) as f64,
+                    origin.x + 14.0 + (rand(&mut expected, 5)) as f64,
+                    origin.y + 14.0 + (rand(&mut expected, 7)) as f64,
                 );
                 let (velocity, gravity) = launch(&mut expected);
                 particles.push(("oBone", pos, velocity, gravity));
             }
             let mut loot = Vec::new();
             for _ in 0..4 {
-                let object = if expected.next_u64() % 12 == 0 {
+                let object = if rand(&mut expected, 12) == 0 {
                     "oSpikeShoes"
-                } else if expected.next_u64() % 2 == 0 {
+                } else if rand(&mut expected, 2) == 0 {
                     "oSapphireBig"
                 } else {
                     "oRopePile"
                 };
                 let velocity = Vec2::new(
-                    (expected.next_u64() % 4) as f64 - (expected.next_u64() % 4) as f64,
-                    -((1 + expected.next_u64() % 2) as f64),
+                    (rand(&mut expected, 4)) as f64 - (rand(&mut expected, 4)) as f64,
+                    -((1 + rand(&mut expected, 2)) as f64),
                 );
                 loot.push((object, velocity));
             }

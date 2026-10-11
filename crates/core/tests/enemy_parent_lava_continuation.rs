@@ -3,7 +3,9 @@
 //! sprite, RNG, or terrain edits. First-step pool fixtures are authored initial
 //! contacts; the final two tests reach the same branch through default AI motion.
 //! Source: oEnemy Step78-88; oTombLord Step42-56; oShopkeeper Step505-547.
-use spelunky_core::{Area, Entity, Game, GameEvent, InputFrame, Rng, RulesPreset, Vec2, World};
+use spelunky_core::{
+    Area, Entity, Game, GameEvent, InputFrame, Rng, RngAlgorithm, RulesPreset, Vec2, World,
+};
 
 #[derive(Clone, Copy, Debug)]
 enum Pool {
@@ -12,7 +14,7 @@ enum Pool {
     HeadAndFeet,
 }
 
-fn room(seed: u64, rules: RulesPreset, level: u32, upper_entrance: bool) -> Game {
+fn room(seed: u32, rules: RulesPreset, level: u32, upper_entrance: bool) -> Game {
     let mut game = Game::shell(seed, rules);
     game.world = World::new(30, 20, Area::Temple, level);
     game.world.name = "rLevel".into();
@@ -59,13 +61,25 @@ fn alive<'a>(game: &'a Game, object: &str) -> Vec<&'a Entity> {
     values
 }
 
-// Independent source order adapter: raw PRNG outputs, not production range(),
-// unit(), movement, or Create helpers. This does not claim original GM8 PRNG parity.
+// Independent arithmetic over one raw draw, not production range()/unit().
+// Canonical mapping follows frozen EXE-derived math; Legacy retains historical
+// SplitMix mapping. These controls are not original gameplay runtime captures.
 fn rand(rng: &mut Rng, width: u64) -> u32 {
-    (rng.next_u64() % width) as u32
+    assert!((1..=u64::from(u32::MAX)).contains(&width));
+    let algorithm = rng.algorithm();
+    let raw = rng.next_u64();
+    match algorithm {
+        RngAlgorithm::Gm8Lcg32V1 => ((raw * width) >> 32) as u32,
+        RngAlgorithm::LegacySplitMix64V1 => (raw % width) as u32,
+    }
 }
 fn random(rng: &mut Rng) -> f64 {
-    (rng.next_u64() >> 11) as f64 / (1_u64 << 53) as f64
+    let algorithm = rng.algorithm();
+    let raw = rng.next_u64();
+    match algorithm {
+        RngAlgorithm::Gm8Lcg32V1 => raw as f64 / 4_294_967_296.0,
+        RngAlgorithm::LegacySplitMix64V1 => (raw >> 11) as f64 / 9_007_199_254_740_992.0,
+    }
 }
 
 fn tomb_oracle(rng: &mut Rng, origin: Vec2) -> Vec<(Vec2, Vec2, f64)> {
@@ -446,4 +460,22 @@ fn ordinary_unarmed_keeper_walks_into_head_and_foot_lava_without_losing_credit()
             assert!(witnessed, "bounded source ATTACK walk must reach Lava");
         }
     }
+}
+
+#[test]
+fn independent_rng_oracles_preserve_canonical_and_legacy_mapping_and_one_draw() {
+    // Canonical first word1365616851 is a frozen static EXE prediction for seed42.
+    let mut canonical = Rng::new(42);
+    assert_eq!(rand(&mut canonical, 5), 1);
+    assert_eq!(canonical.state_bits(), 1_365_616_851);
+    let mut legacy = Rng::legacy(42);
+    assert_eq!(rand(&mut legacy, 5), 3);
+    assert_eq!(legacy.state_bits(), 11_400_714_819_323_198_527);
+
+    let mut canonical = Rng::new(0);
+    assert_eq!(random(&mut canonical).to_bits(), 0x3df0_0000_0000_0000);
+    assert_eq!(canonical.state_bits(), 1);
+    let mut legacy = Rng::legacy(0);
+    assert_eq!(random(&mut legacy).to_bits(), 0x3fec4415072f63b9);
+    assert_eq!(legacy.state_bits(), 0x9e37_79b9_7f4a_7c15);
 }

@@ -303,7 +303,7 @@ fn actual_teleporter_pickup_and_activation_destroy_sticky_receiver() {
             "activation precedes the natural fuse"
         );
         assert_eq!(
-            g.rng.clone().next_u64() % 5,
+            (g.rng.clone().next_u64() * 5) >> 32,
             0,
             "source first teleport is64px"
         );

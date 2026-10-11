@@ -1,7 +1,7 @@
 //! Source-facing regressions: authored initial scenes and ordinary full steps.
 use super::*;
 
-fn room(seed: u64, rules: RulesPreset, player_x: f64) -> Game {
+fn room(seed: u32, rules: RulesPreset, player_x: f64) -> Game {
     let mut game = Game::shell(seed, rules);
     game.world = World::new(20, 16, Area::Mines, 1);
     game.world.name = "rLevel".into();
@@ -88,17 +88,36 @@ fn natural_spider_spring_uses_inherited_left() {
 }
 
 #[test]
-fn natural_snake_spring_preserves_its_explicit_right_override() {
+fn natural_snake_spring_uses_step_facing_after_its_right_create() {
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
-        let mut game = room(42, rules, 40.0);
-        let spring = game.spawn("oSpringTrap", Vec2::new(96.0, 144.0));
-        let snake = game.spawn("oSnake", Vec2::new(96.0, 144.0));
-        game.step(&crate::InputFrame::default());
-        let snake = game.world.entity(snake).unwrap();
-        assert_eq!(snake.pos, Vec2::new(99.0, 128.0));
-        assert_eq!(snake.vel, Vec2::new(3.5, -8.0));
-        assert_eq!(game.world.entity(spring).unwrap().state, 1);
-        assert_eq!(boings(&game), 1);
+        // Snake Create finishes RIGHT, but its first IDLE Step selects a
+        // new facing before Spring's automatic Collision with oEnemy.
+        // Independent GM8 LCG first draws: seed0 -> 1 (LEFT),
+        // seed16 -> 2_156_413_009 (RIGHT). No Create in this room draws RNG.
+        for (seed, expected_facing, expected_x_vel) in [(0_u32, -1, 1.5), (16, 1, 3.5)] {
+            let mut game = room(seed, rules, 40.0);
+            let spring = game.spawn("oSpringTrap", Vec2::new(96.0, 144.0));
+            let snake = game.spawn("oSnake", Vec2::new(96.0, 144.0));
+            let created = game.world.entity(snake).unwrap();
+            assert_eq!(created.facing, 1);
+            assert_eq!(created.vel.x, 2.5);
+            assert_eq!((created.state, created.timer), (0, 0));
+            let first = seed.wrapping_mul(0x0808_8405).wrapping_add(1);
+            let direction = ((u64::from(first) * 2) >> 32) as u32;
+            assert_eq!(if direction == 0 { -1 } else { 1 }, expected_facing);
+            assert_eq!(game.rng.clone().next_u64(), u64::from(first));
+            game.step(&crate::InputFrame::default());
+            let snake = game.world.entity(snake).unwrap();
+            assert_eq!(snake.pos, Vec2::new(99.0, 128.0));
+            assert_eq!(snake.facing, expected_facing);
+            assert_eq!(snake.state, 1);
+            assert_eq!(snake.vel, Vec2::new(expected_x_vel, -8.0));
+            assert_eq!(game.world.entity(spring).unwrap().state, 1);
+            assert_eq!(boings(&game), 1);
+            assert_eq!(game.player.health, 4);
+            let next = first.wrapping_mul(0x0808_8405).wrapping_add(1);
+            assert_eq!(game.rng.clone().next_u64(), u64::from(next));
+        }
     }
 }
 
@@ -125,11 +144,12 @@ fn natural_spider_alarm_still_jumps_toward_player_on_the_right() {
 fn natural_fish_swimming_directions_remain_independent_of_inherited_left() {
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         // Source Piranha rand(1,2)==1 selects dir180; otherwise dir0.
-        // These SplitMix seeds exercise both source Create outcomes. DeadFish
-        // Create explicitly selects dir0 without consuming that draw.
+        // Independent GM8 LCG first draws: seed0 -> 1 (mulhi2=0),
+        // seed16 -> 2_156_413_009 (mulhi2=1), exercising both source
+        // Create outcomes. DeadFish selects dir0 without consuming a draw.
         for (object, seed, delta) in [
-            ("oPiranha", 2, -3.0),
-            ("oPiranha", 42, 3.0),
+            ("oPiranha", 0, -3.0),
+            ("oPiranha", 16, 3.0),
             ("oDeadFish", 42, 3.0),
         ] {
             let mut game = room(seed, rules, 40.0);

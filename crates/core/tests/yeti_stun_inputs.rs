@@ -73,10 +73,31 @@ fn pickup_and_wait_for_idle(game: &mut Game, yeti: u64, pistol: u64) {
     panic!("ordinary default Yeti must naturally enter a positive-counter IDLE pause");
 }
 
+// Independent arithmetic over one raw draw, not production range()/unit().
+// Canonical mapping follows frozen EXE-derived math; Legacy retains historical
+// SplitMix mapping. These controls are not original gameplay runtime captures.
+fn rand(rng: &mut Rng, width: u64) -> u32 {
+    assert!((1..=u64::from(u32::MAX)).contains(&width));
+    let algorithm = rng.algorithm();
+    let raw = rng.next_u64();
+    match algorithm {
+        RngAlgorithm::Gm8Lcg32V1 => ((raw * width) >> 32) as u32,
+        RngAlgorithm::LegacySplitMix64V1 => (raw % width) as u32,
+    }
+}
+fn random(rng: &mut Rng) -> f64 {
+    let algorithm = rng.algorithm();
+    let raw = rng.next_u64();
+    match algorithm {
+        RngAlgorithm::Gm8Lcg32V1 => raw as f64 / 4_294_967_296.0,
+        RngAlgorithm::LegacySplitMix64V1 => (raw >> 11) as f64 / 9_007_199_254_740_992.0,
+    }
+}
+
 fn literal_blood(rng: &mut Rng) -> (Vec2, f64) {
-    let x = rng.unit() * 4.0 - rng.unit() * 4.0;
-    let y = -1.0 - rng.unit() * 2.0;
-    let gravity = f64::from(1 + rng.range(6)) * 0.1;
+    let x = random(rng) * 4.0 - random(rng) * 4.0;
+    let y = -1.0 - random(rng) * 2.0;
+    let gravity = f64::from(1 + rand(rng, 6)) * 0.1;
     (Vec2::new(x, y), gravity)
 }
 
@@ -194,7 +215,7 @@ fn ordinary_pistol_hit_yeti_bleeds_once_on_landing_and_recovers_without_stale_id
             "natural supported stun must recover within its bounded trajectory"
         );
         let mut expected = game.rng.clone();
-        let facing = if expected.range(2) == 0 { -1 } else { 1 };
+        let facing = if rand(&mut expected, 2) == 0 { -1 } else { 1 };
         game.step(&InputFrame::default());
         let actor = game.world.entity(yeti).unwrap();
         assert_eq!(actor.state, 1, "next IDLE Step immediately returns to WALK");
@@ -267,7 +288,7 @@ fn ordinary_pistol_hit_yeti_exhausts_idle_counter_before_recovery() {
         }
         assert!(recovered, "actual ordinary hit must settle and recover");
         let mut expected = game.rng.clone();
-        let facing = if expected.range(2) == 0 { -1 } else { 1 };
+        let facing = if rand(&mut expected, 2) == 0 { -1 } else { 1 };
         game.step(&InputFrame::default());
         let actor = game.world.entity(yeti).unwrap();
         assert_eq!(actor.state, 1);

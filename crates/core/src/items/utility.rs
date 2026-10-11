@@ -508,7 +508,7 @@ mod tests {
         assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
     }
 
-    fn held_teleporter(seed: u64) -> (Game, u64) {
+    fn held_teleporter(seed: u32) -> (Game, u64) {
         let mut game = Game::shell(seed, RulesPreset::Classic);
         game.player.pos = Vec2::new(160.0, 160.0);
         let id = game.spawn("oTeleporter", game.player.pos);
@@ -980,7 +980,7 @@ mod telefrag_blood_source_tests {
         assert!(g.player.pos.x <= 24.0);
         assert_eq!(g.player.health, 4);
         assert_eq!(
-            g.rng.clone().next_u64() % 5,
+            (g.rng.clone().next_u64() * 5) >> 32,
             0,
             "portable seed fixture teleports64px"
         );

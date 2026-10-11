@@ -360,8 +360,10 @@ mod tests {
         // Source generation changes can move or replace a seeded shop. Select
         // an actual Bomb shop with a quiet viewport, without filtering on its
         // welcome result. GiantSpider Create also draws RNG outside the view.
-        let (mut game, keeper, entry, camera) = std::iter::once(20)
-            .chain((0..64).filter(|seed| *seed != 20))
+        // Canonical-RNG seed164 satisfies these preconditions; the original
+        // 0..64 search no longer contains a qualifying generated shop.
+        let (mut game, keeper, entry, camera) = std::iter::once(164)
+            .chain((0..256).filter(|seed| *seed != 164))
             .find_map(|seed| {
                 let mut game = Game::new(seed, RulesPreset::Classic);
                 game.data.insert("next_level".into(), 2.0);

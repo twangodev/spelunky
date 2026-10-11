@@ -3154,7 +3154,7 @@ mod tests {
 mod source_motion_regressions {
     use super::*;
 
-    fn room(seed: u64, rules: RulesPreset, player_x: f64) -> Game {
+    fn room(seed: u32, rules: RulesPreset, player_x: f64) -> Game {
         let mut game = Game::shell(seed, rules);
         game.world = World::new(20, 16, Area::Mines, 1);
         game.world.name = "rLevel".into();
@@ -3373,13 +3373,16 @@ mod source_motion_regressions {
     #[test]
     fn piranha_idle_displacement_keeps_zero_velocity_and_natural_spring_boost() {
         for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
-            for (seed, delta) in [(2, -1.0), (42, 1.0)] {
+            // First Create selectors choose LEFT at seed2 and RIGHT at
+            // seed16 in both historical Legacy and original canonical RNG.
+            for (seed, delta) in [(2, -1.0), (16, 1.0)] {
                 for with_spring in [false, true] {
                     let mut game = room(seed, rules, 40.0);
                     water(&mut game, 8);
                     let spring =
                         with_spring.then(|| game.spawn("oSpringTrap", Vec2::new(96.0, 144.0)));
                     let fish = game.spawn("oPiranha", Vec2::new(96.0, 149.0));
+                    assert_eq!(f64::from(game.world.entity(fish).unwrap().facing), delta);
                     assert_eq!(game.world.entity(fish).unwrap().vel, Vec2::default());
                     if let Some(spring) = spring {
                         assert!(

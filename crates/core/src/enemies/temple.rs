@@ -1383,19 +1383,39 @@ mod tests {
     use super::*;
     use crate::model::{Area, RulesPreset};
 
+    // Independent static prediction from canonical EXE bytes: one unsigned
+    // LCG state per draw, scaled by 2^-32. All source widths here are <=2^21,
+    // so the integer product is exact even in a binary64 real wrapper.
+    #[derive(Clone)]
+    struct CanonicalOracle(u32);
+    impl CanonicalOracle {
+        fn checkpoint(rng: &crate::Rng) -> Self {
+            assert_eq!(rng.algorithm(), crate::RngAlgorithm::Gm8Lcg32V1);
+            Self(u32::try_from(rng.state_bits()).unwrap())
+        }
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self.0.wrapping_mul(0x0808_8405).wrapping_add(1);
+            u64::from(self.0)
+        }
+        fn draw(&mut self, width: u64) -> u64 {
+            assert!(width <= 1 << 21, "oracle width must stay source-exact");
+            (self.next_u64() * width) >> 32
+        }
+    }
+
     // Literal WALK statements from oHawkman Step.xml 106-139 and
     // oMagmaMan Step.xml 66-99. Each rand(a,b) consumes one draw. This oracle
     // intentionally does not call production range/chance or WALK helpers.
     // MagmaMan controls separately include the preceding literal burn prefix.
-    fn literal_magma_burn_prefix(rng: &mut crate::model::Rng) {
-        if 1 + rng.next_u64() % 20 == 1 {
+    fn literal_magma_burn_prefix(rng: &mut CanonicalOracle) {
+        if 1 + rng.draw(20) == 1 {
             rng.next_u64(); // rand(4,12), x
             rng.next_u64(); // rand(4,12), y
         }
     }
 
     fn literal_temple_walk(
-        rng: &mut crate::model::Rng,
+        rng: &mut CanonicalOracle,
         ledge: bool,
         facing: i8,
     ) -> (i32, u32, f64, bool) {
@@ -1404,13 +1424,13 @@ mod tests {
         let mut x_vel = 1.5 * f64::from(facing);
         if ledge {
             state = 0;
-            counter = 20 + (rng.next_u64() % 31) as u32;
+            counter = 20 + (rng.draw(31)) as u32;
             x_vel = 0.0;
         }
-        let idle_roll = 1 + rng.next_u64() % 100;
+        let idle_roll = 1 + rng.draw(100);
         if idle_roll == 1 {
             state = 0;
-            counter = 20 + (rng.next_u64() % 31) as u32;
+            counter = 20 + (rng.draw(31)) as u32;
             x_vel = 0.0;
         }
         (state, counter, x_vel, idle_roll == 1)
@@ -1435,27 +1455,40 @@ mod tests {
     }
 
     fn assert_temple_walk_actor_step(object: &str) {
-        // Fixed seeds independently cover both outcomes of the unconditional
-        // idle roll after the optional ledge timer draw. Seed 0 at a ledge
-        // draws counter 36, then idle=1, then counter 22: the second wins.
-        for (ledge, idle_success, seed) in [
-            (false, false, 0),
-            (false, true, 29),
-            (true, false, 1),
-            (true, true, 0),
-        ] {
+        // Actor-specific canonical controls account for MagmaMan's preceding
+        // burn roll and its two conditional coordinate draws. Hawkman seed 6
+        // draws ledge counter 25, idle 1, then counter 48. MagmaMan seed 18 first
+        // skips burning, then draws ledge counter 49, idle 1, then counter 34.
+        // The later counter must win for both actors, in both directions.
+        let cases = match object {
+            "oHawkman" => [
+                (false, false, 1),
+                (false, true, 0),
+                (true, false, 0),
+                (true, true, 6),
+            ],
+            "oMagmaMan" => [
+                (false, false, 0),
+                (false, true, 6),
+                (true, false, 0),
+                (true, true, 18),
+            ],
+            _ => panic!("unexpected WALK fixture actor {object}"),
+        };
+        for (ledge, idle_success, seed) in cases {
             for facing in [-1, 1] {
                 let (mut game, id) = temple_walk_fixture(object, facing, ledge);
                 game.rng = crate::model::Rng::new(seed);
-                let mut expected_rng = game.rng.clone();
+                let mut expected_rng = CanonicalOracle::checkpoint(&game.rng);
                 if object == "oMagmaMan" {
                     literal_magma_burn_prefix(&mut expected_rng);
                 }
                 let (state, counter, mut x_vel, actual_idle) =
                     literal_temple_walk(&mut expected_rng, ledge, facing);
-                if object == "oHawkman" {
-                    assert_eq!(actual_idle, idle_success);
-                }
+                assert_eq!(
+                    actual_idle, idle_success,
+                    "{object} ledge={ledge} seed={seed}"
+                );
                 if object == "oHawkman" {
                     x_vel = (x_vel.abs() - 0.1).max(0.0) * x_vel.signum();
                 }
@@ -1487,8 +1520,8 @@ mod tests {
     fn actual_airborne_hawkman_step_temple_walk_ledge_rng() {
         let (mut game, id) = temple_walk_fixture("oHawkman", 1, true);
         game.world.entity_mut(id).unwrap().pos.y = 112.0;
-        game.rng = crate::model::Rng::new(0);
-        let mut expected_rng = game.rng.clone();
+        game.rng = crate::model::Rng::new(6);
+        let mut expected_rng = CanonicalOracle::checkpoint(&game.rng);
         let (state, counter, x_vel, idle_success) = literal_temple_walk(&mut expected_rng, true, 1);
         assert!(idle_success);
         super::super::step_instance(&mut game, id);
@@ -1515,8 +1548,8 @@ mod tests {
                 // it before the WALK block. Neither actor starts embedded.
                 actor.pos.x = if facing < 0 { 78.0 } else { 82.0 };
                 actor.vel.x = 2.5 * f64::from(facing);
-                game.rng = crate::model::Rng::new(0);
-                let mut expected_rng = game.rng.clone();
+                game.rng = crate::model::Rng::new(1);
+                let mut expected_rng = CanonicalOracle::checkpoint(&game.rng);
                 if object == "oMagmaMan" {
                     literal_magma_burn_prefix(&mut expected_rng);
                 }
@@ -1550,17 +1583,13 @@ mod tests {
             // A newly selected WALK waits until the next Step. MagmaMan's
             // seed also accounts for its separate preceding burn roll.
             game.rng = crate::model::Rng::new(if object == "oMagmaMan" { 2 } else { 1 });
-            let mut expected_rng = game.rng.clone();
+            let mut expected_rng = CanonicalOracle::checkpoint(&game.rng);
             if object == "oMagmaMan" {
                 literal_magma_burn_prefix(&mut expected_rng);
             }
-            let facing = if expected_rng.next_u64() % 2 == 0 {
-                -1
-            } else {
-                1
-            };
+            let facing = if expected_rng.draw(2) == 0 { -1 } else { 1 };
             if object == "oMagmaMan" {
-                assert_ne!(1 + expected_rng.next_u64() % 6, 1);
+                assert_ne!(1 + expected_rng.draw(6), 1);
             }
             super::super::step_instance(&mut game, id);
             let actor = game.world.entity(id).unwrap();
@@ -2147,10 +2176,36 @@ mod tests {
         draws: u32,
     }
 
-    fn literal_flatfloor_magma_199(rng: &mut crate::model::Rng) -> FlatFloorMagmaOracle {
-        fn rand(rng: &mut crate::model::Rng, draws: &mut u32, low: u64, high: u64) -> u64 {
+    trait LiteralMagmaStream {
+        fn select(&mut self, width: u64) -> u64;
+    }
+    impl LiteralMagmaStream for CanonicalOracle {
+        fn select(&mut self, width: u64) -> u64 {
+            self.draw(width)
+        }
+    }
+    // Historical control retains its original full SplitMix arithmetic and
+    // literal expected values; it is not a canonical source prediction.
+    struct LegacyMagmaOracle(u64);
+    impl LegacyMagmaOracle {
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut value = self.0;
+            value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            value ^ (value >> 31)
+        }
+    }
+    impl LiteralMagmaStream for LegacyMagmaOracle {
+        fn select(&mut self, width: u64) -> u64 {
+            self.next_u64() % width
+        }
+    }
+
+    fn literal_flatfloor_magma_199(rng: &mut impl LiteralMagmaStream) -> FlatFloorMagmaOracle {
+        fn rand(rng: &mut impl LiteralMagmaStream, draws: &mut u32, low: u64, high: u64) -> u64 {
             *draws += 1;
-            low + rng.next_u64() % (high - low + 1)
+            low + rng.select(high - low + 1)
         }
         let mut result = FlatFloorMagmaOracle {
             health: 200,
@@ -2208,8 +2263,8 @@ mod tests {
     }
 
     #[test]
-    fn literal_flatfloor_magma_seed_proves_natural_lifetime_fixture_precondition() {
-        let mut source_rng = crate::model::Rng::new(0);
+    fn literal_flatfloor_magma_historical_legacy_vectors_remain_frozen() {
+        let mut source_rng = LegacyMagmaOracle(0);
         let source = literal_flatfloor_magma_199(&mut source_rng);
         assert_eq!(source.initial_facing, 1);
         assert_eq!(source.transform_step, None);
@@ -2220,9 +2275,8 @@ mod tests {
         );
         assert_eq!(source_rng.next_u64(), 9_593_559_228_881_912_482);
 
-        // Negative control: seed1 is no longer a legal 198-step same-instance
-        // lifetime fixture after restoring the source burn roll before IDLE.
-        let mut source_rng = crate::model::Rng::new(1);
+        // Frozen historical SplitMix negative control: seed1 transforms immediately.
+        let mut source_rng = LegacyMagmaOracle(1);
         let source = literal_flatfloor_magma_199(&mut source_rng);
         assert_eq!(source.initial_facing, 1);
         assert_eq!(source.last_random_facing, 1);
@@ -2231,8 +2285,40 @@ mod tests {
     }
 
     #[test]
+    fn literal_flatfloor_magma_seed_proves_natural_lifetime_fixture_precondition() {
+        // Independently computed by the archived Python source-state machine,
+        // using the frozen executable recurrence rather than Rust RNG helpers.
+        let mut source_rng = CanonicalOracle(0);
+        let source = literal_flatfloor_magma_199(&mut source_rng);
+        assert_eq!(source.initial_facing, 1);
+        assert_eq!(source.last_random_facing, -1);
+        assert_eq!(source.transform_step, None);
+        assert_eq!((source.health, source.state, source.counter), (1, 0, 24));
+        assert_eq!(
+            (source.burns, source.random_idle_entries, source.draws),
+            (12, 2, 394)
+        );
+        assert_eq!(source_rng.next_u64(), 251_700_279);
+
+        // Canonical seed3 reaches the disqualifying transform at step75.
+        let mut source_rng = CanonicalOracle(3);
+        let source = literal_flatfloor_magma_199(&mut source_rng);
+        assert_eq!(source.transform_step, Some(75));
+        assert_eq!(
+            (
+                source.health,
+                source.burns,
+                source.random_idle_entries,
+                source.draws
+            ),
+            (125, 2, 1, 137)
+        );
+        assert_eq!(source_rng.next_u64(), 3_383_530_281);
+    }
+
+    #[test]
     fn actual_step_naturally_aged_magma_man_hurts_until_die_animation_finishes() {
-        // The literal flat-floor oracle below proves seed 0 avoids voluntary
+        // The independent canonical flat-floor oracle proves seed 0 avoids voluntary
         // transformation through tick 199, including the source burn RNG prefix.
         let mut game = Game::shell(0, RulesPreset::Classic);
         game.world = World::new(40, 30, Area::Mines, 1);
@@ -2780,7 +2866,7 @@ mod tests {
     // Source-default actors and authored floor/wall geometry. After birth,
     // these regressions use ordinary idle input only, without actor edits or
     // manually spawned sight. EnemySight has no source expiry timer.
-    fn natural_sight_room(rules: RulesPreset, seed: u64, wall: bool) -> Game {
+    fn natural_sight_room(rules: RulesPreset, seed: u32, wall: bool) -> Game {
         let mut game = Game::shell(seed, rules);
         for x in 0..game.world.width {
             game.world.set_tile(x, 10, "oBlock");
@@ -2800,7 +2886,9 @@ mod tests {
         for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
             for object in ["oHawkman", "oCaveman"] {
                 for wall in [false, true] {
-                    let mut game = natural_sight_room(rules, 42, wall);
+                    // Seed16's first facing selector chooses RIGHT in both
+                    // Legacy and canonical, toward the authored right wall.
+                    let mut game = natural_sight_room(rules, 16, wall);
                     let actor = game.spawn(object, Vec2::new(96.0, 144.0));
                     game.step(&crate::InputFrame::default());
                     let ray = game
@@ -2812,6 +2900,7 @@ mod tests {
                         })
                         .expect("the real actor Step must create its sight");
                     let ray_id = ray.id;
+                    assert_eq!(game.world.entity(actor).unwrap().facing, 1, "{object}");
                     assert_eq!(ray.pos.x - ray.previous_pos.x, 10.0, "{object}");
                     assert_eq!(ray.pos.y, ray.previous_pos.y, "{object}");
                     game.step(&crate::InputFrame::default());
@@ -2841,7 +2930,9 @@ mod tests {
     fn natural_hawk_idle_sight_uses_facing_chosen_this_step() {
         let mut saw_left = false;
         let mut saw_right = false;
-        for seed in 0..16 {
+        // Canonical first words for seeds0..15 choose LEFT; seed16 is the
+        // first RIGHT witness. Retain all earlier cases and both directions.
+        for seed in 0..=16 {
             let mut game = natural_sight_room(RulesPreset::Classic, seed, false);
             let actor = game.spawn("oHawkman", Vec2::new(96.0, 144.0));
             assert_eq!(game.world.entity(actor).unwrap().facing, 1);
@@ -2873,7 +2964,9 @@ mod tests {
         // natural wall turn on the six-tick sight cadence without injecting a
         // WALK state, facing, sight timer, velocity, or random stream.
         for initial_x in 84..114 {
-            let mut game = natural_sight_room(RulesPreset::Classic, 42, true);
+            // The first facing choice is RIGHT under both RNG versions,
+            // so the ordinary walk approaches the same authored right wall.
+            let mut game = natural_sight_room(RulesPreset::Classic, 16, true);
             let actor = game.spawn("oHawkman", Vec2::new(f64::from(initial_x), 144.0));
             for _ in 0..32 {
                 let before = game.world.entity(actor).unwrap().clone();
@@ -2939,7 +3032,7 @@ mod tests {
                         let expected_state = if source_counter < 1 { 1 } else { 0 };
                         let mut source_rng = game.rng.clone();
                         let expected_facing = if expected_state == 1 {
-                            if source_rng.next_u64() % 2 == 0 {
+                            if (source_rng.next_u64() * 2) >> 32 == 0 {
                                 -1
                             } else {
                                 1

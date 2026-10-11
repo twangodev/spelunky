@@ -4,7 +4,7 @@ use spelunky_core::{Game, InputFrame, PlayerState, RulesPreset, RunState, Vec2, 
 // enters the real door and the real Player exit animation requests the room.
 // Calling load_hub afterward is the existing host destination adapter boundary.
 // No portal test moves the player, creates a fake door, or forces a score.
-fn unlocked_portal(seed: u64, rules: RulesPreset, kind: HubKind) -> Game {
+fn unlocked_portal(seed: u32, rules: RulesPreset, kind: HubKind) -> Game {
     let (start, unlock, door, destination, room) = match kind {
         HubKind::Sun => (1, "unlock_sun", "oXSun", "sun", "rSun"),
         HubKind::Stars => (3, "unlock_stars", "oXStars", "stars", "rStars"),

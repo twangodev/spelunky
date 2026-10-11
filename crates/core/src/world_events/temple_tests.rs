@@ -1,7 +1,7 @@
 use super::*;
 use crate::{Area, InputFrame, PlayerState, Rng, RulesPreset, World};
 
-fn room(seed: u64) -> Game {
+fn room(seed: u32) -> Game {
     let mut game = Game::shell(seed, RulesPreset::Classic);
     game.world = World::new(20, 16, Area::Temple, 13);
     game.flags.insert("custom".into());

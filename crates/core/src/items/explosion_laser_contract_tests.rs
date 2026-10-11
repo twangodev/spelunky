@@ -33,10 +33,11 @@ fn pickup(game: &mut Game, weapon: u64) {
     game.step(&InputFrame::default());
 }
 
-// Literal rand(a,b) oracle uses independent integer bounds, not production
-// range/chance, solid destroy, or explosion/particle helper callbacks.
+// Canonical GM8 raw words use mulhigh(width) for these positive integer
+// rand bounds, independently of production range/chance and callback helpers.
+// The separate EXE-derived vector suite checks the raw recurrence itself.
 fn literal_rand(rng: &mut Rng, low: u32, high: u32) -> f64 {
-    f64::from(low) + (rng.next_u64() % u64::from(high - low + 1)) as f64
+    f64::from(low) + ((rng.next_u64() * u64::from(high - low + 1)) >> 32) as f64
 }
 
 fn literal_offset(rng: &mut Rng, origin: Vec2, high: u32) -> Vec2 {
@@ -54,7 +55,7 @@ fn literal_offset(rng: &mut Rng, origin: Vec2, high: u32) -> Vec2 {
 // inherited cap32. Spell out the literal child RNG rather than skip24 blindly.
 fn literal_fire_frog_alarm_payload(rng: &mut Rng) {
     fn random(rng: &mut Rng, bound: f64) -> f64 {
-        ((rng.next_u64() >> 11) as f64 / (1_u64 << 53) as f64) * bound
+        (rng.next_u64() as f64 / 4_294_967_296.0) * bound
     }
     for _object in ["oBlood", "oFlame"] {
         for _ in 0..3 {
@@ -628,7 +629,7 @@ fn actual_ufo_laser_gold_own_destroy_precedes_solid_destroy_with_literal_loot_rn
                             if !gold && big {
                                 assert_eq!(
                                     fragments.len(),
-                                    if seed == 0 { 4 } else { 3 },
+                                    if seed == 0 { 3 } else { 4 },
                                     "both condition-rerolled GoldBig loop outcomes are exercised"
                                 );
                             }

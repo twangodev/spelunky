@@ -26,10 +26,10 @@ fn assert_finite(game: &Game, context: &str) {
     }
 }
 
-fn sequence(tick: u64, seed: u64) -> InputFrame {
+fn sequence(tick: u64, seed: u32) -> InputFrame {
     // Held runs, reversals, rapid release/repress, simultaneous directions and
     // pickup/attack while changing posture exercise more than fresh presses.
-    let phase = (tick + seed * 13) % 180;
+    let phase = (tick + u64::from(seed) * 13) % 180;
     let jump = tick % 17 < 9;
     let previous_jump = tick > 0 && (tick - 1) % 17 < 9;
     InputFrame {

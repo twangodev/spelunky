@@ -1,8 +1,30 @@
 use crate::*;
 
 impl Game {
-    pub fn new(seed: u64, rules: RulesPreset) -> Self {
-        let mut game = Self::shell(seed, rules);
+    pub fn new(seed: u32, rules: RulesPreset) -> Self {
+        Self::generate_first_room(Self::shell(seed, rules))
+    }
+
+    pub fn try_new(seed: u64, rules: RulesPreset) -> Result<Self, RngSeedError> {
+        Ok(Self::generate_first_room(Self::try_shell(seed, rules)?))
+    }
+
+    pub fn legacy(seed: u64, rules: RulesPreset) -> Self {
+        Self::generate_first_room(Self::legacy_shell(seed, rules))
+    }
+
+    /// Select identity before generation consumes any random draws.
+    pub fn new_with_algorithm(
+        seed: u64,
+        rules: RulesPreset,
+        algorithm: RngAlgorithm,
+    ) -> Result<Self, RngSeedError> {
+        Ok(Self::generate_first_room(Self::shell_with_algorithm(
+            seed, rules, algorithm,
+        )?))
+    }
+
+    fn generate_first_room(mut game: Self) -> Self {
         game.flags.insert("no_dark_level".into());
         game.world = generation::generate_with_context(
             &mut game.rng,
@@ -16,8 +38,19 @@ impl Game {
         game
     }
 
-    pub fn tutorial(seed: u64, rules: RulesPreset) -> Self {
-        let mut game = Self::shell(seed, rules);
+    pub fn tutorial(seed: u32, rules: RulesPreset) -> Self {
+        Self::prepare_tutorial(Self::shell(seed, rules))
+    }
+
+    pub fn try_tutorial(seed: u64, rules: RulesPreset) -> Result<Self, RngSeedError> {
+        Ok(Self::prepare_tutorial(Self::try_shell(seed, rules)?))
+    }
+
+    pub fn legacy_tutorial(seed: u64, rules: RulesPreset) -> Self {
+        Self::prepare_tutorial(Self::legacy_shell(seed, rules))
+    }
+
+    fn prepare_tutorial(mut game: Self) -> Self {
         game.world = generation::tutorial();
         game.flags.insert("tutorial".into());
         game.reset_position();
@@ -914,10 +947,11 @@ mod tests {
                     for x in 0..level::LEVEL_WIDTH {
                         first.set_tile(x, 8, '1').unwrap();
                     }
-                    // This seed's generated second-room entrance has room to
-                    // jump right; a low ceiling would test geometry instead
-                    // of whether completing Exit restores the controller.
-                    let mut game = Game::shell(1, rules);
+                    // Canonical seed 8 was selected by a bounded, static
+                    // entrance-geometry search before any continued player
+                    // input. Its six campaign variants all have the same
+                    // clear jump corridor and supporting floor, checked below.
+                    let mut game = Game::shell(8, rules);
                     characters::apply(&mut game, character);
                     game.load_custom(&first, "first", "");
                     if !custom {
@@ -958,6 +992,27 @@ mod tests {
                         game.continue_custom(&next, "second", "first");
                     } else {
                         game.next_level();
+                    }
+                    // characterCreateEvent sets the upright platform mask to
+                    // (-5,-8,5,8). This corridor covers its six-tick held-jump
+                    // sweep; select and assert geometry before exercising the
+                    // controller, rather than selecting on movement outcomes.
+                    let entrance = game.world.entrance;
+                    assert!(
+                        !game.world.collides_except(
+                            Rect::new(entrance.x - 6., entrance.y - 40., 40., 48.),
+                            0,
+                        ),
+                        "continued entrance headroom: {rules:?}/{character:?}/{custom}"
+                    );
+                    for offset in -5..=33 {
+                        assert!(
+                            game.world.tiles_point(
+                                Vec2::new(entrance.x + f64::from(offset), entrance.y + 8.),
+                                "oSolid",
+                            ),
+                            "continued entrance floor: {rules:?}/{character:?}/{custom}/{offset}"
+                        );
                     }
                     for _ in 0..60 {
                         game.step(&InputFrame::default());

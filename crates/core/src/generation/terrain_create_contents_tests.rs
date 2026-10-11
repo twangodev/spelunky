@@ -55,7 +55,7 @@ fn source_selector(
     }
 }
 
-fn fixtures(temple: bool) -> BTreeMap<&'static str, u64> {
+fn fixtures(temple: bool) -> BTreeMap<&'static str, u32> {
     let mut found = BTreeMap::new();
     // Select ONLY on literal source conditions, before exercising production.
     for seed in 0..500_000 {
@@ -72,7 +72,7 @@ fn fixtures(temple: bool) -> BTreeMap<&'static str, u64> {
     );
 }
 
-fn one_parent(seed: u64, temple: bool, own_ruby: bool) -> (World, Rng, u64) {
+fn one_parent(seed: u32, temple: bool, own_ruby: bool) -> (World, Rng, u64) {
     let mut world = World::new(20, 16, Area::Jungle, 5);
     world.set_tile(6, 6, if temple { "oTemple" } else { "oLush" });
     let parent = metadata(&mut world, 6, 6);

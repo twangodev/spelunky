@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const TICK_RATE: u32 = 30;
+/// Versioned replay/record identity for this simulation contract.
+pub const SIMULATION_VERSION: u32 = 1;
 pub const TILE_SIZE: f64 = 16.0;
 pub const VIEW_WIDTH: f64 = 320.0;
 pub const VIEW_HEIGHT: f64 = 240.0;
@@ -802,33 +804,203 @@ impl World {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Rng {
-    state: u64,
+/// Algorithm identity is explicit for canonical state and versioned replays.
+/// Missing historical serialized identity means LegacySplitMix64V1, regardless
+/// of the algorithm selected by a new-game constructor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RngAlgorithm {
+    #[serde(rename = "legacy_splitmix64_v1")]
+    LegacySplitMix64V1,
+    #[serde(rename = "gm8_lcg32_v1")]
+    Gm8Lcg32V1,
 }
-impl Rng {
-    pub fn new(seed: u64) -> Self {
-        Self { state: seed }
+
+impl RngAlgorithm {
+    fn historical_wire_default() -> Self {
+        Self::LegacySplitMix64V1
     }
-    pub fn next_u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_add(0x9e3779b97f4a7c15);
-        let mut z = self.state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
-        z ^ (z >> 31)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RngState {
+    Legacy(u64),
+    Canonical(u32),
+}
+
+#[derive(Debug, Clone)]
+pub struct Rng {
+    state: RngState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RngSeedError {
+    pub seed: u64,
+}
+impl std::fmt::Display for RngSeedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Canonical seed {} exceeds {}", self.seed, u32::MAX)
     }
-    pub fn range(&mut self, upper: u32) -> u32 {
-        if upper == 0 {
-            0
-        } else {
-            (self.next_u64() % u64::from(upper)) as u32
+}
+impl std::error::Error for RngSeedError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceRandError {
+    RequiresCanonicalAlgorithm,
+    UnsupportedWidth(i64),
+}
+impl std::fmt::Display for SourceRandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RequiresCanonicalAlgorithm => {
+                f.write_str("Signed source rand requires the canonical RNG")
+            }
+            Self::UnsupportedWidth(width) => {
+                write!(
+                    f,
+                    "Source rand width {width} exceeds the exact supported domain"
+                )
+            }
         }
+    }
+}
+impl std::error::Error for SourceRandError {}
+
+impl Serialize for Rng {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        match self.state {
+            RngState::Legacy(state) => {
+                // Preserve historical Game serialization bytes and state hashes.
+                // Legacy identity is unambiguous for this old wire shape.
+                let mut wire = serializer.serialize_struct("Rng", 1)?;
+                wire.serialize_field("state", &state)?;
+                wire.end()
+            }
+            RngState::Canonical(state) => {
+                let mut wire = serializer.serialize_struct("Rng", 2)?;
+                wire.serialize_field("algorithm", &RngAlgorithm::Gm8Lcg32V1)?;
+                wire.serialize_field("state", &state)?;
+                wire.end()
+            }
+        }
+    }
+}
+// Compatibility covers the observed JSON-object save/replay contract. The
+// historical derived struct's sequence/binary forms are not a versioned public
+// wire format here; this adapter does not claim to preserve those forms.
+impl<'de> Deserialize<'de> for Rng {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Wire {
+            #[serde(default = "RngAlgorithm::historical_wire_default")]
+            algorithm: RngAlgorithm,
+            state: u64,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        match wire.algorithm {
+            RngAlgorithm::LegacySplitMix64V1 => Ok(Self::legacy(wire.state)),
+            RngAlgorithm::Gm8Lcg32V1 => {
+                Self::try_canonical(wire.state).map_err(serde::de::Error::custom)
+            }
+        }
+    }
+}
+
+impl Rng {
+    /// New runs use canonical raw u32 seeds. External u64 inputs use
+    /// try_canonical(); historical state/replays use legacy() explicitly.
+    pub fn new(seed: u32) -> Self {
+        Self::new_canonical(seed)
+    }
+    pub fn legacy(seed: u64) -> Self {
+        Self {
+            state: RngState::Legacy(seed),
+        }
+    }
+    pub fn new_canonical(seed: u32) -> Self {
+        Self {
+            state: RngState::Canonical(seed),
+        }
+    }
+    /// External canonical seed input is checked, never silently narrowed.
+    pub fn try_canonical(seed: u64) -> Result<Self, RngSeedError> {
+        u32::try_from(seed)
+            .map(Self::new_canonical)
+            .map_err(|_| RngSeedError { seed })
+    }
+    pub fn algorithm(&self) -> RngAlgorithm {
+        match self.state {
+            RngState::Legacy(_) => RngAlgorithm::LegacySplitMix64V1,
+            RngState::Canonical(_) => RngAlgorithm::Gm8Lcg32V1,
+        }
+    }
+    /// Current state bits, with no draw. Canonical state occupies the low32 bits.
+    pub fn state_bits(&self) -> u64 {
+        match self.state {
+            RngState::Legacy(state) => state,
+            RngState::Canonical(state) => u64::from(state),
+        }
+    }
+    /// One diagnostic raw draw. Canonical returns one new u32 state widened to
+    /// u64; it does not combine two draws. This is not a GML random wrapper.
+    pub fn next_u64(&mut self) -> u64 {
+        match &mut self.state {
+            RngState::Legacy(state) => {
+                *state = state.wrapping_add(0x9e3779b97f4a7c15);
+                let mut z = *state;
+                z = (z ^ (z >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94d049bb133111eb);
+                z ^ (z >> 31)
+            }
+            RngState::Canonical(state) => {
+                *state = state.wrapping_mul(0x08088405).wrapping_add(1);
+                u64::from(*state)
+            }
+        }
+    }
+    /// Canonical selection uses unsigned multiply-high and always draws,
+    /// including upper0. It equals source floor(random(upper)) for integer
+    /// widths <=2^21. For larger widths this is the integer-core contract;
+    /// arbitrary real-wrapper rounding is not claimed. Legacy keeps modulo
+    /// selection and its historical no-draw upper0 behavior.
+    pub fn range(&mut self, upper: u32) -> u32 {
+        match self.algorithm() {
+            RngAlgorithm::LegacySplitMix64V1 => {
+                if upper == 0 {
+                    0
+                } else {
+                    (self.next_u64() % u64::from(upper)) as u32
+                }
+            }
+            RngAlgorithm::Gm8Lcg32V1 => ((self.next_u64() * u64::from(upper)) >> 32) as u32,
+        }
+    }
+    /// Exact finite-integer subset of source floor(random(max-min+1))+min.
+    /// Both endpoints are i32; signed width magnitude must be <=2^21. This
+    /// includes zero and negative widths, each consuming exactly one draw.
+    /// Unsupported calls return an error before drawing rather than inventing
+    /// endpoint swapping, clamping, or arbitrary x87 floating semantics.
+    pub fn source_rand(&mut self, min: i32, max: i32) -> Result<i64, SourceRandError> {
+        if self.algorithm() != RngAlgorithm::Gm8Lcg32V1 {
+            return Err(SourceRandError::RequiresCanonicalAlgorithm);
+        }
+        let width = i64::from(max) - i64::from(min) + 1;
+        if width.abs() > (1_i64 << 21) {
+            return Err(SourceRandError::UnsupportedWidth(width));
+        }
+        let state = self.next_u64() as i64;
+        Ok((state * width).div_euclid(1_i64 << 32) + i64::from(min))
     }
     pub fn chance(&mut self, numerator: u32, denominator: u32) -> bool {
         self.range(denominator) < numerator
     }
     pub fn unit(&mut self) -> f64 {
-        (self.next_u64() >> 11) as f64 / (1_u64 << 53) as f64
+        match self.algorithm() {
+            RngAlgorithm::LegacySplitMix64V1 => {
+                (self.next_u64() >> 11) as f64 / (1_u64 << 53) as f64
+            }
+            RngAlgorithm::Gm8Lcg32V1 => self.next_u64() as f64 * (1.0 / 4294967296.0),
+        }
     }
 }
 
@@ -983,7 +1155,26 @@ impl Game {
     pub fn engine_time(&self) -> u64 {
         self.level_tick.wrapping_add(1) % 100_000_001
     }
-    pub fn shell(seed: u64, rules: RulesPreset) -> Self {
+    pub fn shell(seed: u32, rules: RulesPreset) -> Self {
+        Self::shell_from_rng(u64::from(seed), rules, Rng::new(seed))
+    }
+    pub fn try_shell(seed: u64, rules: RulesPreset) -> Result<Self, RngSeedError> {
+        Ok(Self::shell_from_rng(seed, rules, Rng::try_canonical(seed)?))
+    }
+    pub fn legacy_shell(seed: u64, rules: RulesPreset) -> Self {
+        Self::shell_from_rng(seed, rules, Rng::legacy(seed))
+    }
+    pub fn shell_with_algorithm(
+        seed: u64,
+        rules: RulesPreset,
+        algorithm: RngAlgorithm,
+    ) -> Result<Self, RngSeedError> {
+        match algorithm {
+            RngAlgorithm::Gm8Lcg32V1 => Self::try_shell(seed, rules),
+            RngAlgorithm::LegacySplitMix64V1 => Ok(Self::legacy_shell(seed, rules)),
+        }
+    }
+    fn shell_from_rng(seed: u64, rules: RulesPreset, rng: Rng) -> Self {
         Self {
             draw_view: None,
             seed,
@@ -993,7 +1184,7 @@ impl Game {
             down_to_run: true,
             player: Player::default(),
             world: World::new(42, 34, Area::Mines, 1),
-            rng: Rng::new(seed),
+            rng,
             events: Vec::new(),
             state: RunState::Playing,
             ending: None,
@@ -1494,5 +1685,362 @@ mod geometry_tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod canonical_rng_stage_one_tests {
+    use super::*;
+
+    // Frozen independently from executable bytes plus Python arithmetic.
+    // These are static predictions, not original-runtime captures.
+    const CANONICAL: [(u32, [(u32, u64, u32); 8]); 5] = [
+        (
+            0,
+            [
+                (1, 0x3df0000000000000, 0),
+                (134775814, 0x3fa011080c000000, 1),
+                (3698175007, 0x3feb8db583e00000, 51),
+                (870078620, 0x3fc9ee2c4e000000, 12),
+                (1172187917, 0x3fd1778ac3400000, 16),
+                (2884733762, 0x3fe57e3168400000, 40),
+                (1368768587, 0x3fd4657012c00000, 19),
+                (694906232, 0x3fc4b5b6bc000000, 9),
+            ],
+        ),
+        (
+            1,
+            [
+                (134775814, 0x3fa011080c000000, 1),
+                (3698175007, 0x3feb8db583e00000, 51),
+                (870078620, 0x3fc9ee2c4e000000, 12),
+                (1172187917, 0x3fd1778ac3400000, 16),
+                (2884733762, 0x3fe57e3168400000, 40),
+                (1368768587, 0x3fd4657012c00000, 19),
+                (694906232, 0x3fc4b5b6bc000000, 9),
+                (1598751577, 0x3fd7d2c0d6400000, 22),
+            ],
+        ),
+        (
+            42,
+            [
+                (1365616851, 0x3fd4596a34c00000, 19),
+                (3768653856, 0x3fec142304000000, 52),
+                (882243745, 0x3fca4afc50800000, 12),
+                (673767206, 0x3fc4146f93000000, 9),
+                (84669375, 0x3f942fcefc000000, 1),
+                (3638705852, 0x3feb1c47d7800000, 50),
+                (3131320749, 0x3fe7548535a00000, 43),
+                (1705058, 0x3f3a046200000000, 0),
+            ],
+        ),
+        (
+            2147483648,
+            [
+                (2147483649, 0x3fe0000000200000, 30),
+                (2282259462, 0x3fe1011080c00000, 31),
+                (1550691359, 0x3fd71b6b07c00000, 21),
+                (3017562268, 0x3fe67b8b13800000, 42),
+                (3319671565, 0x3fe8bbc561a00000, 46),
+                (737250114, 0x3fc5f8c5a1000000, 10),
+                (3516252235, 0x3fea32b809600000, 49),
+                (2842389880, 0x3fe52d6daf000000, 39),
+            ],
+        ),
+        (
+            4294967295,
+            [
+                (4160191484, 0x3feefeef7f800000, 58),
+                (866343917, 0x3fc9d1adf6800000, 12),
+                (2231304098, 0x3fe09fdff4400000, 31),
+                (567969323, 0x3fc0ed4315800000, 7),
+                (3754609368, 0x3febf9595b000000, 52),
+                (105731641, 0x3f993558e4000000, 1),
+                (2042630942, 0x3fde7004c7800000, 28),
+                (4086028183, 0x3fee717af2e00000, 57),
+            ],
+        ),
+    ];
+
+    #[test]
+    fn canonical_raw_unit_and_range_match_frozen_independent_vectors() {
+        for (seed, draws) in CANONICAL {
+            let mut raw = Rng::new_canonical(seed);
+            let mut unit = Rng::new_canonical(seed);
+            let mut range = Rng::new_canonical(seed);
+            for (state, unit_bits, selected) in draws {
+                assert_eq!(raw.next_u64(), u64::from(state));
+                assert_eq!(unit.unit().to_bits(), unit_bits);
+                assert_eq!(range.range(60), selected);
+                for rng in [&raw, &unit, &range] {
+                    assert_eq!(rng.state_bits(), u64::from(state));
+                    assert_eq!(rng.algorithm(), RngAlgorithm::Gm8Lcg32V1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn canonical_zero_width_draws_while_legacy_zero_width_keeps_old_behavior() {
+        let mut canonical = Rng::new_canonical(0);
+        assert_eq!(canonical.range(0), 0);
+        assert_eq!(canonical.state_bits(), 1);
+        let mut zero_source = Rng::new_canonical(0);
+        assert_eq!(zero_source.source_rand(10, 9), Ok(10));
+        assert_eq!(zero_source.state_bits(), 1);
+        let mut zero_chance = Rng::new_canonical(0);
+        assert!(!zero_chance.chance(0, 0));
+        assert_eq!(zero_chance.state_bits(), 1);
+        let mut legacy = Rng::legacy(u64::MAX);
+        assert_eq!(legacy.range(0), 0);
+        assert_eq!(legacy.state_bits(), u64::MAX);
+    }
+
+    #[test]
+    fn signed_source_widths_match_independent_floor_vectors() {
+        let vectors: &[(u32, i32, i64, u32)] = &[
+            (0, -99, -1, 1),
+            (0, -1, -1, 1),
+            (0, 0, 0, 1),
+            (0, 1, 0, 1),
+            (0, 2, 0, 1),
+            (0, 60, 0, 1),
+            (0, 901, 0, 1),
+            (0, 1200, 0, 1),
+            (0, 2097152, 0, 1),
+            (1, -99, -4, 134775814),
+            (1, -1, -1, 134775814),
+            (1, 0, 0, 134775814),
+            (1, 1, 0, 134775814),
+            (1, 2, 0, 134775814),
+            (1, 60, 1, 134775814),
+            (1, 901, 28, 134775814),
+            (1, 1200, 37, 134775814),
+            (1, 2097152, 65808, 134775814),
+            (42, -99, -32, 1365616851),
+            (42, -1, -1, 1365616851),
+            (42, 0, 0, 1365616851),
+            (42, 1, 0, 1365616851),
+            (42, 2, 0, 1365616851),
+            (42, 60, 19, 1365616851),
+            (42, 901, 286, 1365616851),
+            (42, 1200, 381, 1365616851),
+            (42, 2097152, 666805, 1365616851),
+            (2147483648, -99, -50, 2147483649),
+            (2147483648, -1, -1, 2147483649),
+            (2147483648, 0, 0, 2147483649),
+            (2147483648, 1, 0, 2147483649),
+            (2147483648, 2, 1, 2147483649),
+            (2147483648, 60, 30, 2147483649),
+            (2147483648, 901, 450, 2147483649),
+            (2147483648, 1200, 600, 2147483649),
+            (2147483648, 2097152, 1048576, 2147483649),
+            (4294967295, -99, -96, 4160191484),
+            (4294967295, -1, -1, 4160191484),
+            (4294967295, 0, 0, 4160191484),
+            (4294967295, 1, 0, 4160191484),
+            (4294967295, 2, 1, 4160191484),
+            (4294967295, 60, 58, 4160191484),
+            (4294967295, 901, 872, 4160191484),
+            (4294967295, 1200, 1162, 4160191484),
+            (4294967295, 2097152, 2031343, 4160191484),
+        ];
+        for &(seed, width, expected, state) in vectors {
+            let mut rng = Rng::new_canonical(seed);
+            assert_eq!(rng.source_rand(0, width - 1), Ok(expected));
+            assert_eq!(rng.state_bits(), u64::from(state));
+        }
+        let mut inclusive = Rng::new_canonical(42);
+        assert_eq!(inclusive.source_rand(1, 60), Ok(20));
+        let mut reversed = Rng::new_canonical(42);
+        assert_eq!(reversed.source_rand(100, 0), Ok(68));
+        let mut max_endpoint = Rng::new_canonical(42);
+        assert_eq!(
+            max_endpoint.source_rand(i32::MAX, i32::MAX),
+            Ok(i64::from(i32::MAX))
+        );
+        let mut min_endpoint = Rng::new_canonical(42);
+        assert_eq!(
+            min_endpoint.source_rand(i32::MIN, i32::MIN),
+            Ok(i64::from(i32::MIN))
+        );
+    }
+
+    #[test]
+    fn unsupported_source_widths_and_legacy_calls_do_not_draw() {
+        let mut rng = Rng::new_canonical(42);
+        assert_eq!(
+            rng.source_rand(0, 1 << 21),
+            Err(SourceRandError::UnsupportedWidth((1 << 21) + 1))
+        );
+        assert_eq!(
+            rng.source_rand(0, -(1 << 21) - 2),
+            Err(SourceRandError::UnsupportedWidth(-(1 << 21) - 1))
+        );
+        assert_eq!(rng.state_bits(), 42);
+        let mut legacy = Rng::legacy(u64::MAX);
+        assert_eq!(
+            legacy.source_rand(0, 0),
+            Err(SourceRandError::RequiresCanonicalAlgorithm)
+        );
+        assert_eq!(legacy.state_bits(), u64::MAX);
+    }
+
+    #[test]
+    fn canonical_seed_validation_rejects_full_width_legacy_seeds_without_truncation() {
+        assert_eq!(
+            Rng::try_canonical(u64::from(u32::MAX))
+                .unwrap()
+                .state_bits(),
+            u64::from(u32::MAX)
+        );
+        for seed in [1_u64 << 32, (1_u64 << 53) + 1, u64::MAX] {
+            assert_eq!(Rng::try_canonical(seed).unwrap_err(), RngSeedError { seed });
+            assert_eq!(Rng::legacy(seed).state_bits(), seed);
+        }
+    }
+
+    #[test]
+    fn legacy_raw_draws_match_frozen_port_vectors_for_all_64_seed_bits() {
+        let cases: &[(u64, [u64; 3])] = &[
+            (
+                0,
+                [
+                    16294208416658607535,
+                    7960286522194355700,
+                    487617019471545679,
+                ],
+            ),
+            (
+                1,
+                [
+                    10451216379200822465,
+                    13757245211066428519,
+                    17911839290282890590,
+                ],
+            ),
+            (
+                42,
+                [
+                    13679457532755275413,
+                    2949826092126892291,
+                    5139283748462763858,
+                ],
+            ),
+            (
+                4294967295,
+                [
+                    8336509955162079680,
+                    6998667510010663860,
+                    17170758627551043187,
+                ],
+            ),
+            (
+                4294967296,
+                [
+                    14135772400868000056,
+                    4011968247314693437,
+                    12634733894835514069,
+                ],
+            ),
+            (
+                9007199254740993,
+                [
+                    386430782533759031,
+                    13113306883110016354,
+                    5451226349904013435,
+                ],
+            ),
+            (
+                18446744073709551615,
+                [
+                    16490336266968443936,
+                    16834447057089888969,
+                    4048727598324417001,
+                ],
+            ),
+        ];
+        for &(seed, words) in cases {
+            let mut rng = Rng::legacy(seed);
+            for expected in words {
+                assert_eq!(rng.next_u64(), expected);
+            }
+            assert_eq!(rng.algorithm(), RngAlgorithm::LegacySplitMix64V1);
+        }
+    }
+
+    #[test]
+    fn historical_untagged_and_explicit_tagged_legacy_imports_preserve_state() {
+        for encoded in [
+            r#"{"state":18446744073709551615}"#,
+            r#"{"algorithm":"legacy_splitmix64_v1","state":18446744073709551615}"#,
+        ] {
+            let mut rng: Rng = serde_json::from_str(encoded).unwrap();
+            assert_eq!(rng.algorithm(), RngAlgorithm::LegacySplitMix64V1);
+            assert_eq!(rng.state_bits(), u64::MAX);
+            assert_eq!(
+                serde_json::to_string(&rng).unwrap(),
+                r#"{"state":18446744073709551615}"#
+            );
+            assert_eq!(rng.next_u64(), 16490336266968443936);
+        }
+    }
+
+    #[test]
+    fn canonical_tagged_state_round_trips_without_changing_next_draw() {
+        for state in [0, 1 << 31, u32::MAX] {
+            let rng = Rng::new_canonical(state);
+            let encoded = serde_json::to_string(&rng).unwrap();
+            assert_eq!(
+                encoded,
+                format!(r#"{{"algorithm":"gm8_lcg32_v1","state":{state}}}"#)
+            );
+            let mut decoded: Rng = serde_json::from_str(&encoded).unwrap();
+            assert_eq!(decoded.algorithm(), RngAlgorithm::Gm8Lcg32V1);
+            assert_eq!(decoded.state_bits(), u64::from(state));
+            assert_eq!(decoded.next_u64(), rng.clone().next_u64());
+        }
+    }
+
+    #[test]
+    fn malformed_or_unknown_rng_wire_state_is_rejected() {
+        for encoded in [
+            r#"{"algorithm":"gm8_lcg32_v1","state":4294967296}"#,
+            r#"{"algorithm":"gm8_lcg32_v1","state":-1}"#,
+            r#"{"algorithm":"gm8_lcg32_v1","state":1.5}"#,
+            r#"{"algorithm":"unknown","state":42}"#,
+            r#"{"algorithm":null,"state":42}"#,
+            r#"{"algorithm":"gm8_lcg32_v1"}"#,
+            r#"{"state":42,"state":43}"#,
+        ] {
+            assert!(serde_json::from_str::<Rng>(encoded).is_err(), "{encoded}");
+        }
+    }
+
+    #[test]
+    fn legacy_rng_wire_bytes_preserve_the_historical_envelope_hash_recipe() {
+        #[derive(Serialize)]
+        struct Envelope {
+            seed: u64,
+            rng: Rng,
+            after: u32,
+        }
+        let old = Envelope {
+            seed: u64::MAX,
+            rng: Rng::legacy(u64::MAX),
+            after: 7,
+        };
+        let encoded = serde_json::to_vec(&old).unwrap();
+        assert_eq!(
+            encoded,
+            br#"{"seed":18446744073709551615,"rng":{"state":18446744073709551615},"after":7}"#
+        );
+        let hash = encoded
+            .into_iter()
+            .fold(0xcbf29ce484222325_u64, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+            });
+        // Independently calculated from the literal historical bytes in Python.
+        assert_eq!(hash, 0x0a36895396092cd3);
     }
 }

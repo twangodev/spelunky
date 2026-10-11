@@ -1,8 +1,8 @@
 //! Ordinary source Create and neutral Game.step countdown: no timer/state
 //! overrides. RNG assertions describe the port adapter and source draw order.
-use spelunky_core::{Game, InputFrame, RulesPreset, Vec2, level::Level};
+use spelunky_core::{Game, InputFrame, Rng, RngAlgorithm, RulesPreset, Vec2, level::Level};
 
-fn arena(seed: u64, rules: RulesPreset) -> (Game, u64) {
+fn arena(seed: u32, rules: RulesPreset) -> (Game, u64) {
     let mut level = Level::default();
     level.set_tile(14, 7, '@').unwrap();
     level.set_tile(34, 7, 'X').unwrap();
@@ -16,6 +16,19 @@ fn arena(seed: u64, rules: RulesPreset) -> (Game, u64) {
     assert_eq!(game.player.pos, Vec2::new(248.0, 136.0));
     assert_eq!(game.world.tile(15, 9).unwrap().object, "oBrick");
     (game, scarab)
+}
+
+// Independent arithmetic over one raw draw, not production range()/unit().
+// Canonical mapping follows frozen EXE-derived math; Legacy retains historical
+// SplitMix mapping. These controls are not original gameplay runtime captures.
+fn rand(rng: &mut Rng, width: u64) -> u32 {
+    assert!((1..=u64::from(u32::MAX)).contains(&width));
+    let algorithm = rng.algorithm();
+    let raw = rng.next_u64();
+    match algorithm {
+        RngAlgorithm::Gm8Lcg32V1 => ((raw * width) >> 32) as u32,
+        RngAlgorithm::LegacySplitMix64V1 => (raw % width) as u32,
+    }
 }
 
 fn source_displacement(velocity: f64, time: u64) -> f64 {
@@ -69,10 +82,10 @@ fn ordinary_scarab_countdown_launches_on_zero_crossing_then_moves_next_step() {
                 "counter1 is reached by ordinary neutral Steps, never assigned"
             );
             let mut expected = game.rng.clone();
-            let degrees = expected.next_u64() % 361;
+            let degrees = rand(&mut expected, 361);
             let angle = (degrees as f64).to_radians();
             let launch = Vec2::new(4.0 * angle.cos(), -4.0 * angle.sin());
-            let counter = 10 + (expected.next_u64() % 21) as u32;
+            let counter = 10 + (rand(&mut expected, 21)) as u32;
 
             game.step(&InputFrame::default());
 

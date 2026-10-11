@@ -1455,18 +1455,42 @@ mod tests {
 mod burning_source_tests {
     use super::*;
 
+    // Independent static prediction from canonical EXE bytes: one unsigned
+    // LCG state per draw, scaled by 2^-32. All source widths here are <=2^21,
+    // so the integer product is exact even in a binary64 real wrapper.
+    #[derive(Clone)]
+    struct CanonicalOracle(u32);
+    impl CanonicalOracle {
+        fn checkpoint(rng: &crate::Rng) -> Self {
+            assert_eq!(rng.algorithm(), crate::RngAlgorithm::Gm8Lcg32V1);
+            Self(u32::try_from(rng.state_bits()).unwrap())
+        }
+        fn next_u64(&mut self) -> u64 {
+            self.0 = self.0.wrapping_mul(0x0808_8405).wrapping_add(1);
+            u64::from(self.0)
+        }
+        fn draw(&mut self, width: u64) -> u64 {
+            assert!(width <= 1 << 21, "oracle width must stay source-exact");
+            (self.next_u64() * width) >> 32
+        }
+    }
+
     // Literal rand statements, independent of production chance/range helpers.
-    fn literal_burn(rng: &mut Rng, denominator: u64, bounds: (u64, u64)) -> Option<Vec2> {
-        if 1 + rng.next_u64() % denominator != 1 {
+    fn literal_burn(
+        rng: &mut CanonicalOracle,
+        denominator: u64,
+        bounds: (u64, u64),
+    ) -> Option<Vec2> {
+        if 1 + rng.draw(denominator) != 1 {
             return None;
         }
         Some(Vec2::new(
-            (rng.next_u64() % (bounds.0 + 1)) as f64,
-            (rng.next_u64() % (bounds.1 + 1)) as f64,
+            (rng.draw(bounds.0 + 1)) as f64,
+            (rng.draw(bounds.1 + 1)) as f64,
         ))
     }
 
-    fn scene(seed: u64) -> Game {
+    fn scene(seed: u32) -> Game {
         let mut game = Game::shell(seed, RulesPreset::Classic);
         game.world = World::new(40, 30, Area::Temple, 13);
         game.player.pos = Vec2::new(240.0, 152.0);
@@ -1489,7 +1513,7 @@ mod burning_source_tests {
                 // A source-local event oracle, not the natural ignition fixture.
                 actor.data.insert("burning".into(), 1.0);
                 let (w, h) = crate::catalog::sprite_dimensions(&actor.sprite).unwrap();
-                let mut expected = game.rng.clone();
+                let mut expected = CanonicalOracle::checkpoint(&game.rng);
                 let offset = literal_burn(&mut expected, 5, (w as u64, h as u64));
                 tick(&mut game, &mut actor);
                 let burns: Vec<_> = game
@@ -1575,19 +1599,17 @@ mod burning_source_tests {
         for seed in 0..32 {
             let mut game = scene(seed);
             let id = game.spawn("oAlienEject", Vec2::new(96.0, 112.0));
-            let mut expected = game.rng.clone();
+            let mut expected = CanonicalOracle::checkpoint(&game.rng);
             let mut y = 112.0;
             let mut vy = -6.0;
             let mut expected_births = Vec::new();
             for _ in 0..12 {
                 y += vy;
                 vy += 0.5;
-                let emits = 1 + expected.next_u64() % 5 == 1;
+                let emits = 1 + expected.draw(5) == 1;
                 if emits {
-                    let x =
-                        96.0 + (expected.next_u64() % 4) as f64 - (expected.next_u64() % 4) as f64;
-                    let py =
-                        y + (expected.next_u64() % 4) as f64 - (expected.next_u64() % 4) as f64;
+                    let x = 96.0 + (expected.draw(4)) as f64 - (expected.draw(4)) as f64;
+                    let py = y + (expected.draw(4)) as f64 - (expected.draw(4)) as f64;
                     expected_births.push(Vec2::new(x, py));
                 }
                 let prior_id = game.world.entities.iter().map(|e| e.id).max().unwrap_or(0) + 1;
@@ -1633,7 +1655,7 @@ mod burning_source_tests {
                 actor
                     .data
                     .insert("invincible".into(), f64::from(invincible));
-                let mut expected = game.rng.clone();
+                let mut expected = CanonicalOracle::checkpoint(&game.rng);
                 let offset = if invincible {
                     None
                 } else {
@@ -1670,7 +1692,7 @@ mod burning_source_tests {
                 // Initial source-reachable IDLE counter distinguishes the
                 // unsupported continuation from the grounded transition.
                 game.world.entity_mut(id).unwrap().timer = 1;
-                let mut expected = game.rng.clone();
+                let mut expected = CanonicalOracle::checkpoint(&game.rng);
                 if unsupported {
                     // oMagma's own Create draws x twice, y, and acceleration
                     // after inherited Detritus defaults, before the burn roll.
@@ -1681,7 +1703,7 @@ mod burning_source_tests {
                 let offset = literal_burn(&mut expected, 20, (8, 8));
                 if !unsupported {
                     expected.next_u64(); // counter1 -> 0: facing rand(0,1)
-                    let transform = 1 + expected.next_u64() % 6 == 1;
+                    let transform = 1 + expected.draw(6) == 1;
                     if transform {
                         for _ in 0..4 {
                             expected.next_u64();
@@ -1742,8 +1764,8 @@ mod burning_source_tests {
                 let mut actor = game.world.entities.remove(index);
                 actor.data.insert("burning".into(), burning);
                 let (width, height) = crate::catalog::sprite_dimensions(&actor.sprite).unwrap();
-                let mut expected = game.rng.clone();
-                let expected_facing = if expected.next_u64() % 2 == 0 { -1 } else { 1 };
+                let mut expected = CanonicalOracle::checkpoint(&game.rng);
+                let expected_facing = if expected.draw(2) == 0 { -1 } else { 1 };
                 let offset = if burning > 0.0 {
                     literal_burn(&mut expected, 5, (width as u64, height as u64))
                 } else {
@@ -1806,7 +1828,7 @@ mod burning_source_tests {
                 let mut actor = game.world.entities.remove(index);
                 actor.data.insert("burning".into(), burning);
                 let hp = actor.health;
-                let mut expected = game.rng.clone();
+                let mut expected = CanonicalOracle::checkpoint(&game.rng);
                 // scrCreateBlood's three fresh Blood instances each execute
                 // their four own Create draws before instance_destroy resumes.
                 for _ in 0..12 {
