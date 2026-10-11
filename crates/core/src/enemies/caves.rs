@@ -234,13 +234,15 @@ pub(super) fn collision(
         return false;
     }
     if crate::catalog::is_a(other.object(game), "oSolid") {
+        // The source event is action_kill_object applied to .self.
+        e.alive = false;
         return true;
     }
     if !crate::catalog::is_a(other.object(game), "oCharacter") {
         return false;
     }
-    // Its source Solid collision event is deliberately empty. The character
-    // collision alerts both families using each target's distance to Player1.
+    // Character contact alerts both families using each target's distance to
+    // Player1; a sight destroyed by an earlier solid contact cannot reach it.
     let alerted: Vec<_> = game
         .world
         .entities
@@ -1021,27 +1023,58 @@ mod tests {
     }
 
     #[test]
-    fn sight_solid_callback_is_empty_and_does_not_destroy_the_instance() {
-        let mut game = Game::shell(42, RulesPreset::Classic);
-        game.player.pos = Vec2::new(120.0, 72.0);
-        game.world.set_tile(5, 4, "oBlock");
-        let ray = game.world.spawn("oEnemySight", Vec2::new(64.0, 64.0));
-        game.world
-            .entity_mut(ray)
-            .unwrap()
-            .data
-            .insert("hspeed".into(), 10.0);
-        game.world.spawn("oCaveman", Vec2::new(64.0, 100.0));
-        game.step(&crate::InputFrame::default());
-        assert!(
-            game.world.entity(ray).is_some(),
-            "source Solid callback is empty"
-        );
-        let mut sight = game.world.entity(ray).unwrap().clone();
-        let terrain = crate::dispatcher::Instance::Terrain(4 * game.world.width + 5);
-        assert!(collision(&mut game, &mut sight, terrain));
-        assert!(sight.alive);
-        assert_eq!(game.player.health, 4);
+    fn natural_caveman_sight_dies_at_a_wall_and_open_path_still_alerts() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for wall in [false, true] {
+                let mut game = Game::shell(42, rules);
+                for x in 0..game.world.width {
+                    game.world.set_tile(x, 10, "oBlock");
+                }
+                if wall {
+                    for y in 0..10 {
+                        game.world.set_tile(8, y, "oBlock");
+                    }
+                }
+                game.player.pos = Vec2::new(160.0, 152.0);
+                game.player.previous_pos = game.player.pos;
+                let caveman = game.spawn("oCaveman", Vec2::new(96.0, 144.0));
+                // The source idle branch casts its own moving sight; there is
+                // no manually spawned projectile or actor-state injection.
+                game.step(&crate::InputFrame::default());
+                let ray = game
+                    .world
+                    .entities
+                    .iter()
+                    .find(|e| {
+                        e.alive && e.object == "oEnemySight" && e.value("owner") == caveman as f64
+                    })
+                    .expect("the real Caveman Step must create its sight");
+                let ray_id = ray.id;
+                assert_eq!(ray.value("hspeed"), 10.0);
+                assert_eq!(game.world.entity(caveman).unwrap().state, 1);
+                game.step(&crate::InputFrame::default());
+                assert_eq!(
+                    game.world.entity(ray_id).is_none(),
+                    wall,
+                    "the naturally moving sight reaches the authored wall on its second tick"
+                );
+                let mut alerted = game.events.iter().any(|event| {
+                    matches!(event, crate::GameEvent::Sound { name, .. } if name == "sndAlert")
+                });
+                for _ in 2..6 {
+                    game.step(&crate::InputFrame::default());
+                    alerted |= game.events.iter().any(|event| {
+                        matches!(event, crate::GameEvent::Sound { name, .. } if name == "sndAlert")
+                    });
+                }
+                assert_eq!(
+                    alerted, !wall,
+                    "only the unobstructed sight can alert its owner"
+                );
+                assert_eq!(game.world.entity(caveman).unwrap().state == 2, !wall);
+                assert_eq!(game.player.health, 4);
+            }
+        }
     }
 
     #[test]
