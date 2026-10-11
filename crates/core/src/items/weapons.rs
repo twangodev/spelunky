@@ -1274,7 +1274,8 @@ pub fn collision(game: &mut Game, id: u64, other: crate::dispatcher::Instance) {
             if crate::catalog::is_a(&object, "oSolid")
                 || crate::catalog::is_a(&object, "oItem")
                 || crate::catalog::is_a(&object, "oEnemy") && object != "oGiantSpider"
-                || matches!(object.as_str(), "oWater" | "oWeb") =>
+                || crate::catalog::is_a(&object, "oWater")
+                || object == "oWeb" =>
         {
             e.set_sprite("sWebCreate");
             e.vel = Vec2::default();
