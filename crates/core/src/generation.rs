@@ -706,14 +706,15 @@ pub fn generate(rng: &mut Rng, level: u32, flags: &BTreeSet<String>) -> World {
     apply_wanted_posters(&mut world, &selected);
     let graphics_high = !has(&selected, "low_graphics");
     terrain::create_generated(&mut world, rng);
+    // Construction/carving does not dispatch source Solid Destroy events.
+    // Population does; preserve any real parent checkWater request it emits.
+    world.fluid_dirty = false;
     population::populate(&mut world, rng, &selected);
     terrain::setup_generated(&mut world, rng, graphics_high);
     if graphics_high {
         background_extras(&mut world, rng);
     }
     terrain::finalize_generated(&mut world);
-    // Construction/carving does not dispatch source Solid Destroy events.
-    world.fluid_dirty = false;
     world
 }
 
@@ -1266,10 +1267,73 @@ mod tests {
                     assert!(w.tile(0, y as i32).unwrap().is_solid());
                     assert!(w.tile(41, y as i32).unwrap().is_solid());
                 }
-                for pos in [w.entrance, w.exit] {
-                    assert!(!w.solid_at(pos.x, pos.y), "seed {seed}, level {level}");
+                for (name, pos) in [("entrance", w.entrance), ("exit", w.exit)] {
+                    assert!(
+                        !w.tiles_point(pos, "oSolid"),
+                        "{name} terrain at {pos:?}, seed {seed}, level {level}"
+                    );
                 }
+                // scrEntityGen:453 excludes the start room from Temple floor
+                // enemies. It does not exclude the exit room: mobile SmashTraps
+                // can initially occupy an exit without embedding it in terrain.
+                assert!(
+                    !w.solid_at(w.entrance.x, w.entrance.y),
+                    "entrance live solid at {:?}, seed {seed}, level {level}",
+                    w.entrance
+                );
             }
         }
+    }
+
+    #[test]
+    fn temple_exit_smash_moves_away_and_allows_a_local_exit_interaction() {
+        use crate::model::{Game, InputFrame, RulesPreset, RunState};
+
+        let mut game = Game::shell(37, RulesPreset::Classic);
+        game.world = generate(&mut game.rng, 13, &game.flags);
+        assert_eq!(game.world.exit, Vec2::new(424.0, 472.0));
+        let door_origin = Vec2::new(game.world.exit.x - 8.0, game.world.exit.y - 8.0);
+        let trap = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.alive && e.object == "oSmashTrap" && e.pos == door_origin)
+            .expect("scrEntityGen:470-471 permits a SmashTrap at the raw exit origin");
+        let trap_id = trap.id;
+        assert_eq!(trap.data.get("direction"), Some(&2.0));
+        assert!(game.world.solid_at(door_origin.x, door_origin.y));
+        assert!(!game.world.tiles_point(door_origin, "oSolid"));
+
+        // This is a focused interaction fixture near the generated exit, not
+        // an entrance-to-exit navigation replay. Retain every generated object
+        // and the post-generation RNG; only ordinary inputs follow this pose.
+        game.player.pos = Vec2::new(392.0, 472.0);
+        game.player.previous_pos = game.player.pos;
+        let initial_health = game.player.health;
+        let mut vacated = false;
+        for tick in 0..40 {
+            game.step(&InputFrame {
+                jump_pressed: tick == 2,
+                jump: (2..10).contains(&tick),
+                right: tick >= 2 && game.player.pos.x < 422.0,
+                up: true,
+                ..InputFrame::default()
+            });
+            let trap = game.world.entity(trap_id).expect("generated trap persists");
+            assert!(trap.alive);
+            if !game.world.solid_at(door_origin.x, door_origin.y) {
+                assert!(trap.pos.x < door_origin.x);
+                vacated = true;
+            }
+            if game.state != RunState::Playing {
+                break;
+            }
+        }
+        assert!(
+            vacated,
+            "ordinary SmashTrap movement must clear the exit gate"
+        );
+        assert_eq!(game.player.health, initial_health);
+        assert_eq!(game.state, RunState::Ending);
     }
 }

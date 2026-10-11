@@ -337,7 +337,7 @@ impl CollisionMask {
     /// collision_point uses the cached aggregate integer bbox, unlike smooth
     /// sprite geometry or the explicit rectangle query rasterizer. Reuse the
     /// independently verified bbox updater for its supported transforms only.
-    fn point_bounds(&self) -> Rect {
+    pub(crate) fn point_bounds(&self) -> Rect {
         if self.frame.is_none() {
             return self.bounds;
         }

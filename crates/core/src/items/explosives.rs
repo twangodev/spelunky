@@ -1460,15 +1460,7 @@ fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
     if family == "oXocBlock" {
         // tile_layer_find(99,x,y) removes the individual foreground mural
         // fragment, independently from cleanDeath and the loot branch.
-        if let Some(tile) = game.world.entities.iter_mut().find(|tile| {
-            tile.alive
-                && tile.object == "oGenerationDecoration"
-                && tile.sprite == "bgLadyXoc"
-                && tile.value("depth") == 99.0
-                && tile.pos == entity.pos
-        }) {
-            tile.alive = false;
-        }
+        remove_xoc_fragment(&mut game.world, entity.pos);
     }
     if !solid_outputs_enabled(game, entity) {
         if family == "oSacAltarLeft" {
@@ -1641,6 +1633,137 @@ fn inherits_solid_destroy(object: &str) -> bool {
     false
 }
 
+fn remove_xoc_fragment(world: &mut World, origin: Vec2) {
+    if let Some(tile) = world.entities.iter_mut().find(|tile| {
+        tile.alive
+            && tile.object == "oGenerationDecoration"
+            && tile.sprite == "bgLadyXoc"
+            && tile.value("depth") == 99.0
+            && tile.pos == origin
+    }) {
+        tile.alive = false;
+    }
+}
+
+// oSolid Destroy first gates on a literal collision_point, then selects ONE
+// instance_place target using the destroying receiver's translated full mask.
+// These Temple fixtures are independently stored entities, not terrain cells.
+fn temple_parent_attachment(
+    world: &World,
+    source: &Entity,
+    family: &str,
+    gate: Vec2,
+    translated_origin: Vec2,
+) -> Option<u64> {
+    let targets = || {
+        world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive && crate::catalog::is_a(&entity.object, family))
+    };
+    if !targets().any(|entity| entity.mask_contains(gate, CollisionPrecision::BoundingBox)) {
+        return None;
+    }
+    let mut translated = source.clone();
+    translated.pos = translated_origin;
+    let mask = translated.collision_mask();
+    targets()
+        .find(|entity| mask.intersects_mask(&entity.collision_mask()))
+        .map(|entity| entity.id)
+}
+
+/// The clean Destroy callbacks reachable from scrEntityGen's Temple support
+/// replacement. The caller captures the complete receiver before retirement,
+/// restores the pre-removal fluid flag, then invokes this callback body.
+///
+/// This intentionally does not replace general Game destruction. Stock Temple
+/// templates place shop walls/lamps only in excluded shop rooms, never create
+/// Graves/TikiTorches, and type-exclude Trees/Altars. The sole Door template has
+/// guaranteed support at y-32, failing the replacement predicate. Those Game-
+/// dependent or unguarded callbacks require the runtime dispatcher instead.
+pub(crate) fn destroy_temple_support_clean(world: &mut World, rng: &mut Rng, source: &Entity) {
+    let family = solid_destroy_family(&source.object);
+    assert!(
+        matches!(
+            family,
+            "oSolid"
+                | "oTemple"
+                | "oLush"
+                | "oBlock"
+                | "oPushBlock"
+                | "oXocBlock"
+                | "oTrapBlock"
+                | "oCeilingTrap"
+        ),
+        "unsupported Temple clean Destroy family: {}",
+        source.object
+    );
+    assert_eq!(
+        source.value("shopWall"),
+        0.0,
+        "Temple replacement excludes shop rooms"
+    );
+    assert!(
+        !source
+            .text
+            .get("type")
+            .is_some_and(|kind| kind == "Tree" || kind == "Altar")
+    );
+    assert_ne!(source.value("cleanDeath"), 0.0);
+    let inherited = inherits_solid_destroy(&source.object);
+    let upper = Vec2::new(source.pos.x + 8.0, source.pos.y - 1.0);
+    let lower = Vec2::new(source.pos.x + 8.0, source.pos.y + 18.0);
+    // Preflight unsupported callbacks before any local effect. These cannot
+    // occur in source-authored Temple generation; arbitrary worlds must use
+    // the full Game dispatcher, including grave debris and Lamp Item Create.
+    if inherited {
+        for (family, point) in [("oGrave", upper), ("oLampRed", lower), ("oLamp", lower)] {
+            assert!(
+                !world.tiles_point(point, family)
+                    && !world.entities.iter().any(|entity| entity.alive
+                        && crate::catalog::is_a(&entity.object, family)
+                        && entity.mask_contains(point, CollisionPrecision::BoundingBox)),
+                "unsupported Temple clean Destroy attachment: {family}"
+            );
+        }
+        for family in ["oSpikes", "oTikiTorch"] {
+            if let Some(id) = temple_parent_attachment(world, source, family, upper, upper) {
+                world.entity_mut(id).unwrap().alive = false;
+            }
+        }
+        // Own non-inheriting clean events do not request a water check.
+        world.fluid_dirty = true;
+    }
+    if family == "oXocBlock" {
+        remove_xoc_fragment(world, source.pos);
+    }
+    // These metadata contents represent objects already born in terrain
+    // Create, rather than this clean Destroy's suppressed gold/treasure loot.
+    // Materializing their deferred representation preserves contents, but
+    // does not repair the port's existing original-birth-order timing gap.
+    // Xoc mural metadata and R-template Big Ruby use the same flag for OWN
+    // Destroy loot, which cleanDeath suppresses. Actual deferred terrain Create
+    // contents use concrete object names (oRubyBig, equipment, etc.), whereas
+    // those template assignments retain source treasure labels.
+    if family != "oXocBlock"
+        && source.value("embedded_treasure") != 0.0
+        && source.value("frozen_caveman") == 0.0
+    {
+        if let Some(object) = source
+            .text
+            .get("treasure")
+            .filter(|name| name.starts_with('o'))
+        {
+            let pos = Vec2::new(
+                source.pos.x + 8.0 + source.value("treasure_dx"),
+                source.pos.y + 8.0 + source.value("treasure_dy"),
+            );
+            let id = crate::creation::spawn_generated_entity(world, rng, object, pos);
+            world.entity_mut(id).unwrap().state = 1;
+        }
+    }
+}
+
 fn solid_parent_destroy(game: &mut Game, pos: Vec2, shop_wall: bool) {
     if shop_wall {
         crate::economy::anger(game, pos, "DIE, YOU VANDAL!");
@@ -1765,6 +1888,147 @@ mod tests {
         let mut g = Game::shell(7, RulesPreset::Classic);
         g.player.pos = Vec2::new(160.0, 160.0);
         g
+    }
+
+    fn temple_clean_source(object: &str) -> Entity {
+        let mut source = Entity::new(0, object, Vec2::new(80.0, 80.0));
+        source.data.insert("cleanDeath".into(), 1.0);
+        source
+    }
+
+    #[test]
+    fn temple_clean_destroy_parent_water_check_follows_source_inheritance() {
+        for object in [
+            "oSolid",
+            "oTemple",
+            "oLush",
+            "oBlock",
+            "oPushBlock",
+            "oXocBlock",
+            "oTrapBlock",
+            "oCeilingTrap",
+        ] {
+            for already_dirty in [false, true] {
+                let mut world = World::new(16, 16, Area::Temple, 13);
+                world.fluid_dirty = already_dirty;
+                let mut rng = Rng::new(71);
+                let mut expected = rng.clone();
+                destroy_temple_support_clean(&mut world, &mut rng, &temple_clean_source(object));
+                assert_eq!(
+                    world.fluid_dirty,
+                    already_dirty || matches!(object, "oSolid" | "oTemple" | "oLush"),
+                    "{object}"
+                );
+                assert_eq!(rng.range(1_000_000), expected.range(1_000_000), "{object}");
+                assert!(world.entities.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn temple_clean_destroy_preserves_buried_content_without_own_destroy_loot() {
+        let mut world = World::new(16, 16, Area::Temple, 13);
+        let mut source = temple_clean_source("oTemple");
+        source.data.insert("embedded_treasure".into(), 1.0);
+        source.data.insert("gold_chunks".into(), 3.0);
+        source.data.insert("gold_nuggets".into(), 1.0);
+        source.data.insert("treasure_dx".into(), -2.0);
+        source.data.insert("treasure_dy".into(), 3.0);
+        source.text.insert("treasure".into(), "oSapphireBig".into());
+        let mut rng = Rng::new(71);
+        destroy_temple_support_clean(&mut world, &mut rng, &source);
+        assert_eq!(world.entities.len(), 1);
+        assert_eq!(world.entities[0].object, "oSapphireBig");
+        assert_eq!(world.entities[0].pos, Vec2::new(86.0, 91.0));
+        // The actual R producer also sets the embedded flag, despite this
+        // label referring to OWN Destroy loot rather than a Create-born item.
+        source.text.insert("treasure".into(), "Big Ruby".into());
+        destroy_temple_support_clean(&mut world, &mut rng, &source);
+        assert_eq!(
+            world.entities.len(),
+            1,
+            "R-template own Destroy treasure is clean-suppressed"
+        );
+    }
+
+    #[test]
+    fn temple_clean_destroy_removes_only_matching_xoc_fragment() {
+        let mut world = World::new(16, 16, Area::Temple, 13);
+        let mut ids = Vec::new();
+        for (pos, depth) in [
+            (Vec2::new(80.0, 80.0), 99.0),
+            (Vec2::new(80.0, 80.0), 100.0),
+            (Vec2::new(96.0, 80.0), 99.0),
+        ] {
+            let id = world.spawn("oGenerationDecoration", pos);
+            let fragment = world.entity_mut(id).unwrap();
+            fragment.sprite = "bgLadyXoc".into();
+            fragment.data.insert("depth".into(), depth);
+            ids.push(id);
+        }
+        let mut source = temple_clean_source("oXocBlock");
+        // tiles::terrain_treasure tags the mural's own Destroy loot this way.
+        source.data.insert("embedded_treasure".into(), 1.0);
+        source.text.insert("treasure".into(), "Diamond".into());
+        destroy_temple_support_clean(&mut world, &mut Rng::new(71), &source);
+        assert_eq!(
+            world.entities.len(),
+            3,
+            "clean Xoc must not release its tagged own loot"
+        );
+        assert!(world.entity(ids[0]).is_none());
+        assert!(world.entity(ids[1]).is_some());
+        assert!(world.entity(ids[2]).is_some());
+        assert!(!world.fluid_dirty);
+    }
+
+    #[test]
+    fn temple_parent_attachment_uses_translated_receiver_after_independent_point_gate() {
+        let mut world = World::new(16, 16, Area::Temple, 13);
+        // First source instance intersects the translated receiver, but does
+        // not contain the independent gate point. A later spike opens the gate.
+        let selected = world.spawn("oSpikes", Vec2::new(96.0, 80.0));
+        let gate = world.spawn("oSpikes", Vec2::new(80.0, 64.0));
+        let source = temple_clean_source("oTemple");
+        let point = Vec2::new(88.0, 79.0);
+        assert_eq!(
+            temple_parent_attachment(&world, &source, "oSpikes", point, point),
+            Some(selected)
+        );
+        destroy_temple_support_clean(&mut world, &mut Rng::new(71), &source);
+        assert!(world.entity(selected).is_none());
+        assert!(
+            world.entity(gate).is_some(),
+            "Destroy selects one translated-mask target, not all gate hits"
+        );
+        world.entity_mut(gate).unwrap().alive = false;
+        world.spawn("oSpikes", Vec2::new(96.0, 80.0));
+        assert_eq!(
+            temple_parent_attachment(&world, &source, "oSpikes", point, point),
+            None
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "unsupported Temple clean Destroy family: oDoor")]
+    fn temple_clean_destroy_rejects_unguarded_door_callback() {
+        destroy_temple_support_clean(
+            &mut World::new(16, 16, Area::Temple, 13),
+            &mut Rng::new(71),
+            &temple_clean_source("oDoor"),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "unsupported Temple clean Destroy attachment: oGrave")]
+    fn temple_clean_destroy_rejects_game_dependent_grave_callback() {
+        let mut world = World::new(16, 16, Area::Temple, 13);
+        world.spawn("oGrave", Vec2::new(80.0, 64.0));
+        destroy_temple_support_clean(
+            &mut world,
+            &mut Rng::new(71),
+            &temple_clean_source("oTemple"),
+        );
     }
 
     #[test]

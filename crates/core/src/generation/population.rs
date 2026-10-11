@@ -1,8 +1,8 @@
 //! Source-based population rules from Classic's scrEntityGen/scrTreasureGen.
 //!
 //! Entity coordinates preserve GameMaker instance origins; entrance/exit
-//! coordinates remain tile centers. The source's probability chains remain
-//! conditional: a second roll is made only when the preceding roll failed.
+//! coordinates remain tile centers. Temple preserves eager GM8 Boolean
+//! operands; statement-level else-if probability chains remain conditional.
 use crate::model::{Area, Rect, Rng, Vec2, World};
 use std::collections::BTreeSet;
 
@@ -83,6 +83,14 @@ fn start_room(world: &World, x: i32, y: i32) -> bool {
     room(at(x, y)) == room(world.entrance)
 }
 fn spawn(world: &mut World, rng: &mut Rng, name: &str, x: i32, y: i32) {
+    spawn_at(
+        world,
+        rng,
+        name,
+        Vec2::new(f64::from(x) * 16.0, f64::from(y) * 16.0),
+    );
+}
+fn spawn_at(world: &mut World, rng: &mut Rng, name: &str, origin: Vec2) {
     // `x,y` denotes the tile, while these offsets are the literal
     // instance_create offsets used by the source population scripts.
     let offset = match name {
@@ -97,7 +105,7 @@ fn spawn(world: &mut World, rng: &mut Rng, name: &str, x: i32, y: i32) {
         world,
         rng,
         name,
-        Vec2::new(x as f64 * 16.0 + offset.x, y as f64 * 16.0 + offset.y),
+        Vec2::new(origin.x + offset.x, origin.y + offset.y),
     );
     if name == "oDamsel" {
         // scrTreasureGen clears the price after the Damsel Create event.
@@ -109,15 +117,12 @@ fn spawn(world: &mut World, rng: &mut Rng, name: &str, x: i32, y: i32) {
 fn exists(world: &World, name: &str) -> bool {
     world.entities.iter().any(|e| e.alive && e.object == name)
 }
-fn bones(world: &mut World, rng: &mut Rng, x: i32, y: i32) {
+fn bones_at(world: &mut World, rng: &mut Rng, origin: Vec2) {
     if rng.chance(1, 8) {
-        spawn(world, rng, "oFakeBones", x, y);
+        spawn_at(world, rng, "oFakeBones", origin);
     } else {
-        spawn(world, rng, "oBones", x, y);
-        world.spawn(
-            "oSkull",
-            Vec2::new(x as f64 * 16.0 + 12.0, y as f64 * 16.0 + 12.0),
-        );
+        spawn_at(world, rng, "oBones", origin);
+        world.spawn("oSkull", Vec2::new(origin.x + 12.0, origin.y + 12.0));
     }
 }
 
@@ -138,20 +143,156 @@ fn source_point_family(world: &World, point: Vec2, family: &str) -> bool {
 }
 
 fn source_rectangle_family(world: &World, rectangle: Rect, family: &str) -> bool {
-    // prec=false: test the current sprite/mask bounding boxes, including
-    // alive dynamic descendants even when their movement flags are changed.
-    world.tiles_collide(rectangle, family)
-        || world.entities.iter().any(|entity| {
-            entity.alive
-                && crate::catalog::is_a(&entity.object, family)
-                && entity.sprite_bounds().intersects(rectangle)
+    // Rect stores literal inclusive query endpoints as max-min+1. GM8 keeps
+    // those endpoints fractional, but the target aggregate bbox is integer.
+    // This is deliberately asymmetric: expanding a half-open query by one
+    // would incorrectly hit a target just beyond a fractional query maximum.
+    let hits = |target: Rect| {
+        target.is_valid()
+            && rectangle.is_valid()
+            && target.x + target.w > rectangle.x
+            && target.x <= rectangle.x + rectangle.w - 1.0
+            && target.y + target.h > rectangle.y
+            && target.y <= rectangle.y + rectangle.h - 1.0
+    };
+    world.tiles.iter().enumerate().any(|(index, tile)| {
+        crate::catalog::is_a(&tile.object, family)
+            && hits(
+                world
+                    .tile_collision_mask((index % world.width) as i32, (index / world.width) as i32)
+                    .point_bounds(),
+            )
+    }) || world.entities.iter().any(|entity| {
+        entity.alive
+            && crate::catalog::is_a(&entity.object, family)
+            && hits(entity.collision_mask().point_bounds())
+    })
+}
+
+fn source_family_distance(world: &World, bounds: Rect, family: &str) -> f64 {
+    world
+        .tiles
+        .iter()
+        .enumerate()
+        .filter(|(_, tile)| crate::catalog::is_a(&tile.object, family))
+        .map(|(index, _)| {
+            world
+                .tile_collision_mask((index % world.width) as i32, (index / world.width) as i32)
+                .point_bounds()
         })
+        .chain(
+            world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && crate::catalog::is_a(&entity.object, family))
+                .map(|entity| entity.collision_mask().point_bounds()),
+        )
+        .filter(|target| target.is_valid())
+        .map(|target| crate::world_events::mask_distance(bounds, target))
+        .fold(1_000_000.0, f64::min)
 }
 
 #[derive(Clone, Copy)]
 enum FamilyInstance {
     Tile(usize),
     Entity(u64),
+}
+
+struct TempleReceiver {
+    instance: FamilyInstance,
+    origin: Vec2,
+    bounds: Rect,
+    kind: String,
+    source: crate::model::Entity,
+}
+
+fn temple_receiver(
+    world: &World,
+    serial: u64,
+    instance: FamilyInstance,
+    origin: Vec2,
+) -> Option<TempleReceiver> {
+    let (mut source, bounds) = match instance {
+        FamilyInstance::Tile(index) => {
+            let tile = world.tiles.get(index)?;
+            if tile.creation_serial != serial || !crate::catalog::is_a(&tile.object, "oSolid") {
+                return None;
+            }
+            let center = Vec2::new(origin.x + 8.0, origin.y + 8.0);
+            let metadata = world.entities.iter().find(|entity| {
+                entity.alive && entity.object == "oTerrainMetadata" && entity.pos == center
+            });
+            let mut source = crate::model::Entity::new(0, &tile.object, origin);
+            source.creation_serial = serial;
+            if let Some(metadata) = metadata {
+                source.data = metadata.data.clone();
+                source.text = metadata.text.clone();
+                source.animation = metadata.animation;
+                if let Some(sprite) = metadata.text.get("terrain_sprite") {
+                    source.sprite = sprite.clone();
+                }
+            }
+            (
+                source,
+                world
+                    .tile_collision_mask((index % world.width) as i32, (index / world.width) as i32)
+                    .point_bounds(),
+            )
+        }
+        FamilyInstance::Entity(id) => {
+            let entity = world.entity(id)?;
+            if entity.creation_serial != serial || !crate::catalog::is_a(&entity.object, "oSolid") {
+                return None;
+            }
+            (entity.clone(), entity.collision_mask().point_bounds())
+        }
+    };
+    let kind = source.text.get("type").cloned().unwrap_or_else(|| {
+        let label = if matches!(source.object.as_str(), "oTree" | "oTreeTile") {
+            "Tree"
+        } else if matches!(
+            source.object.as_str(),
+            "oSacAltarLeft" | "oSacAltarRight" | "oAltarLeft" | "oAltarRight"
+        ) {
+            "Altar"
+        } else {
+            "None"
+        };
+        label.into()
+    });
+    source.data.insert("cleanDeath".into(), 1.0);
+    Some(TempleReceiver {
+        instance,
+        origin,
+        bounds,
+        kind,
+        source,
+    })
+}
+
+fn retire_temple_receiver(world: &mut World, rng: &mut Rng, receiver: &TempleReceiver) {
+    // set_tile marks any removal dirty; source overriding Destroy events do
+    // not all inherit oSolid. Let the audited callback select checkWater.
+    let was_dirty = world.fluid_dirty;
+    match receiver.instance {
+        FamilyInstance::Tile(index) => {
+            world.set_tile(index % world.width, index / world.width, "");
+            let center = Vec2::new(receiver.origin.x + 8.0, receiver.origin.y + 8.0);
+            for metadata in world.entities.iter_mut().filter(|entity| {
+                entity.alive && entity.object == "oTerrainMetadata" && entity.pos == center
+            }) {
+                metadata.alive = false;
+            }
+        }
+        FamilyInstance::Entity(id) => {
+            if let Some(entity) = world.entity_mut(id) {
+                entity.data.insert("cleanDeath".into(), 1.0);
+                entity.alive = false;
+            }
+        }
+    }
+    world.fluid_dirty = was_dirty;
+    crate::items::explosives::destroy_temple_support_clean(world, rng, &receiver.source);
 }
 
 fn family_instances(world: &World, family: &str) -> Vec<(u64, FamilyInstance, Vec2)> {
@@ -283,20 +424,54 @@ fn treasure(
     x: i32,
     y: i32,
 ) {
-    let pos = at(x, y);
-    if pos.distance(world.entrance) < 32.0
-        || pos.distance(world.exit) < 32.0
-        || world
-            .entities
-            .iter()
-            .any(|e| e.object == "oGoldIdol" && e.pos.distance(pos) < 64.0)
-    {
+    treasure_at(
+        world,
+        rng,
+        water,
+        state,
+        Vec2::new(f64::from(x) * 16.0, f64::from(y) * 16.0),
+        None,
+    );
+}
+
+fn damsel_chance(rng: &mut Rng, already_exists: bool, source_eager: bool) -> bool {
+    // GM8 evaluates both operands of `not oGame.damsel and rand(...)`.
+    // Preserve the legacy adapter's short circuit outside the Temple pass.
+    let success = if source_eager || !already_exists {
+        rng.chance(1, 8)
+    } else {
+        false
+    };
+    !already_exists && success
+}
+
+fn treasure_at(
+    world: &mut World,
+    rng: &mut Rng,
+    water: &WaterMasks,
+    state: &mut TreasureState,
+    origin: Vec2,
+    receiver_bounds: Option<Rect>,
+) {
+    let pos = Vec2::new(origin.x + 8.0, origin.y + 8.0);
+    let near_landmark = if let Some(bounds) = receiver_bounds {
+        source_family_distance(world, bounds, "oEntrance") < 32.0
+            || source_family_distance(world, bounds, "oExit") < 32.0
+            || source_family_distance(world, bounds, "oGoldIdol") < 64.0
+    } else {
+        pos.distance(world.entrance) < 32.0
+            || pos.distance(world.exit) < 32.0
+            || world
+                .entities
+                .iter()
+                .any(|e| e.object == "oGoldIdol" && e.pos.distance(pos) < 64.0)
+    };
+    if near_landmark {
         return;
     }
     // scrTreasureGen.gml:34–57 probes named source families at distinct
     // coordinates. Enemies do not block loot; oTreasure blocks the alcove /
     // tunnel branches but deliberately does not block the normal fallback.
-    let origin = Vec2::new(f64::from(x) * 16.0, f64::from(y) * 16.0);
     let above = Vec2::new(origin.x, origin.y - 16.0);
     let middle = Vec2::new(origin.x, origin.y - 8.0);
     let clear_normal = !source_point_family(world, above, "oSolid")
@@ -307,11 +482,11 @@ fn treasure(
         || source_point_family(world, Vec2::new(origin.x, origin.y - 1.0), "oTreasure");
     if !col_stuff {
         if rng.chance(1, 100) {
-            spawn(world, rng, "oRock", x, y - 1);
+            spawn_at(world, rng, "oRock", above);
             return;
         }
         if rng.chance(1, 40) {
-            spawn(world, rng, "oJar", x, y - 1);
+            spawn_at(world, rng, "oJar", above);
             return;
         }
     }
@@ -332,32 +507,41 @@ fn treasure(
         // GiantSpider's compiled object index is 749, so (749 < 100) is 0.
         // distance_to_object(0) has no target and returns 1,000,000 (truthy).
         if world.area != Area::Ice && rng.chance(1, 5) {
-            spawn(world, rng, "oWeb", x, y - 1);
+            spawn_at(world, rng, "oWeb", above);
         } else if state.udjat && !exists(world, "oLockedChest") {
             if rng.chance(1, state.chest_chance) {
-                spawn(world, rng, "oLockedChest", x, y - 1);
+                spawn_at(world, rng, "oLockedChest", above);
             } else {
                 state.chest_chance = state.chest_chance.saturating_sub(1).max(1);
             }
         } else if rng.chance(1, 10) {
-            spawn(world, rng, "oCrate", x, y - 1);
+            spawn_at(world, rng, "oCrate", above);
         } else if rng.chance(1, 15) {
-            spawn(world, rng, "oChest", x, y - 1);
-        } else if !state.damsel && rng.chance(1, 8) && !water.wet(x, y - 1) {
-            spawn(world, rng, "oDamsel", x, y - 1);
+            spawn_at(world, rng, "oChest", above);
+        } else if damsel_chance(rng, state.damsel, receiver_bounds.is_some())
+            && !if receiver_bounds.is_some() {
+                source_point_family(world, Vec2::new(origin.x + 8.0, origin.y - 8.0), "oWater")
+            } else {
+                water
+                    .0
+                    .iter()
+                    .any(|mask| mask.contains(Vec2::new(origin.x + 8.0, origin.y - 8.0)))
+            }
+        {
+            spawn_at(world, rng, "oDamsel", above);
             state.damsel = true;
         } else if rng.chance(1 + bonus, 40_u32.saturating_sub(2 * level).max(1)) {
-            bones(world, rng, x, y - 1);
+            bones_at(world, rng, above);
         } else if rng.chance(1, 3) {
-            spawn(world, rng, "oGoldBar", x, y - 1);
+            spawn_at(world, rng, "oGoldBar", above);
         } else if rng.chance(1, 6) {
-            spawn(world, rng, "oGoldBars", x, y - 1);
+            spawn_at(world, rng, "oGoldBars", above);
         } else if rng.chance(1, 6) {
-            spawn(world, rng, "oEmeraldBig", x, y - 1);
+            spawn_at(world, rng, "oEmeraldBig", above);
         } else if rng.chance(1, 8) {
-            spawn(world, rng, "oSapphireBig", x, y - 1);
+            spawn_at(world, rng, "oSapphireBig", above);
         } else if rng.chance(1, 10) {
-            spawn(world, rng, "oRubyBig", x, y - 1);
+            spawn_at(world, rng, "oRubyBig", above);
         }
     } else if !col_stuff
         && source_point_family(world, left, "oSolid")
@@ -365,27 +549,27 @@ fn treasure(
     {
         // The same literal expression at scrTreasureGen:100 assigns n = 10.
         if world.area != Area::Ice && rng.chance(1, 10) {
-            spawn(world, rng, "oWeb", x, y - 1);
+            spawn_at(world, rng, "oWeb", above);
         } else if rng.chance(1, 4) {
-            spawn(world, rng, "oGoldBar", x, y - 1);
+            spawn_at(world, rng, "oGoldBar", above);
         } else if rng.chance(1, 8) {
-            spawn(world, rng, "oGoldBars", x, y - 1);
+            spawn_at(world, rng, "oGoldBars", above);
         } else if rng.chance(1 + bonus, 80_u32.saturating_sub(level).max(1)) {
-            bones(world, rng, x, y - 1);
+            bones_at(world, rng, above);
         } else if rng.chance(1, 8) {
-            spawn(world, rng, "oEmeraldBig", x, y - 1);
+            spawn_at(world, rng, "oEmeraldBig", above);
         } else if rng.chance(1, 9) {
-            spawn(world, rng, "oSapphireBig", x, y - 1);
+            spawn_at(world, rng, "oSapphireBig", above);
         } else if rng.chance(1, 10) {
-            spawn(world, rng, "oRubyBig", x, y - 1);
+            spawn_at(world, rng, "oRubyBig", above);
         }
     } else if clear_normal {
         if rng.chance(1, 40) {
-            spawn(world, rng, "oGoldBar", x, y - 1);
+            spawn_at(world, rng, "oGoldBar", above);
         } else if rng.chance(1, 50) {
-            spawn(world, rng, "oGoldBars", x, y - 1);
+            spawn_at(world, rng, "oGoldBars", above);
         } else if rng.chance(1 + bonus, 140_u32.saturating_sub(2 * level).max(1)) {
-            bones(world, rng, x, y - 1);
+            bones_at(world, rng, above);
         }
     }
 }
@@ -405,6 +589,10 @@ enum PopulationPhase {
 thread_local! {
     static POPULATION_PHASE_TRACE: std::cell::RefCell<Option<Vec<(u32, i32, i32, PopulationPhase)>>> =
         const { std::cell::RefCell::new(None) };
+    static TEMPLE_RECEIVER_TRACE: std::cell::RefCell<Option<Vec<(u64, Vec2)>>> =
+        const { std::cell::RefCell::new(None) };
+    static TEMPLE_RNG_STARTS: std::cell::RefCell<Option<Vec<(u64, Rng)>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -414,6 +602,223 @@ fn trace_population_phase(world: &World, x: i32, y: i32, phase: PopulationPhase)
             trace.push((world.level, x, y, phase));
         }
     });
+}
+
+fn source_room(origin: Vec2) -> (i32, i32) {
+    // Literal scrGetRoomX/Y ranges, including their outer-room clamps.
+    let x = if origin.x < 176.0 {
+        0
+    } else if origin.x < 336.0 {
+        1
+    } else if origin.x < 496.0 {
+        2
+    } else {
+        3
+    };
+    let y = if origin.y < 144.0 {
+        0
+    } else if origin.y < 272.0 {
+        1
+    } else if origin.y < 400.0 {
+        2
+    } else if origin.y < 528.0 {
+        3
+    } else {
+        4
+    };
+    (x, y)
+}
+
+fn temple_in_shop(world: &World, origin: Vec2) -> bool {
+    let room = source_room(origin);
+    world.entities.iter().any(|entity| {
+        entity.alive && entity.object == "oShopkeeper" && source_room(entity.pos) == room
+    })
+}
+
+fn temple_statue(world: &mut World, origin: Vec2) {
+    let id = world.spawn(
+        "oGenerationDecoration",
+        Vec2::new(origin.x, origin.y - 32.0),
+    );
+    let statue = world.entity_mut(id).unwrap();
+    statue.sprite = "bgStatues".into();
+    for (key, value) in [
+        ("decoration", 1.0),
+        ("source_x", 0.0),
+        ("source_y", 0.0),
+        ("source_w", 16.0),
+        ("source_h", 48.0),
+        ("depth", 9005.0),
+    ] {
+        statue.data.insert(key.into(), value);
+    }
+}
+
+fn temple_population(
+    world: &mut World,
+    rng: &mut Rng,
+    water: &WaterMasks,
+    state: &mut TreasureState,
+    gen_tomb_lord: bool,
+    gold_chance: &mut u32,
+) -> bool {
+    // Canonical with(object) captures the initial descendant count; births
+    // append beyond it and Destroy marks rather than compacts the list. This
+    // generation call chain performs no activation/rebuild, so fixed identities
+    // plus live identity checks preserve that scoped traversal contract.
+    let mut made_gold = false;
+    let mut made_tomb = false;
+    let receivers = family_instances(world, "oSolid");
+    let entrance = family_origins(world, "oEntrance").into_iter().next();
+    let start = source_room(Vec2::new(world.entrance.x - 8.0, world.entrance.y - 8.0));
+    for (serial, instance, origin) in receivers {
+        let Some(receiver) = temple_receiver(world, serial, instance, origin) else {
+            continue;
+        };
+        #[cfg(test)]
+        TEMPLE_RECEIVER_TRACE.with(|trace| {
+            if let Some(trace) = trace.borrow_mut().as_mut() {
+                trace.push((serial, origin));
+            }
+        });
+        #[cfg(test)]
+        TEMPLE_RNG_STARTS.with(|trace| {
+            if let Some(trace) = trace.borrow_mut().as_mut() {
+                trace.push((serial, rng.clone()));
+            }
+        });
+        let above = Vec2::new(origin.x, origin.y - 16.0);
+        let high = Vec2::new(origin.x, origin.y - 32.0);
+        // GM8 Boolean operands are eager. Always consume this draw before
+        // the shop gate, even when the above-point is covered or graphics low.
+        let statue_roll = rng.chance(1, 100);
+        let statue_clear = !source_point_family(world, above, "oSolid");
+        if statue_roll && statue_clear {
+            temple_statue(world, origin);
+        }
+        if temple_in_shop(world, origin) {
+            continue;
+        }
+        if origin.y > 32.0
+            && !source_point_family(world, above, "oSolid")
+            && world.level == 14
+            && !made_gold
+        {
+            if rng.chance(1, *gold_chance) {
+                spawn_at(world, rng, "oGoldDoor", above);
+                protect_gold_door_support(world, receiver.instance);
+                made_gold = true;
+            } else {
+                *gold_chance = gold_chance.saturating_sub(1).max(1);
+            }
+        } else if receiver.kind != "Tree"
+            && receiver.kind != "Altar"
+            && origin.y != 0.0
+            && !source_point_family(world, above, "oSolid")
+            && !source_point_family(world, above, "oLava")
+            && !source_rectangle_family(world, Rect::new(origin.x, above.y, 16.0, 16.0), "oEnemy")
+            && !source_point_family(world, high, "oSolid")
+            && (!source_point_family(world, Vec2::new(origin.x - 16.0, origin.y), "oSolid")
+                || !source_point_family(world, Vec2::new(origin.x + 16.0, origin.y), "oSolid"))
+            && source_point_family(world, Vec2::new(origin.x, origin.y + 16.0), "oSolid")
+            && ![160.0, 176.0, 320.0, 336.0, 480.0, 496.0].contains(&origin.x)
+        {
+            let spear_roll = rng.chance(1, 12);
+            // Source-valid generated rooms have a real Entrance. Do not
+            // substitute the presentation's center for its instance origin.
+            let far = entrance.is_some_and(|entrance| origin.distance(entrance) > 64.0);
+            if spear_roll && far {
+                let plugs_lava =
+                    source_point_family(world, Vec2::new(origin.x - 16.0, high.y), "oSolid")
+                        && source_point_family(world, Vec2::new(origin.x + 16.0, high.y), "oSolid")
+                        && !source_point_family(world, high, "oSolid");
+                if !plugs_lava {
+                    if source_point_family(world, above, "oSolid") {
+                        let nearest = family_instances(world, "oSolid")
+                            .into_iter()
+                            .min_by(|a, b| a.2.distance(above).total_cmp(&b.2.distance(above)));
+                        if let Some((serial, instance, position)) = nearest
+                            && let Some(other) = temple_receiver(world, serial, instance, position)
+                        {
+                            retire_temple_receiver(world, rng, &other);
+                        }
+                    }
+                    spawn_at(world, rng, "oSpearTrapBottom", origin);
+                    spawn_at(
+                        world,
+                        rng,
+                        if world.dark {
+                            "oSpearTrapLit"
+                        } else {
+                            "oSpearTrapTop"
+                        },
+                        above,
+                    );
+                    retire_temple_receiver(world, rng, &receiver);
+                }
+            }
+        }
+        #[cfg(test)]
+        trace_population_phase(
+            world,
+            (origin.x / 16.0) as i32,
+            (origin.y / 16.0) as i32,
+            PopulationPhase::Enemies,
+        );
+        if origin.y < world.height as f64 * 16.0 - 64.0
+            && !source_point_family(world, Vec2::new(origin.x, origin.y + 16.0), "oSolid")
+            && !source_point_family(world, Vec2::new(origin.x, origin.y + 32.0), "oSolid")
+            && !source_point_family(world, Vec2::new(origin.x, origin.y + 16.0), "oWater")
+            && !source_point_family(world, Vec2::new(origin.x, origin.y + 32.0), "oWater")
+        {
+            let scarab_roll = rng.chance(1, 40);
+            if world.dark && scarab_roll {
+                spawn_at(world, rng, "oScarab", Vec2::new(origin.x, origin.y + 16.0));
+            }
+        }
+        let destination = source_room(above);
+        // GM8 and/or have equal priority and associate left-to-right.
+        if (destination.0 != start.0 || destination.1 != start.1)
+            && !source_point_family(world, above, "oEnemy")
+            && origin.y > 16.0
+            && !source_point_family(world, above, "oSolid")
+        {
+            let clear =
+                !source_rectangle_family(world, Rect::new(origin.x, high.y, 33.0, 32.0), "oSolid");
+            let tomb_roll = rng.chance(1, 40);
+            if gen_tomb_lord && !made_tomb && clear && tomb_roll {
+                spawn_at(world, rng, "oTombLord", high);
+                made_tomb = true;
+            } else if rng.chance(1, 40) {
+                spawn_at(world, rng, "oCaveman", above);
+            } else if rng.chance(1, 40) {
+                spawn_at(world, rng, "oHawkman", above);
+            } else if rng.chance(1, 60) {
+                spawn_at(
+                    world,
+                    rng,
+                    if world.dark {
+                        "oSmashTrapLit"
+                    } else {
+                        "oSmashTrap"
+                    },
+                    above,
+                );
+            }
+        }
+        if receiver.kind != "Altar" {
+            #[cfg(test)]
+            trace_population_phase(
+                world,
+                (origin.x / 16.0) as i32,
+                (origin.y / 16.0) as i32,
+                PopulationPhase::Treasure,
+            );
+            treasure_at(world, rng, water, state, origin, Some(receiver.bounds));
+        }
+    }
+    made_gold
 }
 
 pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String>) {
@@ -447,7 +852,12 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
         .flat_map(|y| (1..world.width as i32 - 1).map(move |x| (x, y)))
         .filter(|&(x, y)| solid(world, x, y))
         .collect();
+    let made_gold = world.area == Area::Temple
+        && temple_population(world, rng, &water, &mut state, tomb_lord, &mut gold_chance);
     for &(x, y) in &supports {
+        if world.area == Area::Temple {
+            continue;
+        }
         if in_shop(world, x, y) {
             continue;
         }
@@ -602,67 +1012,10 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
                     }
                 }
             }
-            Area::Temple => {
-                if world.level == 14
-                    && y > 2
-                    && !source_point_family(
-                        world,
-                        Vec2::new(f64::from(x) * 16.0, f64::from(y - 1) * 16.0),
-                        "oSolid",
-                    )
-                    && !exists(world, "oGoldDoor")
-                {
-                    if rng.chance(1, gold_chance) {
-                        spawn(world, rng, "oGoldDoor", x, y - 1);
-                        // Source :406 writes to the `with oSolid` receiver.
-                        protect_gold_door_support(
-                            world,
-                            FamilyInstance::Tile(y as usize * world.width + x as usize),
-                        );
-                    } else {
-                        gold_chance = gold_chance.saturating_sub(1).max(1);
-                    }
-                } else {
-                    spear(world, rng, &water, x, y, altar || tree, far);
-                }
-                if ceiling && world.dark && rng.chance(1, 40) {
-                    spawn(world, rng, "oScarab", x, y + 1);
-                }
-                if !start_room(world, x, y - 1) && floor && y > 1 && !occupied(world, x, y - 1) {
-                    if tomb_lord
-                        && !exists(world, "oTombLord")
-                        // scrEntityGen:460 includes both endpoints:
-                        // x..x+32, y-32..y-1 (33 by 32 pixels).
-                        && !source_rectangle_family(
-                            world,
-                            Rect::new(f64::from(x) * 16.0, f64::from(y - 2) * 16.0, 33.0, 32.0),
-                            "oSolid",
-                        )
-                        && rng.chance(1, 40)
-                    {
-                        spawn(world, rng, "oTombLord", x, y - 2);
-                    } else if rng.chance(1, 40) {
-                        spawn(world, rng, "oCaveman", x, y - 1);
-                    } else if rng.chance(1, 40) {
-                        spawn(world, rng, "oHawkman", x, y - 1);
-                    } else if rng.chance(1, 60) {
-                        spawn(
-                            world,
-                            rng,
-                            if world.dark {
-                                "oSmashTrapLit"
-                            } else {
-                                "oSmashTrap"
-                            },
-                            x,
-                            y - 1,
-                        );
-                    }
-                }
-            }
+            Area::Temple => unreachable!("Temple uses its source instance pass"),
             Area::Boss => {}
         }
-        if matches!(world.area, Area::Ice | Area::Temple) && !altar {
+        if world.area == Area::Ice && !altar {
             #[cfg(test)]
             trace_population_phase(world, x, y, PopulationPhase::Treasure);
             treasure(world, rng, &water, &mut state, x, y);
@@ -704,7 +1057,7 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
             spawn(world, rng, "oXMarket", x, y - 1);
         }
     }
-    if world.area == Area::Temple && world.level == 14 && !exists(world, "oGoldDoor") {
+    if world.area == Area::Temple && world.level == 14 && !made_gold {
         // The second `with oSolid` is a fresh pass after enemy/treasure
         // generation. It includes moving blocks and has no shop exclusion.
         if let Some((_, support, origin)) =
@@ -835,6 +1188,585 @@ fn arrows(world: &mut World, rng: &mut Rng, supports: &[(i32, i32)]) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn generated_temple_primary_receiver_callbacks_accept_stock_templates() {
+        for level in [13, 14, 15] {
+            for seed in [0, 1, 2, 3, 7, 29, 42, 6491] {
+                TEMPLE_RECEIVER_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
+                let world = super::super::generate(&mut Rng::new(seed), level, &BTreeSet::new());
+                let visits = TEMPLE_RECEIVER_TRACE.with(|trace| trace.borrow_mut().take().unwrap());
+                assert!(visits.len() >= 100, "level={level} seed={seed}");
+                assert!(
+                    visits.windows(2).all(|w| w[0].0 < w[1].0),
+                    "level={level} seed={seed}"
+                );
+                assert_eq!(world.area, Area::Temple);
+                if level == 14 {
+                    assert!(exists(&world, "oGoldDoor"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn temple_primary_statue_roll_precedes_shop_gate_even_in_low_graphics() {
+        for low_graphics in [false, true] {
+            let mut world = World::new(42, 34, Area::Temple, 13);
+            world.set_tile(20, 20, "oTemple");
+            world.spawn("oShopkeeper", Vec2::new(320.0, 320.0));
+            let mut actual = Rng::new(29);
+            let mut oracle = actual.clone();
+            // Literal :395 precedes :397. The shop suppresses every later
+            // receiver statement, so this source-statement oracle is complete.
+            assert_eq!(oracle.range(100), 0);
+            let flags = if low_graphics {
+                BTreeSet::from(["low_graphics".into()])
+            } else {
+                BTreeSet::new()
+            };
+            populate(&mut world, &mut actual, &flags);
+            let statues: Vec<_> = world
+                .entities
+                .iter()
+                .filter(|e| e.sprite == "bgStatues")
+                .collect();
+            assert_eq!(statues.len(), 1);
+            assert_eq!(statues[0].pos, Vec2::new(320.0, 288.0));
+            assert_eq!(statues[0].value("source_w"), 16.0);
+            assert_eq!(statues[0].value("source_h"), 48.0);
+            assert_eq!(statues[0].value("depth"), 9005.0);
+            assert_eq!(actual.next_u64(), oracle.next_u64());
+        }
+    }
+
+    #[test]
+    fn temple_primary_visits_dynamic_coincident_perimeter_and_reverse_births() {
+        let mut world = World::new(42, 34, Area::Temple, 13);
+        let positions = [
+            Vec2::new(320.0, 512.0),
+            Vec2::new(160.5, 512.25),
+            Vec2::new(160.5, 512.25),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(160.0, 512.0),
+        ];
+        world.set_tile(20, 32, "oTemple");
+        world.spawn("oPushBlock", positions[1]);
+        world.spawn("oPushBlock", positions[2]);
+        world.set_tile(0, 0, "oTemple");
+        world.set_tile(10, 32, "oTemple");
+        for position in [positions[0], positions[1], positions[3]] {
+            world.spawn("oShopkeeper", position);
+        }
+        let mut actual = Rng::new(29);
+        let mut oracle = actual.clone();
+        for _ in 0..5 {
+            oracle.range(100);
+        }
+        TEMPLE_RECEIVER_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
+        populate(&mut world, &mut actual, &BTreeSet::new());
+        let visits = TEMPLE_RECEIVER_TRACE.with(|trace| trace.borrow_mut().take().unwrap());
+        assert_eq!(
+            visits,
+            positions
+                .into_iter()
+                .enumerate()
+                .map(|(i, p)| (i as u64 + 1, p))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn temple_primary_spear_replaces_exact_receiver_and_excludes_newborns() {
+        // Search the literal local prefix: statue chance, spear chance. No
+        // earlier receiver exists and the source spear guards all pass here.
+        let seed = (0..100_000)
+            .find(|&seed| {
+                let mut rng = Rng::new(seed);
+                rng.range(100);
+                rng.range(12) == 0
+            })
+            .unwrap();
+        let mut world = World::new(42, 34, Area::Temple, 13);
+        world.entrance = Vec2::new(24.0, 24.0);
+        world.exit = Vec2::new(616.0, 504.0);
+        world.set_tile(12, 10, "oTemple");
+        world.set_tile(12, 11, "oTemple");
+        world.spawn("oEntrance", Vec2::new(16.0, 16.0));
+        TEMPLE_RECEIVER_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
+        POPULATION_PHASE_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
+        populate(&mut world, &mut Rng::new(seed), &BTreeSet::new());
+        let visits = TEMPLE_RECEIVER_TRACE.with(|trace| trace.borrow_mut().take().unwrap());
+        let phases = POPULATION_PHASE_TRACE.with(|trace| trace.borrow_mut().take().unwrap());
+        assert_eq!(world.tile(12, 10).unwrap().object, "");
+        assert!(world.entities.iter().any(|e| e.alive
+            && e.object == "oSpearTrapBottom"
+            && e.pos == Vec2::new(192.0, 160.0)));
+        assert!(
+            world.entities.iter().any(|e| e.alive
+                && e.object == "oSpearTrapTop"
+                && e.pos == Vec2::new(192.0, 144.0))
+        );
+        assert_eq!(
+            visits,
+            vec![(1, Vec2::new(192.0, 160.0)), (2, Vec2::new(192.0, 176.0))]
+        );
+        assert_eq!(
+            &phases[..2],
+            &[
+                (13, 12, 10, PopulationPhase::Enemies),
+                (13, 12, 10, PopulationPhase::Treasure)
+            ]
+        );
+    }
+
+    #[test]
+    fn temple_spear_clean_destroy_preserves_embedded_content_and_parent_water_request() {
+        let seed = (0..100_000)
+            .find(|&seed| {
+                let mut r = Rng::new(seed);
+                r.range(100);
+                r.range(12) == 0
+            })
+            .unwrap();
+        for (object, embedded, expected_dirty) in [
+            ("oTemple", true, true),
+            ("oTemple", false, true),
+            ("oPushBlock", false, false),
+        ] {
+            let mut world = World::new(42, 34, Area::Temple, 13);
+            world.entrance = Vec2::new(24.0, 24.0);
+            let support = if object == "oPushBlock" {
+                Some(world.spawn(object, Vec2::new(192.0, 160.0)))
+            } else {
+                if embedded {
+                    world.set_tile(12, 10, object);
+                } else {
+                    super::super::tiles::stamp_at(
+                        &mut world,
+                        &mut Rng::new(1),
+                        "R",
+                        12,
+                        10,
+                        false,
+                        false,
+                        "",
+                    );
+                }
+                None
+            };
+            world.set_tile(12, 11, "oTemple");
+            if object == "oTemple" {
+                super::super::tiles::terrain_property(&mut world, 12, 10, "gold_chunks", 3.0);
+                let metadata = world
+                    .entities
+                    .iter_mut()
+                    .find(|e| e.object == "oTerrainMetadata" && e.pos == Vec2::new(200.0, 168.0))
+                    .unwrap();
+                metadata
+                    .text
+                    .insert("terrain_sprite".into(), "sTempleGoldBig".into());
+                if embedded {
+                    metadata.text.insert("treasure".into(), "oRubyBig".into());
+                    metadata.data.insert("embedded_treasure".into(), 1.0);
+                } else {
+                    assert_eq!(metadata.value("embedded_treasure"), 1.0);
+                    assert_eq!(metadata.text["treasure"], "Big Ruby");
+                }
+            }
+            world.spawn("oEntrance", Vec2::new(16.0, 16.0));
+            world.fluid_dirty = false;
+            populate(&mut world, &mut Rng::new(seed), &BTreeSet::new());
+            if let Some(id) = support {
+                assert!(world.entity(id).is_none());
+            } else {
+                assert_eq!(world.tile(12, 10).unwrap().object, "");
+            }
+            assert!(world.entities.iter().any(|e| e.alive
+                && e.object == "oSpearTrapBottom"
+                && e.pos == Vec2::new(192.0, 160.0)));
+            let ruby: Vec<_> = world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oRubyBig")
+                .collect();
+            assert_eq!(ruby.len(), usize::from(embedded));
+            if embedded {
+                assert_eq!(ruby[0].pos, Vec2::new(200.0, 168.0));
+                assert_eq!(ruby[0].state, 1);
+            }
+            assert!(
+                !world
+                    .entities
+                    .iter()
+                    .any(|e| e.alive && matches!(e.object.as_str(), "oGoldChunk" | "oGoldNugget"))
+            );
+            assert_eq!(
+                world.fluid_dirty, expected_dirty,
+                "{object} embedded={embedded}"
+            );
+            assert!(!world.entities.iter().any(|e| e.alive
+                && e.object == "oTerrainMetadata"
+                && e.pos == Vec2::new(200.0, 168.0)));
+        }
+    }
+
+    #[test]
+    fn temple_clean_retirement_uses_actual_r_and_xoc_producer_metadata() {
+        for (symbol, x, y, label, inherited, murals) in [
+            ("R", 12, 10, "Big Ruby", true, 0),
+            ("X", 14, 11, "Diamond", false, 30),
+        ] {
+            let mut world = World::new(42, 34, Area::Temple, 13);
+            super::super::tiles::stamp_at(
+                &mut world,
+                &mut Rng::new(1),
+                symbol,
+                12,
+                10,
+                false,
+                false,
+                "",
+            );
+            let index = y * world.width + x;
+            let serial = world.tiles[index].creation_serial;
+            let origin = Vec2::new(x as f64 * 16.0, y as f64 * 16.0);
+            let receiver =
+                temple_receiver(&world, serial, FamilyInstance::Tile(index), origin).unwrap();
+            assert_eq!(receiver.source.value("embedded_treasure"), 1.0);
+            assert_eq!(receiver.source.text["treasure"], label);
+            assert_eq!(
+                world
+                    .entities
+                    .iter()
+                    .filter(|e| e.alive && e.sprite == "bgLadyXoc")
+                    .count(),
+                murals
+            );
+            world.fluid_dirty = false;
+            let mut actual = Rng::new(17);
+            let mut oracle = actual.clone();
+            retire_temple_receiver(&mut world, &mut actual, &receiver);
+            assert_eq!(world.tiles[index].object, "");
+            assert_eq!(world.fluid_dirty, inherited);
+            assert!(
+                !world
+                    .entities
+                    .iter()
+                    .any(|e| e.alive && matches!(e.object.as_str(), "oRubyBig" | "oDiamond"))
+            );
+            assert!(!world.entities.iter().any(|e| e.alive
+                && e.object == "oTerrainMetadata"
+                && e.pos == Vec2::new(origin.x + 8.0, origin.y + 8.0)));
+            assert_eq!(
+                world
+                    .entities
+                    .iter()
+                    .filter(|e| e.alive && e.sprite == "bgLadyXoc")
+                    .count(),
+                murals.saturating_sub(1)
+            );
+            assert_eq!(actual.next_u64(), oracle.next_u64());
+        }
+    }
+
+    #[test]
+    fn temple_rectangle_false_keeps_fractional_query_endpoints_and_integer_targets() {
+        let mut world = World::new(42, 34, Area::Temple, 13);
+        let id = world.spawn("oPushBlock", Vec2::new(16.0, 80.25));
+        world.entity_mut(id).unwrap().solid = false;
+        world.entity_mut(id).unwrap().held = true;
+        assert_eq!(
+            world.entity(id).unwrap().collision_mask().point_bounds(),
+            Rect::new(16.0, 80.0, 16.0, 16.0)
+        );
+        // Canonical rectangle targetT=80 > raw queryMaxY=79.25: no self hit.
+        assert!(!source_rectangle_family(
+            &world,
+            Rect::new(16.0, 48.25, 33.0, 32.0),
+            "oSolid"
+        ));
+        assert!(source_rectangle_family(
+            &world,
+            Rect::new(16.0, 80.0, 16.0, 1.0),
+            "oSolid"
+        ));
+        assert!(!source_rectangle_family(
+            &world,
+            Rect::new(32.0, 80.0, 1.0, 1.0),
+            "oSolid"
+        ));
+        assert!(source_rectangle_family(
+            &world,
+            Rect::new(31.75, 80.0, 1.0, 1.0),
+            "oSolid"
+        ));
+        world.entity_mut(id).unwrap().alive = false;
+        assert!(!source_rectangle_family(
+            &world,
+            Rect::new(16.0, 80.0, 16.0, 16.0),
+            "oSolid"
+        ));
+        world.set_tile(1, 5, "oTemple");
+        assert!(!source_rectangle_family(
+            &world,
+            Rect::new(16.0, 48.25, 33.0, 32.0),
+            "oSolid"
+        ));
+        assert!(source_rectangle_family(
+            &world,
+            Rect::new(31.75, 80.0, 1.0, 1.0),
+            "oSolid"
+        ));
+    }
+
+    #[test]
+    fn temple_treasure_uses_saved_inclusive_bbox_distance_and_raw_fractional_origin() {
+        for (exit_x, expected_distance, blocked) in [(364.0, 29.0, true), (367.0, 32.0, false)] {
+            let mut world = World::new(42, 34, Area::Temple, 13);
+            let origin = Vec2::new(320.25, 320.25);
+            let support = world.spawn("oPushBlock", origin);
+            let saved = world
+                .entity(support)
+                .unwrap()
+                .collision_mask()
+                .point_bounds();
+            world.entity_mut(support).unwrap().alive = false;
+            world.spawn("oExit", Vec2::new(exit_x, 320.0));
+            world.exit = Vec2::new(exit_x + 8.0, 328.0);
+            assert!(Vec2::new(origin.x + 8.0, origin.y + 8.0).distance(world.exit) > 32.0);
+            assert_eq!(
+                source_family_distance(&world, saved, "oExit"),
+                expected_distance
+            );
+            assert_eq!(
+                source_family_distance(&world, saved, "oEntrance"),
+                1_000_000.0
+            );
+            let mut actual = Rng::new(29);
+            let mut oracle = actual.clone();
+            if !blocked {
+                assert_eq!(oracle.range(100), 0);
+            }
+            let water = WaterMasks::new(&world);
+            treasure_at(
+                &mut world,
+                &mut actual,
+                &water,
+                &mut treasure_state(),
+                origin,
+                Some(saved),
+            );
+            assert_eq!(actual.next_u64(), oracle.next_u64());
+            let rocks: Vec<_> = world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oRock")
+                .collect();
+            assert_eq!(rocks.len(), usize::from(!blocked));
+            if !blocked {
+                assert_eq!(rocks[0].pos, Vec2::new(328.25, 316.25));
+            }
+        }
+    }
+
+    #[test]
+    fn temple_light_ceiling_still_consumes_nested_scarab_roll() {
+        let mut world = World::new(42, 34, Area::Temple, 13);
+        world.entrance = Vec2::new(328.0, 88.0);
+        let id = world.spawn("oPushBlock", Vec2::new(320.0, 80.0));
+        world
+            .entity_mut(id)
+            .unwrap()
+            .text
+            .insert("type".into(), "Altar".into());
+        let mut actual = Rng::new(29);
+        let mut oracle = actual.clone();
+        oracle.range(100);
+        oracle.range(40);
+        populate(&mut world, &mut actual, &BTreeSet::new());
+        assert!(!exists(&world, "oScarab"));
+        assert_eq!(actual.next_u64(), oracle.next_u64());
+    }
+
+    #[test]
+    fn temple_existing_damsel_still_consumes_alcove_damsel_roll() {
+        let seed = (0..100_000)
+            .find(|&seed| {
+                let mut r = Rng::new(seed);
+                r.range(100) != 0
+                    && r.range(40) != 0
+                    && r.range(5) != 0
+                    && r.range(10) != 0
+                    && r.range(15) != 0
+                    && r.range(8) == 0
+                    && r.range(14) != 0
+                    && r.range(3) == 0
+            })
+            .unwrap();
+        let mut world = World::new(42, 34, Area::Temple, 13);
+        for (x, y) in [(20, 20), (20, 18), (19, 19)] {
+            world.set_tile(x, y, "oTemple");
+        }
+        let bounds = world.tile_collision_mask(20, 20).point_bounds();
+        let water = WaterMasks::new(&world);
+        let mut state = treasure_state();
+        state.damsel = true;
+        let mut actual = Rng::new(seed);
+        let mut oracle = actual.clone();
+        for n in [100, 40, 5, 10, 15, 8, 14, 3] {
+            oracle.range(n);
+        }
+        treasure_at(
+            &mut world,
+            &mut actual,
+            &water,
+            &mut state,
+            Vec2::new(320.0, 320.0),
+            Some(bounds),
+        );
+        assert!(!exists(&world, "oDamsel"));
+        assert!(exists(&world, "oGoldBar"));
+        assert_eq!(actual.next_u64(), oracle.next_u64());
+    }
+
+    #[test]
+    fn temple_room_difference_still_requires_named_enemy_point_to_be_clear() {
+        let mut world = World::new(42, 34, Area::Temple, 13);
+        world.entrance = Vec2::new(24.0, 504.0); // different column, same source room row
+        world.set_tile(20, 32, "oTemple");
+        world.spawn("oCaveman", Vec2::new(318.0, 496.0));
+        world.spawn("oExit", Vec2::new(320.0, 512.0));
+        assert!(source_point_family(
+            &world,
+            Vec2::new(320.0, 496.0),
+            "oEnemy"
+        ));
+        let mut actual = Rng::new(29);
+        let mut oracle = actual.clone();
+        oracle.range(100); // only the unconditional statue statement
+        populate(&mut world, &mut actual, &BTreeSet::new());
+        assert!(!exists(&world, "oTombLord"));
+        assert_eq!(
+            world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oCaveman")
+                .count(),
+            1
+        );
+        assert_eq!(actual.next_u64(), oracle.next_u64());
+    }
+
+    #[test]
+    fn temple_fresh_forced_pass_sees_smash_birth_after_initial_pass() {
+        let seed = (0..2_000_000)
+            .find(|&seed| {
+                let mut r = Rng::new(seed);
+                r.range(4) != 0
+                    && r.range(100) != 0
+                    && r.range(160) != 0
+                    && r.range(40) != 0
+                    && r.range(40) != 0
+                    && r.range(40) != 0
+                    && r.range(60) == 0
+            })
+            .unwrap();
+        let mut world = World::new(42, 34, Area::Temple, 14);
+        world.entrance = Vec2::new(24.0, 24.0);
+        world.set_tile(10, 32, "oTemple");
+        let mut actual = Rng::new(seed);
+        let mut oracle = actual.clone();
+        for n in [4, 100, 160, 40, 40, 40, 60] {
+            oracle.range(n);
+        }
+        let direction = oracle.range(4);
+        TEMPLE_RECEIVER_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
+        populate(&mut world, &mut actual, &BTreeSet::new());
+        let visits = TEMPLE_RECEIVER_TRACE.with(|trace| trace.borrow_mut().take().unwrap());
+        assert_eq!(visits, vec![(1, Vec2::new(160.0, 512.0))]);
+        let smash = world
+            .entities
+            .iter()
+            .find(|e| e.object == "oSmashTrap")
+            .unwrap();
+        assert_eq!(smash.pos, Vec2::new(160.0, 496.0));
+        assert_eq!(smash.value("direction"), f64::from(direction));
+        assert_eq!(smash.value("invincible"), 1.0);
+        let door = world
+            .entities
+            .iter()
+            .find(|e| e.object == "oGoldDoor")
+            .unwrap();
+        assert_eq!(door.pos, Vec2::new(160.0, 480.0));
+        assert!(smash.creation_serial < door.creation_serial);
+        assert_eq!(actual.next_u64(), oracle.next_u64());
+    }
+
+    #[test]
+    fn temple_reset_gold_latch_does_not_treat_preexisting_door_as_generated() {
+        let mut world = World::new(42, 34, Area::Temple, 14);
+        let old = world.spawn("oGoldDoor", Vec2::new(16.0, 16.0));
+        world.set_tile(20, 20, "oTemple");
+        world.spawn("oShopkeeper", Vec2::new(320.0, 320.0));
+        let mut actual = Rng::new(42);
+        let mut oracle = actual.clone();
+        oracle.range(4);
+        oracle.range(100);
+        populate(&mut world, &mut actual, &BTreeSet::new());
+        assert!(world.entity(old).is_some());
+        assert_eq!(
+            world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oGoldDoor")
+                .count(),
+            2
+        );
+        assert!(
+            world
+                .entities
+                .iter()
+                .any(|e| e.object == "oGoldDoor" && e.pos == Vec2::new(320.0, 304.0))
+        );
+        assert_eq!(actual.next_u64(), oracle.next_u64());
+    }
+
+    #[test]
+    fn temple_reset_tomb_latch_does_not_treat_preexisting_tomb_as_generated() {
+        let seed = (0..1_000_000)
+            .find(|&seed| {
+                let mut r = Rng::new(seed);
+                r.range(100) != 0 && r.range(40) == 0 && r.range(100) == 0
+            })
+            .unwrap();
+        let mut world = World::new(42, 34, Area::Temple, 13);
+        world.entrance = Vec2::new(24.0, 24.0);
+        world.set_tile(10, 32, "oTemple");
+        let old = world.spawn("oTombLord", Vec2::new(16.0, 16.0));
+        let mut actual = Rng::new(seed);
+        let mut oracle = actual.clone();
+        for n in [100, 40, 100] {
+            oracle.range(n);
+        }
+        populate(&mut world, &mut actual, &BTreeSet::new());
+        assert!(world.entity(old).is_some());
+        assert_eq!(
+            world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oTombLord")
+                .count(),
+            2
+        );
+        assert!(
+            world
+                .entities
+                .iter()
+                .any(|e| e.object == "oTombLord" && e.pos == Vec2::new(160.0, 480.0))
+        );
+        assert_eq!(actual.next_u64(), oracle.next_u64());
+    }
+
     fn isolated_temple_support(level: u32) -> World {
         let mut world = World::new(42, 34, Area::Temple, level);
         world.entrance = at(1, 1);
@@ -845,24 +1777,41 @@ mod tests {
     }
 
     #[test]
-    fn tomb_lord_dynamic_solid_guard_precedes_its_chance_draw() {
+    fn tomb_lord_blocked_rectangle_still_consumes_eager_chance_before_caveman() {
+        let seed = (0..100_000)
+            .find(|&seed| {
+                let mut rng = Rng::new(seed);
+                rng.range(100) != 0 && rng.range(40) == 0 && rng.range(40) == 0
+            })
+            .unwrap();
         for offset in [16.0, 32.0] {
             let mut world = isolated_temple_support(13);
             let block = world.spawn("oPushBlock", Vec2::new(160.0 + offset, 496.0));
-            // A named-family query does not use these movement filters.
             world.entity_mut(block).unwrap().solid = false;
             world.entity_mut(block).unwrap().held = true;
-            let mut actual = Rng::new(6491);
+            world.spawn("oExit", Vec2::new(160.0, 512.0)); // exact bbox suppresses treasure
+            let mut actual = Rng::new(seed);
             let mut source = actual.clone();
-            // scrEntityGen:460 rejects the rectangle before :461's roll.
-            // Within the modeled local chain, the first draw therefore
-            // belongs to Caveman at :466. This is not a full scrEntityGen
-            // RNG oracle: its background draws/primary family pass differ.
-            assert_eq!(source.range(40), 0);
+            assert_ne!(source.range(100), 0); // unconditional statue :395
+            assert_eq!(source.range(40), 0); // eager TombLord :461, blocked
+            assert_eq!(source.range(40), 0); // conditional Caveman :466
+            TEMPLE_RNG_STARTS.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
             populate(&mut world, &mut actual, &BTreeSet::new());
-            assert!(!exists(&world, "oTombLord"), "block offset {offset}");
-            assert!(exists(&world, "oCaveman"), "block offset {offset}");
-            assert_eq!(actual.next_u64(), source.next_u64());
+            let starts = TEMPLE_RNG_STARTS.with(|trace| trace.borrow_mut().take().unwrap());
+            let mut after_first_receiver = starts[1].1.clone();
+            assert_eq!(after_first_receiver.next_u64(), source.next_u64());
+            assert!(
+                !world
+                    .entities
+                    .iter()
+                    .any(|e| e.object == "oTombLord" && e.pos == Vec2::new(160.0, 480.0))
+            );
+            assert!(
+                world
+                    .entities
+                    .iter()
+                    .any(|e| e.object == "oCaveman" && e.pos == Vec2::new(160.0, 496.0))
+            );
         }
     }
 
@@ -872,22 +1821,28 @@ mod tests {
             .find(|&seed| {
                 let mut rng = Rng::new(seed);
                 rng.range(4); // genTombLord on level fourteen.
-                rng.range(160) == 0 // Old tile-only guard would create the door.
+                rng.range(100); // unconditional primary statue roll
+                rng.range(160) == 0 // A tile-only ordinary guard would create the door.
             })
             .unwrap();
         let mut world = isolated_temple_support(14);
         world.spawn("oPushBlock", Vec2::new(160.0, 496.0));
+        world.spawn("oExit", Vec2::new(160.0, 512.0));
         let mut actual = Rng::new(seed);
         let mut source = actual.clone();
-        source.range(4); // Modeled adapter's genTombLord statement.
+        source.range(4);
+        source.range(100); // blocked above suppresses every later first-receiver branch
+        TEMPLE_RNG_STARTS.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
         populate(&mut world, &mut actual, &BTreeSet::new());
         assert!(!world.entities.iter().any(|entity| {
             entity.object == "oGoldDoor" && entity.pos == Vec2::new(160.0, 496.0)
         }));
+        let starts = TEMPLE_RNG_STARTS.with(|trace| trace.borrow_mut().take().unwrap());
+        let mut after_first_receiver = starts[1].1.clone();
         assert_eq!(
-            actual.next_u64(),
+            after_first_receiver.next_u64(),
             source.next_u64(),
-            "blocked ordinary placement consumes no goldChance draw"
+            "blocked ordinary placement consumes only the unconditional statue draw"
         );
     }
 
@@ -897,6 +1852,7 @@ mod tests {
             .find(|&seed| {
                 let mut rng = Rng::new(seed);
                 rng.range(4);
+                rng.range(100);
                 rng.range(160) == 0
             })
             .unwrap();
@@ -946,6 +1902,8 @@ mod tests {
             let mut actual = Rng::new(42);
             let mut source = actual.clone();
             source.range(4);
+            source.range(100); // initial terrain receiver, before shop gate
+            source.range(100); // coincident dynamic receiver, before shop gate
             populate(&mut world, &mut actual, &BTreeSet::new());
             assert!(
                 world
@@ -972,16 +1930,20 @@ mod tests {
         let mut world = World::new(42, 34, Area::Temple, 14);
         world.entrance = at(1, 1);
         world.exit = at(37, 30);
-        // Dynamic-only supports keep the ordinary terrain pass empty.
+        // All three captured primary receivers are shop-gated after their statue roll.
         let first = world.spawn("oPushBlock", Vec2::new(320.0, 320.0));
         let duplicate = world.spawn("oPushBlock", Vec2::new(320.0, 320.0));
         world.spawn("oPushBlock", Vec2::new(160.0, 320.0));
         world.spawn("oShopkeeper", Vec2::new(320.0, 320.0));
+        world.spawn("oShopkeeper", Vec2::new(160.0, 320.0));
         let mut actual = Rng::new(42);
         let mut source = actual.clone();
-        // The adapter's primary terrain pass is empty in this fixture.
-        // This oracle covers the forced pass, not the entire source script.
-        source.range(4); // Modeled adapter's genTombLord statement.
+        // Literal local source statements: initial generation flag, one
+        // statue roll per captured support, then the nonrandom forced pass.
+        source.range(4);
+        for _ in 0..3 {
+            source.range(100);
+        }
         populate(&mut world, &mut actual, &BTreeSet::new());
         let doors: Vec<_> = world
             .entities
@@ -1538,14 +2500,21 @@ mod tests {
     #[test]
     fn temple_enemy_precedes_same_support_treasure_draws() {
         // At level13 genTombLord is unconditionally true. The only support
-        // cannot make a spear or ceiling enemy: TombLord rand(1,40), then
-        // scrTreasureGen's Rock rand(1,100) are the complete source sequence.
+        // cannot make a spear or ceiling enemy: statue rand100 precedes
+        // TombLord rand40, then scrTreasureGen Rock rand100 follows Create.
         let mut world = World::new(42, 34, Area::Temple, 13);
         world.entrance = at(1, 1);
         world.exit = at(37, 30);
         world.set_tile(10, 32, "oTemple");
-        let mut actual = Rng::new(6491);
+        let seed = (0..1_000_000)
+            .find(|&seed| {
+                let mut rng = Rng::new(seed);
+                rng.range(100) != 0 && rng.range(40) == 0 && rng.range(100) == 0
+            })
+            .unwrap();
+        let mut actual = Rng::new(seed);
         let mut source = actual.clone();
+        assert_ne!(source.range(100), 0);
         assert_eq!(source.range(40), 0);
         assert_eq!(source.range(100), 0);
         populate(&mut world, &mut actual, &BTreeSet::new());
