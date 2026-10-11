@@ -828,6 +828,9 @@ fn visit_resources(game: &mut Game, mut callback: impl FnMut(&mut Game, Instance
     }
 }
 fn player_step(game: &mut Game, input: &InputFrame) {
+    game.player.health = game.player.health.min(99);
+    game.player.bombs = game.player.bombs.min(99);
+    game.player.ropes = game.player.ropes.min(99);
     crate::items::pre_player_tick(game);
     crate::world_events::sample_light_distances(game);
     crate::hub::begin_title_exit(game);
