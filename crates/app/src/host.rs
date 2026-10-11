@@ -219,6 +219,10 @@ impl App {
         );
         hydrate_run(&mut game, &store.data);
         spelunky_core::opening::begin_intro(&mut game);
+        let editor = EditorUi::with_source_rng(
+            spelunky_core::editor::preview::PreviewContext::default(),
+            game.rng.clone(),
+        );
         Self {
             proxy,
             window: None,
@@ -234,7 +238,7 @@ impl App {
             settings_return: Screen::Title,
             selection: 0,
             settings_ui: SettingsUi::new(),
-            editor: EditorUi::new(),
+            editor,
             editor_play: false,
             donation: None,
             donation_confirm: false,
@@ -292,6 +296,18 @@ impl App {
         self.input.clear_edges();
     }
     fn screen(&mut self, screen: Screen) {
+        if screen == Screen::Editor && self.screen != Screen::Editor {
+            if let Some(game) = &self.game {
+                self.editor.set_source_rng(game.rng.clone());
+                self.editor.set_source_context(editor_preview_context(game));
+            }
+            if self.editor_play {
+                self.editor.return_from_playtest();
+            }
+            if let Some(game) = &mut self.game {
+                game.rng = self.editor.source_rng().clone();
+            }
+        }
         self.screen = screen;
         self.selection = if screen == Screen::Finished && self.is_hub() {
             1
@@ -532,7 +548,12 @@ impl App {
                     }
                 }
                 if control == Some(SourceHostControl::Editor) {
-                    self.editor = EditorUi::new();
+                    self.editor = EditorUi::with_context(
+                        self.game
+                            .as_ref()
+                            .map(editor_preview_context)
+                            .unwrap_or_default(),
+                    );
                     self.screen(Screen::Editor);
                 } else {
                     self.screen(Screen::Custom);
@@ -668,7 +689,15 @@ impl App {
                 .cloned()
             {
                 let contents = self.store.data.custom_levels[&name].clone();
-                match self.editor.load(&name, &contents) {
+                if let Some(game) = &self.game {
+                    self.editor.set_source_rng(game.rng.clone());
+                    self.editor.set_source_context(editor_preview_context(game));
+                }
+                let result = self.editor.load(&name, &contents);
+                if let Some(game) = &mut self.game {
+                    game.rng = self.editor.source_rng().clone();
+                }
+                match result {
                     Ok(()) => self.screen(Screen::Editor),
                     Err(error) => self.toast(error),
                 }
@@ -789,7 +818,15 @@ impl App {
         match spelunky_core::level::Level::parse(&contents) {
             Ok(_) => {
                 let name = level_name(&name);
-                if let Err(error) = self.editor.load(&name, &contents) {
+                if let Some(game) = &self.game {
+                    self.editor.set_source_rng(game.rng.clone());
+                    self.editor.set_source_context(editor_preview_context(game));
+                }
+                let result = self.editor.load(&name, &contents);
+                if let Some(game) = &mut self.game {
+                    game.rng = self.editor.source_rng().clone();
+                }
+                if let Err(error) = result {
                     self.toast(error);
                     return;
                 }
@@ -824,6 +861,18 @@ impl App {
         }
     }
     fn editor_command(&mut self, command: EditorCommand) {
+        if self.screen == Screen::Editor {
+            if let Some(game) = &mut self.game {
+                game.rng = self.editor.source_rng().clone();
+                if self.editor.source_check_water() {
+                    game.flags.insert("check_water".into());
+                    game.flags.insert("checkWater".into());
+                }
+            }
+            for sound in self.editor.take_source_sounds() {
+                self.audio.play(sound, 0.0);
+            }
+        }
         match command {
             EditorCommand::None => {}
             EditorCommand::Back => {
@@ -868,6 +917,7 @@ impl App {
                     &self.source_music,
                 );
                 hydrate_run(&mut game, &self.store.data);
+                game.rng = self.editor.source_rng().clone();
                 load_custom(&mut game, &level, self.editor.level_name(), "");
                 game.flags.insert("editor_test".into());
                 self.game = Some(game);
@@ -1216,6 +1266,16 @@ impl App {
                     } else {
                         self.key(key, None);
                     }
+                }
+            }
+        }
+        if self.screen == Screen::Editor && self.focused && !self.occluded {
+            let frame = self.timing.advance(host_frame);
+            for _ in 0..frame.ticks {
+                let command = self.editor.source_tick();
+                self.editor_command(command);
+                if self.screen != Screen::Editor {
+                    break;
                 }
             }
         }
@@ -1939,7 +1999,7 @@ impl App {
     }
     fn pointer(&mut self) {
         if self.screen == Screen::Editor {
-            let command = self.editor.pointer(
+            let command = self.editor.stage_pointer(
                 self.cursor[0],
                 self.cursor[1],
                 self.mouse_left,
@@ -2296,6 +2356,13 @@ fn tunnel_progress(game: &Game) -> std::collections::BTreeMap<String, u32> {
     }
     progress
 }
+fn editor_preview_context(game: &Game) -> spelunky_core::editor::preview::PreviewContext {
+    spelunky_core::editor::preview::PreviewContext {
+        city_of_gold: game.flags.contains("city_of_gold") || game.flags.contains("cityOfGold"),
+        treasure_vision: game.player.has("Spectacles") || game.player.has("UdjatEye"),
+    }
+}
+
 fn complete_editor_save(
     editor: &mut EditorUi,
     name: &str,
@@ -5268,6 +5335,11 @@ mod tests {
     #[test]
     fn editor_playtest_uses_document_name_and_source_spawn_offset() {
         let mut editor = EditorUi::new();
+        // The source editor starts blank. Author the entrance whose offset
+        // this test verifies rather than relying on the old seeded template.
+        let mut authored = spelunky_core::level::Level::default();
+        authored.set_tile(2, 30, '@').unwrap();
+        editor.load("custom.lvl", &authored.to_text()).unwrap();
         let EditorCommand::Play(level) = editor.key(KeyCode::F5, None, false) else {
             panic!("F5 must play the current document");
         };
@@ -5278,6 +5350,73 @@ mod tests {
         assert_eq!(game.player.previous_pos, game.player.pos);
         assert_eq!(game.previous_camera, game.camera);
     }
+    #[test]
+    fn editor_live_preview_rebuilds_after_f5_and_an_ordinary_authored_door_exit() {
+        let mut level = spelunky_core::level::Level::default();
+        level.set_tile(1, 12, '@').unwrap();
+        level.set_tile(3, 12, 'X').unwrap();
+        level.set_tile(8, 12, '{').unwrap();
+        for x in 0..20 {
+            level.set_tile(x, 13, '1').unwrap();
+        }
+        level.exit_targets = vec!["NONE".into(), "NONE".into()];
+        let mut editor = EditorUi::new();
+        editor.load("roundtrip.lvl", &level.to_text()).unwrap();
+        editor.pointer(76.0, 48.0, false, true);
+        editor.pointer(0.0, 0.0, false, false);
+        let atlas = Atlas::load().unwrap();
+        let mega = atlas.sprite("sMegaMouthTile", 0.0).unwrap().uv;
+        let has_mega = |editor: &EditorUi| {
+            let mut quads = Vec::new();
+            editor.draw(&atlas, &mut quads);
+            quads
+                .iter()
+                .any(|q| q.uv == mega && q.rect[0] < 240.0 && q.rect[1] >= 36.0)
+        };
+        assert!(!has_mega(&editor), "off-anchor erase removed live preview");
+        let EditorCommand::Play(document) = editor.key(KeyCode::F5, None, false) else {
+            panic!("F5");
+        };
+        assert_eq!(
+            document.get_tile(8, 12),
+            Some('{'),
+            "serialized anchor was preserved"
+        );
+        let mut game = Game::shell(937, spelunky_core::RulesPreset::Classic);
+        game.rng = editor.source_rng().clone();
+        load_custom(&mut game, &document, editor.level_name(), "");
+        game.flags.insert("editor_test".into());
+        for _ in 0..160 {
+            game.step(&spelunky_core::InputFrame {
+                right: true,
+                up: true,
+                ..Default::default()
+            });
+            if game.state == RunState::Transition {
+                break;
+            }
+        }
+        assert_eq!(
+            game.state,
+            RunState::Transition,
+            "normal movement and Up must exit authored door"
+        );
+        assert!(
+            game.ending.is_none(),
+            "editor return bypasses transition room"
+        );
+        assert_eq!(
+            custom_exit(&mut game, &Default::default(), true),
+            CustomExit::Editor
+        );
+        editor.set_source_rng(game.rng.clone());
+        editor.return_from_playtest();
+        assert!(
+            has_mega(&editor),
+            "source return rebuilds saved F5 document"
+        );
+    }
+
     #[test]
     fn editor_playtest_exits_return_to_editor_before_following_or_finishing_links() {
         let level = spelunky_core::level::Level::default();
@@ -5672,6 +5811,7 @@ mod tests {
         old.starting_life = 9;
         old.author = "OLD AUTHOR".into();
         old.set_tile(0, 11, 'I').unwrap();
+        old.signs = vec!["PRESERVE THIS AUTHORED SIGN".into()];
         editor.load("old.lvl", &old.to_text()).unwrap();
         editor.key(KeyCode::KeyN, None, true);
         let EditorCommand::Save { name, text } = editor.key(KeyCode::KeyY, None, false) else {

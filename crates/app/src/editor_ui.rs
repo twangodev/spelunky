@@ -5,8 +5,11 @@ use crate::{
     scene::{rect, text},
 };
 use spelunky_core::{
-    catalog,
-    editor::EditorState,
+    Vec2, catalog,
+    editor::{
+        EditorState,
+        preview::{self, PreviewContext},
+    },
     level::{LEVEL_HEIGHT, LEVEL_WIDTH, Level},
 };
 use winit::keyboard::KeyCode;
@@ -42,8 +45,8 @@ enum Field {
     Ropes,
     Next,
     Name,
-    Sign(usize, usize),
-    Link(usize, usize),
+    Sign(u64),
+    Link(u64),
 }
 impl Field {
     fn label(self) -> &'static str {
@@ -78,6 +81,8 @@ pub struct EditorUi {
     new_pressed: bool,
     pointer_left: bool,
     status: String,
+    play_snapshot: Option<Level>,
+    pointer_sample: Option<(f32, f32, bool, bool)>,
 }
 
 impl Default for EditorUi {
@@ -88,17 +93,15 @@ impl Default for EditorUi {
 
 impl EditorUi {
     pub fn new() -> Self {
-        let mut level = Level::default();
-        // A testable blank room, with its entrance, exit and a floor already present.
-        for x in 0..LEVEL_WIDTH {
-            level.set_tile(x, LEVEL_HEIGHT - 1, '1').unwrap();
-        }
-        level.set_tile(2, LEVEL_HEIGHT - 2, '@').unwrap();
-        level
-            .set_tile(LEVEL_WIDTH - 3, LEVEL_HEIGHT - 2, 'X')
-            .unwrap();
+        Self::with_context(PreviewContext::default())
+    }
+
+    pub fn with_context(context: PreviewContext) -> Self {
+        Self::with_source_rng(context, spelunky_core::Rng::new_canonical(0))
+    }
+    pub fn with_source_rng(context: PreviewContext, rng: spelunky_core::Rng) -> Self {
         Self {
-            state: EditorState::new(level),
+            state: EditorState::with_source_rng(Level::default(), context, rng),
             name: "custom.lvl".into(),
             pan: [0, LEVEL_HEIGHT - ROWS],
             cursor: None,
@@ -109,13 +112,19 @@ impl EditorUi {
             new_pressed: false,
             pointer_left: false,
             status: "PAINT: LEFT   ERASE: RIGHT   ARROWS: PAN".into(),
+            play_snapshot: None,
+            pointer_sample: None,
         }
     }
 
     pub fn load(&mut self, name: &str, source: &str) -> Result<(), String> {
         let level = Level::parse(source)?;
         let name = file_name(name)?;
-        self.state = EditorState::new(level);
+        self.state = EditorState::with_source_rng(
+            level,
+            self.state.previews.context,
+            self.state.previews.rng.clone(),
+        );
         self.name = name;
         self.entry = None;
         self.confirmation = None;
@@ -123,12 +132,32 @@ impl EditorUi {
         self.pointer_left = false;
         self.cursor = None;
         self.stroke = None;
+        self.play_snapshot = None;
         self.status = format!("LOADED {}", self.name);
         Ok(())
     }
 
     pub fn message(&mut self, value: String) {
         self.status = value;
+    }
+
+    pub fn set_source_context(&mut self, context: PreviewContext) {
+        self.state.previews.context = context;
+    }
+    pub fn set_source_rng(&mut self, rng: spelunky_core::Rng) {
+        self.state.previews.rng = rng;
+    }
+    pub fn take_source_sounds(&mut self) -> Vec<&'static str> {
+        std::mem::take(&mut self.state.previews.sounds)
+    }
+    pub fn source_check_water(&self) -> bool {
+        self.state.previews.check_water
+    }
+    pub fn source_error(&self) -> Option<preview::PreviewSourceError> {
+        self.state.previews.source_error
+    }
+    pub fn source_rng(&self) -> &spelunky_core::Rng {
+        &self.state.previews.rng
     }
 
     pub fn level_name(&self) -> &str {
@@ -141,6 +170,7 @@ impl EditorUi {
         self.stroke = None;
         self.new_pressed = false;
         self.pointer_left = false;
+        self.pointer_sample = None;
     }
 
     pub fn key(&mut self, key: KeyCode, typed: Option<&str>, control: bool) -> EditorCommand {
@@ -148,7 +178,7 @@ impl EditorUi {
             return match key {
                 KeyCode::KeyY => EditorCommand::Save {
                     name: self.name.clone(),
-                    text: self.state.level.to_text(),
+                    text: self.state.document().to_text(),
                 },
                 KeyCode::KeyN => self.complete_confirmation(),
                 KeyCode::Escape if confirmation == Confirmation::Exit => {
@@ -212,13 +242,13 @@ impl EditorUi {
                 KeyCode::KeyS => {
                     return EditorCommand::Save {
                         name: self.name.clone(),
-                        text: self.state.level.to_text(),
+                        text: self.state.document().to_text(),
                     };
                 }
                 KeyCode::KeyE => {
                     return EditorCommand::Export {
                         name: self.name.clone(),
-                        text: self.state.level.to_text(),
+                        text: self.state.document().to_text(),
                     };
                 }
                 KeyCode::KeyI | KeyCode::KeyO => return EditorCommand::Import,
@@ -233,7 +263,11 @@ impl EditorUi {
         } else {
             match key {
                 KeyCode::Escape => self.confirm(Confirmation::Exit),
-                KeyCode::F5 => return EditorCommand::Play(self.state.level.clone()),
+                KeyCode::F5 => {
+                    let document = self.state.document();
+                    self.play_snapshot = Some(document.clone());
+                    return EditorCommand::Play(document);
+                }
                 KeyCode::ArrowLeft => self.pan[0] = self.pan[0].saturating_sub(1),
                 KeyCode::ArrowRight => self.pan[0] = (self.pan[0] + 1).min(LEVEL_WIDTH - COLS),
                 KeyCode::ArrowUp => self.pan[1] = self.pan[1].saturating_sub(1),
@@ -243,6 +277,7 @@ impl EditorUi {
                     self.metadata();
                 }
                 KeyCode::KeyN => self.begin(Field::Name, self.name.clone()),
+                KeyCode::KeyE => self.record_at_cursor(None),
                 KeyCode::KeyS => self.record(false),
                 KeyCode::KeyL => self.record(true),
                 KeyCode::PageUp | KeyCode::PageDown => {
@@ -268,12 +303,14 @@ impl EditorUi {
     fn confirm(&mut self, confirmation: Confirmation) {
         self.cancel_pointer();
         self.confirmation = Some(confirmation);
+        self.state.previews.room_instance_destroyed();
         self.status.clear();
     }
 
     fn restart_document(&mut self) {
-        *self = Self::new();
-        self.state = EditorState::new(Level::default());
+        let context = self.state.previews.context;
+        let rng = self.state.previews.rng.clone();
+        *self = Self::with_source_rng(context, rng);
         self.begin(Field::Name, String::new());
     }
 
@@ -298,6 +335,7 @@ impl EditorUi {
 
     fn begin(&mut self, field: Field, value: String) {
         self.stroke = None;
+        self.state.previews.room_instance_destroyed();
         self.entry = Some(Entry {
             field,
             value,
@@ -317,44 +355,48 @@ impl EditorUi {
         self.begin(field, value);
     }
     fn record(&mut self, door: bool) {
+        self.record_at_cursor(Some(door));
+    }
+    fn record_at_cursor(&mut self, door: Option<bool>) {
         let Some((x, y)) = self.cursor else {
             self.status = "POINT AT A SIGN OR DOOR FIRST".into();
             return;
         };
-        let tile = self.state.level.get_tile(x, y).unwrap_or('0');
-        let matches = |c| {
-            if door {
-                matches!(c, '@' | 'X')
-            } else {
-                c == 'I'
-            }
+        // E in the original selects the first precise preview, then checks its
+        // type. It must not search behind an overlapping unrelated object.
+        let point = Vec2::new(24.0 + x as f64 * 16.0, 28.0 + y as f64 * 16.0);
+        let Some(instance) = self
+            .state
+            .previews
+            .at_point(point, "oDrawnSprite")
+            .and_then(|id| self.state.previews.instance(id))
+        else {
+            return;
         };
-        if !matches(tile) {
+        let field = if instance.is_door() && door != Some(false) {
+            Field::Link(instance.id)
+        } else if instance.is_sign() && door != Some(true) {
+            Field::Sign(instance.id)
+        } else {
             self.status = "POINT AT A SIGN OR DOOR FIRST".into();
             return;
+        };
+        self.begin(field, instance.text.clone());
+    }
+    /// The authored editor room is recreated from test.tmp on actual return.
+    /// Focus changes only cancel input and must not recreate preview objects.
+    pub fn return_from_playtest(&mut self) {
+        if let Some(document) = self.play_snapshot.take() {
+            self.state = EditorState::with_source_rng(
+                document,
+                PreviewContext::default(),
+                self.state.previews.rng.clone(),
+            );
+            self.entry = None;
+            self.confirmation = None;
+            self.cursor = None;
+            self.cancel_pointer();
         }
-        let index = self
-            .state
-            .level
-            .tiles
-            .iter()
-            .take(y * LEVEL_WIDTH + x)
-            .filter(|&&c| matches(c))
-            .count();
-        let value = if door {
-            self.state.level.exit_target(index)
-        } else {
-            self.state.level.sign_message(index)
-        }
-        .to_owned();
-        self.begin(
-            if door {
-                Field::Link(x, y)
-            } else {
-                Field::Sign(x, y)
-            },
-            value,
-        );
     }
     fn commit_entry(&mut self) {
         let Some(entry) = self.entry.take() else {
@@ -363,8 +405,9 @@ impl EditorUi {
         let mut next = self.state.level.clone();
         let result: Result<(), String> = match entry.field {
             Field::Name => file_name(&entry.value).map(|name| self.name = name),
-            Field::Sign(x, y) => self.state.set_sign(x, y, entry.value.clone()),
-            Field::Link(x, y) => self.state.set_exit_target(x, y, entry.value.clone()),
+            Field::Sign(id) | Field::Link(id) => {
+                self.state.set_preview_text(id, entry.value.clone())
+            }
             field => {
                 let result = match field {
                     Field::Author => {
@@ -412,7 +455,44 @@ impl EditorUi {
         }
     }
 
+    /// Sampled source Step plus cleanup/Draw-order boundary. CPU interactions
+    /// call this directly; the host stages OS events and calls source_tick at30Hz.
     pub fn pointer(&mut self, x: f32, y: f32, left: bool, right: bool) -> EditorCommand {
+        self.state.previews.step_effects(Vec2::new(
+            16.0 + self.pan[0] as f64 * 16.0,
+            16.0 + self.pan[1] as f64 * 16.0,
+        ));
+        let command = self.pointer_step(x, y, left, right);
+        self.state.previews.finish_source_frame();
+        command
+    }
+    pub fn stage_pointer(&mut self, x: f32, y: f32, left: bool, right: bool) -> EditorCommand {
+        self.pointer_sample = Some((x, y, left, right));
+        // Modern palette/New chrome retains edge-driven interaction; map edits
+        // belong exclusively to the source fixed Step, including stationary holds.
+        if !(0.0..240.0).contains(&x) || !(MAP_Y..204.0).contains(&y) {
+            self.pointer_step(x, y, left, right)
+        } else {
+            EditorCommand::None
+        }
+    }
+    pub fn source_tick(&mut self) -> EditorCommand {
+        self.state.previews.step_effects(Vec2::new(
+            16.0 + self.pan[0] as f64 * 16.0,
+            16.0 + self.pan[1] as f64 * 16.0,
+        ));
+        let command = self
+            .pointer_sample
+            .map_or(EditorCommand::None, |(x, y, left, right)| {
+                self.pointer_step(x, y, left, right)
+            });
+        self.state.previews.finish_source_frame();
+        if self.source_error() == Some(preview::PreviewSourceError::MissingGameClock) {
+            self.status = "SOURCE ERROR: oGame.time IS UNAVAILABLE".into();
+        }
+        command
+    }
+    fn pointer_step(&mut self, x: f32, y: f32, left: bool, right: bool) -> EditorCommand {
         let pressed = left && !self.pointer_left;
         let released = !left && self.pointer_left;
         self.pointer_left = left;
@@ -441,34 +521,14 @@ impl EditorUi {
             self.cursor = Some(cell);
             let result = if left || right {
                 let erase = right && !left;
-                let start = self
-                    .stroke
-                    .filter(|&(_, _, was_erase)| was_erase == erase)
-                    .map_or(cell, |(x, y, _)| (x, y));
                 self.stroke = Some((cell.0, cell.1, erase));
-                let steps = start
-                    .0
-                    .abs_diff(cell.0)
-                    .max(start.1.abs_diff(cell.1))
-                    .max(1);
-                let mut result = Ok(());
-                for step in 0..=steps {
-                    let alpha = step as f64 / steps as f64;
-                    let px = (start.0 as f64 + (cell.0 as f64 - start.0 as f64) * alpha).round()
-                        as usize;
-                    let py = (start.1 as f64 + (cell.1 as f64 - start.1 as f64) * alpha).round()
-                        as usize;
-                    let edit = if erase {
-                        self.state.erase(px, py)
-                    } else {
-                        self.state.paint(px, py)
-                    };
-                    if let Err(error) = edit {
-                        result = Err(error);
-                        break;
-                    }
+                // The source Step edits the sampled cursor cell, never invented
+                // intermediate cells when the pointer jumps across the room.
+                if erase {
+                    self.state.erase(cell.0, cell.1)
+                } else {
+                    self.state.paint(cell.0, cell.1)
                 }
-                result
             } else {
                 self.stroke = None;
                 Ok(())
@@ -529,34 +589,49 @@ impl EditorUi {
                     [x, y, CELL - 0.25, CELL - 0.25],
                     [0.12, 0.11, 0.10, 1.0],
                 );
-                let tile = self
-                    .state
-                    .level
-                    .get_tile(sx + self.pan[0], sy + self.pan[1])
-                    .unwrap_or('0');
-                draw_tile(quads, atlas, tile, x, y, CELL);
             }
         }
-        if let Some((x, y)) = self.cursor {
-            if (self.pan[0]..self.pan[0] + COLS).contains(&x)
-                && (self.pan[1]..self.pan[1] + ROWS).contains(&y)
-            {
-                let x = (x - self.pan[0]) as f32 * CELL;
-                let y = MAP_Y + (y - self.pan[1]) as f32 * CELL;
-                if let Some(frame) = editor_icon(self.state.selected_tile)
-                    .and_then(|sprite| atlas.sprite(sprite, 0.0))
+        // Preview Draw uses native sprite size/origin and source depth order.
+        // The modern viewport is half-size; artwork keeps its original footprint.
+        for instance in self.state.previews.draw_instances() {
+            draw_map_sprite(
+                quads,
+                atlas,
+                instance.sprite,
+                instance.animation(),
+                ((instance.pos.x - 16.0) / 16.0 - self.pan[0] as f64) as f32 * CELL,
+                MAP_Y + ((instance.pos.y - 16.0) / 16.0 - self.pan[1] as f64) as f32 * CELL,
+            );
+            if !instance.text.is_empty() {
+                let start = quads.len();
+                text(
+                    quads,
+                    atlas,
+                    &instance.text,
+                    ((instance.pos.x - 16.0) / 16.0 - self.pan[0] as f64) as f32 * CELL,
+                    MAP_Y + ((instance.pos.y - 16.0) / 16.0 - self.pan[1] as f64) as f32 * CELL,
+                    CELL / 16.0,
+                    WHITE,
+                );
+                let labels: Vec<_> = quads.drain(start..).collect();
+                quads.extend(labels.into_iter().filter_map(clip_map_quad));
+            }
+        }
+        if self.entry.is_none() && self.confirmation.is_none() {
+            if let Some((x, y)) = self.cursor {
+                if (self.pan[0]..self.pan[0] + COLS).contains(&x)
+                    && (self.pan[1]..self.pan[1] + ROWS).contains(&y)
                 {
-                    quads.push(DrawQuad {
-                        rect: [x, y, CELL, CELL],
-                        uv: frame.uv,
-                        color: WHITE,
-                        ..DrawQuad::default()
-                    });
+                    let x = (x - self.pan[0]) as f32 * CELL;
+                    let y = MAP_Y + (y - self.pan[1]) as f32 * CELL;
+                    if let Some(sprite) = editor_icon(self.state.selected_tile) {
+                        draw_map_sprite(quads, atlas, sprite, 0.0, x, y);
+                    }
+                    rect(quads, [x, y, CELL, 0.5], GOLD);
+                    rect(quads, [x, y, 0.5, CELL], GOLD);
+                    rect(quads, [x, y + CELL - 0.5, CELL, 0.5], GOLD);
+                    rect(quads, [x + CELL - 0.5, y, 0.5, CELL], GOLD);
                 }
-                rect(quads, [x, y, CELL, 0.5], GOLD);
-                rect(quads, [x, y, 0.5, CELL], GOLD);
-                rect(quads, [x, y + CELL - 0.5, CELL, 0.5], GOLD);
-                rect(quads, [x + CELL - 0.5, y, 0.5, CELL], GOLD);
             }
         }
         for (index, &tile) in self.state.palette.iter().enumerate() {
@@ -609,7 +684,13 @@ impl EditorUi {
             text(quads, atlas, escape, 72.0, 119.0, 0.75, WHITE);
             let mut y = 134.0;
             for (tile, warning) in [('@', "WARNING: NO ENTRANCE!"), ('X', "WARNING: NO EXIT!")] {
-                if !self.state.level.tiles.contains(&tile) {
+                let object = if tile == '@' { "oEntrance" } else { "oExit" };
+                if !self
+                    .state
+                    .previews
+                    .draw_instances()
+                    .any(|instance| instance.object == object)
+                {
                     text(quads, atlas, warning, 72.0, y, 0.75, GOLD);
                     y += 10.0;
                 }
@@ -679,106 +760,58 @@ fn file_name(name: &str) -> Result<String, String> {
     })
 }
 
-// scrSetCursorTile assigns authored editor artwork, independently of gameplay spawns.
+// Both tables are authored in the core preview model, independently of gameplay.
 fn editor_icon(tile: char) -> Option<&'static str> {
-    match tile {
-        '@' => Some("sEntrance"),
-        'X' => Some("sExit"),
-        'I' => Some("sMsgSign"),
-        '1' => Some("sBrick"),
-        '2' => Some("sLush"),
-        'w' => Some("sWater"),
-        '3' => Some("sDark"),
-        'i' => Some("sIce"),
-        'd' => Some("sDarkFall"),
-        '4' => Some("sTemple"),
-        'l' => Some("sLava"),
-        'L' => Some("sLadder"),
-        'P' => Some("sLadderTop"),
-        'v' => Some("sVine"),
-        't' => Some("sVineTop"),
-        '|' => Some("sTreeTrunk"),
-        'x' => Some("sTreeTop"),
-        ')' => Some("sLeaves"),
-        'q' => Some("sTreeBranchLeft"),
-        'B' => Some("sBlock"),
-        '&' => Some("sWeb"),
-        'r' => Some("sRockTile"),
-        'j' => Some("sJarTile"),
-        'k' => Some("sFakeBonesLeft"),
-        'b' => Some("sBatLeft"),
-        'n' => Some("sSnakeLeft"),
-        's' => Some("sSpider"),
-        'S' => Some("sGiantSpiderHang"),
-        'K' => Some("sSkeletonLeft"),
-        'h' => Some("sCavemanLeft"),
-        '!' => Some("sShopLeftIco"),
-        'f' => Some("sFrogLeft"),
-        'F' => Some("sFireFrogLeft"),
-        'z' => Some("sZombieLeft"),
-        'A' => Some("sVampireLeft"),
-        'p' => Some("sPiranhaTile"),
-        'M' => Some("sManTrapLeft"),
-        'm' => Some("sMonkeyLeft"),
-        'y' => Some("sYetiLeft"),
-        'a' => Some("sAlien"),
-        'U' => Some("sUFO"),
-        'E' => Some("sAlienBoss"),
-        'H' => Some("sHawkLeft"),
-        'Y' => Some("sYetiKingLeft"),
-        '{' => Some("sMegaMouthTile"),
-        'T' => Some("sTombLordLeft"),
-        '^' => Some("sSpikes"),
-        '<' => Some("sArrowTrapLeft"),
-        '>' => Some("sArrowTrapRight"),
-        ']' => Some("sSpearTrap1"),
-        '[' => Some("sSpearTrap2"),
-        '_' => Some("sSpringTrap"),
-        '+' => Some("sSmashTrap"),
-        '$' => Some("sGoldBarTile"),
-        '*' => Some("sGoldBarsTile"),
-        '#' => Some("sGoldIdolTile"),
-        'O' => Some("sCrystalSkullTile"),
-        '5' => Some("sEmeraldBigTile"),
-        '6' => Some("sSapphireBigTile"),
-        '7' => Some("sRubyBigTile"),
-        '8' => Some("sDiamondTile"),
-        'c' => Some("sChestTile"),
-        'C' => Some("sCrateTile"),
-        'D' => Some("sDamselLeftIco"),
-        '.' => Some("sBombBagTile"),
-        ':' => Some("sBombBoxTile"),
-        'u' => Some("sBombPasteTile"),
-        'R' => Some("sRopePileTile"),
-        '`' => Some("sParachuteTile"),
-        'o' => Some("sCompassTile"),
-        '/' => Some("sMacheteTile"),
-        '~' => Some("sSpringShoesTile"),
-        'V' => Some("sSpikeShoesTile"),
-        '}' => Some("sBowTile"),
-        '-' => Some("sPistolTile"),
-        '=' => Some("sShotgunTile"),
-        'W' => Some("sWebCannonTile"),
-        '%' => Some("sSpectaclesTile"),
-        'G' => Some("sGlovesTile"),
-        'g' => Some("sMittTile"),
-        '?' => Some("sTeleporterTile"),
-        '(' => Some("sMattockTile"),
-        '\\' => Some("sCapeTile"),
-        'J' => Some("sJetpackTile"),
-        _ => None,
-    }
+    preview::cursor_sprite(tile)
+}
+fn editor_preview_icon(tile: char) -> Option<&'static str> {
+    preview::preview_sprite(tile)
 }
 
-fn editor_preview_icon(tile: char) -> Option<&'static str> {
-    // scrCreateTile uses hanging enemy/web previews and the boss editor icon.
-    match tile {
-        '&' => Some("sWebTile"),
-        'b' => Some("sBatHang"),
-        's' => Some("sSpiderHang"),
-        'E' => Some("sAlienBossTile"),
-        _ => editor_icon(tile),
+fn draw_map_sprite(
+    quads: &mut Vec<DrawQuad>,
+    atlas: &Atlas,
+    sprite: &str,
+    animation: f64,
+    x: f32,
+    y: f32,
+) {
+    let Some(frame) = atlas.sprite(sprite, animation) else {
+        return;
+    };
+    let scale = CELL / 16.0;
+    let original = [
+        x - frame.origin[0] * scale,
+        y - frame.origin[1] * scale,
+        frame.size[0] * scale,
+        frame.size[1] * scale,
+    ];
+    if let Some(quad) = clip_map_quad(DrawQuad {
+        rect: original,
+        uv: frame.uv,
+        color: WHITE,
+        ..DrawQuad::default()
+    }) {
+        quads.push(quad);
     }
+}
+fn clip_map_quad(mut quad: DrawQuad) -> Option<DrawQuad> {
+    let original = quad.rect;
+    let left = original[0].max(0.0);
+    let top = original[1].max(MAP_Y);
+    let right = (original[0] + original[2]).min(COLS as f32 * CELL);
+    let bottom = (original[1] + original[3]).min(MAP_Y + ROWS as f32 * CELL);
+    if left >= right || top >= bottom {
+        return None;
+    }
+    quad.uv = [
+        quad.uv[0] + (left - original[0]) / original[2] * quad.uv[2],
+        quad.uv[1] + (top - original[1]) / original[3] * quad.uv[3],
+        (right - left) / original[2] * quad.uv[2],
+        (bottom - top) / original[3] * quad.uv[3],
+    ];
+    quad.rect = [left, top, right - left, bottom - top];
+    Some(quad)
 }
 
 fn draw_tile(quads: &mut Vec<DrawQuad>, atlas: &Atlas, tile: char, x: f32, y: f32, size: f32) {
@@ -814,16 +847,16 @@ mod tests {
         ui.pointer(4.0, 40.0, true, true);
         assert_eq!(ui.state.level.get_tile(0, 11), Some('1'));
         ui.pointer(20.0, 40.0, true, true);
-        for x in 0..=2 {
-            assert_eq!(ui.state.level.get_tile(x, 11), Some('1'));
-        }
+        assert_eq!(ui.state.level.get_tile(0, 11), Some('1'));
+        assert_eq!(ui.state.level.get_tile(1, 11), Some('0'));
+        assert_eq!(ui.state.level.get_tile(2, 11), Some('1'));
         // Switching to right-only starts a new erasing stroke at that cell.
         ui.pointer(28.0, 40.0, false, true);
         assert_eq!(ui.state.level.get_tile(2, 11), Some('1'));
         assert_eq!(ui.state.level.get_tile(3, 11), Some('0'));
         ui.pointer(20.0, 40.0, false, true);
         assert_eq!(ui.state.level.get_tile(2, 11), Some('0'));
-        assert_eq!(ui.state.level.get_tile(1, 11), Some('1'));
+        assert_eq!(ui.state.level.get_tile(1, 11), Some('0'));
     }
 
     #[test]
@@ -947,12 +980,20 @@ mod tests {
             ];
             // Use palette clicks, paint, and hover through the normal editor path.
             ui.pointer(palette[0] + 4.0, palette[1] + 4.0, true, false);
-            ui.pointer(4.0, 40.0, false, false);
-            ui.pointer(4.0, 40.0, true, false);
-            ui.pointer(12.0, 40.0, false, false);
+            ui.pointer(36.0, 48.0, false, false);
+            ui.pointer(36.0, 48.0, true, false);
+            ui.pointer(44.0, 48.0, false, false);
             let mut quads = Vec::new();
             ui.draw(&atlas, &mut quads);
-            for rect in [[0.0, MAP_Y, CELL, CELL], palette] {
+            for rect in [
+                [
+                    32.0 - expected_preview.origin[0] * 0.5,
+                    44.0 - expected_preview.origin[1] * 0.5,
+                    expected_preview.size[0] * 0.5,
+                    expected_preview.size[1] * 0.5,
+                ],
+                palette,
+            ] {
                 assert!(
                     quads
                         .iter()
@@ -961,10 +1002,14 @@ mod tests {
                 );
             }
             assert!(
-                quads
-                    .iter()
-                    .any(|quad| quad.rect == [CELL, MAP_Y, CELL, CELL]
-                        && quad.uv == expected_cursor.uv),
+                quads.iter().any(|quad| quad.rect
+                    == [
+                        40.0 - expected_cursor.origin[0] * 0.5,
+                        44.0 - expected_cursor.origin[1] * 0.5,
+                        expected_cursor.size[0] * 0.5,
+                        expected_cursor.size[1] * 0.5
+                    ]
+                    && quad.uv == expected_cursor.uv),
                 "source cursor for {tile} must be {sprite}"
             );
             checked += 1;
@@ -985,8 +1030,8 @@ mod tests {
             let mut ui = EditorUi::new();
             ui.state.select(tile).unwrap();
             // Paint through the normal pointer path, then hover an empty cell.
-            ui.pointer(4.0, 40.0, true, false);
-            ui.pointer(12.0, 40.0, false, false);
+            ui.pointer(36.0, 48.0, true, false);
+            ui.pointer(44.0, 48.0, false, false);
             let mut quads = Vec::new();
             ui.draw(&atlas, &mut quads);
             let index = ui
@@ -996,8 +1041,18 @@ mod tests {
                 .position(|&value| value == tile)
                 .unwrap();
             for rect in [
-                [0.0, MAP_Y, CELL, CELL],
-                [CELL, MAP_Y, CELL, CELL],
+                [
+                    32.0 - icon.origin[0] * 0.5,
+                    44.0 - icon.origin[1] * 0.5,
+                    icon.size[0] * 0.5,
+                    icon.size[1] * 0.5,
+                ],
+                [
+                    40.0 - icon.origin[0] * 0.5,
+                    44.0 - icon.origin[1] * 0.5,
+                    icon.size[0] * 0.5,
+                    icon.size[1] * 0.5,
+                ],
                 [
                     244.0 + (index % 7) as f32 * 10.0,
                     MAP_Y + (index / 7) as f32 * 10.0,
@@ -1059,8 +1114,10 @@ mod tests {
         ui.pointer(4.0, 48.0, false, false);
         ui.pointer(4.0, 48.0, true, false);
         ui.pointer(44.0, 48.0, true, false);
-        for x in 0..=5 {
-            assert_eq!(ui.state.level.get_tile(x, 12), Some('1'));
+        assert_eq!(ui.state.level.get_tile(0, 12), Some('1'));
+        assert_eq!(ui.state.level.get_tile(5, 12), Some('1'));
+        for x in 1..5 {
+            assert_eq!(ui.state.level.get_tile(x, 12), Some('0'));
         }
     }
     #[test]
@@ -1240,5 +1297,514 @@ mod tests {
         ui.key(KeyCode::KeyN, Some("new"), false);
         ui.key(KeyCode::Enter, None, false);
         assert_eq!(ui.level_name(), "new.lvl");
+    }
+    fn choose_palette(ui: &mut EditorUi, tile: char) {
+        let index = ui.state.palette.iter().position(|&c| c == tile).unwrap();
+        ui.pointer(
+            248.0 + (index % 7) as f32 * 10.0,
+            40.0 + (index / 7) as f32 * 10.0,
+            true,
+            false,
+        );
+        ui.pointer(0.0, 0.0, false, false);
+    }
+    fn paint_at(ui: &mut EditorUi, tile: char, x: f32, y: f32) {
+        choose_palette(ui, tile);
+        ui.pointer(x, y, true, false);
+        ui.pointer(x, y, false, false);
+    }
+    fn map_has(quads: &[DrawQuad], uv: [f32; 4]) -> bool {
+        quads
+            .iter()
+            .any(|q| q.uv == uv && q.rect[0] < 240.0 && q.rect[1] >= MAP_Y && q.rect[1] < 204.0)
+    }
+    #[test]
+    fn source_large_previews_and_cursor_keep_native_size_and_origin() {
+        let atlas = Atlas::load().unwrap();
+        for (tile, sprite, size) in [
+            ('{', "sMegaMouthTile", [64.0, 32.0]),
+            ('S', "sGiantSpiderHang", [32.0, 16.0]),
+            ('Y', "sYetiKingLeft", [32.0, 32.0]),
+            ('T', "sTombLordLeft", [32.0, 32.0]),
+            ('E', "sAlienBossTile", [32.0, 32.0]),
+        ] {
+            let mut ui = EditorUi::new();
+            paint_at(&mut ui, tile, 36.0, 48.0);
+            ui.pointer(84.0, 48.0, false, false);
+            let frame = atlas.sprite(sprite, 0.0).unwrap();
+            assert_eq!(frame.size, size, "original native source dimensions");
+            let mut quads = Vec::new();
+            ui.draw(&atlas, &mut quads);
+            assert!(
+                quads.iter().any(|q| q.uv == frame.uv
+                    && q.rect
+                        == [
+                            32.0 - frame.origin[0] * 0.5,
+                            44.0 - frame.origin[1] * 0.5,
+                            size[0] * 0.5,
+                            size[1] * 0.5
+                        ]),
+                "{tile} map artwork must retain its multi-cell footprint"
+            );
+            let cursor = atlas.sprite(editor_icon(tile).unwrap(), 0.0).unwrap();
+            assert!(
+                quads.iter().any(|q| q.uv == cursor.uv
+                    && q.rect
+                        == [
+                            80.0 - cursor.origin[0] * 0.5,
+                            44.0 - cursor.origin[1] * 0.5,
+                            cursor.size[0] * 0.5,
+                            cursor.size[1] * 0.5
+                        ]),
+                "{tile} selected cursor must retain native origin/size"
+            );
+        }
+    }
+    #[test]
+    fn source_off_anchor_erase_removes_preview_without_erasing_saved_anchor() {
+        let atlas = Atlas::load().unwrap();
+        let mega = atlas.sprite("sMegaMouthTile", 0.0).unwrap();
+        let mut ui = EditorUi::new();
+        paint_at(&mut ui, '{', 20.0, 48.0);
+        let mut quads = Vec::new();
+        ui.draw(&atlas, &mut quads);
+        ui.pointer(28.0, 48.0, false, true);
+        ui.pointer(100.0, 0.0, false, false);
+        choose_palette(&mut ui, '0');
+        quads.clear();
+        ui.draw(&atlas, &mut quads);
+        assert_eq!(
+            ui.state.level.get_tile(2, 12),
+            Some('{'),
+            "saved neighbor anchor survives"
+        );
+        assert_eq!(ui.state.level.get_tile(3, 12), Some('0'));
+        assert!(
+            !map_has(&quads, mega.uv),
+            "right erase destroys the overlapping Mega Mouth preview"
+        );
+        ui.cancel_pointer();
+        quads.clear();
+        ui.draw(&atlas, &mut quads);
+        assert!(
+            !map_has(&quads, mega.uv),
+            "focus/input reset must preserve the missing preview"
+        );
+        let EditorCommand::Play(document) = ui.key(KeyCode::F5, None, false) else {
+            panic!("F5");
+        };
+        assert_eq!(document.get_tile(2, 12), Some('{'));
+        assert_eq!(
+            document
+                .to_world()
+                .entities
+                .iter()
+                .filter(|e| e.object == "oJaws")
+                .count(),
+            1,
+            "gameplay still loads the saved anchor independently of missing preview"
+        );
+    }
+    #[test]
+    fn source_first_rectangle_erase_can_leave_a_live_preview_over_an_empty_cell() {
+        let atlas = Atlas::load().unwrap();
+        let brick = atlas.sprite("sBrick", 0.0).unwrap();
+        let mega = atlas.sprite("sMegaMouthTile", 0.0).unwrap();
+        let mut ui = EditorUi::new();
+        let mut quads = Vec::new();
+        paint_at(&mut ui, '{', 20.0, 48.0);
+        ui.draw(&atlas, &mut quads);
+        paint_at(&mut ui, '1', 28.0, 48.0);
+        quads.clear();
+        ui.draw(&atlas, &mut quads);
+        assert!(
+            map_has(&quads, mega.uv),
+            "paint protects off-anchor Mega Mouth"
+        );
+        ui.pointer(28.0, 48.0, false, true);
+        ui.pointer(0.0, 0.0, false, false);
+        choose_palette(&mut ui, '0');
+        quads.clear();
+        ui.draw(&atlas, &mut quads);
+        assert_eq!(ui.state.level.get_tile(2, 12), Some('{'));
+        assert_eq!(ui.state.level.get_tile(3, 12), Some('0'));
+        assert!(!map_has(&quads, mega.uv));
+        assert!(
+            quads
+                .iter()
+                .any(|q| q.uv == brick.uv && q.rect == [24.0, 44.0, 8.0, 8.0]),
+            "first rectangle hit destroys Mega Mouth, leaving the later brick preview"
+        );
+        ui.key(KeyCode::KeyZ, None, true);
+        quads.clear();
+        ui.draw(&atlas, &mut quads);
+        assert!(
+            map_has(&quads, mega.uv),
+            "undo restores live preview room, not just tile grid"
+        );
+        ui.key(KeyCode::KeyY, None, true);
+        quads.clear();
+        ui.draw(&atlas, &mut quads);
+        assert!(!map_has(&quads, mega.uv));
+    }
+    #[test]
+    fn source_record_selection_observes_family_rebuild_after_button_destruction() {
+        let atlas = Atlas::load().unwrap();
+        let mut ui = EditorUi::new();
+        let mut quads = Vec::new();
+        paint_at(&mut ui, '@', 20.0, 48.0);
+        ui.draw(&atlas, &mut quads);
+        paint_at(&mut ui, 'S', 12.0, 48.0);
+        quads.clear();
+        ui.draw(&atlas, &mut quads);
+        ui.pointer(20.0, 48.0, false, false);
+        ui.key(KeyCode::KeyL, None, false);
+        assert!(
+            ui.entry.is_some(),
+            "new instances append: first precise point selects the earlier door"
+        );
+        ui.key(KeyCode::Escape, None, false);
+        ui.pointer(20.0, 48.0, false, false);
+        quads.clear();
+        ui.draw(&atlas, &mut quads);
+        ui.key(KeyCode::KeyL, None, false);
+        assert!(
+            ui.entry.is_none(),
+            "modal button destruction rebuilds query order from depth-sorted room; Spider wins"
+        );
+    }
+    #[test]
+    fn source_pointer_jump_does_not_paint_unvisited_cells() {
+        let mut ui = EditorUi::new();
+        ui.pointer(4.0, 48.0, true, false);
+        ui.pointer(44.0, 48.0, true, false);
+        ui.pointer(44.0, 48.0, false, false);
+        assert_eq!(ui.state.level.get_tile(0, 12), Some('1'));
+        assert_eq!(ui.state.level.get_tile(5, 12), Some('1'));
+        for x in 1..5 {
+            assert_eq!(
+                ui.state.level.get_tile(x, 12),
+                Some('0'),
+                "source Step never visits this cell"
+            );
+        }
+    }
+    #[test]
+    fn source_fresh_editor_is_blank_and_new_discards_old_preview_objects() {
+        let mut ui = EditorUi::new();
+        assert_eq!(
+            ui.state.level,
+            Level::default(),
+            "source Create fills all cells with zero"
+        );
+        paint_at(&mut ui, '{', 20.0, 48.0);
+        ui.key(KeyCode::KeyN, None, true);
+        ui.key(KeyCode::KeyN, None, false);
+        ui.key(KeyCode::KeyA, Some("fresh"), false);
+        ui.key(KeyCode::Enter, None, false);
+        let atlas = Atlas::load().unwrap();
+        let mut quads = Vec::new();
+        ui.draw(&atlas, &mut quads);
+        assert_eq!(ui.state.level, Level::default());
+        assert!(!map_has(
+            &quads,
+            atlas.sprite("sMegaMouthTile", 0.0).unwrap().uv
+        ));
+    }
+    #[test]
+    fn source_precise_paint_preserves_a_bow_that_bbox_erase_removes() {
+        let atlas = Atlas::load().unwrap();
+        let bow = atlas.sprite("sBowTile", 0.0).unwrap();
+        let mut ui = EditorUi::new();
+        let mut quads = Vec::new();
+        paint_at(&mut ui, '}', 36.0, 48.0);
+        ui.draw(&atlas, &mut quads);
+        // The Bow mask misses both authored +8,+12 and +8,+4 sample points.
+        // Selecting eraser and LEFT painting changes levelArray only.
+        paint_at(&mut ui, '0', 36.0, 48.0);
+        quads.clear();
+        ui.draw(&atlas, &mut quads);
+        assert_eq!(ui.state.level.get_tile(4, 12), Some('0'));
+        assert!(
+            map_has(&quads, bow.uv),
+            "precise point misses preserve the Bow preview"
+        );
+        ui.pointer(36.0, 48.0, false, true);
+        ui.pointer(0.0, 0.0, false, false);
+        quads.clear();
+        ui.draw(&atlas, &mut quads);
+        assert!(
+            !map_has(&quads, bow.uv),
+            "right erase uses bbox and destroys the Bow"
+        );
+    }
+    #[test]
+    fn source_staged_map_input_waits_for_fixed_ticks_and_stationary_holds_repeat() {
+        let atlas = Atlas::load().unwrap();
+        let mut ui = EditorUi::new();
+        ui.stage_pointer(4.0, 48.0, true, false);
+        assert_eq!(ui.state.level.get_tile(0, 12), Some('0'));
+        let before = ui.state.previews.clone();
+        let mut quads = Vec::new();
+        for _ in 0..8 {
+            ui.draw(&atlas, &mut quads);
+        }
+        assert_eq!(
+            ui.state.previews, before,
+            "high-refresh Draw never mutates source state"
+        );
+        ui.source_tick();
+        assert_eq!(ui.state.level.get_tile(0, 12), Some('1'));
+        let rng = ui.source_rng().state_bits();
+        ui.source_tick();
+        assert_ne!(
+            ui.source_rng().state_bits(),
+            rng,
+            "held stationary terrain is freshly created each source Step"
+        );
+        ui.cancel_pointer();
+        let stopped = ui.source_rng().state_bits();
+        ui.source_tick();
+        assert_eq!(
+            ui.source_rng().state_bits(),
+            stopped,
+            "focus reset ends held paint"
+        );
+        ui.stage_pointer(12.0, 48.0, true, false);
+        ui.stage_pointer(44.0, 48.0, true, false);
+        ui.source_tick();
+        for x in 1..5 {
+            assert_eq!(ui.state.level.get_tile(x, 12), Some('0'));
+        }
+        assert_eq!(ui.state.level.get_tile(5, 12), Some('1'));
+    }
+    #[test]
+    fn source_editor_ticks_rng_and_live_debris_match_at_30_60_144_240_hz() {
+        let mut expected = None;
+        for hz in [30, 60, 144, 240] {
+            let mut ui = EditorUi::with_source_rng(
+                PreviewContext::default(),
+                spelunky_core::Rng::new_canonical(239),
+            );
+            choose_palette(&mut ui, 'B');
+            ui.stage_pointer(36.0, 48.0, true, false);
+            let mut clock = crate::timing::FixedClock::new();
+            let mut ticks = 0;
+            for _ in 0..hz {
+                for _ in 0..clock.advance(1.0 / hz as f64).ticks {
+                    ui.source_tick();
+                    ticks += 1;
+                }
+            }
+            assert_eq!(ticks, 30);
+            assert_ne!(
+                ui.source_rng().state_bits(),
+                239,
+                "real block Destroy consumes source RNG"
+            );
+            if let Some(expected) = &expected {
+                assert_eq!(&ui.state.previews, expected, "source state at{hz}Hz");
+            } else {
+                expected = Some(ui.state.previews.clone());
+            }
+        }
+    }
+    #[test]
+    fn source_inherited_support_destroy_removes_spike_preview_but_preserves_saved_spike() {
+        let atlas = Atlas::load().unwrap();
+        let spike = atlas.sprite("sSpikes", 0.0).unwrap();
+        for (support, inherited) in [
+            ('1', true),
+            ('2', true),
+            ('3', true),
+            ('4', true),
+            ('B', false),
+        ] {
+            let mut ui = EditorUi::new();
+            paint_at(&mut ui, support, 36.0, 56.0);
+            paint_at(&mut ui, '^', 36.0, 48.0);
+            choose_palette(&mut ui, '0');
+            ui.pointer(36.0, 56.0, false, true);
+            ui.pointer(0.0, 0.0, false, false);
+            let mut quads = Vec::new();
+            ui.draw(&atlas, &mut quads);
+            assert_eq!(ui.state.level.get_tile(4, 12), Some('^'));
+            assert_eq!(ui.state.level.get_tile(4, 13), Some('0'));
+            assert_eq!(
+                map_has(&quads, spike.uv),
+                !inherited,
+                "resolved{support} Destroy inheritance"
+            );
+            assert_eq!(ui.source_check_water(), inherited);
+            let EditorCommand::Play(document) = ui.key(KeyCode::F5, None, false) else {
+                panic!("F5");
+            };
+            assert!(
+                document
+                    .to_world()
+                    .entities
+                    .iter()
+                    .any(|e| e.object == "oSpikes")
+                    || document
+                        .to_world()
+                        .tiles
+                        .iter()
+                        .any(|t| t.object == "oSpikes")
+            );
+        }
+    }
+    #[test]
+    fn source_actual_play_snapshot_return_rebuilds_previews_but_focus_does_not() {
+        let atlas = Atlas::load().unwrap();
+        let mega = atlas.sprite("sMegaMouthTile", 0.0).unwrap();
+        let mut ui = EditorUi::new();
+        paint_at(&mut ui, '{', 20.0, 48.0);
+        choose_palette(&mut ui, '0');
+        ui.pointer(28.0, 48.0, false, true);
+        ui.pointer(0.0, 0.0, false, false);
+        let mut quads = Vec::new();
+        ui.draw(&atlas, &mut quads);
+        assert!(!map_has(&quads, mega.uv));
+        ui.cancel_pointer();
+        ui.source_tick();
+        quads.clear();
+        ui.draw(&atlas, &mut quads);
+        assert!(!map_has(&quads, mega.uv));
+        let EditorCommand::Play(document) = ui.key(KeyCode::F5, None, false) else {
+            panic!("F5");
+        };
+        assert_eq!(document.get_tile(2, 12), Some('{'));
+        ui.return_from_playtest();
+        quads.clear();
+        ui.draw(&atlas, &mut quads);
+        assert!(
+            map_has(&quads, mega.uv),
+            "source room recreation reloads test.tmp, unlike focus loss"
+        );
+        assert!(!ui.state.can_undo(), "recreated room has a fresh history");
+    }
+    #[test]
+    fn source_context_changes_preview_block_but_not_cursor_or_editor_tree_leaves() {
+        let atlas = Atlas::load().unwrap();
+        // An explicit inherited-global boundary; no natural true-city editor route is claimed.
+        let mut ui = EditorUi::with_context(PreviewContext {
+            city_of_gold: true,
+            treasure_vision: false,
+        });
+        paint_at(&mut ui, 'B', 36.0, 48.0);
+        ui.pointer(44.0, 48.0, false, false);
+        let mut quads = Vec::new();
+        ui.draw(&atlas, &mut quads);
+        assert!(
+            quads
+                .iter()
+                .any(|q| q.uv == atlas.sprite("sGoldBlock", 0.0).unwrap().uv
+                    && q.rect == [32.0, 44.0, 8.0, 8.0])
+        );
+        assert!(
+            quads
+                .iter()
+                .any(|q| q.uv == atlas.sprite("sBlock", 0.0).unwrap().uv
+                    && q.rect == [40.0, 44.0, 8.0, 8.0])
+        );
+        paint_at(&mut ui, '|', 52.0, 48.0);
+        paint_at(&mut ui, ')', 60.0, 48.0);
+        choose_palette(&mut ui, '0');
+        quads.clear();
+        ui.draw(&atlas, &mut quads);
+        assert!(
+            quads
+                .iter()
+                .any(|q| q.uv == atlas.sprite("sLeaves", 0.0).unwrap().uv && q.rect[0] == 56.0)
+        );
+        assert!(
+            !map_has(&quads, atlas.sprite("sLeavesRight", 0.0).unwrap().uv),
+            "TreeTile is not real oTree"
+        );
+        ui.key(KeyCode::KeyN, None, true);
+        ui.key(KeyCode::KeyN, None, false);
+        assert!(
+            ui.state.previews.context.city_of_gold,
+            "NEW preserves globals"
+        );
+        ui.key(KeyCode::KeyA, Some("gold"), false);
+        ui.key(KeyCode::Enter, None, false);
+        ui.key(KeyCode::F5, None, false);
+        ui.return_from_playtest();
+        assert!(
+            !ui.state.previews.context.city_of_gold,
+            "actual test return clears globals"
+        );
+    }
+    #[test]
+    fn source_live_door_text_is_drawn_at_object_origin_and_survives_grid_only_erase() {
+        let atlas = Atlas::load().unwrap();
+        let mut ui = EditorUi::new();
+        paint_at(&mut ui, 'S', 12.0, 48.0);
+        paint_at(&mut ui, '@', 20.0, 48.0);
+        // S is first in the query array, so use the ordinary metadata adapter
+        // before arranging the overlap in a loaded fixture.
+        let mut authored = Level::default();
+        authored.set_tile(2, 12, '@').unwrap();
+        authored.exit_targets = vec!["NEXT".into()];
+        ui.load("label.lvl", &authored.to_text()).unwrap();
+        paint_at(&mut ui, 'S', 12.0, 48.0);
+        ui.pointer(20.0, 48.0, false, false);
+        ui.key(KeyCode::KeyL, None, false);
+        ui.key(KeyCode::Escape, None, false);
+        ui.pointer(20.0, 48.0, false, false);
+        choose_palette(&mut ui, '0');
+        ui.pointer(20.0, 48.0, false, true);
+        ui.pointer(0.0, 0.0, false, false);
+        assert_eq!(ui.state.level.get_tile(2, 12), Some('0'));
+        let mut quads = Vec::new();
+        ui.draw(&atlas, &mut quads);
+        let glyph = atlas
+            .sprite("sFontSmall", ('N' as u32 - 32) as f64)
+            .unwrap();
+        assert!(
+            quads
+                .iter()
+                .any(|q| q.uv == glyph.uv && q.rect == [16.0, 44.0, 4.0, 4.0]),
+            "live target Draw follows surviving preview"
+        );
+        assert!(
+            ui.state
+                .previews
+                .draw_instances()
+                .any(|i| i.object == "oEntrance")
+        );
+        let EditorCommand::Export { text, .. } = ui.key(KeyCode::KeyE, None, true) else {
+            panic!("export");
+        };
+        assert!(
+            Level::parse(&text).unwrap().exit_targets.is_empty(),
+            "saved grid0 omits surviving ghost text"
+        );
+    }
+    #[test]
+    fn source_gold_clock_error_is_visible_after_natural_editor_destroy_and_steps() {
+        let mut ui = EditorUi::with_source_rng(
+            PreviewContext {
+                city_of_gold: true,
+                ..Default::default()
+            },
+            spelunky_core::Rng::new_canonical(927),
+        );
+        paint_at(&mut ui, 'B', 36.0, 48.0);
+        choose_palette(&mut ui, '0');
+        ui.stage_pointer(36.0, 48.0, false, true);
+        ui.source_tick();
+        ui.cancel_pointer();
+        assert_eq!(ui.source_error(), None, "birth frame runs no gold Step");
+        ui.source_tick();
+        assert_eq!(ui.source_error(), None, "integer launch needs no clock");
+        ui.source_tick();
+        assert_eq!(
+            ui.source_error(),
+            Some(preview::PreviewSourceError::MissingGameClock)
+        );
+        assert_eq!(ui.status, "SOURCE ERROR: oGame.time IS UNAVAILABLE");
+        assert_eq!(ui.state.level.get_tile(4, 12), Some('0'));
     }
 }

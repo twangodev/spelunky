@@ -4,6 +4,10 @@ use crate::{
     model::World,
 };
 
+pub mod preview;
+use crate::Vec2;
+use preview::{PreviewContext, PreviewRoom};
+
 /// Original palette groups. Eraser is `0`; all content is available in this port.
 pub const BLOCK_PALETTE: &str = "@XI1LPB&rjk2wvt|x)q3di4l";
 pub const ENEMY_PALETTE: &str = "bnsSKh!fFzAMmp{aUEyYHT";
@@ -15,8 +19,15 @@ pub struct EditorState {
     pub level: Level,
     pub selected_tile: char,
     pub palette: Vec<char>,
-    undo: Vec<Level>,
-    redo: Vec<Level>,
+    pub previews: PreviewRoom,
+    undo: Vec<Snapshot>,
+    redo: Vec<Snapshot>,
+}
+
+#[derive(Debug, Clone)]
+struct Snapshot {
+    level: Level,
+    previews: PreviewRoom,
 }
 
 impl Default for EditorState {
@@ -27,6 +38,14 @@ impl Default for EditorState {
 
 impl EditorState {
     pub fn new(level: Level) -> Self {
+        Self::with_context(level, PreviewContext::default())
+    }
+
+    pub fn with_context(level: Level, context: PreviewContext) -> Self {
+        Self::with_source_rng(level, context, crate::Rng::new_canonical(0))
+    }
+    pub fn with_source_rng(level: Level, context: PreviewContext, rng: crate::Rng) -> Self {
+        let previews = build_previews(&level, context, rng);
         let palette = format!("0{BLOCK_PALETTE}{ENEMY_PALETTE}{TRAP_PALETTE}{ITEM_PALETTE}")
             .chars()
             .collect();
@@ -34,6 +53,7 @@ impl EditorState {
             level,
             selected_tile: '1',
             palette,
+            previews,
             undo: vec![],
             redo: vec![],
         }
@@ -71,7 +91,17 @@ impl EditorState {
                 next.signs[index].clear();
             }
         }
-        self.replace_level(next);
+        let mut previews = self.previews.clone();
+        if let Some(id) = previews.create_tile(tile, x, y) {
+            if !fresh {
+                if let Some(index) = record_index(&next, x, y, true) {
+                    previews.instance_mut(id).unwrap().text = next.exit_target(index).to_owned();
+                } else if let Some(index) = record_index(&next, x, y, false) {
+                    previews.instance_mut(id).unwrap().text = next.sign_message(index).to_owned();
+                }
+            }
+        }
+        self.commit(next, previews);
         Ok(())
     }
 
@@ -79,7 +109,15 @@ impl EditorState {
         self.edit_tile(x, y, self.selected_tile, true)
     }
     pub fn erase(&mut self, x: usize, y: usize) -> Result<(), String> {
-        self.set_tile(x, y, '0')
+        let mut next = self.level.clone();
+        next.set_tile(x, y, '0')?;
+        for door in [true, false] {
+            remap_records(&self.level, &mut next, door);
+        }
+        let mut previews = self.previews.clone();
+        previews.erase(x, y);
+        self.commit(next, previews);
+        Ok(())
     }
 
     pub fn set_exit_target(&mut self, x: usize, y: usize, target: String) -> Result<(), String> {
@@ -93,8 +131,12 @@ impl EditorState {
         }
         let mut next = self.level.clone();
         materialize_records(&mut next, true);
-        next.exit_targets[index] = target;
-        self.replace_level(next);
+        next.exit_targets[index] = target.clone();
+        let mut previews = self.previews.clone();
+        if let Some(id) = door_at(&previews, x, y) {
+            previews.instance_mut(id).unwrap().text = target;
+        }
+        self.commit(next, previews);
         Ok(())
     }
 
@@ -108,37 +150,123 @@ impl EditorState {
         }
         let mut next = self.level.clone();
         materialize_records(&mut next, false);
-        next.signs[index] = message;
-        self.replace_level(next);
+        next.signs[index] = message.clone();
+        let mut previews = self.previews.clone();
+        if let Some(id) = previews.at_point(anchor(x, y), "oMsgSign") {
+            previews.instance_mut(id).unwrap().text = message;
+        }
+        self.commit(next, previews);
         Ok(())
     }
 
-    /// Use this for metadata edits so they participate in undo/redo.
+    /// Metadata changes preserve live previews; explicit grid replacement rebuilds
+    /// the authored room. Painting and erasing use their distinct source queries.
     pub fn replace_level(&mut self, next: Level) {
-        if next == self.level {
+        let previews = if next.tiles == self.level.tiles {
+            self.previews.clone()
+        } else {
+            build_previews(&next, self.previews.context, self.previews.rng.clone())
+        };
+        self.commit(next, previews);
+    }
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            level: self.level.clone(),
+            previews: self.previews.clone(),
+        }
+    }
+    fn commit(&mut self, next: Level, previews: PreviewRoom) {
+        if next == self.level && previews == self.previews {
             return;
         }
-        self.undo.push(self.level.clone());
-        // Bound history memory even during long painting sessions.
+        self.undo.push(self.snapshot());
         if self.undo.len() > 256 {
             self.undo.remove(0);
         }
         self.level = next;
+        self.previews = previews;
         self.redo.clear();
     }
-
+    pub fn set_preview_text(&mut self, id: u64, text: String) -> Result<(), String> {
+        if text.contains(['\r', '\n']) {
+            return Err("Text must be a single line".into());
+        }
+        let instance = self
+            .previews
+            .instance(id)
+            .ok_or("Preview no longer exists")?;
+        if !instance.is_door() && !instance.is_sign() {
+            return Err("Preview is not a sign or door".into());
+        }
+        let (x, y) = instance.cell();
+        let door = instance.is_door();
+        let mut next = self.level.clone();
+        if let Some(index) = record_index(&next, x, y, door) {
+            materialize_records(&mut next, door);
+            if door {
+                next.exit_targets[index] = text.clone();
+            } else {
+                next.signs[index] = text.clone();
+            }
+        }
+        let mut previews = self.previews.clone();
+        previews.instance_mut(id).unwrap().text = text;
+        self.commit(next, previews);
+        Ok(())
+    }
+    /// scrTestLevel/save gather text from surviving previews, independently of
+    /// levelArray. Unused imported trailing records remain a file adapter feature.
+    pub fn document(&self) -> Level {
+        let mut next = self.level.clone();
+        for door in [true, false] {
+            let mut records = Vec::new();
+            let mut grid_count = 0;
+            for y in 0..LEVEL_HEIGHT {
+                for x in 0..LEVEL_WIDTH {
+                    if !matches_record(self.level.get_tile(x, y).unwrap_or('0'), door) {
+                        continue;
+                    }
+                    grid_count += 1;
+                    let id = if door {
+                        door_at(&self.previews, x, y)
+                    } else {
+                        self.previews.at_point(anchor(x, y), "oMsgSign")
+                    };
+                    if let Some(instance) = id.and_then(|id| self.previews.instance(id)) {
+                        records.push(instance.text.clone());
+                    }
+                }
+            }
+            let old = if door {
+                &self.level.exit_targets
+            } else {
+                &self.level.signs
+            };
+            records.extend(old.iter().skip(grid_count).cloned());
+            if door {
+                next.exit_targets = records;
+            } else {
+                next.signs = records;
+            }
+        }
+        next
+    }
     pub fn undo(&mut self) -> bool {
         let Some(previous) = self.undo.pop() else {
             return false;
         };
-        self.redo.push(std::mem::replace(&mut self.level, previous));
+        self.redo.push(self.snapshot());
+        self.level = previous.level;
+        self.previews = previous.previews;
         true
     }
     pub fn redo(&mut self) -> bool {
         let Some(next) = self.redo.pop() else {
             return false;
         };
-        self.undo.push(std::mem::replace(&mut self.level, next));
+        self.undo.push(self.snapshot());
+        self.level = next.level;
+        self.previews = next.previews;
         true
     }
     pub fn can_undo(&self) -> bool {
@@ -148,8 +276,50 @@ impl EditorState {
         !self.redo.is_empty()
     }
     pub fn test_play(&self) -> World {
-        self.level.to_world()
+        self.document().to_world()
     }
+}
+
+fn anchor(x: usize, y: usize) -> Vec2 {
+    Vec2::new(16.0 + x as f64 * 16.0, 16.0 + y as f64 * 16.0)
+}
+fn door_at(previews: &PreviewRoom, x: usize, y: usize) -> Option<u64> {
+    previews
+        .at_point(anchor(x, y), "oExit")
+        .or_else(|| previews.at_point(anchor(x, y), "oEntrance"))
+}
+fn build_previews(level: &Level, context: PreviewContext, rng: crate::Rng) -> PreviewRoom {
+    let mut previews = PreviewRoom::with_rng(context, rng);
+    let mut door_index = 0;
+    let mut sign_index = 0;
+    // The source creates every cell, including zero: a later empty cell may
+    // remove an earlier overlapping preview while its saved anchor remains.
+    for y in 0..LEVEL_HEIGHT {
+        for x in 0..LEVEL_WIDTH {
+            let tile = level.get_tile(x, y).unwrap_or('0');
+            previews.create_tile(tile, x, y);
+            let (family, records, index) = match tile {
+                '@' => ("oEntrance", &level.exit_targets, &mut door_index),
+                'X' => ("oExit", &level.exit_targets, &mut door_index),
+                'I' => ("oMsgSign", &level.signs, &mut sign_index),
+                _ => continue,
+            };
+            if !records.is_empty() {
+                if let Some(id) = previews.at_point(anchor(x, y), family) {
+                    // Retain the port's final-record fallback for malformed
+                    // short lists; valid original files never need this adapter.
+                    previews.instance_mut(id).unwrap().text = records
+                        .get(*index)
+                        .or_else(|| records.last())
+                        .cloned()
+                        .unwrap();
+                    *index += 1;
+                }
+            }
+        }
+    }
+    previews.finish_source_frame();
+    previews
 }
 
 fn matches_record(tile: char, door: bool) -> bool {
