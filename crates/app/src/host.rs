@@ -704,17 +704,28 @@ impl App {
     fn editor_command(&mut self, command: EditorCommand) {
         match command {
             EditorCommand::None => {}
-            EditorCommand::Back => self.screen(Screen::Title),
+            EditorCommand::Back => {
+                if self.game.is_none() {
+                    let mut game = Game::shell(wall_seed(), self.store.data.settings.rules);
+                    hydrate_run(&mut game, &self.store.data);
+                    self.game = Some(game);
+                }
+                if let Some(game) = &mut self.game {
+                    prepare_editor_return(game);
+                }
+                self.editor_play = false;
+                self.recorded = false;
+                self.open_hub(spelunky_core::hub::HubKind::Title);
+            }
             EditorCommand::Import => self.import_dialog(),
             EditorCommand::Save { name, text } => {
                 self.store
                     .data
                     .custom_levels
                     .insert(level_name(&name), text);
-                match self.store.save() {
-                    Ok(()) => self.editor.message(format!("SAVED {name}")),
-                    Err(error) => self.editor.message(error),
-                }
+                let result = self.store.save();
+                let command = complete_editor_save(&mut self.editor, &name, result);
+                self.editor_command(command);
             }
             EditorCommand::Export { name, text } => match crate::editor_io::export(&name, &text) {
                 Ok(()) => self.editor.message(format!("EXPORTED {name}")),
@@ -1954,6 +1965,28 @@ fn tunnel_progress(game: &Game) -> std::collections::BTreeMap<String, u32> {
     }
     progress
 }
+fn complete_editor_save(
+    editor: &mut EditorUi,
+    name: &str,
+    result: Result<(), String>,
+) -> EditorCommand {
+    match result {
+        Ok(()) => {
+            editor.message(format!("SAVED {name}"));
+            editor.saved()
+        }
+        Err(error) => {
+            editor.message(error);
+            EditorCommand::None
+        }
+    }
+}
+
+fn prepare_editor_return(game: &mut Game) {
+    game.flags.retain(|flag| !flag.starts_with("title_start:"));
+    game.flags.insert("title_start:2".into());
+}
+
 fn capture_lifetime_stats(game: &Game, data: &mut crate::storage::SaveData) -> bool {
     if data.lifetime_stats == game.lifetime_stats {
         return false;
@@ -4179,5 +4212,93 @@ mod tests {
         assert_eq!(level_name("C:\\levels\\example.lvl"), "example");
         assert_eq!(level_name("C:\\levels\\Example.LVL"), "Example");
         assert_eq!(level_name("map.lvl.lvl"), "map.lvl");
+    }
+    #[test]
+    fn editor_exit_save_failure_keeps_the_draft_until_success_then_returns_to_authored_title() {
+        let mut editor = EditorUi::new();
+        editor.key(KeyCode::KeyN, None, false);
+        editor.key(KeyCode::KeyA, Some("saved-room"), false);
+        editor.key(KeyCode::Enter, None, false);
+        // A genuine pointer edit, followed by ordinary source Escape/Y input.
+        editor.pointer(4., 40., true, false);
+        editor.pointer(4., 40., false, false);
+        assert!(matches!(
+            editor.key(KeyCode::Escape, None, false),
+            EditorCommand::None
+        ));
+        let EditorCommand::Save { name, text } = editor.key(KeyCode::KeyY, None, false) else {
+            panic!("source Y must request saving before leaving");
+        };
+        assert_eq!(name, "saved-room.lvl");
+        assert_eq!(
+            spelunky_core::level::Level::parse(&text)
+                .unwrap()
+                .get_tile(0, 11),
+            Some('1')
+        );
+        assert!(matches!(
+            complete_editor_save(&mut editor, &name, Err("quota exhausted".into())),
+            EditorCommand::None
+        ));
+        let EditorCommand::Save {
+            name: retry_name,
+            text: retry_text,
+        } = editor.key(KeyCode::KeyY, None, false)
+        else {
+            panic!("a failed save must preserve the confirmation and draft for retry");
+        };
+        assert_eq!((&retry_name, &retry_text), (&name, &text));
+        let mut save = crate::storage::SaveData::default();
+        save.custom_levels.insert(level_name(&name), text.clone());
+        let restored = crate::storage::SaveData::from_json(&save.to_json().unwrap()).unwrap();
+        assert_eq!(restored.custom_levels["saved-room"], text);
+        assert!(matches!(
+            complete_editor_save(&mut editor, &name, Ok(())),
+            EditorCommand::Back
+        ));
+        let mut game = Game::shell(19, spelunky_core::RulesPreset::Classic);
+        game.load_custom(&spelunky_core::level::Level::default(), "saved-room", "");
+        game.flags.insert("title_start:1".into());
+        prepare_editor_return(&mut game);
+        game.load_hub(spelunky_core::hub::HubKind::Title);
+        assert_eq!(game.world.name, "rTitle");
+        assert_eq!(game.player.pos, spelunky_core::Vec2::new(600., 184.));
+        assert_eq!(game.player.facing, -1);
+        assert!(!game.flags.contains("custom"));
+        assert!(!game.flags.contains("custom_level"));
+    }
+
+    #[test]
+    fn editor_new_save_failure_does_not_clear_old_level_and_success_restarts_source_defaults() {
+        let mut editor = EditorUi::new();
+        let mut old = spelunky_core::level::Level::default();
+        old.starting_life = 9;
+        old.author = "OLD AUTHOR".into();
+        old.set_tile(0, 11, 'I').unwrap();
+        editor.load("old.lvl", &old.to_text()).unwrap();
+        editor.key(KeyCode::KeyN, None, true);
+        let EditorCommand::Save { name, text } = editor.key(KeyCode::KeyY, None, false) else {
+            panic!("source New/Y must save the old document first");
+        };
+        assert_eq!(spelunky_core::level::Level::parse(&text).unwrap(), old);
+        complete_editor_save(&mut editor, &name, Err("write failed".into()));
+        let EditorCommand::Save { text: retry, .. } = editor.key(KeyCode::KeyY, None, false) else {
+            panic!("retry");
+        };
+        assert_eq!(retry, text);
+        assert!(matches!(
+            complete_editor_save(&mut editor, &name, Ok(())),
+            EditorCommand::None
+        ));
+        editor.key(KeyCode::KeyF, Some("fresh"), false);
+        editor.key(KeyCode::Enter, None, false);
+        let EditorCommand::Save { name, text } = editor.key(KeyCode::KeyS, None, true) else {
+            panic!("fresh save");
+        };
+        assert_eq!(name, "fresh.lvl");
+        assert_eq!(
+            spelunky_core::level::Level::parse(&text).unwrap(),
+            spelunky_core::level::Level::default()
+        );
     }
 }

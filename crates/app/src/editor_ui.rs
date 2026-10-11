@@ -27,6 +27,12 @@ pub enum EditorCommand {
     Back,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Confirmation {
+    Exit,
+    New,
+}
+
 #[derive(Clone, Copy)]
 enum Field {
     Author,
@@ -68,6 +74,9 @@ pub struct EditorUi {
     stroke: Option<(usize, usize, bool)>,
     entry: Option<Entry>,
     metadata_index: usize,
+    confirmation: Option<Confirmation>,
+    new_pressed: bool,
+    pointer_left: bool,
     status: String,
 }
 
@@ -96,6 +105,9 @@ impl EditorUi {
             stroke: None,
             entry: None,
             metadata_index: 0,
+            confirmation: None,
+            new_pressed: false,
+            pointer_left: false,
             status: "PAINT: LEFT   ERASE: RIGHT   ARROWS: PAN".into(),
         }
     }
@@ -106,6 +118,9 @@ impl EditorUi {
         self.state = EditorState::new(level);
         self.name = name;
         self.entry = None;
+        self.confirmation = None;
+        self.new_pressed = false;
+        self.pointer_left = false;
         self.cursor = None;
         self.stroke = None;
         self.status = format!("LOADED {}", self.name);
@@ -124,9 +139,30 @@ impl EditorUi {
     /// operating system delivers no matching mouse-button release event.
     pub fn cancel_pointer(&mut self) {
         self.stroke = None;
+        self.new_pressed = false;
+        self.pointer_left = false;
     }
 
     pub fn key(&mut self, key: KeyCode, typed: Option<&str>, control: bool) -> EditorCommand {
+        if let Some(confirmation) = self.confirmation {
+            return match key {
+                KeyCode::KeyY => EditorCommand::Save {
+                    name: self.name.clone(),
+                    text: self.state.level.to_text(),
+                },
+                KeyCode::KeyN => self.complete_confirmation(),
+                KeyCode::Escape if confirmation == Confirmation::Exit => {
+                    self.confirmation = None;
+                    EditorCommand::None
+                }
+                // Source Escape cancels EXIT, but leaves the editor from NEW.
+                KeyCode::Escape => {
+                    self.restart_document();
+                    EditorCommand::Back
+                }
+                _ => EditorCommand::None,
+            };
+        }
         if self.entry.is_some() {
             match key {
                 KeyCode::Escape => {
@@ -140,7 +176,7 @@ impl EditorUi {
                         self.metadata();
                     }
                 }
-                KeyCode::Backspace => {
+                KeyCode::Backspace | KeyCode::Delete => {
                     let entry = self.entry.as_mut().unwrap();
                     if entry.replace {
                         entry.value.clear();
@@ -172,6 +208,7 @@ impl EditorUi {
         }
         if control {
             match key {
+                KeyCode::KeyN => self.confirm(Confirmation::New),
                 KeyCode::KeyS => {
                     return EditorCommand::Save {
                         name: self.name.clone(),
@@ -195,7 +232,7 @@ impl EditorUi {
             }
         } else {
             match key {
-                KeyCode::Escape => return EditorCommand::Back,
+                KeyCode::Escape => self.confirm(Confirmation::Exit),
                 KeyCode::F5 => return EditorCommand::Play(self.state.level.clone()),
                 KeyCode::ArrowLeft => self.pan[0] = self.pan[0].saturating_sub(1),
                 KeyCode::ArrowRight => self.pan[0] = (self.pan[0] + 1).min(LEVEL_WIDTH - COLS),
@@ -226,6 +263,37 @@ impl EditorUi {
             }
         }
         EditorCommand::None
+    }
+
+    fn confirm(&mut self, confirmation: Confirmation) {
+        self.cancel_pointer();
+        self.confirmation = Some(confirmation);
+        self.status.clear();
+    }
+
+    fn restart_document(&mut self) {
+        *self = Self::new();
+        self.state = EditorState::new(Level::default());
+        self.begin(Field::Name, String::new());
+    }
+
+    fn complete_confirmation(&mut self) -> EditorCommand {
+        match self.confirmation {
+            Some(Confirmation::Exit) => {
+                self.restart_document();
+                EditorCommand::Back
+            }
+            Some(Confirmation::New) => {
+                self.restart_document();
+                EditorCommand::None
+            }
+            None => EditorCommand::None,
+        }
+    }
+
+    /// Only the host's successful persistence result may finish a Y response.
+    pub fn saved(&mut self) -> EditorCommand {
+        self.complete_confirmation()
     }
 
     fn begin(&mut self, field: Field, value: String) {
@@ -345,7 +413,24 @@ impl EditorUi {
     }
 
     pub fn pointer(&mut self, x: f32, y: f32, left: bool, right: bool) -> EditorCommand {
-        if self.entry.is_some() || !x.is_finite() || !y.is_finite() {
+        let pressed = left && !self.pointer_left;
+        let released = !left && self.pointer_left;
+        self.pointer_left = left;
+        if self.confirmation.is_some() || self.entry.is_some() || !x.is_finite() || !y.is_finite() {
+            return EditorCommand::None;
+        }
+        let over_new = (280.0..317.0).contains(&x) && (10.0..23.0).contains(&y);
+        if pressed && over_new {
+            self.new_pressed = true;
+        } else if !over_new {
+            self.new_pressed = false;
+        }
+        if released && self.new_pressed {
+            self.confirm(Confirmation::New);
+            return EditorCommand::None;
+        }
+        if over_new {
+            self.stroke = None;
             return EditorCommand::None;
         }
         if (0.0..240.0).contains(&x) && (MAP_Y..204.0).contains(&y) {
@@ -427,6 +512,9 @@ impl EditorUi {
             0.5,
             WHITE,
         );
+        text(quads, atlas, "CTRL N NEW", 224.0, 13.0, 0.5, WHITE);
+        rect(quads, [280.0, 10.0, 37.0, 13.0], [0.15, 0.15, 0.16, 1.0]);
+        text(quads, atlas, "NEW", 289.0, 13.0, 0.75, GOLD);
         for sy in 0..ROWS {
             for sx in 0..COLS {
                 let x = sx as f32 * CELL;
@@ -480,7 +568,7 @@ impl EditorUi {
         text(
             quads,
             atlas,
-            "CTRL Z/Y UNDO/REDO  PGUP/DN TILE  ESC BACK",
+            "CTRL Z/Y UNDO/REDO  PGUP/DN TILE  ESC EXIT",
             3.0,
             218.0,
             0.5,
@@ -495,6 +583,23 @@ impl EditorUi {
             0.5,
             WHITE,
         );
+        if let Some(confirmation) = self.confirmation {
+            rect(quads, [6.0, 88.0, 308.0, 88.0], [0.02, 0.02, 0.03, 0.98]);
+            text(quads, atlas, "SAVE LEVEL? (Y/N)", 92.0, 103.0, 1.0, WHITE);
+            let escape = if confirmation == Confirmation::Exit {
+                "ESC CANCEL"
+            } else {
+                "ESC RETURN TO TITLE"
+            };
+            text(quads, atlas, escape, 72.0, 119.0, 0.75, WHITE);
+            let mut y = 134.0;
+            for (tile, warning) in [('@', "WARNING: NO ENTRANCE!"), ('X', "WARNING: NO EXIT!")] {
+                if !self.state.level.tiles.contains(&tile) {
+                    text(quads, atlas, warning, 72.0, y, 0.75, GOLD);
+                    y += 10.0;
+                }
+            }
+        }
         if let Some(entry) = &self.entry {
             rect(quads, [4.0, 70.0, 312.0, 94.0], [0.02, 0.02, 0.04, 1.0]);
             text(quads, atlas, entry.field.label(), 10.0, 78.0, 0.65, GOLD);
@@ -675,5 +780,110 @@ mod tests {
         ui.key(KeyCode::KeyJ, Some("jungle"), false);
         ui.key(KeyCode::Enter, None, false);
         assert_eq!(ui.state.level.music, "JUNGLE");
+    }
+    #[test]
+    fn source_exit_confirmation_blocks_edits_cancels_and_discards_with_ordinary_keys() {
+        let mut ui = EditorUi::new();
+        let original = ui.state.level.clone();
+        assert!(matches!(
+            ui.key(KeyCode::Escape, None, false),
+            EditorCommand::None
+        ));
+        ui.pointer(4., 40., true, false);
+        ui.pointer(4., 40., false, false);
+        ui.key(KeyCode::ArrowRight, None, false);
+        assert!(matches!(
+            ui.key(KeyCode::F5, None, false),
+            EditorCommand::None
+        ));
+        assert!(matches!(
+            ui.key(KeyCode::KeyS, None, true),
+            EditorCommand::None
+        ));
+        assert_eq!(ui.state.level, original);
+        assert_eq!(ui.pan[0], 0);
+        ui.key(KeyCode::Escape, None, false);
+        ui.pointer(4., 40., true, false);
+        ui.pointer(4., 40., false, false);
+        assert_eq!(ui.state.level.get_tile(0, 11), Some('1'));
+        ui.key(KeyCode::Escape, None, false);
+        assert!(matches!(
+            ui.key(KeyCode::KeyN, None, false),
+            EditorCommand::Back
+        ));
+        assert_eq!(
+            ui.state.level,
+            Level::default(),
+            "discarded room must not reappear on editor reopen"
+        );
+    }
+
+    #[test]
+    fn source_new_button_release_confirmation_and_escape_policy_are_preserved() {
+        let mut ui = EditorUi::new();
+        let original = ui.state.level.clone();
+        ui.pointer(290., 15., true, false);
+        // Releasing outside cancels the button, without opening a prompt.
+        ui.pointer(270., 15., false, false);
+        assert!(matches!(
+            ui.key(KeyCode::KeyS, None, true),
+            EditorCommand::Save { .. }
+        ));
+        ui.pointer(290., 15., true, false);
+        ui.pointer(290., 15., false, false);
+        ui.pointer(4., 40., true, false);
+        assert_eq!(
+            ui.state.level, original,
+            "modal must block pointer painting"
+        );
+        assert!(matches!(
+            ui.key(KeyCode::KeyN, None, false),
+            EditorCommand::None
+        ));
+        assert_eq!(ui.state.level, Level::default());
+        ui.key(KeyCode::KeyF, Some("fresh"), false);
+        ui.key(KeyCode::Enter, None, false);
+        ui.key(KeyCode::KeyN, None, true);
+        // The source Escape NEW branch leaves the editor; EXIT Escape cancels.
+        assert!(matches!(
+            ui.key(KeyCode::Escape, None, false),
+            EditorCommand::Back
+        ));
+    }
+
+    #[test]
+    fn delete_matches_backspace_for_name_metadata_sign_and_link_text() {
+        let mut ui = EditorUi::new();
+        ui.key(KeyCode::KeyN, None, false);
+        ui.key(KeyCode::KeyC, Some("Café🦇"), false);
+        ui.key(KeyCode::Delete, None, false);
+        ui.key(KeyCode::Backspace, None, false);
+        ui.key(KeyCode::Enter, None, false);
+        assert_eq!(ui.level_name(), "Caf.lvl");
+        ui.key(KeyCode::KeyM, None, false);
+        ui.key(KeyCode::KeyA, Some("Ada!"), false);
+        ui.key(KeyCode::Delete, None, false);
+        ui.key(KeyCode::Enter, None, false);
+        assert_eq!(ui.state.level.author, "Ada");
+        ui.state.set_tile(0, 11, 'I').unwrap();
+        ui.pointer(4., 40., false, false);
+        ui.key(KeyCode::KeyS, None, false);
+        ui.key(KeyCode::KeyH, Some("hello!"), false);
+        ui.key(KeyCode::Delete, None, false);
+        ui.key(KeyCode::Enter, None, false);
+        assert_eq!(ui.state.level.sign_message(0), "hello");
+        ui.state.set_tile(0, 11, 'X').unwrap();
+        ui.key(KeyCode::KeyL, None, false);
+        ui.key(KeyCode::KeyN, Some("next.lvl!"), false);
+        ui.key(KeyCode::Delete, None, false);
+        ui.key(KeyCode::Enter, None, false);
+        assert_eq!(ui.state.level.exit_target(0), "next.lvl");
+        ui.key(KeyCode::KeyN, None, false);
+        ui.key(KeyCode::KeyA, None, true);
+        ui.key(KeyCode::Delete, None, false);
+        ui.key(KeyCode::Delete, None, false);
+        ui.key(KeyCode::KeyN, Some("new"), false);
+        ui.key(KeyCode::Enter, None, false);
+        assert_eq!(ui.level_name(), "new.lvl");
     }
 }
