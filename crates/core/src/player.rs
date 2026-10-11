@@ -299,7 +299,11 @@ fn active_prelude(game: &mut Game) {
                         .world
                         .entities
                         .iter()
-                        .filter(|e| e.alive && crate::catalog::is_a(&e.object, "oDetritus"))
+                        .filter(|e| {
+                            e.alive
+                                && e.engine_active
+                                && crate::catalog::is_a(&e.object, "oDetritus")
+                        })
                         .count()
                         < 16
                 {

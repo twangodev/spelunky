@@ -1153,7 +1153,7 @@ pub(crate) fn create_flames(game: &mut Game, pos: Vec2, count: usize) {
             .world
             .entities
             .iter()
-            .filter(|e| e.alive && catalog::is_a(&e.object, "oDetritus"))
+            .filter(|e| e.alive && e.engine_active && catalog::is_a(&e.object, "oDetritus"))
             .count()
             < 16
         {
@@ -1187,7 +1187,9 @@ pub(crate) fn initialize_detritus(game: &mut Game, e: &mut Entity) {
             .entities
             .iter()
             .take_while(|other| other.id != e.id)
-            .filter(|other| other.alive && catalog::is_a(&other.object, "oDetritus"))
+            .filter(|other| {
+                other.alive && other.engine_active && catalog::is_a(&other.object, "oDetritus")
+            })
             .count()
             >= 32
         {
@@ -2983,6 +2985,73 @@ mod tests {
             assert_eq!(game.world.entity(id).unwrap().pos.y, 90.0);
             assert_eq!(game.world.entity(id).unwrap().value("life"), 52.0);
             assert_eq!(game.player.health, 4);
+        }
+    }
+}
+#[cfg(test)]
+mod particle_cap_membership_source_tests {
+    use super::*;
+    use crate::RulesPreset;
+
+    #[test]
+    fn script_blood16_uses_active_family_before_each_birth_and_preserves_rng() {
+        for (active, inactive) in [
+            (0, 0),
+            (15, 0),
+            (16, 0),
+            (0, 16),
+            (15, 16),
+            (16, 16),
+            (0, 32),
+        ] {
+            for bloodless in [false, true] {
+                let mut game = Game::shell(7, RulesPreset::Classic);
+                let ids: Vec<_> = (0..active + inactive)
+                    .map(|_| game.spawn("oBone", Vec2::new(560.0, 400.0)))
+                    .collect();
+                for &id in ids.iter().skip(active) {
+                    game.world.entity_mut(id).unwrap().engine_active = false;
+                }
+                let mut receiver = Entity::new(0, "oSnake", Vec2::new(80.0, 80.0));
+                receiver
+                    .data
+                    .insert("bloodless".into(), f64::from(bloodless));
+                let count = if bloodless {
+                    0
+                } else {
+                    3.min(16usize.saturating_sub(active))
+                };
+                let mut oracle = game.rng.clone();
+                let expected: Vec<_> = (0..count)
+                    .map(|_| {
+                        let velocity = Vec2::new(
+                            oracle.unit() * 4.0 - oracle.unit() * 4.0,
+                            -1.0 - oracle.unit() * 2.0,
+                        );
+                        let gravity = f64::from(1 + oracle.range(6)) * 0.1;
+                        (velocity, gravity)
+                    })
+                    .collect();
+                crate::enemies::create_blood(&mut game, &receiver, Vec2::new(88.0, 88.0), 3);
+                let actual: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oBlood")
+                    .collect();
+                assert_eq!(
+                    actual.len(),
+                    expected.len(),
+                    "active={active} inactive={inactive} bloodless={bloodless}"
+                );
+                for (blood, (velocity, gravity)) in actual.iter().zip(expected) {
+                    assert!(blood.alive && blood.engine_active);
+                    assert_eq!(blood.pos, Vec2::new(88.0, 88.0));
+                    assert_eq!(blood.vel, velocity);
+                    assert_eq!(blood.value("gravity"), gravity);
+                }
+                assert_eq!(game.rng.next_u64(), oracle.next_u64());
+            }
         }
     }
 }

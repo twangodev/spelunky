@@ -351,7 +351,7 @@ fn create_blood(game: &mut Game, e: &Entity, pos: Vec2, count: u32) {
             .world
             .entities
             .iter()
-            .filter(|p| p.alive && crate::catalog::is_a(&p.object, "oDetritus"))
+            .filter(|p| p.alive && p.engine_active && crate::catalog::is_a(&p.object, "oDetritus"))
             .count()
             < 16
         {

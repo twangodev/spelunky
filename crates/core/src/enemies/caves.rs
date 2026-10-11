@@ -385,7 +385,11 @@ fn blood(game: &mut Game, e: &Entity, pos: Vec2, count: usize) {
             .world
             .entities
             .iter()
-            .filter(|other| other.alive && crate::catalog::is_a(&other.object, "oDetritus"))
+            .filter(|other| {
+                other.alive
+                    && other.engine_active
+                    && crate::catalog::is_a(&other.object, "oDetritus")
+            })
             .count()
             < 16
         {
