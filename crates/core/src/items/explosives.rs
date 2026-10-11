@@ -433,14 +433,7 @@ pub fn use_rope(game: &mut Game, input: &InputFrame) {
         return;
     }
     let pos = game.player.pos;
-    let player_bounds = game.player.bounds();
-    if !input.down
-        && super::solid_edge(
-            &game.world,
-            Rect::new(player_bounds.x, player_bounds.y - 1.0, player_bounds.w, 1.0),
-            0,
-        )
-    {
+    if !input.down && crate::player::cached_col_top(&game.player) {
         return;
     }
     let mut throw_pos = pos;

@@ -15,6 +15,12 @@ fn value(p: &Player, key: &str, default: f64) -> f64 {
 fn set(p: &mut Player, key: &str, n: f64) {
     p.data.insert(key.into(), n);
 }
+/// The character controller samples this before movement; item actions read
+/// the same source variable later in oPlayer1's Step, without another query.
+pub(crate) fn cached_col_top(player: &Player) -> bool {
+    value(player, "colTop", 0.0) != 0.0
+}
+
 fn has(p: &Player, names: &[&str]) -> bool {
     names.iter().any(|name| p.has(name))
 }
@@ -815,6 +821,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let col_left = edge(w, p, Side::Left, 1.0);
     let col_right = edge(w, p, Side::Right, 1.0);
     let col_top = edge(w, p, Side::Top, 1.0);
+    set(p, "colTop", f64::from(col_top));
     let col_moveable_left = precise_line(w, edge_rect(p, Side::Left, 1.0, false), "oMoveableSolid");
     let col_moveable_right =
         precise_line(w, edge_rect(p, Side::Right, 1.0, false), "oMoveableSolid");
