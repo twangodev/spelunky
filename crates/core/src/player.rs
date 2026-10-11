@@ -1284,7 +1284,8 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     set(
         p,
         "collision_top",
-        if p.state == PlayerState::Falling {
+        // characterStepEvent600: incoming yVel, before acceleration/moveTo.
+        if p.vel.y > 0.0 && airborne(p.state) {
             -6.0
         } else {
             -8.0
@@ -3893,3 +3894,7 @@ mod tests {
 #[cfg(test)]
 #[path = "player/ledge_tests.rs"]
 mod ledge_tests;
+
+#[cfg(test)]
+#[path = "player/movement_top_tests.rs"]
+mod movement_top_tests;
