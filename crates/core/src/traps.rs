@@ -403,6 +403,7 @@ pub(crate) fn player_health_prelude(game: &mut Game) {
 pub(crate) fn player_hurt_enabled(game: &Game) -> bool {
     game.player.health >= -99
         && game.player.data.get("hidden").copied().unwrap_or(0.) == 0.
+        && game.player.data.get("visible").copied().unwrap_or(1.) != 0.
         && !game.player.is_exiting()
 }
 
