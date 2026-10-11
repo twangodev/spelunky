@@ -1512,8 +1512,17 @@ fn tick_rope(game: &mut Game, rope: &mut Entity) {
             rope.data.insert("gravity".into(), 0.6);
         }
         if super::lava_at(game, Rect::new(rope.pos.x, rope.pos.y - 5.0, 0.001, 0.001)) {
+            // instance_destroy retires this receiver without exiting its event.
+            // The child can still deploy rope; publishing must keep it dead.
             rope.alive = false;
-            return;
+            if let Some(stored) = game
+                .world
+                .entities
+                .iter_mut()
+                .find(|stored| stored.id == rope.id)
+            {
+                stored.alive = false;
+            }
         }
     }
     if rope.value("falling") == 0.0 {
@@ -1548,6 +1557,8 @@ fn tick_rope(game: &mut Game, rope: &mut Entity) {
                 rope.id,
             )
         {
+            rope.data.insert("falling".into(), 0.0);
+            rope.pos.y -= 8.0;
             rope.alive = false;
         } else {
             spawn_rope_part(game, "oRope", Vec2::new(rope.pos.x - 8.0, rope.pos.y));
@@ -1589,18 +1600,64 @@ fn tick_rope_burn(game: &mut Game, rope: &mut Entity) {
 fn tick_burning_flame(game: &mut Game, flame: &mut Entity) {
     flame.pos.y -= 1.0;
 
-    let near = Rect::new(flame.pos.x - 1.0, flame.pos.y - 8.0, 2.0, 16.0);
-    if solid_point(&game.world, flame.pos)
-        || !game.world.entities.iter().any(|rope| {
-            rope.alive && rope.object == "oRope" && near.intersects(rope.sprite_bounds())
+    crate::dispatcher::register_instances(game);
+    let ropes: Vec<_> = crate::dispatcher::descendant_instances(game, "oRope")
+        .into_iter()
+        .filter_map(|instance| match instance {
+            crate::dispatcher::Instance::Entity(id) => game
+                .world
+                .entity(id)
+                .filter(|rope| rope.engine_active)
+                .map(|rope| rope.id),
+            _ => None,
         })
+        .collect();
+    let first = Vec2::new(flame.pos.x - 1.0, flame.pos.y - 8.0);
+    let second = Vec2::new(flame.pos.x + 1.0, flame.pos.y + 8.0);
+    if rope_solid_rectangle(&game.world, flame.pos, flame.pos)
+        || !ropes
+            .iter()
+            .filter_map(|id| game.world.entity(*id))
+            .any(|rope| {
+                rope.collision_mask()
+                    .intersects_rectangle_bbox(first, second)
+            })
     {
+        // The following independent point query still runs after Destroy.
         flame.alive = false;
-        return;
+        if let Some(stored) = game
+            .world
+            .entities
+            .iter_mut()
+            .find(|stored| stored.id == flame.id)
+        {
+            stored.alive = false;
+        }
     }
-    if let Some(rope) = game.world.entities.iter_mut().find(|rope| {
-        rope.alive && rope.object == "oRope" && rope.sprite_bounds().contains(flame.pos)
-    }) {
+    let nearest = ropes
+        .iter()
+        .filter_map(|id| game.world.entity(*id))
+        .any(|rope| {
+            rope.collision_mask()
+                .intersects_rectangle_bbox(flame.pos, flame.pos)
+        })
+        .then(|| {
+            ropes
+                .into_iter()
+                .filter_map(|id| game.world.entity(id))
+                .fold(None, |nearest: Option<&Entity>, rope| {
+                    if nearest.is_none_or(|current| {
+                        rope.pos.distance(flame.pos) < current.pos.distance(flame.pos)
+                    }) {
+                        Some(rope)
+                    } else {
+                        nearest
+                    }
+                })
+                .map(|rope| rope.id)
+        })
+        .flatten();
+    if let Some(rope) = nearest.and_then(|id| game.world.entity_mut(id)) {
         rope.data.insert("burn_timer".into(), 1.0);
     }
 }
@@ -5623,3 +5680,49 @@ mod player_explosion_blood_contract_tests;
 #[cfg(test)]
 #[path = "firefrog_bomb_own_step_tests.rs"]
 mod firefrog_bomb_own_step_tests;
+
+#[cfg(test)]
+mod rope_own_termination_state_tests {
+    use super::*;
+
+    #[test]
+    fn falling_bottom_or_count_termination_publishes_source_retired_state() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for bottom in [false, true] {
+                let mut game = Game::shell(7, rules);
+                let id = game.spawn("oRopeThrow", Vec2::new(80.0, 80.0));
+                // Deliberate callback-state fixture, not a natural input route.
+                let rope = game.world.entity_mut(id).unwrap();
+                rope.data.insert("falling".into(), 1.0);
+                rope.data
+                    .insert("fall_count".into(), if bottom { 0.0 } else { 16.0 });
+                if bottom {
+                    game.spawn("oHardBlock", Vec2::new(80.0, 92.0));
+                }
+                let next_id = game.world.next_id;
+                step_instance(&mut game, id);
+                let retired = game
+                    .world
+                    .entities
+                    .iter()
+                    .find(|entity| entity.id == id)
+                    .unwrap();
+                assert!(!retired.alive);
+                assert!(game.world.entity(id).is_none());
+                assert_eq!(retired.value("falling"), 0.0);
+                assert_eq!(retired.value("fall_count"), if bottom { 1.0 } else { 17.0 });
+                assert_eq!(retired.pos, Vec2::new(80.0, 80.0));
+                assert_eq!(
+                    game.world.next_id, next_id,
+                    "terminating branch creates no segment"
+                );
+                assert!(
+                    game.world
+                        .entities
+                        .iter()
+                        .all(|entity| !matches!(entity.object.as_str(), "oRope" | "oRopeTop"))
+                );
+            }
+        }
+    }
+}
