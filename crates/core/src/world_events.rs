@@ -535,7 +535,14 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         }
         "oPsychicCreateP" | "oPsychicCreate2" => psychic_create(game, &mut e),
         "oIceBottom" => ice_bottom(game, &mut e),
-        "oFrozenCaveman" => frozen_caveman(game, &mut e),
+        "oFrozenCaveman" => {
+            if !point_family(game, e.pos, "oIce") {
+                destroy_frozen_caveman(game, id);
+            }
+            // The shared Destroy callback owns the stored receiver, including
+            // its retirement before the synchronous Caveman Create.
+            return;
+        }
         "oBlood" | "oBone" => detritus(game, &mut e),
         "oFlame" => flame(game, &mut e),
         "oLava" => {
@@ -1029,16 +1036,26 @@ fn ice_bottom(game: &mut Game, e: &mut Entity) {
     }
 }
 
-fn frozen_caveman(game: &mut Game, e: &mut Entity) {
-    if point_family(game, e.pos, "oIce") {
+/// oFrozenCaveman own Destroy is synchronous and runs only once. Its local
+/// cleanDeath is irrelevant: the source guards only global.cleanSolids.
+pub(crate) fn destroy_frozen_caveman(game: &mut Game, id: u64) {
+    let Some(stored) = game.world.entity_mut(id) else {
+        return;
+    };
+    if stored.value("destroy_done") != 0.0 {
         return;
     }
-    e.alive = false;
+    stored.alive = false;
+    stored.data.insert("destroy_done".into(), 1.0);
+    let e = stored.clone();
     // Generated ice stores the frozen occupant on terrain metadata, whose
     // destruction adapter already owns its release. Explicit instances (e.g.
     // imported rooms) need the source Destroy event here instead.
     let adapted = game.world.entities.iter().any(|other| {
-        other.value("frozen_caveman") != 0.0
+        other.object == "oTerrainMetadata"
+            && other.value("frozen_caveman") != 0.0
+            && (other.value("frozen_caveman_released") != 0.0
+                || other.value("frozen_caveman_release_pending") != 0.0)
             && (other.pos.x / 16.0).floor() == (e.pos.x / 16.0).floor()
             && (other.pos.y / 16.0).floor() == (e.pos.y / 16.0).floor()
     });
@@ -1048,7 +1065,7 @@ fn frozen_caveman(game: &mut Game, e: &mut Entity) {
     {
         return;
     }
-    let id = game.world.spawn("oCaveman", e.pos);
+    let id = game.spawn("oCaveman", e.pos);
     let caveman = game.world.entity_mut(id).unwrap();
     caveman.state = 98;
     caveman.timer = caveman.value("stun_time") as u32;

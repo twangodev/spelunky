@@ -1899,6 +1899,18 @@ fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibili
     // Block/Xoc families additionally have source global-city loot branches.
     let stored_gold =
         source.data.contains_key("gold_chunks") || source.data.contains_key("gold_nuggets");
+    if source.value("frozen_caveman") != 0.0 && solid_outputs_enabled(game, &source) {
+        if let Some(metadata) = &metadata {
+            // Only this terrain adapter can promise a virtual occupant release.
+            // A merely adjacent/stale metadata instance cannot suppress an
+            // independently stored Ice/FrozenCaveman Destroy callback.
+            game.world
+                .entity_mut(metadata.id)
+                .unwrap()
+                .data
+                .insert("frozen_caveman_release_pending".into(), 1.0);
+        }
+    }
     solid_destroy_body(game, &source, !stored_gold);
     let outputs_enabled = solid_outputs_enabled(game, &source);
     if let Some(metadata) = metadata {
@@ -1972,6 +1984,16 @@ fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibili
             }
         }
         if metadata.value("frozen_caveman") != 0.0 && outputs_enabled {
+            // Keep the receipt on retired metadata: a remaining explicit
+            // representation must not release the same occupant on its Step.
+            let stored = game
+                .world
+                .entities
+                .iter_mut()
+                .find(|stored| stored.id == metadata.id)
+                .unwrap();
+            stored.data.remove("frozen_caveman_release_pending");
+            stored.data.insert("frozen_caveman_released".into(), 1.0);
             let id = game.spawn("oCaveman", Vec2::new(center.x - 8.0, center.y - 8.0));
             crate::enemies::init_entity(game.world.entity_mut(id).unwrap());
             let caveman = game.world.entity_mut(id).unwrap();
@@ -2135,6 +2157,9 @@ fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
             );
             game.spawn("oDrip", pos);
         }
+        if family == "oIce" {
+            destroy_ice_frozen_caveman(game, entity, center);
+        }
     }
     if matches!(family, "oDark" | "oAlienShip" | "oAlienShipFloor") {
         for object in ["oRubbleDark", "oRubbleDarkSmall", "oRubbleDarkSmall"] {
@@ -2266,6 +2291,37 @@ fn remove_xoc_fragment(world: &mut World, origin: Vec2) {
             && tile.pos == origin
     }) {
         tile.alive = false;
+    }
+}
+
+// oIce Destroy first tests collision_point(center,...,0,0), then selects
+// ONE instance_place using the Ice receiver translated to that same center.
+// The gate and precise pair query may select different FrozenCavemen.
+fn destroy_ice_frozen_caveman(game: &mut Game, source: &Entity, center: Vec2) {
+    use crate::dispatcher::Instance;
+    crate::dispatcher::register_instances(game);
+    let targets: Vec<_> = crate::dispatcher::descendant_instances(game, "oFrozenCaveman")
+        .into_iter()
+        .filter_map(|instance| match instance {
+            Instance::Entity(id) => game.world.entity(id),
+            _ => None,
+        })
+        .filter(|entity| entity.engine_active)
+        .collect();
+    if !targets
+        .iter()
+        .any(|entity| entity.mask_contains(center, CollisionPrecision::BoundingBox))
+    {
+        return;
+    }
+    let mut translated = source.clone();
+    translated.pos = center;
+    let target = targets
+        .into_iter()
+        .find(|entity| translated.event_intersects(entity))
+        .map(|entity| entity.id);
+    if let Some(id) = target {
+        crate::world_events::destroy_frozen_caveman(game, id);
     }
 }
 
