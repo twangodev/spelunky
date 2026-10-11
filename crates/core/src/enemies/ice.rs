@@ -1103,7 +1103,11 @@ pub(super) fn collision(
                 yeti_player_collision(game, e);
                 true
             }
-            "oYetiKing" | "oAlienBoss" => {
+            "oYetiKing" => {
+                king_player_collision(game, e);
+                true
+            }
+            "oAlienBoss" => {
                 giant_player_collision(game, e);
                 true
             }
@@ -1377,6 +1381,55 @@ fn yeti_player_collision(game: &mut Game, e: &mut Entity) {
             super::drop_from_throw(game);
             e.set_sprite("sYetiThrowL");
             return;
+        }
+    }
+}
+
+// oYetiKing replaces Enemy's Character collision. Its two direct Blood
+// Creates are independent of scrCreateBlood's cap and the receiver's bloodless.
+fn king_player_collision(game: &mut Game, e: &mut Entity) {
+    if (game.player.pos.x - (e.pos.x + 16.0)).abs() > 16.0 {
+        return;
+    }
+    if super::player_alive(game)
+        && matches!(
+            game.player.state,
+            PlayerState::Jumping | PlayerState::Falling
+        )
+        && game.player.pos.y < e.pos.y + 8.0
+        && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
+    {
+        game.player.vel.y = -6.0 - 0.2 * game.player.vel.y;
+        let damage =
+            (game.player.data.get("fall_timer").copied().unwrap_or(0.0) / 16.0).ceil() as i32;
+        if game.player.has("SpikeShoes") {
+            e.health -= 3 * damage;
+            game.spawn(
+                "oBlood",
+                Vec2::new(game.player.pos.x, game.player.pos.y + 8.0),
+            );
+        } else {
+            e.health -= damage;
+        }
+        game.player.data.insert("fall_timer".into(), 0.0);
+        super::set_counts_as_kill(e, true);
+        game.spawn("oBlood", Vec2::new(e.pos.x + 16.0, e.pos.y + 8.0));
+        game.sound("sndHit", e.pos);
+    } else if game.player.invincible == 0 {
+        game.player.data.insert("blink".into(), 30.0);
+        game.player.invincible = 30;
+        if game.player.pos.y < e.pos.y {
+            game.player.vel.y = -6.0;
+        }
+        game.player.vel.x = if game.player.pos.x < e.pos.x {
+            -6.0
+        } else {
+            6.0
+        };
+        if crate::statistics::is_real_level(game) {
+            hurt_player_cause(game, 2, crate::statistics::EnemyDeath::YetiKing);
+        } else {
+            game.sound("sndHurt", game.player.pos);
         }
     }
 }
