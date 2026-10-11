@@ -153,7 +153,9 @@ fn natural_positive_price_weapon_purchases_emit_literal_acquisition_and_keep_act
                 acquisitions[0].ticks, 120,
                 "script event precedes Pay timer override"
             );
-            assert_eq!(game.data.get("message_timer").copied(), Some(80.0));
+            // Pay assigns80 in NormalStep; bright LevelDraw consumes one afterward.
+            assert_eq!(game.presentation().data["source_message_draw_timer"], 80.0);
+            assert_eq!(game.data.get("message_timer").copied(), Some(79.0));
             let pickup_sounds: Vec<_> = game
                 .events
                 .iter()

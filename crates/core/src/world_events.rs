@@ -220,11 +220,67 @@ fn surface_fluid(game: &mut Game, id: Option<u64>, origin: Vec2, object: &str) {
     }
 }
 
-/// oScreen Begin Step runs before normal collision refreshes a message.
-pub(crate) fn begin_step(game: &mut Game) {
-    if let Some(timer) = game.data.get_mut("message_timer") {
-        *timer = (*timer - 1.0).max(0.0);
+/// Real receivers override the implicit room/controller adapter, including
+/// inactive receivers retained outside query-visible storage. Visibility only
+/// gates Draw; oScreen is invisible but still receives Begin Step.
+fn message_receivers(game: &Game, object: &str, draw: bool, implicit: bool) -> usize {
+    let mut actual = game
+        .world
+        .entities
+        .iter()
+        .chain(game.dispatcher.hidden_entities().iter())
+        .filter(|e| e.alive && catalog::is_a(&e.object, object))
+        .peekable();
+    if actual.peek().is_none() {
+        return usize::from(implicit);
     }
+    actual
+        .filter(|e| {
+            e.engine_active
+                && (!draw
+                    || e.data.get("visible").map_or_else(
+                        || catalog::object(&e.object).is_some_and(|o| o.visible),
+                        |v| *v != 0.0,
+                    ))
+        })
+        .count()
+}
+
+/// Returns the last positive pre-decrement timer drawn by this callback phase.
+fn consume_message(game: &mut Game, receivers: usize) -> f64 {
+    let mut drawn = 0.0;
+    for _ in 0..receivers {
+        if let Some(timer) = game.data.get_mut("message_timer") {
+            if *timer > 0.0 {
+                drawn = *timer;
+                *timer -= 1.0;
+            }
+        }
+    }
+    drawn
+}
+
+/// oScreen Begin Step draws and screen_refresh()s BEFORE normal Step producers.
+/// Pausing/focus freeze never calls Game.step. A dead Player still exists.
+pub(crate) fn begin_step(game: &mut Game) -> f64 {
+    let receivers = if game.is_level() && game.player.engine_active {
+        message_receivers(game, "oScreen", false, true)
+    } else {
+        0
+    };
+    consume_message(game, receivers)
+}
+
+/// oLevel Draw is a second consumption in bright rooms. It writes the offscreen
+/// surface after Screen Begin's refresh, and must run once per source Draw,
+/// never once per interpolated host render. Actual receivers need no Player.
+pub(crate) fn message_draw(game: &mut Game) -> f64 {
+    let receivers = if game.world.dark {
+        0
+    } else {
+        message_receivers(game, "oLevel", true, game.is_level())
+    };
+    consume_message(game, receivers)
 }
 
 pub(crate) fn prepare_tick(game: &mut Game) {
@@ -1086,7 +1142,6 @@ fn psychic_create(game: &mut Game, e: &mut Entity) {
 }
 
 fn sign(game: &mut Game, e: &mut Entity) {
-    let remaining = (e.value("message_cooldown_until") - game.tick as f64).max(0.0);
     let mask = e.sprite_bounds();
     if !mask.intersects(game.player.sprite_bounds())
         && !game.world.entities.iter().any(|character| {
@@ -1099,25 +1154,13 @@ fn sign(game: &mut Game, e: &mut Entity) {
     }
     // The source collision refreshes the global display lifetime every tick.
     game.data.insert("message_timer".into(), 200.0);
-    let changed = game.data.get("message_sign_id").copied() != Some(e.id as f64);
-    game.data.insert("message_sign_id".into(), e.id as f64);
-    if remaining != 0.0 && !changed {
-        return;
-    }
-    let first = e.text.get("message").map(String::as_str).unwrap_or("");
-    let second = e.text.get("message2").map(String::as_str).unwrap_or("");
-    let message = [first, second]
-        .into_iter()
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n");
-    if !message.is_empty() || changed {
-        game.events.push(GameEvent::Message(message));
-        // Events notify the presentation once, rather than duplicating the same
-        // notification on every overlapping tick. Display lifetime still refreshes.
-        e.data
-            .insert("message_cooldown_until".into(), game.tick as f64 + 200.0);
-    }
+    // Collision assigns both globals EVERY time, including an empty first
+    // line and after another producer assigned a message earlier this tick.
+    game.events.push(GameEvent::Dialogue(crate::SourceMessage {
+        first: e.text.get("message").cloned().unwrap_or_default(),
+        second: e.text.get("message2").cloned().unwrap_or_default(),
+        ticks: 200,
+    }));
 }
 
 fn light(e: &mut Entity) {
@@ -1748,17 +1791,31 @@ mod tests {
         }
     }
     #[test]
-    fn sign_preserves_both_metadata_lines_and_bounds_and_cooldown() {
+    fn sign_preserves_both_metadata_lines_bounds_and_repeated_source_assignments() {
         let mut g = room();
         let id = g.world.spawn("oMsgSign", Vec2::new(32.0, 32.0));
         let sign = g.world.entity_mut(id).unwrap();
         sign.text.insert("message".into(), "FIRST".into());
         sign.text.insert("message2".into(), "SECOND".into());
         advance(&mut g);
-        assert_eq!(g.events, vec![GameEvent::Message("FIRST\nSECOND".into())]);
+        assert_eq!(
+            g.events,
+            vec![GameEvent::Dialogue(crate::SourceMessage {
+                first: "FIRST".into(),
+                second: "SECOND".into(),
+                ticks: 200
+            })]
+        );
         for _ in 0..199 {
             advance(&mut g);
-            assert!(g.events.is_empty());
+            assert_eq!(
+                g.events,
+                vec![GameEvent::Dialogue(crate::SourceMessage {
+                    first: "FIRST".into(),
+                    second: "SECOND".into(),
+                    ticks: 200,
+                })]
+            );
         }
         assert_eq!(g.data["message_timer"], 200.0);
         advance(&mut g);
@@ -3009,7 +3066,12 @@ mod tests {
             .insert("message".into(), "SPRITE EDGE".into());
         g.step(&InputFrame::default());
         assert!(
-            !g.events.contains(&GameEvent::Message("SPRITE EDGE".into())),
+            !g.events
+                .contains(&GameEvent::Dialogue(crate::SourceMessage {
+                    first: "SPRITE EDGE".into(),
+                    second: "".into(),
+                    ticks: 200
+                })),
             "first Collision uses Create scale +1 before the first Draw"
         );
         assert!(
@@ -3025,10 +3087,17 @@ mod tests {
         // The first Draw persisted the right-facing scale. The following
         // Collision can now reach the same sign without moving either actor.
         g.step(&InputFrame::default());
-        assert!(g.events.contains(&GameEvent::Message("SPRITE EDGE".into())));
+        assert!(
+            g.events
+                .contains(&GameEvent::Dialogue(crate::SourceMessage {
+                    first: "SPRITE EDGE".into(),
+                    second: "".into(),
+                    ticks: 200
+                }))
+        );
     }
     #[test]
-    fn switching_back_to_a_sign_replaces_current_message_before_cooldown() {
+    fn switching_signs_assigns_both_source_lines_on_every_collision() {
         let mut g = room();
         for (x, text) in [(32.0, "FIRST"), (80.0, "SECOND")] {
             let id = g.world.spawn("oMsgSign", Vec2::new(x, 32.0));
@@ -3039,13 +3108,34 @@ mod tests {
                 .insert("message".into(), text.into());
         }
         advance(&mut g);
-        assert_eq!(g.events, vec![GameEvent::Message("FIRST".into())]);
+        assert_eq!(
+            g.events,
+            vec![GameEvent::Dialogue(crate::SourceMessage {
+                first: "FIRST".into(),
+                second: "".into(),
+                ticks: 200
+            })]
+        );
         g.player.pos.x = 88.0;
         advance(&mut g);
-        assert_eq!(g.events, vec![GameEvent::Message("SECOND".into())]);
+        assert_eq!(
+            g.events,
+            vec![GameEvent::Dialogue(crate::SourceMessage {
+                first: "SECOND".into(),
+                second: "".into(),
+                ticks: 200
+            })]
+        );
         g.player.pos.x = 40.0;
         advance(&mut g);
-        assert_eq!(g.events, vec![GameEvent::Message("FIRST".into())]);
+        assert_eq!(
+            g.events,
+            vec![GameEvent::Dialogue(crate::SourceMessage {
+                first: "FIRST".into(),
+                second: "".into(),
+                ticks: 200
+            })]
+        );
     }
     #[test]
     fn room_clock_quantizes_detritus_without_using_lifetime_tick() {
@@ -3553,3 +3643,63 @@ mod grave_step_tests {
 #[cfg(test)]
 #[path = "world_events/detritus_source_contract_tests.rs"]
 mod detritus_source_contract_tests;
+
+#[cfg(test)]
+mod message_callback_gate_tests {
+    use super::*;
+    use crate::{Area, PlayerState, RulesPreset, World};
+    fn fixture() -> Game {
+        let mut game = Game::shell(29, RulesPreset::Classic);
+        game.world = World::new(20, 15, Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        game.data.insert("message_timer".into(), 20.);
+        game
+    }
+    #[test]
+    fn screen_begin_requires_level_and_query_visible_player_but_not_living_or_visible() {
+        let mut game = fixture();
+        game.player.state = PlayerState::Dead;
+        game.player.data.insert("visible".into(), 0.);
+        assert_eq!(begin_step(&mut game), 20.);
+        assert_eq!(game.data["message_timer"], 19.);
+        game.player.engine_active = false;
+        assert_eq!(begin_step(&mut game), 0.);
+        assert_eq!(game.data["message_timer"], 19.);
+        game.player.engine_active = true;
+        game.world.name = "rMoon".into();
+        assert_eq!(begin_step(&mut game), 0.);
+        assert_eq!(game.data["message_timer"], 19.);
+    }
+    #[test]
+    fn invisible_screen_receives_begin_but_inactive_screen_and_invisible_level_do_not() {
+        let mut game = fixture();
+        let screen = game.world.spawn("oScreen", Vec2::default());
+        game.world
+            .entity_mut(screen)
+            .unwrap()
+            .data
+            .insert("visible".into(), 0.);
+        assert_eq!(begin_step(&mut game), 20.);
+        game.world.entity_mut(screen).unwrap().engine_active = false;
+        assert_eq!(begin_step(&mut game), 0.);
+        let level = game.world.spawn("oLevel", Vec2::default());
+        game.world
+            .entity_mut(level)
+            .unwrap()
+            .data
+            .insert("visible".into(), 0.);
+        assert_eq!(message_draw(&mut game), 0.);
+        game.world
+            .entity_mut(level)
+            .unwrap()
+            .data
+            .insert("visible".into(), 1.);
+        // Actual oLevel Draw has neither isLevel nor Player existence guards.
+        game.world.name = "rMoon".into();
+        game.player.engine_active = false;
+        assert_eq!(message_draw(&mut game), 19.);
+        game.world.dark = true;
+        assert_eq!(message_draw(&mut game), 0.);
+        assert_eq!(game.data["message_timer"], 18.);
+    }
+}

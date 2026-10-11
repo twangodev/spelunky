@@ -2132,7 +2132,14 @@ fn hud_in_view(
         } else {
             format!(
                 "sCompass{}{direction}",
-                if game.data.get("message_timer").copied().unwrap_or(0.0) > 0.0 {
+                if game
+                    .data
+                    .get("source_message_begin_timer")
+                    .or_else(|| game.data.get("message_timer"))
+                    .copied()
+                    .unwrap_or(0.0)
+                    > 0.0
+                {
                     "Small"
                 } else {
                     ""

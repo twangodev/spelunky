@@ -1338,7 +1338,7 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
     game.tick += 1;
     game.level_tick += 1;
     game.dispatcher.phase = Phase::BeginStep;
-    crate::world_events::begin_step(game);
+    let message_begin_timer = crate::world_events::begin_step(game);
     for index in 0..12u8 {
         game.dispatcher.phase = Phase::Alarm(index);
         let mut last = i32::MIN;
@@ -1597,7 +1597,16 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
             }
         }
     }
+    let message_draw_timer = crate::world_events::message_draw(game);
     game.capture_draw_view();
+    // Presentation-only phase records preserve timer1's final visible frame.
+    // The authoritative global already contains both callback decrements.
+    if let Some(view) = game.draw_view.as_mut() {
+        view.data
+            .insert("source_message_begin_timer".into(), message_begin_timer);
+        view.data
+            .insert("source_message_draw_timer".into(), message_draw_timer);
+    }
     game.dispatcher.phase = Phase::Animation;
     let room_tick = game.level_tick;
     let order = game.dispatcher.active_order.clone();

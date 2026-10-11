@@ -202,9 +202,52 @@ struct App {
     message_until: f64,
     message_simulated: bool,
     source_message: Option<spelunky_core::SourceMessage>,
+    drawn_source_message: Option<spelunky_core::SourceMessage>,
     #[cfg(not(target_arch = "wasm32"))]
     epoch: std::time::Instant,
 }
+/// A source assignment replaces both global strings and their lifetime. Retire
+/// the modern wall-clock toast permanently instead of revealing it on expiry.
+fn replace_source_dialogue(
+    bare: &mut String,
+    until: &mut f64,
+    simulated: &mut bool,
+    logical: &mut Option<spelunky_core::SourceMessage>,
+    message: &spelunky_core::SourceMessage,
+) {
+    bare.clear();
+    *until = 0.0;
+    *simulated = true;
+    *logical = Some(message.clone());
+}
+
+/// Screen Begin's text predates this tick's producers in BOTH brightness modes.
+/// Retaining this immutable choice also freezes it during a manual pause.
+fn begin_source_message(
+    game: &Game,
+    previous: Option<&spelunky_core::SourceMessage>,
+) -> Option<spelunky_core::SourceMessage> {
+    game.presentation()
+        .data
+        .get("source_message_begin_timer")
+        .is_some_and(|timer| *timer > 0.0)
+        .then(|| previous.cloned())
+        .flatten()
+}
+
+/// A modern notice does not assign or clear either source global string.
+fn replace_host_toast(
+    bare: &mut String,
+    until: &mut f64,
+    simulated: &mut bool,
+    message: &str,
+    expiry: f64,
+) {
+    *bare = message.into();
+    *until = expiry;
+    *simulated = false;
+}
+
 impl App {
     fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
         let store = Store::load();
@@ -260,6 +303,7 @@ impl App {
             message_until: 0.,
             message_simulated: false,
             source_message: None,
+            drawn_source_message: None,
             #[cfg(not(target_arch = "wasm32"))]
             epoch: std::time::Instant::now(),
         }
@@ -319,10 +363,15 @@ impl App {
             .pause(!self.focused || self.occluded || matches!(screen, Screen::Pause));
     }
     fn toast(&mut self, message: impl Into<String>) {
-        self.message = message.into();
-        self.message_simulated = false;
-        self.source_message = None;
-        self.message_until = self.now() + 6.;
+        let expiry = self.now() + 6.;
+        let message = message.into();
+        replace_host_toast(
+            &mut self.message,
+            &mut self.message_until,
+            &mut self.message_simulated,
+            &message,
+            expiry,
+        );
     }
     fn snapshot_lifetime_stats(&mut self) {
         if let Some(game) = &self.game {
@@ -377,6 +426,7 @@ impl App {
         self.flush_source_music();
         self.snapshot_lifetime_stats();
         self.source_message = None;
+        self.drawn_source_message = None;
         let seed = wall_seed() ^ fold_seed_entropy(u128::from(self.now().to_bits()));
         let mut game = if tutorial {
             Game::tutorial_with_music(
@@ -404,6 +454,7 @@ impl App {
     fn start_from_hub(&mut self, tutorial: bool, level: u32) {
         self.snapshot_lifetime_stats();
         self.source_message = None;
+        self.drawn_source_message = None;
         if let Some(game) = &mut self.game {
             game.start_from_hub(tutorial, level);
             donation_ui::hydrate(game, &self.store.data.tunnel_remaining);
@@ -417,6 +468,7 @@ impl App {
     fn open_hub(&mut self, kind: spelunky_core::hub::HubKind) {
         self.snapshot_lifetime_stats();
         self.source_message = None;
+        self.drawn_source_message = None;
         if self.game.is_none() {
             self.start_game(false);
         }
@@ -538,6 +590,7 @@ impl App {
             Some(SourceHostControl::Editor | SourceHostControl::CustomLevels) => {
                 self.editor_play = false;
                 self.source_message = None;
+                self.drawn_source_message = None;
                 if let Some(game) = &mut self.game {
                     game.flags.remove("editor_test");
                     game.flags.insert("source_music_stopped".into());
@@ -791,6 +844,7 @@ impl App {
         self.flush_source_music();
         self.snapshot_lifetime_stats();
         self.source_message = None;
+        self.drawn_source_message = None;
         let Some(contents) = self.store.data.custom_levels.get(name) else {
             return;
         };
@@ -911,6 +965,7 @@ impl App {
                 self.flush_source_music();
                 self.snapshot_lifetime_stats();
                 self.source_message = None;
+                self.drawn_source_message = None;
                 let mut game = new_custom_game(
                     wall_seed(),
                     self.store.data.settings.rules,
@@ -1288,9 +1343,13 @@ impl App {
                 if let (Some(ui), Some(game)) = (&mut self.donation, &mut self.game) {
                     let paid = ui.tick(game, &input);
                     if paid > 0 {
-                        self.message = format!("THANKS FOR THE ${paid} DONATION!");
-                        self.message_simulated = false;
-                        self.message_until = now + 4.;
+                        replace_host_toast(
+                            &mut self.message,
+                            &mut self.message_until,
+                            &mut self.message_simulated,
+                            &format!("THANKS FOR THE ${paid} DONATION!"),
+                            now + 4.,
+                        );
                     }
                 }
             }
@@ -1301,6 +1360,7 @@ impl App {
                 let mut input = self.input.take_tick();
                 apply_cinematic_start(&mut input, &mut self.cinematic_action);
                 if let Some(game) = &mut self.game {
+                    let begin_message = self.source_message.clone();
                     game.down_to_run = self.store.data.settings.down_to_run;
                     consume_source_music(&mut self.audio, &mut self.source_music, game);
                     game.step(&input);
@@ -1320,34 +1380,29 @@ impl App {
                                 ((pos.x - game.camera.x) / 320. * 2. - 1.) as f32,
                             ),
                             GameEvent::Message(message) => {
-                                self.message = message.clone();
-                                self.message_until = now + 5.;
-                                self.message_simulated = game
-                                    .data
-                                    .get("message_timer")
-                                    .is_some_and(|timer| *timer > 0.);
-                                self.source_message = self.message_simulated.then(|| {
-                                    let (first, second) =
-                                        message.split_once('\n').unwrap_or((message, ""));
-                                    spelunky_core::SourceMessage {
-                                        first: first.into(),
-                                        second: second.into(),
-                                        ticks: game
-                                            .data
-                                            .get("message_timer")
-                                            .copied()
-                                            .unwrap_or(0.)
-                                            .max(0.)
-                                            as u32,
-                                    }
-                                });
+                                // Bare events are host notices, never source
+                                // assignments inferred from an unrelated timer.
+                                replace_host_toast(
+                                    &mut self.message,
+                                    &mut self.message_until,
+                                    &mut self.message_simulated,
+                                    message,
+                                    now + 5.,
+                                );
                             }
                             GameEvent::Dialogue(message) => {
-                                self.source_message = Some(message.clone());
+                                replace_source_dialogue(
+                                    &mut self.message,
+                                    &mut self.message_until,
+                                    &mut self.message_simulated,
+                                    &mut self.source_message,
+                                    message,
+                                );
                             }
                             _ => {}
                         }
                     }
+                    self.drawn_source_message = begin_source_message(game, begin_message.as_ref());
                 }
                 if self.finish_cinematic() {
                     break;
@@ -1888,16 +1943,10 @@ impl App {
         } else {
             self.now() < self.message_until
         };
-        let source_visible = self.source_message.as_ref().is_some_and(|_| {
-            self.screen == Screen::Playing
-                && self.game.as_ref().is_some_and(|game| {
-                    game.data
-                        .get("message_timer")
-                        .is_some_and(|timer| *timer > 0.)
-                })
-        });
+        let source_visible = matches!(self.screen, Screen::Playing | Screen::Pause)
+            && self.drawn_source_message.is_some();
         if source_visible {
-            let message = self.source_message.as_ref().unwrap();
+            let message = self.drawn_source_message.as_ref().unwrap();
             let pay = self.input.action_label("pay");
             scene::source_message(
                 &mut quads,
@@ -1963,10 +2012,10 @@ impl App {
             self.viewport(),
             self.store.data.settings.pixel_snap,
         );
-        snapshot["sourceMessage"] = self.source_message.as_ref().map(|message| {
+        snapshot["sourceMessage"] = self.drawn_source_message.as_ref().map(|message| {
             serde_json::json!({
                 "first": message.first, "second": message.second,
-                "timer": self.game.as_ref().and_then(|game| game.data.get("message_timer")).copied().unwrap_or(0.),
+                "timer": self.game.as_ref().and_then(|game| game.presentation().data.get("source_message_begin_timer")).copied().unwrap_or(0.),
             })
         }).unwrap_or(serde_json::Value::Null);
         if let Ok(value) = js_sys::JSON::parse(&snapshot.to_string()) {
@@ -6009,3 +6058,239 @@ mod tests {
 #[cfg(test)]
 #[path = "moon_timeout_host_tests.rs"]
 mod moon_timeout_host_tests;
+
+#[cfg(test)]
+mod source_message_lifecycle_tests {
+    use super::*;
+    use spelunky_core::{InputFrame, RulesPreset, SourceMessage, Vec2, World};
+    #[test]
+    fn dialogue_permanently_retires_live_wall_clock_toast_and_both_old_lines() {
+        let mut bare = "OLD MODERN TOAST".to_string();
+        let mut until = 10_000.;
+        let mut simulated = false;
+        let mut logical = Some(SourceMessage {
+            first: "OLD SOURCE".into(),
+            second: "OLD SECOND".into(),
+            ticks: 200,
+        });
+        let incoming = SourceMessage {
+            first: "I'M OUT OF ARROWS!".into(),
+            second: String::new(),
+            ticks: 80,
+        };
+        replace_source_dialogue(
+            &mut bare,
+            &mut until,
+            &mut simulated,
+            &mut logical,
+            &incoming,
+        );
+        assert!(bare.is_empty());
+        assert_eq!(until, 0.);
+        assert!(simulated);
+        assert_eq!(logical.as_ref(), Some(&incoming));
+        // Expiry cannot expose any previous bare string, regardless of wall time.
+        for now in [0., 1., 9_999.] {
+            assert!(!(!bare.is_empty() && now < until));
+        }
+    }
+    #[test]
+    fn real_pickup_freezes_begin_text_final_frame_pause_and_inert_scene_reads() {
+        for dark in [false, true] {
+            let mut game = Game::shell(29, RulesPreset::Classic);
+            game.world = World::new(42, 18, Area::Mines, 1);
+            game.world.name = "rLevel".into();
+            game.world.dark = dark;
+            for x in 0..42 {
+                game.world.set_tile(x, 8, "oHardBlock");
+            }
+            game.player.pos = Vec2::new(72., 120.);
+            game.player.previous_pos = game.player.pos;
+            game.player.grounded = true;
+            game.player.state = spelunky_core::PlayerState::Standing;
+            let id = game.spawn("oSpectacles", Vec2::new(73., 120.));
+            let item = game.world.entity_mut(id).unwrap();
+            item.data.insert("cost".into(), 0.);
+            item.data.insert("forSale".into(), 0.);
+            game.step(&InputFrame {
+                down: true,
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            let message = game
+                .events
+                .iter()
+                .find_map(|e| {
+                    if let GameEvent::Dialogue(m) = e {
+                        Some(m.clone())
+                    } else {
+                        None
+                    }
+                })
+                .expect("REAL_PICKUP_DIALOGUE");
+            assert!(
+                begin_source_message(&game, None).is_none(),
+                "SOURCE_REFRESH_PRECEDES_NEW_PRODUCER"
+            );
+            let atlas = Atlas::load().unwrap();
+            for _ in 0..if dark { 120 } else { 60 } {
+                game.step(&InputFrame::default());
+                let frozen = begin_source_message(&game, Some(&message)).unwrap();
+                assert_eq!(frozen, message);
+            }
+            assert_eq!(game.data["message_timer"], 0.);
+            assert_eq!(game.presentation().data["source_message_begin_timer"], 1.);
+            let frozen = begin_source_message(&game, Some(&message)).unwrap();
+            let hash = game.state_hash();
+            let rng = game.rng.clone().next_u64();
+            let mut expected = Vec::new();
+            scene::source_message(&mut expected, &atlas, &frozen.first, &frozen.second, false);
+            assert!(!expected.is_empty());
+            // Pause/focus freezes this same captured frame; no Game.step/clock advance.
+            for alpha in [0., 0.25, 0.5, 0.75, 1.] {
+                let mut quads = scene::game_scene(&game, alpha, false, &atlas);
+                let count = quads.len();
+                scene::source_message(&mut quads, &atlas, &frozen.first, &frozen.second, false);
+                assert_eq!(quads.len() - count, expected.len());
+                for (actual, expected) in quads[count..].iter().zip(&expected) {
+                    assert_eq!(actual.rect, expected.rect);
+                    assert_eq!(actual.uv, expected.uv);
+                    assert_eq!(actual.color, expected.color);
+                    assert_eq!(actual.rotation, expected.rotation);
+                    assert_eq!(actual.pivot, expected.pivot);
+                    assert_eq!(actual.blend, expected.blend);
+                }
+            }
+            assert_eq!(game.state_hash(), hash);
+            assert_eq!(game.rng.clone().next_u64(), rng);
+            game.step(&InputFrame::default());
+            assert!(begin_source_message(&game, Some(&message)).is_none());
+        }
+    }
+}
+
+#[cfg(test)]
+mod typed_source_message_tests {
+    use super::*;
+    #[test]
+    fn modern_notice_during_source_lifetime_never_becomes_or_clears_source_dialogue() {
+        let source = spelunky_core::SourceMessage {
+            first: "SOURCE".into(),
+            second: "SECOND".into(),
+            ticks: 80,
+        };
+        let mut logical = Some(source.clone());
+        let mut bare = String::new();
+        let mut until = 0.;
+        let mut simulated = true;
+        replace_host_toast(&mut bare, &mut until, &mut simulated, "MODERN NOTICE", 15.);
+        assert_eq!(logical.as_ref(), Some(&source));
+        assert_eq!(bare, "MODERN NOTICE");
+        assert_eq!(until, 15.);
+        assert!(!simulated);
+        let replacement = spelunky_core::SourceMessage {
+            first: String::new(),
+            second: "NEW SECOND".into(),
+            ticks: 200,
+        };
+        replace_source_dialogue(
+            &mut bare,
+            &mut until,
+            &mut simulated,
+            &mut logical,
+            &replacement,
+        );
+        assert_eq!(logical.as_ref(), Some(&replacement));
+        assert!(bare.is_empty());
+        assert_eq!(until, 0.);
+        assert!(simulated);
+    }
+}
+
+#[cfg(test)]
+mod message_compass_phase_tests {
+    use super::*;
+    use spelunky_core::{InputFrame, RulesPreset, Vec2, World};
+    #[test]
+    fn natural_pickup_final_begin_message_uses_small_compass_after_global_expiry() {
+        let atlas = Atlas::load().unwrap();
+        let small = atlas.sprite("sCompassSmallLR", 0.).unwrap().uv;
+        let large = atlas.sprite("sCompassLR", 0.).unwrap().uv;
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for dark in [false, true] {
+                let mut game = Game::shell(29, rules);
+                game.world = World::new(42, 30, Area::Mines, 1);
+                game.world.name = "rLevel".into();
+                game.world.dark = dark;
+                game.world.exit = Vec2::new(600., 400.);
+                for x in 0..42 {
+                    game.world.set_tile(x, 8, "oHardBlock");
+                }
+                game.player.pos = Vec2::new(72., 120.);
+                game.player.previous_pos = game.player.pos;
+                game.player.grounded = true;
+                game.player.state = spelunky_core::PlayerState::Standing;
+                game.player.equipment.insert("Compass".into());
+                let id = game.spawn("oSpectacles", Vec2::new(73., 120.));
+                let item = game.world.entity_mut(id).unwrap();
+                item.data.insert("cost".into(), 0.);
+                item.data.insert("forSale".into(), 0.);
+                game.step(&InputFrame {
+                    down: true,
+                    attack: true,
+                    attack_pressed: true,
+                    ..Default::default()
+                });
+                let message = game
+                    .events
+                    .iter()
+                    .find_map(|e| {
+                        if let GameEvent::Dialogue(m) = e {
+                            Some(m.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .expect("REAL_PICKUP_DIALOGUE");
+                assert_eq!(game.presentation().data["source_message_begin_timer"], 0.);
+                assert!(begin_source_message(&game, None).is_none());
+                let first = scene::game_scene(&game, 0.5, false, &atlas);
+                let first_uses_large =
+                    first.iter().any(|q| q.uv == large) && !first.iter().any(|q| q.uv == small);
+                for _ in 0..if dark { 120 } else { 60 } {
+                    game.step(&InputFrame::default());
+                }
+                assert_eq!(game.data["message_timer"], 0.);
+                assert_eq!(game.presentation().data["source_message_begin_timer"], 1.);
+                let drawn =
+                    begin_source_message(&game, Some(&message)).expect("FINAL_BEGIN_TEXT_VISIBLE");
+                let live = game.state_hash();
+                let draw = game.presentation().state_hash();
+                let rng = game.rng.clone().next_u64();
+                for alpha in [0., 0.125, 0.5, 0.875, 1.] {
+                    let mut quads = scene::game_scene(&game, alpha, false, &atlas);
+                    assert_eq!(
+                        quads.iter().filter(|q| q.uv == small).count(),
+                        1,
+                        "FINAL_BEGIN_ONE_COMPASS_SMALL_AFTER_GLOBAL_ZERO"
+                    );
+                    assert!(!quads.iter().any(|q| q.uv == large));
+                    let count = quads.len();
+                    scene::source_message(&mut quads, &atlas, &drawn.first, &drawn.second, false);
+                    assert!(quads.len() > count, "REAL_FINAL_BEGIN_TEXT_QUADS");
+                }
+                assert!(first_uses_large, "BEGIN_ZERO_PRECEDES_PICKUP_PRODUCER");
+                assert_eq!(game.state_hash(), live);
+                assert_eq!(game.presentation().state_hash(), draw);
+                assert_eq!(game.rng.clone().next_u64(), rng);
+                game.step(&InputFrame::default());
+                assert_eq!(game.presentation().data["source_message_begin_timer"], 0.);
+                assert!(begin_source_message(&game, Some(&message)).is_none());
+                let quads = scene::game_scene(&game, 0.5, false, &atlas);
+                assert_eq!(quads.iter().filter(|q| q.uv == large).count(), 1);
+                assert!(!quads.iter().any(|q| q.uv == small));
+            }
+        }
+    }
+}

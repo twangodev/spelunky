@@ -305,7 +305,7 @@ fn natural_bow_unarmed_and_genuinely_exhausted_ammo_keep_frame_zero() {
                         && message.second.is_empty()
                         && message.ticks == 80))
         );
-        assert_eq!(game.data["message_timer"], 80.0);
+        assert_eq!(game.data["message_timer"], 79.0);
         assert_eq!(game.data["arrows"], 0.0);
         assert_eq!(game.player.data["bow_armed"], 0.0);
         assert_frame(&game, bow, 0.0);

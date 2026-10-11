@@ -45,6 +45,14 @@ fn empty_bow(rules: RulesPreset) -> (Game, SourceMessage) {
     // Spectacles is strictly nearer; no equal-distance nearest-family premise.
     let spectacles = game.spawn("oSpectacles", Vec2::new(73.0, 120.0));
     let bow = game.spawn("oBow", Vec2::new(77.0, 124.0));
+    // A source sign is authored left of the firing lane. After all six shots,
+    // ordinary walking refreshes live prior text without writing a timer.
+    let sign = game.spawn("oMsgSign", Vec2::new(40.0, 112.0));
+    let sign = game.world.entity_mut(sign).unwrap();
+    sign.text
+        .insert("message".into(), "READ BEFORE FIRING".into());
+    sign.text
+        .insert("message2".into(), "THIS LINE MUST BE CLEARED".into());
     for id in [spectacles, bow] {
         let e = game.world.entity_mut(id).unwrap();
         e.data.insert("cost".into(), 0.0);
@@ -140,6 +148,52 @@ fn empty_bow(rules: RulesPreset) -> (Game, SourceMessage) {
     assert_eq!(game.player.held, Some(bow));
     assert_eq!(game.state, spelunky_core::RunState::Playing);
     assert!(!game.player.is_stunned());
+    // Bright rooms have two source consumers; the original120-tick pickup
+    // can expire during weapon cooldowns. Refresh through a real collision.
+    let mut reached_sign = false;
+    for _ in 0..40 {
+        game.step(&InputFrame {
+            left: true,
+            ..Default::default()
+        });
+        if game.data.get("message_timer").copied().unwrap_or(0.0) >= 190.0 {
+            reached_sign = true;
+            break;
+        }
+    }
+    assert!(reached_sign, "FIXTURE_ORDINARY_WALK_REACHES_MESSAGE_SIGN");
+    for _ in 0..40 {
+        game.step(&InputFrame {
+            right: true,
+            ..Default::default()
+        });
+        if game.player.pos.x >= 72.0 {
+            break;
+        }
+    }
+    assert!(
+        game.player.pos.x >= 72.0,
+        "FIXTURE_ORDINARY_WALK_LEAVES_SIGN"
+    );
+    for _ in 0..200 {
+        let timer = game.data.get("message_timer").copied().unwrap_or(0.0);
+        if timer > 0.0 && timer < 80.0 {
+            break;
+        }
+        game.step(&InputFrame::default());
+    }
+    assert_eq!(game.player.held, Some(bow));
+    assert_eq!(
+        game.data["arrows"], 0.0,
+        "FIXTURE_NO_ARROW_RECOVERY_AFTER_SIGN"
+    );
+    assert_eq!(game.state, spelunky_core::RunState::Playing);
+    assert!(!game.player.is_stunned());
+    let previous = SourceMessage {
+        first: "READ BEFORE FIRING".into(),
+        second: "THIS LINE MUST BE CLEARED".into(),
+        ticks: 200,
+    };
     (game, previous)
 }
 
@@ -150,9 +204,10 @@ fn assert_empty_message(game: &Game) {
     assert_eq!(message.ticks, 80);
     assert_eq!(
         game.data.get("message_timer"),
-        Some(&80.0),
-        "BOW_EMPTY_REFRESHES_80"
+        Some(&79.0),
+        "BOW_EMPTY_SOURCE_80_THEN_BRIGHT_DRAW_CONSUMES_ONE"
     );
+    assert_eq!(game.presentation().data["source_message_draw_timer"], 80.0);
     assert!(
         !game
             .events
@@ -186,13 +241,15 @@ fn empty_bow_refreshes_live_source_message_and_clears_second_line() {
                 .any(|e| e.id >= first_birth && e.object == "oArrow")
         );
         game.step(&release());
-        assert_eq!(game.data["message_timer"], 79.0);
-        for _ in 0..78 {
+        assert_eq!(game.data["message_timer"], 77.0);
+        for _ in 0..38 {
             game.step(&InputFrame::default());
         }
         assert_eq!(game.data["message_timer"], 1.0);
         game.step(&InputFrame::default());
         assert_eq!(game.data["message_timer"], 0.0);
+        assert_eq!(game.presentation().data["source_message_begin_timer"], 1.0);
+        assert_eq!(game.presentation().data["source_message_draw_timer"], 0.0);
     }
 }
 
@@ -211,12 +268,14 @@ fn empty_bow_after_expiry_uses_simulation_timer_not_host_five_second_fallback() 
         game.step(&attack());
         assert_empty_message(&game);
         game.step(&release());
-        assert_eq!(game.data["message_timer"], 79.0);
-        for _ in 0..78 {
+        assert_eq!(game.data["message_timer"], 77.0);
+        for _ in 0..38 {
             game.step(&InputFrame::default());
         }
         assert_eq!(game.data["message_timer"], 1.0);
         game.step(&InputFrame::default());
         assert_eq!(game.data["message_timer"], 0.0);
+        assert_eq!(game.presentation().data["source_message_begin_timer"], 1.0);
+        assert_eq!(game.presentation().data["source_message_draw_timer"], 0.0);
     }
 }

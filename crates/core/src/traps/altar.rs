@@ -455,9 +455,12 @@ fn spawn_gift(game: &mut Game, object: &str, pos: Vec2) {
 
 fn punish(game: &mut Game) {
     let count = game.data.get("kali_punish").copied().unwrap_or(0.0) as u32;
-    game.events.push(GameEvent::Message(
-        "YOU DARE DEFILE MY ALTAR? I WILL PUNISH YOU!".into(),
-    ));
+    crate::enemies::shop_dialogue::say(
+        game,
+        "YOU DARE DEFILE MY ALTAR?",
+        "I WILL PUNISH YOU!",
+        200,
+    );
     crate::camera_shake::request(game, 10.0);
     *game.data.entry("favor".into()).or_default() -= 16.0;
     if count == 1 {
@@ -1197,7 +1200,9 @@ mod tests {
                 assert_eq!(game.data["favor"], 8.);
                 assert_eq!(game.data["kali_gift"], 1.);
                 assert_eq!(game.data["shake"], 10.);
-                assert_eq!(game.data["message_timer"], 200.);
+                // Sacrifice writes200 in enemy NormalStep, before bright Draw.
+                assert_eq!(game.presentation().data["source_message_draw_timer"], 200.);
+                assert_eq!(game.data["message_timer"], 199.);
                 assert!(game.events.iter().any(|event| matches!(event,
                     GameEvent::Dialogue(message) if message.first == "KALI ACCEPTS YOUR SACRIFICE!"
                         && message.second == "SHE BESTOWS A GIFT UPON YOU!" && message.ticks == 200

@@ -413,7 +413,15 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(last(&game).first, format!("WELCOME TO {name}'S BOMB SHOP!"));
-        assert_eq!(game.data["message_timer"], 200.0);
+        // NormalStep assigns200; only a bright room consumes at LevelDraw.
+        assert_eq!(
+            game.data["message_timer"],
+            if game.world.dark { 200.0 } else { 199.0 }
+        );
+        assert_eq!(
+            game.presentation().data["source_message_draw_timer"],
+            if game.world.dark { 0.0 } else { 200.0 }
+        );
         assert_eq!(game.rng.next_u64(), expected.next_u64());
         for _ in 0..20 {
             game.step(&InputFrame {
