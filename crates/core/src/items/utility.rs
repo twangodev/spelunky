@@ -170,18 +170,21 @@ pub fn use_utility(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
     // by the platform engine. In particular the standing sprite is 12px wide
     // while the normal movement rectangle is 10px wide.
     let player_bounds = game.player.sprite_bounds();
-    let destroyed = game.world.entities.iter_mut().find(|e| {
+    let receiver = game.world.entities.iter().find(|e| {
         e.alive
             && crate::catalog::is_a(&e.object, "oEnemy")
             && e.sprite_bounds().intersects(player_bounds)
-    }).map(|enemy| {
-        // The original directly destroys the first intersecting enemy, bypassing
-        // invulnerability, ordinary attack damage and death drops.
-        enemy.health -= 99;
-        enemy.alive = false;
-        enemy.id
-    });
-    if let Some(id) = destroyed {
+    }).cloned();
+    if let Some(receiver) = receiver {
+        // scrUseItem runs scrCreateBlood in the receiver's context, at the
+        // player's destination, before HP subtraction and synchronous Destroy.
+        crate::enemies::create_blood(game, &receiver, target, 3);
+        let id = receiver.id;
+        if let Some(enemy) = game.world.entity_mut(id) {
+            // Direct destruction bypasses invulnerability and normal death drops.
+            enemy.health -= 99;
+            enemy.alive = false;
+        }
         // scrUseItem finishes the receiver's Destroy before sndTeleport and
         // before the later Bomb Item Step can test enemyID for reattachment.
         crate::enemies::finish_actor_destroy(game, id);
@@ -906,5 +909,274 @@ mod tests {
                 .iter()
                 .all(|(id, _)| game.world.entity(*id).is_none())
         );
+    }
+}
+
+#[cfg(test)]
+mod telefrag_blood_source_tests {
+    use super::*;
+
+    // Same normal-input fixture as the sticky receiver Destroy contract. All
+    // authored placement/equipment is initial; held/attachment/timer/velocity
+    // are established by actual pickup, Bomb and walking inputs.
+    fn ready_telefrag(rules: RulesPreset) -> (Game, u64, u64, InputFrame) {
+        let mut g = Game::shell(0, rules);
+        g.world = World::new(30, 20, Area::Mines, 1);
+        g.world.name = "rLevel".into();
+        for x in 0..30 {
+            g.world.set_tile(x, 7, "oHardBlock");
+        }
+        g.world.set_tile(5, 5, "oHardBlock");
+        g.player.pos = Vec2::new(80.0, 104.0);
+        g.player.previous_pos = g.player.pos;
+        g.player.grounded = true;
+        g.player.equipment.insert("Paste".into());
+        let receiver = g.spawn("oBat", Vec2::new(84.0, 94.0));
+        let teleporter = g.spawn("oTeleporter", Vec2::new(80.0, 108.0));
+        g.step(&InputFrame::default());
+        g.step(&InputFrame {
+            down: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(g.player.held, Some(teleporter));
+        g.step(&InputFrame::default());
+        let first = g.world.next_id;
+        g.step(&InputFrame {
+            bomb_pressed: true,
+            ..Default::default()
+        });
+        let bomb = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.alive && e.id >= first && e.object == "oBomb")
+            .expect("ordinary Bomb input creates armed Bomb")
+            .id;
+        assert_eq!(
+            g.world.entity(bomb).unwrap().value("attached_id"),
+            receiver as f64
+        );
+        for _ in 0..60 {
+            if g.player.pos.x <= 24.0 {
+                break;
+            }
+            g.step(&InputFrame {
+                left: true,
+                ..Default::default()
+            });
+        }
+        assert!(g.player.pos.x <= 24.0);
+        assert_eq!(g.player.health, 4);
+        assert_eq!(
+            g.rng.clone().next_u64() % 5,
+            0,
+            "portable seed fixture teleports64px"
+        );
+        assert!(g.world.entity(receiver).is_some());
+        assert_eq!(
+            g.world.entity(bomb).unwrap().value("attached_id"),
+            receiver as f64
+        );
+        assert!(
+            !g.world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oBlood")
+        );
+        (
+            g,
+            receiver,
+            bomb,
+            InputFrame {
+                right: true,
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn actual_teleporter_pickup_input_creates_three_blood_before_sync_destroy() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let (mut g, receiver, bomb, activate) = ready_telefrag(rules);
+            let mut callback = g.clone();
+            crate::player::tick(&mut callback, &activate);
+            let origin = callback.player.pos;
+            let first = callback.world.next_id;
+            let before = callback.world.entity(receiver).unwrap().clone();
+            let mut oracle = callback.rng.clone();
+            // Literal scrUseItem: distance draw, six FlareSpark position draws;
+            // then scrCreateBlood: three synchronous oBlood Creates, each
+            // random4-random4, -1-random2, rand1..6*.1. No production blood helper.
+            let target = Vec2::new(origin.x + 16.0 * f64::from(4 + oracle.range(5)), origin.y);
+            let sparks: Vec<_> = (0..3)
+                .map(|_| {
+                    Vec2::new(
+                        origin.x - 4.0 + f64::from(oracle.range(9)),
+                        origin.y - 4.0 + f64::from(oracle.range(9)),
+                    )
+                })
+                .collect();
+            let blood: Vec<_> = (0..3)
+                .map(|_| {
+                    let velocity = Vec2::new(
+                        oracle.unit() * 4.0 - oracle.unit() * 4.0,
+                        -1.0 - oracle.unit() * 2.0,
+                    );
+                    (velocity, f64::from(1 + oracle.range(6)) * 0.1)
+                })
+                .collect();
+            crate::items::player_step(&mut callback, &activate);
+            assert_eq!(callback.player.pos, target);
+            for (i, pos) in sparks.iter().enumerate() {
+                let e = callback.world.entity(first + i as u64).unwrap();
+                assert_eq!(e.object, "oFlareSpark");
+                assert_eq!(e.pos, *pos);
+            }
+            let drops: Vec<_> = callback
+                .world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oBlood")
+                .collect();
+            assert_eq!(
+                drops.len(),
+                3,
+                "source telefrag emits Blood3, separately from ordinary death drops"
+            );
+            for (i, (velocity, gravity)) in blood.iter().enumerate() {
+                let e = drops[i];
+                assert_eq!(
+                    e.id,
+                    first + 3 + i as u64,
+                    "all sparks precede all synchronous Blood Creates"
+                );
+                assert_eq!(
+                    e.pos, target,
+                    "source uses player destination, not enemy origin"
+                );
+                assert_ne!(
+                    target, before.pos,
+                    "fixture distinguishes the two source origins"
+                );
+                assert_eq!(e.vel, *velocity);
+                assert_eq!(e.value("gravity"), *gravity);
+                assert_eq!(e.value("world_effect_initialized"), 1.0);
+                assert_eq!(e.value("life"), 60.0, "callback stops before Blood Step");
+            }
+            assert_eq!(
+                callback.rng.clone().next_u64(),
+                oracle.next_u64(),
+                "exact18 draws after teleport distance, no death-burst draws"
+            );
+            let retired = callback
+                .world
+                .entities
+                .iter()
+                .find(|e| e.id == receiver)
+                .unwrap();
+            assert!(!retired.alive);
+            assert_eq!(retired.health, before.health - 99);
+            assert_eq!(retired.value("blood_left"), before.value("blood_left"));
+            assert_eq!(retired.value("sticky_destroyed"), 1.0);
+            assert_eq!(
+                callback.world.entity(bomb).unwrap().value("attached_id"),
+                0.0,
+                "synchronous Destroy clears backlink before Bomb Step/End Step"
+            );
+            assert!(
+                matches!(callback.events.last(), Some(GameEvent::Sound { name, pos })
+                if name == "sndTeleport" && *pos == target)
+            );
+            // The actual full production dispatcher consumes the same ordinary
+            // activation. Blood may move during its later resource Step.
+            g.step(&activate);
+            let actual: Vec<_> = g
+                .world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oBlood")
+                .collect();
+            assert_eq!(actual.len(), 3);
+            assert_eq!(
+                actual.iter().map(|e| e.id).collect::<Vec<_>>(),
+                drops.iter().map(|e| e.id).collect::<Vec<_>>()
+            );
+            assert!(g.world.entity(receiver).is_none());
+            assert_eq!(g.world.entity(bomb).unwrap().value("attached_id"), 0.0);
+            assert_eq!(g.player.health, 4);
+        }
+    }
+
+    #[test]
+    fn telefrag_blood_obeys_receiver_guard_and_each_shared_cap_check() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let (g, receiver, bomb, activate) = ready_telefrag(rules);
+            // Supplemental callback-context controls author only the script's
+            // receiver flag/shared resource count. They do not claim a natural
+            // acquisition route for bloodless Bat or these resource preconditions.
+            for (bloodless, detritus, expected) in [
+                (false, 0, 3),
+                (false, 14, 2),
+                (false, 15, 1),
+                (false, 16, 0),
+                (true, 0, 0),
+            ] {
+                let mut callback = g.clone();
+                callback
+                    .world
+                    .entity_mut(receiver)
+                    .unwrap()
+                    .data
+                    .insert("bloodless".into(), f64::from(bloodless));
+                for _ in 0..detritus {
+                    callback.world.spawn("oBone", Vec2::new(200.0, 64.0));
+                }
+                crate::player::tick(&mut callback, &activate);
+                let mut oracle = callback.rng.clone();
+                oracle.range(5);
+                for _ in 0..6 {
+                    oracle.range(9);
+                }
+                for _ in 0..expected {
+                    oracle.unit();
+                    oracle.unit();
+                    oracle.unit();
+                    oracle.range(6);
+                }
+                crate::items::player_step(&mut callback, &activate);
+                assert_eq!(
+                    callback
+                        .world
+                        .entities
+                        .iter()
+                        .filter(|e| e.alive && e.object == "oBlood")
+                        .count(),
+                    expected
+                );
+                assert_eq!(
+                    callback.rng.clone().next_u64(),
+                    oracle.next_u64(),
+                    "suppressed creates consume no RNG"
+                );
+                assert_eq!(
+                    callback.world.entity(bomb).unwrap().value("attached_id"),
+                    0.0,
+                    "suppression must not skip synchronous receiver Destroy"
+                );
+                assert!(
+                    !callback
+                        .world
+                        .entities
+                        .iter()
+                        .find(|e| e.id == receiver)
+                        .unwrap()
+                        .alive
+                );
+            }
+        }
     }
 }
