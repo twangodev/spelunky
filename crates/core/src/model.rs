@@ -86,7 +86,16 @@ pub enum RulesPreset {
 pub struct InputFrame {
     pub left: bool,
     pub right: bool,
+    /// Independent device edges, ORed by the host like Classic's control scripts.
+    #[serde(default)]
+    pub left_released: bool,
+    #[serde(default)]
+    pub right_released: bool,
     pub up: bool,
+    #[serde(default)]
+    pub up_pressed: bool,
+    #[serde(default)]
+    pub down_pressed: bool,
     pub down: bool,
     pub run: bool,
     pub jump: bool,
@@ -94,6 +103,8 @@ pub struct InputFrame {
     pub jump_released: bool,
     pub attack: bool,
     pub attack_pressed: bool,
+    #[serde(default)]
+    pub attack_released: bool,
     #[serde(default)]
     pub start_pressed: bool,
     pub bomb_pressed: bool,
@@ -105,6 +116,11 @@ pub struct InputFrame {
 }
 impl InputFrame {
     pub fn clear_edges(&mut self) {
+        self.left_released = false;
+        self.right_released = false;
+        self.up_pressed = false;
+        self.down_pressed = false;
+        self.attack_released = false;
         self.jump_pressed = false;
         self.jump_released = false;
         self.attack_pressed = false;

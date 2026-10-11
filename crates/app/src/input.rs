@@ -265,6 +265,15 @@ impl InputState {
             (keyboard.has(action) && !self.keyboard_held.has(action))
                 || (self.gamepad_actions.has(action) && !self.gamepad_held.has(action))
         };
+        let released = |action| {
+            (!keyboard.has(action) && self.keyboard_held.has(action))
+                || (!self.gamepad_actions.has(action) && self.gamepad_held.has(action))
+        };
+        self.frame.left_released |= released(Action::Left);
+        self.frame.right_released |= released(Action::Right);
+        self.frame.up_pressed |= pressed(Action::Up);
+        self.frame.down_pressed |= pressed(Action::Down);
+        self.frame.attack_released |= released(Action::Attack);
         self.frame.jump_pressed |= pressed(Action::Jump);
         self.frame.jump_released |= (!keyboard.has(Action::Jump)
             && self.keyboard_held.has(Action::Jump))
@@ -549,6 +558,363 @@ fn parse_key(name: &str) -> Option<KeyCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mixed_source_floor() -> spelunky_core::Game {
+        use spelunky_core::{Area, Game, PlayerState, RulesPreset, Vec2, World};
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.world = World::new(40, 30, Area::Mines, 1);
+        for x in 0..40 {
+            game.world.set_tile(x, 10, "oBrick");
+        }
+        game.player.pos = Vec2::new(88.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        game
+    }
+
+    #[test]
+    fn mixed_source_horizontal_release_nudges_actual_step_while_other_device_holds() {
+        for (action, key, direction) in [
+            (Action::Left, KeyCode::ArrowLeft, -1.0),
+            (Action::Right, KeyCode::ArrowRight, 1.0),
+        ] {
+            for release_keyboard in [false, true] {
+                let mut game = mixed_source_floor();
+                let mut input = InputState::default();
+                let mut pad = Actions::default();
+                pad.set(action, true);
+                input.key(key, true, false);
+                input.accept_gamepads(pad, 0);
+                game.step(&input.take_tick());
+                assert_eq!(
+                    game.player.vel.x, 0.0,
+                    "source waits two held ticks before acceleration"
+                );
+                if release_keyboard {
+                    input.key(key, false, false);
+                } else {
+                    input.accept_gamepads(Actions::default(), 0);
+                }
+                let tick = input.take_tick();
+                assert!(tick.left || tick.right);
+                game.step(&tick);
+                // characterStepEvent release acceleration0.5, ground friction0.6.
+                assert!(
+                    (game.player.vel.x - direction * 0.3).abs() < 1e-10,
+                    "independent release missing: keyboard={release_keyboard} action={action:?} vel={:?}",
+                    game.player.vel
+                );
+                let next = input.take_tick();
+                assert!(!next.left_released && !next.right_released);
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_source_bow_release_fires_actual_step_while_other_device_still_attacks() {
+        for release_keyboard in [false, true] {
+            let mut game = mixed_source_floor();
+            let mut input = InputState::default();
+            let id = game.world.spawn("oBow", game.player.pos);
+            game.player.held = Some(id);
+            game.world.entity_mut(id).unwrap().held = true;
+            game.data.insert("arrows".into(), 3.0);
+            let mut pad = Actions::default();
+            pad.set(Action::Attack, true);
+            input.key(KeyCode::KeyX, true, false);
+            input.accept_gamepads(pad, 0);
+            game.step(&input.take_tick());
+            assert_eq!(game.player.data.get("bow_armed"), Some(&1.0));
+            let before = game.player.data["bow_strength"];
+            if release_keyboard {
+                input.key(KeyCode::KeyX, false, false);
+            } else {
+                input.accept_gamepads(Actions::default(), 0);
+            }
+            let tick = input.take_tick();
+            assert!(tick.attack);
+            game.step(&tick);
+            let arrows: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oArrow")
+                .collect();
+            assert_eq!(
+                arrows.len(),
+                1,
+                "source checkAttackReleased must fire while other device holds"
+            );
+            assert_eq!(game.data["arrows"], 2.0);
+            assert_eq!(game.player.data["bow_armed"], 0.0);
+            // Source charges0.2 before release, even in the same Step.
+            assert!((arrows[0].vel.x.abs() - (1.0 + before + 0.2)).abs() < 1e-10);
+            game.step(&input.take_tick());
+            assert_eq!(game.data["arrows"], 2.0, "held other device fired twice");
+        }
+    }
+
+    #[test]
+    fn mixed_source_donation_fresh_press_changes_selection_while_other_device_holds() {
+        for keyboard_first in [false, true] {
+            for (action, key, initial, first, second) in [
+                (Action::Up, KeyCode::ArrowUp, 0, 100, 200),
+                (Action::Down, KeyCode::ArrowDown, 500, 400, 300),
+            ] {
+                let mut game = mixed_source_floor();
+                game.world.level = 4;
+                game.state = spelunky_core::RunState::Transition;
+                game.player.money = 10_000;
+                let mut ui = crate::donation_ui::TransitionDonation::begin(&game).unwrap();
+                ui.amount = initial;
+                let mut input = InputState::default();
+                let mut pad = Actions::default();
+                pad.set(action, true);
+                if keyboard_first {
+                    input.key(key, true, false);
+                } else {
+                    input.accept_gamepads(pad, 0);
+                }
+                ui.tick(&mut game, &input.take_tick());
+                assert_eq!(ui.amount, first);
+                if keyboard_first {
+                    input.accept_gamepads(pad, 0);
+                } else {
+                    input.key(key, true, false);
+                }
+                ui.tick(&mut game, &input.take_tick());
+                assert_eq!(ui.amount, second, "fresh second-device press was lost");
+                ui.tick(&mut game, &input.take_tick());
+                assert_eq!(ui.amount, second, "held selection repeated too early");
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_source_opposing_donation_directions_do_not_invent_a_press_when_priority_changes() {
+        let mut game = mixed_source_floor();
+        game.world.level = 4;
+        game.state = spelunky_core::RunState::Transition;
+        game.player.money = 10_000;
+        let mut ui = crate::donation_ui::TransitionDonation::begin(&game).unwrap();
+        ui.amount = 500;
+        let mut input = InputState::default();
+        input.key(KeyCode::ArrowUp, true, false);
+        ui.tick(&mut game, &input.take_tick());
+        assert_eq!(ui.amount, 600);
+        let mut pad = Actions::default();
+        pad.set(Action::Down, true);
+        input.accept_gamepads(pad, 0);
+        ui.tick(&mut game, &input.take_tick());
+        assert_eq!(ui.amount, 500);
+        ui.tick(&mut game, &input.take_tick());
+        assert_eq!(ui.amount, 500);
+        input.key(KeyCode::ArrowUp, false, false);
+        ui.tick(&mut game, &input.take_tick());
+        assert_eq!(
+            ui.amount, 500,
+            "held down became a fake press after up released"
+        );
+    }
+
+    #[test]
+    fn mixed_source_donation_short_up_tap_clamps_before_held_down_repeat_at_either_cap() {
+        for (money, remaining) in [(1_000, 100_000), (5_000, 1_000)] {
+            let mut game = mixed_source_floor();
+            game.world.level = 4;
+            game.state = spelunky_core::RunState::Transition;
+            game.player.money = money;
+            game.data
+                .insert("tunnel1_remaining".into(), f64::from(remaining));
+            let mut ui = crate::donation_ui::TransitionDonation::begin(&game).unwrap();
+            let mut input = InputState::default();
+            // Reach the cap through real short keyboard presses, without
+            // injecting selection or held-repeat counters mid-sequence.
+            for _ in 0..10 {
+                input.key(KeyCode::ArrowUp, true, false);
+                input.key(KeyCode::ArrowUp, false, false);
+                ui.tick(&mut game, &input.take_tick());
+            }
+            assert_eq!(ui.amount, 1_000);
+            let mut pad = Actions::default();
+            pad.set(Action::Down, true);
+            input.accept_gamepads(pad, 0);
+            ui.tick(&mut game, &input.take_tick());
+            assert_eq!(ui.amount, 900);
+            for held_tick in 2..=21 {
+                input.key(KeyCode::ArrowUp, true, false);
+                input.key(KeyCode::ArrowUp, false, false);
+                let tick = input.take_tick();
+                assert!(tick.up_pressed && !tick.up && tick.down);
+                ui.tick(&mut game, &tick);
+                // Fresh Up caps at1000 before Down starts repeating on21.
+                assert_eq!(ui.amount, if held_tick == 21 { 900 } else { 1_000 });
+            }
+            assert_eq!(game.player.money, money);
+            assert_eq!(game.data["tunnel1_remaining"], f64::from(remaining));
+        }
+    }
+
+    #[test]
+    fn mixed_source_single_device_bow_release_cap_and_empty_ammo_paths_stay_valid() {
+        for keyboard in [false, true] {
+            for ammo in [0.0, 3.0] {
+                let mut game = mixed_source_floor();
+                let mut input = InputState::default();
+                let id = game.world.spawn("oBow", game.player.pos);
+                game.player.held = Some(id);
+                game.world.entity_mut(id).unwrap().held = true;
+                game.data.insert("arrows".into(), ammo);
+                let mut pad = Actions::default();
+                pad.set(Action::Attack, true);
+                if keyboard {
+                    input.key(KeyCode::KeyX, true, false);
+                } else {
+                    input.accept_gamepads(pad, 0);
+                }
+                for _ in 0..65 {
+                    game.step(&input.take_tick());
+                }
+                if ammo > 0.0 {
+                    assert_eq!(game.player.data["bow_strength"], 12.0);
+                }
+                if keyboard {
+                    input.key(KeyCode::KeyX, false, false);
+                } else {
+                    input.accept_gamepads(Actions::default(), 0);
+                }
+                game.step(&input.take_tick());
+                let arrows: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.alive && e.object == "oArrow")
+                    .collect();
+                assert_eq!(arrows.len(), usize::from(ammo > 0.0));
+                assert_eq!(
+                    game.data["arrows"],
+                    if ammo > 0.0 { ammo - 1.0 } else { 0.0 }
+                );
+                if ammo > 0.0 {
+                    assert!((arrows[0].vel.x.abs() - 13.0).abs() < 1e-10);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_source_short_press_repress_and_all_device_releases_are_tick_consumed_once() {
+        let mut input = InputState::default();
+        input.key(KeyCode::ArrowLeft, true, false);
+        input.take_tick();
+        input.key(KeyCode::ArrowLeft, false, false);
+        input.key(KeyCode::ArrowLeft, true, false);
+        input.key(KeyCode::ArrowDown, true, false);
+        input.key(KeyCode::ArrowDown, false, false);
+        input.key(KeyCode::KeyX, true, false);
+        input.key(KeyCode::KeyX, false, false);
+        let tick = input.take_tick();
+        assert!(
+            tick.left
+                && tick.left_released
+                && tick.down_pressed
+                && !tick.down
+                && tick.attack_pressed
+                && tick.attack_released
+                && !tick.attack
+        );
+        let next = input.take_tick();
+        assert!(next.left);
+        assert!(!next.left_released && !next.down_pressed && !next.attack_released);
+        input.key(KeyCode::ArrowLeft, false, false);
+        assert!(input.take_tick().left_released);
+        input.clear_edges();
+        assert!(!input.take_tick().left_released);
+    }
+
+    #[test]
+    fn mixed_source_pay_edge_remains_independent_and_confirmation_pays_once() {
+        let mut input = InputState::default();
+        let mut pad = Actions::default();
+        pad.set(Action::Pay, true);
+        input.key(KeyCode::KeyP, true, false);
+        assert!(input.take_tick().pay_pressed);
+        input.accept_gamepads(pad, 0);
+        assert!(input.take_tick().pay_pressed);
+        assert!(!input.take_tick().pay_pressed);
+        input.key(KeyCode::KeyP, false, false);
+        input.key(KeyCode::KeyP, true, false);
+        assert!(input.take_tick().pay_pressed);
+        let mut game = mixed_source_floor();
+        game.world.level = 4;
+        game.state = spelunky_core::RunState::Transition;
+        game.player.money = 500;
+        let mut ui = crate::donation_ui::TransitionDonation::begin(&game).unwrap();
+        input.key(KeyCode::ArrowUp, true, false);
+        ui.tick(&mut game, &input.take_tick());
+        assert_eq!(ui.amount, 100);
+        input.key(KeyCode::KeyP, false, false);
+        input.key(KeyCode::KeyP, true, false);
+        assert_eq!(ui.tick(&mut game, &input.take_tick()), 100);
+        assert_eq!(ui.tick(&mut game, &input.take_tick()), 0);
+        assert_eq!(game.player.money, 400);
+    }
+
+    #[test]
+    fn mixed_source_device_change_and_screen_clear_do_not_invent_new_edges() {
+        let mut input = InputState::default();
+        let mut pad = Actions::default();
+        for action in [
+            Action::Left,
+            Action::Right,
+            Action::Up,
+            Action::Down,
+            Action::Attack,
+        ] {
+            pad.set(action, true);
+        }
+        input.accept_gamepads(pad, 0);
+        input.take_tick();
+        input.clear_edges();
+        let tick = input.take_tick();
+        assert!(
+            !tick.left_released
+                && !tick.right_released
+                && !tick.up_pressed
+                && !tick.down_pressed
+                && !tick.attack_released
+        );
+        input.clear_gameplay();
+        input.accept_gamepads(pad, 0);
+        assert_eq!(input.take_tick(), InputFrame::default());
+        input.accept_gamepads(Actions::default(), 0);
+        assert_eq!(input.take_tick(), InputFrame::default());
+        input.accept_gamepads(pad, 0);
+        let tick = input.take_tick();
+        assert!(tick.up_pressed && tick.down_pressed && tick.attack_pressed);
+        input.accept_gamepads(Actions::default(), 0);
+        let tick = input.take_tick();
+        assert!(tick.left_released && tick.right_released && tick.attack_released);
+    }
+
+    #[test]
+    fn mixed_source_historical_serialized_frames_default_new_edges_to_false() {
+        let mut old = serde_json::to_value(InputFrame::default()).unwrap();
+        for name in [
+            "left_released",
+            "right_released",
+            "up_pressed",
+            "down_pressed",
+            "attack_released",
+        ] {
+            old.as_object_mut().unwrap().remove(name);
+        }
+        assert_eq!(
+            serde_json::from_value::<InputFrame>(old).unwrap(),
+            InputFrame::default()
+        );
+    }
 
     #[test]
     fn action_labels_use_validated_primary_bindings_and_show_unbound_actions() {

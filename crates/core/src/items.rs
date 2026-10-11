@@ -146,7 +146,7 @@ pub(crate) fn player_step(game: &mut Game, input: &InputFrame) {
     tick_whip(game);
     weapons::attack_step(game);
     player_actions(game, input);
-    weapons::player_step(game);
+    weapons::player_step_with_release(game, input.attack_released);
 }
 
 pub(crate) fn player_hurt(game: &mut Game) {

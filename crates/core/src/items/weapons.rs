@@ -762,6 +762,12 @@ pub fn pre_tick(game: &mut Game) {
 }
 
 pub fn player_step(game: &mut Game) {
+    player_step_with_release(game, false);
+}
+
+/// Source release is independent from aggregate held state in mixed-device play.
+/// The compatibility driver above retains held-only subsystem fixtures.
+pub(crate) fn player_step_with_release(game: &mut Game, attack_released: bool) {
     let bow_strength = game.player.data.get("bow_strength").copied().unwrap_or(0.0);
     for item in game.world.entities.iter_mut().filter(|e| e.alive && e.held) {
         let base = match item.object.as_str() {
@@ -815,11 +821,17 @@ pub fn player_step(game: &mut Game) {
         if !holding_bow {
             game.player.data.insert("bow_armed".into(), 0.0);
             game.player.data.insert("bow_strength".into(), 0.0);
-        } else if game.player.data.get("attack_held").copied().unwrap_or(0.0) != 0.0 {
-            let strength = game.player.data.entry("bow_strength".into()).or_default();
-            *strength = (*strength + 0.2).min(12.0);
         } else {
-            fire_bow(game);
+            let held = game.player.data.get("attack_held").copied().unwrap_or(0.0) != 0.0;
+            if held {
+                let strength = game.player.data.entry("bow_strength".into()).or_default();
+                *strength = (*strength + 0.2).min(12.0);
+            }
+            // oPlayer1 charges first, then evaluates checkAttackReleased().
+            // Held-only input producers retain their existing falling-level path.
+            if attack_released || !held {
+                fire_bow(game);
+            }
         }
     }
 }

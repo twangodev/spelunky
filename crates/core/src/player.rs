@@ -836,10 +836,14 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         0.0
     };
     if !matches!(p.state, PlayerState::Climbing | PlayerState::Hanging) {
-        if value(p, "previous_left", 0.0) > 0.0 && !input.left && p.vel.x.abs() < 0.1 {
+        if (input.left_released || (value(p, "previous_left", 0.0) > 0.0 && !input.left))
+            && p.vel.x.abs() < 0.1
+        {
             ax -= 0.5;
         }
-        if value(p, "previous_right", 0.0) > 0.0 && !input.right && p.vel.x.abs() < 0.1 {
+        if (input.right_released || (value(p, "previous_right", 0.0) > 0.0 && !input.right))
+            && p.vel.x.abs() < 0.1
+        {
             ax += 0.5;
         }
         if input.left && !input.right {

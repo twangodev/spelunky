@@ -9,6 +9,8 @@ pub struct TransitionDonation {
     pub amount: u32,
     up_held: u32,
     down_held: u32,
+    previous_up: bool,
+    previous_down: bool,
 }
 impl TransitionDonation {
     pub fn begin(game: &Game) -> Option<Self> {
@@ -19,6 +21,8 @@ impl TransitionDonation {
             amount: 0,
             up_held: 0,
             down_held: 0,
+            previous_up: false,
+            previous_down: false,
         })
     }
     pub fn remaining(&self, game: &Game) -> u32 {
@@ -40,10 +44,22 @@ impl TransitionDonation {
             self.amount = 0;
             return 0;
         };
+        // oTransition handles fresh press edges independently from oTunnelMan's
+        // held-repeat counters, including presses from a second device.
+        let up_pressed = input.up_pressed || (input.up && !self.previous_up);
+        let down_pressed = input.down_pressed || (input.down && !self.previous_down);
+        if up_pressed {
+            self.amount = self.amount.saturating_add(100);
+        } else if down_pressed {
+            self.amount = self.amount.saturating_sub(100);
+        }
+        // Source oTransition clamps its fresh selection before the later
+        // oTunnelMan held-repeat Step, including an opposing short tap.
+        self.amount = self.amount.min(game.player.money).min(offer.remaining);
         if input.up {
             self.up_held = self.up_held.saturating_add(1);
             self.down_held = 0;
-            if self.up_held == 1 || self.up_held > 20 {
+            if self.up_held > 20 {
                 self.amount =
                     self.amount
                         .saturating_add(if self.up_held > 100 { 1_000 } else { 100 });
@@ -51,7 +67,7 @@ impl TransitionDonation {
         } else if input.down {
             self.down_held = self.down_held.saturating_add(1);
             self.up_held = 0;
-            if self.down_held == 1 || self.down_held > 20 {
+            if self.down_held > 20 {
                 self.amount =
                     self.amount
                         .saturating_sub(if self.down_held > 100 { 1_000 } else { 100 });
@@ -60,6 +76,8 @@ impl TransitionDonation {
             self.up_held = 0;
             self.down_held = 0;
         }
+        self.previous_up = input.up;
+        self.previous_down = input.down;
         self.amount = self.amount.min(game.player.money).min(offer.remaining);
         if (input.attack_pressed || input.pay_pressed) && self.amount > 0 {
             let paid = progression::donate_to_tunnel(game, self.amount);
