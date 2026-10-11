@@ -572,7 +572,32 @@ fn treasure_at(
 }
 
 fn schedule(rng: &mut Rng, level: u32, first: u32, last: u32) -> bool {
-    level >= first && level <= last && (level == last || rng.chance(1, last - level + 1))
+    // scrInitLevel's two scheduling windows each have three levels. The
+    // Boolean level guards are eager; the else-if statements are conditional.
+    let first_roll = rng.chance(1, 3);
+    if level == first && first_roll {
+        true
+    } else {
+        let second_roll = rng.chance(1, 2);
+        (level == first + 1 && second_roll) || level == last
+    }
+}
+
+// Test-only observation of the existing Ice floor geometry adapter. This
+// proves its random/event ordering on natural layouts, not geometry parity.
+#[cfg(test)]
+struct IceFloorRollTrace {
+    origin: Vec2,
+    dark_support: bool,
+    spring_allowed: bool,
+    before: Rng,
+    after: Rng,
+    births: Vec<(String, Vec2)>,
+}
+#[cfg(test)]
+thread_local! {
+    static ICE_FLOOR_ROLL_TRACE: std::cell::RefCell<Option<Vec<IceFloorRollTrace>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 #[cfg(test)]
@@ -855,14 +880,22 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
     let cemetery = flag(flags, &["cemetery", "cemetary"]);
     let market = flag(flags, &["black_market", "blackMarket"]);
     let yeti = flag(flags, &["yeti_lair", "yetiLair"]);
-    let udjat = world.area == Area::Mines
-        && !flag(flags, &["made_udjat_eye", "madeUdjatEye"])
-        && (flag(flags, &["gen_udjat_eye", "genUdjatEye"]) || schedule(rng, world.level, 2, 4));
-    let need_market = world.area == Area::Jungle
-        && !market
-        && !flag(flags, &["made_market_entrance", "madeMarketEntrance"])
-        && (flag(flags, &["gen_market_entrance", "genMarketEntrance"])
-            || schedule(rng, world.level, 5, 7));
+    // Preserve the existing InitLevel adapter location. Source performs these
+    // decisions before EntityGen; full initialization timing is a separate gap.
+    // Only each made flag suppresses its entire statement-level chain.
+    let udjat = if flag(flags, &["made_udjat_eye", "madeUdjatEye"]) {
+        false
+    } else {
+        let scheduled = schedule(rng, world.level, 2, 4);
+        world.area == Area::Mines && (flag(flags, &["gen_udjat_eye", "genUdjatEye"]) || scheduled)
+    };
+    let need_market = if flag(flags, &["made_market_entrance", "madeMarketEntrance"]) {
+        false
+    } else {
+        let scheduled = schedule(rng, world.level, 5, 7);
+        world.area == Area::Jungle
+            && (flag(flags, &["gen_market_entrance", "genMarketEntrance"]) || scheduled)
+    };
     let mut state = TreasureState {
         udjat,
         chest_chance: 8,
@@ -1010,6 +1043,20 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
                     }
                 }
                 if floor && y > 1 && y < 37 && far && !occupied(world, x, y - 1) {
+                    #[cfg(test)]
+                    let observation = ICE_FLOOR_ROLL_TRACE.with(|trace| {
+                        trace.borrow().is_some().then(|| {
+                            (
+                                rng.clone(),
+                                world.entities.len(),
+                                tile == "oDark"
+                                    && !solid(world, x, y - 2)
+                                    && !solid(world, x, y - 3)
+                                    && !solid(world, x, y - 4)
+                                    && at(x, y).distance(world.exit) > 64.0,
+                            )
+                        })
+                    });
                     // Source :370 evaluates its roll before every pure guard.
                     let spring_roll = rng.chance(1, 10);
                     if spring_roll
@@ -1022,6 +1069,26 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
                         spawn(world, rng, "oSpringTrap", x, y - 1);
                     } else if rng.chance(1, 20) {
                         spawn(world, rng, "oYeti", x, y - 1);
+                    }
+                    #[cfg(test)]
+                    if let Some((before, first_birth, spring_allowed)) = observation {
+                        ICE_FLOOR_ROLL_TRACE.with(|trace| {
+                            trace
+                                .borrow_mut()
+                                .as_mut()
+                                .unwrap()
+                                .push(IceFloorRollTrace {
+                                    origin: Vec2::new(f64::from(x) * 16.0, f64::from(y) * 16.0),
+                                    dark_support: tile == "oDark",
+                                    spring_allowed,
+                                    before,
+                                    after: rng.clone(),
+                                    births: world.entities[first_birth..]
+                                        .iter()
+                                        .map(|e| (e.object.clone(), e.pos))
+                                        .collect(),
+                                });
+                        });
                     }
                 }
             }
@@ -1456,34 +1523,36 @@ mod tests {
     }
 
     #[test]
-    fn jungle_column_natural_dark_seed27_keeps_tiki_at_spear_banned_column() {
-        // Fixed from a bounded real generate(0..64, Jungle5, default flags)
-        // discovery. This is an unmodified natural layout/darkness selection,
+    fn jungle_column_natural_dark_seed86_keeps_tiki_at_spear_banned_column() {
+        // Fixed from a bounded real generate(0..512, Jungle5, default flags)
+        // discovery. Seed27 was the historical counterexample before the
+        // corrected InitLevel Udjat/Market draws shifted later population RNG.
+        // This is an unmodified natural layout/darkness selection,
         // not a guard-entry RNG state or a carved room fixture. scrEntityGen
-        // :236 permits Tiki at rawx480; only the separate :240 spear is banned.
+        // :236 permits Tiki at rawx496; only the separate :240 spear is banned.
         // The generated support satisfies the source side-clearance OR.
-        let world = super::super::generate(&mut Rng::new(27), 5, &BTreeSet::new());
+        let world = super::super::generate(&mut Rng::new(86), 5, &BTreeSet::new());
         assert!(world.dark, "darkness is selected naturally for this seed");
-        assert_eq!(world.tile(30, 22).unwrap().object, "oLush");
-        assert_eq!(world.tile(30, 23).unwrap().object, "oLush");
-        for y in [20, 21] {
-            assert!(!world.tiles_point(Vec2::new(480.0, f64::from(y * 16)), "oSolid"));
+        assert_eq!(world.tile(31, 31).unwrap().object, "oLush");
+        assert_eq!(world.tile(31, 32).unwrap().object, "oLush");
+        for y in [29, 30] {
+            assert!(!world.tiles_point(Vec2::new(496.0, f64::from(y * 16)), "oSolid"));
         }
         assert!(
-            !world.tile(29, 22).unwrap().is_solid() || !world.tile(31, 22).unwrap().is_solid(),
+            !world.tile(30, 31).unwrap().is_solid() || !world.tile(32, 31).unwrap().is_solid(),
             "source requires at least one open side"
         );
         assert!(
             world
                 .entities
                 .iter()
-                .any(|e| e.alive && e.object == "oTikiTorch" && e.pos == Vec2::new(480.0, 320.0)),
-            "source Tiki is not restricted by the spear-only rawx480 ban"
+                .any(|e| e.alive && e.object == "oTikiTorch" && e.pos == Vec2::new(496.0, 464.0)),
+            "source Tiki is not restricted by the spear-only rawx496 ban"
         );
         assert!(
             !world.entities.iter().any(|e| e.alive
                 && e.object == "oSpearTrapBottom"
-                && e.pos == Vec2::new(480.0, 352.0)),
+                && e.pos == Vec2::new(496.0, 496.0)),
             "successful Tiki stops the separate spear statement"
         );
     }
@@ -2180,11 +2249,10 @@ mod tests {
             // Literal :395 precedes :397. The shop suppresses every later
             // receiver statement, so this source-statement oracle is complete.
             assert_eq!(oracle.range(100), 0);
-            let flags = if low_graphics {
-                BTreeSet::from(["low_graphics".into()])
-            } else {
-                BTreeSet::new()
-            };
+            let mut flags = entity_gen_only_flags();
+            if low_graphics {
+                flags.insert("low_graphics".into());
+            }
             populate(&mut world, &mut actual, &flags);
             let statues: Vec<_> = world
                 .entities
@@ -2224,7 +2292,7 @@ mod tests {
             oracle.range(100);
         }
         TEMPLE_RECEIVER_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
-        populate(&mut world, &mut actual, &BTreeSet::new());
+        populate(&mut world, &mut actual, &entity_gen_only_flags());
         let visits = TEMPLE_RECEIVER_TRACE.with(|trace| trace.borrow_mut().take().unwrap());
         assert_eq!(
             visits,
@@ -2255,7 +2323,7 @@ mod tests {
         world.spawn("oEntrance", Vec2::new(16.0, 16.0));
         TEMPLE_RECEIVER_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
         POPULATION_PHASE_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
-        populate(&mut world, &mut Rng::new(seed), &BTreeSet::new());
+        populate(&mut world, &mut Rng::new(seed), &entity_gen_only_flags());
         let visits = TEMPLE_RECEIVER_TRACE.with(|trace| trace.borrow_mut().take().unwrap());
         let phases = POPULATION_PHASE_TRACE.with(|trace| trace.borrow_mut().take().unwrap());
         assert_eq!(world.tile(12, 10).unwrap().object, "");
@@ -2336,7 +2404,7 @@ mod tests {
             }
             world.spawn("oEntrance", Vec2::new(16.0, 16.0));
             world.fluid_dirty = false;
-            populate(&mut world, &mut Rng::new(seed), &BTreeSet::new());
+            populate(&mut world, &mut Rng::new(seed), &entity_gen_only_flags());
             if let Some(id) = support {
                 assert!(world.entity(id).is_none());
             } else {
@@ -2544,7 +2612,7 @@ mod tests {
         let mut oracle = actual.clone();
         oracle.range(100);
         oracle.range(40);
-        populate(&mut world, &mut actual, &BTreeSet::new());
+        populate(&mut world, &mut actual, &entity_gen_only_flags());
         assert!(!exists(&world, "oScarab"));
         assert_eq!(actual.next_u64(), oracle.next_u64());
     }
@@ -2605,7 +2673,7 @@ mod tests {
         let mut actual = Rng::new(29);
         let mut oracle = actual.clone();
         oracle.range(100); // only the unconditional statue statement
-        populate(&mut world, &mut actual, &BTreeSet::new());
+        populate(&mut world, &mut actual, &entity_gen_only_flags());
         assert!(!exists(&world, "oTombLord"));
         assert_eq!(
             world
@@ -2642,7 +2710,7 @@ mod tests {
         }
         let direction = oracle.range(4);
         TEMPLE_RECEIVER_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
-        populate(&mut world, &mut actual, &BTreeSet::new());
+        populate(&mut world, &mut actual, &entity_gen_only_flags());
         let visits = TEMPLE_RECEIVER_TRACE.with(|trace| trace.borrow_mut().take().unwrap());
         assert_eq!(visits, vec![(1, Vec2::new(160.0, 512.0))]);
         let smash = world
@@ -2673,7 +2741,7 @@ mod tests {
         let mut oracle = actual.clone();
         oracle.range(4);
         oracle.range(100);
-        populate(&mut world, &mut actual, &BTreeSet::new());
+        populate(&mut world, &mut actual, &entity_gen_only_flags());
         assert!(world.entity(old).is_some());
         assert_eq!(
             world
@@ -2709,7 +2777,7 @@ mod tests {
         for n in [100, 40, 100] {
             oracle.range(n);
         }
-        populate(&mut world, &mut actual, &BTreeSet::new());
+        populate(&mut world, &mut actual, &entity_gen_only_flags());
         assert!(world.entity(old).is_some());
         assert_eq!(
             world
@@ -2757,7 +2825,7 @@ mod tests {
             assert_eq!(source.range(40), 0); // eager TombLord :461, blocked
             assert_eq!(source.range(40), 0); // conditional Caveman :466
             TEMPLE_RNG_STARTS.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
-            populate(&mut world, &mut actual, &BTreeSet::new());
+            populate(&mut world, &mut actual, &entity_gen_only_flags());
             let starts = TEMPLE_RNG_STARTS.with(|trace| trace.borrow_mut().take().unwrap());
             let mut after_first_receiver = starts[1].1.clone();
             assert_eq!(after_first_receiver.next_u64(), source.next_u64());
@@ -2794,7 +2862,7 @@ mod tests {
         source.range(4);
         source.range(100); // blocked above suppresses every later first-receiver branch
         TEMPLE_RNG_STARTS.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
-        populate(&mut world, &mut actual, &BTreeSet::new());
+        populate(&mut world, &mut actual, &entity_gen_only_flags());
         assert!(!world.entities.iter().any(|entity| {
             entity.object == "oGoldDoor" && entity.pos == Vec2::new(160.0, 496.0)
         }));
@@ -2818,7 +2886,7 @@ mod tests {
             })
             .unwrap();
         let mut world = isolated_temple_support(14);
-        populate(&mut world, &mut Rng::new(seed), &BTreeSet::new());
+        populate(&mut world, &mut Rng::new(seed), &entity_gen_only_flags());
         let door = world
             .entities
             .iter()
@@ -2865,7 +2933,7 @@ mod tests {
             source.range(4);
             source.range(100); // initial terrain receiver, before shop gate
             source.range(100); // coincident dynamic receiver, before shop gate
-            populate(&mut world, &mut actual, &BTreeSet::new());
+            populate(&mut world, &mut actual, &entity_gen_only_flags());
             assert!(
                 world
                     .entities
@@ -2905,7 +2973,7 @@ mod tests {
         for _ in 0..3 {
             source.range(100);
         }
-        populate(&mut world, &mut actual, &BTreeSet::new());
+        populate(&mut world, &mut actual, &entity_gen_only_flags());
         let doors: Vec<_> = world
             .entities
             .iter()
@@ -3566,7 +3634,7 @@ mod tests {
         assert_eq!(source.range(30), 0); // UFO chance succeeds.
         let shift = source.range(2); // Synchronous UFO Create.
         assert_eq!(source.range(100), 0); // Following treasure Rock succeeds.
-        populate(&mut world, &mut actual, &BTreeSet::new());
+        populate(&mut world, &mut actual, &entity_gen_only_flags());
         let ufo = world
             .entities
             .iter()
@@ -3604,7 +3672,7 @@ mod tests {
         assert_ne!(source.range(100), 0);
         assert_eq!(source.range(40), 0);
         assert_eq!(source.range(100), 0);
-        populate(&mut world, &mut actual, &BTreeSet::new());
+        populate(&mut world, &mut actual, &entity_gen_only_flags());
         let enemy = world
             .entities
             .iter()
@@ -3887,6 +3955,229 @@ mod tests {
         assert_eq!(world.entities[0].pos, Vec2::new(80.0, 96.0));
         assert_eq!(world.entities[1].pos, Vec2::new(88.0, 108.0));
         assert_eq!(world.entities[2].pos, Vec2::new(88.0, 104.0));
+    }
+
+    // These unit fixtures enter the EntityGen phase with InitLevel's two
+    // secret chains already completed. Its scheduling has separate tests below.
+    fn entity_gen_only_flags() -> BTreeSet<String> {
+        BTreeSet::from(["made_udjat_eye".into(), "made_market_entrance".into()])
+    }
+
+    fn literal_init_schedule(rng: &mut Rng, level: u32, first: u32) -> bool {
+        let first_roll = 1 + rng.range(3);
+        if level == first && first_roll == 1 {
+            true
+        } else {
+            let second_roll = 1 + rng.range(2);
+            if level == first + 1 && second_roll == 1 {
+                true
+            } else {
+                level == first + 2
+            }
+        }
+    }
+
+    #[test]
+    fn eager_init_schedule_retains_repeated_level_guards_and_conditional_else_if() {
+        for first in [2, 5] {
+            for level in 1..=15 {
+                for seed in 0..64 {
+                    let mut actual = Rng::new(seed);
+                    let mut source = actual.clone();
+                    let expected = literal_init_schedule(&mut source, level, first);
+                    assert_eq!(
+                        schedule(&mut actual, level, first, first + 2),
+                        expected,
+                        "first={first} level={level} seed={seed}"
+                    );
+                    assert_eq!(
+                        actual.next_u64(),
+                        source.next_u64(),
+                        "first={first} level={level} seed={seed}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn eager_init_schedules_obey_made_flags_and_preserve_explicit_fixture_overrides() {
+        for level in [1, 2, 3, 4, 5, 6, 7, 9, 13, 14] {
+            for made_udjat in [false, true] {
+                for made_market in [false, true] {
+                    for forced in [false, true] {
+                        let area = Area::for_level(level);
+                        let mut world = World::new(42, 38, area, level);
+                        world.entrance = at(1, 1);
+                        world.exit = at(38, 30);
+                        let mut flags = BTreeSet::new();
+                        if made_udjat {
+                            flags.insert("made_udjat_eye".into());
+                        }
+                        if made_market {
+                            flags.insert("made_market_entrance".into());
+                        }
+                        if forced {
+                            // These are API fixture overrides, not source globals
+                            // surviving scrInitLevel's reset statements.
+                            flags.insert("gen_udjat_eye".into());
+                            flags.insert("gen_market_entrance".into());
+                            flags.insert("black_market".into());
+                        }
+                        let mut actual = Rng::new(0);
+                        let mut source = actual.clone();
+                        let udjat = if made_udjat {
+                            false
+                        } else {
+                            let scheduled = literal_init_schedule(&mut source, level, 2);
+                            area == Area::Mines && (scheduled || forced)
+                        };
+                        if !made_market {
+                            literal_init_schedule(&mut source, level, 5);
+                        }
+                        if area == Area::Mines {
+                            source.range(6);
+                        }
+                        if area == Area::Temple && level != 13 {
+                            source.range(4);
+                        }
+                        populate(&mut world, &mut actual, &flags);
+                        assert_eq!(
+                            exists(&world, "oLockedChest"),
+                            udjat,
+                            "level={level} made={made_udjat}/{made_market} forced={forced}"
+                        );
+                        assert_eq!(
+                            actual.next_u64(),
+                            source.next_u64(),
+                            "level={level} made={made_udjat}/{made_market} forced={forced}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn eager_market_schedule_reaches_actual_entrance_placement() {
+        // InitLevel :187-193 has only the made flag as its outer guard.
+        // Udjat is already completed here, isolating the Market chain's
+        // guard-entry RNG. SplitMix tapes are independent of placement:
+        // seed3 => range3=0; seed0 => range3=1, range2=0;
+        // seed1 => range3=2, range2=1. These are not GM8 PRNG claims.
+        for (level, seed, made, forced, black_market, expected) in [
+            (5, 3, false, false, false, true),
+            (5, 0, false, false, false, false),
+            (6, 0, false, false, false, true),
+            (6, 1, false, false, false, false),
+            (7, 1, false, false, false, true),
+            (8, 3, false, false, false, false),
+            (5, 3, false, false, true, true),
+            (5, 0, false, true, false, true),
+            (5, 3, true, true, false, false),
+        ] {
+            let mut source = Rng::new(seed);
+            let scheduled = if made {
+                false
+            } else {
+                literal_init_schedule(&mut source, level, 5)
+            };
+            assert_eq!(!made && (scheduled || forced), expected);
+
+            let mut world = World::new(12, 12, Area::Jungle, level);
+            world.entrance = at(6, 5);
+            world.exit = at(10, 10);
+            // One eligible stacked support makes the existing entrance
+            // placement adapter observable without changing its geometry.
+            // Both treasure calls are naturally near the authored entrance.
+            world.set_tile(6, 5, "oLush");
+            world.set_tile(6, 6, "oLush");
+            assert!(solid(&world, 6, 5) && solid(&world, 6, 6));
+            let mut flags = BTreeSet::from(["made_udjat_eye".into()]);
+            if made {
+                flags.insert("made_market_entrance".into());
+            }
+            if forced {
+                flags.insert("gen_market_entrance".into());
+            }
+            if black_market {
+                flags.insert("black_market".into());
+            }
+            populate(&mut world, &mut Rng::new(seed), &flags);
+            let entrances: Vec<_> = world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.object == "oXMarket")
+                .collect();
+            assert_eq!(
+                entrances.len(),
+                usize::from(expected),
+                "level={level} seed={seed} made={made} forced={forced} market={black_market}"
+            );
+            if expected {
+                assert_eq!(entrances[0].pos, Vec2::new(96.0, 80.0));
+            }
+        }
+    }
+
+    #[test]
+    fn eager_natural_ice_generation_uses_literal_spring_then_yeti_stream() {
+        let mut non_dark = 0;
+        let mut allowed = 0;
+        let mut disallowed = 0;
+        let mut springs = 0;
+        let mut yetis = 0;
+        for seed in [0, 1, 42] {
+            ICE_FLOOR_ROLL_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
+            let mut game = crate::Game::shell(seed, crate::RulesPreset::Classic);
+            game.start_from_hub(false, 9);
+            let traces = ICE_FLOOR_ROLL_TRACE.with(|trace| trace.borrow_mut().take().unwrap());
+            assert!(!traces.is_empty(), "generated seed={seed}");
+            for trace in traces {
+                non_dark += usize::from(!trace.dark_support);
+                allowed += usize::from(trace.spring_allowed);
+                disallowed += usize::from(!trace.spring_allowed);
+                let mut source = trace.before;
+                let spring_roll = 1 + source.range(10);
+                let object = if spring_roll == 1 && trace.spring_allowed {
+                    springs += 1;
+                    Some("oSpringTrap")
+                } else if 1 + source.range(20) == 1 {
+                    yetis += 1;
+                    Some("oYeti")
+                } else {
+                    None
+                };
+                let expected: Vec<_> = object
+                    .into_iter()
+                    .map(|object| {
+                        (
+                            object.to_owned(),
+                            Vec2::new(trace.origin.x, trace.origin.y - 16.0),
+                        )
+                    })
+                    .collect();
+                assert_eq!(
+                    trace.births, expected,
+                    "seed={seed} origin={:?}",
+                    trace.origin
+                );
+                let mut actual = trace.after;
+                assert_eq!(
+                    actual.next_u64(),
+                    source.next_u64(),
+                    "seed={seed} origin={:?}",
+                    trace.origin
+                );
+            }
+            assert_eq!(game.world.area, Area::Ice);
+            assert_eq!(game.player.health, 4);
+        }
+        assert!(non_dark > 0 && allowed > 0 && disallowed > 0);
+        assert!(
+            springs > 0 && yetis > 0,
+            "actual generation must cover both branch births"
+        );
     }
 
     #[test]
