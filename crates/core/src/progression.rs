@@ -161,6 +161,29 @@ pub(crate) fn initialize_level(game: &mut Game) {
         .insert("progression_level".into(), game.world.level as f64);
     game.flags.remove("ghost_exists");
     game.flags.remove("ghost_warning");
+    game.flags.remove("music_fade");
+    game.data.insert("music_fade_timer".into(), 0.0);
+    game.data.insert("music_frequency".into(), 44100.0);
+    let music = if game.flags.contains("custom") || game.flags.contains("custom_level") {
+        match game.data.get("custom_music").copied().unwrap_or(0.0) {
+            1.0 => "musLush",
+            2.0 => "musIce",
+            3.0 => "musTemple",
+            4.0 => "musBoss",
+            _ => "musCave",
+        }
+    } else {
+        match game.world.area {
+            Area::Mines => "musCave",
+            Area::Jungle => "musLush",
+            Area::Ice => "musIce",
+            Area::Temple => "musTemple",
+            Area::Boss => "musBoss",
+        }
+    };
+    if music != "musBoss" || game.player.data.get("active").copied().unwrap_or(1.0) != 0.0 {
+        game.set_music_frequency(music, 44100);
+    }
     game.flags.remove("udjat_blink");
     game.data.insert("udjat_blink_counter".into(), 0.);
     if game.world.dark {
@@ -372,6 +395,30 @@ pub(crate) fn gold_door_collision(game: &mut Game) {
     }
 }
 
+/// oLevel553 Step16 precedes camera and activation work.
+pub(crate) fn level_music_step(game: &mut Game) {
+    let timer = game.data.get("music_fade_timer").copied().unwrap_or(0.0);
+    if !game.flags.contains("music_fade") || timer >= 100.0 {
+        return;
+    }
+    if game.is_level() {
+        let music = match game.world.area {
+            Area::Jungle => Some("musLush"),
+            Area::Ice => Some("musIce"),
+            Area::Temple => Some("musTemple"),
+            Area::Boss if game.player.data.get("active").copied().unwrap_or(1.0) == 0.0 => None,
+            Area::Boss => Some("musBoss"),
+            Area::Mines => Some("musCave"),
+        };
+        if let Some(music) = music {
+            let hz = game.data.get("music_frequency").copied().unwrap_or(44100.0) - 100.0;
+            game.data.insert("music_frequency".into(), hz);
+            game.set_music_frequency(music, hz as u32);
+        }
+    }
+    game.data.insert("music_fade_timer".into(), timer + 1.0);
+}
+
 fn ghost(game: &mut Game) {
     // The level clock advances only while its player is alive. Dead world
     // ticks must not be reinterpreted as elapsed run time.
@@ -386,6 +433,7 @@ fn ghost(game: &mut Game) {
         return;
     }
     if elapsed > 120000. && game.flags.insert("ghost_warning".into()) {
+        game.flags.insert("music_fade".into());
         crate::enemies::shop_dialogue::say(
             game,
             "A CHILL RUNS UP YOUR SPINE...",

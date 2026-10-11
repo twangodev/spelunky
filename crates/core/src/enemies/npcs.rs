@@ -629,6 +629,7 @@ fn damsel(game: &mut Game, e: &mut Entity) {
     }
     if !e.held && e.vel.y > 2.0 && e.state != 2 {
         e.state = 2;
+        game.set_sound_pan("sndDamsel", 0.0);
         game.sound("sndDamsel", e.pos);
     }
     if e.held {
@@ -653,6 +654,14 @@ fn damsel(game: &mut Game, e: &mut Entity) {
                 } else {
                     "sDamselYellL"
                 });
+                let pan = if game.player.pos.x < e.pos.x {
+                    -1.0
+                } else if game.player.pos.x > e.pos.x {
+                    1.0
+                } else {
+                    0.0
+                };
+                game.set_sound_pan("sndDamsel", pan);
                 game.sound("sndDamsel", e.pos);
             }
         }

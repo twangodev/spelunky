@@ -408,6 +408,7 @@ fn fire_bow(game: &mut Game) {
     game.player.data.insert("bow_armed".into(), 0.0);
     game.player.data.insert("bow_strength".into(), 0.0);
     game.sound("sndArrowTrap", pos);
+    game.stop_sound("sndBowPull");
 }
 
 /// oArrow and oFlare explicitly inherit oItem Step before their own code.
@@ -910,7 +911,15 @@ pub(crate) fn player_step_with_release(game: &mut Game, attack_released: bool) {
             .held
             .and_then(|id| game.world.entity(id))
             .is_some_and(|e| e.object == "oBow");
+        let bow_strength = game.player.data.get("bow_strength").copied().unwrap_or(0.0);
         if !holding_bow {
+            // oPlayer1 Step1505: cancellation sound belongs to the charging gate.
+            if game.player.held.is_none()
+                && game.player.data.get("attack_held").copied().unwrap_or(0.0) != 0.0
+                && bow_strength < 12.0
+            {
+                game.stop_sound("sndBowPull");
+            }
             game.player.data.insert("bow_armed".into(), 0.0);
             game.player.data.insert("bow_strength".into(), 0.0);
         } else {
