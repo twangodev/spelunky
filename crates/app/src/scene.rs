@@ -899,6 +899,9 @@ pub fn game_scene_in_view(
                 player.sprite.as_str(),
                 "sPExit" | "sDamselExit" | "sTunnelExit"
             );
+        // characterDrawEvent's early back-jetpack branch bypasses redColor.
+        // Whipping uses the ordinary tinted character and side jetpack instead.
+        let back_jetpack = jetpack && climbing && player.attack_timer == 0;
         if (player.has("Cape") || player.has("cape"))
             && !game
                 .world
@@ -956,7 +959,7 @@ pub fn game_scene_in_view(
             );
             layers.push((900, u64::MAX - 2, canopy));
         }
-        if jetpack && !climbing {
+        if jetpack && !back_jetpack {
             sprite(
                 &mut layer,
                 atlas,
@@ -977,6 +980,13 @@ pub fn game_scene_in_view(
         } else {
             "sStandLeft"
         };
+        let red = player.data.get("red_color").copied().unwrap_or(0.0);
+        let color = if red > 0.0 && !back_jetpack {
+            let [r, g, b] = source_mask_rgb(200.0 + red, 0.0, 0.0);
+            [r as f32, g as f32, b as f32, 1.0]
+        } else {
+            WHITE
+        };
         sprite(
             &mut layer,
             atlas,
@@ -985,7 +995,7 @@ pub fn game_scene_in_view(
             x,
             y,
             player.facing > 0,
-            WHITE,
+            color,
         );
         if player.data.get("bow_armed").copied().unwrap_or(0.0) > 0.0 {
             let bomb = player.data.get("bow_bomb_armed").copied().unwrap_or(0.0) > 0.0;
@@ -1011,7 +1021,7 @@ pub fn game_scene_in_view(
                 WHITE,
             );
         }
-        if jetpack && climbing {
+        if back_jetpack {
             sprite(&mut layer, atlas, "sJetpackBack", 0.0, x, y, false, WHITE);
         }
         let depth = player.data.get("depth").copied().unwrap_or_else(|| {
@@ -2819,6 +2829,217 @@ mod tests {
                         );
                     }
                     assert_eq!(game.data.get("message_timer"), Some(&message));
+                }
+            }
+        }
+    }
+
+    // Use real synchronous Blood Create, its five-tick collectible alarm,
+    // movement and Player collision. Never assign red_color, red_toggle,
+    // collectible, particle velocity/age, or invoke the collision directly.
+    fn natural_kapala_flash(preset: RulesPreset) -> Game {
+        let mut game = adaptive_room();
+        game.rules = preset;
+        game.player.equipment.insert("Kapala".into());
+        for _ in 0..16 {
+            game.spawn("oBlood", game.player.pos);
+        }
+        for _ in 0..120 {
+            game.step(&spelunky_core::InputFrame::default());
+            if game
+                .presentation()
+                .player
+                .data
+                .get("red_color")
+                .copied()
+                .unwrap_or(0.0)
+                > 0.0
+            {
+                assert!(
+                    game.data.get("bloodLevel").copied().unwrap_or(0.0) > 0.0
+                        || game.player.health > 4
+                );
+                assert!(
+                    game.world
+                        .entities
+                        .iter()
+                        .any(|e| e.object == "oBloodSpark")
+                );
+                return game;
+            }
+        }
+        panic!("natural collectible Blood did not reach the Kapala player: {preset:?}");
+    }
+
+    fn source_player_uv(game: &Game, atlas: &Atlas) -> [f32; 4] {
+        let player = &game.presentation().player;
+        let mut uv = atlas.sprite(&player.sprite, player.animation).unwrap().uv;
+        if player.facing > 0 {
+            uv[0] += uv[2];
+            uv[2] = -uv[2];
+        }
+        uv
+    }
+
+    fn assert_source_player_color(game: &Game, atlas: &Atlas, color: [f32; 4]) {
+        let live = game.state_hash();
+        let draw = game.presentation().state_hash();
+        let random = game.rng.clone().next_u64();
+        let uv = source_player_uv(game, atlas);
+        for view in [
+            Viewport::canonical(),
+            Viewport::from_surface(1920, 1080),
+            Viewport::from_surface(720, 960),
+        ] {
+            for alpha in [0.0, 0.125, 0.5, 0.875, 1.0] {
+                let quads = game_scene_in_view(game, alpha, false, atlas, view);
+                let player: Vec<_> = quads.iter().filter(|quad| quad.uv == uv).collect();
+                assert_eq!(
+                    player.len(),
+                    1,
+                    "frozen character frame missing or duplicated"
+                );
+                assert_eq!(player[0].color, color, "source redColor at alpha={alpha}");
+            }
+        }
+        assert_eq!(game.state_hash(), live);
+        assert_eq!(game.presentation().state_hash(), draw);
+        assert_eq!(game.rng.clone().next_u64(), random);
+    }
+
+    #[test]
+    fn source_kapala_real_blood_collection_tints_frozen_character_and_naturally_fades() {
+        let atlas = Atlas::load().unwrap();
+        for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let neutral = adaptive_room();
+            assert_source_player_color(&neutral, &atlas, WHITE);
+            let mut game = natural_kapala_flash(preset);
+            let red = game.presentation().player.data["red_color"];
+            assert!(red > 0.0 && red <= 55.0 && red % 5.0 == 0.0);
+            // Independent integer-source oracle; no production color helper.
+            assert_source_player_color(
+                &game,
+                &atlas,
+                [(200.0 + red) as f32 / 255.0, 0.0, 0.0, 1.0],
+            );
+            let mut faded = false;
+            for _ in 0..240 {
+                game.step(&spelunky_core::InputFrame::default());
+                if game.presentation().player.data.get("red_color") == Some(&0.0) {
+                    faded = true;
+                    break;
+                }
+            }
+            assert!(faded, "ordinary source pulse never finished: {preset:?}");
+            assert_source_player_color(&game, &atlas, WHITE);
+
+            let mut without_kapala = adaptive_room();
+            without_kapala.rules = preset;
+            for _ in 0..16 {
+                without_kapala.spawn("oBlood", without_kapala.player.pos);
+            }
+            for _ in 0..40 {
+                without_kapala.step(&spelunky_core::InputFrame::default());
+            }
+            assert_eq!(
+                without_kapala
+                    .data
+                    .get("bloodLevel")
+                    .copied()
+                    .unwrap_or(0.0),
+                0.0
+            );
+            assert_eq!(
+                without_kapala
+                    .presentation()
+                    .player
+                    .data
+                    .get("red_color")
+                    .copied()
+                    .unwrap_or(0.0),
+                0.0
+            );
+            assert_source_player_color(&without_kapala, &atlas, WHITE);
+        }
+    }
+
+    #[test]
+    fn source_kapala_flash_jetpack_exception_whipping_decorations_and_blink_draw_controls() {
+        let atlas = Atlas::load().unwrap();
+        // Synthetic Draw-branch controls derive their red value from an actual
+        // acquired snapshot. They make no claim to reach Climbing/Exit via input.
+        let acquired = natural_kapala_flash(RulesPreset::Classic);
+        for (state, sprite_name) in [
+            (PlayerState::Standing, "sStandLeft"),
+            (PlayerState::Climbing, "sClimbUp"),
+            (PlayerState::Standing, "sPExit"),
+            (PlayerState::Standing, "sDamselExit"),
+            (PlayerState::Standing, "sTunnelExit"),
+        ] {
+            for jetpack in [false, true] {
+                for whipping in [false, true] {
+                    for facing in [-1, 1] {
+                        let mut draw = acquired.presentation().clone();
+                        draw.player.state = state;
+                        draw.player.set_sprite(sprite_name);
+                        draw.player.facing = facing;
+                        draw.player.attack_timer = if whipping { 12 } else { 0 };
+                        if jetpack {
+                            draw.player.equipment.insert("Jetpack".into());
+                        }
+                        draw.player.data.insert("bow_armed".into(), 1.0);
+                        let exception = jetpack
+                            && !whipping
+                            && (state == PlayerState::Climbing || sprite_name.ends_with("Exit"));
+                        let red = draw.player.data["red_color"];
+                        assert_source_player_color(
+                            &draw,
+                            &atlas,
+                            if exception {
+                                WHITE
+                            } else {
+                                [(200.0 + red) as f32 / 255.0, 0.0, 0.0, 1.0]
+                            },
+                        );
+                        let quads = game_scene(&draw, 0.5, false, &atlas);
+                        let back_uv = atlas.sprite("sJetpackBack", 0.0).unwrap().uv;
+                        assert_eq!(quads.iter().any(|q| q.uv == back_uv), exception);
+                        let side = if facing > 0 {
+                            "sJetpackRight"
+                        } else {
+                            "sJetpackLeft"
+                        };
+                        let side_uv = atlas.sprite(side, 0.0).unwrap().uv;
+                        assert_eq!(quads.iter().any(|q| q.uv == side_uv), jetpack && !exception);
+                        let arrow = if facing > 0 {
+                            "sArrowRight"
+                        } else {
+                            "sArrowLeft"
+                        };
+                        for name in [side, "sJetpackBack", arrow] {
+                            let uv = atlas.sprite(name, 0.0).unwrap().uv;
+                            assert!(
+                                quads
+                                    .iter()
+                                    .filter(|q| q.uv == uv)
+                                    .all(|q| q.color == WHITE),
+                                "decoration tinted: {name}"
+                            );
+                        }
+                        draw.player.data.insert("blink_toggle".into(), 1.0);
+                        let hidden = game_scene(&draw, 0.5, false, &atlas);
+                        for uv in [
+                            source_player_uv(&draw, &atlas),
+                            back_uv,
+                            side_uv,
+                            atlas.sprite(arrow, 0.0).unwrap().uv,
+                        ] {
+                            assert!(
+                                !hidden.iter().any(|q| q.uv == uv),
+                                "blink must hide source player layer"
+                            );
+                        }
+                    }
                 }
             }
         }
