@@ -214,7 +214,8 @@ fn skeleton(game: &mut Game, e: &mut Entity) {
         debris(game, e);
         super::record_death(game, e);
         e.alive = false;
-        return;
+        // Own instance_destroy finishes Enemy Destroy before this Step resumes.
+        super::destroyed(game, e);
     }
     if bottom(&game.world, e) && e.state != 98 {
         e.vel.y = 0.0;
@@ -253,7 +254,8 @@ fn zombie(game: &mut Game, e: &mut Entity) {
         debris(game, e);
         super::record_death(game, e);
         e.alive = false;
-        return;
+        // Own instance_destroy finishes Enemy Destroy before this Step resumes.
+        super::destroyed(game, e);
     }
     if side(&game.world, e, 1, 1.0) {
         e.vel.x = -1.0;
@@ -1627,5 +1629,90 @@ mod vampire_own_destroy_tail_tests {
     #[test]
     fn canonical_own_stunned_crush_keeps_burning_timer_draws_and_recovery_body() {
         own_stunned_crush_keeps_burning_timer_draws_and_recovery_body_case(OracleMode::Canonical);
+    }
+}
+#[cfg(test)]
+mod undead_own_destroy_tail_tests {
+    use super::*;
+    use crate::{Area, RulesPreset};
+
+    // Controlled detached receiver: Game.step removes the tombstone before a
+    // public observer can inspect these otherwise unobservable Skeleton fields.
+    fn skeleton_idle_tail_case(canonical: bool) {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = if canonical {
+                Game::shell(42, rules)
+            } else {
+                Game::legacy_shell(42, rules)
+            };
+            game.world = World::new(30, 20, Area::Mines, 1);
+            for x in 0..30 {
+                game.world.set_tile(x, 10, "oBlock");
+            }
+            game.player.pos = Vec2::new(240.0, 152.0);
+            let id = game.spawn("oSkeleton", Vec2::new(96.0, 144.0));
+            let mut actor = game.world.entity(id).unwrap().clone();
+            actor.health = 0;
+            actor.state = 0;
+            actor.timer = 1;
+            actor.vel = Vec2::new(0.0, 2.0);
+            actor.held = true;
+            game.player.held = Some(id);
+            let bomb = game.spawn("oBomb", Vec2::new(32.0, 32.0));
+            game.world
+                .entity_mut(bomb)
+                .unwrap()
+                .data
+                .insert("attached_id".into(), id as f64);
+            actor.data.insert("bomb_id".into(), bomb as f64);
+            skeleton(&mut game, &mut actor);
+            assert!(!actor.alive);
+            assert_eq!(
+                actor.value("enemy_destroyed"),
+                1.0,
+                "SYNCHRONOUS_ENEMY_DESTROY"
+            );
+            assert_eq!(game.player.held, None);
+            assert!(actor.held, "SOURCE_DESTROY_LEAVES_RECEIVER_HELD_FLAG");
+            assert_eq!(actor.value("bomb_id"), bomb as f64);
+            assert_eq!(game.world.entity(bomb).unwrap().value("attached_id"), 0.0);
+            assert_eq!(
+                (actor.state, actor.timer),
+                (1, 0),
+                "POST_DESTROY_IDLE_TIMER_AND_WALK_TRANSITION"
+            );
+            assert_eq!(actor.vel.y, 0.0, "POST_DESTROY_GROUNDED_VELOCITY");
+            assert_eq!(
+                actor.sprite, "sSkeletonWalkLeft",
+                "POST_DESTROY_SPRITE_EPILOGUE"
+            );
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.alive && e.object == "oBone")
+                    .count(),
+                3
+            );
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.alive && e.object == "oSkull")
+                    .count(),
+                1
+            );
+            assert!(!game.world.entities.iter().any(|e| e.object == "oBlood"));
+            assert_eq!(game.data.get("skeletons"), Some(&1.0));
+            assert_eq!(game.data.get("kills"), Some(&1.0));
+        }
+    }
+    #[test]
+    fn legacy_controlled_skeleton_destroy_preserves_idle_and_sprite_tail() {
+        skeleton_idle_tail_case(false)
+    }
+    #[test]
+    fn canonical_controlled_skeleton_destroy_preserves_idle_and_sprite_tail() {
+        skeleton_idle_tail_case(true)
     }
 }
