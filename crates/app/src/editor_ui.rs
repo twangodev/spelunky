@@ -538,8 +538,15 @@ impl EditorUi {
             {
                 let x = (x - self.pan[0]) as f32 * CELL;
                 let y = MAP_Y + (y - self.pan[1]) as f32 * CELL;
-                if editor_icon(self.state.selected_tile).is_some() {
-                    draw_tile(quads, atlas, self.state.selected_tile, x, y, CELL);
+                if let Some(frame) = editor_icon(self.state.selected_tile)
+                    .and_then(|sprite| atlas.sprite(sprite, 0.0))
+                {
+                    quads.push(DrawQuad {
+                        rect: [x, y, CELL, CELL],
+                        uv: frame.uv,
+                        color: WHITE,
+                        ..DrawQuad::default()
+                    });
                 }
                 rect(quads, [x, y, CELL, 0.5], GOLD);
                 rect(quads, [x, y, 0.5, CELL], GOLD);
@@ -667,12 +674,105 @@ fn file_name(name: &str) -> Result<String, String> {
     })
 }
 
-// These authored editor icons represent compound water-and-enemy gameplay tiles.
+// scrSetCursorTile assigns authored editor artwork, independently of gameplay spawns.
 fn editor_icon(tile: char) -> Option<&'static str> {
     match tile {
+        '@' => Some("sEntrance"),
+        'X' => Some("sExit"),
+        'I' => Some("sMsgSign"),
+        '1' => Some("sBrick"),
+        '2' => Some("sLush"),
+        'w' => Some("sWater"),
+        '3' => Some("sDark"),
+        'i' => Some("sIce"),
+        'd' => Some("sDarkFall"),
+        '4' => Some("sTemple"),
+        'l' => Some("sLava"),
+        'L' => Some("sLadder"),
+        'P' => Some("sLadderTop"),
+        'v' => Some("sVine"),
+        't' => Some("sVineTop"),
+        '|' => Some("sTreeTrunk"),
+        'x' => Some("sTreeTop"),
+        ')' => Some("sLeaves"),
+        'q' => Some("sTreeBranchLeft"),
+        'B' => Some("sBlock"),
+        '&' => Some("sWeb"),
+        'r' => Some("sRockTile"),
+        'j' => Some("sJarTile"),
+        'k' => Some("sFakeBonesLeft"),
+        'b' => Some("sBatLeft"),
+        'n' => Some("sSnakeLeft"),
+        's' => Some("sSpider"),
+        'S' => Some("sGiantSpiderHang"),
+        'K' => Some("sSkeletonLeft"),
+        'h' => Some("sCavemanLeft"),
+        '!' => Some("sShopLeftIco"),
+        'f' => Some("sFrogLeft"),
+        'F' => Some("sFireFrogLeft"),
+        'z' => Some("sZombieLeft"),
+        'A' => Some("sVampireLeft"),
         'p' => Some("sPiranhaTile"),
+        'M' => Some("sManTrapLeft"),
+        'm' => Some("sMonkeyLeft"),
+        'y' => Some("sYetiLeft"),
+        'a' => Some("sAlien"),
+        'U' => Some("sUFO"),
+        'E' => Some("sAlienBoss"),
+        'H' => Some("sHawkLeft"),
+        'Y' => Some("sYetiKingLeft"),
         '{' => Some("sMegaMouthTile"),
+        'T' => Some("sTombLordLeft"),
+        '^' => Some("sSpikes"),
+        '<' => Some("sArrowTrapLeft"),
+        '>' => Some("sArrowTrapRight"),
+        ']' => Some("sSpearTrap1"),
+        '[' => Some("sSpearTrap2"),
+        '_' => Some("sSpringTrap"),
+        '+' => Some("sSmashTrap"),
+        '$' => Some("sGoldBarTile"),
+        '*' => Some("sGoldBarsTile"),
+        '#' => Some("sGoldIdolTile"),
+        'O' => Some("sCrystalSkullTile"),
+        '5' => Some("sEmeraldBigTile"),
+        '6' => Some("sSapphireBigTile"),
+        '7' => Some("sRubyBigTile"),
+        '8' => Some("sDiamondTile"),
+        'c' => Some("sChestTile"),
+        'C' => Some("sCrateTile"),
+        'D' => Some("sDamselLeftIco"),
+        '.' => Some("sBombBagTile"),
+        ':' => Some("sBombBoxTile"),
+        'u' => Some("sBombPasteTile"),
+        'R' => Some("sRopePileTile"),
+        '`' => Some("sParachuteTile"),
+        'o' => Some("sCompassTile"),
+        '/' => Some("sMacheteTile"),
+        '~' => Some("sSpringShoesTile"),
+        'V' => Some("sSpikeShoesTile"),
+        '}' => Some("sBowTile"),
+        '-' => Some("sPistolTile"),
+        '=' => Some("sShotgunTile"),
+        'W' => Some("sWebCannonTile"),
+        '%' => Some("sSpectaclesTile"),
+        'G' => Some("sGlovesTile"),
+        'g' => Some("sMittTile"),
+        '?' => Some("sTeleporterTile"),
+        '(' => Some("sMattockTile"),
+        '\\' => Some("sCapeTile"),
+        'J' => Some("sJetpackTile"),
         _ => None,
+    }
+}
+
+fn editor_preview_icon(tile: char) -> Option<&'static str> {
+    // scrCreateTile uses hanging enemy/web previews and the boss editor icon.
+    match tile {
+        '&' => Some("sWebTile"),
+        'b' => Some("sBatHang"),
+        's' => Some("sSpiderHang"),
+        'E' => Some("sAlienBossTile"),
+        _ => editor_icon(tile),
     }
 }
 
@@ -681,7 +781,7 @@ fn draw_tile(quads: &mut Vec<DrawQuad>, atlas: &Atlas, tile: char, x: f32, y: f3
         return;
     }
     let spawns = spelunky_core::level::tile_spawns(tile);
-    if let Some(frame) = editor_icon(tile)
+    if let Some(frame) = editor_preview_icon(tile)
         .or_else(|| {
             spawns
                 .first()
@@ -703,6 +803,75 @@ fn draw_tile(quads: &mut Vec<DrawQuad>, atlas: &Atlas, tile: char, x: f32, y: f3
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ordinary_palette_selection_uses_source_cursor_and_preview_artwork() {
+        let source = include_str!(
+            "../../../references/classic-1.1/Scripts/Level Editor/scrSetCursorTile.gml"
+        );
+        let atlas = Atlas::load().unwrap();
+        let mut checked = 0;
+        for line in source
+            .lines()
+            .filter(|line| line.contains("oCursObj.sprite_index ="))
+        {
+            let tile = line.split('"').nth(1).unwrap().chars().next().unwrap();
+            let sprite = line
+                .split("sprite_index = ")
+                .nth(1)
+                .unwrap()
+                .trim_end_matches(';');
+            let expected_cursor = atlas.sprite(sprite, 0.0).unwrap();
+            let preview = match tile {
+                '&' => "sWebTile",
+                'b' => "sBatHang",
+                's' => "sSpiderHang",
+                'E' => "sAlienBossTile",
+                _ => sprite,
+            };
+            let expected_preview = atlas.sprite(preview, 0.0).unwrap();
+            let mut ui = EditorUi::new();
+            let index = ui
+                .state
+                .palette
+                .iter()
+                .position(|&value| value == tile)
+                .unwrap();
+            let palette = [
+                244.0 + (index % 7) as f32 * 10.0,
+                MAP_Y + (index / 7) as f32 * 10.0,
+                8.0,
+                8.0,
+            ];
+            // Use palette clicks, paint, and hover through the normal editor path.
+            ui.pointer(palette[0] + 4.0, palette[1] + 4.0, true, false);
+            ui.pointer(4.0, 40.0, false, false);
+            ui.pointer(4.0, 40.0, true, false);
+            ui.pointer(12.0, 40.0, false, false);
+            let mut quads = Vec::new();
+            ui.draw(&atlas, &mut quads);
+            for rect in [[0.0, MAP_Y, CELL, CELL], palette] {
+                assert!(
+                    quads
+                        .iter()
+                        .any(|quad| quad.rect == rect && quad.uv == expected_preview.uv),
+                    "source preview for {tile} must be {preview} at {rect:?}"
+                );
+            }
+            assert!(
+                quads
+                    .iter()
+                    .any(|quad| quad.rect == [CELL, MAP_Y, CELL, CELL]
+                        && quad.uv == expected_cursor.uv),
+                "source cursor for {tile} must be {sprite}"
+            );
+            checked += 1;
+        }
+        assert_eq!(
+            checked, 84,
+            "every authored selectable tile must be exercised"
+        );
+    }
+
     #[test]
     fn authored_fish_icons_render_in_map_palette_and_selected_cursor() {
         let atlas = Atlas::load().unwrap();
