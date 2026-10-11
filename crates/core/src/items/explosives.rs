@@ -350,6 +350,15 @@ pub(crate) fn alarm(game: &mut Game, id: u64, alarm: u8) {
             let pos = game.world.entity(id).unwrap().pos;
             // Create executes immediately; contact effects await the collision phase.
             game.spawn("oExplosion", pos);
+            if object == "oFireFrogBomb" {
+                // This child Alarm emits blood before the guarded flame script.
+                // Its Create explicitly sets bloodless=false.
+                let bomb = game.world.entity(id).unwrap().clone();
+                crate::enemies::create_blood(game, &bomb, pos, 3);
+            }
+            if !game.flags.contains("low_graphics") {
+                crate::world_events::create_flames(game, pos, 3);
+            }
             if game.player.held == Some(id) {
                 game.player.held = None;
             }

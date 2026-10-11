@@ -569,13 +569,19 @@ pub(crate) fn item_step_impacts(game: &mut Game, item_id: u64) {
             if fragile {
                 broke = true;
             }
+            // oItem's enemy branch emits before destroying the arrow. The
+            // separate Damsel branch has no bomb-arrow explosion callback.
+            if e.object != "oDamsel" && item.object == "oArrow" && item.sprite == "sBombArrowRight"
+            {
+                game.spawn("oExplosion", item.pos);
+                if !game.flags.contains("low_graphics") {
+                    crate::world_events::create_flames(game, item.pos, 3);
+                }
+            }
             if matches!(item.object.as_str(), "oArrow" | "oFishBone") {
                 if let Some(projectile) = game.world.entities.iter_mut().find(|e| e.id == item_id) {
                     projectile.alive = false;
                 }
-            }
-            if item.object == "oArrow" && item.value("bomb_arrow") > 0. {
-                game.spawn("oExplosion", item.pos);
             }
         });
     }

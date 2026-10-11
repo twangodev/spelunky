@@ -760,6 +760,9 @@ pub fn pre_tick(game: &mut Game) {
         *fuse -= 1.0;
     } else {
         game.spawn("oExplosion", game.player.pos);
+        if !game.flags.contains("low_graphics") {
+            crate::world_events::create_flames(game, game.player.pos, 3);
+        }
         game.player.data.insert("bow_bomb_armed".into(), 0.0);
         game.player.data.remove("bow_bomb_fuse");
     }
@@ -1208,6 +1211,9 @@ pub fn alarm(game: &mut Game, id: u64, number: u8) {
         }
         ("oArrow", 1) => {
             game.spawn("oExplosion", e.pos);
+            if !game.flags.contains("low_graphics") {
+                crate::world_events::create_flames(game, e.pos, 3);
+            }
             if game.player.held == Some(id) {
                 game.player.held = None;
             }

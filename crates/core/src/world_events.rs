@@ -1144,6 +1144,23 @@ pub(crate) fn spawn_detritus(game: &mut Game, object: &str, pos: Vec2) -> u64 {
     id
 }
 
+/// scrCreateFlame checks the shared detritus cap before each synchronous Create.
+/// The graphics setting belongs to each caller, rather than this script.
+pub(crate) fn create_flames(game: &mut Game, pos: Vec2, count: usize) {
+    for _ in 0..count {
+        if game
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.alive && catalog::is_a(&e.object, "oDetritus"))
+            .count()
+            < 16
+        {
+            game.spawn("oFlame", pos);
+        }
+    }
+}
+
 pub(crate) fn initialize_detritus(game: &mut Game, e: &mut Entity) {
     if e.value("world_effect_initialized") == 0.0 {
         e.vel = Vec2::new(
