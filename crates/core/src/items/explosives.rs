@@ -3798,10 +3798,23 @@ mod literal_dark_and_arrow_destroy_regressions {
                 // host dispatch would leave this source sprite guard untested.
                 game.player.invincible = 999;
                 let before_velocity = game.player.vel;
+                assert!(!game.world.entities.iter().any(|e| e.object == "oBlood"));
                 let mut expected_rng = game.rng.clone();
-                if !exit {
+                let expected_blood = if exit {
+                    None
+                } else {
                     expected_rng.range(3);
-                }
+                    // Player Step1683-1696 emits script Blood1 after speed.
+                    // Literal own oBlood Create: three velocity random calls,
+                    // then rand(1,6) gravity; no source helper is called here.
+                    Some((
+                        Vec2::new(
+                            expected_rng.unit() * 4.0 - expected_rng.unit() * 4.0,
+                            -1.0 - expected_rng.unit() * 2.0,
+                        ),
+                        f64::from(1 + expected_rng.range(6)) * 0.1,
+                    ))
+                };
                 game.events.clear();
                 game.world.spawn("oExplosion", game.player.pos);
                 tick(&mut game);
@@ -3829,6 +3842,18 @@ mod literal_dark_and_arrow_destroy_regressions {
                 } else {
                     assert_eq!(game.player.vel.y, -6.0);
                     assert_eq!(game.player.stun, 100);
+                }
+                let blood: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.alive && e.object == "oBlood")
+                    .collect();
+                assert_eq!(blood.len(), usize::from(!exit), "{character:?}/{exit}");
+                if let Some((velocity, gravity)) = expected_blood {
+                    assert_eq!(blood[0].pos, game.player.pos);
+                    assert_eq!(blood[0].vel, velocity);
+                    assert_eq!(blood[0].value("gravity"), gravity);
                 }
                 assert_eq!(
                     game.rng.range(100_000),
@@ -4515,6 +4540,13 @@ mod source_player_explosion_step {
                 }
                 let mut expected_rng = game.rng.clone();
                 let speed = 4.0 + f64::from(expected_rng.range(3));
+                // Source Player Step emits one Blood, independently of the
+                // number of overlapping blasts or whether damage is fatal.
+                let blood_velocity = Vec2::new(
+                    expected_rng.unit() * 4.0 - expected_rng.unit() * 4.0,
+                    -1.0 - expected_rng.unit() * 2.0,
+                );
+                let blood_gravity = f64::from(1 + expected_rng.range(6)) * 0.1;
                 game.step(&InputFrame::default());
                 assert_eq!(
                     game.player.health,
@@ -4529,6 +4561,20 @@ mod source_player_explosion_step {
                     1
                 );
                 assert_eq!(game.player.vel, Vec2::new(speed, -6.0));
+                assert_eq!(
+                    game.player.data.get("bounced").copied().unwrap_or(0.0),
+                    0.0,
+                    "airborne fixture excludes the independent late-bottom script Blood3"
+                );
+                let blood: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.alive && e.object == "oBlood")
+                    .collect();
+                assert_eq!(blood.len(), 1, "blasts={count} hp={hp} real={real_room}");
+                assert_eq!(blood[0].vel, blood_velocity);
+                assert_eq!(blood[0].value("gravity"), blood_gravity);
                 assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
                 assert_eq!(
                     game.lifetime_stats.misc_deaths
