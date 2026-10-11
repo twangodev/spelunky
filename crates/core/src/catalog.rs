@@ -104,6 +104,13 @@ pub fn sprite_frame_count(name: &str) -> usize {
         .map_or(0, |sprite| sprite.frames.len())
 }
 
+/// Full unscaled canvas dimensions of the first sprite frame, independent of
+/// its origin and collision mask. Returns `None` for an unknown or empty sprite.
+pub fn sprite_dimensions(name: &str) -> Option<(u32, u32)> {
+    let frame = sprite_frames().get(name)?.frames.first()?;
+    Some((frame.w, frame.h))
+}
+
 /// Unscaled first-frame sprite mask at its original source origin.
 pub fn sprite_bounds(name: &str, pos: Vec2) -> Rect {
     static BOUNDS: OnceLock<BTreeMap<String, Rect>> = OnceLock::new();
@@ -177,6 +184,8 @@ struct SpriteFrames {
 
 #[derive(Deserialize)]
 struct FrameBounds {
+    w: u32,
+    h: u32,
     bounds: Option<[i32; 4]>,
     mask_offset: Option<usize>,
     mask_stride: Option<usize>,
@@ -627,6 +636,100 @@ pub fn bounds(name: &str, pos: Vec2) -> Rect {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn sprite_dimensions_match_canonical_png_canvases_and_animation_variants() {
+        let cases: [(&str, (u32, u32), &[u8]); 6] = [
+            (
+                "sGiantSpider",
+                (32, 32),
+                include_bytes!(
+                    "../../../references/classic-1.1/Sprites/Enemies/GiantSpider/sGiantSpider.images/image 0.png"
+                ),
+            ),
+            (
+                "sGiantSpiderHang",
+                (32, 16),
+                include_bytes!(
+                    "../../../references/classic-1.1/Sprites/Enemies/GiantSpider/sGiantSpiderHang.images/image 0.png"
+                ),
+            ),
+            (
+                "sHawkLeft",
+                (16, 16),
+                include_bytes!(
+                    "../../../references/classic-1.1/Sprites/Enemies/Hawkman/sHawkLeft.images/image 0.png"
+                ),
+            ),
+            (
+                "sHawkStunL",
+                (24, 16),
+                include_bytes!(
+                    "../../../references/classic-1.1/Sprites/Enemies/Hawkman/sHawkStunL.images/image 0.png"
+                ),
+            ),
+            (
+                "sManTrapEatL",
+                (32, 32),
+                include_bytes!(
+                    "../../../references/classic-1.1/Sprites/Enemies/ManTrap/sManTrapEatL.images/image 0.png"
+                ),
+            ),
+            (
+                "sYetiDeadL",
+                (24, 16),
+                include_bytes!(
+                    "../../../references/classic-1.1/Sprites/Enemies/Yeti/sYetiDeadL.images/image 0.png"
+                ),
+            ),
+        ];
+        for (name, expected, png) in cases {
+            assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n", "{name}");
+            assert_eq!(&png[12..16], b"IHDR", "{name}");
+            let png_dimensions = (
+                u32::from_be_bytes(png[16..20].try_into().unwrap()),
+                u32::from_be_bytes(png[20..24].try_into().unwrap()),
+            );
+            assert_eq!(png_dimensions, expected, "canonical PNG: {name}");
+            assert_eq!(sprite_dimensions(name), Some(png_dimensions), "{name}");
+        }
+    }
+
+    #[test]
+    fn sprite_dimensions_are_canvas_sizes_rather_than_collision_mask_sizes() {
+        for (name, canvas, mask_size) in [
+            ("sGiantSpider", (32, 32), (30, 15)),
+            ("sHawkStunL", (24, 16), (20, 16)),
+        ] {
+            let [left, top, right, bottom] = sprite_def(name).unwrap().bounds;
+            let actual_mask_size = ((right - left + 1) as u32, (bottom - top + 1) as u32);
+            assert_eq!(actual_mask_size, mask_size, "{name}");
+            assert_ne!(canvas, actual_mask_size, "{name}");
+            assert_eq!(sprite_dimensions(name), Some(canvas), "{name}");
+        }
+    }
+
+    #[test]
+    fn bundled_sprite_canvases_are_positive_and_consistent_across_frames() {
+        // The API specifies the first frame. Validate the current source corpus
+        // without requiring future sprite data to have uniform frame canvases.
+        for (name, sprite) in sprite_frames() {
+            let first = sprite.frames.first().expect("bundled sprite has a frame");
+            assert!(first.w > 0 && first.h > 0, "{name}");
+            assert_eq!(sprite_dimensions(name), Some((first.w, first.h)), "{name}");
+            for frame in &sprite.frames {
+                assert_eq!((frame.w, frame.h), (first.w, first.h), "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn sprite_dimensions_unknown_names_do_not_fall_back_to_object_sprites() {
+        assert!(sprite("oGiantSpider").is_some());
+        for name in ["", "missing", "oGiantSpider"] {
+            assert_eq!(sprite_dimensions(name), None, "{name}");
+        }
+    }
 
     fn original_is_a(objects: &BTreeMap<String, ObjectDef>, name: &str, parent: &str) -> bool {
         let mut current = name;

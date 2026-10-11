@@ -757,6 +757,15 @@ fn boss(game: &mut Game, e: &mut Entity) {
         }
         super::record_death(game, e);
     }
+    // oAlienBoss Step emits from the death sprite before gravity/moveTo.
+    // scrCreateBlood has its own bloodless/cap-16 guard; the following direct
+    // Create is independent and retains inherited Detritus cap-32 behavior.
+    if e.sprite == "sAlienBossDie" && game.rng.range(2) == 0 {
+        let pos = Vec2::new(e.pos.x + 8.0, e.pos.y + 14.0 + f64::from(game.rng.range(5)));
+        super::create_blood(game, e, pos, 1);
+        let pos = Vec2::new(e.pos.x + 8.0, e.pos.y + 14.0 + f64::from(game.rng.range(5)));
+        game.spawn("oBlood", pos);
+    }
     e.vel.x = (e.vel.x.abs() - 0.1).max(0.0) * e.vel.x.signum();
     if e.vel.x.abs() < 0.5 || e.state == 0 {
         e.vel.x = 0.0;
@@ -1668,6 +1677,208 @@ mod tests {
             source_frame(&mut g, &mut e);
         }
         assert!(!e.alive);
+    }
+
+    fn dying_boss_blood_room(detritus: usize, bloodless: bool) -> (Game, u64) {
+        let mut g = boss_item_room();
+        let id = g.spawn("oAlienBoss", Vec2::new(128.0, 96.0));
+        let boss = g.world.entity_mut(id).unwrap();
+        boss.health = 0;
+        boss.state = 99;
+        boss.set_sprite("sAlienBossDie");
+        boss.vel = Vec2::new(1.0, 1.0);
+        boss.data.insert("bloodless".into(), f64::from(bloodless));
+        boss.data.insert("blood_left".into(), 0.0);
+        for _ in 0..detritus {
+            g.spawn("oBone", Vec2::new(280.0, 48.0));
+        }
+        // Reset only the fixture's RNG after synchronous Create callbacks.
+        // Independent source evaluation gives success on seed 6's first roll.
+        g.rng = crate::Rng::new(6);
+        (g, id)
+    }
+
+    fn live_boss_blood(g: &Game) -> Vec<&Entity> {
+        g.world
+            .entities
+            .iter()
+            .filter(|e| e.alive && e.object == "oBlood")
+            .collect()
+    }
+
+    #[test]
+    fn actual_step_dying_boss_blood_preserves_script_direct_guards_and_create_order() {
+        for (detritus, bloodless, expected_count, next_rng) in [
+            (0, false, 2, 9_187_981_958_480_619_105),
+            (15, false, 2, 9_187_981_958_480_619_105),
+            (16, false, 1, 3_738_407_306_160_466_512),
+            (31, false, 1, 3_738_407_306_160_466_512),
+            (32, false, 0, 3_738_407_306_160_466_512),
+            (0, true, 1, 3_738_407_306_160_466_512),
+            (15, true, 1, 3_738_407_306_160_466_512),
+        ] {
+            let (mut g, boss_id) = dying_boss_blood_room(detritus, bloodless);
+            g.step(&crate::InputFrame::default());
+            let boss = g.world.entity(boss_id).unwrap();
+            assert_eq!(
+                boss.pos,
+                Vec2::new(129.0, 98.0),
+                "the dying body actually moves"
+            );
+            assert_eq!(
+                boss.value("blood_left"),
+                0.0,
+                "this source producer has no budget"
+            );
+            let blood = live_boss_blood(&g);
+            assert_eq!(
+                blood.len(),
+                expected_count,
+                "detritus={detritus}, bloodless={bloodless}"
+            );
+            let positions: Vec<_> = blood.iter().map(|e| e.pos).collect();
+            assert_eq!(
+                positions,
+                match expected_count {
+                    2 => vec![Vec2::new(136.0, 113.0), Vec2::new(136.0, 110.0)],
+                    1 => vec![Vec2::new(136.0, 111.0)],
+                    _ => Vec::new(),
+                },
+                "separate source Y draws and synchronous first Create precede movement"
+            );
+            for drop in &blood {
+                assert_eq!(
+                    drop.age, 0,
+                    "earlier Blood resource does not run a newborn Step"
+                );
+                assert_eq!(drop.sprite, "sBlood");
+                assert_eq!(drop.value("life"), 60.0);
+                assert_eq!(drop.value("world_effect_initialized"), 1.0);
+                assert_eq!(&drop.alarms[..3], &[1, 1, 5]);
+                assert_eq!(drop.value("collectible"), 0.0);
+                assert_eq!(drop.value("bounce"), 0.0);
+            }
+            if expected_count == 2 {
+                assert!((blood[0].vel.x - -0.19678379546949554).abs() < 1e-12);
+                assert!((blood[1].vel.x - 0.3391272229582798).abs() < 1e-12);
+            } else if expected_count == 1 {
+                assert!((blood[0].vel.x - -1.7808133884482826).abs() < 1e-12);
+            }
+            assert_eq!(
+                g.rng.clone().next_u64(),
+                next_rng,
+                "callback RNG even at direct cap32"
+            );
+        }
+    }
+
+    #[test]
+    fn actual_step_boss_blood_uses_dying_sprite_and_source_half_probability() {
+        for (state, sprite, seed, expected_count, next_rng) in [
+            (99, "sAlienBossDie", 0, 0, 7_960_286_522_194_355_700),
+            (99, "sAlienBossDead", 6, 0, 13_647_215_125_184_110_592),
+            (99, "sAlienBossHurt", 6, 0, 13_647_215_125_184_110_592),
+            (0, "sAlienBossDie", 6, 2, 9_187_981_958_480_619_105),
+        ] {
+            let (mut g, id) = dying_boss_blood_room(0, false);
+            let boss = g.world.entity_mut(id).unwrap();
+            if state == 0 {
+                boss.health = 10;
+            }
+            boss.state = state;
+            boss.set_sprite(sprite);
+            g.rng = crate::Rng::new(seed);
+            g.step(&crate::InputFrame::default());
+            assert_eq!(
+                live_boss_blood(&g).len(),
+                expected_count,
+                "{sprite}, state={state}, seed={seed}"
+            );
+            assert_eq!(g.rng.clone().next_u64(), next_rng);
+        }
+    }
+
+    #[test]
+    fn actual_step_crushed_live_boss_creates_gems_then_first_dying_blood() {
+        let mut g = boss_item_room();
+        let id = g.spawn("oAlienBoss", Vec2::new(128.0, 96.0));
+        assert_eq!(g.world.entity(id).unwrap().health, 10);
+        assert_eq!(g.world.entity(id).unwrap().sprite, "sAlienBoss");
+        // Source Step's center-in-solid check kills a live boss naturally;
+        // no health, dying sprite, or state is assigned by this fixture.
+        g.world.set_tile(8, 6, "oBlock");
+        g.rng = crate::Rng::new(6);
+        g.step(&crate::InputFrame::default());
+        let boss = g.world.entity(id).unwrap();
+        assert_eq!(boss.health, 0);
+        assert_eq!(boss.state, 99);
+        assert_eq!(boss.sprite, "sAlienBossDie");
+        let gems: Vec<_> = g
+            .world
+            .entities
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.object.as_str(),
+                    "oEmeraldBig" | "oSapphireBig" | "oRubyBig"
+                )
+            })
+            .collect();
+        assert_eq!(gems.len(), 4);
+        let blood = live_boss_blood(&g);
+        assert_eq!(
+            blood.len(),
+            2,
+            "first death-entry Step also emits the source pair"
+        );
+        assert!(gems.iter().all(|gem| gem.id < blood[0].id));
+        assert_eq!(blood[0].pos, Vec2::new(136.0, 112.0));
+        assert_eq!(blood[1].pos, Vec2::new(136.0, 113.0));
+        assert_eq!(g.rng.clone().next_u64(), 213_719_968_000_392_126);
+        assert_eq!(g.player.health, 4);
+    }
+
+    #[test]
+    fn actual_step_naturally_rock_killed_boss_bleeds_repeatedly_until_death_art_finishes() {
+        let mut g = boss_item_room();
+        let id = g.spawn("oAlienBoss", Vec2::new(128.0, 128.0));
+        for expected_health in (0..10).rev() {
+            throw_boss_rock(&mut g, 128.0);
+            assert_eq!(g.world.entity(id).unwrap().health, expected_health);
+            if expected_health > 0 {
+                for _ in 0..6 {
+                    g.step(&crate::InputFrame::default());
+                }
+                assert_eq!(g.world.entity(id).unwrap().sprite, "sAlienBoss");
+            }
+        }
+        let mut emission_steps = 0;
+        let mut dead_art_steps = 0;
+        for _ in 0..40 {
+            let previous_sprite = g.world.entity(id).unwrap().sprite.clone();
+            let previous_ids: Vec<_> = live_boss_blood(&g).iter().map(|e| e.id).collect();
+            g.step(&crate::InputFrame::default());
+            let new_count = live_boss_blood(&g)
+                .iter()
+                .filter(|e| !previous_ids.contains(&e.id))
+                .count();
+            if previous_sprite == "sAlienBossDead" {
+                dead_art_steps += 1;
+                assert_eq!(new_count, 0, "the completed death art stops this producer");
+            } else if new_count > 0 {
+                emission_steps += 1;
+            }
+        }
+        assert!(
+            emission_steps > 2,
+            "dying blood repeats across actual animation Steps"
+        );
+        assert!(
+            dead_art_steps > 0,
+            "natural animation-end callback must complete"
+        );
+        assert_eq!(g.world.entity(id).unwrap().sprite, "sAlienBossDead");
+        assert_eq!(g.player.health, 4);
     }
 
     #[test]

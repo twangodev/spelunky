@@ -126,7 +126,8 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
     }
     if point(&game.world, Vec2::new(center.x, e.pos.y - 1.0), "oLava") {
         e.alive = false;
-        return;
+        // Source instance_destroy does not return from the current event.
+        // Later spear/spike statements still execute on this receiver.
     }
     if point(
         &game.world,
@@ -167,6 +168,12 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
                 e.data.insert("animation_speed".into(), 0.5);
             }
             game.sound("sndHit", e.pos);
+            create_blood(
+                game,
+                e,
+                blood_center(e, dimensions),
+                if stunned_body { 2 } else { 1 },
+            );
         }
     }
     if e.vel.y > 2.0
@@ -176,9 +183,13 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
             "oSpikes",
         )
     {
+        if e.value("bloodless") == 0.0 {
+            stain_spike(game, e);
+        }
         if e.health > 0 {
             e.health = 0;
             set_counts_as_kill(e, false);
+            create_blood(game, e, blood_center(e, dimensions), 3);
             if matches!(
                 e.object.as_str(),
                 "oCaveman" | "oManTrap" | "oYeti" | "oHawkman" | "oShopkeeper" | "oShopkeeper2"
@@ -192,6 +203,72 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
     crate::traps::altar::offering_entity(game, e);
     if e.state == 98 && (e.vel.x.abs() > 2.0 || e.vel.y.abs() > 2.0) {
         body_projectile(game, e);
+    }
+}
+
+fn blood_center(e: &Entity, fallback: (f64, f64)) -> Vec2 {
+    // sprite_width/height are the image canvas, not its collision rectangle.
+    let (width, height) = crate::catalog::sprite_dimensions(&e.sprite)
+        .map_or(fallback, |(width, height)| {
+            (f64::from(width), f64::from(height))
+        });
+    Vec2::new(e.pos.x + width / 2.0, e.pos.y + height / 2.0)
+}
+
+fn stain_spike(game: &mut Game, e: &Entity) {
+    // instance_place translates the receiver to the requested origin. The
+    // preceding feet point only gates this separate first-instance query.
+    let mut probe = e.clone();
+    probe.pos = Vec2::new(e.pos.x + 8.0, e.pos.y + 14.0);
+    crate::dispatcher::register_instances(game);
+    let spike = crate::dispatcher::descendant_instances(game, "oSpikes")
+        .into_iter()
+        .find(|instance| match *instance {
+            Instance::Entity(id) => game
+                .world
+                .entity(id)
+                .is_some_and(|spike| spike.engine_active && probe.event_intersects(spike)),
+            Instance::Terrain(index) => {
+                let x = (index % game.world.width) as i32;
+                let y = (index / game.world.width) as i32;
+                game.world.tiles[index].engine_active
+                    && probe
+                        .collision_mask()
+                        .intersects_mask(&game.world.tile_collision_mask(x, y))
+            }
+            Instance::Player => false,
+        });
+    match spike {
+        Some(Instance::Entity(id)) => {
+            if let Some(spike) = game.world.entity_mut(id) {
+                spike.set_sprite("sSpikesBlood");
+            }
+        }
+        Some(Instance::Terrain(index)) => {
+            let origin = Instance::Terrain(index).position(game);
+            let center = Vec2::new(origin.x + 8.0, origin.y + 8.0);
+            let id = game
+                .world
+                .entities
+                .iter()
+                .find(|metadata| {
+                    metadata.alive
+                        && metadata.object == "oTerrainMetadata"
+                        && (metadata.pos.x / 16.0).floor() == (origin.x / 16.0).floor()
+                        && (metadata.pos.y / 16.0).floor() == (origin.y / 16.0).floor()
+                })
+                .map(|metadata| metadata.id)
+                .unwrap_or_else(|| game.world.spawn("oTerrainMetadata", center));
+            let metadata = game.world.entity_mut(id).unwrap();
+            let mut sprite = metadata
+                .text
+                .get("terrain_sprite")
+                .cloned()
+                .unwrap_or_default();
+            crate::animation::assign(&mut sprite, &mut metadata.animation, "sSpikesBlood");
+            metadata.text.insert("terrain_sprite".into(), sprite);
+        }
+        _ => {}
     }
 }
 
@@ -285,6 +362,401 @@ mod tests {
         g.player.pos = Vec2::new(240.0, 160.0);
         g.player.previous_pos = g.player.pos;
         g
+    }
+
+    fn live_blood(game: &Game) -> Vec<&Entity> {
+        game.world
+            .entities
+            .iter()
+            .filter(|e| e.alive && e.object == "oBlood")
+            .collect()
+    }
+
+    fn assert_blood_create(drop: &Entity) {
+        assert!(drop.engine_active);
+        assert_eq!(drop.sprite, "sBlood");
+        assert_eq!(drop.value("world_effect_initialized"), 1.0);
+        assert_eq!(drop.value("collectible"), 0.0);
+        assert_eq!(drop.image_speed(), 0.3);
+        assert_eq!(drop.alarms, [1, 1, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1]);
+    }
+
+    fn naturally_extended_spear(rules: RulesPreset) -> Game {
+        let mut game = Game::shell(71, rules);
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        game.player.pos = Vec2::new(79.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.spawn("oSpearTrapTop", Vec2::new(96.0, 144.0));
+        for _ in 0..20 {
+            game.step(&InputFrame::default());
+            assert_eq!(game.player.health, 4);
+        }
+        let spear = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.alive && e.object == "oSpearsLeft")
+            .expect("the real supported trap must extend its spear");
+        assert_eq!(spear.pos, Vec2::new(80.0, 144.0));
+        assert_eq!(spear.animation, 20.0);
+        game
+    }
+
+    #[test]
+    fn natural_spear_hit_emits_parent_blood_and_preserves_child_death_burst() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for (object, expected_drops) in [("oCaveman", 2), ("oSnake", 4)] {
+                let mut game = naturally_extended_spear(rules);
+                // Public Create into a naturally extended hazard; no altered
+                // actor HP/state/velocity or trap animation is required.
+                let actor = game.spawn(object, Vec2::new(80.0, 144.0));
+                game.step(&InputFrame::default());
+                assert_eq!(live_blood(&game).len(), expected_drops, "{object}");
+                assert_eq!(game.data.get("kills").copied().unwrap_or(0.0), 0.0);
+                if object == "oCaveman" {
+                    let actor = game.world.entity(actor).unwrap();
+                    assert_eq!(actor.health, 1);
+                    assert_eq!(actor.state, 98);
+                } else {
+                    assert!(game.world.entity(actor).is_none());
+                }
+                // Caveman runs before oBlood's resource; Snake after it.
+                // previous_pos retains the newborn origin in either case.
+                let drops = live_blood(&game);
+                for drop in drops.iter().take(if object == "oCaveman" { 2 } else { 1 }) {
+                    assert_eq!(drop.previous_pos, Vec2::new(88.0, 152.0));
+                    assert_blood_create(drop);
+                }
+                if object == "oSnake" {
+                    for drop in &drops[1..] {
+                        // Source moveTo proposes three pixels, but the real
+                        // oSolid spear trap at x96 stops the third: Snake's
+                        // right edge x+14 reaches96 at origin82. Child blood
+                        // therefore uses82+8, after the parent's center88.
+                        assert_eq!(drop.pos, Vec2::new(90.0, 152.0));
+                        assert_blood_create(drop);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn natural_spike_fall_emits_fresh_blood_and_stains_the_selected_spike() {
+        for (object, expected_drops) in [("oCaveman", 3), ("oSnake", 6), ("oSkeleton", 0)] {
+            let mut game = room();
+            for x in 0..game.world.width {
+                game.world.set_tile(x, 8, "oBlock");
+            }
+            game.player.pos = Vec2::new(240.0, 120.0);
+            game.player.previous_pos = game.player.pos;
+            for x in (64..=144).step_by(16) {
+                game.spawn("oSpikes", Vec2::new(f64::from(x), 112.0));
+            }
+            let actor = game.spawn(object, Vec2::new(96.0, 64.0));
+            let mut impact_origin = None;
+            for _ in 0..60 {
+                let before = game.world.entity(actor).unwrap().pos;
+                game.step(&InputFrame::default());
+                if game.world.entity(actor).is_none_or(|e| e.health <= 0) {
+                    impact_origin = Some(before);
+                    break;
+                }
+                assert!(
+                    live_blood(&game).is_empty(),
+                    "{object} bled before the spike hit"
+                );
+            }
+            let before = impact_origin.expect("ordinary gravity must reach the spikes");
+            let drops = live_blood(&game);
+            assert_eq!(drops.len(), expected_drops, "{object}");
+            for drop in drops.iter().take(3) {
+                assert_eq!(drop.previous_pos, Vec2::new(before.x + 8.0, before.y + 8.0));
+                assert_blood_create(drop);
+            }
+            let stained = game
+                .world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oSpikes" && e.sprite == "sSpikesBlood")
+                .count();
+            assert_eq!(stained, usize::from(object != "oSkeleton"), "{object}");
+            assert_eq!(game.data.get("kills").copied().unwrap_or(0.0), 0.0);
+        }
+    }
+
+    #[test]
+    fn natural_tile_spike_fall_preserves_stain_mask_and_source_order_next_tick() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = Game::shell(123, rules);
+            game.world = World::new(40, 30, Area::Mines, 1);
+            for x in 0..game.world.width {
+                game.world.set_tile(x, 8, "oBlock");
+            }
+            game.player.pos = Vec2::new(240.0, 120.0);
+            game.player.previous_pos = game.player.pos;
+            // Source Create launches a Caveman with xVel=2.5. A legal narrow
+            // corridor constrains its ordinary drifting/turning AI before the
+            // fall, without changing any actor state after Create. Custom
+            // bounds [2,0,14,16] keep its origin in x94..98 and feet in tile6.
+            for x in [5, 7] {
+                for y in 4..=6 {
+                    game.world.set_tile(x, y, "oBlock");
+                }
+            }
+            // The translated receiver overlaps both neighboring spikes. Source
+            // instance_place selects the first created, which is deliberately
+            // different from the tile containing the feet point.
+            for x in [7, 6, 4, 5, 8, 9] {
+                game.world.set_tile(x, 7, "oSpikes");
+            }
+            let right = Instance::Terrain(7 * game.world.width + 7);
+            let underfoot = Instance::Terrain(7 * game.world.width + 6);
+            let source_order = vec![
+                right,
+                underfoot,
+                Instance::Terrain(7 * game.world.width + 4),
+                Instance::Terrain(7 * game.world.width + 5),
+                Instance::Terrain(7 * game.world.width + 8),
+                Instance::Terrain(7 * game.world.width + 9),
+            ];
+            let original_serial = game.world.tile(7, 7).unwrap().creation_serial;
+            let actor = game.spawn("oCaveman", Vec2::new(96.0, 64.0));
+            let mut impact = false;
+            for _ in 0..60 {
+                let before = game.world.entity(actor).unwrap().clone();
+                let feet = Vec2::new(before.pos.x + 8.0, before.pos.y + 16.0);
+                let entering_spikes = before.vel.y > 2.0 && game.world.tiles_point(feet, "oSpikes");
+                if entering_spikes {
+                    assert!(game.world.tile_bounds(6, 7).contains(feet));
+                    assert!(!game.world.tile_bounds(7, 7).contains(feet));
+                    let mut translated = before.clone();
+                    translated.pos = Vec2::new(before.pos.x + 8.0, before.pos.y + 14.0);
+                    assert!(
+                        translated
+                            .collision_mask()
+                            .intersects_mask(&game.world.tile_collision_mask(7, 7))
+                    );
+                    assert_eq!(
+                        crate::dispatcher::descendant_instances(&game, "oSpikes"),
+                        source_order
+                    );
+                }
+                game.step(&InputFrame::default());
+                if game.world.entity(actor).is_some_and(|e| e.health <= 0) {
+                    assert!(
+                        entering_spikes,
+                        "death must come from the ordinary falling spike gate"
+                    );
+                    impact = true;
+                    break;
+                }
+                assert!(live_blood(&game).is_empty());
+            }
+            assert!(impact, "ordinary gravity must reach the tile-backed spikes");
+            assert_eq!(live_blood(&game).len(), 3);
+            assert_eq!(
+                crate::dispatcher::descendant_instances(&game, "oSpikes"),
+                source_order
+            );
+            assert_eq!(game.world.tile_bounds(7, 7).y, 116.0);
+            assert_eq!(game.world.tile_bounds(6, 7).y, 115.0);
+            let metadata_id = game
+                .world
+                .entities
+                .iter()
+                .find(|e| {
+                    e.alive && e.object == "oTerrainMetadata" && e.pos == Vec2::new(120.0, 120.0)
+                })
+                .expect("running parent event must persist the selected terrain sprite")
+                .id;
+            assert_eq!(
+                game.world
+                    .entity(metadata_id)
+                    .unwrap()
+                    .text
+                    .get("terrain_sprite")
+                    .map(String::as_str),
+                Some("sSpikesBlood")
+            );
+            game.step(&InputFrame::default());
+            assert_eq!(
+                game.world
+                    .entity(metadata_id)
+                    .unwrap()
+                    .text
+                    .get("terrain_sprite")
+                    .map(String::as_str),
+                Some("sSpikesBlood")
+            );
+            assert_eq!(game.world.tile_bounds(7, 7).y, 116.0);
+            assert_eq!(game.world.tile_bounds(6, 7).y, 115.0);
+            assert_eq!(game.world.tile(7, 7).unwrap().object, "oSpikes");
+            assert_eq!(
+                game.world.tile(7, 7).unwrap().creation_serial,
+                original_serial
+            );
+            assert_eq!(
+                crate::dispatcher::descendant_instances(&game, "oSpikes"),
+                source_order
+            );
+            assert_eq!(
+                live_blood(&game).len(),
+                3,
+                "a corpse must not repeat the fresh-death burst"
+            );
+        }
+    }
+
+    #[test]
+    fn actual_step_upper_lava_destruction_continues_parent_spear_statements() {
+        let mut game = naturally_extended_spear(RulesPreset::Classic);
+        game.world.set_tile(5, 8, "oLava");
+        let actor = game.spawn("oCaveman", Vec2::new(80.0, 144.0));
+        game.step(&InputFrame::default());
+        assert!(game.world.entity(actor).is_none());
+        assert_eq!(live_blood(&game).len(), 2);
+        assert!(
+            game.events.iter().any(|event| {
+                matches!(event, GameEvent::Sound { name, .. } if name == "sndHit")
+            })
+        );
+    }
+
+    #[test]
+    fn parent_spear_script_obeys_per_drop_cap_bloodless_health_and_rng() {
+        for object in [
+            "oCaveman",
+            "oManTrap",
+            "oYeti",
+            "oHawkman",
+            "oShopkeeper",
+            "oShopkeeper2",
+            "oSnake",
+        ] {
+            for (detritus, bloodless, health) in [
+                (0, false, 3),
+                (15, false, 3),
+                (16, false, 3),
+                (0, true, 3),
+                (0, false, 0),
+            ] {
+                let mut game = room();
+                let spear = game.spawn("oSpearsLeft", Vec2::new(96.0, 96.0));
+                game.world.entity_mut(spear).unwrap().animation = 20.0;
+                let actor_id = game.spawn(object, Vec2::new(96.0, 96.0));
+                let mut actor = game.world.entity(actor_id).unwrap().clone();
+                actor.health = health;
+                actor.data.insert("bloodless".into(), f64::from(bloodless));
+                for _ in 0..detritus {
+                    game.spawn("oBone", Vec2::new(280.0, 80.0));
+                }
+                let mut expected_rng = game.rng.clone();
+                tick(&mut game, &mut actor);
+                let body = object != "oSnake";
+                let requested = if bloodless || (body && health == 0) {
+                    0
+                } else if body {
+                    2
+                } else {
+                    1
+                };
+                let expected_count = requested.min(16 - detritus);
+                let drops = live_blood(&game);
+                assert_eq!(
+                    drops.len(),
+                    expected_count,
+                    "{object}, cap={detritus}, bloodless={bloodless}, hp={health}"
+                );
+                for drop in drops {
+                    assert_blood_create(drop);
+                    assert_eq!(drop.pos, Vec2::new(104.0, 104.0));
+                    assert_eq!(
+                        drop.vel,
+                        Vec2::new(
+                            expected_rng.unit() * 4.0 - expected_rng.unit() * 4.0,
+                            -1.0 - expected_rng.unit() * 2.0
+                        )
+                    );
+                    assert_eq!(
+                        drop.value("gravity"),
+                        f64::from(1 + expected_rng.range(6)) * 0.1
+                    );
+                }
+                assert_eq!(
+                    game.rng.next_u64(),
+                    expected_rng.next_u64(),
+                    "{object}: suppressed attempts must not consume RNG"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn parent_spike_stain_uses_translated_receiver_first_instance_even_for_a_corpse() {
+        for terrain in [false, true] {
+            for (health, bloodless, expected_drops) in [(3, false, 3), (0, false, 0), (3, true, 0)]
+            {
+                let mut game = room();
+                let right = if terrain {
+                    game.world.set_tile(7, 7, "oSpikes");
+                    game.world.set_tile(6, 7, "oSpikes");
+                    None
+                } else {
+                    let right = game.spawn("oSpikes", Vec2::new(112.0, 112.0));
+                    game.spawn("oSpikes", Vec2::new(96.0, 112.0));
+                    Some(right)
+                };
+                let id = game.spawn("oCaveman", Vec2::new(96.0, 99.0));
+                let mut actor = game.world.entity(id).unwrap().clone();
+                actor.health = health;
+                actor.vel.y = 3.0;
+                actor.data.insert("bloodless".into(), f64::from(bloodless));
+                tick(&mut game, &mut actor);
+                assert_eq!(live_blood(&game).len(), expected_drops);
+                if let Some(right) = right {
+                    assert_eq!(
+                        game.world.entity(right).unwrap().sprite,
+                        if bloodless { "sSpikes" } else { "sSpikesBlood" }
+                    );
+                    assert!(game.world.entities.iter().any(|spike| {
+                        spike.object == "oSpikes"
+                            && spike.pos == Vec2::new(96.0, 112.0)
+                            && spike.sprite == "sSpikes"
+                    }));
+                } else {
+                    assert_eq!(
+                        game.world.tile_bounds(7, 7).y,
+                        if bloodless { 115.0 } else { 116.0 }
+                    );
+                    assert_eq!(game.world.tile_bounds(6, 7).y, 115.0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn parent_environment_blood_center_uses_full_current_sprite_canvas() {
+        for (object, sprite, center) in [
+            ("oYeti", "sYetiStunL", Vec2::new(108.0, 104.0)),
+            ("oHawkman", "sHawkStunL", Vec2::new(108.0, 104.0)),
+            ("oManTrap", "sManTrapEatL", Vec2::new(112.0, 112.0)),
+        ] {
+            let mut game = room();
+            let spear = game.spawn("oSpearsLeft", Vec2::new(96.0, 96.0));
+            game.world.entity_mut(spear).unwrap().animation = 20.0;
+            let id = game.spawn(object, Vec2::new(96.0, 96.0));
+            let mut actor = game.world.entity(id).unwrap().clone();
+            actor.set_sprite(sprite);
+            tick(&mut game, &mut actor);
+            assert_eq!(live_blood(&game).len(), 2, "{sprite}");
+            assert!(
+                live_blood(&game).iter().all(|drop| drop.pos == center),
+                "{sprite}"
+            );
+        }
     }
     #[test]
     fn actual_step_fast_stunned_body_ufo_kill_has_run_credit_without_lifetime_row() {

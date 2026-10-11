@@ -291,11 +291,17 @@ pub(crate) fn collision(game: &mut Game, id: u64, other: Instance) {
                     e.health -= projectile.data.get("damage").copied().unwrap_or(1.) as i32;
                     set_counts_as_kill(e, true);
                     if e.value("blood_left") > 0. {
-                        let b = e.sprite_bounds();
+                        // Source sprite_width/height refer to the complete
+                        // current image, independently of mask, origin, or scale.
+                        let (width, height) =
+                            crate::catalog::sprite_dimensions(&e.sprite).unwrap_or((0, 0));
                         create_blood(
                             game,
                             e,
-                            Vec2::new(e.pos.x + b.w / 2., e.pos.y + b.h / 2.),
+                            Vec2::new(
+                                e.pos.x + f64::from(width) / 2.0,
+                                e.pos.y + f64::from(height) / 2.0,
+                            ),
                             1,
                         );
                         if e.health < 0 {
@@ -1052,14 +1058,32 @@ fn apply_melee(
                 e.vel.y = -2.0;
             }
         }
-        "oGiantSpider" if !pre => {
-            if e.value("hit_cooldown") > 0.0 {
+        "oGiantSpider" | "oTombLord" if !pre => {
+            if e.value("hit_cooldown") > 0.0 || (e.object == "oTombLord" && pos.y >= e.pos.y + 12.0)
+            {
                 return false;
             }
-            actual = 1;
+            // These front-whip overrides create Blood directly, bypassing
+            // scrCreateBlood's bloodless flag and 16-detritus gate. Their
+            // inherited rear-whip events remain in the oEnemy handler.
+            e.health -= if e.object == "oGiantSpider" {
+                1
+            } else {
+                damage
+            };
+            if e.object == "oTombLord" {
+                set_counts_as_kill(e, true);
+            }
+            game.spawn("oBlood", Vec2::new(e.pos.x + 16.0, e.pos.y + 24.0));
+            game.sound("sndHit", e.pos);
             e.data.insert("hit_cooldown".into(), 10.0);
+            e.data.insert("assaulted".into(), 1.0);
+            if e.health <= 0 {
+                e.data.insert("killed_by_player".into(), 1.0);
+            }
+            return true;
         }
-        "oTombLord" | "oYetiKing" if !pre => {
+        "oYetiKing" if !pre => {
             if e.value("hit_cooldown") > 0.0 || pos.y >= e.pos.y + 12.0 {
                 return false;
             }
@@ -1083,6 +1107,25 @@ fn apply_melee(
         }
     }
     e.health -= actual;
+    if matches!(e.object.as_str(), "oCaveman" | "oHawkman") && e.value("blood_left") > 0.0 {
+        // Source uses the current full canvas size, never mask dimensions
+        // or an origin-adjusted center (including Hawk's 24px resting poses).
+        let (width, height) = crate::catalog::sprite_dimensions(&e.sprite).unwrap_or((0, 0));
+        create_blood(
+            game,
+            e,
+            Vec2::new(
+                e.pos.x + f64::from(width) / 2.0,
+                e.pos.y + f64::from(height) / 2.0,
+            ),
+            1,
+        );
+        // Exhaustion depends on post-hit HP, even when bloodless or capped.
+        if e.health < 0 {
+            e.data
+                .insert("blood_left".into(), e.value("blood_left") - 1.0);
+        }
+    }
     e.data.insert("assaulted".into(), 1.0);
     if actual > 0 {
         set_counts_as_kill(e, true);
@@ -1272,6 +1315,451 @@ pub(super) fn in_stars(game: &Game) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // These fixtures use only initial scene setup followed by ordinary input.
+    // No hit boxes are spawned manually, and no family/collision callback is
+    // invoked directly. Stop at the first hit, before later bounce/death blood.
+    fn custom_melee_blood_room(object: &str, rear: bool, rules: RulesPreset) -> (Game, u64) {
+        let mut game = Game::shell(42, rules);
+        game.world = World::new(20, 16, Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        for x in 0..20 {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        let large = matches!(object, "oGiantSpider" | "oTombLord");
+        let upper_ledge = object == "oTombLord" && !rear;
+        if upper_ledge {
+            // Source front-whip gate requires other.y < TombLord.y + 12.
+            // The ledge supports the player without touching the boss center.
+            game.world.set_tile(4, 9, "oBlock");
+            game.world.set_tile(5, 9, "oBlock");
+        }
+        game.player.pos = Vec2::new(
+            if upper_ledge { 86.0 } else { 80.0 },
+            if upper_ledge { 136.0 } else { 152.0 },
+        );
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        game.player.facing = 1;
+        let target = game.spawn(
+            object,
+            Vec2::new(
+                if rear {
+                    if large { 40.0 } else { 56.0 }
+                } else if upper_ledge {
+                    92.0
+                } else {
+                    96.0
+                },
+                if large { 128.0 } else { 144.0 },
+            ),
+        );
+        let actor = game.world.entity_mut(target).unwrap();
+        // Valid idle/waiting states keep the scene still during one attack.
+        actor.vel = Vec2::default();
+        actor.timer = 200;
+        if object == "oYeti" {
+            // Yeti Step uses its source counter variable, rather than timer.
+            actor.data.insert("counter".into(), 50.0);
+        }
+        actor.data.insert("sight_timer".into(), 200.0);
+        actor.data.insert("hit_cooldown".into(), 0.0);
+        set_counts_as_kill(actor, false);
+        if object == "oGiantSpider" {
+            actor.state = 2;
+            actor.alarms[0] = 100;
+        }
+        (game, target)
+    }
+
+    fn custom_melee_blood_fill(game: &mut Game, count: usize) {
+        for _ in 0..count {
+            // Real detritus, distant from the fight and safely above the floor.
+            game.spawn("oBone", Vec2::new(240.0, 64.0));
+        }
+    }
+
+    fn custom_melee_blood_pick_up_machete(game: &mut Game) {
+        let id = game.spawn("oMachete", game.player.pos);
+        game.step(&InputFrame {
+            down: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.held, Some(id));
+        assert!(game.world.entity(id).unwrap().held);
+        game.step(&InputFrame::default());
+    }
+
+    fn custom_melee_blood_first_hit(game: &mut Game, target: u64, hitbox: &str) -> Rng {
+        let hp = game.world.entity(target).unwrap().health;
+        for frame in 0..18 {
+            let before = game.rng.clone();
+            game.step(&InputFrame {
+                attack: frame == 0,
+                attack_pressed: frame == 0,
+                ..Default::default()
+            });
+            let actor = game
+                .world
+                .entity(target)
+                .expect("victim survives the hit frame");
+            if actor.health != hp {
+                assert!(
+                    game.world
+                        .entities
+                        .iter()
+                        .any(|e| e.alive && e.object == hitbox),
+                    "the input must create the expected source attack: {hitbox}"
+                );
+                assert_eq!(game.player.health, 4, "fixture must avoid body contact");
+                return before;
+            }
+            assert!(
+                source_contact_live_blood(game).is_empty(),
+                "no earlier blood producer"
+            );
+        }
+        panic!("ordinary input did not reach the target with {hitbox}");
+    }
+
+    // Independent oracle from oBlood/Create's literal random(4)-random(4),
+    // -1-random(2), rand(1,6)*0.1. Do not call the production blood helper.
+    fn custom_melee_blood_create_oracle(rng: &mut Rng) -> (Vec2, f64) {
+        let velocity = Vec2::new(rng.unit() * 4.0 - rng.unit() * 4.0, -1.0 - rng.unit() * 2.0);
+        let gravity = f64::from(1 + rng.range(6)) * 0.1;
+        (velocity, gravity)
+    }
+
+    #[test]
+    fn actual_step_custom_melee_blood_caveman_hawkman_front_and_rear_guards() {
+        // Both custom XML events: subtract HP; if bloodLeft>0 call script;
+        // decrement only for post-hit HP<0; then countsAsKill/stun/sound.
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for object in ["oCaveman", "oHawkman"] {
+                for rear in [false, true] {
+                    for (detritus, bloodless, left) in [
+                        (0, false, 1.0),
+                        (15, false, 1.0),
+                        (16, false, 1.0),
+                        (0, true, 1.0),
+                        (16, true, 1.0),
+                        (0, false, 0.0),
+                    ] {
+                        let (mut game, target) = custom_melee_blood_room(object, rear, rules);
+                        custom_melee_blood_fill(&mut game, detritus);
+                        let actor = game.world.entity_mut(target).unwrap();
+                        let hp = actor.health;
+                        actor.data.insert("bloodless".into(), f64::from(bloodless));
+                        actor.data.insert("blood_left".into(), left);
+                        let mut expected_rng = custom_melee_blood_first_hit(
+                            &mut game,
+                            target,
+                            if rear { "oWhipPre" } else { "oWhip" },
+                        );
+                        let emits = left > 0.0 && !bloodless && detritus < 16;
+                        let expected_create =
+                            emits.then(|| custom_melee_blood_create_oracle(&mut expected_rng));
+                        let actor = game.world.entity(target).unwrap();
+                        assert_eq!(actor.health, hp - 1, "{object} rear={rear}");
+                        assert_eq!(actor.state, 98);
+                        assert!(counts_as_kill(actor));
+                        assert_eq!(actor.value("blood_left"), left);
+                        let blood = source_contact_live_blood(&game);
+                        assert_eq!(
+                            blood.len(),
+                            usize::from(emits),
+                            "{object} rear={rear} detritus={detritus} bloodless={bloodless} left={left}"
+                        );
+                        if let Some((velocity, gravity)) = expected_create {
+                            assert_eq!(
+                                blood[0].pos,
+                                Vec2::new(actor.pos.x + 8.0, actor.pos.y + 8.0)
+                            );
+                            assert_eq!(blood[0].vel, velocity);
+                            assert_eq!(blood[0].value("gravity"), gravity);
+                            assert_source_contact_blood_create(blood[0]);
+                        }
+                        assert_eq!(game.rng.clone().next_u64(), expected_rng.next_u64());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn actual_step_custom_melee_blood_natural_machete_post_hit_exhaustion_and_hawk_pose() {
+        // Initial stunned bodies are legal Machete targets. Their source Step
+        // selects the resting pose before the natural rear-blade collision.
+        // Hawk Stun is 24x16 with origin(4,0): source center is x+12,y+8,
+        // irrespective of the current opaque mask width or sprite origin.
+        for object in ["oCaveman", "oHawkman"] {
+            for hp in [1, 2] {
+                for (detritus, bloodless, left) in [
+                    (0, false, 1.0),
+                    (16, false, 1.0),
+                    (0, true, 1.0),
+                    (0, false, 0.0),
+                ] {
+                    let (mut game, target) =
+                        custom_melee_blood_room(object, true, RulesPreset::Classic);
+                    let actor = game.world.entity_mut(target).unwrap();
+                    actor.health = hp;
+                    actor.state = 98;
+                    actor.data.insert("bounced".into(), 1.0);
+                    actor.data.insert("bloodless".into(), f64::from(bloodless));
+                    actor.data.insert("blood_left".into(), left);
+                    custom_melee_blood_fill(&mut game, detritus);
+                    custom_melee_blood_pick_up_machete(&mut game);
+                    assert_eq!(game.world.entity(target).unwrap().health, hp);
+                    assert!(source_contact_live_blood(&game).is_empty());
+                    let mut expected_rng =
+                        custom_melee_blood_first_hit(&mut game, target, "oMachetePre");
+                    let emits = left > 0.0 && !bloodless && detritus < 16;
+                    if emits {
+                        custom_melee_blood_create_oracle(&mut expected_rng);
+                    }
+                    let actor = game.world.entity(target).unwrap();
+                    assert_eq!(actor.health, hp - 2);
+                    assert_eq!(
+                        actor.value("blood_left"),
+                        left - f64::from(left > 0.0 && hp - 2 < 0)
+                    );
+                    assert!(counts_as_kill(actor));
+                    let blood = source_contact_live_blood(&game);
+                    assert_eq!(blood.len(), usize::from(emits));
+                    if emits {
+                        assert_eq!(
+                            blood[0].pos,
+                            Vec2::new(
+                                actor.pos.x + if object == "oHawkman" { 12.0 } else { 8.0 },
+                                actor.pos.y + 8.0
+                            )
+                        );
+                        assert_source_contact_blood_create(blood[0]);
+                    }
+                    assert_eq!(game.rng.clone().next_u64(), expected_rng.next_u64());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn actual_step_custom_melee_blood_giant_spider_tomb_lord_direct_caps_and_credit() {
+        // Front overrides: Spider subtracts literal 1 and preserves credit;
+        // TombLord subtracts other.damage and restores credit. Direct Create
+        // ignores caller bloodless, bloodLeft, and script cap16, but inherits
+        // oDetritus' >32 destruction. Blood Create RNG still runs at cap32.
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for object in ["oGiantSpider", "oTombLord"] {
+                for detritus in [0, 16, 31, 32] {
+                    for bloodless in [false, true] {
+                        let (mut game, target) = custom_melee_blood_room(object, false, rules);
+                        custom_melee_blood_fill(&mut game, detritus);
+                        let actor = game.world.entity_mut(target).unwrap();
+                        let hp = actor.health;
+                        actor.data.insert("bloodless".into(), f64::from(bloodless));
+                        actor.data.insert("blood_left".into(), 0.0);
+                        let mut expected_rng =
+                            custom_melee_blood_first_hit(&mut game, target, "oWhip");
+                        let (velocity, gravity) =
+                            custom_melee_blood_create_oracle(&mut expected_rng);
+                        let actor = game.world.entity(target).unwrap();
+                        assert_eq!(actor.health, hp - 1);
+                        assert_eq!(counts_as_kill(actor), object == "oTombLord");
+                        assert_eq!(actor.value("blood_left"), 0.0);
+                        assert_eq!(actor.value("hit_cooldown"), 10.0);
+                        let blood = source_contact_live_blood(&game);
+                        assert_eq!(
+                            blood.len(),
+                            usize::from(detritus < 32),
+                            "{object} detritus={detritus} bloodless={bloodless}"
+                        );
+                        if let Some(drop) = blood.first() {
+                            assert_eq!(drop.pos, Vec2::new(actor.pos.x + 16.0, actor.pos.y + 24.0));
+                            assert_eq!(drop.vel, velocity);
+                            assert_eq!(drop.value("gravity"), gravity);
+                            assert_source_contact_blood_create(drop);
+                        }
+                        assert_eq!(game.rng.clone().next_u64(), expected_rng.next_u64());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn actual_step_custom_melee_blood_boss_rear_is_inherited_script_not_direct() {
+        for object in ["oGiantSpider", "oTombLord"] {
+            for (detritus, bloodless) in [(0, false), (16, false), (0, true)] {
+                let (mut game, target) =
+                    custom_melee_blood_room(object, true, RulesPreset::Classic);
+                custom_melee_blood_fill(&mut game, detritus);
+                game.world
+                    .entity_mut(target)
+                    .unwrap()
+                    .data
+                    .insert("bloodless".into(), f64::from(bloodless));
+                let hp = game.world.entity(target).unwrap().health;
+                custom_melee_blood_first_hit(&mut game, target, "oWhipPre");
+                let actor = game.world.entity(target).unwrap();
+                assert_eq!(actor.health, hp - 1);
+                assert!(counts_as_kill(actor));
+                assert_eq!(actor.value("hit_cooldown"), 0.0);
+                assert_eq!(
+                    source_contact_live_blood(&game).len(),
+                    usize::from(detritus < 16 && !bloodless)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn actual_step_custom_melee_blood_no_hit_no_blood_and_plain_yeti_is_bloodless_bump() {
+        let (mut game, target) = custom_melee_blood_room("oTombLord", false, RulesPreset::Classic);
+        // Remove the upper ledge: forward whip is below the source y+12 gate.
+        game.world.set_tile(4, 9, "");
+        game.world.set_tile(5, 9, "");
+        game.player.pos.y = 152.0;
+        game.player.previous_pos = game.player.pos;
+        for frame in 0..18 {
+            game.step(&InputFrame {
+                attack: frame == 0,
+                attack_pressed: frame == 0,
+                ..Default::default()
+            });
+            assert_eq!(game.world.entity(target).unwrap().health, 20);
+            assert_eq!(
+                game.world.entity(target).unwrap().value("hit_cooldown"),
+                0.0
+            );
+            assert!(source_contact_live_blood(&game).is_empty());
+        }
+        for rear in [false, true] {
+            let (mut game, target) = custom_melee_blood_room("oYeti", rear, RulesPreset::Classic);
+            let hp = game.world.entity(target).unwrap().health;
+            let mut accepted = false;
+            for frame in 0..18 {
+                game.step(&InputFrame {
+                    attack: frame == 0,
+                    attack_pressed: frame == 0,
+                    ..Default::default()
+                });
+                assert_eq!(game.world.entity(target).unwrap().health, hp);
+                assert!(source_contact_live_blood(&game).is_empty());
+                if game.world.entity(target).unwrap().value("hit_cooldown") > 0.0 {
+                    accepted = true;
+                    break;
+                }
+            }
+            assert!(accepted, "plain Yeti whip must still reach its bump branch");
+        }
+        let (mut game, target) = custom_melee_blood_room("oManTrap", true, RulesPreset::Classic);
+        custom_melee_blood_first_hit(&mut game, target, "oWhipPre");
+        assert!(
+            source_contact_live_blood(&game).is_empty(),
+            "ManTrap has a Leaf producer, never Blood"
+        );
+    }
+    #[test]
+    fn actual_step_inherited_rear_whip_blood_uses_full_current_image_center() {
+        // Basis/oEnemy/WhipPre: subtract HP; guarded scrCreateBlood at
+        // x+sprite_width/2,y+sprite_height/2; hp<0 exhaustion; then sound.
+        // Original GiantSpider PNG is32x32; its separate frame0 mask occupies
+        // only x1..30,y18..31. The source center remains x+16,y+16.
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for (detritus, bloodless, left) in [
+                (0, false, 1.0),
+                (15, false, 1.0),
+                (16, false, 1.0),
+                (0, true, 1.0),
+                (0, false, 0.0),
+            ] {
+                let mut game = Game::shell(42, rules);
+                game.world = World::new(20, 16, Area::Mines, 1);
+                game.world.name = "rLevel".into();
+                for x in 0..20 {
+                    game.world.set_tile(x, 10, "oBlock");
+                }
+                game.player.pos = Vec2::new(80.0, 152.0);
+                game.player.previous_pos = game.player.pos;
+                game.player.state = PlayerState::Standing;
+                game.player.grounded = true;
+                game.player.facing = 1;
+                let target = game.spawn("oGiantSpider", Vec2::new(40.0, 128.0));
+                let actor = game.world.entity_mut(target).unwrap();
+                actor.state = 2;
+                actor.vel = Vec2::default();
+                actor.alarms[0] = 100;
+                actor.data.insert("hit_cooldown".into(), 0.0);
+                actor.data.insert("bloodless".into(), f64::from(bloodless));
+                actor.data.insert("blood_left".into(), left);
+                set_counts_as_kill(actor, false);
+                for _ in 0..detritus {
+                    game.spawn("oBone", Vec2::new(240.0, 64.0));
+                }
+                let mut hit = false;
+                for frame in 0..6 {
+                    let mut expected_rng = game.rng.clone();
+                    game.step(&InputFrame {
+                        attack: frame == 0,
+                        attack_pressed: frame == 0,
+                        ..Default::default()
+                    });
+                    let actor = game.world.entity(target).unwrap();
+                    if actor.health == 1 {
+                        continue;
+                    }
+                    assert_eq!(actor.health, 0);
+                    assert!(counts_as_kill(actor));
+                    assert_eq!(
+                        actor.value("blood_left"),
+                        left,
+                        "zero HP does not exhaust bloodLeft"
+                    );
+                    assert_eq!(
+                        actor.value("hit_cooldown"),
+                        0.0,
+                        "inherited rear has no front cooldown"
+                    );
+                    assert!(
+                        game.world
+                            .entities
+                            .iter()
+                            .any(|e| e.alive && e.object == "oWhipPre"),
+                        "real input must create rear whip"
+                    );
+                    assert_eq!(game.player.health, 4, "no body collision masks the fixture");
+                    let emits = left > 0.0 && !bloodless && detritus < 16;
+                    let blood = source_contact_live_blood(&game);
+                    assert_eq!(blood.len(), usize::from(emits));
+                    if emits {
+                        assert_eq!(
+                            blood[0].pos,
+                            Vec2::new(actor.pos.x + 16.0, actor.pos.y + 16.0)
+                        );
+                        // Independently transcribed oBlood/Create random draws.
+                        let velocity = Vec2::new(
+                            expected_rng.unit() * 4.0 - expected_rng.unit() * 4.0,
+                            -1.0 - expected_rng.unit() * 2.0,
+                        );
+                        let gravity = f64::from(1 + expected_rng.range(6)) * 0.1;
+                        assert_eq!(blood[0].vel, velocity);
+                        assert_eq!(blood[0].value("gravity"), gravity);
+                        assert_source_contact_blood_create(blood[0]);
+                    }
+                    assert_eq!(game.rng.clone().next_u64(), expected_rng.next_u64());
+                    hit = true;
+                    break;
+                }
+                assert!(
+                    hit,
+                    "fresh rear-whip input must hit the waiting GiantSpider"
+                );
+            }
+        }
+    }
     #[test]
     fn actual_step_item_ufo_death_runs_explosion_and_eject_create_immediately() {
         for seed in 0..64 {
