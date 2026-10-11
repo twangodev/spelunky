@@ -149,7 +149,10 @@ fn initial_arrow_room(
     for _ in 0..count {
         game.spawn("oBone", Vec2::new(200.0, 80.0));
     }
-    let id = game.spawn("oArrow", game.player.pos + Vec2::new(-4.0, -4.0));
+    let id = game.spawn(
+        "oArrow",
+        Vec2::new(game.player.pos.x - 4.0, game.player.pos.y - 4.0),
+    );
     game.world.entity_mut(id).unwrap().vel.x = 12.0;
     game
 }
