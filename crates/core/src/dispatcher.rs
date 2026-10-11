@@ -812,7 +812,6 @@ fn player_step(game: &mut Game, input: &InputFrame) {
     crate::player::finish_step(game);
     crate::items::player_collectibles(game);
     crate::progression::player_deposits(game);
-    crate::world_events::sync_parachute(game);
 }
 fn normal_instance(game: &mut Game, i: Instance, input: &InputFrame) {
     match i {

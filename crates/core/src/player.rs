@@ -297,6 +297,9 @@ fn swimming_effects(game: &mut Game) {
 /// by a stun, death, ledge transition, or exit animation. Its fall injury and
 /// synchronous Create events precede the swimming/bubble branch.
 fn active_prelude(game: &mut Game) {
+    let parachute_exists = game.world.entities.iter().any(|entity| {
+        entity.alive && entity.engine_active && entity.object == "oParachute"
+    });
     let p = &mut game.player;
     let stationary = matches!(
         p.sprite.as_str(),
@@ -310,9 +313,13 @@ fn active_prelude(game: &mut Game) {
         p.state = PlayerState::Standing;
     }
     let mut fall = value(p, "fall_timer", 0.0);
-    if value(p, "parachute_open", 0.0) > 0.0 {
+    // This is a derived controller cache, not the source existence predicate.
+    set(p, "parachute_open", f64::from(parachute_exists));
+    if parachute_exists {
         fall = 0.0;
     }
+    let mut deploy_parachute = false;
+    let mut remove_parachute = false;
     let mut injury = 0;
     let hidden_state = matches!(p.state, PlayerState::Stunned | PlayerState::Dead);
     let climbing = p.state == PlayerState::Climbing
@@ -328,10 +335,7 @@ fn active_prelude(game: &mut Game) {
             && fall > 14.0
             && !solid_point(&game.world, Vec2::new(p.pos.x, p.pos.y + 32.0))
         {
-            p.equipment.remove("Parachute");
-            p.equipment.remove("parachute");
-            set(p, "parachute_open", 1.0);
-            fall = 0.0;
+            deploy_parachute = true;
         }
     } else if (grounded_state(p.state)
         || (matches!(p.state, PlayerState::Stunned | PlayerState::Dead)
@@ -353,10 +357,26 @@ fn active_prelude(game: &mut Game) {
         fall = 0.0;
     } else {
         fall = 0.0;
-        set(p, "parachute_open", 0.0);
+        remove_parachute = true;
     }
     set(p, "fall_timer", fall);
     set(p, "fall_ticks", fall);
+    if deploy_parachute {
+        // Step276: synchronous Create precedes both the timer reset and the
+        // inventory clear; own-Step hurt later in this same Step sees it.
+        game.spawn(
+            "oParachute",
+            Vec2::new(game.player.pos.x - 8.0, game.player.pos.y - 16.0),
+        );
+        set(&mut game.player, "fall_timer", 0.0);
+        set(&mut game.player, "fall_ticks", 0.0);
+        game.player.equipment.remove("Parachute");
+        game.player.equipment.remove("parachute");
+        set(&mut game.player, "parachute_open", 1.0);
+    } else if remove_parachute {
+        // Step309: retire the canopy at the pre-movement Player origin.
+        remove_player_parachutes(game);
+    }
     if injury > 0 {
         // The source subtracts life directly: fall injury bypasses the hit
         // invulnerability check and does not invent its hurt sound or flash.
@@ -1610,14 +1630,9 @@ fn wall_injury(game: &mut Game) {
     game.events.push(GameEvent::Damage { amount: 1 });
 }
 
-/// oPlayer1 Step1808-1913, after own-Step hurt and held release, before DIED.
-/// Automatic Collision has not run, so its newly assigned stun belongs to the
-/// following Player Step. The prior dead flag is independent of current HP.
-pub(crate) fn late_hurt_step(game: &mut Game) {
-    let dead = game.player.state == PlayerState::Dead || game.state == RunState::Dead;
-    if !dead && !game.player.is_stunned() {
-        return;
-    }
+/// Both source canopy cleanup sites create one used canopy before retiring all
+/// active parachutes. The caller supplies the exact phase and Player origin.
+fn remove_player_parachutes(game: &mut Game) {
     if game
         .world
         .entities
@@ -1635,6 +1650,17 @@ pub(crate) fn late_hurt_step(game: &mut Game) {
         }
     }
     set(&mut game.player, "parachute_open", 0.0);
+}
+
+/// oPlayer1 Step1808-1913, after own-Step hurt and held release, before DIED.
+/// Automatic Collision has not run, so its newly assigned stun belongs to the
+/// following Player Step. The prior dead flag is independent of current HP.
+pub(crate) fn late_hurt_step(game: &mut Game) {
+    let dead = game.player.state == PlayerState::Dead || game.state == RunState::Dead;
+    if !dead && !game.player.is_stunned() {
+        return;
+    }
+    remove_player_parachutes(game);
     crate::items::cancel_player_attack_after_hurt(game);
     let p = &mut game.player;
     let sprite = character_sprite(
