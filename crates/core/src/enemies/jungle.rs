@@ -853,8 +853,8 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
         (incoming_y + gravity).min(10.0)
     };
     if e.health <= 0 {
+        // instance_destroy marks this receiver; the current GML event continues.
         die(game, e);
-        return;
     }
     let left = collision_offset(&game.world, e, -1.0, 0.0);
     let right = collision_offset(&game.world, e, 1.0, 0.0);
@@ -867,7 +867,8 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
         0 => {
             if e.timer > 0 {
                 e.timer -= 1;
-            } else {
+            }
+            if e.timer == 0 {
                 e.state = 1;
                 e.facing = if game.rng.chance(1, 2) { -1 } else { 1 };
             }
@@ -904,14 +905,18 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
             e.vel.x = 0.0;
         }
         98 => {
+            e.set_sprite("sManTrapStunL");
+            if grounded && e.value("bounced") == 0.0 {
+                e.data.insert("bounced".into(), 1.0);
+                source_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 1);
+            }
             if grounded || e.held {
                 if e.timer > 0 {
                     e.timer -= 1;
                 } else if e.value("ate_shopkeeper") != 0.0 {
                     release_shopkeeper(game, e);
                     e.alive = false;
-                    return;
-                } else {
+                } else if e.health > 0 {
                     e.state = 0;
                     e.timer = 20 + game.rng.range(31);
                     if e.held {
@@ -964,17 +969,32 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
         }
     }
     if grounded {
-        e.vel.x *= 0.3;
         if e.vel.x.abs() < 0.1 {
             e.vel.x = 0.0;
+        } else {
+            e.vel.x *= 0.3;
         }
     }
     if super::solid_mask(&game.world, e.bounds(), e.id) {
         e.pos.y -= 2.0;
     }
-    if e.state == 98 {
-        e.set_sprite("sManTrapStunL");
-    } else if e.state < 96 {
+    if e.state == 97 && e.animation == 8.0 {
+        source_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y), 1);
+    }
+    // GML evaluates the tail roll even when status or the real image phase
+    // excludes a Bone. Blood Create above must consume its RNG first.
+    let spit_bone = game.rng.range(8) == 0;
+    if e.state == 96 && e.animation == 6.0 && spit_bone {
+        let pos = Vec2::new(
+            e.pos.x + if e.facing < 0 { 2.0 } else { 14.0 },
+            e.pos.y + 4.0,
+        );
+        let bone = crate::world_events::spawn_detritus(game, "oBone", pos);
+        if let Some(bone) = game.world.entity_mut(bone) {
+            bone.vel.x = if e.facing < 0 { -2.0 } else { 2.0 };
+        }
+    }
+    if e.state < 96 {
         e.set_sprite("sManTrapLeft");
     }
 }
@@ -2306,6 +2326,469 @@ mod tests {
         );
     }
 
+    // Literal Create oracle: random(4), random(4), random(2), rand(1,6).
+    // Deliberately does not call the port's detritus or ManTrap helpers.
+    fn mantrap_detritus_oracle(rng: &mut crate::Rng) -> (Vec2, f64) {
+        let velocity = Vec2::new(rng.unit() * 4.0 - rng.unit() * 4.0, -1.0 - rng.unit() * 2.0);
+        (velocity, f64::from(1 + rng.range(6)) * 0.1)
+    }
+
+    #[test]
+    fn mantrap_own_step_exact_real_phases_and_eager_tail_rng() {
+        for state in [97, 96] {
+            for phase in [6.0, 6.5, 8.0, 8.5] {
+                for facing in [-1, 1] {
+                    for succeeds in [false, true] {
+                        let seed = (0..64)
+                            .find(|seed| (crate::Rng::new(*seed).range(8) == 0) == succeeds)
+                            .unwrap();
+                        let mut game = collision_room();
+                        let mut trap = Entity::new(999, "oManTrap", Vec2::new(112.0, 144.0));
+                        super::super::init_entity(&mut trap);
+                        trap.state = state;
+                        trap.set_sprite(if state == 97 {
+                            "sManTrapEatL"
+                        } else {
+                            "sManTrapSleepL"
+                        });
+                        trap.animation = phase;
+                        trap.facing = facing;
+                        trap.vel = Vec2::default();
+                        game.rng = crate::Rng::new(seed);
+                        let mut expected = game.rng.clone();
+                        let blood = state == 97 && phase == 8.0;
+                        let blood_create = blood.then(|| mantrap_detritus_oracle(&mut expected));
+                        let roll = expected.range(8);
+                        let bone = state == 96 && phase == 6.0 && roll == 0;
+                        let bone_create = bone.then(|| mantrap_detritus_oracle(&mut expected));
+                        tick(&mut game, &mut trap);
+                        let output: Vec<_> = game
+                            .world
+                            .entities
+                            .iter()
+                            .filter(|e| matches!(e.object.as_str(), "oBlood" | "oBone"))
+                            .collect();
+                        assert_eq!(
+                            output.len(),
+                            usize::from(blood || bone),
+                            "state={state} phase={phase} facing={facing}"
+                        );
+                        if let Some((velocity, gravity)) = blood_create {
+                            assert_eq!(output[0].object, "oBlood");
+                            assert_eq!(output[0].pos, Vec2::new(trap.pos.x + 8.0, trap.pos.y));
+                            assert_eq!(output[0].vel, velocity);
+                            assert_eq!(output[0].value("gravity"), gravity);
+                        }
+                        if let Some((velocity, gravity)) = bone_create {
+                            assert_eq!(output[0].object, "oBone");
+                            assert_eq!(
+                                output[0].pos,
+                                Vec2::new(
+                                    trap.pos.x + if facing < 0 { 2.0 } else { 14.0 },
+                                    trap.pos.y + 4.0
+                                )
+                            );
+                            assert_eq!(
+                                output[0].vel,
+                                Vec2::new(f64::from(facing) * 2.0, velocity.y)
+                            );
+                            assert_eq!(output[0].value("gravity"), gravity);
+                            assert_eq!(output[0].value("world_effect_initialized"), 1.0);
+                        }
+                        assert_eq!(
+                            game.rng.next_u64(),
+                            expected.next_u64(),
+                            "state={state} phase={phase}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mantrap_own_step_bone_cap_keeps_create_draws_and_skips_destroyed_with_body() {
+        for count in [31, 32] {
+            for facing in [-1, 1] {
+                let mut game = collision_room();
+                for _ in 0..count {
+                    crate::world_events::spawn_detritus(
+                        &mut game,
+                        "oBone",
+                        Vec2::new(240.0, 144.0),
+                    );
+                }
+                let mut trap = Entity::new(999, "oManTrap", Vec2::new(112.0, 144.0));
+                super::super::init_entity(&mut trap);
+                trap.state = 96;
+                trap.set_sprite("sManTrapSleepL");
+                trap.animation = 6.0;
+                trap.facing = facing;
+                trap.vel = Vec2::default();
+                let seed = (0..64)
+                    .find(|seed| crate::Rng::new(*seed).range(8) == 0)
+                    .unwrap();
+                game.rng = crate::Rng::new(seed);
+                let mut expected = game.rng.clone();
+                assert_eq!(expected.range(8), 0);
+                // oDetritus Create destroys the 33rd instance, but does not
+                // abort oBone's own Create. Its four draws still happen.
+                let (velocity, gravity) = mantrap_detritus_oracle(&mut expected);
+                tick(&mut game, &mut trap);
+                let bone = game.world.entities.last().unwrap();
+                assert_eq!(bone.object, "oBone");
+                assert_eq!(game.world.entities.len(), count + 1);
+                assert_eq!(bone.alive, count == 31);
+                assert_eq!(
+                    bone.pos,
+                    Vec2::new(
+                        trap.pos.x + if facing < 0 { 2.0 } else { 14.0 },
+                        trap.pos.y + 4.0,
+                    ),
+                );
+                // The following with(explicit ID) skips a destroyed receiver;
+                // only a live Bone receives the producer's xVel override.
+                assert_eq!(
+                    bone.vel,
+                    Vec2::new(
+                        if count == 31 {
+                            f64::from(facing) * 2.0
+                        } else {
+                            velocity.x
+                        },
+                        velocity.y,
+                    ),
+                );
+                assert_eq!(bone.value("gravity"), gravity);
+                assert_eq!(bone.value("world_effect_initialized"), 1.0);
+                assert_eq!(game.rng.next_u64(), expected.next_u64());
+            }
+        }
+    }
+
+    #[test]
+    fn mantrap_own_step_bloodless_and_detritus_cap_precede_tail_roll() {
+        for (bloodless, count) in [(true, 0), (false, 15), (false, 16)] {
+            let mut game = collision_room();
+            for _ in 0..count {
+                crate::world_events::spawn_detritus(&mut game, "oBone", Vec2::new(240.0, 144.0));
+            }
+            let mut trap = Entity::new(999, "oManTrap", Vec2::new(112.0, 144.0));
+            super::super::init_entity(&mut trap);
+            trap.state = 97;
+            trap.set_sprite("sManTrapEatL");
+            trap.animation = 8.0;
+            trap.vel = Vec2::default();
+            trap.data.insert("bloodless".into(), f64::from(bloodless));
+            let mut expected = game.rng.clone();
+            if !bloodless && count < 16 {
+                mantrap_detritus_oracle(&mut expected);
+            }
+            expected.range(8);
+            tick(&mut game, &mut trap);
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oBlood")
+                    .count(),
+                usize::from(!bloodless && count < 16)
+            );
+            assert_eq!(game.rng.next_u64(), expected.next_u64());
+        }
+    }
+
+    #[test]
+    fn mantrap_own_step_idle_countdown_and_pre_multiply_friction() {
+        for counter in [1, 2] {
+            let mut game = collision_room();
+            let mut trap = Entity::new(999, "oManTrap", Vec2::new(112.0, 144.0));
+            super::super::init_entity(&mut trap);
+            trap.timer = counter;
+            trap.vel = Vec2::new(0.2, 0.0);
+            let mut expected = game.rng.clone();
+            let facing = if counter == 1 {
+                Some(if expected.range(2) == 0 { -1 } else { 1 })
+            } else {
+                None
+            };
+            expected.range(8);
+            tick(&mut game, &mut trap);
+            assert_eq!(trap.timer, counter - 1);
+            assert_eq!(trap.state, i32::from(counter == 1));
+            if let Some(facing) = facing {
+                assert_eq!(trap.facing, facing);
+            }
+            assert_eq!(
+                trap.vel.x, 0.06,
+                "0.2 passes the source threshold before multiplication"
+            );
+            assert_eq!(game.rng.next_u64(), expected.next_u64());
+        }
+    }
+
+    #[test]
+    fn mantrap_own_step_first_stunned_landing_blood_latches_before_recovery() {
+        let mut game = collision_room();
+        let mut trap = Entity::new(999, "oManTrap", Vec2::new(112.0, 144.0));
+        super::super::init_entity(&mut trap);
+        trap.state = 98;
+        trap.timer = 2;
+        trap.vel = Vec2::default();
+        let mut expected = game.rng.clone();
+        mantrap_detritus_oracle(&mut expected);
+        expected.range(8);
+        tick(&mut game, &mut trap);
+        assert_eq!((trap.state, trap.timer), (98, 1));
+        assert_eq!(trap.value("bounced"), 1.0);
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oBlood")
+                .count(),
+            1
+        );
+        assert_eq!(game.rng.clone().next_u64(), expected.clone().next_u64());
+        expected.range(8);
+        tick(&mut game, &mut trap);
+        assert_eq!((trap.state, trap.timer), (98, 0));
+        let recovery = 20 + expected.range(31);
+        expected.range(8);
+        tick(&mut game, &mut trap);
+        assert_eq!((trap.state, trap.timer), (0, recovery));
+        assert_eq!(trap.sprite, "sManTrapLeft");
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oBlood")
+                .count(),
+            1
+        );
+        assert_eq!(game.rng.next_u64(), expected.next_u64());
+    }
+
+    #[test]
+    fn mantrap_own_step_destroy_continues_and_dead_stunned_does_not_recover() {
+        for (state, keeper) in [(0, false), (98, false), (98, true)] {
+            let mut game = collision_room();
+            let mut trap = Entity::new(999, "oManTrap", Vec2::new(112.0, 144.0));
+            super::super::init_entity(&mut trap);
+            trap.health = 0;
+            trap.state = state;
+            trap.vel = Vec2::default();
+            trap.data.insert("bounced".into(), 1.0);
+            trap.data.insert("ate_shopkeeper".into(), f64::from(keeper));
+            let mut expected = game.rng.clone();
+            // Death's leaf/blood burst, then both literal keeper-release sites.
+            for _ in 0..if keeper { 3 } else { 1 } {
+                for _ in 0..3 {
+                    expected.range(17);
+                    expected.range(17);
+                }
+                mantrap_detritus_oracle(&mut expected);
+            }
+            let facing = if state == 0 {
+                Some(if expected.range(2) == 0 { -1 } else { 1 })
+            } else {
+                None
+            };
+            expected.range(8);
+            tick(&mut game, &mut trap);
+            assert!(!trap.alive);
+            assert_eq!(trap.state, if state == 0 { 1 } else { 98 });
+            if let Some(facing) = facing {
+                assert_eq!(trap.facing, facing);
+            }
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oShopkeeper")
+                    .count(),
+                if keeper { 2 } else { 0 }
+            );
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oLeaf")
+                    .count(),
+                if keeper { 9 } else { 3 }
+            );
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oBlood")
+                    .count(),
+                if keeper { 3 } else { 1 }
+            );
+            assert_eq!(game.rng.next_u64(), expected.next_u64());
+        }
+    }
+
+    #[test]
+    fn game_step_mantrap_own_destroy_keeps_later_eating_blood_and_rng() {
+        let mut game = collision_room();
+        let id = game.spawn("oManTrap", Vec2::new(112.0, 144.0));
+        let trap = game.world.entity_mut(id).unwrap();
+        // Controlled lethal onset during an existing meal; the inherited
+        // event sees no lava/other Destroy trigger in this authored room.
+        trap.health = 0;
+        trap.state = 97;
+        trap.set_sprite("sManTrapEatL");
+        trap.animation = 8.0;
+        trap.vel = Vec2::default();
+        let mut expected = game.rng.clone();
+        for _ in 0..3 {
+            expected.range(17);
+            expected.range(17);
+        }
+        mantrap_detritus_oracle(&mut expected); // hp death Blood
+        mantrap_detritus_oracle(&mut expected); // surviving meal tail Blood
+        expected.range(8);
+        game.step(&crate::InputFrame::default());
+        assert!(game.world.entity(id).is_none());
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oBlood")
+                .count(),
+            2
+        );
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oLeaf")
+                .count(),
+            3
+        );
+        assert_eq!(game.lifetime_stats.enemy_kills[10], 1);
+        assert_eq!(game.player.health, 4);
+        assert_eq!(game.rng.next_u64(), expected.next_u64());
+    }
+
+    #[test]
+    fn game_step_mantrap_own_tail_is_view_gated_at_real_animation_phase() {
+        for (state, phase) in [(97, 8.0), (97, 8.5), (96, 6.0), (96, 6.5)] {
+            for offview in [false, true] {
+                let mut game = collision_room();
+                let id = game.spawn(
+                    "oManTrap",
+                    Vec2::new(if offview { 370.0 } else { 112.0 }, 144.0),
+                );
+                let trap = game.world.entity_mut(id).unwrap();
+                trap.state = state;
+                trap.set_sprite(if state == 97 {
+                    "sManTrapEatL"
+                } else {
+                    "sManTrapSleepL"
+                });
+                trap.animation = phase;
+                trap.vel = Vec2::default();
+                let seed = (0..64)
+                    .find(|seed| crate::Rng::new(*seed).range(8) == 0)
+                    .unwrap();
+                game.rng = crate::Rng::new(seed);
+                let mut expected = game.rng.clone();
+                let blood = !offview && state == 97 && phase == 8.0;
+                if blood {
+                    mantrap_detritus_oracle(&mut expected);
+                }
+                let bone = if offview {
+                    false
+                } else {
+                    expected.range(8) == 0 && state == 96 && phase == 6.0
+                };
+                if bone {
+                    mantrap_detritus_oracle(&mut expected);
+                }
+                game.step(&crate::InputFrame::default());
+                assert_eq!(game.player.health, 4);
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(|e| e.object == "oBlood")
+                        .count(),
+                    usize::from(blood)
+                );
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(|e| e.object == "oBone")
+                        .count(),
+                    usize::from(bone)
+                );
+                assert_eq!(
+                    game.rng.next_u64(),
+                    expected.next_u64(),
+                    "state={state} phase={phase} offview={offview}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn game_step_mantrap_actual_npc_meal_emits_blood_then_sleeps_and_recovers() {
+        let mut game = collision_room();
+        let id = game.spawn("oManTrap", Vec2::new(112.0, 144.0));
+        game.world.entity_mut(id).unwrap().vel = Vec2::default();
+        let victim = game.spawn("oDamsel", Vec2::new(116.0, 144.0));
+        game.step(&crate::InputFrame::default());
+        assert!(game.world.entity(victim).is_none());
+        assert_eq!(game.world.entity(id).unwrap().state, 97);
+        let mut observed_blood_phase = false;
+        let mut observed_sleep = false;
+        let mut observed_stun = false;
+        let mut recovered = false;
+        for _ in 0..600 {
+            let trap = game.world.entity(id).unwrap();
+            let (state, phase, bounced) = (trap.state, trap.animation, trap.value("bounced"));
+            let blood_before: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oBlood")
+                .map(|e| e.id)
+                .collect();
+            game.step(&crate::InputFrame::default());
+            if state == 97 && phase == 8.0 {
+                assert!(
+                    game.world
+                        .entities
+                        .iter()
+                        .any(|e| e.object == "oBlood" && !blood_before.contains(&e.id))
+                );
+                observed_blood_phase = true;
+            }
+            let trap = game.world.entity(id).unwrap();
+            observed_sleep |= trap.state == 96;
+            observed_stun |= trap.state == 98;
+            if state == 98 && bounced == 0.0 && trap.value("bounced") != 0.0 {
+                assert!(
+                    game.world
+                        .entities
+                        .iter()
+                        .any(|e| e.object == "oBlood" && !blood_before.contains(&e.id))
+                );
+            }
+            if observed_stun && trap.state == 0 {
+                assert_eq!(trap.value("bounced"), 1.0);
+                recovered = true;
+                break;
+            }
+        }
+        assert!(observed_blood_phase && observed_sleep && observed_stun && recovered);
+        assert_eq!(game.player.health, 4);
+        assert_eq!(game.state, crate::RunState::Playing);
+    }
+
     #[test]
     fn mantrap_death_creates_leaves_blood_keeper_then_second_leaf_blood_burst() {
         let mut game = Game::shell(38, RulesPreset::Classic);
@@ -2328,6 +2811,8 @@ mod tests {
             expected.unit();
             expected.range(6);
         }
+        expected.range(2);
+        expected.range(8);
         tick(&mut game, &mut trap);
         assert!(!trap.alive);
         assert_eq!(
