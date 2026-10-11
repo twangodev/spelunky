@@ -1048,6 +1048,93 @@ mod tests {
         assert_eq!(last.pos, Vec2::new(280., 184.));
     }
     #[test]
+    fn real_exit_lava_death_enters_a_running_tally_without_reviving_player() {
+        use crate::characters::{self, Character};
+        use crate::model::GameEvent;
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
+                // Natural door/animation route; only the arriving hazard is
+                // controlled. Neither player life nor its Exit phase is set.
+                for (arriving_lava, ankh) in [(false, false), (true, false), (true, true)] {
+                    let mut g = Game::shell(11, rules);
+                    g.world = crate::model::World::new(40, 20, Area::Mines, 1);
+                    g.world.name = "Mines".into();
+                    for x in 0..40 {
+                        g.world.set_tile(x, 9, "oHardBlock");
+                    }
+                    // Controlled initial campaign room geometry. Ordinary
+                    // campaign exits use rTransition; no custom adapter flags.
+                    g.world.entrance = Vec2::new(120., 136.);
+                    g.player.pos = g.world.entrance;
+                    g.player.previous_pos = g.player.pos;
+                    g.spawn("oEntrance", Vec2::new(112., 128.));
+                    g.spawn("oExit", Vec2::new(128., 128.));
+                    characters::apply(&mut g, character);
+                    for _ in 0..8 {
+                        g.step(&InputFrame::default());
+                    }
+                    let initial_health = g.player.health;
+                    if ankh {
+                        let id = g.spawn("oAnkh", Vec2::new(g.player.pos.x, g.player.pos.y + 4.));
+                        // Let oItem's real no-shop Step clear its Create cost.
+                        g.step(&InputFrame::default());
+                        assert_eq!(g.world.entity(id).unwrap().value("cost"), 0.);
+                        g.step(&InputFrame {
+                            down: true,
+                            attack: true,
+                            attack_pressed: true,
+                            ..Default::default()
+                        });
+                        assert!(g.player.has("Ankh"));
+                    }
+                    for _ in 0..30 {
+                        g.step(&InputFrame {
+                            right: true,
+                            up: true,
+                            ..Default::default()
+                        });
+                        if g.player.is_exiting() {
+                            break;
+                        }
+                    }
+                    assert!(g.player.is_exiting(), "{rules:?}/{character:?}");
+                    assert_eq!(g.state, RunState::Ending);
+                    let exit_sprite = g.player.sprite.clone();
+                    if arriving_lava {
+                        g.spawn("oLava", Vec2::new(g.player.pos.x - 8., g.player.pos.y - 8.));
+                        g.step(&InputFrame::default());
+                        assert!(g.events.contains(&GameEvent::Damage { amount: 99 }));
+                        assert_eq!(g.player.sprite, exit_sprite);
+                        assert_eq!(g.player.health, if ankh { 4 } else { 0 });
+                        assert_eq!(g.state, if ankh { RunState::Ending } else { RunState::Dead });
+                        assert!(!g.player.has("Ankh"));
+                        assert_eq!(g.events.contains(&GameEvent::Died), !ankh);
+                    }
+                    let expected_health = if arriving_lava { if ankh { 4 } else { 0 } } else { initial_health };
+                    for _ in 0..40 {
+                        if g.ending.as_ref().unwrap().stage != EndingStage::Exit {
+                            break;
+                        }
+                        g.step(&InputFrame::default());
+                    }
+                    assert_eq!(g.world.name, "rTransition1");
+                    assert_eq!(g.ending.as_ref().unwrap().stage, EndingStage::Transition);
+                    assert_eq!(g.state, RunState::Ending);
+                    assert_eq!(g.player.health, expected_health);
+                    assert!(g.game_over.destination.is_none(), "no GameOver acknowledgment was sent");
+                    let stage_tick = g.ending.as_ref().unwrap().stage_tick;
+                    for _ in 0..60 {
+                        g.step(&InputFrame::default());
+                    }
+                    let tally = g.ending.as_ref().unwrap();
+                    assert_eq!(tally.stage_tick, stage_tick + 60);
+                    assert!(tally.draw_loot >= 0, "the new room's controller runs after dead-player departure");
+                    assert_eq!(g.player.health, expected_health, "room routing must not revive the departed player");
+                }
+            }
+        }
+    }
+    #[test]
     fn lava_spray_requests_flame_only_if_idle_each_source_step() {
         let mut g = game();
         begin_custom(&mut g);
@@ -1506,6 +1593,10 @@ pub(crate) fn player_animation_end(game: &mut Game) {
         let room = transition_room(game);
         enter(game, &mut s, EndingStage::Transition, room);
     }
+    // Animation End replaces the departing, nonpersistent Player/Game with
+    // the authored cinematic controller even if lava killed that player.
+    // Keep global life/death consequences; this selects the new room's Step.
+    game.state = RunState::Ending;
     game.ending = Some(s);
 }
 fn tick_inner(game: &mut Game, input: &InputFrame, world_already_ticked: bool) {
