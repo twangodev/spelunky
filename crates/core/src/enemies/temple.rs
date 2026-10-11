@@ -51,6 +51,7 @@ pub fn init(e: &mut Entity) {
             e.timer = 0;
             e.set_sprite("sOlmecStart1");
             e.data.insert("intro_stage".into(), 0.0);
+            e.data.insert("shopWall".into(), 0.0);
             e.data.insert("invincible".into(), 1.0);
             e.data.insert("no_stomp".into(), 1.0);
             e.data.insert("no_whip".into(), 1.0);
@@ -1168,29 +1169,12 @@ fn olmec(game: &mut Game, e: &mut Entity) {
             }
         }
         7 => {
-            let target = if e.alive {
-                Some(Vec2::new(e.pos.x + 32.0, e.pos.y + 16.0))
-            } else {
-                // Qualified oOlmec.x/y excludes a tombstoned receiver. Create
-                // queries the first remaining live, active family instance.
-                crate::dispatcher::register_instances(game);
-                crate::dispatcher::descendant_instances(game, "oOlmec")
-                    .into_iter()
-                    .find_map(|instance| match instance {
-                        Instance::Entity(id) => game
-                            .world
-                            .entity(id)
-                            .filter(|boss| boss.engine_active)
-                            .map(|boss| Vec2::new(boss.pos.x + 32.0, boss.pos.y + 16.0)),
-                        _ => None,
-                    })
-            };
             for _ in 0..6 {
                 let pos = Vec2::new(
                     e.pos.x + 32.0 + f64::from(game.rng.range(33)) - f64::from(game.rng.range(33)),
                     e.pos.y + 14.0 + f64::from(game.rng.range(33)) - f64::from(game.rng.range(33)),
                 );
-                if let Some(target) = target {
+                if let Some(target) = crate::world_events::qualified_olmec_target(game, Some(e)) {
                     crate::world_events::spawn_psychic_create_2(game, pos, target);
                 } else {
                     // Under Ignore, the failed child Create still returns its
@@ -2511,13 +2495,21 @@ mod tests {
             assert_eq!(effect.previous_pos, pos, "source Create origin");
             let angle = (target.y - pos.y).atan2(target.x - pos.x);
             let velocity = Vec2::new(2.0 * angle.cos(), 2.0 * angle.sin());
-            assert_eq!(
-                effect.vel, velocity,
+            let expected_dir = (-angle.to_degrees()).rem_euclid(360.0);
+            let dir = *effect.data.get("dir").expect("source Create assigns dir");
+            assert!((dir - expected_dir).abs() < 1e-12);
+            assert_eq!(effect.data.get("y_vel"), Some(&0.0));
+            // Source Step converts stored degrees back to radians. The adapter
+            // uses f64; native x87 transcendental bits are not an oracle.
+            assert!(
+                (effect.vel.x - velocity.x).abs() < 1e-12
+                    && (effect.vel.y - velocity.y).abs() < 1e-12,
                 "heading must be fixed while the boss is detached"
             );
-            assert_eq!(
-                effect.pos,
-                Vec2::new(pos.x + velocity.x, pos.y + velocity.y)
+            assert!(
+                (effect.pos.x - pos.x - velocity.x).abs() < 1e-12
+                    && (effect.pos.y - pos.y - velocity.y).abs() < 1e-12,
+                "source psychic displacement after degree conversion"
             );
             assert_eq!(effect.value("psychic_initialized"), 1.0);
             assert!(effect.id < balls[0].id, "all six effects precede the balls");

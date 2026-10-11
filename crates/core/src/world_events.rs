@@ -936,12 +936,102 @@ pub(crate) fn spawn_psychic_create_p(game: &mut Game, pos: Vec2, velocity: Vec2)
     id
 }
 
+/// Qualified oOlmec.x/y uses the current active array, whose order changes
+/// when instances are reactivated. The currently executing Olmec is detached
+/// from World, but remains query-visible until its Destroy callback finishes.
+pub(crate) fn qualified_olmec_target(game: &mut Game, receiver: Option<&Entity>) -> Option<Vec2> {
+    crate::dispatcher::register_instances(game);
+    let mut first = crate::dispatcher::descendant_instances(game, "oOlmec")
+        .into_iter()
+        .find_map(|instance| {
+            let pos = match instance {
+                crate::dispatcher::Instance::Entity(id) => game
+                    .world
+                    .entity(id)
+                    .filter(|boss| boss.engine_active)
+                    .map(|boss| boss.pos)?,
+                crate::dispatcher::Instance::Terrain(index) => game
+                    .world
+                    .tiles
+                    .get(index)
+                    .filter(|tile| tile.engine_active)
+                    .map(|_| instance.position(game))?,
+                crate::dispatcher::Instance::Player => return None,
+            };
+            Some((instance, pos))
+        });
+    // Existing family queries use registration_order, refreshed from the
+    // active array by activation. Merge just the detached executing receiver.
+    if let Some(receiver) =
+        receiver.filter(|e| e.alive && e.engine_active && catalog::is_a(&e.object, "oOlmec"))
+    {
+        let own = crate::dispatcher::Instance::Entity(receiver.id);
+        let order = &game.dispatcher.registration_order;
+        if let Some(index) = order.iter().position(|instance| *instance == own) {
+            if first.is_none_or(|(instance, _)| {
+                order
+                    .iter()
+                    .position(|i| *i == instance)
+                    .is_some_and(|first_index| index < first_index)
+            }) {
+                first = Some((own, receiver.pos));
+            }
+        }
+    }
+    first.map(|(_, pos)| Vec2::new(pos.x + 32.0, pos.y + 16.0))
+}
+
+fn psychic_direction(pos: Vec2, target: Vec2) -> f64 {
+    let dx = target.x - pos.x;
+    let dy = target.y - pos.y;
+    if dx == 0.0 {
+        if dy > 0.0 {
+            270.0
+        } else if dy < 0.0 {
+            90.0
+        } else {
+            0.0
+        }
+    } else {
+        let degrees = dy.atan2(dx) * 180.0 / std::f64::consts::PI;
+        if degrees > 0.0 {
+            360.0 - degrees
+        } else {
+            -degrees
+        }
+    }
+}
+
+fn initialize_psychic_create_2(e: &mut Entity, target: Option<Vec2>) {
+    // DrawnSprite inherited Create, then PsychicCreate2's own prefix.
+    e.text.insert("type".into(), String::new());
+    e.data.insert("blinkToggle".into(), 0.0);
+    e.vel.y = 0.0;
+    e.data.insert("y_acc".into(), 0.6);
+    e.data.insert("y_vel".into(), 0.0);
+    e.set_image_speed(0.4);
+    if let Some(target) = target {
+        let angle = (target.y - e.pos.y).atan2(target.x - e.pos.x);
+        e.data
+            .insert("dir".into(), psychic_direction(e.pos, target));
+        e.vel = Vec2::new(2.0 * angle.cos(), 2.0 * angle.sin());
+    } else {
+        e.data.insert("psychic_missing_dir".into(), 1.0);
+    }
+    e.data.insert("psychic_initialized".into(), 1.0);
+}
+
+fn report_psychic_create_missing_owner(game: &mut Game) {
+    *game.data.entry("source_runtime_errors".into()).or_default() += 1.0;
+    game.events.push(GameEvent::Message(
+        "SOURCE RUNTIME ERROR: oPsychicCreate2 Create: oOlmec has no active instance; child Create code block aborted."
+            .into(),
+    ));
+}
+
 pub(crate) fn spawn_psychic_create_2(game: &mut Game, pos: Vec2, target: Vec2) -> u64 {
     let id = game.world.spawn("oPsychicCreate2", pos);
-    let e = game.world.entity_mut(id).unwrap();
-    let angle = (target.y - pos.y).atan2(target.x - pos.x);
-    e.vel = Vec2::new(2.0 * angle.cos(), 2.0 * angle.sin());
-    e.data.insert("psychic_initialized".into(), 1.0);
+    initialize_psychic_create_2(game.world.entity_mut(id).unwrap(), Some(target));
     id
 }
 
@@ -950,52 +1040,43 @@ pub(crate) fn spawn_psychic_create_2(game: &mut Game, pos: Vec2, target: Vec2) -
 /// separate error rather than using a fabricated heading to a retired boss.
 pub(crate) fn spawn_psychic_create_2_without_owner(game: &mut Game, pos: Vec2) -> u64 {
     let id = game.world.spawn("oPsychicCreate2", pos);
-    let effect = game.world.entity_mut(id).unwrap();
-    effect.text.insert("type".into(), String::new());
-    effect.data.insert("blinkToggle".into(), 0.0);
-    effect.vel.y = 0.0;
-    effect.data.insert("y_acc".into(), 0.6);
-    effect.data.insert("psychic_initialized".into(), 1.0);
-    effect.data.insert("psychic_missing_dir".into(), 1.0);
-    *game.data.entry("source_runtime_errors".into()).or_default() += 1.0;
-    game.events.push(GameEvent::Message(
-        "SOURCE RUNTIME ERROR: oPsychicCreate2 Create: oOlmec has no active instance; child Create code block aborted."
-            .into(),
-    ));
+    initialize_psychic_create_2(game.world.entity_mut(id).unwrap(), None);
+    report_psychic_create_missing_owner(game);
     id
 }
 
-fn initialize_psychic_create(game: &Game, e: &mut Entity) {
+fn initialize_psychic_create(game: &mut Game, e: &mut Entity) {
     if e.value("psychic_initialized") != 0.0 {
         return;
     }
     e.vel = Vec2::default();
     if e.object == "oPsychicCreate2" {
-        if let Some(olmec) = game
-            .world
-            .entities
-            .iter()
-            .find(|o| o.alive && o.object == "oOlmec")
-        {
-            let dx = olmec.pos.x + 32.0 - e.pos.x;
-            let dy = olmec.pos.y + 16.0 - e.pos.y;
-            let angle = dy.atan2(dx);
-            e.vel = Vec2::new(2.0 * angle.cos(), 2.0 * angle.sin());
+        let target = qualified_olmec_target(game, None);
+        initialize_psychic_create_2(e, target);
+        if target.is_none() {
+            report_psychic_create_missing_owner(game);
         }
+    } else {
+        e.data.insert("psychic_initialized".into(), 1.0);
     }
-    e.data.insert("psychic_initialized".into(), 1.0);
 }
 
 fn psychic_create(game: &mut Game, e: &mut Entity) {
-    if e.value("psychic_missing_dir") != 0.0 {
-        *game.data.entry("source_runtime_errors".into()).or_default() += 1.0;
-        game.events.push(GameEvent::Message(
-            "SOURCE RUNTIME ERROR: oPsychicCreate2 Step: dir is uninitialized; Step code block aborted."
-                .into(),
-        ));
-        return;
-    }
     initialize_psychic_create(game, e);
+    if e.object == "oPsychicCreate2" {
+        let Some(dir) = e.data.get("dir").copied() else {
+            *game.data.entry("source_runtime_errors".into()).or_default() += 1.0;
+            game.events.push(GameEvent::Message(
+                "SOURCE RUNTIME ERROR: oPsychicCreate2 Step: dir is uninitialized; Step code block aborted."
+                    .into(),
+            ));
+            return;
+        };
+        // Entity.vel is the movement cache for this manually moved effect.
+        // Literal source yVel remains zero in data["y_vel"].
+        let radians = dir.to_radians();
+        e.vel = Vec2::new(2.0 * radians.cos(), -2.0 * radians.sin());
+    }
     e.pos.x += e.vel.x;
     e.pos.y += e.vel.y;
     let player_effect = e.object == "oPsychicCreateP";
