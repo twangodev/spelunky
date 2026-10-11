@@ -338,7 +338,8 @@ fn vampire(game: &mut Game, e: &mut Entity) {
         game.spawn("oSmokePuff", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
         game.sound("sndCavemanDie", e.pos);
         e.alive = false;
-        return;
+        // Own instance_destroy finishes Enemy Destroy before this Step resumes.
+        super::destroyed(game, e);
     }
     if grounded && e.state != 98 {
         e.vel.y = 0.0;
@@ -547,7 +548,8 @@ fn vampire(game: &mut Game, e: &mut Entity) {
                 cape.data.insert("forSale".into(), 0.0);
             }
             e.alive = false;
-            return;
+            // The DEAD branch still reaches scrCheckCollisions and its art tail.
+            super::destroyed(game, e);
         }
         // THROW is declared in the source but no Step branch assigns behavior.
         _ => {}
@@ -1420,5 +1422,210 @@ mod tests {
         game.world.spawn("oBlood", Vec2::new(48.0, 48.0));
         absorb_blood(&mut game, &mut e);
         assert_eq!(e.health, 1);
+    }
+}
+
+#[cfg(test)]
+mod vampire_own_destroy_tail_tests {
+    use super::*;
+    use crate::{Rng, RngAlgorithm, RulesPreset};
+
+    #[derive(Clone, Copy)]
+    enum OracleMode {
+        Legacy,
+        Canonical,
+    }
+    impl OracleMode {
+        fn game(self, seed: u64, rules: RulesPreset) -> Game {
+            match self {
+                Self::Legacy => Game::legacy_shell(seed, rules),
+                Self::Canonical => Game::shell(u32::try_from(seed).unwrap(), rules),
+            }
+        }
+    }
+
+    // Legacy preserves the frozen raw-adapter oracle. Canonical never calls a
+    // production draw while constructing the independent expected sequence.
+    enum DirectSourceTape {
+        Legacy(Rng),
+        Canonical(u32),
+    }
+    impl DirectSourceTape {
+        fn at(game: &Game) -> Self {
+            match game.rng.algorithm() {
+                RngAlgorithm::LegacySplitMix64V1 => Self::Legacy(game.rng.clone()),
+                RngAlgorithm::Gm8Lcg32V1 => {
+                    Self::Canonical(u32::try_from(game.rng.state_bits()).unwrap())
+                }
+            }
+        }
+        fn next_u64(&mut self) -> u64 {
+            match self {
+                Self::Legacy(t) => t.next_u64(),
+                Self::Canonical(state) => {
+                    *state = state.wrapping_mul(0x0808_8405).wrapping_add(1);
+                    u64::from(*state)
+                }
+            }
+        }
+        fn rand(&mut self, width: u64) -> u64 {
+            let legacy = matches!(self, Self::Legacy(_));
+            let raw = self.next_u64();
+            if legacy {
+                raw % width
+            } else {
+                (raw * width) >> 32
+            }
+        }
+    }
+
+    fn own_dead_destroy_finishes_before_retired_collision_and_held_art_tail_case(mode: OracleMode) {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = mode.game(42, rules);
+            game.world = World::new(30, 20, crate::Area::Mines, 1);
+            game.player.pos = Vec2::new(240.0, 152.0);
+            game.player.previous_pos = game.player.pos;
+            game.world.set_tile(3, 3, "oBlock");
+            for x in 0..30 {
+                game.world.set_tile(x, 4, "oBlock");
+            }
+            let mut actor = Entity::new(99, "oVampire", Vec2::new(34.0, 48.0));
+            crate::enemies::init_entity(&mut actor);
+            // Initial event-scoped DEAD/held contact intentionally exposes the
+            // retired local actor that Game.step removes before public lookup.
+            actor.state = 99;
+            actor.health = 0;
+            actor.held = true;
+            actor.vel = Vec2::new(2.0, 0.0);
+            game.player.held = Some(actor.id);
+            game.player.pickup_item_type = "Vampire".into();
+            assert!(bottom(&game.world, &actor));
+            assert!(side(&game.world, &actor, 1, 1.0));
+            assert!(!side(&game.world, &actor, -1, 1.0));
+            vampire(&mut game, &mut actor);
+            assert!(!actor.alive);
+            assert_eq!(
+                actor.value("enemy_destroyed"),
+                1.0,
+                "SYNCHRONOUS_ENEMY_DESTROY"
+            );
+            assert_eq!(game.player.held, None);
+            assert_eq!(
+                game.player.pickup_item_type, "Vampire",
+                "SOURCE_WRITES_PICKUPITEM_NOT_TYPE"
+            );
+            assert!(actor.held, "DESTROY_RETAINS_RECEIVER_HELD_FIELD");
+            assert_eq!(
+                actor.pos,
+                Vec2::new(33.0, 48.0),
+                "POST_DEAD_SCRCHECKCOLLISIONS"
+            );
+            assert_eq!(actor.vel, Vec2::default(), "POST_DEAD_FRICTION");
+            assert_eq!(actor.sprite, "sVampireDHeldL", "POST_DEAD_HELD_ART");
+            let bones: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oBone")
+                .collect();
+            assert_eq!(bones.len(), 3);
+            assert!(
+                bones.iter().all(|e| e.pos == Vec2::new(42.0, 56.0)),
+                "PRE_TAIL_OTHER_SELF_ORIGIN"
+            );
+            assert_eq!(game.data.get("kills"), Some(&1.0));
+            // No second public event or artificial re-entry is dispatched on
+            // this retired actor; callback idempotence is the shared contract.
+        }
+    }
+
+    fn own_stunned_crush_keeps_burning_timer_draws_and_recovery_body_case(mode: OracleMode) {
+        let mut saw_burn = false;
+        let mut saw_skip = false;
+        for seed in 0..16 {
+            for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+                let mut game = mode.game(seed, rules);
+                game.world = World::new(30, 20, crate::Area::Mines, 1);
+                game.player.pos = Vec2::new(240.0, 152.0);
+                for y in 5..=6 {
+                    for x in 6..=7 {
+                        game.world.set_tile(x, y, "oBlock");
+                    }
+                }
+                let mut actor = Entity::new(99, "oVampire", Vec2::new(96.0, 80.0));
+                crate::enemies::init_entity(&mut actor);
+                actor.state = 98;
+                actor.timer = 60;
+                actor.vel = Vec2::default();
+                actor.data.insert("burning".into(), 2.0);
+                let mut expected = DirectSourceTape::at(&game);
+                // Literal phase oracle: preserve Legacy raw adapter; canonical
+                // uses independent LCG/multiply-high math. Burn Create no RNG.
+                let burn = expected.rand(5) == 0;
+                let position = if burn {
+                    Some(Vec2::new(
+                        96.0 + (4 + expected.rand(9)) as f64,
+                        80.0 + (4 + expected.rand(9)) as f64,
+                    ))
+                } else {
+                    None
+                };
+                vampire(&mut game, &mut actor);
+                assert!(!actor.alive);
+                assert_eq!(actor.value("burning"), 1.0, "OWN_BURNING_AFTER_CRUSH");
+                assert_eq!(actor.timer, 59, "STUNNED_BODY_AFTER_CRUSH");
+                assert_eq!(actor.value("bounced"), 1.0);
+                let burns: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oBurn")
+                    .collect();
+                assert_eq!(burns.len(), usize::from(burn));
+                if let Some(position) = position {
+                    assert_eq!(burns[0].pos, position);
+                }
+                assert_eq!(
+                    game.rng.next_u64(),
+                    expected.next_u64(),
+                    "OWN_BURN_SOURCE_DRAW_ORDER"
+                );
+                assert!(
+                    !game
+                        .world
+                        .entities
+                        .iter()
+                        .any(|e| e.object == "oCapePickup")
+                );
+                saw_burn |= burn;
+                saw_skip |= !burn;
+            }
+        }
+        assert!(saw_burn && saw_skip, "BOTH_SOURCE_BURN_BRANCHES_REQUIRED");
+    }
+
+    // Each mode is a distinct test, not a second iteration hidden by old failure.
+    #[test]
+    fn legacy_own_dead_destroy_finishes_before_retired_collision_and_held_art_tail() {
+        own_dead_destroy_finishes_before_retired_collision_and_held_art_tail_case(
+            OracleMode::Legacy,
+        );
+    }
+
+    #[test]
+    fn canonical_own_dead_destroy_finishes_before_retired_collision_and_held_art_tail() {
+        own_dead_destroy_finishes_before_retired_collision_and_held_art_tail_case(
+            OracleMode::Canonical,
+        );
+    }
+
+    #[test]
+    fn legacy_own_stunned_crush_keeps_burning_timer_draws_and_recovery_body() {
+        own_stunned_crush_keeps_burning_timer_draws_and_recovery_body_case(OracleMode::Legacy);
+    }
+
+    #[test]
+    fn canonical_own_stunned_crush_keeps_burning_timer_draws_and_recovery_body() {
+        own_stunned_crush_keeps_burning_timer_draws_and_recovery_body_case(OracleMode::Canonical);
     }
 }
