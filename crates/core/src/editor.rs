@@ -48,11 +48,12 @@ impl EditorState {
     }
 
     pub fn set_tile(&mut self, x: usize, y: usize, tile: char) -> Result<(), String> {
+        self.edit_tile(x, y, tile, false)
+    }
+
+    fn edit_tile(&mut self, x: usize, y: usize, tile: char, fresh: bool) -> Result<(), String> {
         let mut next = self.level.clone();
         next.set_tile(x, y, tile)?;
-        if next == self.level {
-            return Ok(());
-        }
         // Keep door/sign records attached to their cells when row-major order changes.
         let previous = self.level.get_tile(x, y).unwrap_or('0');
         for door in [true, false] {
@@ -60,12 +61,22 @@ impl EditorState {
                 remap_records(&self.level, &mut next, door);
             }
         }
+        if fresh {
+            // scrCreateTile creates a new door/sign, whose Create clears its text.
+            if let Some(index) = record_index(&next, x, y, true) {
+                materialize_records(&mut next, true);
+                next.exit_targets[index].clear();
+            } else if let Some(index) = record_index(&next, x, y, false) {
+                materialize_records(&mut next, false);
+                next.signs[index].clear();
+            }
+        }
         self.replace_level(next);
         Ok(())
     }
 
     pub fn paint(&mut self, x: usize, y: usize) -> Result<(), String> {
-        self.set_tile(x, y, self.selected_tile)
+        self.edit_tile(x, y, self.selected_tile, true)
     }
     pub fn erase(&mut self, x: usize, y: usize) -> Result<(), String> {
         self.set_tile(x, y, '0')

@@ -440,17 +440,17 @@ impl EditorUi {
             );
             self.cursor = Some(cell);
             let result = if left || right {
+                let erase = right && !left;
                 let start = self
                     .stroke
-                    .filter(|&(_, _, erase)| erase == right)
+                    .filter(|&(_, _, was_erase)| was_erase == erase)
                     .map_or(cell, |(x, y, _)| (x, y));
-                self.stroke = Some((cell.0, cell.1, right));
+                self.stroke = Some((cell.0, cell.1, erase));
                 let steps = start
                     .0
                     .abs_diff(cell.0)
                     .max(start.1.abs_diff(cell.1))
                     .max(1);
-                let tile = if right { '0' } else { self.state.selected_tile };
                 let mut result = Ok(());
                 for step in 0..=steps {
                     let alpha = step as f64 / steps as f64;
@@ -458,7 +458,12 @@ impl EditorUi {
                         as usize;
                     let py = (start.1 as f64 + (cell.1 as f64 - start.1 as f64) * alpha).round()
                         as usize;
-                    if let Err(error) = self.state.set_tile(px, py, tile) {
+                    let edit = if erase {
+                        self.state.erase(px, py)
+                    } else {
+                        self.state.paint(px, py)
+                    };
+                    if let Err(error) = edit {
                         result = Err(error);
                         break;
                     }
@@ -803,6 +808,104 @@ fn draw_tile(quads: &mut Vec<DrawQuad>, atlas: &Atlas, tile: char, x: f32, y: f3
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn simultaneous_mouse_buttons_paint_before_right_only_erase() {
+        let mut ui = EditorUi::new();
+        ui.pointer(4.0, 40.0, true, true);
+        assert_eq!(ui.state.level.get_tile(0, 11), Some('1'));
+        ui.pointer(20.0, 40.0, true, true);
+        for x in 0..=2 {
+            assert_eq!(ui.state.level.get_tile(x, 11), Some('1'));
+        }
+        // Switching to right-only starts a new erasing stroke at that cell.
+        ui.pointer(28.0, 40.0, false, true);
+        assert_eq!(ui.state.level.get_tile(2, 11), Some('1'));
+        assert_eq!(ui.state.level.get_tile(3, 11), Some('0'));
+        ui.pointer(20.0, 40.0, false, true);
+        assert_eq!(ui.state.level.get_tile(2, 11), Some('0'));
+        assert_eq!(ui.state.level.get_tile(1, 11), Some('1'));
+    }
+
+    #[test]
+    fn repainting_doors_and_signs_creates_fresh_text_and_undo_restores_it() {
+        for (tile, replacement) in [('@', '@'), ('X', 'X'), ('I', 'I'), ('@', 'X'), ('X', '@')] {
+            let mut ui = EditorUi::new();
+            ui.state.select(tile).unwrap();
+            ui.pointer(4.0, 40.0, true, false);
+            ui.pointer(4.0, 40.0, false, false);
+            // Customize through the ordinary editor text-entry keys.
+            ui.key(
+                if tile == 'I' {
+                    KeyCode::KeyS
+                } else {
+                    KeyCode::KeyL
+                },
+                None,
+                false,
+            );
+            ui.key(KeyCode::KeyA, Some("custom text"), false);
+            ui.key(KeyCode::Enter, None, false);
+            let customized = ui.state.level.clone();
+            ui.state.select(replacement).unwrap();
+            ui.pointer(4.0, 40.0, true, false);
+            let index = 0;
+            assert_eq!(
+                if tile == 'I' {
+                    ui.state.level.sign_message(index)
+                } else {
+                    ui.state.level.exit_target(index)
+                },
+                ""
+            );
+            ui.key(KeyCode::KeyZ, None, true);
+            assert_eq!(
+                ui.state.level, customized,
+                "undo must restore the customized {tile}"
+            );
+            ui.key(KeyCode::KeyY, None, true);
+            assert_eq!(
+                if tile == 'I' {
+                    ui.state.level.sign_message(index)
+                } else {
+                    ui.state.level.exit_target(index)
+                },
+                ""
+            );
+        }
+    }
+
+    #[test]
+    fn repainting_one_imported_record_preserves_other_cells_and_extra_records() {
+        let mut authored = Level::default();
+        authored.set_tile(0, 11, '@').unwrap();
+        authored.set_tile(1, 11, 'X').unwrap();
+        authored.set_tile(2, 11, 'I').unwrap();
+        authored.set_tile(3, 11, 'I').unwrap();
+        authored.exit_targets = vec!["first.lvl".into(), "other.lvl".into(), "extra-door".into()];
+        authored.signs = vec![
+            "first sign".into(),
+            "other sign".into(),
+            "extra-sign".into(),
+        ];
+        let mut ui = EditorUi::new();
+        ui.load("records.lvl", &authored.to_text()).unwrap();
+        ui.state.select('@').unwrap();
+        ui.pointer(4.0, 40.0, true, false);
+        assert_eq!(ui.state.level.exit_targets, ["", "other.lvl", "extra-door"]);
+        assert_eq!(ui.state.level.signs, authored.signs);
+        ui.pointer(12.0, 40.0, false, false);
+        ui.state.select('I').unwrap();
+        ui.pointer(12.0, 40.0, true, false);
+        assert_eq!(ui.state.level.exit_targets, ["", "extra-door"]);
+        assert_eq!(
+            ui.state.level.signs,
+            ["", "first sign", "other sign", "extra-sign"]
+        );
+        ui.key(KeyCode::KeyZ, None, true);
+        assert_eq!(ui.state.level.exit_targets, ["", "other.lvl", "extra-door"]);
+        assert_eq!(ui.state.level.signs, authored.signs);
+    }
+
     #[test]
     fn ordinary_palette_selection_uses_source_cursor_and_preview_artwork() {
         let source = include_str!(
