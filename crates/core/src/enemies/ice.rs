@@ -1434,9 +1434,57 @@ fn king_player_collision(game: &mut Game, e: &mut Entity) {
     }
 }
 
+// AlienBoss owns Character collision: its floor+1 damage, player Blood guard,
+// and hurt/dead-state gate differ from the King's independent callback.
+fn alien_boss_player_collision(game: &mut Game, e: &mut Entity) {
+    if super::player_alive(game)
+        && matches!(
+            game.player.state,
+            PlayerState::Jumping | PlayerState::Falling
+        )
+        && game.player.pos.y < e.pos.y + 8.0
+        && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
+    {
+        game.player.vel.y = -6.0 - 0.2 * game.player.vel.y;
+        let damage = ((game.player.data.get("fall_timer").copied().unwrap_or(0.0) / 16.0).floor()
+            + 1.0) as i32;
+        if game.player.has("SpikeShoes") {
+            e.health -= 3 * damage;
+            if e.value("bloodless") == 0.0 {
+                game.spawn(
+                    "oBlood",
+                    Vec2::new(game.player.pos.x, game.player.pos.y + 8.0),
+                );
+            }
+        } else {
+            e.health -= damage;
+        }
+        game.player.data.insert("fall_timer".into(), 0.0);
+        super::set_counts_as_kill(e, true);
+        game.spawn("oBlood", Vec2::new(e.pos.x + 16.0, e.pos.y + 8.0));
+        game.sound("sndHit", e.pos);
+    } else if game.player.invincible == 0 && e.state != 99 {
+        game.player.data.insert("blink".into(), 30.0);
+        game.player.invincible = 30;
+        if game.player.pos.y < e.pos.y {
+            game.player.vel.y = -6.0;
+        }
+        game.player.vel.x = if game.player.pos.x < e.pos.x {
+            -6.0
+        } else {
+            6.0
+        };
+        hurt_player_cause(game, 1, crate::statistics::EnemyDeath::AlienBoss);
+    }
+}
+
 fn giant_player_collision(game: &mut Game, e: &mut Entity) {
     let king = e.object == "oYetiKing";
     if king && (game.player.pos.x - (e.pos.x + 16.0)).abs() > 16.0 {
+        return;
+    }
+    if e.object == "oAlienBoss" {
+        alien_boss_player_collision(game, e);
         return;
     }
     if super::player_alive(game)
