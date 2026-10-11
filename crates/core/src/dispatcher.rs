@@ -1107,11 +1107,43 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
                 .get(&key)
                 .cloned()
                 .unwrap_or_default();
+            // A singleton keeps the original linear lookup path. For larger
+            // batches only alarm-slot writes occur between callbacks, so index
+            // the visible vector without crossing a callback, registration
+            // pass, activation, or storage partition.
+            let singleton = instances.len() == 1;
+            let mut entity_indices: Option<HashMap<u64, (usize, bool, bool)>> = None;
             for i in instances {
-                if !alive(game, i) || !is_active(game, i) {
-                    continue;
-                }
-                let due = i.alarms_mut(game).is_some_and(|a| {
+                let alarms = if singleton {
+                    if alive(game, i) && is_active(game, i) {
+                        i.alarms_mut(game)
+                    } else {
+                        None
+                    }
+                } else if let Instance::Entity(id) = i {
+                    let indices = entity_indices.get_or_insert_with(|| {
+                        let mut indices = HashMap::with_capacity(game.world.entities.len());
+                        for (position, entity) in game.world.entities.iter().enumerate() {
+                            let entry =
+                                indices.entry(entity.id).or_insert((position, false, false));
+                            // Keep the old separate existential predicates even
+                            // for public/deserialized vectors with duplicate IDs.
+                            entry.1 |= entity.alive;
+                            entry.2 |= entity.engine_active;
+                        }
+                        indices
+                    });
+                    indices
+                        .get(&id)
+                        .filter(|(_, any_alive, any_active)| *any_alive && *any_active)
+                        .and_then(|&(position, _, _)| game.world.entities.get_mut(position))
+                        .map(|entity| &mut entity.alarms)
+                } else if alive(game, i) && is_active(game, i) {
+                    i.alarms_mut(game)
+                } else {
+                    None
+                };
+                let due = alarms.is_some_and(|a| {
                     if a[index as usize] >= 0 {
                         a[index as usize] -= 1;
                         a[index as usize] == 0
@@ -1120,6 +1152,9 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
                     }
                 });
                 if due {
+                    // Source callbacks may remove/reinsert actors, create
+                    // instances, or activate regions. No index survives one.
+                    entity_indices = None;
                     alarm(game, i, index);
                 }
             }
