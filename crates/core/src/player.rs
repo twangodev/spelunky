@@ -208,6 +208,48 @@ fn ladder_at(w: &World, pos: Vec2) -> Option<Vec2> {
 fn ladder_segment_at(w: &World, pos: Vec2) -> Option<Vec2> {
     ladder_match(w, pos, false)
 }
+/// Literal instance_place: translate the current Player sprite mask without
+/// changing its transform or frame, then return the first active source-family
+/// instance in registration order. This is separate from ladder point probes.
+fn ladder_place(
+    w: &World,
+    p: &Player,
+    pos: Vec2,
+    order: &[crate::dispatcher::Instance],
+) -> Option<Vec2> {
+    let caller = p.collision_mask_at(pos);
+    order.iter().find_map(|instance| {
+        let (target, origin) = match *instance {
+            crate::dispatcher::Instance::Terrain(index) => {
+                let tile = w.tiles.get(index)?;
+                if !tile.engine_active || !crate::catalog::is_a(&tile.object, "oLadder") {
+                    return None;
+                }
+                let x = (index % w.width) as i32;
+                let y = (index / w.width) as i32;
+                (
+                    w.tile_collision_mask(x, y),
+                    Vec2::new(f64::from(x) * 16.0, f64::from(y) * 16.0),
+                )
+            }
+            crate::dispatcher::Instance::Entity(id) => {
+                let entity = w.entity(id)?;
+                if !entity.alive
+                    || !entity.engine_active
+                    || !crate::catalog::is_a(&entity.object, "oLadder")
+                {
+                    return None;
+                }
+                (entity.collision_mask(), entity.pos)
+            }
+            crate::dispatcher::Instance::Player => return None,
+        };
+        caller
+            .intersects_mask(&target)
+            .then_some(Vec2::new(origin.x + 8.0, origin.y))
+    })
+}
+
 fn ladder_match(w: &World, pos: Vec2, include_top: bool) -> Option<Vec2> {
     let tx = (pos.x / 16.0).floor() as i32;
     let ty = (pos.y / 16.0).floor() as i32;
@@ -841,6 +883,14 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             _ => None,
         })
         .collect();
+    // Only attachment uses instance_place; climbing/eligibility keep their
+    // literal point probes. Never substitute World storage order for source
+    // registration order when a caller bypasses the dispatcher.
+    let ladder_order = if input.up || input.down {
+        crate::dispatcher::descendant_instances(game, "oLadder")
+    } else {
+        Vec::new()
+    };
     let p = &mut game.player;
     if p.state == PlayerState::Dead || p.is_stunned() {
         // Source keeps its platform state separate from dead/stunned. The
@@ -1276,7 +1326,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             // characterStepEvent550 clears the previous fall before either
             // attaching to the ladder below or beginning a platform drop.
             fall = 0.0;
-            if let Some(ladder) = ladder_segment_at(w, Vec2::new(p.pos.x, p.pos.y + 16.0)) {
+            if let Some(ladder) =
+                ladder_place(w, p, Vec2::new(p.pos.x, p.pos.y + 16.0), &ladder_order)
+            {
                 if (p.pos.x - ladder.x).abs() < 4.0 {
                     p.pos.x = ladder.x;
                     p.vel = Vec2::default();
@@ -1334,7 +1386,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
                     &["oLadderTop", "oVineTop"],
                 )))
     {
-        if let Some(ladder) = ladder_segment_at(w, Vec2::new(p.pos.x, p.pos.y - 8.0)) {
+        if let Some(ladder) = ladder_place(w, p, Vec2::new(p.pos.x, p.pos.y - 8.0), &ladder_order) {
             if (p.pos.x - ladder.x).abs() < 4.0 {
                 p.pos.x = ladder.x;
                 if ladder_at(w, p.pos).is_none() {
@@ -3174,7 +3226,7 @@ mod tests {
             characters::apply(&mut g, character);
             g.player.health = 20;
             for y in 5..10 {
-                g.world.set_tile(5, y, "oLadder");
+                g.world.set_tile(5, y, "oLadderOrange");
             }
             g.step(&InputFrame {
                 up: true,
@@ -3414,9 +3466,10 @@ mod tests {
     #[test]
     fn ladder_grab_snaps_and_climb_uses_point_six_acceleration() {
         let mut g = room(RulesPreset::Classic);
-        g.world.set_tile(5, 9, "oLadder");
-        g.world.set_tile(5, 8, "oLadder");
+        g.world.set_tile(5, 9, "oLadderOrange");
+        g.world.set_tile(5, 8, "oLadderOrange");
         g.player.pos.x = 89.0;
+        crate::dispatcher::register_instances(&mut g);
         step(
             &mut g,
             InputFrame {

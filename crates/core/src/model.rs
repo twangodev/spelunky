@@ -255,15 +255,13 @@ impl Player {
         self.collision_mask().intersects(rect, precision)
     }
     pub(crate) fn collision_mask(&self) -> crate::catalog::CollisionMask {
+        self.collision_mask_at(self.pos)
+    }
+    /// instance_place changes only the queried origin, retaining the current
+    /// loaded sprite mask, animation frame, and source Draw transform.
+    pub(crate) fn collision_mask_at(&self, pos: Vec2) -> crate::catalog::CollisionMask {
         let (scale, angle) = self.collision_transform();
-        crate::catalog::instance_mask(
-            "oPlayer1",
-            &self.sprite,
-            self.pos,
-            self.animation,
-            scale,
-            angle,
-        )
+        crate::catalog::instance_mask("oPlayer1", &self.sprite, pos, self.animation, scale, angle)
     }
     fn collision_transform(&self) -> (Vec2, f64) {
         let xscale = self.data.get("image_xscale").copied().unwrap_or(1.0);
@@ -1175,6 +1173,7 @@ mod geometry_tests {
                         let expected = original_player_bounds(&p);
                         assert_bounds_bits(p.sprite_bounds(), expected, sprite);
                         assert_bounds_bits(p.collision_mask().bounds(), expected, sprite);
+                        assert_bounds_bits(p.collision_mask_at(p.pos).bounds(), expected, sprite);
                     }
                 }
             }
