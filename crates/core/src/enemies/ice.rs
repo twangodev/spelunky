@@ -277,10 +277,12 @@ fn yeti(game: &mut Game, e: &mut Entity) {
             .world
             .solid_point_except(Vec2::new(e.pos.x + 8.0, e.pos.y + crush_y), e.id)
     {
-        // This source destruction bypasses DEAD and its kill-credit block.
-        e.alive = false;
+        super::create_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 3);
         game.sound("sndCavemanDie", e.pos);
-        return;
+        e.alive = false;
+        // instance_destroy finishes Enemy Destroy, then this own Step continues
+        // with the receiver's original health, status, and held flag.
+        super::destroyed(game, e);
     }
     if e.state == 99 {
         if e.value("dead") == 0.0 {
