@@ -1519,7 +1519,8 @@ pub(super) fn set_counts_as_kill(e: &mut Entity, value: bool) {
 }
 
 pub(super) fn record_keeper_crush(game: &mut Game, e: &mut Entity) {
-    if e.value("death_recorded") == 0.0 && e.health > 0 {
+    // Both own crush branches check hp only; DEAD remains a later branch.
+    if e.health > 0 {
         *game.data.entry("kills".into()).or_default() += 1.0;
         *game.data.entry("shopkeepers".into()).or_default() += 1.0;
         if crate::statistics::is_real_level(game) {
@@ -1527,8 +1528,6 @@ pub(super) fn record_keeper_crush(game: &mut Game, e: &mut Entity) {
                 .enemy_kill(crate::statistics::EnemyKill::Shopkeeper);
         }
     }
-    e.data.insert("death_recorded".into(), 1.0);
-    e.data.insert("dead".into(), 1.0);
     game.flags.insert("murderer".into());
 }
 

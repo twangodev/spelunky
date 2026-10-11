@@ -781,9 +781,9 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
         if e.state < 98 && e.value("has_gun") > 0.0 {
             keeper_drop_gun(game, e);
         }
-        e.health = 0;
         e.alive = false;
-        return;
+        // Own crush preserves hp/dead and continues this Step after Destroy.
+        super::destroyed(game, e);
     }
     if e.health <= 0 && e.state < 98 {
         e.state = 99;
@@ -2566,5 +2566,241 @@ mod tests {
                 .count(),
             3
         );
+    }
+}
+
+#[cfg(test)]
+mod keeper_own_crush_tail_tests {
+    use super::*;
+    use crate::RulesPreset;
+
+    fn fixture(rules: RulesPreset, crushed: bool) -> Game {
+        let mut game = Game::legacy_shell(42, rules);
+        game.world = World::new(30, 20, crate::Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        game.player.pos = Vec2::new(240.0, 152.0);
+        if crushed {
+            for y in 5..=6 {
+                for x in 6..=7 {
+                    game.world.set_tile(x, y, "oBlock");
+                }
+            }
+        } else {
+            for x in 0..30 {
+                game.world.set_tile(x, 6, "oBlock");
+            }
+        }
+        game
+    }
+    fn actor() -> Entity {
+        let mut actor = Entity::new(999, "oShopkeeper", Vec2::new(96.0, 80.0));
+        crate::enemies::init_entity(&mut actor);
+        actor
+    }
+    fn objects<'a>(game: &'a Game, object: &str) -> Vec<&'a Entity> {
+        let mut result: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.object == object)
+            .collect();
+        result.sort_by_key(|e| e.creation_serial);
+        result
+    }
+    // Raw-port adapter checks the source statement/Create ordering only. It
+    // does not claim canonical GameMaker seed or numerical stream equality.
+    fn blood_draws(rng: &mut crate::Rng) {
+        for _ in 0..3 {
+            rng.next_u64();
+            rng.next_u64();
+            rng.next_u64();
+            rng.next_u64();
+        }
+    }
+    fn gun_draws(rng: &mut crate::Rng) -> Vec2 {
+        let y = (4 + rng.next_u64() % 3) as f64;
+        let x = (4 + rng.next_u64() % 3) as f64;
+        Vec2::new(x, y)
+    }
+
+    #[test]
+    fn controlled_healthy_crush_preserves_hp_and_does_not_prelatch_dead() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = fixture(rules, true);
+            let mut actor = actor();
+            let mut expected = game.rng.clone();
+            blood_draws(&mut expected);
+            let gun = gun_draws(&mut expected);
+            shopkeeper(&mut game, &mut actor);
+            assert!(!actor.alive);
+            assert_eq!(actor.health, 20, "CRUSH_SOURCE_DOES_NOT_ASSIGN_HP");
+            assert_eq!(
+                actor.value("dead"),
+                0.0,
+                "CRUSH_SOURCE_DOES_NOT_ASSIGN_DEAD"
+            );
+            assert_eq!(actor.value("death_recorded"), 0.0);
+            assert_eq!(actor.value("enemy_destroyed"), 1.0, "DESTROY_AT_PRODUCER");
+            assert_eq!(
+                actor.state, 4,
+                "RETIRED_IDLE_SEES_MURDERER_AND_ENTERS_PATROL"
+            );
+            assert_eq!(actor.value("has_gun"), 0.0);
+            assert_eq!(objects(&game, "oBlood").len(), 3);
+            assert!(
+                objects(&game, "oBlood")
+                    .iter()
+                    .all(|e| e.pos == Vec2::new(104.0, 88.0))
+            );
+            assert_eq!(objects(&game, "oShotgun").len(), 1);
+            let dropped = objects(&game, "oShotgun")[0];
+            assert_eq!(dropped.pos, Vec2::new(104.0, 88.0));
+            assert_eq!(dropped.vel, gun);
+            assert_eq!(dropped.value("cost"), 0.0);
+            assert!(objects(&game, "oGoldNugget").is_empty());
+            assert_eq!(game.data.get("kills"), Some(&1.0));
+            assert_eq!(game.lifetime_stats.enemy_kills[19], 1);
+            assert_eq!(
+                game.rng.next_u64(),
+                expected.next_u64(),
+                "BLOOD_CREATES_THEN_ORDINARY_CRUSH_GUN"
+            );
+        }
+    }
+
+    #[test]
+    fn controlled_dead_crush_runs_dead_loot_then_common_gun_body_tail() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = fixture(rules, true);
+            let mut actor = actor();
+            actor.health = 0;
+            actor.state = 99;
+            let mut expected = game.rng.clone();
+            blood_draws(&mut expected);
+            let count = (1 + expected.next_u64() % 4) as usize;
+            let velocities: Vec<_> = (0..count)
+                .map(|_| {
+                    Vec2::new(
+                        (1 + expected.next_u64() % 3) as f64 - (1 + expected.next_u64() % 3) as f64,
+                        -1.0,
+                    )
+                })
+                .collect();
+            let gun = gun_draws(&mut expected);
+            shopkeeper(&mut game, &mut actor);
+            assert!(!actor.alive);
+            assert_eq!(actor.value("enemy_destroyed"), 1.0);
+            assert_eq!(actor.value("dead"), 1.0, "DEAD_BRANCH_OWNS_LATCH");
+            assert_eq!(actor.value("death_recorded"), 1.0);
+            assert_eq!(
+                game.data.get("kills"),
+                Some(&1.0),
+                "HP_ZERO_CRUSH_HAS_NO_CREDIT_BEFORE_DEAD"
+            );
+            assert_eq!(game.lifetime_stats.enemy_kills[19], 1);
+            let gold = objects(&game, "oGoldNugget");
+            assert_eq!(gold.len(), count);
+            for (piece, velocity) in gold.into_iter().zip(velocities) {
+                assert_eq!(
+                    piece.pos,
+                    Vec2::new(104.0, 88.0),
+                    "DROP_ORIGIN_BEFORE_BODY_TAIL"
+                );
+                assert_eq!(piece.vel, velocity);
+            }
+            assert_eq!(
+                objects(&game, "oShotgun").len(),
+                1,
+                "STUNNED_CRUSH_DEFERS_GUN_TO_COMMON_TAIL"
+            );
+            assert_eq!(objects(&game, "oShotgun")[0].vel, gun);
+            assert_eq!(
+                actor.value("collision_top"),
+                6.0,
+                "COMMON_CORPSE_BODY_TAIL_EXECUTED"
+            );
+            assert_eq!(actor.sprite, "sShopDieL");
+            assert_eq!(
+                game.rng.next_u64(),
+                expected.next_u64(),
+                "BLOOD_THEN_DEAD_GOLD_THEN_GUN"
+            );
+            let count = game.world.entities.len();
+            super::super::destroyed(&mut game, &mut actor);
+            assert_eq!(
+                game.world.entities.len(),
+                count,
+                "DESTROY_CALLBACK_IDEMPOTENT"
+            );
+        }
+    }
+
+    #[test]
+    fn controlled_held_stunned_crush_clears_backlinks_then_keeps_timer_and_live_art() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = fixture(rules, true);
+            let mut actor = actor();
+            actor.state = 98;
+            actor.held = true;
+            actor.timer = 1;
+            game.player.held = Some(actor.id);
+            game.player.pickup_item_type = "Shopkeeper".into();
+            // Explicit event-level attachment fixture; not a natural pickup or
+            // sticky-bomb route. It observes synchronous callback dependencies.
+            let bomb = game.spawn("oBomb", Vec2::new(240.0, 80.0));
+            actor.data.insert("bomb_id".into(), bomb as f64);
+            game.world
+                .entity_mut(bomb)
+                .unwrap()
+                .data
+                .insert("attached_id".into(), actor.id as f64);
+            shopkeeper(&mut game, &mut actor);
+            assert!(!actor.alive);
+            assert_eq!(actor.health, 20);
+            assert_eq!(actor.value("dead"), 0.0);
+            assert_eq!(actor.value("enemy_destroyed"), 1.0);
+            assert_eq!(
+                game.player.held, None,
+                "ENEMY_DESTROY_BEFORE_COMMON_HELD_TAIL"
+            );
+            assert_eq!(game.player.pickup_item_type, "Shopkeeper");
+            assert_eq!(game.world.entity(bomb).unwrap().value("attached_id"), 0.0);
+            assert!(actor.held, "DESTROY_RETAINS_LOCAL_HELD_FIELD");
+            assert_eq!(actor.timer, 0, "STUNNED_COUNTER_CONTINUES_AFTER_CRUSH");
+            assert_eq!(actor.state, 98);
+            assert_eq!(
+                actor.sprite, "sShopHeldL",
+                "PRESERVED_HP_SELECTS_LIVE_HELD_ART"
+            );
+            assert_eq!(actor.value("collision_top"), 6.0);
+            assert_eq!(objects(&game, "oShotgun").len(), 1);
+            assert!(objects(&game, "oGoldNugget").is_empty());
+            assert_eq!(game.data.get("kills"), Some(&1.0));
+        }
+    }
+
+    #[test]
+    fn controlled_noncrush_dead_control_keeps_corpse_alive() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = fixture(rules, false);
+            let mut actor = actor();
+            actor.health = 0;
+            actor.state = 99;
+            shopkeeper(&mut game, &mut actor);
+            assert!(
+                actor.alive,
+                "DEAD_IS_A_RETAINED_CORPSE_UNLESS_A_DESTROY_BRANCH_RUNS"
+            );
+            assert_eq!(actor.state, 99);
+            assert_eq!(actor.value("enemy_destroyed"), 0.0);
+            assert_eq!(actor.value("dead"), 1.0);
+            assert_eq!(game.data.get("kills"), Some(&1.0));
+            assert!(objects(&game, "oBlood").is_empty());
+            let gold = objects(&game, "oGoldNugget").len();
+            assert!((1..=4).contains(&gold));
+            assert_eq!(objects(&game, "oShotgun").len(), 1);
+            // Inspect only this event. A second raw Step without advancing its
+            // newborn solid GoldNuggets is not an ordinary lifecycle route.
+        }
     }
 }
