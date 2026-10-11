@@ -72,6 +72,26 @@ pub fn init_entity(e: &mut Entity) {
         return;
     }
     e.data.insert("weapon_initialized".into(), 1.0);
+    // These Creates inherit DrawnSprite first. Specialized front/rear
+    // hitboxes then overwrite Whip's type/damage; only front Whip declares
+    // puncture, so rear hitboxes intentionally leave that property absent.
+    let hitbox_create = match e.object.as_str() {
+        "oWhip" => Some(("Whip", 1.0, Some(0.0))),
+        "oWhipPre" => Some(("Whip", 1.0, None)),
+        "oSlash" => Some(("Machete", 2.0, Some(1.0))),
+        "oMachetePre" => Some(("Machete", 2.0, None)),
+        "oMattockHit" => Some(("Mattock", 2.0, Some(1.0))),
+        "oMattockPre" => Some(("Mattock", 2.0, None)),
+        _ => None,
+    };
+    if let Some((kind, damage, puncture)) = hitbox_create {
+        e.data.insert("blinkToggle".into(), 0.0);
+        e.text.insert("type".into(), kind.into());
+        e.data.insert("damage".into(), damage);
+        if let Some(puncture) = puncture {
+            e.data.insert("puncture".into(), puncture);
+        }
+    }
     if matches!(
         e.object.as_str(),
         "oBow"
@@ -115,7 +135,7 @@ pub fn init_entity(e: &mut Entity) {
             e.timer = 5;
             e.data.insert("damage".into(), 3.0);
         }
-        "oMachetePre" | "oMattockPre" => {
+        "oWhipPre" | "oMachetePre" | "oMattockPre" => {
             e.alarms[0] = 3;
         }
         "oMattockHit" => e.set_image_speed(0.5),
