@@ -2397,7 +2397,10 @@ mod tests {
             assert_eq!(crate::items::explosives::source_type(bat), "None");
             assert_eq!(bat.health, 1);
             assert_eq!(bat.state, 1, "no ceiling naturally wakes the fresh Bat");
-            assert_eq!(bat.sprite, "sBatHang", "wake does not change this image yet");
+            assert_eq!(
+                bat.sprite, "sBatHang",
+                "wake does not change this image yet"
+            );
             assert_eq!(game.player.health, 3);
             assert_eq!(game.player.invincible, 30);
             assert_eq!(game.player.data.get("blink"), Some(&30.0));

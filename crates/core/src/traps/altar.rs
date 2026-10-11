@@ -853,11 +853,12 @@ mod tests {
                 assert_eq!(game.data.get("skulls").copied().unwrap_or(0.), 0.);
                 assert_eq!(game.lifetime_stats.idols_converted, 0);
                 assert_eq!(game.data.get("idolsConverted").copied().unwrap_or(0.), 0.);
-                assert!(game
-                    .world
-                    .entities
-                    .iter()
-                    .any(|entity| entity.object == "oBigCollect"));
+                assert!(
+                    game.world
+                        .entities
+                        .iter()
+                        .any(|entity| entity.object == "oBigCollect")
+                );
                 assert_eq!(
                     messages
                         .iter()
@@ -888,9 +889,11 @@ mod tests {
                     assert!(game.world.entity(idol).is_some());
                     assert_eq!(game.data.get("collect").copied().unwrap_or(0.), 0.);
                     assert_eq!(game.data.get("idols").copied().unwrap_or(0.), 0.);
-                    assert!(!messages
-                        .iter()
-                        .any(|message| message.first == "PLEASURE DOING BUSINESS!"));
+                    assert!(
+                        !messages
+                            .iter()
+                            .any(|message| message.first == "PLEASURE DOING BUSINESS!")
+                    );
                 }
             }
         }
@@ -1225,12 +1228,16 @@ mod tests {
                     .iter()
                     .find(|e| e.object == expected_gift.unwrap())
                     .unwrap();
-                assert!(blood
-                    .iter()
-                    .all(|e| e.creation_serial > flame.creation_serial));
-                assert!(blood
-                    .iter()
-                    .all(|e| e.creation_serial < poofs[0].creation_serial));
+                assert!(
+                    blood
+                        .iter()
+                        .all(|e| e.creation_serial > flame.creation_serial)
+                );
+                assert!(
+                    blood
+                        .iter()
+                        .all(|e| e.creation_serial < poofs[0].creation_serial)
+                );
                 assert!(poofs[0].creation_serial < poofs[1].creation_serial);
                 assert!(poofs[1].creation_serial < gift.creation_serial);
                 assert_eq!(gift.value("cost"), 0.);
@@ -1358,11 +1365,13 @@ mod tests {
                         .count(),
                     1
                 );
-                assert!(!game
-                    .world
-                    .entities
-                    .iter()
-                    .any(|e| e.object == "oKapala" || e.object == "oPoof"));
+                assert!(
+                    !game
+                        .world
+                        .entities
+                        .iter()
+                        .any(|e| e.object == "oKapala" || e.object == "oPoof")
+                );
                 assert!(game.events.iter().any(|event| matches!(event,
                     GameEvent::Dialogue(message) if message.first == "KALI ACCEPTS YOUR SACRIFICE!"
                         && message.second == "SHE BESTOWS A GIFT UPON YOU!" && message.ticks == 0
@@ -1394,11 +1403,13 @@ mod tests {
                 let mut expected_rng = game.rng.clone();
                 reward(&mut game, Vec2::new(64., 64.), 56.);
                 assert_eq!(game.data["kali_gift"], 1.);
-                assert!(!game
-                    .world
-                    .entities
-                    .iter()
-                    .any(|e| e.object == "oPoof" || crate::items::is_item(&e.object)));
+                assert!(
+                    !game
+                        .world
+                        .entities
+                        .iter()
+                        .any(|e| e.object == "oPoof" || crate::items::is_item(&e.object))
+                );
                 assert_eq!(game.rng.clone().next_u64(), expected_rng.next_u64());
             }
         }
@@ -1446,11 +1457,13 @@ mod tests {
                         && message.contains("scrGetFavorMsg")
                         && message.contains("oSacAltarRight.x")
                 )));
-                assert!(!game
-                    .world
-                    .entities
-                    .iter()
-                    .any(|entity| { entity.object == "oKapala" || entity.object == "oPoof" }));
+                assert!(
+                    !game
+                        .world
+                        .entities
+                        .iter()
+                        .any(|entity| { entity.object == "oKapala" || entity.object == "oPoof" })
+                );
                 assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
             }
         }
@@ -1539,11 +1552,12 @@ mod tests {
                         .count(),
                     2
                 );
-                assert!(game
-                    .world
-                    .entities
-                    .iter()
-                    .any(|e| e.alive && e.object == object));
+                assert!(
+                    game.world
+                        .entities
+                        .iter()
+                        .any(|e| e.alive && e.object == object)
+                );
                 assert_eq!(game.rng.clone().next_u64(), expected_rng.next_u64());
             }
         }
@@ -1577,11 +1591,12 @@ mod tests {
                     expected_rng.range(8);
                     reward(&mut game, Vec2::new(64., 64.), 56.);
                     let expected = if jetpack { "oBombBox" } else { "oJetpack" };
-                    assert!(game
-                        .world
-                        .entities
-                        .iter()
-                        .any(|e| e.object == expected && e.value("cost") == 0.));
+                    assert!(
+                        game.world
+                            .entities
+                            .iter()
+                            .any(|e| e.object == expected && e.value("cost") == 0.)
+                    );
                     assert_eq!(
                         game.world
                             .entities
@@ -1705,11 +1720,12 @@ mod tests {
             game.world.entity(id)
         );
         assert_eq!(game.data["favor"], 8.0);
-        assert!(game
-            .world
-            .entities
-            .iter()
-            .any(|e| { e.data.get("forSale") == Some(&0.0) && e.pos == Vec2::new(80.0, 40.0) }));
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .any(|e| { e.data.get("forSale") == Some(&0.0) && e.pos == Vec2::new(80.0, 40.0) })
+        );
 
         let mut game = altar_room();
         let id = game.world.spawn("oDamsel", Vec2::new(72.0, 56.0));

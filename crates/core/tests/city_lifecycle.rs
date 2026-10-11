@@ -6,8 +6,8 @@ mod common;
 
 use common::complete_source_exit;
 use spelunky_core::{
-    ending::{self, EndingKind, EndingStage},
     Area, Game, InputFrame, PlayerState, Rect, RulesPreset, RunState, Vec2, World,
+    ending::{self, EndingKind, EndingStage},
 };
 
 fn temple_door_room() -> Game {

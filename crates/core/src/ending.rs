@@ -1106,11 +1106,22 @@ mod tests {
                         assert!(g.events.contains(&GameEvent::Damage { amount: 99 }));
                         assert_eq!(g.player.sprite, exit_sprite);
                         assert_eq!(g.player.health, if ankh { 4 } else { 0 });
-                        assert_eq!(g.state, if ankh { RunState::Ending } else { RunState::Dead });
+                        assert_eq!(
+                            g.state,
+                            if ankh {
+                                RunState::Ending
+                            } else {
+                                RunState::Dead
+                            }
+                        );
                         assert!(!g.player.has("Ankh"));
                         assert_eq!(g.events.contains(&GameEvent::Died), !ankh);
                     }
-                    let expected_health = if arriving_lava { if ankh { 4 } else { 0 } } else { initial_health };
+                    let expected_health = if arriving_lava {
+                        if ankh { 4 } else { 0 }
+                    } else {
+                        initial_health
+                    };
                     for _ in 0..40 {
                         if g.ending.as_ref().unwrap().stage != EndingStage::Exit {
                             break;
@@ -1121,15 +1132,24 @@ mod tests {
                     assert_eq!(g.ending.as_ref().unwrap().stage, EndingStage::Transition);
                     assert_eq!(g.state, RunState::Ending);
                     assert_eq!(g.player.health, expected_health);
-                    assert!(g.game_over.destination.is_none(), "no GameOver acknowledgment was sent");
+                    assert!(
+                        g.game_over.destination.is_none(),
+                        "no GameOver acknowledgment was sent"
+                    );
                     let stage_tick = g.ending.as_ref().unwrap().stage_tick;
                     for _ in 0..60 {
                         g.step(&InputFrame::default());
                     }
                     let tally = g.ending.as_ref().unwrap();
                     assert_eq!(tally.stage_tick, stage_tick + 60);
-                    assert!(tally.draw_loot >= 0, "the new room's controller runs after dead-player departure");
-                    assert_eq!(g.player.health, expected_health, "room routing must not revive the departed player");
+                    assert!(
+                        tally.draw_loot >= 0,
+                        "the new room's controller runs after dead-player departure"
+                    );
+                    assert_eq!(
+                        g.player.health, expected_health,
+                        "room routing must not revive the departed player"
+                    );
                 }
             }
         }
