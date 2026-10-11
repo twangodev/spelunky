@@ -1515,9 +1515,15 @@ fn eject_player_collision(game: &mut Game, e: &mut Entity) {
     {
         game.player.vel.y = -6.0 - 0.2 * game.player.vel.y;
         game.player.data.insert("fall_timer".into(), 0.0);
+        game.sound("sndHit", e.pos);
+        for _ in 0..3 {
+            game.spawn(
+                "oBlood",
+                Vec2::new(game.player.pos.x + 8.0, game.player.pos.y + 8.0),
+            );
+        }
         super::record_death(game, e);
         e.alive = false;
-        game.sound("sndHit", e.pos);
     } else if game.player.invincible == 0 {
         game.player.invincible = 30;
         game.player.data.insert("blink".into(), 30.0);
