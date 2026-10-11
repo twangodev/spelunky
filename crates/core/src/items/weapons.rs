@@ -373,7 +373,7 @@ fn fire_bow(game: &mut Game) {
     if game.world.solid_at(pos.x, pos.y) {
         pos = game.player.pos;
     }
-    if game.player.state == PlayerState::Ducking {
+    if matches!(game.player.sprite.as_str(), "sDuckLeft" | "sDamselDuckL") {
         pos.y += 4.0;
     }
     let speed = game.player.vel.x + facing * (1.0 + strength);
