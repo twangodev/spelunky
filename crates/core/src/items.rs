@@ -300,7 +300,7 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
             !e.held && lava_at(game, Rect::new(e.pos.x, e.pos.y - 5.0, 0.001, 0.001))
         });
         if lava_destroy {
-            break_item(game, id);
+            destroy_fragile_item(game, id);
         }
         // Run BOTH creature queries with the post-response velocity. The
         // receiver can continue its event after the explicit lava Destroy.
@@ -310,7 +310,7 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
                 game.player.held = None;
                 game.player.pickup_item_type.clear();
             }
-            break_item(game, id);
+            destroy_fragile_item(game, id);
         }
         if let Some(mut entity) = game.world.entity(id).cloned() {
             update_depth(game, &mut entity);
@@ -1457,6 +1457,7 @@ fn advance_item_body(game: &mut Game, entity: &mut Entity) -> bool {
         game,
         Rect::new(entity.pos.x, entity.pos.y - 5.0, 0.001, 0.001),
     ) && entity.object != "oSceptre"
+        && !fragile
     {
         destroy = true;
     }
@@ -1578,10 +1579,19 @@ fn tick_treasures(game: &mut Game) {
 
 /// Called by combat when a fragile thrown body breaks on a creature.
 pub fn break_item(game: &mut Game, id: u64) {
+    break_item_callback(game, id, false);
+}
+
+fn destroy_fragile_item(game: &mut Game, id: u64) {
+    // Explicit instance_destroy calls in the same own Step each run Destroy.
+    break_item_callback(game, id, true);
+}
+
+fn break_item_callback(game: &mut Game, id: u64, repeat: bool) {
     let Some(entity) = game.world.entities.iter_mut().find(|e| e.id == id) else {
         return;
     };
-    if entity.value("break_done") != 0.0 {
+    if !repeat && entity.value("break_done") != 0.0 {
         return;
     }
     entity.data.insert("break_done".into(), 1.0);
