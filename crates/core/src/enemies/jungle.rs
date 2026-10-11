@@ -515,6 +515,9 @@ fn monkey_steal(game: &mut Game, e: &Entity) {
 }
 
 fn fish(game: &mut Game, e: &mut Entity) {
+    // All Piranha states pass displacement directly to moveTo; they never
+    // assign xVel/yVel. Preserve velocity supplied by external collisions.
+    let stored_velocity = e.vel;
     let target_swimming = super::player_alive(game)
         && game.player.data.get("swimming").copied().unwrap_or(0.0) != 0.0;
     let near = center(e).distance(game.player.pos) < 90.0;
@@ -604,6 +607,7 @@ fn fish(game: &mut Game, e: &mut Entity) {
         game.spawn("oFishBone", e.pos);
         e.alive = false;
     }
+    e.vel = stored_velocity;
 }
 
 fn aim_fish(game: &mut Game, e: &mut Entity, target: Vec2) {

@@ -854,6 +854,22 @@ pub(super) fn move_body(world: &World, e: &mut Entity, gravity: f64) -> (bool, b
     (wall, grounded)
 }
 
+/// Spider Steps use moveTo without assigning velocity at solid contact.
+/// Keep their post-move gravity separate from families that settle support.
+pub(super) fn move_body_preserving_velocity(
+    world: &World,
+    e: &mut Entity,
+    gravity: f64,
+) -> (bool, bool) {
+    let velocity = e.vel;
+    let contacts = move_body(world, e, 0.0);
+    e.vel = Vec2::new(
+        velocity.x,
+        (velocity.y + inherited::gravity(e, gravity)).min(10.0),
+    );
+    contacts
+}
+
 pub(super) fn steer_toward(e: &mut Entity, target: Vec2, speed: f64) {
     let origin = center(e);
     let distance = origin.distance(target);
@@ -3054,6 +3070,267 @@ mod tests {
             assert_eq!(game.engine_time(), 4);
             assert_eq!(game.world.entity(id).unwrap().pos, Vec2::new(160.0, 65.0));
             assert_eq!(game.player.health, 4);
+        }
+    }
+}
+
+// Prepared from Classic 1.1 sources; UNRUN. Scenes use birth data and ordinary input.
+#[cfg(test)]
+mod source_motion_regressions {
+    use super::*;
+
+    fn room(seed: u64, rules: RulesPreset, player_x: f64) -> Game {
+        let mut game = Game::shell(seed, rules);
+        game.world = World::new(20, 16, Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        for x in 0..20 {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        game.player.pos = Vec2::new(player_x, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        game
+    }
+
+    fn water(game: &mut Game, first_row: i32) {
+        for y in first_row..=9 {
+            for x in 4..=10 {
+                game.world.set_tile(x, y, "oWaterSwim");
+            }
+        }
+    }
+
+    fn boings(game: &Game) -> usize {
+        game.events.iter().filter(|event| {
+            matches!(event, GameEvent::Sound { name, .. } if name == "sndBoing")
+        }).count()
+    }
+
+    #[test]
+    fn initial_spider_flip_bounds_miss_spring_while_supported_gravity_survives() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = room(42, rules, 240.0);
+            let spring = game.spawn("oSpringTrap", Vec2::new(96.0, 144.0));
+            let spider = game.spawn("oSpider", Vec2::new(96.0, 144.0));
+            let initial = game.world.entity(spider).unwrap();
+            assert_eq!(initial.sprite, "sSpiderFlip");
+            assert_eq!(initial.sprite_bounds(), Rect::new(96.0, 144.0, 16.0, 10.0));
+            assert_eq!(initial.bounds().y + initial.bounds().h, 160.0);
+            assert!(!initial.event_intersects(game.world.entity(spring).unwrap()));
+            game.step(&crate::InputFrame::default());
+            let actor = game.world.entity(spider).unwrap();
+            assert_eq!(actor.pos, Vec2::new(96.0, 144.0));
+            assert_eq!(actor.sprite, "sSpiderFlip");
+            assert_eq!(actor.vel, Vec2::new(0.0, 0.2));
+            assert_eq!(actor.state, 2);
+            let spring = game.world.entity(spring).unwrap();
+            assert_eq!((spring.state, spring.timer), (0, 0));
+            assert_eq!(boings(&game), 0);
+        }
+    }
+
+    #[test]
+    fn initial_spider_flip_finishes_into_its_normal_sprite_through_full_steps() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = room(42, rules, 240.0);
+            let spider = game.spawn("oSpider", Vec2::new(96.0, 144.0));
+            assert_eq!(game.world.entity(spider).unwrap().sprite, "sSpiderFlip");
+            for _ in 0..24 {
+                game.step(&crate::InputFrame::default());
+            }
+            let actor = game.world.entity(spider).unwrap();
+            assert_eq!(actor.sprite, "sSpider");
+            assert!(actor.alive);
+            assert_eq!(actor.pos.y, 144.0);
+        }
+    }
+
+    #[test]
+    fn supported_spider_accumulates_gravity_through_zero_and_blocked_displacements() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = room(42, rules, 240.0);
+            let spider = game.spawn("oSpider", Vec2::new(96.0, 144.0));
+            // These four Steps precede even the shortest Create-selected alarm.
+            // At vy=.4, a scheduled pixel at an even source clock is blocked.
+            for step in 1..=4 {
+                game.step(&crate::InputFrame::default());
+                let actor = game.world.entity(spider).unwrap();
+                assert_eq!(actor.pos, Vec2::new(96.0, 144.0));
+                assert!((actor.vel.y - f64::from(step) * 0.2).abs() < 1e-12);
+                assert_eq!(actor.vel.x, 0.0);
+                assert_eq!(actor.state, 2);
+            }
+        }
+    }
+
+    #[test]
+    fn initial_giant_spider_flip_bounds_miss_spring_and_keep_source_health_one() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = room(42, rules, 240.0);
+            let spring = game.spawn("oSpringTrap", Vec2::new(96.0, 144.0));
+            let spider = game.spawn("oGiantSpider", Vec2::new(96.0, 128.0));
+            let initial = game.world.entity(spider).unwrap();
+            assert_eq!(initial.sprite, "sGiantSpiderFlip");
+            assert_eq!(initial.sprite_bounds(), Rect::new(97.0, 128.0, 30.0, 15.0));
+            assert_eq!(initial.bounds().y + initial.bounds().h, 160.0);
+            assert_eq!(initial.health, 1);
+            assert!(!initial.event_intersects(game.world.entity(spring).unwrap()));
+            game.step(&crate::InputFrame::default());
+            let actor = game.world.entity(spider).unwrap();
+            assert_eq!(actor.sprite, "sGiantSpiderFlip");
+            assert_eq!(actor.pos, Vec2::new(96.0, 128.0));
+            assert_eq!(actor.vel.y, 0.3);
+            assert_eq!(actor.health, 1);
+            assert_eq!(game.world.entity(spring).unwrap().state, 0);
+            assert_eq!(boings(&game), 0);
+        }
+    }
+
+    #[test]
+    fn giant_spider_flip_finishes_before_its_natural_alarm_and_slows_animation() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            // Seed1's first draw creates squirtTimer; its next draw selects
+            // alarm12. Nine Flip images at speed.8 finish in twelve Steps,
+            // before that alarm fires on the thirteenth ordinary Step.
+            let mut game = room(1, rules, 240.0);
+            let spider = game.spawn("oGiantSpider", Vec2::new(96.0, 128.0));
+            assert_eq!(game.world.entity(spider).unwrap().sprite, "sGiantSpiderFlip");
+            for _ in 0..12 {
+                game.step(&crate::InputFrame::default());
+            }
+            let actor = game.world.entity(spider).unwrap();
+            assert_eq!(actor.sprite, "sGiantSpider");
+            assert_eq!(actor.image_speed(), 0.4);
+            assert_eq!(actor.health, 1);
+            assert_eq!(actor.pos.y, 128.0);
+        }
+    }
+
+    #[test]
+    fn giant_spider_also_retains_post_move_gravity_on_support() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = room(42, rules, 240.0);
+            let spider = game.spawn("oGiantSpider", Vec2::new(96.0, 128.0));
+            for step in 1..=3 {
+                game.step(&crate::InputFrame::default());
+                let actor = game.world.entity(spider).unwrap();
+                assert_eq!(actor.pos, Vec2::new(96.0, 128.0));
+                assert!((actor.vel.y - f64::from(step) * 0.3).abs() < 1e-12);
+                assert!(actor.alive);
+            }
+        }
+    }
+
+    #[test]
+    fn native_spider_flip_overlap_springs_after_its_own_step_velocity_writes() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for with_spring in [false, true] {
+                let mut game = room(42, rules, 240.0);
+                let spring = with_spring.then(|| game.spawn("oSpringTrap", Vec2::new(96.0, 144.0)));
+                let spider = game.spawn("oSpider", Vec2::new(96.0, 147.0));
+                let initial = game.world.entity(spider).unwrap();
+                assert_eq!(initial.sprite_bounds(), Rect::new(96.0, 147.0, 16.0, 10.0));
+                if let Some(spring) = spring {
+                    assert!(initial.event_intersects(game.world.entity(spring).unwrap()));
+                }
+                game.step(&crate::InputFrame::default());
+                let actor = game.world.entity(spider).unwrap();
+                assert_eq!(actor.health, 1);
+                if let Some(spring) = spring {
+                    assert_eq!(actor.pos, Vec2::new(96.0, 131.0));
+                    assert_eq!(actor.vel, Vec2::new(-2.0, -8.0));
+                    let spring = game.world.entity(spring).unwrap();
+                    assert_eq!((spring.state, spring.timer), (1, 10));
+                    assert_eq!(boings(&game), 1);
+                } else {
+                    assert_eq!(actor.pos, Vec2::new(96.0, 147.0));
+                    assert_eq!(actor.vel, Vec2::new(-1.0, 0.2));
+                    assert_eq!(boings(&game), 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn supported_nonstunned_families_keep_their_explicit_source_resets() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for object in ["oSnake", "oCaveman", "oYeti", "oManTrap", "oHawkman"] {
+                let mut game = room(42, rules, 240.0);
+                let id = game.spawn(object, Vec2::new(96.0, 144.0));
+                game.step(&crate::InputFrame::default());
+                let actor = game.world.entity(id).unwrap();
+                assert_eq!(actor.pos.y, 144.0, "{object}");
+                assert_eq!(actor.vel.y, 0.0, "{object}");
+                assert!(actor.alive, "{object}");
+            }
+        }
+    }
+
+    #[test]
+    fn piranha_idle_displacement_keeps_zero_velocity_and_natural_spring_boost() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for (seed, delta) in [(2, -1.0), (42, 1.0)] {
+                for with_spring in [false, true] {
+                    let mut game = room(seed, rules, 40.0);
+                    water(&mut game, 8);
+                    let spring = with_spring.then(|| game.spawn("oSpringTrap", Vec2::new(96.0, 144.0)));
+                    let fish = game.spawn("oPiranha", Vec2::new(96.0, 149.0));
+                    assert_eq!(game.world.entity(fish).unwrap().vel, Vec2::default());
+                    if let Some(spring) = spring {
+                        assert!(game.world.entity(fish).unwrap().event_intersects(game.world.entity(spring).unwrap()));
+                    }
+                    game.step(&crate::InputFrame::default());
+                    let actor = game.world.entity(fish).unwrap();
+                    assert_eq!(actor.state, 0);
+                    let expected_y = if with_spring { 133.0 } else { 149.0 };
+                    let expected_vel = if with_spring { Vec2::new(-1.0, -8.0) } else { Vec2::default() };
+                    assert_eq!(actor.pos, Vec2::new(96.0 + delta, expected_y));
+                    assert_eq!(actor.vel, expected_vel);
+                    assert_eq!(boings(&game), usize::from(with_spring));
+                    if let Some(spring) = spring {
+                        let spring = game.world.entity(spring).unwrap();
+                        assert_eq!((spring.state, spring.timer), (1, 10));
+                    }
+                    // The next literal moveTo still moves horizontally; it must
+                    // preserve the collision's stored (-1,-8), not consume it.
+                    game.step(&crate::InputFrame::default());
+                    let actor = game.world.entity(fish).unwrap();
+                    assert_eq!(actor.pos, Vec2::new(96.0 + 2.0 * delta, expected_y));
+                    assert_eq!(actor.vel, expected_vel);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn piranha_natural_player_attack_and_pause_keep_stored_velocity() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = room(42, rules, 64.0);
+            water(&mut game, 4);
+            game.player.pos = Vec2::new(64.0, 120.0);
+            game.player.previous_pos = game.player.pos;
+            let fish = game.spawn("oPiranha", Vec2::new(96.0, 96.0));
+            let mut saw_attack = false;
+            for _ in 0..4 {
+                game.step(&crate::InputFrame::default());
+                let actor = game.world.entity(fish).unwrap();
+                saw_attack |= actor.state == 1;
+                assert_eq!(actor.vel, Vec2::default());
+            }
+            assert!(saw_attack, "ordinary player water entry must trigger ATTACK");
+            let mut saw_pause = false;
+            let input = crate::InputFrame { left: true, ..Default::default() };
+            for _ in 0..24 {
+                game.step(&input);
+                let actor = game.world.entity(fish).unwrap();
+                assert_eq!(actor.vel, Vec2::default());
+                if actor.state == 2 {
+                    saw_pause = true;
+                    break;
+                }
+            }
+            assert!(saw_pause, "ordinary left input must exit water and trigger PAUSE");
         }
     }
 }

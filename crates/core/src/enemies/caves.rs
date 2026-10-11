@@ -12,7 +12,7 @@
 //! group alerts; `oBat.events/Step.xml` defines water steering; spider
 //! `Alarm 0.xml`/`Alarm 1.xml` and `Step.xml` define recovery and drowning.
 
-use super::{bounds, center, move_body, steer_toward};
+use super::{bounds, center, move_body, move_body_preserving_velocity, steer_toward};
 use crate::{Entity, Game, PlayerState, Rect, Vec2, World};
 
 pub fn matches(object: &str) -> bool {
@@ -61,7 +61,7 @@ pub fn init(e: &mut Entity) {
             set_sprite(e, "sBatHang");
             e.data.insert("animation_speed".into(), 0.5);
         }
-        "oSpider" => set_sprite(e, "sSpider"),
+        "oSpider" => set_sprite(e, "sSpiderFlip"),
         "oSpiderHang" => {
             set_sprite(e, "sSpiderHang");
             set_collision(e, [4.0, 0.0, 12.0, 12.0]);
@@ -73,7 +73,7 @@ pub fn init(e: &mut Entity) {
         }
         "oGiantSpider" => {
             e.data.insert("contact_damage".into(), 2.0);
-            set_sprite(e, "sGiantSpider");
+            set_sprite(e, "sGiantSpiderFlip");
             e.data.insert("animation_speed".into(), 0.8);
             // Context-dependent Create supplies the source RNG draw.
             e.data.insert("squirt_timer".into(), -1.0);
@@ -635,7 +635,8 @@ fn spider(game: &mut Game, e: &mut Entity, giant: bool) {
         e.data
             .insert("hit_cooldown".into(), e.value("hit_cooldown") - 1.0);
     }
-    let (_, grounded) = move_body(&game.world, e, if giant { 0.3 } else { 0.2 });
+    let (_, grounded) =
+        move_body_preserving_velocity(&game.world, e, if giant { 0.3 } else { 0.2 });
     if crushed(
         game,
         e,
