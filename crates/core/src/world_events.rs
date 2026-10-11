@@ -167,9 +167,6 @@ pub(crate) fn fluid_tick(game: &mut Game) {
                 let mut flame = game.world.entity(id).unwrap().clone();
                 initialize_detritus(game, &mut flame);
                 flame.vel.y = 4.0;
-                if !flame.alive {
-                    game.world.spawn("oSmokePuff", flame.pos);
-                }
                 let index = game.world.entities.iter().position(|e| e.id == id).unwrap();
                 game.world.entities[index] = flame;
             }
@@ -728,8 +725,7 @@ pub(crate) fn collision(game: &mut Game, id: u64, other: crate::dispatcher::Inst
         "oPsychicCreateP" if catalog::is_a(&object, "oSolid") => e.alive = false,
         "oFlame" if catalog::is_a(&object, "oWater") => {
             spawn_effect(game, "oSmokePuff", e.pos);
-            spawn_effect(game, "oSmokePuff", e.pos);
-            e.alive = false;
+            destroy_detritus(game, &mut e);
         }
         "oMsgSign" if catalog::is_a(&object, "oCharacter") => sign(game, &mut e),
         "oParachute" if catalog::is_a(&object, "oItem") => {
@@ -1114,9 +1110,6 @@ fn lava(game: &mut Game, e: &mut Entity, terrain: bool) {
         }
     }
     particle.vel.y = -f64::from(1 + game.rng.range(4));
-    if !particle.alive && object == "oFlame" {
-        game.world.spawn("oSmokePuff", particle.pos);
-    }
     let index = game
         .world
         .entities
@@ -1215,20 +1208,34 @@ fn collect_effect(e: &mut Entity) {
 
 fn flame(game: &mut Game, e: &mut Entity) {
     detritus(game, e);
-    if e.alive {
-        if e.vel.y > 6.0 {
-            e.alive = false;
-        }
-        if game
-            .world
-            .collides_except(Rect::new(e.pos.x - 4.0, e.pos.y + 4.0, 8.0, 1.0), e.id)
-            && e.value("life") > 20.0
-        {
-            e.data.insert("life".into(), 20.0);
-        }
+    // Inherited self-destruction does not abort the following child action.
+    if e.vel.y > 6.0 {
+        destroy_detritus(game, e);
     }
-    if !e.alive {
+    if game
+        .world
+        .collides_except(Rect::new(e.pos.x - 4.0, e.pos.y + 4.0, 8.0, 1.0), e.id)
+        && e.value("life") > 20.0
+    {
+        e.data.insert("life".into(), 20.0);
+    }
+}
+
+/// Each reached instance_destroy executes Destroy synchronously, even if an
+/// earlier call in this same Code action already marked the receiver. Source
+/// oFlame Destroy creates Smoke at the call position, before later movement.
+fn destroy_detritus(game: &mut Game, e: &mut Entity) {
+    if e.object == "oFlame" {
         spawn_effect(game, "oSmokePuff", e.pos);
+    }
+    e.alive = false;
+    if let Some(stored) = game
+        .world
+        .entities
+        .iter_mut()
+        .find(|stored| stored.id == e.id)
+    {
+        stored.alive = false;
     }
 }
 
@@ -1313,53 +1320,92 @@ pub(crate) fn create_flames(game: &mut Game, pos: Vec2, count: usize) {
 }
 
 pub(crate) fn initialize_detritus(game: &mut Game, e: &mut Entity) {
-    if e.value("world_effect_initialized") == 0.0 {
-        e.vel = Vec2::new(
-            game.rng.unit() * 4.0 - game.rng.unit() * 4.0,
-            -1.0 - game.rng.unit() * 2.0,
-        );
-        e.data
-            .entry("gravity".into())
-            .or_insert_with(|| f64::from(1 + game.rng.range(6)) * 0.1);
-        e.data.insert("life".into(), 60.0);
-        e.data.insert("world_effect_initialized".into(), 1.0);
-        let extent = if e.object == "oMagma" { 8.0 } else { 4.0 };
-        for (key, value) in [
-            ("collision_left", -extent),
-            ("collision_top", -extent),
-            ("collision_right", extent),
-            ("collision_bottom", extent),
-        ] {
-            e.data.insert(key.into(), value);
+    if e.value("world_effect_initialized") != 0.0 {
+        return;
+    }
+    e.data.insert("world_effect_initialized".into(), 1.0);
+    // Parent Create, before the child's image_speed/random/alarms action.
+    for (key, value) in [
+        ("collision_left", -4.0),
+        ("collision_top", -4.0),
+        ("collision_right", 4.0),
+        ("collision_bottom", 4.0),
+        ("life", 60.0),
+        ("gravity", 0.6),
+        ("bounce", 1.0),
+        ("dying", 0.0),
+        ("invincible", 0.0),
+    ] {
+        e.data.insert(key.into(), value);
+    }
+    // The current receiver has already been registered; include it even when
+    // an actor adapter temporarily owns it outside world storage.
+    let others = game
+        .world
+        .entities
+        .iter()
+        .filter(|other| {
+            other.id != e.id
+                && other.alive
+                && other.engine_active
+                && catalog::is_a(&other.object, "oDetritus")
+        })
+        .count();
+    if others + 1 > 32 {
+        destroy_detritus(game, e);
+    }
+    // Only the four concrete children own this second Create action. The bare
+    // parent retains its defaults without consuming any child random draws.
+    if !matches!(e.object.as_str(), "oFlame" | "oBlood" | "oBone" | "oMagma") {
+        return;
+    }
+    // Child Create continues after inherited Destroy, including all four draws.
+    e.set_image_speed(0.3);
+    e.vel = Vec2::new(
+        game.rng.unit() * 4.0 - game.rng.unit() * 4.0,
+        -1.0 - game.rng.unit() * 2.0,
+    );
+    e.data
+        .insert("gravity".into(), f64::from(1 + game.rng.range(6)) * 0.1);
+    match e.object.as_str() {
+        "oBlood" => {
+            e.data.insert("invincible".into(), 1.0);
+            e.data.insert("bounce".into(), 0.0);
+            e.data.insert("collectible".into(), 0.0);
+            e.alarms[0] = 1;
+            e.alarms[1] = 1;
+            e.alarms[2] = 5;
         }
-        if game
-            .world
-            .entities
-            .iter()
-            .take_while(|other| other.id != e.id)
-            .filter(|other| {
-                other.alive && other.engine_active && catalog::is_a(&other.object, "oDetritus")
-            })
-            .count()
-            >= 32
-        {
-            e.alive = false;
-            return;
+        "oFlame" | "oMagma" => {
+            e.alarms[0] = 2;
+            e.alarms[1] = 50;
+            if e.object == "oMagma" {
+                e.health = 200;
+                for (key, value) in [
+                    ("collision_left", -8.0),
+                    ("collision_top", -8.0),
+                    ("collision_right", 8.0),
+                    ("collision_bottom", 8.0),
+                ] {
+                    e.data.insert(key.into(), value);
+                }
+            }
         }
+        _ => {}
     }
 }
 
 pub(crate) fn detritus(game: &mut Game, e: &mut Entity) {
     initialize_detritus(game, e);
-    if !e.alive {
-        return;
-    }
     let extent = if e.object == "oMagma" { 8.0 } else { 4.0 };
+    if outside(game, e.pos, 4.0) {
+        destroy_detritus(game, e);
+    }
     let life = e.value("life");
-    e.data.insert("life".into(), life - 1.0);
-    if life <= 0.0 || outside(game, e.pos, 4.0) {
-        e.alive = false;
-        return;
+    if life > 0.0 {
+        e.data.insert("life".into(), life - 1.0);
+    } else {
+        destroy_detritus(game, e);
     }
     let dx = displacement(e.vel.x, game.engine_time());
     let dy = displacement(e.vel.y, game.engine_time());
@@ -1394,8 +1440,7 @@ pub(crate) fn detritus(game: &mut Game, e: &mut Entity) {
         e.pos = next;
     }
     if point_family(game, Vec2::new(e.pos.x, e.pos.y - 4.0), "oLava") {
-        e.alive = false;
-        return;
+        destroy_detritus(game, e);
     }
     let bottom = game.world.collides_except(
         Rect::new(e.pos.x - extent, e.pos.y + extent, extent * 2.0, 1.0),
@@ -1428,9 +1473,9 @@ pub(crate) fn detritus(game: &mut Game, e: &mut Entity) {
     }
     if e.object == "oBlood" {
         if e.vel.y > 6.0 {
-            e.alive = false;
+            destroy_detritus(game, e);
         }
-        if bottom && life > 20.0 {
+        if bottom && e.value("life") > 20.0 {
             e.data.insert("life".into(), 20.0);
         }
     } else if e.object == "oBone" && bottom {
@@ -2930,7 +2975,7 @@ mod tests {
     fn detritus_cap_preserves_oldest_instances_and_rejects_newest() {
         let mut g = room();
         let ids: Vec<_> = (0..33)
-            .map(|_| g.world.spawn("oBone", Vec2::new(80.0, 80.0)))
+            .map(|_| g.spawn("oBone", Vec2::new(80.0, 80.0)))
             .collect();
         advance(&mut g);
         assert!(ids[..32].iter().all(|id| g.world.entity(*id).is_some()));
@@ -3406,3 +3451,7 @@ mod grave_step_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "world_events/detritus_source_contract_tests.rs"]
+mod detritus_source_contract_tests;

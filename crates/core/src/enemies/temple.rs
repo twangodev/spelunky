@@ -1396,9 +1396,7 @@ fn magma(game: &mut Game, e: &mut Entity) {
         e.data.entry("life".into()).or_insert(60.0);
     }
     crate::world_events::detritus(game, e);
-    if !e.alive {
-        return;
-    }
+    // The child action continues after inherited instance_destroy.
     if super::solid_mask(
         &game.world,
         Rect::new(e.pos.x - 8.0, e.pos.y + 8.0, 16.0, 1.0),
