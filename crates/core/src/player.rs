@@ -1528,7 +1528,7 @@ fn stunned_tick(w: &mut World, p: &mut Player, time: u64) {
     };
 }
 
-fn script_player_blood(game: &mut Game, count: u32) {
+pub(crate) fn script_player_blood(game: &mut Game, count: u32) {
     if value(&game.player, "bloodless", 0.0) != 0.0 {
         return;
     }

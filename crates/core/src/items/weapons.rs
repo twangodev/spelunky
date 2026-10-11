@@ -562,7 +562,9 @@ pub(super) fn item_rotation(velocity: Vec2, stuck: bool, previous: f64) -> f64 {
 }
 
 fn hit_player(game: &mut Game, projectile: &mut Entity, damage: i32) {
-    if game.player.is_exiting() || projectile.object != "oBullet" && super::player_dead(game) {
+    if game.player.is_exiting()
+        || !matches!(projectile.object.as_str(), "oBullet" | "oArrow") && super::player_dead(game)
+    {
         return;
     }
     // Classic projectile damage bypasses contact-damage invulnerability.
@@ -587,6 +589,21 @@ fn hit_player(game: &mut Game, projectile: &mut Entity, damage: i32) {
             .enemy_death(crate::statistics::EnemyDeath::Shopkeeper);
     }
     game.player.vel = Vec2::new(projectile.vel.x, -4.0);
+    if projectile.object == "oArrow" {
+        // Player Step: script Blood, synchronous inherited Item Destroy, then
+        // hurt sound and stun. Arrow has no additional dead/stunned guard.
+        crate::player::script_player_blood(game, 3);
+        if projectile.held {
+            game.player.held = None;
+        }
+        projectile.alive = false;
+        if damaged {
+            game.events.push(GameEvent::Damage { amount: damage });
+        }
+        game.sound("sndHurt", game.player.pos);
+        game.player.stun = 20;
+        return;
+    }
     if projectile.object == "oBullet" {
         // Character collision creates Blood directly at the receiver's origin,
         // even on a corpse. It does not use scrCreateBlood's bloodless/16 cap.
@@ -598,8 +615,7 @@ fn hit_player(game: &mut Game, projectile: &mut Entity, damage: i32) {
     }
     game.sound("sndHurt", game.player.pos);
     projectile.alive = false;
-    // Arrow own-Step release waits for the late Player block after all hurt
-    // queries. Bullet's later automatic Collision has no release in source.
+    // Bullet's automatic Collision has no held-item release in source.
 }
 
 /// oPlayer1 Step checks rocks independently from Arrow collisions. Rocks
@@ -3168,25 +3184,6 @@ mod bullet_character_source_tests {
             }
         }
     }
-
-    #[test]
-    fn arrow_shared_hit_keeps_existing_dead_guard_and_no_bullet_blood() {
-        for dead in [false, true] {
-            let mut game = Game::shell(7, RulesPreset::Classic);
-            game.player.health = 8;
-            game.player.pos = Vec2::new(104.0, 120.0);
-            if dead {
-                game.player.state = PlayerState::Dead;
-                game.state = RunState::Dead;
-            }
-            let mut arrow = Entity::new(100, "oArrow", game.player.pos);
-            arrow.vel.x = 12.0;
-            let rng = game.rng.clone().next_u64();
-            hit_player(&mut game, &mut arrow, 4);
-            assert_eq!(game.player.health, if dead { 8 } else { 4 });
-            assert_eq!(arrow.alive, dead);
-            assert!(!game.world.entities.iter().any(|e| e.object == "oBlood"));
-            assert_eq!(game.rng.next_u64(), rng);
-        }
-    }
 }
+
+include!("arrow_player_blood_tests.rs");
