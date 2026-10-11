@@ -105,6 +105,21 @@ pub struct State {
     #[serde(skip)]
     synced_revision: Option<(u64, u64, u64)>,
 }
+impl State {
+    /// Frozen instances omitted from world storage by source activation.
+    /// Presentation callers should read this from `Game::presentation()`;
+    /// borrowing the slice does not activate, register, or advance its actors.
+    pub fn hidden_entities(&self) -> &[Entity] {
+        &self.hidden_entities
+    }
+
+    /// Frozen terrain omitted from world storage, paired with its grid index.
+    /// Read from `Game::presentation()` alongside that same snapshot's world.
+    /// The storage order and identities are preserved without filtering.
+    pub fn hidden_tiles(&self) -> &[(usize, Tile)] {
+        &self.hidden_tiles
+    }
+}
 fn alive(game: &Game, instance: Instance) -> bool {
     match instance {
         Instance::Player => true,
@@ -114,6 +129,109 @@ fn alive(game: &Game, instance: Instance) -> bool {
             .tiles
             .get(i)
             .is_some_and(|t| !t.object.is_empty()),
+    }
+}
+
+#[cfg(test)]
+mod presentation_storage_tests {
+    use super::*;
+    use crate::{Area, PlayerState, RulesPreset, World};
+
+    #[test]
+    fn hidden_slice_accessors_borrow_exact_storage_including_duplicate_identities() {
+        let mut state = State::default();
+        state
+            .hidden_entities
+            .push(Entity::new(7, "oRock", Vec2::new(600.0, 80.0)));
+        state
+            .hidden_entities
+            .push(Entity::new(7, "oBomb", Vec2::new(640.0, 80.0)));
+        state.hidden_tiles.push((37, Tile::new("oBrick")));
+        state.hidden_tiles.push((37, Tile::new("oLush")));
+        let before = serde_json::to_vec(&state).unwrap();
+        assert!(std::ptr::eq(
+            state.hidden_entities(),
+            state.hidden_entities.as_slice()
+        ));
+        assert!(std::ptr::eq(
+            state.hidden_tiles(),
+            state.hidden_tiles.as_slice()
+        ));
+        assert_eq!(
+            state
+                .hidden_entities()
+                .iter()
+                .map(|e| (e.id, e.object.as_str()))
+                .collect::<Vec<_>>(),
+            [(7, "oRock"), (7, "oBomb")]
+        );
+        assert_eq!(
+            state
+                .hidden_tiles()
+                .iter()
+                .map(|(i, t)| (*i, t.object.as_str()))
+                .collect::<Vec<_>>(),
+            [(37, "oBrick"), (37, "oLush")]
+        );
+        assert_eq!(serde_json::to_vec(&state).unwrap(), before);
+    }
+
+    #[test]
+    fn actual_step_exposes_frozen_draw_storage_without_changing_source_state() {
+        let mut game = Game::shell(5, RulesPreset::Classic);
+        game.world = World::new(80, 40, Area::Mines, 1);
+        game.world.name = "presentation storage fixture".into();
+        game.player.pos = Vec2::new(40.0, 152.0);
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        for x in 0..80 {
+            game.world.set_tile(x, 10, "oBrick");
+        }
+        let id = game.world.spawn("oBomb", Vec2::new(600.0, 152.0));
+        let bomb = game.world.entity_mut(id).unwrap();
+        bomb.data.insert("armed".into(), 1.0);
+        bomb.alarms[0] = 5;
+        bomb.alarms[1] = -1;
+        bomb.age = 7;
+        for _ in 0..8 {
+            game.step(&InputFrame::default());
+        }
+        let index = 10 * game.world.width + 37;
+        let state = game.state_hash();
+        let rng = game.rng.clone().next_u64();
+        let camera = (game.previous_camera, game.camera);
+        let draw = game.presentation();
+        let draw_state = draw.state_hash();
+        assert_eq!(draw.dispatcher.phase, Phase::Draw);
+        assert!(draw.world.entity(id).is_none());
+        assert!(draw.world.tiles[index].object.is_empty());
+        let frozen = draw
+            .dispatcher
+            .hidden_entities()
+            .iter()
+            .find(|e| e.id == id)
+            .unwrap();
+        // Source alarms/bookkeeping run once before Level deactivation, then
+        // the offcamera bomb freezes. Reading an expanded view must not tick it.
+        assert_eq!((frozen.alarms[0], frozen.alarms[1], frozen.age), (4, -1, 8));
+        assert!(!frozen.engine_active);
+        let terrain = draw
+            .dispatcher
+            .hidden_tiles()
+            .iter()
+            .find(|(i, _)| *i == index)
+            .unwrap();
+        assert_eq!(terrain.1.object, "oBrick");
+        assert!(!terrain.1.engine_active);
+        assert_eq!(game.world.entity(id).unwrap().alarms[0], frozen.alarms[0]);
+        for _ in 0..100 {
+            std::hint::black_box(draw.dispatcher.hidden_entities());
+            std::hint::black_box(draw.dispatcher.hidden_tiles());
+        }
+        assert_eq!(draw.state_hash(), draw_state);
+        assert_eq!(game.state_hash(), state);
+        assert_eq!(game.rng.clone().next_u64(), rng);
+        assert_eq!((game.previous_camera, game.camera), camera);
     }
 }
 pub fn is_active(game: &Game, instance: Instance) -> bool {

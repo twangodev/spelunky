@@ -10,15 +10,18 @@ use crate::{
     settings_ui::{SettingsCommand, SettingsUi},
     storage::{Record, Store},
     timing::FixedClock,
+    viewport::Viewport,
 };
 use spelunky_core::{Area, Game, GameEvent, RunState};
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use winit::window::Fullscreen;
 use winit::{
     application::ApplicationHandler,
     event::{ElementState, MouseButton, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     keyboard::{KeyCode, PhysicalKey},
-    window::{Fullscreen, Window, WindowId},
+    window::{Window, WindowId},
 };
 
 const WHITE: [f32; 4] = [1.0, 0.95, 0.85, 1.0];
@@ -187,6 +190,7 @@ struct App {
     occluded: bool,
     next_frame: f64,
     cursor: [f32; 2],
+    cursor_physical: Option<[f64; 2]>,
     mouse_left: bool,
     mouse_right: bool,
     control: bool,
@@ -230,6 +234,7 @@ impl App {
             occluded: false,
             next_frame: 0.,
             cursor: [0.; 2],
+            cursor_physical: None,
             mouse_left: false,
             mouse_right: false,
             control: false,
@@ -303,6 +308,9 @@ impl App {
         }
     }
     fn fullscreen(&self) {
+        #[cfg(target_arch = "wasm32")]
+        toggle_browser_fullscreen();
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(window) = &self.window {
             window.set_fullscreen(if window.fullscreen().is_some() {
                 None
@@ -1205,19 +1213,35 @@ impl App {
         let Some(atlas) = &self.atlas else {
             return vec![];
         };
+        let viewport = self.viewport();
         let mut quads = if matches!(
             self.screen,
             Screen::Playing | Screen::Pause | Screen::Finished | Screen::Donation
         ) {
             self.game
                 .as_ref()
-                .map(|g| scene::game_scene(g, alpha, self.store.data.settings.pixel_snap, atlas))
+                .map(|g| {
+                    scene::game_scene_in_view(
+                        g,
+                        alpha,
+                        self.store.data.settings.pixel_snap,
+                        atlas,
+                        viewport,
+                    )
+                })
                 .unwrap_or_default()
         } else {
             let mut q = vec![];
-            rect(&mut q, [0., 0., 320., 240.], [0.055, 0.035, 0.03, 1.]);
+            rect(
+                &mut q,
+                [0., 0., viewport.width, viewport.height],
+                [0.055, 0.035, 0.03, 1.],
+            );
             q
         };
+        // Scene owns the expanded world and its HUD. Host menus, editor and
+        // overlays retain their authored coordinates within the centered UI.
+        let ui_start = quads.len();
         match self.screen {
             Screen::Playing => {
                 if let Some(game) = self
@@ -1647,7 +1671,14 @@ impl App {
                 );
             }
         }
+        offset_fixed_ui(&mut quads[ui_start..], viewport.ui_origin());
         quads
+    }
+    fn viewport(&self) -> Viewport {
+        self.renderer
+            .as_ref()
+            .map(Renderer::viewport)
+            .unwrap_or_else(Viewport::canonical)
     }
     #[cfg(target_arch = "wasm32")]
     fn publish_test_snapshot(&self, alpha: f64) {
@@ -1665,6 +1696,12 @@ impl App {
             self.screen,
             self.game.as_ref(),
             alpha,
+            self.store.data.settings.pixel_snap,
+        );
+        apply_viewport_snapshot(
+            &mut snapshot,
+            self.game.as_ref(),
+            self.viewport(),
             self.store.data.settings.pixel_snap,
         );
         snapshot["sourceMessage"] = self.source_message.as_ref().map(|message| {
@@ -2326,6 +2363,14 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(renderer) = &mut self.renderer {
                     renderer.resize(size.width, size.height);
                 }
+                // A resize changes the editor's inverse projection even if
+                // the mouse is stationary. End the old stroke before remapping.
+                self.mouse_left = false;
+                self.mouse_right = false;
+                self.editor.cancel_pointer();
+                if let Some([x, y]) = self.cursor_physical {
+                    self.cursor = logical_pointer(x, y, size.width, size.height);
+                }
             }
             WindowEvent::Focused(focused) => {
                 self.focused = focused;
@@ -2386,6 +2431,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                self.cursor_physical = Some([position.x, position.y]);
                 if let Some(window) = &self.window {
                     self.cursor = logical_pointer(
                         position.x,
@@ -2490,15 +2536,132 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 }
-fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
-    let scale = (width as f64 / 320.).min(height as f64 / 240.);
-    if scale <= 0. {
-        return [-1., -1.];
+fn offset_fixed_ui(quads: &mut [DrawQuad], origin: [f32; 2]) {
+    for quad in quads {
+        quad.rect[0] += origin[0];
+        quad.rect[1] += origin[1];
     }
-    [
-        ((x - (width as f64 - 320. * scale) * 0.5) / scale) as f32,
-        ((y - (height as f64 - 240. * scale) * 0.5) / scale) as f32,
-    ]
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn apply_viewport_snapshot(
+    snapshot: &mut serde_json::Value,
+    game: Option<&Game>,
+    viewport: Viewport,
+    pixel_snap: bool,
+) {
+    let [ui_x, ui_y] = viewport.ui_origin();
+    snapshot["viewport"] = serde_json::json!({
+        "surfaceWidth": viewport.surface_width,
+        "surfaceHeight": viewport.surface_height,
+        "logicalWidth": viewport.width,
+        "logicalHeight": viewport.height,
+        "scale": viewport.scale,
+        "uiOriginX": ui_x,
+        "uiOriginY": ui_y,
+    });
+    let Some(game) = game else { return };
+    let Some(x) = snapshot["camera"]["renderedX"].as_f64() else {
+        return;
+    };
+    let Some(y) = snapshot["camera"]["renderedY"].as_f64() else {
+        return;
+    };
+    let presentation = game.presentation();
+    let canonical_camera = spelunky_core::Vec2::new(x, y);
+    let camera = if viewport.width != 320. || viewport.height != 240. {
+        viewport.camera(
+            canonical_camera,
+            presentation.world.width as f64 * 16.,
+            presentation.world.height as f64 * 16.,
+        )
+    } else {
+        canonical_camera
+    };
+    snapshot["camera"]["renderedX"] = camera.x.into();
+    snapshot["camera"]["renderedY"] = camera.y.into();
+    for (coordinate, camera_position, key) in
+        [("x", camera.x, "screenX"), ("y", camera.y, "screenY")]
+    {
+        if let Some(position) = snapshot["rendered"][coordinate].as_f64() {
+            let projected = position - camera_position;
+            snapshot["rendered"][key] = if pixel_snap {
+                projected.round()
+            } else {
+                projected
+            }
+            .into();
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn toggle_browser_fullscreen() {
+    use wasm_bindgen::{JsCast, JsValue};
+    let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+        return;
+    };
+    let (target, method): (JsValue, &str) = if document.fullscreen_element().is_some() {
+        (document.clone().into(), "exitFullscreen")
+    } else if let Some(root) = document.document_element() {
+        (root.into(), "requestFullscreen")
+    } else {
+        return;
+    };
+    // web-sys 0.3.91's generated fullscreen methods discard the DOM Promise.
+    // Invoke the platform method directly to retain and handle its rejection,
+    // without depending on a shell-specific JavaScript global.
+    let result = js_sys::Reflect::get(&target, &method.into())
+        .and_then(|value| value.dyn_into::<js_sys::Function>())
+        .and_then(|function| function.call0(&target));
+    match result {
+        Ok(value) => {
+            if let Ok(promise) = value.dyn_into::<js_sys::Promise>() {
+                wasm_bindgen_futures::spawn_local(async move {
+                    if wasm_bindgen_futures::JsFuture::from(promise).await.is_err() {
+                        browser_fullscreen_failed();
+                    }
+                    focus_browser_canvas();
+                });
+            }
+        }
+        Err(_) => {
+            browser_fullscreen_failed();
+            focus_browser_canvas();
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn browser_fullscreen_failed() {
+    const MESSAGE: &str = "Could not change fullscreen. Use your browser's fullscreen controls.";
+    if let Some(status) = web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.get_element_by_id("fullscreen-status"))
+    {
+        status.set_text_content(Some(MESSAGE));
+        let _ = status.remove_attribute("hidden");
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn focus_browser_canvas() {
+    use wasm_bindgen::JsCast;
+    let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+        return;
+    };
+    if document.has_focus().unwrap_or(false) {
+        if let Some(canvas) = document
+            .get_element_by_id("spelunky-canvas")
+            .and_then(|element| element.dyn_into::<web_sys::HtmlElement>().ok())
+        {
+            let _ = canvas.focus();
+        }
+    }
+}
+
+fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
+    Viewport::from_surface(width, height).logical_pointer(x, y)
 }
 #[cfg(test)]
 mod tests {
@@ -2998,6 +3161,15 @@ mod tests {
         game
     }
     fn drawn_player_anchor(game: &Game, alpha: f64, atlas: &Atlas) -> [f64; 2] {
+        drawn_player_anchor_in_view(game, alpha, atlas, Viewport::canonical(), false)
+    }
+    fn drawn_player_anchor_in_view(
+        game: &Game,
+        alpha: f64,
+        atlas: &Atlas,
+        viewport: Viewport,
+        pixel_snap: bool,
+    ) -> [f64; 2] {
         let player = &game.presentation().player;
         let frame = atlas.sprite(&player.sprite, player.animation).unwrap();
         let mut uv = frame.uv;
@@ -3006,7 +3178,7 @@ mod tests {
             uv[0] += uv[2];
             uv[2] = -uv[2];
         }
-        let quads = scene::game_scene(game, alpha, false, atlas);
+        let quads = scene::game_scene_in_view(game, alpha, pixel_snap, atlas, viewport);
         let quad = quads.iter().find(|quad| quad.uv == uv).unwrap();
         [
             f64::from(
@@ -3848,9 +4020,119 @@ mod tests {
     }
     #[test]
     fn pointer_letterbox_coordinates_match_renderer() {
-        assert_eq!(logical_pointer(240., 0., 1920, 1080), [0., 0.]);
-        assert_eq!(logical_pointer(1680., 1080., 1920, 1080), [320., 240.]);
-        assert_eq!(logical_pointer(0., 100., 800, 800), [0., 0.]);
+        for (actual, expected) in [
+            (logical_pointer(240., 0., 1920, 1080), [0., 0.]),
+            (logical_pointer(1680., 1080., 1920, 1080), [320., 240.]),
+            (logical_pointer(0., 100., 800, 800), [0., 0.]),
+        ] {
+            for index in 0..2 {
+                assert!((actual[index] - expected[index]).abs() < 0.0001);
+            }
+        }
+        assert!(
+            logical_pointer(0., 0., 0, 100)
+                .iter()
+                .all(|value| !value.is_finite())
+        );
+    }
+    #[test]
+    fn resized_editor_pointer_paints_the_same_source_cells_without_joining_strokes() {
+        let mut editor = EditorUi::new();
+        for ((width, height), [source_x, source_y]) in
+            [((1920, 1080), [12., 48.]), ((800, 800), [100., 72.])]
+        {
+            // Derive physical positions from the fixed UI's independent
+            // surface centering contract, then exercise the real editor.
+            let scale = (width as f64 / 320.).min(height as f64 / 240.);
+            let x = (width as f64 - 320. * scale) * 0.5 + source_x * scale;
+            let y = (height as f64 - 240. * scale) * 0.5 + source_y * scale;
+            let [logical_x, logical_y] = logical_pointer(x, y, width, height);
+            editor.pointer(logical_x, logical_y, true, false);
+            editor.cancel_pointer();
+        }
+        let EditorCommand::Play(level) = editor.key(KeyCode::F5, None, false) else {
+            panic!("Editor did not produce its painted level");
+        };
+        assert_eq!(level.get_tile(1, 12), Some('1'));
+        assert_eq!(level.get_tile(12, 15), Some('1'));
+        assert_eq!(level.get_tile(6, 13), Some('0'));
+    }
+    #[test]
+    fn viewport_diagnostics_match_actual_player_projection_without_mutating_core() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = camera_follow_fixture();
+        game.step(&spelunky_core::InputFrame {
+            right: true,
+            ..Default::default()
+        });
+        let hash = game.state_hash();
+        for (width, height) in [(1920, 1080), (800, 800), (1080, 1920), (320, 240)] {
+            let viewport = Viewport::from_surface(width, height);
+            for alpha in [0., 0.25, 0.5, 1.] {
+                for pixel_snap in [false, true] {
+                    let mut snapshot =
+                        test_snapshot(Screen::Playing, Some(&game), alpha, pixel_snap);
+                    let source_camera = snapshot["camera"]["authoritativeX"].clone();
+                    apply_viewport_snapshot(&mut snapshot, Some(&game), viewport, pixel_snap);
+                    let anchor =
+                        drawn_player_anchor_in_view(&game, alpha, &atlas, viewport, pixel_snap);
+                    for (index, key) in ["screenX", "screenY"].into_iter().enumerate() {
+                        assert!(
+                            (snapshot["rendered"][key].as_f64().unwrap() - anchor[index]).abs()
+                                < 0.0001,
+                            "{width}x{height}, alpha={alpha}, pixel_snap={pixel_snap}, {key}"
+                        );
+                    }
+                    assert_eq!(snapshot["camera"]["authoritativeX"], source_camera);
+                    assert_eq!(snapshot["viewport"]["surfaceWidth"], width);
+                    assert_eq!(snapshot["viewport"]["surfaceHeight"], height);
+                }
+            }
+        }
+        assert_eq!(
+            game.state_hash(),
+            hash,
+            "viewport diagnostics changed simulation"
+        );
+    }
+    #[test]
+    fn canonical_viewport_keeps_small_room_authored_camera_in_diagnostics_and_scene() {
+        use spelunky_core::{Vec2, World};
+        let atlas = Atlas::load().unwrap();
+        let mut game = camera_follow_fixture();
+        game.world = World::new(10, 8, Area::Mines, 1);
+        game.player.previous_pos = Vec2::new(76., 62.);
+        game.player.pos = Vec2::new(80., 64.);
+        game.previous_camera = Vec2::new(9., 5.);
+        game.camera = Vec2::new(11., 7.);
+        game.flags.remove("render_discontinuity");
+        let hash = game.state_hash();
+        for (width, height) in [(320, 240), (960, 720), (1920, 1440)] {
+            let viewport = Viewport::from_surface(width, height);
+            assert_eq!([viewport.width, viewport.height], [320., 240.]);
+            for alpha in [0., 0.5, 1.] {
+                let mut snapshot = test_snapshot(Screen::Playing, Some(&game), alpha, false);
+                let authored_camera = [
+                    snapshot["camera"]["renderedX"].clone(),
+                    snapshot["camera"]["renderedY"].clone(),
+                ];
+                apply_viewport_snapshot(&mut snapshot, Some(&game), viewport, false);
+                assert_eq!(snapshot["camera"]["renderedX"], authored_camera[0]);
+                assert_eq!(snapshot["camera"]["renderedY"], authored_camera[1]);
+                let anchor = drawn_player_anchor_in_view(&game, alpha, &atlas, viewport, false);
+                for (index, key) in ["screenX", "screenY"].into_iter().enumerate() {
+                    assert!(
+                        (snapshot["rendered"][key].as_f64().unwrap() - anchor[index]).abs()
+                            < 0.0001
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            game.state_hash(),
+            hash,
+            "canonical presentation changed core"
+        );
     }
     #[test]
     fn sign_messages_preserve_lines_and_wrap_without_losing_words() {

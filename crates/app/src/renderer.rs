@@ -1,14 +1,17 @@
 //! Batched sprites drawn at the actual surface resolution.
 //!
 //! Logical positions stay fractional all the way to rasterization. The viewport
-//! preserves Classic's 320 × 240 aspect ratio without an intermediate framebuffer.
+//! uses a uniform scale and expands the visible world to fill the surface.
 
+use crate::viewport::Viewport;
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use winit::window::Window;
 
+#[cfg(test)]
 const LOGICAL_WIDTH: f32 = 320.0;
+#[cfg(test)]
 const LOGICAL_HEIGHT: f32 = 240.0;
 const INITIAL_VERTEX_CAPACITY: usize = 4096;
 
@@ -299,6 +302,10 @@ impl Renderer {
         }
     }
 
+    pub fn viewport(&self) -> Viewport {
+        Viewport::from_surface(self.config.width, self.config.height)
+    }
+
     pub fn render(
         &mut self,
         quads: &[DrawQuad],
@@ -309,8 +316,9 @@ impl Renderer {
         }
         let frame = self.surface.get_current_texture()?;
         self.vertices.clear();
+        let view = self.viewport();
         for quad in quads {
-            append_quad(&mut self.vertices, quad);
+            append_quad_in_view(&mut self.vertices, quad, view);
         }
         if self.vertices.len() > self.vertex_capacity {
             self.vertex_capacity = self.vertices.len().next_power_of_two();
@@ -351,8 +359,7 @@ impl Renderer {
             });
             let [x, y, width, height] = viewport(self.config.width, self.config.height);
             pass.set_viewport(x, y, width, height, 0.0, 1.0);
-            // Clip quads at the game viewport, including sprites partly outside
-            // the camera, so they never draw into the letterbox margins.
+            // Rasterize every physical pixel; the logical view expands uniformly.
             let left = x.ceil() as u32;
             let top = y.ceil() as u32;
             let right = (x + width).floor() as u32;
@@ -448,18 +455,15 @@ fn create_vertex_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer 
 }
 
 fn viewport(width: u32, height: u32) -> [f32; 4] {
-    let scale = (width as f32 / LOGICAL_WIDTH).min(height as f32 / LOGICAL_HEIGHT);
-    let viewport_width = LOGICAL_WIDTH * scale;
-    let viewport_height = LOGICAL_HEIGHT * scale;
-    [
-        (width as f32 - viewport_width) * 0.5,
-        (height as f32 - viewport_height) * 0.5,
-        viewport_width,
-        viewport_height,
-    ]
+    [0.0, 0.0, width as f32, height as f32]
 }
 
+#[cfg(test)]
 fn append_quad(vertices: &mut Vec<Vertex>, quad: &DrawQuad) {
+    append_quad_in_view(vertices, quad, Viewport::canonical());
+}
+
+fn append_quad_in_view(vertices: &mut Vec<Vertex>, quad: &DrawQuad, view: Viewport) {
     let [x, y, width, height] = quad.rect;
     let [u, v, uv_width, uv_height] = quad.uv;
     let [pivot_x, pivot_y] = quad.pivot;
@@ -471,8 +475,8 @@ fn append_quad(vertices: &mut Vec<Vertex>, quad: &DrawQuad) {
         let world_y = y + pivot_y + local_x * sin + local_y * cos;
         Vertex {
             position: [
-                world_x * 2.0 / LOGICAL_WIDTH - 1.0,
-                1.0 - world_y * 2.0 / LOGICAL_HEIGHT,
+                world_x * 2.0 / view.width - 1.0,
+                1.0 - world_y * 2.0 / view.height,
             ],
             uv: [u + uv_width * dx, v + uv_height * dy],
             color: quad.color,
@@ -497,6 +501,19 @@ pub(crate) mod tests {
     /// fallback used when a surface only advertises an sRGB format.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn gpu_pixels(quads: &[DrawQuad], srgb_texture: bool) -> Vec<u8> {
+        gpu_pixels_in_view(quads, srgb_texture, Viewport::canonical())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn gpu_pixels_in_view(
+        quads: &[DrawQuad],
+        srgb_texture: bool,
+        viewport: Viewport,
+    ) -> Vec<u8> {
+        let width = viewport.surface_width;
+        let height = viewport.surface_height;
+        let stride = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         pollster::block_on(async {
             let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
             let adapter = instance
@@ -506,6 +523,7 @@ pub(crate) mod tests {
                 })
                 .await
                 .expect("GPU pixel regression requires a software or native adapter");
+            eprintln!("GPU_ACCEPTANCE adapter={:?}", adapter.get_info());
             let (device, queue) = adapter
                 .request_device(
                     &wgpu::DeviceDescriptor {
@@ -594,8 +612,8 @@ pub(crate) mod tests {
             let target = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("mask readback"),
                 size: wgpu::Extent3d {
-                    width: 320,
-                    height: 240,
+                    width,
+                    height,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -615,7 +633,7 @@ pub(crate) mod tests {
             });
             let mut vertices = Vec::new();
             for quad in quads {
-                append_quad(&mut vertices, quad);
+                append_quad_in_view(&mut vertices, quad, viewport);
             }
             let buffer = create_vertex_buffer(&device, vertices.len().max(1));
             queue.write_buffer(&buffer, 0, bytemuck::cast_slice(&vertices));
@@ -648,7 +666,7 @@ pub(crate) mod tests {
             }
             let readback = device.create_buffer(&wgpu::BufferDescriptor {
                 label: None,
-                size: 320 * 240 * 4,
+                size: u64::from(stride) * u64::from(height),
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
@@ -658,8 +676,8 @@ pub(crate) mod tests {
                     buffer: &readback,
                     layout: wgpu::TexelCopyBufferLayout {
                         offset: 0,
-                        bytes_per_row: Some(1280),
-                        rows_per_image: Some(240),
+                        bytes_per_row: Some(stride),
+                        rows_per_image: Some(height),
                     },
                 },
                 target.size(),
@@ -676,14 +694,36 @@ pub(crate) mod tests {
                 .recv_timeout(std::time::Duration::from_secs(30))
                 .unwrap()
                 .unwrap();
-            readback.slice(..).get_mapped_range().to_vec()
+            let bytes = readback.slice(..).get_mapped_range();
+            bytes
+                .chunks(stride as usize)
+                .flat_map(|row| row[..width as usize * 4].iter().copied())
+                .collect()
         })
     }
 
     #[test]
-    fn letterbox_preserves_aspect_ratio() {
-        assert_eq!(viewport(1920, 1080), [240.0, 0.0, 1440.0, 1080.0]);
-        assert_eq!(viewport(800, 800), [0.0, 100.0, 800.0, 600.0]);
+    fn viewport_covers_the_entire_surface() {
+        assert_eq!(viewport(1920, 1080), [0.0, 0.0, 1920.0, 1080.0]);
+        assert_eq!(viewport(800, 800), [0.0, 0.0, 800.0, 800.0]);
+    }
+
+    #[test]
+    fn expanded_projection_keeps_square_pixels_at_all_surface_shapes() {
+        let quad = DrawQuad {
+            rect: [64.0, 64.0, 16.0, 16.0],
+            color: [1.; 4],
+            ..Default::default()
+        };
+        for (width, height) in [(1920, 1080), (800, 800), (600, 1200), (3440, 1440)] {
+            let view = Viewport::from_surface(width, height);
+            let mut vertices = Vec::new();
+            append_quad_in_view(&mut vertices, &quad, view);
+            let dx = (vertices[2].position[0] - vertices[0].position[0]) * width as f32 / 2.0;
+            let dy = (vertices[0].position[1] - vertices[1].position[1]) * height as f32 / 2.0;
+            assert!((dx - dy).abs() < 0.001);
+            assert!((f64::from(dx) - 16.0 * view.scale).abs() < 0.001);
+        }
     }
 
     #[test]

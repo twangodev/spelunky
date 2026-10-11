@@ -11,6 +11,7 @@ mod scene;
 mod settings_ui;
 mod storage;
 mod timing;
+mod viewport;
 
 pub fn run() {
     if let Err(error) = host::run() {

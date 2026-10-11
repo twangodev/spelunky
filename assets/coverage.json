@@ -5279,7 +5279,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 661,
+          "line": 769,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -5949,7 +5949,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1507,
+          "line": 1669,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -6017,7 +6017,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1435,
+          "line": 1597,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -8442,7 +8442,7 @@
         },
         {
           "kind": "source_player_phase_adapter",
-          "line": 595,
+          "line": 713,
           "module": "crates/core/src/dispatcher.rs"
         }
       ],
@@ -11402,7 +11402,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1509,
+          "line": 1671,
           "module": "crates/app/src/scene.rs"
         }
       ],

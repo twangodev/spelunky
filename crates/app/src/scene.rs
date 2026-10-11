@@ -1,10 +1,11 @@
 //! Builds a presentation snapshot without advancing simulation or animation.
 use spelunky_core::{Area, Entity, Game, PlayerState, TICK_RATE, Vec2, catalog};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     atlas::Atlas,
     renderer::{DrawQuad, QuadBlend},
+    viewport::Viewport,
 };
 
 const WHITE: [f32; 4] = [1.0; 4];
@@ -258,6 +259,30 @@ fn sprite(
     mirrored: bool,
     color: [f32; 4],
 ) {
+    sprite_in_view(
+        quads,
+        atlas,
+        name,
+        frame,
+        x,
+        y,
+        mirrored,
+        color,
+        Viewport::canonical(),
+    );
+}
+
+fn sprite_in_view(
+    quads: &mut Vec<DrawQuad>,
+    atlas: &Atlas,
+    name: &str,
+    frame: f64,
+    x: f32,
+    y: f32,
+    mirrored: bool,
+    color: [f32; 4],
+    view: Viewport,
+) {
     let Some(frame) = atlas.sprite(name, frame) else {
         return;
     };
@@ -277,7 +302,7 @@ fn sprite(
         .abs()
         .max((width - frame.origin[0]).abs())
         .hypot(frame.origin[1].abs().max((height - frame.origin[1]).abs()));
-    if x + radius < 0.0 || x - radius > 320.0 || y + radius < 0.0 || y - radius > 240.0 {
+    if x + radius < 0.0 || x - radius > view.width || y + radius < 0.0 || y - radius > view.height {
         return;
     }
     quads.push(DrawQuad {
@@ -335,6 +360,14 @@ fn entity_position(game: &Game, entity: &Entity, alpha: f64) -> Vec2 {
     }
 }
 
+fn presented_entity_position(game: &Game, entity: &Entity, alpha: f64, frozen: bool) -> Vec2 {
+    if frozen {
+        entity.pos
+    } else {
+        entity_position(game, entity, alpha)
+    }
+}
+
 fn entity_draw_x(object: &str, x: f32, mirrored: bool) -> f32 {
     // oEnemy's inherited Draw event compensates by exactly 16 original
     // pixels. A raw origin flip would move its top-left-origin sprite into
@@ -372,7 +405,12 @@ fn entity_draw_extras(
     atlas: &Atlas,
     x: f32,
     y: f32,
+    view: Viewport,
 ) {
+    let sprite =
+        |quads: &mut Vec<DrawQuad>, atlas: &Atlas, name: &str, frame, x, y, mirrored, color| {
+            sprite_in_view(quads, atlas, name, frame, x, y, mirrored, color, view);
+        };
     if matches!(entity.object.as_str(), "oPDummy" | "oPDummy2") {
         // These source actors have their own Draw event. Equipment follows the
         // cinematic actor rather than the frozen gameplay character.
@@ -500,6 +538,17 @@ fn entity_draw_extras(
 /// Alpha interpolates positions only. Sprite frames and all HUD values are
 /// simulation state, so presentation never changes gameplay or animation speed.
 pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> Vec<DrawQuad> {
+    game_scene_in_view(game, alpha, pixel_snap, atlas, Viewport::canonical())
+}
+
+/// Expands presentation only; source activation and the frozen Draw state stay unchanged.
+pub fn game_scene_in_view(
+    game: &Game,
+    alpha: f64,
+    pixel_snap: bool,
+    atlas: &Atlas,
+    view: Viewport,
+) -> Vec<DrawQuad> {
     let game = game.presentation();
     let alpha = if game.flags.contains("render_discontinuity") {
         1.0
@@ -508,7 +557,64 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
     } else {
         1.0
     };
-    let camera = interpolated(game.previous_camera, game.camera, alpha);
+    let canonical_camera = interpolated(game.previous_camera, game.camera, alpha);
+    let expanded = view.width != 320.0 || view.height != 240.0;
+    // Canonical helper preserves authored room framing, including small rooms.
+    let camera = if expanded {
+        view.camera(
+            canonical_camera,
+            game.world.width as f64 * 16.0,
+            game.world.height as f64 * 16.0,
+        )
+    } else {
+        canonical_camera
+    };
+    let sprite =
+        |quads: &mut Vec<DrawQuad>, atlas: &Atlas, name: &str, frame, x, y, mirrored, color| {
+            sprite_in_view(quads, atlas, name, frame, x, y, mirrored, color, view);
+        };
+    let visible_ids: BTreeSet<_> = if expanded {
+        game.world.entities.iter().map(|entity| entity.id).collect()
+    } else {
+        BTreeSet::new()
+    };
+    let hidden: Vec<_> = if expanded {
+        game.dispatcher
+            .hidden_entities()
+            .iter()
+            .filter(|entity| !visible_ids.contains(&entity.id))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let hidden_ids: BTreeSet<_> = hidden.iter().map(|entity| entity.id).collect();
+    let entities = game
+        .world
+        .entities
+        .iter()
+        .filter(|entity| entity.engine_active)
+        .chain(hidden.iter().copied());
+    // Keep visible grid traversal first; hidden storage is borrowed, never activated.
+    let hidden_tile_storage = if expanded {
+        game.dispatcher.hidden_tiles()
+    } else {
+        &[]
+    };
+    let hidden_tiles = hidden_tile_storage
+        .iter()
+        .filter(|(index, _)| {
+            expanded
+                && *index < game.world.tiles.len()
+                && game.world.tiles[*index].object.is_empty()
+        })
+        .map(|(index, tile)| (*index, tile));
+    let tiles = game
+        .world
+        .tiles
+        .iter()
+        .enumerate()
+        .filter(|(_, tile)| !tile.object.is_empty() && tile.engine_active)
+        .chain(hidden_tiles);
     // A cinematic uses the authored room's world, but its actors and Draw
     // controller replace the gameplay character, HUD and lighting pass.
     let cinematic = game
@@ -516,15 +622,19 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
         .as_ref()
         .filter(|ending| ending.stage != spelunky_core::ending::EndingStage::Exit);
     let mut quads = Vec::with_capacity(1000);
-    background(&mut quads, game, camera, pixel_snap, atlas);
+    background_in_view(&mut quads, game, camera, pixel_snap, atlas, view);
     let mut layers: Vec<(i32, u64, Vec<DrawQuad>)> = Vec::new();
-    let terrain_sprites: BTreeMap<(usize, usize), (&str, f64)> = game
-        .world
-        .entities
+    let terrain_sprites: BTreeMap<(usize, usize), (&str, f64)> = hidden
         .iter()
+        .copied()
+        .chain(
+            game.world
+                .entities
+                .iter()
+                .filter(|entity| entity.engine_active),
+        )
         .filter(|entity| {
             entity.alive
-                && entity.engine_active
                 && entity.object == "oTerrainMetadata"
                 && entity.pos.x >= 0.0
                 && entity.pos.y >= 0.0
@@ -541,8 +651,8 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
             })
         })
         .collect();
-    for (index, tile) in game.world.tiles.iter().enumerate() {
-        if tile.object.is_empty() || !tile.engine_active {
+    for (index, tile) in tiles {
+        if tile.object.is_empty() {
             continue;
         }
         let tile_x = index % game.world.width.max(1);
@@ -564,7 +674,7 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
         };
         let position = Vec2::new(tile_x as f64 * 16.0, tile_y as f64 * 16.0);
         let [x, y] = screen(position, position, camera, alpha, pixel_snap);
-        if x < -64.0 || y < -64.0 || x > 320.0 || y > 240.0 {
+        if x < -64.0 || y < -64.0 || x > view.width || y > view.height {
             continue;
         }
         let definition = catalog::object(&tile.object);
@@ -584,9 +694,10 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
         );
         layers.push((definition.map_or(100, |def| def.depth), index as u64, layer));
     }
-    for metadata in game.world.entities.iter().filter(|entity| {
-        entity.alive && entity.engine_active && entity.object == "oTerrainMetadata"
-    }) {
+    for metadata in entities
+        .clone()
+        .filter(|entity| entity.alive && entity.object == "oTerrainMetadata")
+    {
         let frozen = metadata.value("frozen_caveman") != 0.0;
         let embedded = metadata.value("embedded_treasure") != 0.0;
         if !frozen && !embedded {
@@ -636,12 +747,7 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
         sprite(&mut layer, atlas, name, 0.0, x, y, false, WHITE);
         layers.push((depth, 1_000_000 + metadata.id, layer));
     }
-    for entity in game
-        .world
-        .entities
-        .iter()
-        .filter(|entity| entity.alive && entity.engine_active)
-    {
+    for entity in entities.clone().filter(|entity| entity.alive) {
         if entity.data.get("visible") == Some(&0.0)
             || entity.data.get("hidden") == Some(&1.0)
             || entity.object == "oTerrainMetadata"
@@ -655,7 +761,9 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
         let Some(name) = entity_sprite(atlas, entity) else {
             continue;
         };
-        let position = entity_position(game, entity, alpha);
+        // Hidden actors retain stale previous_pos while source simulation is frozen.
+        let position =
+            presented_entity_position(game, entity, alpha, hidden_ids.contains(&entity.id));
         let [x, y] = screen(position, position, camera, alpha, pixel_snap);
         let mut layer = Vec::with_capacity(1);
         if entity.object == "oHintHand" && (game.player.pos.x - (entity.pos.x + 8.0)).abs() < 8.0 {
@@ -771,7 +879,7 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
                 ];
             }
         }
-        entity_draw_extras(&mut layer, game, entity, atlas, x, y);
+        entity_draw_extras(&mut layer, game, entity, atlas, x, y, view);
         let depth = entity.data.get("depth").map_or_else(
             || definition.map_or(60, |def| def.depth),
             |depth| *depth as i32,
@@ -920,6 +1028,7 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
     for (_, _, layer) in layers {
         quads.extend(layer);
     }
+    let mut panel_start = quads.len();
     if let Some(ending) = cinematic {
         use spelunky_core::ending::EndingStage;
         let fade = interpolate_fade(ending.previous_fade_level, ending.fade_level, alpha);
@@ -958,9 +1067,19 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
         }
     } else {
         if darkness_enabled(game) {
-            darkness(&mut quads, game, camera, alpha);
+            darkness_in_view(&mut quads, game, camera, alpha, view);
+            // Darkness already occupies world coordinates, outside the fixed UI panel.
         }
-        hud(&mut quads, game, camera, atlas);
+        panel_start = quads.len();
+        let [ox, oy] = view.ui_origin();
+        // World-attached source HUD text retains world coordinates after panel translation.
+        hud_in_view(
+            &mut quads,
+            game,
+            Vec2::new(camera.x + f64::from(ox), camera.y + f64::from(oy)),
+            atlas,
+            view,
+        );
         if let Some(ending) = game.ending.as_ref().filter(|ending| {
             ending.kind == spelunky_core::ending::EndingKind::TitleCredits
                 && ending.stage == spelunky_core::ending::EndingStage::Exit
@@ -991,7 +1110,25 @@ pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> V
             }
         }
     }
+    place_authored_panel(&mut quads[panel_start..], view);
     quads
+}
+
+/// Center authored UI and expand the full-screen fades emitted by cinematic_fade.
+fn place_authored_panel(quads: &mut [DrawQuad], view: Viewport) {
+    let [x, y] = view.ui_origin();
+    for quad in quads {
+        if quad.rect == [0.0, 0.0, 320.0, 240.0]
+            && quad.uv == [0.0; 4]
+            && quad.color[..3] == [0.0; 3]
+            && quad.blend == QuadBlend::Alpha
+        {
+            quad.rect = [0.0, 0.0, view.width, view.height];
+        } else {
+            quad.rect[0] += x;
+            quad.rect[1] += y;
+        }
+    }
 }
 
 /// Source oEnd3/oEndCustom Draw. Simulation owns every reveal and countup.
@@ -1291,6 +1428,7 @@ fn transition_text(
     }
 }
 
+#[cfg(test)]
 fn background(
     quads: &mut Vec<DrawQuad>,
     game: &Game,
@@ -1298,13 +1436,37 @@ fn background(
     pixel_snap: bool,
     atlas: &Atlas,
 ) {
+    background_in_view(
+        quads,
+        game,
+        camera,
+        pixel_snap,
+        atlas,
+        Viewport::canonical(),
+    );
+}
+
+fn background_in_view(
+    quads: &mut Vec<DrawQuad>,
+    game: &Game,
+    camera: Vec2,
+    pixel_snap: bool,
+    atlas: &Atlas,
+    view: Viewport,
+) {
+    let sprite =
+        |quads: &mut Vec<DrawQuad>, atlas: &Atlas, name: &str, frame, x, y, mirrored, color| {
+            sprite_in_view(quads, atlas, name, frame, x, y, mirrored, color, view);
+        };
     let (name, tiled) = match game.world.name.as_str() {
         "rEnd" | "rEndCustom" | "rTransition1" | "rTransition1x" | "rTransition2"
         | "rTransition2x" | "rTransition3" | "rTransition3x" => ("bgCave", true),
         "rTransition4" => ("bgTemple", true),
         "rEnd3" | "rCredits2" => ("bgClouds", false),
         "rIntro" | "rCredits1" => ("backgroundNight", true),
-        // The volcano room is covered by its authored oEnd2BG instance.
+        // Preserve its authored center panel; repeat the existing background
+        // beyond that panel only when the display reveals additional world.
+        "rEnd2" if view.width != 320.0 || view.height != 240.0 => ("sEnd2BG", true),
         "rEnd2" => return,
         _ => (
             match game.world.area {
@@ -1318,7 +1480,7 @@ fn background(
         return;
     };
     let [width, height] = frame.size;
-    if !tiled {
+    if !tiled && view.width == 320.0 && view.height == 240.0 {
         sprite(
             quads,
             atlas,
@@ -1338,9 +1500,9 @@ fn background(
         start_y = start_y.round();
     }
     let mut y = start_y;
-    while y < 240.0 {
+    while y < view.height {
         let mut x = start_x;
-        while x < 320.0 {
+        while x < view.width {
             sprite(quads, atlas, name, 0.0, x, y, false, WHITE);
             x += width;
         }
@@ -1522,7 +1684,20 @@ fn illumination(lights: &[Light], point: Vec2) -> [f64; 3] {
         .map_or([0.0; 3], |light| light.tint)
 }
 
+#[cfg(test)]
 fn darkness(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, alpha: f64) {
+    darkness_in_view(quads, game, camera, alpha, Viewport::canonical());
+}
+
+fn darkness_in_view(
+    quads: &mut Vec<DrawQuad>,
+    game: &Game,
+    camera: Vec2,
+    alpha: f64,
+    view: Viewport,
+) {
+    let columns = view.width.ceil() as i32;
+    let rows = view.height.ceil() as i32;
     let lights = scene_lights(game, alpha);
     let tint = lights[0].tint.map(|channel| channel as f32);
     let mut intervals: Vec<(i32, i32)> = Vec::with_capacity(lights.len());
@@ -1531,7 +1706,7 @@ fn darkness(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, alpha: f64) {
     // Scanline runs retain logical-pixel edges without an offscreen framebuffer
     // or an arbitrary GPU light-count limit. GM8's polygon edge rasterization
     // has not been verified; these use analytic circles at pixel centers.
-    for y in 0..240 {
+    for y in 0..rows {
         intervals.clear();
         for light in &lights {
             let dy = camera.y + f64::from(y) + 0.5 - light.position.y;
@@ -1540,8 +1715,8 @@ fn darkness(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, alpha: f64) {
             }
             let half = (light.radius * light.radius - dy * dy).sqrt();
             let center = light.position.x - camera.x;
-            let start = (center - half - 0.5).ceil().clamp(0.0, 320.0) as i32;
-            let end = ((center + half - 0.5).floor() + 1.0).clamp(0.0, 320.0) as i32;
+            let start = (center - half - 0.5).ceil().clamp(0.0, f64::from(columns)) as i32;
+            let end = ((center + half - 0.5).floor() + 1.0).clamp(0.0, f64::from(columns)) as i32;
             if start < end {
                 intervals.push((start, end));
             }
@@ -1549,7 +1724,11 @@ fn darkness(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, alpha: f64) {
         intervals.sort_unstable();
         let mut cursor = 0;
         let mut active: Option<(i32, i32)> = None;
-        for (start, end) in intervals.iter().copied().chain(std::iter::once((321, 321))) {
+        for (start, end) in intervals
+            .iter()
+            .copied()
+            .chain(std::iter::once((columns + 1, columns + 1)))
+        {
             if let Some((left, right)) = active {
                 if start <= right {
                     active = Some((left, right.max(end)));
@@ -1559,9 +1738,9 @@ fn darkness(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, alpha: f64) {
                 mask_run(quads, left, right, y, tint);
                 cursor = right;
             }
-            active = (start < 320).then_some((start, end));
+            active = (start < columns).then_some((start, end));
         }
-        mask_run(quads, cursor, 320, y, [0.0; 3]);
+        mask_run(quads, cursor, columns, y, [0.0; 3]);
     }
 }
 
@@ -1818,7 +1997,18 @@ fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas) 
     }
 }
 
+#[cfg(test)]
 fn hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas) {
+    hud_in_view(quads, game, camera, atlas, Viewport::canonical());
+}
+
+fn hud_in_view(
+    quads: &mut Vec<DrawQuad>,
+    game: &Game,
+    camera: Vec2,
+    atlas: &Atlas,
+    view: Viewport,
+) {
     if game.opening.as_ref().is_some_and(|opening| {
         opening.kind == spelunky_core::opening::OpeningKind::Intro || !opening.player_present
     }) {
@@ -1904,33 +2094,41 @@ fn hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas) {
         }
     }
     if player.has("Compass") {
-        let exit_x = (game.world.exit.x - camera.x) as f32;
-        let exit_y = (game.world.exit.y - camera.y) as f32;
-        let name = if exit_y > 240.0 {
+        let [ox, oy] = view.ui_origin();
+        let exit_x = (game.world.exit.x - camera.x) as f32 + ox;
+        let exit_y = (game.world.exit.y - camera.y) as f32 + oy;
+        let name = if exit_y > view.height {
             if exit_x < 0.0 {
                 "sCompassLL"
-            } else if exit_x > 304.0 {
+            } else if exit_x > view.width - 16.0 {
                 "sCompassLR"
             } else {
                 "sCompassDown"
             }
         } else if exit_x < 0.0 {
             "sCompassLeft"
-        } else if exit_x > 304.0 {
+        } else if exit_x > view.width - 16.0 {
             "sCompassRight"
         } else {
             ""
         };
-        sprite(
+        let start = quads.len();
+        sprite_in_view(
             quads,
             atlas,
             name,
             0.0,
-            exit_x.clamp(0.0, 304.0),
-            exit_y.clamp(40.0, 224.0),
+            exit_x.clamp(0.0, view.width - 16.0),
+            exit_y.clamp(40.0, view.height - 16.0),
             false,
             WHITE,
+            view,
         );
+        // The final panel placement moves fixed HUD only; compass is already in full-view coordinates.
+        for quad in &mut quads[start..] {
+            quad.rect[0] -= ox;
+            quad.rect[1] -= oy;
+        }
     }
     let seconds = game.tick / u64::from(TICK_RATE);
     text(
@@ -2080,6 +2278,394 @@ mod tests {
 
     use super::*;
     use spelunky_core::RulesPreset;
+
+    fn adaptive_room() -> Game {
+        let mut game = Game::shell(5, RulesPreset::Classic);
+        game.world = spelunky_core::World::new(80, 40, Area::Mines, 1);
+        game.player.pos = Vec2::new(40.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        for x in 0..80 {
+            game.world.set_tile(x, 10, "oBrick");
+        }
+        game.camera = Vec2::new(0.0, 0.0);
+        game.previous_camera = game.camera;
+        game
+    }
+
+    fn quad_bytes(
+        quads: &[DrawQuad],
+    ) -> Vec<([u32; 4], [u32; 4], [u32; 4], u32, [u32; 2], QuadBlend)> {
+        quads
+            .iter()
+            .map(|q| {
+                (
+                    q.rect.map(f32::to_bits),
+                    q.uv.map(f32::to_bits),
+                    q.color.map(f32::to_bits),
+                    q.rotation.to_bits(),
+                    q.pivot.map(f32::to_bits),
+                    q.blend,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn adaptive_view_reveals_horizontal_and_vertical_world_markers_without_stretching() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = adaptive_room();
+        game.world.spawn("oRuby", Vec2::new(368.0, 64.0));
+        game.world.spawn("oEmerald", Vec2::new(80.0, 304.0));
+        let ruby = atlas.sprite("sRuby", 0.0).unwrap();
+        let emerald = atlas.sprite("sEmerald", 0.0).unwrap();
+        let canonical = game_scene(&game, 0.5, false, &atlas);
+        assert!(
+            !canonical
+                .iter()
+                .any(|q| q.uv == ruby.uv || q.uv == emerald.uv)
+        );
+        let wide = game_scene_in_view(
+            &game,
+            0.5,
+            false,
+            &atlas,
+            Viewport::from_surface(1920, 1080),
+        );
+        let tall = game_scene_in_view(&game, 0.5, false, &atlas, Viewport::from_surface(800, 800));
+        let q = wide
+            .iter()
+            .find(|q| q.uv == ruby.uv)
+            .expect("horizontal strip missing");
+        assert_eq!(&q.rect[2..], &ruby.size);
+        assert!(tall.iter().any(|q| q.uv == emerald.uv));
+        assert_eq!(
+            quad_bytes(&canonical),
+            quad_bytes(&game_scene_in_view(
+                &game,
+                0.5,
+                false,
+                &atlas,
+                Viewport::from_surface(960, 720)
+            ))
+        );
+    }
+
+    #[test]
+    fn adaptive_view_borrows_frozen_draw_actors_and_tiles_and_visible_storage_wins_duplicates() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = adaptive_room();
+        let id = game.world.spawn("oBomb", Vec2::new(600.0, 152.0));
+        for _ in 0..8 {
+            game.step(&spelunky_core::InputFrame::default());
+        }
+        let view = Viewport::from_surface(2400, 720);
+        let draw = game.presentation();
+        let hidden = draw
+            .dispatcher
+            .hidden_entities()
+            .iter()
+            .find(|e| e.id == id)
+            .expect("fixture not frozen");
+        let frame = atlas.sprite(&hidden.sprite, hidden.animation).unwrap();
+        let index = 10 * game.world.width + 37;
+        let camera = view.camera(
+            interpolated(draw.previous_camera, draw.camera, 0.5),
+            draw.world.width as f64 * 16.0,
+            draw.world.height as f64 * 16.0,
+        );
+        let floor_x = 592.0 - camera.x as f32;
+        let floor_y = 160.0 - camera.y as f32;
+        assert!(draw.world.entity(id).is_none());
+        assert!(draw.world.tiles[index].object.is_empty());
+        let hash = game.state_hash();
+        let draw_hash = draw.state_hash();
+        let rng = game.rng.clone().next_u64();
+        for alpha in [0., 0.5, 1.] {
+            let quads = game_scene_in_view(&game, alpha, false, &atlas, view);
+            let bomb = quads
+                .iter()
+                .find(|q| q.uv == frame.uv)
+                .expect("frozen outer actor absent");
+            assert_eq!(bomb.rect[0], (hidden.pos.x as f32) - frame.origin[0]);
+            assert!(
+                quads
+                    .iter()
+                    .any(|q| q.rect[0] == floor_x && q.rect[1] == floor_y),
+                "frozen outer floor absent"
+            );
+        }
+        let mut stale = hidden.clone();
+        stale.previous_pos.x -= 20.0;
+        for alpha in [0., 0.5, 1.] {
+            assert_eq!(
+                presented_entity_position(draw, &stale, alpha, true),
+                stale.pos
+            );
+        }
+        assert_eq!(game.state_hash(), hash);
+        assert_eq!(game.presentation().state_hash(), draw_hash);
+        assert_eq!(game.rng.clone().next_u64(), rng);
+        // Deliberately malformed duplicate controls: visible storage is authoritative.
+        let mut replacement = hidden.clone();
+        let draw = game.draw_view.as_mut().unwrap();
+        replacement.pos.x = 560.0;
+        replacement.previous_pos = replacement.pos;
+        replacement.engine_active = true;
+        replacement.sprite = "sRuby".into();
+        replacement.animation = 0.0;
+        draw.world.entities.push(replacement);
+        draw.world.tiles[index] = spelunky_core::Tile::new("oLush");
+        let quads = game_scene_in_view(&game, 0.5, false, &atlas, view);
+        assert!(
+            !quads.iter().any(|q| q.uv == frame.uv),
+            "hidden duplicate resurrected"
+        );
+        let at_index: Vec<_> = quads
+            .iter()
+            .filter(|q| q.rect[0] == floor_x && q.rect[1] == floor_y)
+            .collect();
+        assert_eq!(at_index.len(), 1, "duplicate terrain drawn twice");
+        assert_eq!(
+            at_index[0].uv,
+            atlas
+                .sprite(catalog::sprite("oLush").unwrap(), 0.0)
+                .unwrap()
+                .uv
+        );
+    }
+
+    #[test]
+    fn adaptive_darkness_fades_background_and_hud_cover_the_expanded_view() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = adaptive_room();
+        game.world.dark = true;
+        for view in [
+            Viewport::from_surface(1920, 1080),
+            Viewport::from_surface(800, 800),
+            Viewport::from_surface(600, 1200),
+        ] {
+            let quads = game_scene_in_view(&game, 0.5, false, &atlas, view);
+            let mask: Vec<_> = quads
+                .iter()
+                .filter(|q| q.blend == QuadBlend::Multiply)
+                .collect();
+            assert_eq!(mask.first().unwrap().rect[0], 0.0);
+            assert!(mask.iter().any(
+                |q| q.rect[0] + q.rect[2] >= view.width && q.rect[1] + q.rect[3] >= view.height
+            ));
+            for y in 0..view.height.ceil() as u32 {
+                let width: f32 = mask
+                    .iter()
+                    .filter(|q| q.rect[1] == y as f32)
+                    .map(|q| q.rect[2])
+                    .sum();
+                assert_eq!(width, view.width.ceil(), "uncovered darkness row{y}");
+            }
+            let heart = atlas.sprite("sHeart", 0.0).unwrap();
+            let [ox, oy] = view.ui_origin();
+            let q = quads.iter().find(|q| q.uv == heart.uv).unwrap();
+            assert_eq!(q.rect[0], 8.0 - heart.origin[0] + ox);
+            assert_eq!(q.rect[1], 8.0 - heart.origin[1] + oy);
+            let mut panel = Vec::new();
+            cinematic_fade(&mut panel, 0.5);
+            place_authored_panel(&mut panel, view);
+            assert_eq!(panel[0].rect, [0.0, 0.0, view.width, view.height]);
+        }
+        game.world.name = "rEnd3".into();
+        assert_eq!(
+            quad_bytes(&game_scene(&game, 0.5, false, &atlas)),
+            quad_bytes(&game_scene_in_view(
+                &game,
+                0.5,
+                false,
+                &atlas,
+                Viewport::from_surface(960, 720)
+            ))
+        );
+    }
+
+    #[test]
+    fn adaptive_volcano_background_fills_outer_strips_without_changing_authored_panel() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = adaptive_room();
+        game.world.name = "rEnd2".into();
+        let view = Viewport::from_surface(1920, 1080);
+        let mut quads = Vec::new();
+        background_in_view(
+            &mut quads,
+            &game,
+            Vec2::new(-53.333333, 0.0),
+            false,
+            &atlas,
+            view,
+        );
+        assert!(
+            quads
+                .iter()
+                .any(|q| q.rect[0] <= 0.0 && q.rect[0] + q.rect[2] > 0.0)
+        );
+        assert!(
+            quads
+                .iter()
+                .any(|q| q.rect[0] < view.width && q.rect[0] + q.rect[2] >= view.width)
+        );
+        quads.clear();
+        background_in_view(
+            &mut quads,
+            &game,
+            Vec2::default(),
+            false,
+            &atlas,
+            Viewport::from_surface(960, 720),
+        );
+        assert!(quads.is_empty(), "canonical room background changed");
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    #[ignore = "requires a native or software GPU; run explicitly for renderer acceptance"]
+    fn adaptive_gpu_darkness_covers_full_wide_and_tall_surface_and_preserves_hud() {
+        let mut game = adaptive_room();
+        game.data.insert("darkness".into(), 0.5);
+        for view in [
+            Viewport::from_surface(1920, 1080),
+            Viewport::from_surface(800, 800),
+            Viewport::from_surface(600, 1200),
+        ] {
+            let mut quads = Vec::new();
+            rect(
+                &mut quads,
+                [0., 0., view.width, view.height],
+                [0.8, 0.4, 0.2, 1.],
+            );
+            darkness_in_view(&mut quads, &game, Vec2::default(), 1.0, view);
+            rect(
+                &mut quads,
+                [view.width - 24., view.height - 24., 16., 16.],
+                [1., 0.5, 0., 1.],
+            );
+            for srgb in [false, true] {
+                let pixels = crate::renderer::tests::gpu_pixels_in_view(&quads, srgb, view);
+                for (x, y, expected) in [
+                    (
+                        view.surface_width - 1,
+                        view.surface_height - 1,
+                        [0, 0, 0, 255],
+                    ),
+                    (
+                        ((f64::from(view.width) - 16.0) * view.scale).floor() as u32,
+                        ((f64::from(view.height) - 16.0) * view.scale).floor() as u32,
+                        [255, 128, 0, 255],
+                    ),
+                    (
+                        (40.0 * view.scale).floor() as u32,
+                        (152.0 * view.scale).floor() as u32,
+                        [102, 51, 51, 255],
+                    ),
+                ] {
+                    let offset = ((y * view.surface_width + x) * 4) as usize;
+                    let actual = &pixels[offset..offset + 4];
+                    assert!(
+                        actual
+                            .iter()
+                            .zip(expected)
+                            .all(|(a, b)| (i32::from(*a) - b).abs() <= 1),
+                        "view={view:?} srgb={srgb} pixel({x},{y})={actual:?} expected={expected:?}"
+                    );
+                }
+                // The HUD square uses the real projection, not an independent viewport formula.
+                let orange: Vec<_> = pixels
+                    .chunks_exact(4)
+                    .enumerate()
+                    .filter_map(|(i, p)| {
+                        (p[0] >= 254 && (127..=129).contains(&p[1]) && p[2] <= 1).then_some((
+                            i as u32 % view.surface_width,
+                            i as u32 / view.surface_width,
+                        ))
+                    })
+                    .collect();
+                let min_x = orange.iter().map(|p| p.0).min().unwrap();
+                let max_x = orange.iter().map(|p| p.0).max().unwrap();
+                let min_y = orange.iter().map(|p| p.1).min().unwrap();
+                let max_y = orange.iter().map(|p| p.1).max().unwrap();
+                let width = max_x - min_x + 1;
+                let height = max_y - min_y + 1;
+                assert!((f64::from(width) - 16.0 * view.scale).abs() <= 1.0);
+                assert!((f64::from(height) - 16.0 * view.scale).abs() <= 1.0);
+                assert!(
+                    width.abs_diff(height) <= 1,
+                    "square pixels stretched on GPU"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn adaptive_compass_uses_expanded_world_visibility_and_window_edges() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = adaptive_room();
+        game.player.equipment.insert("Compass".into());
+        let view = Viewport::from_surface(1920, 1080);
+        let arrows: Vec<_> = [
+            "sCompassLL",
+            "sCompassLR",
+            "sCompassDown",
+            "sCompassLeft",
+            "sCompassRight",
+        ]
+        .iter()
+        .map(|name| atlas.sprite(name, 0.0).unwrap().uv)
+        .collect();
+        game.world.exit = Vec2::new(368.0, 160.0);
+        let quads = game_scene_in_view(&game, 0.5, false, &atlas, view);
+        assert!(
+            !quads.iter().any(|q| arrows.contains(&q.uv)),
+            "visible expanded exit incorrectly got arrow"
+        );
+        game.world.exit = Vec2::new(800.0, 400.0);
+        let quads = game_scene_in_view(&game, 0.5, false, &atlas, view);
+        let frame = atlas.sprite("sCompassLR", 0.0).unwrap();
+        let q = quads.iter().find(|q| q.uv == frame.uv).unwrap();
+        assert!((q.rect[0] - (view.width - 16.0 - frame.origin[0])).abs() < 0.0001);
+        assert_eq!(q.rect[1], view.height - 16.0 - frame.origin[1]);
+    }
+
+    #[test]
+    fn adaptive_views_do_not_change_actual_tick_trace_or_random_stream() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = adaptive_room();
+        let mut reference = game.clone();
+        for tick in 0..12 {
+            let input = spelunky_core::InputFrame {
+                right: tick < 6,
+                ..Default::default()
+            };
+            game.step(&input);
+            reference.step(&input);
+            for view in [
+                Viewport::from_surface(3440, 1440),
+                Viewport::from_surface(600, 1200),
+                Viewport::canonical(),
+            ] {
+                let _ = game_scene_in_view(&game, 0.375, false, &atlas, view);
+            }
+            assert_eq!(game.state_hash(), reference.state_hash());
+            assert_eq!(
+                game.rng.clone().next_u64(),
+                reference.rng.clone().next_u64()
+            );
+            assert_eq!(
+                serde_json::to_string(&game.events).unwrap(),
+                serde_json::to_string(&reference.events).unwrap()
+            );
+            assert_eq!(
+                game.presentation().state_hash(),
+                reference.presentation().state_hash()
+            );
+        }
+    }
 
     fn source_draw_room() -> Game {
         let mut level = spelunky_core::level::Level::default();
