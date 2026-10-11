@@ -506,14 +506,15 @@ fn entity_draw_extras(
             WHITE,
         );
     }
-    if catalog::is_a(&entity.object, "oItem") && entity.value("cost") > 0.0 {
-        // Source increments cimg in Draw at its fixed 30 Hz. Keep this visual
-        // animation on simulation time when rendering at higher refresh rates.
+    if spelunky_core::items::draws_price_marker(&entity.object) && entity.value("cost") > 0.0 {
+        // Source Draw captures cimg before cycling 0..9. The sprite has twenty
+        // atlas frames; age-based wrapping would incorrectly expose 10..19.
+        // Repeated presentation reads must not advance this source counter.
         sprite(
             layer,
             atlas,
             "sSmallCollect",
-            entity.age.saturating_sub(1) as f64,
+            entity.value("draw_cimg"),
             x,
             y - 12.0,
             false,
@@ -4811,6 +4812,98 @@ mod tests {
                 .iter()
                 .any(|q| q.uv == atlas.sprite("sRedArrowDown", 0.0).unwrap().uv)
         );
+    }
+
+    #[test]
+    fn actual_draw_price_markers_repeat_ten_frames_at_every_render_alpha() {
+        let atlas = Atlas::load().unwrap();
+        assert!(
+            atlas.sprite("sSmallCollect", 10.0).unwrap().uv
+                != atlas.sprite("sSmallCollect", 0.0).unwrap().uv
+        );
+        for object in ["oBombBag", "oDamsel"] {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            for x in 0..game.world.width {
+                game.world.set_tile(x, 10, "oBrick");
+            }
+            let keeper = game.spawn("oShopkeeper", Vec2::new(144.0, 144.0));
+            game.player.pos = Vec2::new(32.0, 152.0);
+            game.player.previous_pos = game.player.pos;
+            let id = game.spawn(object, Vec2::new(120.0, 144.0));
+            game.world
+                .entity_mut(id)
+                .unwrap()
+                .data
+                .insert("cost".into(), 5000.0);
+            for tick in 0..24 {
+                game.step(&spelunky_core::InputFrame::default());
+                assert!(
+                    game.world.entity(keeper).is_some(),
+                    "the merchant must stay alive"
+                );
+                assert_eq!(game.world.entity(id).unwrap().value("cost"), 5000.0);
+                let before = game.state_hash();
+                assert!(game.presentation().world.entity(id).is_some());
+                let expected = (tick % 10) as f64;
+                for alpha in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                    let quads = game_scene(&game, alpha, false, &atlas);
+                    assert!(
+                        quads
+                            .iter()
+                            .any(|q| q.uv == atlas.sprite("sSmallCollect", expected).unwrap().uv),
+                        "{object} tick {tick} alpha {alpha}"
+                    );
+                }
+                assert_eq!(
+                    game.state_hash(),
+                    before,
+                    "render changed the source counter"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn overriding_item_draws_omit_price_markers_and_invisible_items_do_not_tick_cimg() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oBrick");
+        }
+        game.player.pos = Vec2::new(32.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        let keeper = game.spawn("oShopkeeper", Vec2::new(144.0, 144.0));
+        let mut ids = Vec::new();
+        for object in ["oArrow", "oDice", "oBombBag"] {
+            let id = game.spawn(object, Vec2::new(120.0, 144.0));
+            ids.push(id);
+            let entity = game.world.entity_mut(id).unwrap();
+            entity.data.insert("cost".into(), 5000.0);
+            if object == "oBombBag" {
+                entity.data.insert("visible".into(), 0.0);
+            }
+        }
+        for _ in 0..12 {
+            game.step(&spelunky_core::InputFrame::default());
+        }
+        assert!(game.world.entity(keeper).is_some());
+        for id in ids {
+            let entity = game.world.entity(id).expect("marker control must survive");
+            assert_eq!(
+                entity.value("cost"),
+                5000.0,
+                "Create must precede the price override"
+            );
+            assert_eq!(entity.value("cimg"), 0.0);
+        }
+        let quads = game_scene(&game, 0.5, false, &atlas);
+        for frame in 0..20 {
+            assert!(
+                !quads
+                    .iter()
+                    .any(|q| q.uv == atlas.sprite("sSmallCollect", frame as f64).unwrap().uv)
+            );
+        }
     }
 
     #[test]

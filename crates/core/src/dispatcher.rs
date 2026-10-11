@@ -1509,6 +1509,7 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
                 );
                 if e.alive && visible {
                     crate::enemies::draw_instance(game, id);
+                    crate::items::draw_instance(game, id);
                 }
             }
         }

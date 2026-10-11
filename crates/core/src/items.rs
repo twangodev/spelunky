@@ -12,6 +12,32 @@ pub mod utility;
 pub mod weapons;
 pub(crate) use utility::initialize_dice;
 
+/// oItem and oDamsel Draw show the paid-item sparkle. Arrow and Dice
+/// replace that Draw event and never inherit its price marker.
+pub fn draws_price_marker(object: &str) -> bool {
+    crate::catalog::is_a(object, "oItem") && !matches!(object, "oArrow" | "oDice")
+}
+
+/// Capture the original Draw-local frame before its ten-frame counter advances.
+/// Damsel owns the same counter in its overriding enemy Draw handler.
+pub(crate) fn draw_instance(game: &mut crate::Game, id: u64) {
+    let Some(entity) = game.world.entity_mut(id) else {
+        return;
+    };
+    if entity.object == "oDamsel"
+        || !draws_price_marker(&entity.object)
+        || entity.value("cost") <= 0.0
+    {
+        return;
+    }
+    let frame = entity.value("cimg");
+    entity.data.insert("draw_cimg".into(), frame);
+    let next = frame + 1.0;
+    entity
+        .data
+        .insert("cimg".into(), if next > 9.0 { 0.0 } else { next });
+}
+
 pub fn is_item(name: &str) -> bool {
     collectibles::is_collectible(name)
         || matches!(
