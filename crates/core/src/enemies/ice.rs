@@ -564,32 +564,7 @@ fn king(game: &mut Game, e: &mut Entity) {
                 if frame == 7.0 {
                     game.sound("sndYetiYell", e.pos);
                 }
-                let mut falling = Vec::new();
-                for y in 0..game.world.height {
-                    for x in 0..game.world.width {
-                        let pos = Vec2::new(x as f64 * 16.0 + 8.0, y as f64 * 16.0 + 8.0);
-                        if game
-                            .world
-                            .tile(x as i32, y as i32)
-                            .is_some_and(|t| t.object == "oIce")
-                            && (pos.x - (e.pos.x + 16.0)).abs() > 16.0
-                            && Vec2::new(pos.x - 8.0, pos.y - 8.0).distance(e.pos) < 96.0
-                            && game.rng.range(60) == 0
-                        {
-                            falling.push((x, y, pos));
-                        }
-                    }
-                }
-                for (x, y, pos) in falling {
-                    game.world.set_tile(x, y, "");
-                    game.spawn("oIceBlock", Vec2::new(pos.x - 8.0, pos.y - 8.0));
-                }
-                for ice in &mut game.world.entities {
-                    if ice.object == "oThinIce" {
-                        let thickness = ice.data.entry("thickness".into()).or_insert(20.0);
-                        *thickness -= 2.0;
-                    }
-                }
+                king_yell_ice(game, e);
             }
         }
         _ => {}
@@ -607,6 +582,78 @@ fn king(game: &mut Game, e: &mut Entity) {
     e.set_sprite(sprite);
     if super::solid_mask(&game.world, e.bounds(), e.id) {
         e.pos.y -= 2.0;
+    }
+}
+
+fn king_yell_ice(game: &mut Game, receiver: &Entity) {
+    use crate::dispatcher::Instance;
+
+    // Object-qualified oYetiKing.x/y select the first active family member.
+    // with_actor detaches this event's receiver, so retain its position at its
+    // original registration slot instead of treating the only King as absent.
+    let target = game
+        .dispatcher
+        .registration_order
+        .iter()
+        .copied()
+        .find_map(|instance| {
+            if instance == Instance::Entity(receiver.id) {
+                return Some(receiver.pos);
+            }
+            (crate::dispatcher::is_active(game, instance)
+                && crate::catalog::is_a(instance.object(game), "oYetiKing")
+                && matches!(instance, Instance::Entity(id) if game.world.entity(id).is_some()))
+            .then(|| instance.position(game))
+        })
+        // Focused event callers may supply a receiver before registration.
+        .unwrap_or(receiver.pos);
+
+    // Source with(oIce) captures its initial count and skips dead slots before
+    // the body. Its only family deletion is the current receiver; IceBlock,
+    // Drip and released Caveman births are outside oIce. Snapshot identities
+    // preserve that traversal even when nested Rust Create compacts the lists.
+    let ice = crate::dispatcher::descendant_instances(game, "oIce");
+    for instance in ice {
+        if !crate::dispatcher::is_active(game, instance)
+            || !crate::catalog::is_a(instance.object(game), "oIce")
+            || matches!(instance, Instance::Entity(id) if game.world.entity(id).is_none())
+        {
+            continue;
+        }
+        let roll = game.rng.range(60);
+        let origin = instance.position(game);
+        if roll == 0
+            && ((target.x + 16.0) - (origin.x + 8.0)).abs() > 16.0
+            && origin.distance(target) < 96.0
+        {
+            // Source creates the falling block before dispatching Ice Destroy.
+            // Own destruction bypasses attack invincibility and completes its
+            // Destroy callbacks before the next receiver's roll.
+            game.spawn("oIceBlock", origin);
+            match instance {
+                Instance::Terrain(index) => {
+                    let (x, y) = (index % game.world.width, index / game.world.width);
+                    crate::items::explosives::destroy_terrain_self(game, x, y);
+                }
+                Instance::Entity(id) => {
+                    crate::items::explosives::destroy_solid_self(game, id);
+                }
+                Instance::Player => unreachable!("oPlayer1 is outside oIce"),
+            }
+        }
+    }
+
+    // ThinIce is a sibling of Ice, so its distinct pass consumes no ice roll.
+    // Moving-trap thickness is stored on entity instances, initialized to 60.
+    for instance in crate::dispatcher::descendant_instances(game, "oThinIce") {
+        if !crate::dispatcher::is_active(game, instance) {
+            continue;
+        }
+        if let Instance::Entity(id) = instance
+            && let Some(ice) = game.world.entity_mut(id)
+        {
+            *ice.data.entry("thickness".into()).or_insert(60.0) -= 2.0;
+        }
     }
 }
 
@@ -1246,6 +1293,205 @@ mod tests {
         if crate::animation::advance(&mut entity.animation, speed, frames) {
             animation_end(game, entity, &sprite);
         }
+    }
+
+    fn king_yell_room(seed: u64, position: Vec2) -> (Game, u64) {
+        let mut game = Game::shell(seed, RulesPreset::Classic);
+        game.world = World::new(60, 30, Area::Ice, 9);
+        game.world.name = "Yeti King source yell fixture".into();
+        game.player.pos = Vec2::new(40.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.grounded = true;
+        game.player.state = PlayerState::Standing;
+        game.camera = Vec2::default();
+        for x in 0..60 {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        let id = game.spawn("oYetiKing", position);
+        let king = game.world.entity_mut(id).unwrap();
+        king.state = 3;
+        king.animation = 8.0;
+        king.vel = Vec2::default();
+        king.set_sprite("sYetiKingYellR");
+        (game, id)
+    }
+
+    // Literal Step139–154 + Ice Destroy oracle. Inputs are the independently
+    // authored active-family sequence, not results from the dispatcher/helper.
+    // IceBlock and the Drip inherited Create chain make no random calls.
+    fn source_yell_oracle(
+        mut rng: crate::Rng,
+        king: Vec2,
+        ice: &[Vec2],
+        clean: bool,
+    ) -> (crate::Rng, Vec<Vec2>, Vec<Vec2>) {
+        let mut blocks = Vec::new();
+        let mut drips = Vec::new();
+        for origin in ice {
+            let n = rng.range(60) + 1;
+            let dx = origin.x - king.x;
+            let dy = origin.y - king.y;
+            if n == 1
+                && ((king.x + 16.0) - (origin.x + 8.0)).abs() > 16.0
+                && (dx * dx + dy * dy).sqrt() < 96.0
+            {
+                blocks.push(*origin);
+                if !clean {
+                    for _ in 0..3 {
+                        let x = origin.x + f64::from(rng.range(17));
+                        let y = origin.y + f64::from(rng.range(17));
+                        drips.push(Vec2::new(x, y));
+                    }
+                }
+            }
+        }
+        (rng, blocks, drips)
+    }
+
+    #[test]
+    fn actual_yell_source_order_rolls_active_ice_before_geometry_and_destroy_callbacks() {
+        let king = Vec2::new(96.0, 128.0);
+        // Cross-storage birth order deliberately disagrees with the grid scan.
+        let origins = [
+            Vec2::new(160.0, 128.0),
+            Vec2::new(80.0, 64.0),
+            Vec2::new(96.0, 48.0),  // aligned: still consumes its roll
+            Vec2::new(400.0, 96.0), // distant, outside view but engine-active
+            Vec2::new(176.0, 128.0),
+        ];
+        let mut conversions = 0;
+        for seed in 0..128 {
+            let (mut game, id) = king_yell_room(seed, king);
+            let dynamic = game.world.spawn("oIce", origins[0]);
+            game.world.set_tile(5, 4, "oIce");
+            game.world.set_tile(6, 3, "oIce");
+            let distant = game.world.spawn("oIce", origins[3]);
+            game.world.set_tile(11, 8, "oIce");
+            let inactive = game.world.spawn("oIce", Vec2::new(704.0, 64.0));
+            game.world.set_tile(40, 4, "oIce");
+            let dead = game.world.spawn("oIce", Vec2::new(224.0, 64.0));
+            game.world.entity_mut(dead).unwrap().alive = false;
+            let thin = game.spawn("oThinIce", Vec2::new(240.0, 64.0));
+            let inactive_thin = game.spawn("oThinIce", Vec2::new(704.0, 96.0));
+            let excluded = game.spawn("oIceBlock", Vec2::new(288.0, 64.0));
+            // Source instance_destroy ignores attack invincibility.
+            game.world
+                .entity_mut(dynamic)
+                .unwrap()
+                .data
+                .insert("invincible".into(), 1.0);
+            let (mut expected_rng, blocks, drips) =
+                source_yell_oracle(game.rng.clone(), king, &origins, false);
+            conversions += blocks.len();
+
+            game.step(&crate::InputFrame::default());
+
+            assert_eq!(game.world.entity(id).unwrap().pos, king, "seed {seed}");
+            assert!(game.world.entity(distant).unwrap().engine_active);
+            assert!(!game.world.entity(inactive).unwrap().engine_active);
+            assert!(!game.world.tile(40, 4).unwrap().engine_active);
+            assert!(game.world.entity(dead).is_none());
+            assert_eq!(game.world.entity(thin).unwrap().value("thickness"), 58.0);
+            assert_eq!(
+                game.world.entity(inactive_thin).unwrap().value("thickness"),
+                60.0
+            );
+            let actual_blocks: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|entity| {
+                    entity.alive && entity.object == "oIceBlock" && entity.id != excluded
+                })
+                .map(|entity| entity.pos)
+                .collect();
+            assert_eq!(actual_blocks, blocks, "seed {seed}");
+            let actual_drips: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.object == "oDrip")
+                .map(|entity| entity.pos)
+                .collect();
+            assert_eq!(actual_drips, drips, "seed {seed}");
+            assert_eq!(game.rng.next_u64(), expected_rng.next_u64(), "seed {seed}");
+        }
+        assert!(
+            conversions > 0,
+            "exercise synchronous successful conversions"
+        );
+    }
+
+    #[test]
+    fn actual_yell_source_frame_window_and_camera_gate_preserve_rng() {
+        for (x, frame, rolls) in [
+            (96.0, 6.5, 0),
+            (96.0, 7.0, 1),
+            (96.0, 12.0, 1),
+            (96.0, 12.5, 0),
+            (335.0, 8.0, 0), // active margin, outside King's narrower AI view
+        ] {
+            let (mut game, king) = king_yell_room(42, Vec2::new(x, 128.0));
+            game.world.entity_mut(king).unwrap().animation = frame;
+            let ice = game.world.spawn("oIce", Vec2::new(400.0, 64.0));
+            let mut expected_rng = game.rng.clone();
+            for _ in 0..rolls {
+                expected_rng.range(60);
+            }
+            game.step(&crate::InputFrame::default());
+            assert!(game.world.entity(king).unwrap().engine_active);
+            assert!(game.world.entity(ice).unwrap().engine_active);
+            assert_eq!(
+                game.rng.next_u64(),
+                expected_rng.next_u64(),
+                "x={x}, frame={frame}"
+            );
+        }
+    }
+
+    #[test]
+    fn actual_yell_source_first_king_and_strict_origin_boundaries() {
+        let first = Vec2::new(96.0, 128.0);
+        let origins = [
+            Vec2::new(120.0, 128.0), // alignment exactly16: excluded
+            Vec2::new(121.0, 128.0), // alignment17: eligible
+            Vec2::new(191.0, 128.0), // origin distance95: eligible
+            Vec2::new(192.0, 128.0), // origin distance96: excluded
+            Vec2::new(368.0, 128.0), // near yelling King, far from first King
+        ];
+        let mut conversions = 0;
+        for seed in 0..128 {
+            let (mut game, first_id) = king_yell_room(seed, first);
+            let idle = game.world.entity_mut(first_id).unwrap();
+            idle.state = 0;
+            idle.animation = 0.0;
+            idle.data.insert("counter".into(), 999.0);
+            let second = game.spawn("oYetiKing", Vec2::new(304.0, 128.0));
+            let yelling = game.world.entity_mut(second).unwrap();
+            yelling.state = 3;
+            yelling.animation = 8.0;
+            yelling.vel = Vec2::default();
+            yelling.set_sprite("sYetiKingYellR");
+            for origin in origins {
+                game.world.spawn("oIce", origin);
+            }
+            // Clean source Ice Destroy suppresses Drips; its60roll remains.
+            game.flags.insert("cleanSolids".into());
+            let (mut expected_rng, blocks, _) =
+                source_yell_oracle(game.rng.clone(), first, &origins, true);
+            conversions += blocks.len();
+            game.step(&crate::InputFrame::default());
+            let actual: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.object == "oIceBlock")
+                .map(|entity| entity.pos)
+                .collect();
+            assert_eq!(actual, blocks, "seed {seed}");
+            assert_eq!(game.rng.next_u64(), expected_rng.next_u64(), "seed {seed}");
+        }
+        assert!(conversions > 0);
     }
 
     #[test]
