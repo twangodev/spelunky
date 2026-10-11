@@ -23,6 +23,25 @@ fn step(game: &mut Game) {
     game.step(&InputFrame::default());
 }
 
+fn assert_room_create_music(game: &Game) {
+    // oLevel Create calls startMusic when enabled: ordinary Mines selects
+    // playMusic(musCave, true), then SS_SetSoundFreq(musCave, 44100).
+    assert_eq!(
+        game.events,
+        vec![
+            GameEvent::MusicPlay {
+                name: "musCave".into(),
+                looping: true,
+                if_idle: true
+            },
+            GameEvent::MusicFrequency {
+                name: "musCave".into(),
+                hz: 44_100
+            },
+        ]
+    );
+}
+
 #[test]
 fn drowning_spider_cleanup_does_not_reuse_later_spiders_old_storage_index() {
     let mut game = room();
@@ -54,7 +73,7 @@ fn drowning_spider_cleanup_does_not_reuse_later_spiders_old_storage_index() {
         new_index < old_index,
         "cleanup really moved the later actor"
     );
-    assert!(game.events.is_empty());
+    assert_room_create_music(&game);
 
     step(&mut game);
     assert_eq!(game.world.entity(second).unwrap().alarms[1], 1);
@@ -98,7 +117,11 @@ fn laser_alarm_callbacks_preserve_later_actors_after_removal_reinsertion_and_bir
             [64.0, 128.0].repeat(tick)
         );
         assert!(trails.windows(2).all(|pair| pair[0].id < pair[1].id));
-        assert!(game.events.is_empty());
+        if tick == 1 {
+            assert_room_create_music(&game);
+        } else {
+            assert!(game.events.is_empty());
+        }
         assert_eq!(rng_checkpoint(&game), rng_before);
     }
 }
@@ -122,7 +145,7 @@ fn earlier_alarm_index_rearms_pending_later_index_before_same_frame_decrement() 
     );
     assert_eq!(bomb.image_speed(), 1.0);
     assert!(!game.world.entities.iter().any(|e| e.object == "oExplosion"));
-    assert!(game.events.is_empty());
+    assert_room_create_music(&game);
     assert_eq!(rng_checkpoint(&game), rng_before);
 
     step(&mut game);
@@ -162,7 +185,7 @@ fn alarm_callback_newborn_enters_later_resource_before_normal_step() {
         game.dispatcher.resource_order[&catalog::object("oArrow").unwrap().id]
             .contains(&dispatcher::Instance::Entity(arrow.id))
     );
-    assert!(game.events.is_empty());
+    assert_room_create_music(&game);
     assert_eq!(rng_checkpoint(&game), rng_before);
 }
 
