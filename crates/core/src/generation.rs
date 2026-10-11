@@ -7,6 +7,8 @@ use std::sync::OnceLock;
 
 #[path = "generation/blocks.rs"]
 mod blocks;
+#[path = "generation/init_cleanup.rs"]
+mod init_cleanup;
 #[path = "generation/population.rs"]
 mod population;
 #[path = "generation/selectors.rs"]
@@ -827,6 +829,7 @@ pub(crate) fn generate_with_campaign(
     if graphics_high {
         background_extras(&mut world, rng);
     }
+    init_cleanup::cleanup(&mut world, state.revision);
     terrain::finalize_generated(&mut world);
     world
 }
