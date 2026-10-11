@@ -1152,6 +1152,7 @@ fn olmec(game: &mut Game, e: &mut Entity) {
             }
         }
         6 => {
+            e.data.insert("carryPlayer".into(), 0.0);
             if grounded {
                 if e.value("slammed") == 0.0 {
                     spawn(game, "oOlmecSlam", Vec2::new(e.pos.x, e.pos.y + 64.0));
