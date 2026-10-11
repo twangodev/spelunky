@@ -6898,7 +6898,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 995,
+          "line": 997,
           "module": "crates/core/src/enemies/jungle.rs"
         },
         {
@@ -7474,7 +7474,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 996,
+          "line": 998,
           "module": "crates/core/src/enemies/jungle.rs"
         },
         {

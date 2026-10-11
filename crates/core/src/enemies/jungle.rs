@@ -465,6 +465,8 @@ fn monkey_steal(game: &mut Game, e: &Entity) {
     };
     let money = 500 + 125 * area;
     let object;
+    // GML evaluates both operands of the source money-and-rand condition,
+    // including its roll when the player's money is below the threshold.
     if game.rng.chance(1, 4) {
         game.player.vel = Vec2::new(3.0 * game.player.facing as f64, -3.0);
         game.player.stun = 40;
@@ -472,7 +474,7 @@ fn monkey_steal(game: &mut Game, e: &Entity) {
         crate::items::drop_held_with_velocity(game, Vec2::default());
         game.sound("sndHit", e.pos);
         return;
-    } else if game.player.money >= money && game.rng.chance(8, 10) {
+    } else if game.rng.chance(8, 10) && game.player.money >= money {
         game.player.money -= money;
         object = "oGoldNugget";
     } else if game.rng.chance(1, 2) && game.player.ropes > 0 {
@@ -1280,6 +1282,140 @@ mod tests {
         assert!((40..=80).contains(&e.timer));
         assert_eq!(game.player.health, 4);
     }
+
+    #[test]
+    fn actual_monkey_grab_preserves_eager_money_roll_and_branch_stops() {
+        use crate::{InputFrame, Rng, RunState, level::Level};
+
+        #[derive(Clone, Copy, Debug)]
+        enum Case {
+            InsufficientMoney,
+            MoneyTaken,
+            MoneyRollFails,
+            TripStopsTheft,
+        }
+
+        fn grabbed(seed: u64, money: u32) -> (Game, u64) {
+            let mut level = Level::default();
+            level.starting_bombs = 0;
+            level.starting_ropes = 0;
+            level.set_tile(6, 7, '@').unwrap();
+            for x in 0..crate::level::LEVEL_WIDTH {
+                level.set_tile(x, 8, '1').unwrap();
+            }
+            let mut game = Game::shell(seed, RulesPreset::Classic);
+            game.load_custom(&level, "monkey-theft", "");
+            game.player.money = money;
+            for _ in 0..8 {
+                game.step(&InputFrame::default());
+            }
+            assert!(game.player.grounded);
+            let monkey = game.spawn(
+                "oMonkey",
+                Vec2::new(game.player.pos.x - 8.0, game.player.pos.y - 8.0),
+            );
+            game.step(&InputFrame::default());
+            let actor = game.world.entity(monkey).unwrap();
+            assert_eq!(actor.state, 7, "real collision must acquire GRAB");
+            assert!((40..=80).contains(&actor.timer));
+            assert_eq!(game.player.health, 4);
+            (game, monkey)
+        }
+
+        // Literal source Step.xml:226..308 branch order, using only the RNG
+        // primitive. This oracle evaluates the money roll before combining
+        // its result with affordability. Empty bomb/rope inventory keeps the
+        // failed-theft path free of item Create draws. Gold Nugget's inherited
+        // Create is deterministic; its three launch draws precede release.
+        fn source_theft(rng: &mut Rng, money: u32) -> (bool, bool, Option<Vec2>, f64) {
+            let trip = 1 + rng.range(4) == 1;
+            let mut took_money = false;
+            let mut launch = None;
+            if !trip {
+                let money_roll = 1 + rng.range(10);
+                if money >= 500 && money_roll <= 8 {
+                    took_money = true;
+                    launch = Some(Vec2::new(
+                        f64::from(1 + rng.range(3)) - f64::from(1 + rng.range(3)),
+                        -f64::from(3 + rng.range(2)),
+                    ));
+                } else {
+                    let _rope_roll = 1 + rng.range(2);
+                }
+            }
+            let bounce_y = -f64::from(2 + rng.range(3));
+            (trip, took_money, launch, bounce_y)
+        }
+
+        for case in [
+            Case::InsufficientMoney,
+            Case::MoneyTaken,
+            Case::MoneyRollFails,
+            Case::TripStopsTheft,
+        ] {
+            let money = if matches!(case, Case::InsufficientMoney) {
+                0
+            } else {
+                2_000
+            };
+            // Select an initial seed with the required source branch outcome,
+            // after actual Create and GRAB acquisition have consumed their RNG.
+            let (mut game, monkey) = (0..64)
+                .find_map(|seed| {
+                    let (game, monkey) = grabbed(seed, money);
+                    let mut preview = game.rng.clone();
+                    let trip = 1 + preview.range(4) == 1;
+                    let money_roll = if trip { 0 } else { 1 + preview.range(10) };
+                    let selected = match case {
+                        Case::InsufficientMoney => !trip,
+                        Case::MoneyTaken => !trip && money_roll <= 8,
+                        Case::MoneyRollFails => !trip && money_roll > 8,
+                        Case::TripStopsTheft => trip,
+                    };
+                    selected.then_some((game, monkey))
+                })
+                .expect("bounded seed set supplies each source theft branch");
+            assert_eq!(game.world.area, Area::Mines);
+            let before_wait = game.rng.clone().next_u64();
+            for _ in 0..80 {
+                if game.world.entity(monkey).unwrap().timer == 0 {
+                    break;
+                }
+                game.step(&InputFrame::default());
+                assert_eq!(game.state, RunState::Playing, "{case:?}");
+                assert_eq!(game.world.entity(monkey).unwrap().state, 7);
+            }
+            assert_eq!(game.world.entity(monkey).unwrap().timer, 0);
+            assert_eq!(game.rng.clone().next_u64(), before_wait);
+            let mut expected_rng = game.rng.clone();
+            let (trip, took_money, launch, bounce_y) = source_theft(&mut expected_rng, money);
+            game.step(&InputFrame::default());
+            assert_eq!(game.state, RunState::Playing, "{case:?}");
+            let actor = game.world.entity(monkey).unwrap();
+            assert_eq!(actor.state, 1, "{case:?}: expired GRAB must release");
+            assert_eq!(actor.vel.y, bounce_y, "{case:?}: release RNG");
+            assert_eq!(game.player.health, 4, "{case:?}");
+            assert_eq!(game.player.money, money - if took_money { 500 } else { 0 });
+            assert_eq!(game.player.is_stunned(), trip, "{case:?}");
+            let nuggets: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.object == "oGoldNugget")
+                .collect();
+            assert_eq!(nuggets.len(), usize::from(took_money), "{case:?}");
+            if let Some(launch) = launch {
+                assert_eq!(nuggets[0].vel, launch, "{case:?}: source launch RNG");
+                assert_eq!(nuggets[0].value("canCollect"), 0.0);
+            }
+            assert_eq!(
+                game.rng.next_u64(),
+                expected_rng.next_u64(),
+                "{case:?}: next RNG after source theft and common release"
+            );
+        }
+    }
+
     #[test]
     fn mantrap_eating_is_lethal_and_then_sleeps() {
         let mut game = Game::shell(6, RulesPreset::Classic);
