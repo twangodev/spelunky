@@ -904,28 +904,40 @@ fn base_character_collision(game: &mut Game, e: &mut Entity) {
     ) && game.player.invincible == 0
     {
         let damage = 1;
+        let source_type = crate::items::explosives::source_type(e);
         let prior_health = game.player.health;
         if prior_health > 0 {
             game.player.health -= damage;
         }
         if prior_health > 0 && game.player.health <= 0 && crate::statistics::is_real_level(game) {
             use crate::statistics::EnemyDeath;
-            let cause = match e.object.as_str() {
-                "oBat" => Some(EnemyDeath::Bat),
-                "oSnake" => Some(EnemyDeath::Snake),
-                "oSpider" | "oSpiderHang" => Some(EnemyDeath::Spider),
-                "oGiantSpider" | "oGiantSpiderHang" => Some(EnemyDeath::GiantSpider),
-                "oCaveman" => Some(EnemyDeath::Caveman),
-                "oSkeleton" => Some(EnemyDeath::Skeleton),
-                "oZombie" => Some(EnemyDeath::Zombie),
-                "oVampire" => Some(EnemyDeath::Vampire),
-                "oFrog" => Some(EnemyDeath::Frog),
-                "oFireFrog" => Some(EnemyDeath::FireFrog),
-                "oPiranha" => Some(EnemyDeath::Piranha),
-                // Jaws Create uses "Mega Mouth", while the inherited event
-                // compares "Megamouth". Preserve the original unmatched row.
-                "oAlien" => Some(EnemyDeath::Alien),
-                "oUFO" => Some(EnemyDeath::Ufo),
+            // The source compares type, not object_index. Bat, Zombie and
+            // hanging spiders retain inherited "None" until a caller writes it.
+            let cause = match source_type.as_str() {
+                "Bat" => Some(EnemyDeath::Bat),
+                "Snake" => Some(EnemyDeath::Snake),
+                "Spider" => Some(EnemyDeath::Spider),
+                "Giant Spider" => Some(EnemyDeath::GiantSpider),
+                "Caveman" => Some(EnemyDeath::Caveman),
+                "Skeleton" => Some(EnemyDeath::Skeleton),
+                "Zombie" => Some(EnemyDeath::Zombie),
+                "Vampire" => Some(EnemyDeath::Vampire),
+                "Frog" => Some(EnemyDeath::Frog),
+                "Fire Frog" => Some(EnemyDeath::FireFrog),
+                "Mantrap" => Some(EnemyDeath::ManTrap),
+                "Piranha" => Some(EnemyDeath::Piranha),
+                // Jaws Create uses "Mega Mouth", not this source comparison.
+                "Megamouth" => Some(EnemyDeath::Jaws),
+                "Yeti" => Some(EnemyDeath::Yeti),
+                "Yeti King" => Some(EnemyDeath::YetiKing),
+                "Alien" => Some(EnemyDeath::Alien),
+                "UFO" => Some(EnemyDeath::Ufo),
+                "Alien Boss" => Some(EnemyDeath::AlienBoss),
+                "Hawkman" => Some(EnemyDeath::Hawkman),
+                "Shopkeeper" => Some(EnemyDeath::Shopkeeper),
+                "Tomb Lord" => Some(EnemyDeath::TombLord),
+                "Magma Man" => Some(EnemyDeath::MagmaMan),
+                "Olmec" => Some(EnemyDeath::Olmec),
                 _ => None,
             };
             if let Some(cause) = cause {
@@ -935,7 +947,7 @@ fn base_character_collision(game: &mut Game, e: &mut Entity) {
         game.events.push(GameEvent::Damage { amount: damage });
         // Literal oEnemy Character event: these inherited contacts bleed at
         // the enemy origin. Vampire's own callback returns before this path.
-        if matches!(e.object.as_str(), "oBat" | "oPiranha" | "oVampire") {
+        if matches!(source_type.as_str(), "Bat" | "Piranha" | "Vampire") {
             create_blood(game, e, Vec2::new(e.pos.x + 4.0, e.pos.y + 4.0), 1);
         }
         game.sound("sndHurt", game.player.pos);
@@ -2270,10 +2282,10 @@ mod tests {
     }
 
     #[test]
-    fn actual_step_bat_and_piranha_source_contact_blood() {
-        // Literal oEnemy/Character lines14-57: a successful hit emits one
-        // scrCreateBlood(x+4,y+4,1) for Bat/Piranha, never for Snake. The
-        // script independently suppresses bloodless callers and the 16 cap.
+    fn actual_step_effective_type_gates_source_contact_blood() {
+        // oEnemy/Character compares type, not object_index. Piranha's own
+        // Create sets its type; Bat inherits "None", and Snake is not in the
+        // contact-blood type list. The script still applies bloodless/cap16.
         for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
             for object in ["oBat", "oPiranha", "oSnake"] {
                 for (detritus, bloodless, invincible) in [
@@ -2307,7 +2319,7 @@ mod tests {
                         "{object}"
                     );
                     let expected = usize::from(
-                        object != "oSnake" && !invincible && !bloodless && detritus < 16,
+                        object == "oPiranha" && !invincible && !bloodless && detritus < 16,
                     );
                     let blood = source_contact_live_blood(&game);
                     assert_eq!(
@@ -2324,6 +2336,134 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    fn fresh_type_contact_room(rules: RulesPreset, player_x: f64, health: i32) -> Game {
+        let mut game = Game::shell(42, rules);
+        game.world = World::new(20, 16, Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        // Authored starting conditions, before any actor is created or stepped.
+        game.player.pos = Vec2::new(player_x, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        game.player.health = health;
+        game
+    }
+
+    #[test]
+    fn actual_step_fresh_bat_none_contact_preserves_hurt_without_blood_rng() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = fresh_type_contact_room(rules, 104.0, 4);
+            let id = game.spawn("oBat", Vec2::new(96.0, 144.0));
+            let expected_rng = game.rng.clone();
+            game.step(&InputFrame::default());
+
+            let bat = game.world.entity(id).unwrap();
+            assert_eq!(crate::items::explosives::source_type(bat), "None");
+            assert_eq!(bat.health, 1);
+            assert_eq!(bat.state, 1, "no ceiling naturally wakes the fresh Bat");
+            assert_eq!(bat.sprite, "sBatHang", "wake does not change this image yet");
+            assert_eq!(game.player.health, 3);
+            assert_eq!(game.player.invincible, 30);
+            assert_eq!(game.player.data.get("blink"), Some(&30.0));
+            assert_eq!(game.player.stun, 0);
+            assert_eq!(game.player.vel.x, 6.0);
+            assert!(game.events.contains(&GameEvent::Damage { amount: 1 }));
+            assert!(game.events.iter().any(|event| matches!(
+                event, GameEvent::Sound { name, .. } if name == "sndHurt"
+            )));
+            assert!(source_contact_live_blood(&game).is_empty());
+            assert_eq!(game.rng.clone().next_u64(), expected_rng.clone().next_u64());
+        }
+    }
+
+    #[test]
+    fn actual_step_fresh_lethal_contacts_use_create_type_and_late_death_timing() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for (object, player_x, typed_row) in [
+                ("oBat", 104.0, None),
+                ("oZombie", 104.0, None),
+                ("oSpiderHang", 112.0, None),
+                ("oGiantSpiderHang", 104.0, None),
+                ("oSnake", 104.0, Some(crate::statistics::EnemyDeath::Snake)),
+            ] {
+                let mut game = fresh_type_contact_room(rules, player_x, 1);
+                if matches!(object, "oSpiderHang" | "oGiantSpiderHang") {
+                    // Exact8px from the drop center fails the source's strict
+                    // abs<8 condition; the real ceiling keeps this form hanging.
+                    game.world.set_tile(6, 8, "oBlock");
+                }
+                let id = game.spawn(object, Vec2::new(96.0, 144.0));
+                game.step(&InputFrame::default());
+
+                let actor = game.world.entity(id).unwrap();
+                assert_eq!(actor.object, object, "{object} must not transform");
+                assert_eq!(
+                    crate::items::explosives::source_type(actor),
+                    if typed_row.is_some() { "Snake" } else { "None" },
+                    "{object}"
+                );
+                assert_eq!(game.player.health, 0, "{object}");
+                assert_eq!(game.player.invincible, 30, "{object}");
+                assert_eq!(game.player.data.get("blink"), Some(&30.0), "{object}");
+                assert!(game.events.contains(&GameEvent::Damage { amount: 1 }));
+                assert!(source_contact_live_blood(&game).is_empty(), "{object}");
+                let mut expected_rows = [0; 24];
+                if let Some(row) = typed_row {
+                    expected_rows[row as usize] = 1;
+                }
+                assert_eq!(game.lifetime_stats.enemy_deaths, expected_rows, "{object}");
+                // Automatic Character collision follows Player Step. Lethal
+                // contact is observed by the next real Player Step, not here.
+                assert_eq!(game.state, RunState::Playing, "{object}");
+                assert!(!game.events.contains(&GameEvent::Died), "{object}");
+                game.step(&InputFrame::default());
+                assert_eq!(game.state, RunState::Dead, "{object}");
+                assert!(game.events.contains(&GameEvent::Died), "{object}");
+                assert_eq!(game.lifetime_stats.enemy_deaths, expected_rows, "{object}");
+            }
+        }
+    }
+
+    #[test]
+    fn actual_step_fresh_piranha_typed_contact_keeps_blood_create_rng() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = fresh_type_contact_room(rules, 104.0, 4);
+            for x in 5..=8 {
+                game.world.set_tile(x, 9, "oWaterSwim");
+            }
+            let id = game.spawn("oPiranha", Vec2::new(96.0, 144.0));
+            let mut expected_rng = game.rng.clone();
+            // Fresh submerged Player and fish each create a Bubble. Fish Step
+            // then resets bubbleTimer to rand(30,50), before contact Blood.
+            expected_rng.range(3);
+            expected_rng.range(3);
+            expected_rng.range(21);
+            let blood_velocity = Vec2::new(
+                expected_rng.unit() * 4.0 - expected_rng.unit() * 4.0,
+                -1.0 - expected_rng.unit() * 2.0,
+            );
+            let blood_gravity = f64::from(1 + expected_rng.range(6)) * 0.1;
+            game.step(&InputFrame::default());
+
+            let fish = game.world.entity(id).unwrap();
+            assert_eq!(crate::items::explosives::source_type(fish), "Piranha");
+            assert_eq!(fish.health, 1);
+            assert_eq!(game.player.health, 3);
+            assert_eq!(game.player.invincible, 30);
+            assert_eq!(game.player.data.get("blink"), Some(&30.0));
+            let blood = source_contact_live_blood(&game);
+            assert_eq!(blood.len(), 1);
+            assert_eq!(blood[0].pos, Vec2::new(fish.pos.x + 4.0, fish.pos.y + 4.0));
+            assert_eq!(blood[0].vel, blood_velocity);
+            assert_eq!(blood[0].value("gravity"), blood_gravity);
+            assert_source_contact_blood_create(blood[0]);
+            assert_eq!(game.rng.clone().next_u64(), expected_rng.next_u64());
         }
     }
 
