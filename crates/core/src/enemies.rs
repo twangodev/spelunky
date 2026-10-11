@@ -193,8 +193,10 @@ fn with_actor_inner(
     };
     let mut actor = game.world.entities.remove(index);
     init_entity(&mut actor);
+    game.dispatcher.detached_actor_slots.push((id, index));
     action(game, &mut actor);
     destroyed(game, &mut actor);
+    game.dispatcher.detached_actor_slots.pop();
     game.world
         .entities
         .insert(index.min(game.world.entities.len()), actor);

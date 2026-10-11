@@ -1909,6 +1909,42 @@ pub(crate) fn destroy_unsupported_tree_tile(game: &mut Game, x: usize, y: usize)
     destroy_terrain_impl(game, x, y, false)
 }
 
+// Most stock Solid callbacks cannot recurse into their own receiver. Kali's
+// explicit with-family cascade is finite: defile=false allows one inner own
+// Destroy body, which retires before the outer code resumes. Depth is a Rust
+// borrow/recursion guard, not a claim of a general native recursion limit.
+fn begin_solid_destroy(
+    game: &mut Game,
+    receiver: (crate::dispatcher::Instance, u64),
+    altar_cascade: bool,
+) -> bool {
+    match game.dispatcher.destroying_solids.get_mut(&receiver) {
+        None => {
+            game.dispatcher.destroying_solids.insert(receiver, 1);
+            true
+        }
+        Some(depth) if altar_cascade && *depth == 1 => {
+            *depth = 2;
+            true
+        }
+        Some(_) => false,
+    }
+}
+fn finish_solid_destroy(game: &mut Game, receiver: (crate::dispatcher::Instance, u64)) {
+    let depth = game
+        .dispatcher
+        .destroying_solids
+        .get_mut(&receiver)
+        .unwrap();
+    *depth -= 1;
+    if *depth == 0 {
+        game.dispatcher.destroying_solids.remove(&receiver);
+    }
+}
+fn altar_cascade(game: &Game, object: &str) -> bool {
+    game.flags.contains("altar_defile_cascade") && crate::catalog::is_a(object, "oSacAltarLeft")
+}
+
 fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibility: bool) -> bool {
     if x >= game.world.width || y >= game.world.height {
         return false;
@@ -1923,7 +1959,7 @@ fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibili
     }
     let object = tile.object.clone();
     let center = Vec2::new(x as f64 * 16.0 + 8.0, y as f64 * 16.0 + 8.0);
-    let metadata = game
+    let mut metadata = game
         .world
         .entities
         .iter()
@@ -1936,11 +1972,28 @@ fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibili
     {
         return false;
     }
-    // World::set_tile also serves non-event editing callers. Runtime Destroy
-    // requests water only when the actual source callback reaches checkWater.
-    let water_was_dirty = game.world.fluid_dirty;
-    game.world.set_tile(x, y, "");
-    game.world.fluid_dirty = water_was_dirty;
+    let serial = tile.creation_serial;
+    let receiver = (
+        crate::dispatcher::Instance::Terrain(y * game.world.width + x),
+        serial,
+    );
+    let cascade = altar_cascade(game, &object);
+    if cascade {
+        // The source with-loop assigns defile=false before instance_destroy.
+        // Terrain stores that source field in the associated live metadata.
+        if let Some(metadata) = &mut metadata {
+            metadata.data.insert("defile".into(), 0.0);
+            crate::dispatcher::stored_entity_mut(game, metadata.id)
+                .unwrap()
+                .data
+                .insert("defile".into(), 0.0);
+        }
+    }
+    if !begin_solid_destroy(game, receiver, cascade) {
+        return false;
+    }
+    // Native instance_destroy marks its receiver only AFTER Destroy returns.
+    // The grid and its metadata remain queryable through all nested Creates.
     let mut source = Entity::new(0, &object, Vec2::new(center.x - 8.0, center.y - 8.0));
     if let Some(metadata) = &metadata {
         source.data = metadata.data.clone();
@@ -1948,6 +2001,9 @@ fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibili
         if let Some(sprite) = metadata.text.get("terrain_sprite") {
             source.sprite = sprite.clone();
         }
+    }
+    if cascade {
+        source.data.insert("defile".into(), 0.0);
     }
     if inherits_solid_destroy(&object) {
         solid_parent_destroy(game, source.pos, false);
@@ -1961,8 +2017,7 @@ fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibili
             // Only this terrain adapter can promise a virtual occupant release.
             // A merely adjacent/stale metadata instance cannot suppress an
             // independently stored Ice/FrozenCaveman Destroy callback.
-            game.world
-                .entity_mut(metadata.id)
+            crate::dispatcher::stored_entity_mut(game, metadata.id)
                 .unwrap()
                 .data
                 .insert("frozen_caveman_release_pending".into(), 1.0);
@@ -1970,8 +2025,7 @@ fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibili
     }
     solid_destroy_body(game, &source, !stored_gold);
     let outputs_enabled = solid_outputs_enabled(game, &source);
-    if let Some(metadata) = metadata {
-        game.world.entity_mut(metadata.id).unwrap().alive = false;
+    if let Some(metadata) = &metadata {
         if metadata.value("shopWall") != 0.0
             && !matches!(
                 solid_destroy_family(&object),
@@ -2043,12 +2097,7 @@ fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibili
         if metadata.value("frozen_caveman") != 0.0 && outputs_enabled {
             // Keep the receipt on retired metadata: a remaining explicit
             // representation must not release the same occupant on its Step.
-            let stored = game
-                .world
-                .entities
-                .iter_mut()
-                .find(|stored| stored.id == metadata.id)
-                .unwrap();
+            let stored = crate::dispatcher::stored_entity_mut(game, metadata.id).unwrap();
             stored.data.remove("frozen_caveman_release_pending");
             stored.data.insert("frozen_caveman_released".into(), 1.0);
             let id = game.spawn("oCaveman", Vec2::new(center.x - 8.0, center.y - 8.0));
@@ -2059,6 +2108,13 @@ fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibili
             caveman.data.insert("invincible".into(), 20.0);
         }
     }
+    if let Some(metadata) = metadata {
+        if let Some(stored) = crate::dispatcher::stored_entity_mut(game, metadata.id) {
+            stored.alive = false;
+        }
+    }
+    crate::dispatcher::retire_solid_terrain(game, y * game.world.width + x, serial);
+    finish_solid_destroy(game, receiver);
     true
 }
 
@@ -2725,39 +2781,51 @@ fn solid_parent_destroy(game: &mut Game, pos: Vec2, shop_wall: bool) {
     }
     let upper = Vec2::new(pos.x + 8.0, pos.y - 1.0);
     let lower = Vec2::new(pos.x + 8.0, pos.y + 18.0);
-    let mut lamps = Vec::new();
-    let mut graves = Vec::new();
-    for entity in &mut game.world.entities {
-        if !entity.alive {
+    let mut targets: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|entity| entity.alive)
+        .filter_map(|entity| {
+            if matches!(entity.object.as_str(), "oSpikes" | "oTikiTorch" | "oGrave")
+                && entity.sprite_bounds().contains(upper)
+            {
+                Some((entity.id, entity.object.clone(), entity.pos))
+            } else if matches!(entity.object.as_str(), "oLamp" | "oLampRed")
+                && entity.sprite_bounds().contains(lower)
+            {
+                Some((entity.id, entity.object.clone(), entity.pos))
+            } else {
+                None
+            }
+        })
+        .collect();
+    // Preserve this legacy adapter's existing callback order and selection;
+    // only defer each receiver's retirement until its own callback finishes.
+    targets.sort_by_key(|(_, object, _)| match object.as_str() {
+        "oGrave" => 1,
+        "oLamp" | "oLampRed" => 2,
+        _ => 0,
+    });
+    for (id, object, pos) in targets {
+        if !game.world.entity(id).is_some_and(|entity| entity.alive) {
             continue;
         }
-        if matches!(entity.object.as_str(), "oSpikes" | "oTikiTorch" | "oGrave")
-            && entity.sprite_bounds().contains(upper)
-        {
-            if entity.object == "oGrave" {
-                graves.push(entity.clone());
-                entity.data.insert("destroy_done".into(), 1.0);
-            }
-            entity.alive = false;
-        } else if matches!(entity.object.as_str(), "oLamp" | "oLampRed")
-            && entity.sprite_bounds().contains(lower)
-        {
-            lamps.push((
-                if entity.object == "oLampRed" {
+        if object == "oGrave" {
+            destroy_solid_self(game, id);
+        } else {
+            if matches!(object.as_str(), "oLamp" | "oLampRed") {
+                let item = if object == "oLampRed" {
                     "oLampRedItem"
                 } else {
                     "oLampItem"
-                },
-                Vec2::new(entity.pos.x + 8.0, entity.pos.y + 12.0),
-            ));
-            entity.alive = false;
+                };
+                game.spawn(item, Vec2::new(pos.x + 8.0, pos.y + 12.0));
+            }
+            if let Some(target) = crate::dispatcher::stored_entity_mut(game, id) {
+                target.alive = false;
+            }
         }
-    }
-    for grave in graves {
-        solid_destroy_body(game, &grave, true);
-    }
-    for (object, pos) in lamps {
-        game.spawn(object, pos);
     }
     // oSolid Destroy.xml:50 follows attachment callbacks and runs regardless
     // of the child event's cleanDeath/global.cleanSolids loot guards.
@@ -2768,17 +2836,36 @@ fn solid_parent_destroy(game: &mut Game, pos: Vec2, shop_wall: bool) {
 #[path = "explosives_fluid_tests.rs"]
 mod fluid_invalidation_tests;
 
+#[cfg(test)]
+#[path = "solid_destroy_lifecycle_tests.rs"]
+pub(crate) mod lifecycle_tests;
+
 /// Olmec executes its own Step while detached from World. Its inherited
 /// oSolid Destroy still finishes before the remaining statements in that Step.
 /// Keep this separate from position-only legacy solid callbacks: Olmec uses
 /// its current 64px sprite mask for each translated instance_place query.
 pub(crate) fn destroy_detached_olmec(game: &mut Game, source: &mut Entity) {
     assert_eq!(source.object, "oOlmec");
-    if source.value("destroy_done") != 0.0 {
+    let receiver = (
+        crate::dispatcher::Instance::Entity(source.id),
+        source.creation_serial,
+    );
+    if source.value("destroy_done") != 0.0 || !begin_solid_destroy(game, receiver, false) {
         return;
     }
-    source.alive = false;
-    source.data.insert("destroy_done".into(), 1.0);
+    // Publish the borrowed receiver at its original storage slot while nested
+    // callbacks execute. World-only Create queries must see the same instance.
+    let index = game
+        .dispatcher
+        .detached_actor_slots
+        .iter()
+        .rev()
+        .find(|(id, _)| *id == source.id)
+        .map_or(game.world.entities.len(), |(_, index)| *index);
+    source.alive = true;
+    game.world
+        .entities
+        .insert(index.min(game.world.entities.len()), source.clone());
     if source.value("shopWall") != 0.0 {
         crate::economy::anger(game, source.pos, "DIE, YOU VANDAL!");
         game.flags.insert("shopkeepers_angry".into());
@@ -2786,7 +2873,8 @@ pub(crate) fn destroy_detached_olmec(game: &mut Game, source: &mut Entity) {
     let upper = Vec2::new(source.pos.x + 8.0, source.pos.y - 1.0);
     for family in ["oSpikes", "oTikiTorch", "oGrave"] {
         if let Some(target) = detached_solid_attachment(game, source, family, upper, upper) {
-            retire_detached_solid_attachment(game, target, family);
+            let serial = detached_attachment_serial(game, target);
+            retire_detached_solid_attachment(game, target, family, serial);
         }
     }
     let gate = Vec2::new(source.pos.x + 8.0, source.pos.y + 18.0);
@@ -2794,12 +2882,20 @@ pub(crate) fn destroy_detached_olmec(game: &mut Game, source: &mut Entity) {
     for (family, item) in [("oLampRed", "oLampRedItem"), ("oLamp", "oLampItem")] {
         if let Some(target) = detached_solid_attachment(game, source, family, gate, origin) {
             let pos = target.position(game);
+            let serial = detached_attachment_serial(game, target);
             // The lamp remains live through its replacement Item's Create.
             game.spawn(item, Vec2::new(pos.x + 8.0, pos.y + 12.0));
-            retire_detached_solid_attachment(game, target, family);
+            retire_detached_solid_attachment(game, target, family, serial);
         }
     }
     game.world.fluid_dirty = true;
+    // Child callbacks may write receiver fields or alter activation membership.
+    if let Some(published) = crate::dispatcher::take_stored_entity(game, source.id) {
+        *source = published;
+    }
+    source.alive = false;
+    source.data.insert("destroy_done".into(), 1.0);
+    finish_solid_destroy(game, receiver);
 }
 
 fn detached_solid_attachment(
@@ -2851,10 +2947,20 @@ fn detached_solid_attachment(
     })
 }
 
+fn detached_attachment_serial(game: &Game, target: crate::dispatcher::Instance) -> Option<u64> {
+    match target {
+        crate::dispatcher::Instance::Terrain(index) => {
+            Some(game.world.tiles[index].creation_serial)
+        }
+        _ => None,
+    }
+}
+
 fn retire_detached_solid_attachment(
     game: &mut Game,
     target: crate::dispatcher::Instance,
     family: &str,
+    terrain_serial: Option<u64>,
 ) {
     use crate::dispatcher::Instance;
     match target {
@@ -2865,15 +2971,12 @@ fn retire_detached_solid_attachment(
             destroy_terrain_self(game, index % game.world.width, index / game.world.width);
         }
         Instance::Entity(id) => {
-            if let Some(target) = game.world.entity_mut(id) {
+            if let Some(target) = crate::dispatcher::stored_entity_mut(game, id) {
                 target.alive = false;
             }
         }
         Instance::Terrain(index) => {
-            let water_was_dirty = game.world.fluid_dirty;
-            game.world
-                .set_tile(index % game.world.width, index / game.world.width, "");
-            game.world.fluid_dirty = water_was_dirty;
+            crate::dispatcher::retire_solid_terrain(game, index, terrain_serial.unwrap());
         }
         Instance::Player => {}
     }
@@ -2920,18 +3023,29 @@ fn destroy_solid_instance_impl(game: &mut Game, id: u64, respect_invincibility: 
     {
         return false;
     }
-    let stored = game
-        .world
-        .entities
-        .iter_mut()
-        .find(|entity| entity.id == id)
-        .unwrap();
-    stored.alive = false;
-    stored.data.insert("destroy_done".into(), 1.0);
+    let receiver = (
+        crate::dispatcher::Instance::Entity(id),
+        entity.creation_serial,
+    );
+    let cascade = altar_cascade(game, &entity.object);
+    if !begin_solid_destroy(game, receiver, cascade) {
+        return false;
+    }
+    // Some own-Step adapters request destruction after setting their local
+    // dead flag. That execution receipt must not hide the source receiver
+    // from synchronous child Create queries inside its Destroy event.
+    crate::dispatcher::stored_entity_mut(game, id)
+        .unwrap()
+        .alive = true;
     if inherits_solid_destroy(&entity.object) {
         solid_parent_destroy(game, entity.pos, entity.value("shopWall") != 0.0);
     }
     solid_destroy_body(game, &entity, true);
+    if let Some(stored) = crate::dispatcher::stored_entity_mut(game, id) {
+        stored.alive = false;
+        stored.data.insert("destroy_done".into(), 1.0);
+    }
+    finish_solid_destroy(game, receiver);
     true
 }
 
@@ -3959,6 +4073,15 @@ mod destruction_callbacks {
                 expected.next_u64();
             }
             let target = game.world.spawn(object, Vec2::new(80.0, 80.0));
+            if object == "oSacAltarRight" {
+                // Isolate one own rubble body, like the source cascade's
+                // defile=false assignment before calling instance_destroy.
+                game.world
+                    .entity_mut(target)
+                    .unwrap()
+                    .data
+                    .insert("defile".into(), 0.0);
+            }
             assert!(destroy_solid_instance(&mut game, target));
             assert_eq!(count(&game, "oRubble"), 1, "{object}");
             assert_eq!(count(&game, "oRubbleSmall"), 2, "{object}");

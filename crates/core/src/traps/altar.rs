@@ -454,13 +454,12 @@ fn spawn_gift(game: &mut Game, object: &str, pos: Vec2) {
 }
 
 fn punish(game: &mut Game) {
-    *game.data.entry("favor".into()).or_default() -= 16.0;
     let count = game.data.get("kali_punish").copied().unwrap_or(0.0) as u32;
-    game.data.insert("kali_punish".into(), (count + 1) as f64);
-    crate::camera_shake::request(game, 10.0);
     game.events.push(GameEvent::Message(
         "YOU DARE DEFILE MY ALTAR? I WILL PUNISH YOU!".into(),
     ));
+    crate::camera_shake::request(game, 10.0);
+    *game.data.entry("favor".into()).or_default() -= 16.0;
     if count == 1 {
         game.spawn("oBall", game.player.pos);
         for link in 1..=4 {
@@ -486,36 +485,37 @@ fn punish(game: &mut Game) {
             }
         }
     }
-    // Source with(oSacAltarLeft) includes its Right child. Each remaining
-    // altar runs its normal Destroy body/rubble with defile disabled.
-    let ids: Vec<_> = game
-        .world
-        .entities
-        .iter()
-        .filter(|e| e.alive && crate::catalog::is_a(&e.object, "oSacAltarLeft"))
-        .map(|e| e.id)
-        .collect();
-    let tiles: Vec<_> = game
-        .world
-        .tiles
-        .iter()
-        .enumerate()
-        .filter(|(_, t)| crate::catalog::is_a(&t.object, "oSacAltarLeft"))
-        .map(|(index, _)| index)
-        .collect();
+    // Source increments AFTER punishment births, BEFORE its with-family.
+    game.data.insert("kali_punish".into(), (count + 1) as f64);
+    crate::dispatcher::register_instances(game);
+    let targets = crate::dispatcher::descendant_instances(game, "oSacAltarLeft");
     game.flags.insert("altar_defile_cascade".into());
-    for id in ids {
-        if let Some(entity) = game.world.entity_mut(id) {
-            entity.data.insert("defile".into(), 0.);
+    for target in targets {
+        if !crate::dispatcher::is_active(game, target) {
+            continue;
         }
-        crate::items::explosives::destroy_solid_self(game, id);
-    }
-    for index in tiles {
-        crate::items::explosives::destroy_terrain_self(
-            game,
-            index % game.world.width,
-            index / game.world.width,
-        );
+        match target {
+            crate::dispatcher::Instance::Entity(id) => {
+                let Some(entity) = game.world.entity_mut(id) else {
+                    continue;
+                };
+                entity.data.insert("defile".into(), 0.0);
+                crate::items::explosives::destroy_solid_self(game, id);
+            }
+            crate::dispatcher::Instance::Terrain(index) => {
+                if game.world.tiles[index].object.is_empty() {
+                    continue;
+                }
+                // The terrain callback adapter publishes the same defile=false
+                // assignment to its metadata before any inner child Creates.
+                crate::items::explosives::destroy_terrain_self(
+                    game,
+                    index % game.world.width,
+                    index / game.world.width,
+                );
+            }
+            crate::dispatcher::Instance::Player => {}
+        }
     }
     game.flags.remove("altar_defile_cascade");
     game.data.retain(|key, _| !key.starts_with("altar_tile:"));
@@ -1791,8 +1791,8 @@ mod tests {
                     .iter()
                     .filter(|e| matches!(e.sprite.as_str(), "sRubbleTan" | "sRubbleTanSmall"))
                     .count(),
-                9,
-                "all three altar Destroy bodies emit their three pieces"
+                12,
+                "origin emits outer and finite defile=false inner bodies; two siblings emit one each"
             );
             assert!(!game.world.entities.iter().any(|e| e.object == "oSpider"));
             game.step(&crate::InputFrame::default());

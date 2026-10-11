@@ -101,6 +101,11 @@ pub struct State {
     storage_order: Vec<u64>,
     #[serde(skip)]
     pub running: bool,
+    // Execution guards are distinct from native query-visible retirement.
+    #[serde(skip)]
+    pub(crate) destroying_solids: BTreeMap<(Instance, u64), u8>,
+    #[serde(skip)]
+    pub(crate) detached_actor_slots: Vec<(u64, usize)>,
     #[serde(default)]
     known_terrain: BTreeMap<usize, (u64, String)>,
     #[serde(skip)]
@@ -179,6 +184,55 @@ impl State {
         &self.hidden_tiles
     }
 }
+/// Callback activation may move a still-live Destroy receiver out of World.
+pub(crate) fn stored_entity_mut(game: &mut Game, id: u64) -> Option<&mut Entity> {
+    game.world
+        .entities
+        .iter_mut()
+        .chain(game.dispatcher.hidden_entities.iter_mut())
+        .find(|entity| entity.id == id)
+}
+
+pub(crate) fn take_stored_entity(game: &mut Game, id: u64) -> Option<Entity> {
+    if let Some(index) = game
+        .world
+        .entities
+        .iter()
+        .position(|entity| entity.id == id)
+    {
+        return Some(game.world.entities.remove(index));
+    }
+    let index = game
+        .dispatcher
+        .hidden_entities
+        .iter()
+        .position(|entity| entity.id == id)?;
+    Some(game.dispatcher.hidden_entities.remove(index))
+}
+
+/// Retire this identity, preserving a replacement born at the same grid cell.
+pub(crate) fn retire_solid_terrain(game: &mut Game, index: usize, serial: u64) {
+    let same = game
+        .world
+        .tiles
+        .get(index)
+        .is_some_and(|tile| tile.creation_serial == serial);
+    let hidden = game
+        .dispatcher
+        .hidden_tiles
+        .iter()
+        .position(|(i, tile)| *i == index && tile.creation_serial == serial);
+    if let Some(hidden) = hidden {
+        game.dispatcher.hidden_tiles.remove(hidden);
+    }
+    if same || (hidden.is_some() && game.world.tiles[index].object.is_empty()) {
+        let water_was_dirty = game.world.fluid_dirty;
+        game.world
+            .set_tile(index % game.world.width, index / game.world.width, "");
+        game.world.fluid_dirty = water_was_dirty;
+    }
+}
+
 fn alive(game: &Game, instance: Instance) -> bool {
     match instance {
         Instance::Player => true,
@@ -738,6 +792,8 @@ fn level_step(game: &mut Game) {
 }
 /// Synchronous source Create dispatch; caller overrides happen after return.
 pub(crate) fn create(game: &mut Game, id: u64) {
+    #[cfg(test)]
+    crate::items::explosives::lifecycle_tests::observe_create(game, id);
     crate::enemies::create_instance(game, id);
     crate::items::create_instance(game, id);
     crate::world_events::create_instance(game, id);
