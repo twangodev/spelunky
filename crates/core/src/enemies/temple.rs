@@ -720,19 +720,19 @@ fn tomb_lord(game: &mut Game, e: &mut Entity) {
     }
     countdown(e, "attack_cooldown");
     countdown(e, "hit_cooldown");
-    if e.state >= 98 {
-        e.state = 1;
-    }
     match e.state {
         0 => {
-            e.vel.x = 0.0;
             if e.timer > 0 {
                 e.timer -= 1;
-            } else {
+            }
+            if e.timer == 0 {
                 e.state = 1;
             }
         }
         1 => {
+            if e.timer > 0 {
+                e.timer -= 1;
+            }
             let d = game.player.pos.x - center(e).x;
             if wall
                 || (d * (e.facing as f64) < 0.0
@@ -780,10 +780,8 @@ fn tomb_lord(game: &mut Game, e: &mut Entity) {
                 }
             }
         }
+        98.. => e.state = 1,
         _ => {}
-    }
-    if e.state == 1 && e.timer > 0 {
-        e.timer -= 1;
     }
     // The source's post-state correction also executes after destruction.
     if super::solid_mask(&game.world, e.bounds(), e.id) {
