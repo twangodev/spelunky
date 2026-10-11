@@ -235,6 +235,47 @@ fn arrow_ledge(w: &World, point: Vec2, arrow_order: &[u64]) -> bool {
         .is_some_and(|entity| entity.value("stuck") != 0.0)
 }
 
+/// isCollisionLadder samples the cached controller bounds, before movement
+/// and the later falling-body update. Its precise rectangle allows reversed
+/// corners and equal endpoints; scan its rounded inclusive rows, retaining
+/// the source raw cached-bbox rejection before selected-mask rasterization.
+fn cached_ladder_collision(w: &World, p: &Player) -> bool {
+    let bounds = bounds_at(p, p.pos);
+    let first = Vec2::new(bounds.x + 8.0, bounds.y + 8.0);
+    let last = Vec2::new(bounds.x + bounds.w - 8.0, bounds.y + bounds.h - 8.0);
+    let hits = |mask: crate::catalog::CollisionMask| {
+        if !mask.intersects_rectangle_bbox(first, last) {
+            return false;
+        }
+        let left = gm_round(first.x.min(last.x));
+        let right = gm_round(first.x.max(last.x));
+        let top = gm_round(first.y.min(last.y)) as i64;
+        let bottom = gm_round(first.y.max(last.y)) as i64;
+        (top..=bottom).any(|y| {
+            mask.intersects_axis_line(
+                Vec2::new(left, y as f64),
+                Vec2::new(right, y as f64),
+                CollisionPrecision::Precise,
+            )
+        })
+    };
+    for family in ["oLadderTop", "oLadder"] {
+        if w.tiles.iter().enumerate().any(|(index, tile)| {
+            tile.engine_active
+                && crate::catalog::is_a(&tile.object, family)
+                && hits(w.tile_collision_mask((index % w.width) as i32, (index / w.width) as i32))
+        }) || w.entities.iter().any(|entity| {
+            entity.alive
+                && entity.engine_active
+                && crate::catalog::is_a(&entity.object, family)
+                && hits(entity.collision_mask())
+        }) {
+            return true;
+        }
+    }
+    false
+}
+
 fn ladder_at(w: &World, pos: Vec2) -> Option<Vec2> {
     ladder_match(w, pos, true)
 }
@@ -1048,6 +1089,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let col_left = edge(w, p, Side::Left, 1.0);
     let col_right = edge(w, p, Side::Right, 1.0);
     let col_top = edge(w, p, Side::Top, 1.0);
+    let col_ladder = cached_ladder_collision(w, p);
     set(p, "colTop", f64::from(col_top));
     let col_moveable_left = precise_line(w, edge_rect(p, Side::Left, 1.0, false), "oMoveableSolid");
     let col_moveable_right =
@@ -1320,12 +1362,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     }
     intensity = f64::from(p.jump_time) / f64::from(JUMP_TICKS) * gravity;
 
-    if input.up
-        && grounded_state(p.state)
-        && ladder_at(w, p.pos).is_none()
-        && p.vel.x == 0.0
-        && ax == 0.0
-    {
+    if input.up && grounded_state(p.state) && !col_ladder && p.vel.x == 0.0 && ax == 0.0 {
         p.state = PlayerState::LookingUp;
     }
     if !input.up && p.state == PlayerState::LookingUp {
