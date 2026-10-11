@@ -506,7 +506,8 @@ fn treasure_at(
         // Preserve scrTreasureGen:54's literal typo, not intended proximity:
         // GiantSpider's compiled object index is 749, so (749 < 100) is 0.
         // distance_to_object(0) has no target and returns 1,000,000 (truthy).
-        if world.area != Area::Ice && rng.chance(1, 5) {
+        let web_roll = rng.chance(1, 5);
+        if world.area != Area::Ice && web_roll {
             spawn_at(world, rng, "oWeb", above);
         } else if state.udjat && !exists(world, "oLockedChest") {
             if rng.chance(1, state.chest_chance) {
@@ -548,7 +549,8 @@ fn treasure_at(
         && source_point_family(world, right, "oSolid")
     {
         // The same literal expression at scrTreasureGen:100 assigns n = 10.
-        if world.area != Area::Ice && rng.chance(1, 10) {
+        let web_roll = rng.chance(1, 10);
+        if world.area != Area::Ice && web_roll {
             spawn_at(world, rng, "oWeb", above);
         } else if rng.chance(1, 4) {
             spawn_at(world, rng, "oGoldBar", above);
@@ -3317,7 +3319,8 @@ mod tests {
         if distance_to_object_zero >= 0.5 {
             n = if alcove { 5 } else { 10 };
         }
-        if area != Area::Ice && 1 + rng.range(n) == 1 {
+        let web_roll = 1 + rng.range(n);
+        if area != Area::Ice && web_roll == 1 {
             return vec!["oWeb"];
         }
         let level = if area == Area::Ice { 9 } else { 1 };
@@ -3356,6 +3359,75 @@ mod tests {
             }
         }
         Vec::new()
+    }
+
+    #[test]
+    fn eager_ice_web_exclusion_still_changes_downstream_treasure() {
+        for (alcove, seed, limits, expected_object) in [
+            (
+                true,
+                13,
+                vec![100, 40, 5, 10, 15, 8, 22, 3, 6, 6, 8, 10],
+                None,
+            ),
+            (false, 2, vec![100, 40, 10, 4], Some("oGoldBar")),
+        ] {
+            let mut world = World::new(16, 16, Area::Ice, 9);
+            world.entrance = at(1, 1);
+            world.exit = at(14, 14);
+            world.set_tile(6, 8, "oDark");
+            world.set_tile(5, 7, "oDark");
+            world.set_tile(
+                if alcove { 6 } else { 7 },
+                if alcove { 6 } else { 7 },
+                "oDark",
+            );
+            let water = WaterMasks::new(&world);
+            let mut state = treasure_state();
+            state.damsel = false;
+            let mut actual = Rng::new(seed);
+            let mut source = actual.clone();
+            for limit in limits {
+                source.range(limit);
+            }
+            treasure(&mut world, &mut actual, &water, &mut state, 6, 8);
+            assert!(!exists(&world, "oWeb"));
+            assert_eq!(
+                world.entities.first().map(|e| e.object.as_str()),
+                expected_object
+            );
+            assert_eq!(world.entities.len(), usize::from(expected_object.is_some()));
+            assert_eq!(actual.next_u64(), source.next_u64(), "alcove={alcove}");
+        }
+    }
+
+    #[test]
+    fn eager_web_roll_waits_for_rock_jar_returns_and_udjat_branch_stops() {
+        for (seed, limits, object, udjat, chest_chance) in [
+            (29, vec![100], Some("oRock"), false, 8),
+            (25, vec![100, 40], Some("oJar"), false, 8),
+            (0, vec![100, 40, 5, 8], None, true, 7),
+        ] {
+            let mut world = World::new(16, 16, Area::Mines, 2);
+            world.entrance = at(1, 1);
+            world.exit = at(14, 14);
+            for (x, y) in [(6, 8), (5, 7), (6, 6)] {
+                world.set_tile(x, y, "oBrick");
+            }
+            let water = WaterMasks::new(&world);
+            let mut state = treasure_state();
+            state.udjat = udjat;
+            let mut actual = Rng::new(seed);
+            let mut source = actual.clone();
+            for limit in limits {
+                source.range(limit);
+            }
+            treasure(&mut world, &mut actual, &water, &mut state, 6, 8);
+            assert_eq!(world.entities.first().map(|e| e.object.as_str()), object);
+            assert_eq!(world.entities.len(), usize::from(object.is_some()));
+            assert_eq!(state.chest_chance, chest_chance);
+            assert_eq!(actual.next_u64(), source.next_u64());
+        }
     }
 
     #[test]
@@ -3421,7 +3493,7 @@ mod tests {
                 }
                 assert!(fallthrough > 0, "exercise downstream loot chain");
                 if area == Area::Ice {
-                    assert_eq!(webs, 0, "Ice skips the web random statement");
+                    assert_eq!(webs, 0, "Ice consumes the web roll but cannot create a web");
                 } else {
                     assert!(webs > 0, "exercise source web successes");
                 }
