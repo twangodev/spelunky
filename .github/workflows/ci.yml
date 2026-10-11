@@ -46,7 +46,6 @@ jobs:
             target/release/spelunky
             assets
             COPYING.txt
-            README.md
           if-no-files-found: error
 
   web:
