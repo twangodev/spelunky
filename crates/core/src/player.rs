@@ -1515,6 +1515,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
                 monkey.data.insert("grab_counter".into(), 60.0);
             }
         }
+        // This is still a completed characterStepEvent: DUCKTOHANG resets
+        // the source's two prior platform states even though its motion stops.
+        remember_controller_history(&mut game.player);
         return;
     }
     if cape || parachute {
@@ -1881,6 +1884,9 @@ fn animate(p: &mut Player, input: &InputFrame, w: &World) {
         // characterStepEvent restores this on every whipping Step. The attack
         // start later in that Step overrides it to 0.6 for its first frame.
         p.set_image_speed(1.0);
+        // characterSprite skips whipping, but characterStepEvent1008-1009
+        // still records the platform state before the following controller.
+        remember_controller_history(p);
         return;
     }
     let mut speed = p.image_speed();
@@ -1961,6 +1967,13 @@ fn animate(p: &mut Player, input: &InputFrame, w: &World) {
     .to_owned();
     p.set_sprite(&name);
     p.set_image_speed(speed.min(1.0));
+    remember_controller_history(p);
+}
+
+/// Equivalent to the source's statePrev/statePrevPrev for its three-FALLING
+/// sprite gate. Only completed character controllers record this history;
+/// dead, stunned, inactive, exiting and already-DUCKTOHANG Steps leave it alone.
+fn remember_controller_history(p: &mut Player) {
     let fall_count = if p.state == PlayerState::Falling {
         value(p, "fall_state_ticks", 0.0) + 1.0
     } else {
