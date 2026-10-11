@@ -3644,12 +3644,27 @@ mod tests {
     fn input_fired_web_cannon_draws_all_source_frames_before_animation_end_birth() {
         let atlas = Atlas::load().unwrap();
         let mut game = source_draw_room();
+        // The room starts airborne. Source Player Step1219 gives an empty-hand
+        // attack priority over pickup until the player can duck on the floor.
+        for _ in 0..20 {
+            if game.player.grounded {
+                break;
+            }
+            game.step(&spelunky_core::InputFrame::default());
+        }
+        assert!(game.player.grounded);
+        game.step(&spelunky_core::InputFrame {
+            down: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.state, PlayerState::Ducking);
         let weapon = game.spawn(
             "oWebCannon",
             Vec2::new(game.player.pos.x, game.player.pos.y + 2.0),
         );
         game.step(&spelunky_core::InputFrame {
             down: true,
+            attack: true,
             attack_pressed: true,
             ..Default::default()
         });
