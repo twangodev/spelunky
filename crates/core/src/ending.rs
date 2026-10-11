@@ -1055,7 +1055,12 @@ mod tests {
             for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
                 // Natural door/animation route; only the arriving hazard is
                 // controlled. Neither player life nor its Exit phase is set.
-                for (arriving_lava, ankh) in [(false, false), (true, false), (true, true)] {
+                for (arriving_lava, ankh, last_exit_frame) in [
+                    (false, false, false),
+                    (true, false, false),
+                    (true, false, true),
+                    (true, true, false),
+                ] {
                     let mut g = Game::shell(11, rules);
                     g.world = crate::model::World::new(40, 20, Area::Mines, 1);
                     g.world.name = "Mines".into();
@@ -1100,6 +1105,21 @@ mod tests {
                     assert!(g.player.is_exiting(), "{rules:?}/{character:?}");
                     assert_eq!(g.state, RunState::Ending);
                     let exit_sprite = g.player.sprite.clone();
+                    if last_exit_frame {
+                        // Source Step1809..1878 selects a Die sprite on the
+                        // next dead Step. A fatal last Exit frame instead
+                        // reaches Animation End in this same engine frame.
+                        let frames = crate::catalog::sprite_frame_count(&exit_sprite) as f64;
+                        for _ in 0..40 {
+                            if (g.player.animation + g.player.image_speed()).floor() >= frames {
+                                break;
+                            }
+                            g.step(&InputFrame::default());
+                            assert_eq!(g.player.sprite, exit_sprite);
+                            assert_eq!(g.ending.as_ref().unwrap().stage, EndingStage::Exit);
+                        }
+                        assert!((g.player.animation + g.player.image_speed()).floor() >= frames);
+                    }
                     if arriving_lava {
                         g.spawn("oLava", Vec2::new(g.player.pos.x - 8., g.player.pos.y - 8.));
                         g.step(&InputFrame::default());
@@ -1108,7 +1128,7 @@ mod tests {
                         assert_eq!(g.player.health, if ankh { 4 } else { 0 });
                         assert_eq!(
                             g.state,
-                            if ankh {
+                            if ankh || last_exit_frame {
                                 RunState::Ending
                             } else {
                                 RunState::Dead
@@ -1116,6 +1136,28 @@ mod tests {
                         );
                         assert!(!g.player.has("Ankh"));
                         assert_eq!(g.events.contains(&GameEvent::Died), !ankh);
+                        // Room replacement intentionally discards draw_view,
+                        // so the pre-Animation snapshot cannot be read after
+                        // this full Step. Damage/Died plus the unchanged Exit
+                        // sprite and HP0 witness the lethal callback boundary.
+                        if !last_exit_frame && !ankh {
+                            // Early lava leaves enough time for the NEXT dead
+                            // Step to select Die. It must NOT finish the exit.
+                            for _ in 0..40 {
+                                g.step(&InputFrame::default());
+                            }
+                            assert_eq!(g.world.name, "Mines");
+                            assert_eq!(g.state, RunState::Dead);
+                            assert_eq!(g.player.health, 0);
+                            assert!(!g.player.is_exiting());
+                            assert_eq!(
+                                g.player.sprite,
+                                selected_sprite(&g, "sDieL", "sDamselDieL", "sTunnelDieL")
+                            );
+                            assert_eq!(g.ending.as_ref().unwrap().stage, EndingStage::Exit);
+                            assert!(g.game_over.destination.is_none());
+                            continue;
+                        }
                     }
                     let expected_health = if arriving_lava {
                         if ankh { 4 } else { 0 }
