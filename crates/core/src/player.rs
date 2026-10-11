@@ -1119,10 +1119,12 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         } else if input.right {
             p.facing = 1;
         }
-        if input.up && ladder_at(w, Vec2::new(p.pos.x, p.pos.y - 8.0)).is_some() {
-            ay -= 0.6;
-            if p.alarms[2] < 1 {
-                p.alarms[2] = 8;
+        if input.up {
+            if ladder_at(w, Vec2::new(p.pos.x, p.pos.y - 8.0)).is_some() {
+                ay -= 0.6;
+                if p.alarms[2] < 1 {
+                    p.alarms[2] = 8;
+                }
             }
         } else if input.down {
             if ladder_at(w, Vec2::new(p.pos.x, p.pos.y + 8.0)).is_some() {
