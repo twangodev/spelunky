@@ -396,10 +396,7 @@ fn first_late_floor_contact_runs_direct_wall_then_independent_script_bottom_inju
             game.player.stun, 20,
             "initial controlled tumble retains its counter"
         );
-        assert_eq!(
-            game.player.health, 8,
-            "direct wall1 + independent bottom1"
-        );
+        assert_eq!(game.player.health, 8, "direct wall1 + independent bottom1");
         assert_eq!(game.player.data["wall_hurt"], 0.0);
         assert_eq!(game.player.data["bounced"], 1.0);
         assert_eq!(

@@ -374,11 +374,13 @@ fn natural_bow_pickup_charge_embedding_and_walk_fall_arrow_grab_has_no_snap() {
         };
         fired.step(&pickup);
         held.step(&pickup);
-        assert!(fired
-            .player
-            .held
-            .and_then(|id| fired.world.entity(id))
-            .is_some_and(|e| e.object == "oBow"));
+        assert!(
+            fired
+                .player
+                .held
+                .and_then(|id| fired.world.entity(id))
+                .is_some_and(|e| e.object == "oBow")
+        );
         assert_eq!(fired.data.get("arrows"), Some(&6.0));
         fired.step(&InputFrame::default());
         held.step(&InputFrame::default());
@@ -430,11 +432,13 @@ fn natural_bow_pickup_charge_embedding_and_walk_fall_arrow_grab_has_no_snap() {
             embedded,
             "fully charged Arrow never naturally embedded in the wall"
         );
-        assert!(!held
-            .world
-            .entities
-            .iter()
-            .any(|e| e.alive && e.object == "oArrow"));
+        assert!(
+            !held
+                .world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oArrow")
+        );
         assert_eq!(fired.data.get("arrows"), Some(&5.0));
         let mut saw_fall = false;
         let mut grabbed = false;
