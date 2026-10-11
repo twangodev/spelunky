@@ -544,6 +544,20 @@ fn king(game: &mut Game, e: &mut Entity) {
         e.health = 0;
     }
     if e.health < 1 {
+        // Literal death prefix: both Blood origin draws precede its capped
+        // script, then each Bone Create finishes before the next origin rolls.
+        let blood_pos = Vec2::new(
+            e.pos.x + 14.0 + f64::from(game.rng.range(5)),
+            e.pos.y + 14.0 + f64::from(game.rng.range(5)),
+        );
+        super::create_blood(game, e, blood_pos, 3);
+        for _ in 0..4 {
+            let pos = Vec2::new(
+                e.pos.x + 14.0 + f64::from(game.rng.range(5)),
+                e.pos.y + 14.0 + f64::from(game.rng.range(7)),
+            );
+            game.spawn("oBone", pos);
+        }
         for _ in 0..4 {
             let item = if game.rng.range(12) == 0 {
                 "oSpikeShoes"
@@ -553,6 +567,11 @@ fn king(game: &mut Game, e: &mut Entity) {
                 "oRopePile"
             };
             let id = game.spawn(item, Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
+            if item != "oSapphireBig" {
+                let loot = game.world.entity_mut(id).unwrap();
+                loot.data.insert("cost".into(), 0.0);
+                loot.data.insert("for_sale".into(), 0.0);
+            }
             let vx = f64::from(game.rng.range(4)) - f64::from(game.rng.range(4));
             let vy = -f64::from(1 + game.rng.range(2));
             if let Some(loot) = game.world.entity_mut(id) {
@@ -1964,7 +1983,28 @@ mod tests {
         e.health = 0;
         tick(&mut g, &mut e);
         assert!(!e.alive);
-        assert_eq!(g.world.entities.len(), 4);
+        let count = |object: &str| {
+            g.world
+                .entities
+                .iter()
+                .filter(|drop| drop.object == object)
+                .count()
+        };
+        assert_eq!(count("oBlood"), 3);
+        assert_eq!(count("oBone"), 4);
+        let loot = g
+            .world
+            .entities
+            .iter()
+            .filter(|drop| {
+                matches!(
+                    drop.object.as_str(),
+                    "oSpikeShoes" | "oSapphireBig" | "oRopePile"
+                )
+            })
+            .count();
+        assert_eq!(loot, 4);
+        assert_eq!(g.world.entities.len(), 11);
     }
     #[test]
     fn laser_removes_destructible_tile_only() {
