@@ -1,11 +1,23 @@
-import { svelte } from '@sveltejs/vite-plugin-svelte';
+import adapter from '@sveltejs/adapter-static';
+import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  root: 'client',
-  base: './',
-  publicDir: '../public',
-  build: { outDir: '../dist', emptyOutDir: true },
-  // Winit owns the canvas and event loop; reload the page instead of remounting it.
-  plugins: [svelte({ compilerOptions: { hmr: false } })],
+  plugins: [
+    {
+      name: 'spelunky-full-page-reload',
+      enforce: 'pre',
+      handleHotUpdate({ server }) {
+        // The Rust event loop owns its canvas for the lifetime of the page.
+        server.ws.send({ type: 'full-reload' });
+        return [];
+      },
+    },
+    sveltekit({
+      adapter: adapter({ pages: 'dist', assets: 'dist' }),
+      files: { assets: 'public' },
+      paths: { relative: true },
+      compilerOptions: { hmr: false },
+    }),
+  ],
 });
