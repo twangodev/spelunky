@@ -1383,7 +1383,11 @@ fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibili
     {
         return false;
     }
+    // World::set_tile also serves non-event editing callers. Runtime Destroy
+    // requests water only when the actual source callback reaches checkWater.
+    let water_was_dirty = game.world.fluid_dirty;
     game.world.set_tile(x, y, "");
+    game.world.fluid_dirty = water_was_dirty;
     let mut source = Entity::new(0, &object, Vec2::new(center.x - 8.0, center.y - 8.0));
     if let Some(metadata) = &metadata {
         source.data = metadata.data.clone();
@@ -1555,6 +1559,11 @@ fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
         if family == "oSacAltarLeft" {
             crate::traps::altar::destroyed(game, entity);
         }
+        if matches!(family, "oSpearTrapTop" | "oSpearTrapBottom") {
+            // Their own non-inheriting Destroy writes this outside its clean
+            // output guard, unlike other trap/block Destroy overrides.
+            game.world.fluid_dirty = true;
+        }
         return;
     }
     let city = game.flags.contains("city_of_gold") || game.flags.contains("cityOfGold");
@@ -1680,6 +1689,9 @@ fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
             .is_some_and(|treasure| treasure == "Big Ruby")
     {
         game.spawn("oRubyBig", center);
+    }
+    if matches!(family, "oSpearTrapTop" | "oSpearTrapBottom") {
+        game.world.fluid_dirty = true;
     }
 }
 
@@ -1965,7 +1977,14 @@ fn solid_parent_destroy(game: &mut Game, pos: Vec2, shop_wall: bool) {
     for (object, pos) in lamps {
         game.spawn(object, pos);
     }
+    // oSolid Destroy.xml:50 follows attachment callbacks and runs regardless
+    // of the child event's cleanDeath/global.cleanSolids loot guards.
+    game.world.fluid_dirty = true;
 }
+
+#[cfg(test)]
+#[path = "explosives_fluid_tests.rs"]
+mod fluid_invalidation_tests;
 
 /// Execute gameplay Destroy effects once for an independently stored solid.
 /// Used by explosions and mattocks; target invincibility is respected here.
