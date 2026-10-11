@@ -18,6 +18,8 @@ pub struct Settings {
     pub frame_cap: Option<u32>,
     /// Action names map to winit physical-key names, separated by commas.
     pub bindings: BTreeMap<String, String>,
+    /// Classic controller actions map to portable physical button names.
+    pub controller_bindings: BTreeMap<String, String>,
 }
 
 impl Default for Settings {
@@ -49,6 +51,7 @@ impl Default for Settings {
             vsync: true,
             frame_cap: None,
             bindings,
+            controller_bindings: crate::controller::default_bindings(),
         }
     }
 }
@@ -159,6 +162,8 @@ impl SaveData {
         for (action, keys) in Settings::default().bindings {
             data.settings.bindings.entry(action).or_insert(keys);
         }
+        data.settings.controller_bindings =
+            crate::controller::validated_bindings(&data.settings.controller_bindings);
         data.validate()?;
         Ok(data)
     }
@@ -441,6 +446,73 @@ mod tests {
             assert!(data.settings.vsync);
             assert!(!data.settings.pixel_snap);
         }
+    }
+
+    #[test]
+    fn legacy_saves_receive_controller_defaults_without_changing_keyboard_remaps() {
+        for json in [
+            r#"{}"#,
+            r#"{"version":0,"settings":{"bindings":{"jump":"KeyJ","attack":""}}}"#,
+            r#"{"version":1,"settings":{"bindings":{"jump":"KeyJ","attack":""}}}"#,
+        ] {
+            let data = SaveData::from_json(json).unwrap();
+            assert_eq!(
+                data.settings.controller_bindings,
+                crate::controller::default_bindings()
+            );
+            if json != "{}" {
+                assert_eq!(data.settings.bindings["jump"], "KeyJ");
+                assert_eq!(data.settings.bindings["attack"], "");
+            }
+        }
+    }
+
+    #[test]
+    fn controller_remaps_survive_save_round_trip_with_records_unchanged() {
+        let mut data = SaveData::default();
+        data.settings
+            .controller_bindings
+            .insert("jump".into(), "East".into());
+        data.settings
+            .controller_bindings
+            .insert("start".into(), "Mode".into());
+        data.settings.bindings.insert("jump".into(), "KeyJ".into());
+        data.unlocks.insert("shortcut_5".into());
+        data.challenge_records.insert("mini1".into(), 37);
+        let decoded = SaveData::from_json(&data.to_json().unwrap()).unwrap();
+        assert_eq!(
+            decoded.settings.controller_bindings,
+            data.settings.controller_bindings
+        );
+        assert_eq!(decoded.settings.bindings, data.settings.bindings);
+        assert_eq!(decoded.unlocks, data.unlocks);
+        assert_eq!(decoded.challenge_records, data.challenge_records);
+    }
+
+    #[test]
+    fn invalid_controller_values_normalize_and_missing_actions_receive_defaults() {
+        let data = SaveData::from_json(
+            r#"{"settings":{"controller_bindings":{"jump":"B1","attack":"","cycle":"Button18","run":"RightStick","unknown":"East"}}}"#,
+        )
+        .unwrap();
+        let mut expected = crate::controller::default_bindings();
+        expected.insert("run".into(), "RightStick".into());
+        assert_eq!(data.settings.controller_bindings, expected);
+        let reopened = SaveData::from_json(&data.to_json().unwrap()).unwrap();
+        assert_eq!(reopened.settings.controller_bindings, expected);
+    }
+
+    #[test]
+    fn duplicate_controller_assignments_remain_valid_after_save_round_trip() {
+        let data = SaveData::from_json(
+            r#"{"settings":{"controller_bindings":{"jump":"South","attack":"South","start":"South"}}}"#,
+        )
+        .unwrap();
+        let decoded = SaveData::from_json(&data.to_json().unwrap()).unwrap();
+        for action in ["jump", "attack", "start"] {
+            assert_eq!(decoded.settings.controller_bindings[action], "South");
+        }
+        assert_eq!(decoded.settings.controller_bindings.len(), 9);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Native and WebGL hosts share the same Rust application and fixed simulation.
 mod atlas;
 mod audio;
+mod controller;
 mod donation_ui;
 mod editor_io;
 mod editor_ui;

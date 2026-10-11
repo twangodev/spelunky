@@ -22,7 +22,8 @@ const ACTIONS: [(&str, &str); 14] = [
     ("pause", "PAUSE"),
 ];
 const FIRST_BINDING: usize = 7;
-const RESTORE: usize = FIRST_BINDING + ACTIONS.len();
+const CONFIGURE_CONTROLLER: usize = FIRST_BINDING + ACTIONS.len();
+const RESTORE: usize = CONFIGURE_CONTROLLER + 1;
 const BACK: usize = RESTORE + 1;
 const ROWS: usize = BACK + 1;
 const VISIBLE: usize = 11;
@@ -43,6 +44,7 @@ pub enum SettingsCommand {
 pub struct SettingsUi {
     selected: usize,
     binding: Option<usize>,
+    controller_binding: Option<usize>,
     unsupported_key: bool,
 }
 
@@ -52,10 +54,41 @@ impl SettingsUi {
     }
 
     pub fn awaiting_binding(&self) -> bool {
-        self.binding.is_some()
+        self.binding.is_some() || self.awaiting_controller_binding()
+    }
+
+    pub fn awaiting_controller_binding(&self) -> bool {
+        self.controller_binding.is_some()
+    }
+
+    pub fn controller(
+        &mut self,
+        button: crate::controller::Button,
+        settings: &mut Settings,
+    ) -> SettingsCommand {
+        let Some(index) = self.controller_binding else {
+            return SettingsCommand::None;
+        };
+        let (action, _, _) = crate::controller::ACTIONS[index];
+        settings
+            .controller_bindings
+            .insert(action.into(), button.name().into());
+        self.advance_controller_binding(index);
+        SettingsCommand::Changed
+    }
+
+    fn advance_controller_binding(&mut self, index: usize) {
+        self.controller_binding =
+            (index + 1 < crate::controller::ACTIONS.len()).then_some(index + 1);
     }
 
     pub fn key(&mut self, key: KeyCode, settings: &mut Settings) -> SettingsCommand {
+        if let Some(index) = self.controller_binding {
+            if key == KeyCode::Escape {
+                self.advance_controller_binding(index);
+            }
+            return SettingsCommand::None;
+        }
         if let Some(index) = self.binding.take() {
             self.unsupported_key = false;
             if key == KeyCode::Escape {
@@ -120,9 +153,13 @@ impl SettingsUi {
                 settings.frame_cap = CAPS[next];
             }
             6 if confirm => return SettingsCommand::Fullscreen,
-            FIRST_BINDING..RESTORE if confirm => {
+            FIRST_BINDING..CONFIGURE_CONTROLLER if confirm => {
                 self.binding = Some(self.selected - FIRST_BINDING);
                 self.unsupported_key = false;
+                return SettingsCommand::None;
+            }
+            CONFIGURE_CONTROLLER if confirm => {
+                self.controller_binding = Some(0);
                 return SettingsCommand::None;
             }
             RESTORE if confirm => *settings = Settings::default(),
@@ -156,7 +193,7 @@ impl SettingsUi {
                 scene::rect(quads, [14.0, y - 3.0, 292.0, 12.0], [0.2, 0.22, 0.29, 1.0]);
             }
             let (label, value) = row(index, settings);
-            let value = if selected && self.awaiting_binding() {
+            let value = if selected && self.binding.is_some() {
                 "PRESS A KEY...".into()
             } else {
                 value
@@ -172,12 +209,13 @@ impl SettingsUi {
             4 => "SYNC TO DISPLAY REFRESH WHEN AVAILABLE.",
             5 => "BROWSER FRAME TIMING FOLLOWS THE DISPLAY.",
             6 => "ENTER: TOGGLE FULLSCREEN.",
-            FIRST_BINDING..RESTORE => "ENTER: REPLACE KEYS FOR THIS ACTION.",
+            FIRST_BINDING..CONFIGURE_CONTROLLER => "ENTER: REPLACE KEYS FOR THIS ACTION.",
+            CONFIGURE_CONTROLLER => "ENTER: CONFIGURE CONTROLLER BUTTONS.",
             RESTORE => "RESTORES SETTINGS. RECORDS ARE PRESERVED.",
             _ => "RETURN TO THE PREVIOUS MENU.",
         };
         scene::text(quads, atlas, description, 18.0, 199.0, 0.75, MUTED);
-        if self.awaiting_binding() {
+        if self.binding.is_some() {
             scene::text(
                 quads,
                 atlas,
@@ -220,6 +258,41 @@ impl SettingsUi {
                 MUTED,
             );
         }
+        if let Some(index) = self.controller_binding {
+            let (action, label, default) = crate::controller::ACTIONS[index];
+            let current = settings
+                .controller_bindings
+                .get(action)
+                .and_then(|value| crate::controller::parse(value))
+                .unwrap_or(default);
+            scene::rect(quads, [20.0, 66.0, 280.0, 112.0], [0.02, 0.03, 0.06, 1.0]);
+            scene::text(quads, atlas, "PRESS BUTTON FOR", 32.0, 78.0, 1.0, GOLD);
+            scene::text(quads, atlas, label, 32.0, 96.0, 1.0, WHITE);
+            scene::text(
+                quads,
+                atlas,
+                &format!(
+                    "{} / {}   CURRENT: {}",
+                    index + 1,
+                    crate::controller::ACTIONS.len(),
+                    current.label()
+                ),
+                32.0,
+                116.0,
+                0.75,
+                MUTED,
+            );
+            scene::text(quads, atlas, "ESC TO KEEP SAME", 32.0, 138.0, 0.75, WHITE);
+            scene::text(
+                quads,
+                atlas,
+                "RELEASE ALL CONTROLS BEFORE NEXT BUTTON.",
+                32.0,
+                158.0,
+                0.75,
+                MUTED,
+            );
+        }
     }
 }
 
@@ -248,7 +321,7 @@ fn row(index: usize, settings: &Settings) -> (String, String) {
                 .map_or("UNLIMITED".into(), |cap| cap.to_string()),
         ),
         6 => ("FULLSCREEN", "ENTER".into()),
-        FIRST_BINDING..RESTORE => {
+        FIRST_BINDING..CONFIGURE_CONTROLLER => {
             let (action, label) = ACTIONS[index - FIRST_BINDING];
             let value = settings.bindings.get(action).cloned().unwrap_or_default();
             (
@@ -260,6 +333,7 @@ fn row(index: usize, settings: &Settings) -> (String, String) {
                 },
             )
         }
+        CONFIGURE_CONTROLLER => ("CONFIGURE CONTROLLER", "ENTER".into()),
         RESTORE => ("RESTORE DEFAULTS", "ENTER".into()),
         _ => ("BACK", "ENTER".into()),
     };
@@ -277,6 +351,132 @@ fn short(value: &str, length: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn enter_controller_wizard(menu: &mut SettingsUi, settings: &mut Settings) {
+        for _ in 0..CONFIGURE_CONTROLLER {
+            assert_eq!(
+                menu.key(KeyCode::ArrowDown, settings),
+                SettingsCommand::None
+            );
+        }
+        assert_eq!(menu.key(KeyCode::Enter, settings), SettingsCommand::None);
+        assert!(menu.awaiting_controller_binding());
+        assert!(menu.awaiting_binding());
+    }
+
+    #[test]
+    fn controller_wizard_captures_defaults_in_source_order_and_returns_to_menu() {
+        let mut menu = SettingsUi::new();
+        let mut settings = Settings::default();
+        let keyboard = settings.bindings.clone();
+        let defaults = settings.controller_bindings.clone();
+        enter_controller_wizard(&mut menu, &mut settings);
+        for (index, (action, _, button)) in crate::controller::ACTIONS.iter().enumerate() {
+            assert_eq!(
+                menu.controller(*button, &mut settings),
+                SettingsCommand::Changed
+            );
+            assert_eq!(settings.controller_bindings[*action], button.name());
+            assert_eq!(
+                menu.awaiting_controller_binding(),
+                index + 1 < crate::controller::ACTIONS.len()
+            );
+        }
+        assert!(!menu.awaiting_binding());
+        assert_eq!(settings.controller_bindings, defaults);
+        assert_eq!(settings.bindings, keyboard);
+        settings.controller_bindings.clear();
+        menu.key(KeyCode::ArrowDown, &mut settings);
+        assert_eq!(
+            menu.key(KeyCode::Enter, &mut settings),
+            SettingsCommand::Changed
+        );
+        assert_eq!(settings.controller_bindings, defaults);
+        menu.key(KeyCode::ArrowDown, &mut settings);
+        assert_eq!(
+            menu.key(KeyCode::Enter, &mut settings),
+            SettingsCommand::Back
+        );
+    }
+
+    #[test]
+    fn controller_wizard_ignores_keyboard_and_escape_keeps_each_saved_mapping() {
+        let mut menu = SettingsUi::new();
+        let mut settings = Settings::default();
+        let original = settings.controller_bindings.clone();
+        let keyboard = settings.bindings.clone();
+        enter_controller_wizard(&mut menu, &mut settings);
+        for index in 0..crate::controller::ACTIONS.len() {
+            for key in [
+                KeyCode::Enter,
+                KeyCode::NumpadEnter,
+                KeyCode::Space,
+                KeyCode::ArrowUp,
+                KeyCode::ArrowDown,
+                KeyCode::ArrowLeft,
+                KeyCode::ArrowRight,
+                KeyCode::Delete,
+                KeyCode::Backspace,
+                KeyCode::KeyA,
+                KeyCode::F4,
+            ] {
+                assert_eq!(menu.key(key, &mut settings), SettingsCommand::None);
+                assert_eq!(menu.controller_binding, Some(index));
+            }
+            assert_eq!(
+                menu.key(KeyCode::Escape, &mut settings),
+                SettingsCommand::None
+            );
+            assert_eq!(
+                menu.awaiting_controller_binding(),
+                index + 1 < crate::controller::ACTIONS.len()
+            );
+            assert_eq!(settings.controller_bindings, original);
+            assert_eq!(settings.bindings, keyboard);
+        }
+        assert!(!menu.awaiting_binding());
+        assert_eq!(
+            menu.key(KeyCode::Escape, &mut settings),
+            SettingsCommand::Back
+        );
+    }
+
+    #[test]
+    fn controller_wizard_accepts_duplicates_and_ignores_buttons_outside_capture() {
+        let mut menu = SettingsUi::new();
+        let mut settings = Settings::default();
+        let button = crate::controller::ACTIONS[0].2;
+        let original = settings.controller_bindings.clone();
+        assert_eq!(
+            menu.controller(button, &mut settings),
+            SettingsCommand::None
+        );
+        assert_eq!(settings.controller_bindings, original);
+        enter_controller_wizard(&mut menu, &mut settings);
+        for (action, _, _) in crate::controller::ACTIONS.iter().take(2) {
+            assert_eq!(
+                menu.controller(button, &mut settings),
+                SettingsCommand::Changed
+            );
+            assert_eq!(settings.controller_bindings[*action], button.name());
+        }
+        for _ in 2..crate::controller::ACTIONS.len() {
+            menu.key(KeyCode::Escape, &mut settings);
+        }
+        assert!(!menu.awaiting_binding());
+        let saved = settings.controller_bindings.clone();
+        assert_eq!(
+            menu.controller(button, &mut settings),
+            SettingsCommand::None
+        );
+        assert_eq!(settings.controller_bindings, saved);
+        assert_eq!(
+            row(CONFIGURE_CONTROLLER, &settings).0,
+            "CONFIGURE CONTROLLER"
+        );
+        assert_eq!(row(RESTORE, &settings).0, "RESTORE DEFAULTS");
+        assert_eq!(row(BACK, &settings).0, "BACK");
+    }
 
     #[test]
     fn bindings_can_capture_navigation_keys_cancel_and_unbind() {

@@ -1,5 +1,6 @@
 //! Keyboard/controller state and tick-consumed button edges.
 
+use crate::controller::{self, Button as ControllerButton};
 use spelunky_core::InputFrame;
 use std::collections::{BTreeMap, HashSet};
 use winit::keyboard::KeyCode;
@@ -83,6 +84,10 @@ pub struct InputState {
     bindings: BTreeMap<String, Vec<KeyCode>>,
     gamepad_actions: Actions,
     gamepad_connected: bool,
+    controller_bindings: BTreeMap<String, String>,
+    controller_capture_held: bool,
+    controller_capture_blocked: bool,
+    controller_edges: Vec<ControllerButton>,
     blocked_gamepad_actions: Actions,
     keyboard_held: Actions,
     gamepad_held: Actions,
@@ -104,6 +109,10 @@ impl Default for InputState {
                 .collect(),
             gamepad_actions: Actions::default(),
             gamepad_connected: false,
+            controller_bindings: controller::default_bindings(),
+            controller_capture_held: false,
+            controller_capture_blocked: false,
+            controller_edges: Vec::new(),
             blocked_gamepad_actions: Actions::default(),
             keyboard_held: Actions::default(),
             gamepad_held: Actions::default(),
@@ -155,29 +164,103 @@ impl InputState {
         self.clear();
     }
 
+    pub fn set_controller_bindings(&mut self, bindings: &BTreeMap<String, String>) {
+        self.controller_bindings = controller::validated_bindings(bindings);
+        self.clear();
+    }
+
+    /// Raw physical controls are captured before menu navigation is translated
+    /// to keyboard keys. Classic accepts one control per all-neutral stroke.
+    pub fn controller_pressed(&mut self) -> Vec<ControllerButton> {
+        std::mem::take(&mut self.controller_edges)
+    }
+
+    fn controller_binding(&self, action: &str) -> ControllerButton {
+        controller::parse(&self.controller_bindings[action]).expect("validated controller binding")
+    }
+
+    fn mapped_controller_actions(&self, held: u32) -> Actions {
+        let mut actions = Actions::default();
+        for (action, name, _) in ACTIONS {
+            if let Some(value) = self.controller_bindings.get(name) {
+                if let Some(button) = controller::parse(value) {
+                    actions.set(action, held & button.mask() != 0);
+                }
+            }
+        }
+        actions
+    }
+
+    fn portable_controller(&self, held: u32, directions: [bool; 4]) -> (Actions, u8) {
+        let [left, right, up, down] = directions;
+        let mut actions = self.mapped_controller_actions(held);
+        actions.set(Action::Left, left);
+        actions.set(Action::Right, right);
+        actions.set(Action::Up, up);
+        actions.set(Action::Down, down);
+        let mut ui = 0;
+        for (index, pressed) in [
+            up,
+            down,
+            left,
+            right,
+            held & ControllerButton::South.mask() != 0,
+            held & ControllerButton::East.mask() != 0,
+            held & self.controller_binding("start").mask() != 0,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if pressed {
+                ui |= 1 << index;
+            }
+        }
+        (actions, ui)
+    }
+
+    fn accept_controller_capture(&mut self, held: u32) {
+        if held == 0 {
+            self.controller_capture_blocked = false;
+            self.controller_capture_held = false;
+        } else if !self.controller_capture_held && !self.controller_capture_blocked {
+            // Source scans physical buttons before its two trigger axes.
+            let button = controller::ALL
+                .into_iter()
+                .filter(|button| {
+                    !matches!(
+                        button,
+                        ControllerButton::LeftTrigger | ControllerButton::RightTrigger
+                    )
+                })
+                .chain([
+                    ControllerButton::LeftTrigger,
+                    ControllerButton::RightTrigger,
+                ])
+                .find(|button| held & button.mask() != 0);
+            if let Some(button) = button {
+                self.controller_edges.push(button);
+            }
+            self.controller_capture_held = true;
+        }
+    }
+
     /// Source prompts select controller mode (`global.gamepadOn`), not the
     /// most recently used device. This port enables supported connected pads
-    /// automatically, and labels their fixed mappings by physical position.
+    /// automatically, and labels their current mappings by physical position.
     pub fn action_label(&self, action: &str) -> String {
         if self.gamepad_connected {
-            let label = match action {
-                "left" => Some("LEFT"),
-                "right" => Some("RIGHT"),
-                "up" | "exit" => Some("UP"),
-                "down" => Some("DOWN"),
-                "jump" => Some("SOUTH BUTTON"),
-                "attack" => Some("WEST BUTTON"),
-                "bomb" => Some("LEFT TRIGGER"),
-                "rope" => Some("RIGHT TRIGGER"),
-                "run" => Some("LEFT SHOULDER"),
-                "cycle" => Some("RIGHT SHOULDER"),
-                "flare" => Some("NORTH BUTTON"),
-                "pay" => Some("SELECT"),
-                "pause" => Some("START"),
-                _ => None,
-            };
-            if let Some(label) = label {
-                return label.into();
+            let controller_action = if action == "pause" { "start" } else { action };
+            if let Some(value) = self.controller_bindings.get(controller_action) {
+                if let Some(button) = controller::parse(value) {
+                    return button.label().into();
+                }
+            }
+            match action {
+                "left" => return "LEFT".into(),
+                "right" => return "RIGHT".into(),
+                "up" | "exit" => return "UP".into(),
+                "down" => return "DOWN".into(),
+                _ => {}
             }
         }
         let Some(key) = self.bindings.get(action).and_then(|keys| keys.first()) else {
@@ -215,6 +298,7 @@ impl InputState {
     pub fn clear_edges(&mut self) {
         self.frame.clear_edges();
         self.ui_edges.clear();
+        self.controller_edges.clear();
     }
 
     pub fn clear(&mut self) {
@@ -225,6 +309,7 @@ impl InputState {
         // on return as a new menu confirmation or gameplay action.
         self.blocked_gamepad_ui = u8::MAX;
         self.blocked_gamepad_actions = Actions(u16::MAX);
+        self.controller_capture_blocked = true;
     }
 
     /// Clear gameplay at screen transitions while keeping controller menu
@@ -240,6 +325,7 @@ impl InputState {
         self.gamepad_held = Actions::default();
         self.frame = InputFrame::default();
         self.ui_edges.clear();
+        self.controller_edges.clear();
     }
 
     /// Controller navigation edges only; the host handles keyboard menu keys.
@@ -325,28 +411,32 @@ impl InputState {
     pub fn update_gamepad(&mut self) {
         let Some(mut gilrs) = self.gilrs.take() else {
             self.gamepad_connected = false;
+            self.accept_controller_capture(0);
             self.accept_gamepads(Actions::default(), 0);
             return;
         };
         // Sampling after every queued event preserves a press/release pair that
         // arrives between two presentation frames.
         while gilrs.next_event().is_some() {
-            let (actions, ui, connected) = Self::native_gamepads(&gilrs);
+            let (actions, ui, connected, capture) = self.native_gamepads(&gilrs);
             self.gamepad_connected = connected;
+            self.accept_controller_capture(capture);
             self.accept_gamepads(actions, ui);
         }
-        let (actions, ui, connected) = Self::native_gamepads(&gilrs);
+        let (actions, ui, connected, capture) = self.native_gamepads(&gilrs);
         self.gamepad_connected = connected;
+        self.accept_controller_capture(capture);
         self.accept_gamepads(actions, ui);
         self.gilrs = Some(gilrs);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn native_gamepads(gilrs: &gilrs::Gilrs) -> (Actions, u8, bool) {
+    fn native_gamepads(&self, gilrs: &gilrs::Gilrs) -> (Actions, u8, bool, u32) {
         use gilrs::{Axis, Button};
         let mut actions = Actions::default();
         let mut ui = 0;
         let mut connected = false;
+        let mut capture = 0;
         for (_, pad) in gilrs.gamepads() {
             if !pad.is_connected() {
                 continue;
@@ -358,37 +448,32 @@ impl InputState {
             let right = x > DEAD_ZONE || pad.is_pressed(Button::DPadRight);
             let up = y > DEAD_ZONE || pad.is_pressed(Button::DPadUp);
             let down = y < -DEAD_ZONE || pad.is_pressed(Button::DPadDown);
-            let jump = pad.is_pressed(Button::South);
-            actions.set(Action::Left, left);
-            actions.set(Action::Right, right);
-            actions.set(Action::Up, up);
-            actions.set(Action::Down, down);
-            actions.set(Action::Jump, jump);
-            actions.set(Action::Attack, pad.is_pressed(Button::West));
-            actions.set(Action::Bomb, pad.is_pressed(Button::LeftTrigger2));
-            actions.set(Action::Rope, pad.is_pressed(Button::RightTrigger2));
-            actions.set(Action::Run, pad.is_pressed(Button::LeftTrigger));
-            actions.set(Action::Cycle, pad.is_pressed(Button::RightTrigger));
-            actions.set(Action::Flare, pad.is_pressed(Button::North));
-            actions.set(Action::Pay, pad.is_pressed(Button::Select));
-            for (index, pressed) in [
-                up,
-                down,
-                left,
-                right,
-                jump,
-                pad.is_pressed(Button::East),
-                pad.is_pressed(Button::Start),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                if pressed {
-                    ui |= 1 << index;
+            let mut held = 0;
+            for button in controller::ALL {
+                let native = native_controller_button(button);
+                if pad.is_pressed(native) {
+                    held |= button.mask();
+                }
+                let capturing = if matches!(
+                    button,
+                    ControllerButton::LeftTrigger | ControllerButton::RightTrigger
+                ) {
+                    pad.button_data(native)
+                        .is_some_and(|data| data.value() > 0.1)
+                        || pad.is_pressed(native)
+                } else {
+                    pad.is_pressed(native)
+                };
+                if capturing {
+                    capture |= button.mask();
                 }
             }
+            let (mapped_actions, mapped_ui) =
+                self.portable_controller(held, [left, right, up, down]);
+            actions.0 |= mapped_actions.0;
+            ui |= mapped_ui;
         }
-        (actions, ui, connected)
+        (actions, ui, connected, capture)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -397,6 +482,7 @@ impl InputState {
         let mut actions = Actions::default();
         let mut ui = 0;
         let mut connected = false;
+        let mut capture = 0;
         if let Some(pads) =
             web_sys::window().and_then(|window| window.navigator().get_gamepads().ok())
         {
@@ -423,31 +509,60 @@ impl InputState {
                 let right = x > DEAD_ZONE || button(15);
                 let up = y < -DEAD_ZONE || button(12);
                 let down = y > DEAD_ZONE || button(13);
-                let jump = button(0);
-                actions.set(Action::Left, left);
-                actions.set(Action::Right, right);
-                actions.set(Action::Up, up);
-                actions.set(Action::Down, down);
-                actions.set(Action::Jump, jump);
-                actions.set(Action::Attack, button(2));
-                actions.set(Action::Bomb, button(6));
-                actions.set(Action::Rope, button(7));
-                actions.set(Action::Run, button(4));
-                actions.set(Action::Cycle, button(5));
-                actions.set(Action::Flare, button(3));
-                actions.set(Action::Pay, button(8));
-                for (index, pressed) in [up, down, left, right, jump, button(1), button(9)]
-                    .into_iter()
-                    .enumerate()
-                {
-                    if pressed {
-                        ui |= 1 << index;
+                let mut held = 0;
+                for physical in controller::ALL {
+                    let index = physical as u32;
+                    if button(index) {
+                        held |= physical.mask();
+                    }
+                    let capturing = if matches!(
+                        physical,
+                        ControllerButton::LeftTrigger | ControllerButton::RightTrigger
+                    ) {
+                        buttons
+                            .get(index)
+                            .dyn_into::<web_sys::GamepadButton>()
+                            .is_ok_and(|button| button.pressed() || button.value() > 0.1)
+                    } else {
+                        button(index)
+                    };
+                    if capturing {
+                        capture |= physical.mask();
                     }
                 }
+                let (mapped_actions, mapped_ui) =
+                    self.portable_controller(held, [left, right, up, down]);
+                actions.0 |= mapped_actions.0;
+                ui |= mapped_ui;
             }
         }
         self.gamepad_connected = connected;
+        self.accept_controller_capture(capture);
         self.accept_gamepads(actions, ui);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn native_controller_button(button: ControllerButton) -> gilrs::Button {
+    use gilrs::Button;
+    match button {
+        ControllerButton::South => Button::South,
+        ControllerButton::East => Button::East,
+        ControllerButton::West => Button::West,
+        ControllerButton::North => Button::North,
+        ControllerButton::LeftShoulder => Button::LeftTrigger,
+        ControllerButton::RightShoulder => Button::RightTrigger,
+        ControllerButton::LeftTrigger => Button::LeftTrigger2,
+        ControllerButton::RightTrigger => Button::RightTrigger2,
+        ControllerButton::Select => Button::Select,
+        ControllerButton::Start => Button::Start,
+        ControllerButton::LeftStick => Button::LeftThumb,
+        ControllerButton::RightStick => Button::RightThumb,
+        ControllerButton::DPadUp => Button::DPadUp,
+        ControllerButton::DPadDown => Button::DPadDown,
+        ControllerButton::DPadLeft => Button::DPadLeft,
+        ControllerButton::DPadRight => Button::DPadRight,
+        ControllerButton::Mode => Button::Mode,
     }
 }
 
@@ -558,6 +673,179 @@ fn parse_key(name: &str) -> Option<KeyCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn remap_sample(input: &mut InputState, held: u32) {
+        let directions = [
+            ControllerButton::DPadLeft,
+            ControllerButton::DPadRight,
+            ControllerButton::DPadUp,
+            ControllerButton::DPadDown,
+        ]
+        .map(|button| held & button.mask() != 0);
+        let (actions, ui) = input.portable_controller(held, directions);
+        input.accept_controller_capture(held);
+        input.accept_gamepads(actions, ui);
+    }
+
+    #[test]
+    fn controller_remap_defaults_preserve_every_ordinary_button_and_menu_edge() {
+        let mut input = InputState::default();
+        for button in controller::ALL {
+            remap_sample(&mut input, 0);
+            input.take_tick();
+            input.ui_pressed();
+            remap_sample(&mut input, button.mask());
+            let tick = input.take_tick();
+            assert_eq!(tick.jump, button == ControllerButton::South);
+            assert_eq!(tick.jump_pressed, button == ControllerButton::South);
+            assert_eq!(tick.attack, button == ControllerButton::West);
+            assert_eq!(tick.attack_pressed, button == ControllerButton::West);
+            assert_eq!(
+                tick.cycle_pressed,
+                button == ControllerButton::RightShoulder
+            );
+            assert_eq!(tick.run, button == ControllerButton::LeftShoulder);
+            assert_eq!(tick.bomb_pressed, button == ControllerButton::LeftTrigger);
+            assert_eq!(tick.rope_pressed, button == ControllerButton::RightTrigger);
+            assert_eq!(tick.flare_pressed, button == ControllerButton::North);
+            assert_eq!(tick.pay_pressed, button == ControllerButton::Select);
+            assert_eq!(tick.left, button == ControllerButton::DPadLeft);
+            assert_eq!(tick.right, button == ControllerButton::DPadRight);
+            assert_eq!(tick.up, button == ControllerButton::DPadUp);
+            assert_eq!(tick.down, button == ControllerButton::DPadDown);
+            let expected = match button {
+                ControllerButton::South => vec![UiButton::Confirm],
+                ControllerButton::East => vec![UiButton::Cancel],
+                ControllerButton::Start => vec![UiButton::Pause],
+                ControllerButton::DPadLeft => vec![UiButton::Left],
+                ControllerButton::DPadRight => vec![UiButton::Right],
+                ControllerButton::DPadUp => vec![UiButton::Up],
+                ControllerButton::DPadDown => vec![UiButton::Down],
+                _ => vec![],
+            };
+            assert_eq!(input.ui_pressed(), expected);
+            remap_sample(&mut input, button.mask());
+            let repeat = input.take_tick();
+            assert!(!repeat.jump_pressed && !repeat.attack_pressed && !repeat.pay_pressed);
+            assert!(input.ui_pressed().is_empty());
+        }
+    }
+
+    #[test]
+    fn controller_remap_changes_gameplay_and_start_without_changing_fixed_menu_confirm() {
+        let mut input = InputState::default();
+        input.set_controller_bindings(&BTreeMap::from([
+            ("jump".into(), "East".into()),
+            ("attack".into(), "South".into()),
+            ("start".into(), "Mode".into()),
+        ]));
+        remap_sample(&mut input, 0);
+        remap_sample(&mut input, ControllerButton::East.mask());
+        let tick = input.take_tick();
+        assert!(tick.jump && tick.jump_pressed && !tick.attack);
+        assert_eq!(input.ui_pressed(), vec![UiButton::Cancel]);
+        remap_sample(&mut input, 0);
+        input.take_tick();
+        remap_sample(&mut input, ControllerButton::South.mask());
+        let tick = input.take_tick();
+        assert!(tick.attack && tick.attack_pressed && !tick.jump);
+        assert_eq!(input.ui_pressed(), vec![UiButton::Confirm]);
+        remap_sample(&mut input, 0);
+        remap_sample(&mut input, ControllerButton::Start.mask());
+        assert!(input.ui_pressed().is_empty());
+        remap_sample(&mut input, 0);
+        remap_sample(&mut input, ControllerButton::Mode.mask());
+        assert_eq!(input.ui_pressed(), vec![UiButton::Pause]);
+        input.gamepad_connected = true;
+        assert_eq!(input.action_label("attack"), "SOUTH BUTTON");
+        assert_eq!(input.action_label("pause"), "MODE");
+        input.gamepad_connected = false;
+        assert_eq!(input.action_label("attack"), "X");
+    }
+
+    #[test]
+    fn controller_remap_preserves_independent_keyboard_release_and_duplicate_actions() {
+        let mut input = InputState::default();
+        input.set_controller_bindings(&BTreeMap::from([
+            ("attack".into(), "East".into()),
+            ("jump".into(), "East".into()),
+        ]));
+        remap_sample(&mut input, 0);
+        input.key(KeyCode::KeyX, true, false);
+        input.take_tick();
+        remap_sample(&mut input, ControllerButton::East.mask());
+        let tick = input.take_tick();
+        assert!(tick.attack && tick.attack_pressed && tick.jump && tick.jump_pressed);
+        remap_sample(&mut input, 0);
+        let tick = input.take_tick();
+        assert!(tick.attack && tick.attack_released && tick.jump_released && !tick.jump);
+        assert!(!input.take_tick().attack_released);
+        remap_sample(&mut input, ControllerButton::East.mask());
+        input.take_tick();
+        input.key(KeyCode::KeyX, false, false);
+        let tick = input.take_tick();
+        assert!(tick.attack && tick.attack_released && tick.jump);
+    }
+
+    #[test]
+    fn controller_remap_capture_requires_all_neutral_and_prioritizes_buttons_before_triggers() {
+        let mut input = InputState::default();
+        let first = ControllerButton::South.mask() | ControllerButton::LeftTrigger.mask();
+        input.accept_controller_capture(first);
+        assert_eq!(input.controller_pressed(), vec![ControllerButton::South]);
+        input.accept_controller_capture(first | ControllerButton::West.mask());
+        input.accept_controller_capture(ControllerButton::West.mask());
+        assert!(input.controller_pressed().is_empty());
+        input.accept_controller_capture(0);
+        input.accept_controller_capture(ControllerButton::LeftTrigger.mask());
+        assert_eq!(
+            input.controller_pressed(),
+            vec![ControllerButton::LeftTrigger]
+        );
+        input.accept_controller_capture(0);
+        input.accept_controller_capture(ControllerButton::RightTrigger.mask());
+        assert_eq!(
+            input.controller_pressed(),
+            vec![ControllerButton::RightTrigger]
+        );
+        assert!(input.controller_pressed().is_empty());
+    }
+
+    #[test]
+    fn controller_remap_capture_focus_and_screen_clear_require_release() {
+        let mut input = InputState::default();
+        let held = ControllerButton::South.mask();
+        input.clear();
+        input.accept_controller_capture(held);
+        assert!(input.controller_pressed().is_empty());
+        input.accept_controller_capture(0);
+        input.accept_controller_capture(held);
+        input.clear_edges();
+        input.accept_controller_capture(held);
+        assert!(input.controller_pressed().is_empty());
+        input.accept_controller_capture(0);
+        input.accept_controller_capture(held);
+        input.clear_gameplay();
+        input.accept_controller_capture(held);
+        assert!(input.controller_pressed().is_empty());
+        input.accept_controller_capture(0);
+        input.accept_controller_capture(held);
+        assert_eq!(input.controller_pressed(), vec![ControllerButton::South]);
+    }
+
+    #[test]
+    fn controller_remap_capture_retains_short_strokes_and_consumes_them_once() {
+        let mut input = InputState::default();
+        input.accept_controller_capture(ControllerButton::South.mask());
+        input.accept_controller_capture(0);
+        input.accept_controller_capture(ControllerButton::West.mask());
+        input.accept_controller_capture(0);
+        assert_eq!(
+            input.controller_pressed(),
+            vec![ControllerButton::South, ControllerButton::West]
+        );
+        assert!(input.controller_pressed().is_empty());
+    }
 
     fn mixed_source_floor() -> spelunky_core::Game {
         use spelunky_core::{Area, Game, PlayerState, RulesPreset, Vec2, World};

@@ -208,6 +208,7 @@ impl App {
         let store = Store::load();
         let mut input = InputState::default();
         input.set_bindings(&store.data.settings.bindings);
+        input.set_controller_bindings(&store.data.settings.controller_bindings);
         let mut game = Game::shell(wall_seed(), store.data.settings.rules);
         hydrate_run(&mut game, &store.data);
         spelunky_core::opening::begin_intro(&mut game);
@@ -314,6 +315,8 @@ impl App {
     fn settings_changed(&mut self) {
         let settings = &self.store.data.settings;
         self.input.set_bindings(&settings.bindings);
+        self.input
+            .set_controller_bindings(&settings.controller_bindings);
         self.audio
             .set_volumes(settings.music_volume, settings.effects_volume);
         if let Some(renderer) = &mut self.renderer {
@@ -1039,11 +1042,28 @@ impl App {
         if self.focused && !self.occluded {
             self.input.update_gamepad();
         }
-        let buttons = self.input.ui_pressed();
+        let controller_buttons = self.input.controller_pressed();
+        let mut buttons = self.input.ui_pressed();
+        if self.screen == Screen::Settings
+            && settings_controller_frame(
+                &mut self.settings_ui,
+                &mut self.store.data.settings,
+                &controller_buttons,
+                &mut buttons,
+            )
+        {
+            self.settings_changed();
+        }
         if !buttons.is_empty() {
             self.audio.unlock();
         }
+        let controller_screen = self.screen;
         for button in buttons {
+            // One physical control may be both Confirm/Cancel and remapped
+            // Start. Its remaining edges belong to the screen it came from.
+            if self.screen != controller_screen {
+                break;
+            }
             if self.screen == Screen::Donation {
                 match button {
                     UiButton::Confirm => self.donation_confirm = true,
@@ -1091,17 +1111,11 @@ impl App {
                 continue;
             }
             if self.screen != Screen::Playing {
-                self.key(
-                    match button {
-                        UiButton::Up => KeyCode::ArrowUp,
-                        UiButton::Down => KeyCode::ArrowDown,
-                        UiButton::Left => KeyCode::ArrowLeft,
-                        UiButton::Right => KeyCode::ArrowRight,
-                        UiButton::Confirm => KeyCode::Enter,
-                        UiButton::Cancel | UiButton::Pause => KeyCode::Escape,
-                    },
-                    None,
-                )
+                let capturing =
+                    self.screen == Screen::Settings && self.settings_ui.awaiting_binding();
+                if let Some(key) = controller_menu_key(button, capturing) {
+                    self.key(key, None);
+                }
             }
         }
         if self.screen == Screen::Donation && self.focused && !self.occluded {
@@ -2197,6 +2211,42 @@ fn source_elapsed_ms(game: &Game) -> u64 {
     game.source_elapsed_ms()
 }
 
+fn controller_menu_key(button: UiButton, capturing: bool) -> Option<KeyCode> {
+    if capturing {
+        return None;
+    }
+    Some(match button {
+        UiButton::Up => KeyCode::ArrowUp,
+        UiButton::Down => KeyCode::ArrowDown,
+        UiButton::Left => KeyCode::ArrowLeft,
+        UiButton::Right => KeyCode::ArrowRight,
+        UiButton::Confirm => KeyCode::Enter,
+        UiButton::Cancel | UiButton::Pause => KeyCode::Escape,
+    })
+}
+
+fn settings_controller_frame(
+    ui: &mut SettingsUi,
+    settings: &mut crate::storage::Settings,
+    physical: &[crate::controller::Button],
+    menu: &mut Vec<UiButton>,
+) -> bool {
+    let capture = ui.awaiting_controller_binding();
+    let awaiting = ui.awaiting_binding();
+    let mut changed = false;
+    if capture {
+        for &button in physical {
+            changed |= ui.controller(button, settings) == SettingsCommand::Changed;
+        }
+    }
+    // Controller navigation never masquerades as physical keyboard input.
+    // Suppress the completing capture too, even after the wizard closes.
+    if awaiting {
+        menu.clear();
+    }
+    changed
+}
+
 fn apply_cinematic_start(input: &mut spelunky_core::InputFrame, pending: &mut bool) {
     input.start_pressed |= std::mem::take(pending);
 }
@@ -2857,6 +2907,169 @@ fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
 }
 #[cfg(test)]
 mod tests {
+    fn controller_remap_enter_wizard(ui: &mut SettingsUi, settings: &mut crate::storage::Settings) {
+        for _ in 0..21 {
+            ui.key(KeyCode::ArrowDown, settings);
+        }
+        ui.key(KeyCode::Enter, settings);
+        assert!(ui.awaiting_controller_binding());
+    }
+
+    #[test]
+    fn controller_remap_host_suppresses_later_menu_edges_in_the_capture_entry_frame() {
+        for row in [7, 21] {
+            let mut ui = SettingsUi::new();
+            let mut settings = crate::storage::Settings::default();
+            for _ in 0..row {
+                ui.key(KeyCode::ArrowDown, &mut settings);
+            }
+            let keyboard = settings.bindings.clone();
+            let controller = settings.controller_bindings.clone();
+            for button in [
+                UiButton::Confirm,
+                UiButton::Cancel,
+                UiButton::Up,
+                UiButton::Confirm,
+            ] {
+                if let Some(key) = controller_menu_key(button, ui.awaiting_binding()) {
+                    ui.key(key, &mut settings);
+                }
+            }
+            assert!(ui.awaiting_binding());
+            assert_eq!(settings.bindings, keyboard);
+            assert_eq!(settings.controller_bindings, controller);
+            if row == 21 {
+                ui.controller(crate::controller::Button::East, &mut settings);
+                assert_eq!(
+                    settings.controller_bindings["jump"], "East",
+                    "Cancel skipped Jump"
+                );
+            } else {
+                ui.key(KeyCode::KeyJ, &mut settings);
+                assert_eq!(settings.bindings["left"], "KeyJ");
+            }
+        }
+    }
+
+    #[test]
+    fn controller_remap_host_keeps_ordinary_menu_navigation_unchanged() {
+        let mut ui = SettingsUi::new();
+        let mut settings = crate::storage::Settings::default();
+        let before = serde_json::to_value(&settings).unwrap();
+        let original = vec![
+            UiButton::Up,
+            UiButton::Down,
+            UiButton::Left,
+            UiButton::Right,
+            UiButton::Confirm,
+            UiButton::Cancel,
+            UiButton::Pause,
+        ];
+        let mut menu = original.clone();
+        assert!(!settings_controller_frame(
+            &mut ui,
+            &mut settings,
+            &[crate::controller::Button::South],
+            &mut menu
+        ));
+        assert_eq!(menu, original);
+        assert_eq!(serde_json::to_value(&settings).unwrap(), before);
+    }
+
+    #[test]
+    fn controller_remap_host_does_not_convert_controller_menu_edges_to_keyboard_bindings() {
+        let mut ui = SettingsUi::new();
+        let mut settings = crate::storage::Settings::default();
+        for _ in 0..7 {
+            ui.key(KeyCode::ArrowDown, &mut settings);
+        }
+        ui.key(KeyCode::Enter, &mut settings);
+        assert!(ui.awaiting_binding() && !ui.awaiting_controller_binding());
+        let before = settings.bindings.clone();
+        let mut menu = vec![UiButton::Confirm, UiButton::Up, UiButton::Cancel];
+        assert!(!settings_controller_frame(
+            &mut ui,
+            &mut settings,
+            &[crate::controller::Button::West],
+            &mut menu
+        ));
+        assert!(menu.is_empty());
+        assert_eq!(settings.bindings, before);
+        assert!(ui.awaiting_binding());
+        assert_eq!(
+            ui.key(KeyCode::KeyJ, &mut settings),
+            SettingsCommand::Changed
+        );
+        assert_eq!(settings.bindings["left"], "KeyJ");
+    }
+
+    #[test]
+    fn controller_remap_host_consumes_capturing_and_completing_menu_edges_and_persists() {
+        let mut ui = SettingsUi::new();
+        let mut settings = crate::storage::Settings::default();
+        let keyboard = settings.bindings.clone();
+        controller_remap_enter_wizard(&mut ui, &mut settings);
+        let mut menu = vec![UiButton::Cancel];
+        assert!(settings_controller_frame(
+            &mut ui,
+            &mut settings,
+            &[crate::controller::Button::East],
+            &mut menu
+        ));
+        assert!(menu.is_empty());
+        assert_eq!(settings.controller_bindings["jump"], "East");
+        for _ in 1..8 {
+            ui.key(KeyCode::Escape, &mut settings);
+        }
+        let mut menu = vec![UiButton::Pause, UiButton::Confirm];
+        assert!(settings_controller_frame(
+            &mut ui,
+            &mut settings,
+            &[crate::controller::Button::Mode],
+            &mut menu
+        ));
+        assert!(!ui.awaiting_binding());
+        assert!(menu.is_empty(), "completion leaked a menu activation");
+        assert_eq!(settings.controller_bindings["start"], "Mode");
+        assert_eq!(settings.bindings, keyboard);
+        let mut data = crate::storage::SaveData::default();
+        data.settings = settings;
+        let decoded = crate::storage::SaveData::from_json(&data.to_json().unwrap()).unwrap();
+        assert_eq!(decoded.settings.controller_bindings["jump"], "East");
+        assert_eq!(decoded.settings.controller_bindings["start"], "Mode");
+        assert_eq!(decoded.settings.bindings, keyboard);
+    }
+
+    #[test]
+    fn controller_remap_host_does_not_capture_the_button_that_opened_the_wizard() {
+        let mut ui = SettingsUi::new();
+        let mut settings = crate::storage::Settings::default();
+        for _ in 0..21 {
+            ui.key(KeyCode::ArrowDown, &mut settings);
+        }
+        let before = settings.controller_bindings.clone();
+        let mut menu = vec![UiButton::Confirm];
+        assert!(!settings_controller_frame(
+            &mut ui,
+            &mut settings,
+            &[crate::controller::Button::South],
+            &mut menu
+        ));
+        assert_eq!(menu, vec![UiButton::Confirm]);
+        // This is the same ordinary Confirm-to-Enter path used by the host.
+        ui.key(KeyCode::Enter, &mut settings);
+        assert!(ui.awaiting_controller_binding());
+        let mut menu = vec![];
+        assert!(!settings_controller_frame(
+            &mut ui,
+            &mut settings,
+            &[],
+            &mut menu
+        ));
+        assert_eq!(settings.controller_bindings, before);
+        assert!(ui.awaiting_controller_binding());
+    }
+
     #[test]
     fn ordinary_fatal_collision_stops_music_at_player_death_step_but_ankh_keeps_it_playing() {
         for has_ankh in [false, true] {
