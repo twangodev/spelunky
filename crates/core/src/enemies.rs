@@ -883,7 +883,7 @@ pub(super) fn solid_mask(world: &World, r: Rect, excluded: u64) -> bool {
 }
 
 /// Classic moveTo quantizes fractional speeds by global time, and resolves X first.
-/// Movable-solid pushing and one-way platforms are not represented here yet.
+/// Source canPushMoveableSolids/canLandOnPlatforms exclude enemy bodies.
 pub(super) fn move_body(world: &World, e: &mut Entity, gravity: f64) -> (bool, bool) {
     fn collides(world: &World, e: &Entity, r: Rect) -> bool {
         solid_mask(world, r, e.id)
@@ -960,14 +960,59 @@ pub(super) fn steer_toward(e: &mut Entity, target: Vec2, speed: f64) {
     e.facing = if target.x < origin.x { -1 } else { 1 };
 }
 
-/// scrCheckCollisions uses the collision flags captured before narrowing a
-/// stunned body, and retains its impact speed until applying the bounce.
-pub(super) fn settle_body(world: &World, e: &mut Entity, impact_y: f64) {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct BodyContacts {
+    pub left: bool,
+    pub right: bool,
+    pub top: bool,
+    pub bottom: bool,
+}
+
+/// Capture the source isCollision*(1) lines before AI and scrCheckCollisions
+/// change the receiver's bounds. Query active oSolid descendants, including held ones.
+pub(super) fn body_contacts(world: &World, e: &Entity) -> BodyContacts {
     let b = e.bounds();
-    let left = solid_mask(world, Rect::new(b.x - 1.0, b.y, 1.0, b.h), e.id);
-    let right = solid_mask(world, Rect::new(b.x + b.w, b.y, 1.0, b.h), e.id);
-    let top = solid_mask(world, Rect::new(b.x, b.y - 1.0, b.w, 1.0), e.id);
-    let bottom = solid_mask(world, Rect::new(b.x, b.y + b.h, b.w, 1.0), e.id);
+    let lb = b.x.round_ties_even();
+    let rb = (b.x + b.w - 1.0).round_ties_even();
+    let tb = b.y.round_ties_even();
+    let bb = (b.y + b.h - 1.0).round_ties_even();
+    let line = |first, second| {
+        world.tiles_line_precision(first, second, "oSolid", crate::CollisionPrecision::Precise)
+            || world.entities.iter().any(|other| {
+                other.id != e.id
+                    && other.alive
+                    && other.engine_active
+                    && crate::catalog::is_a(&other.object, "oSolid")
+                    && other.collision_mask().intersects_axis_line(
+                        first,
+                        second,
+                        crate::CollisionPrecision::Precise,
+                    )
+            })
+    };
+    let left = (b.x - 1.0).round_ties_even();
+    let right = (b.x + b.w).round_ties_even();
+    let top = (b.y - 1.0).round_ties_even();
+    let bottom = (b.y + b.h).round_ties_even();
+    BodyContacts {
+        left: line(Vec2::new(left, tb), Vec2::new(left, bb)),
+        right: line(Vec2::new(right, tb), Vec2::new(right, bb)),
+        top: line(Vec2::new(lb, top), Vec2::new(rb, top)),
+        bottom: line(Vec2::new(lb, bottom), Vec2::new(rb, bottom)),
+    }
+}
+
+/// scrCheckCollisions consumes the flags captured before narrowing the body.
+pub(super) fn settle_body(e: &mut Entity, contacts: BodyContacts, impact_y: f64) {
+    let BodyContacts {
+        left,
+        right,
+        top,
+        bottom,
+    } = contacts;
+    // moveTo changes position only; keep the caller's post-gravity yVel
+    // even when its displacement was blocked against a ceiling.
+    e.vel.y = impact_y;
     for (key, value) in [
         ("collision_left", 2.0),
         ("collision_top", 6.0),
@@ -999,7 +1044,6 @@ pub(super) fn settle_body(world: &World, e: &mut Entity, impact_y: f64) {
         } else {
             e.vel.x * 0.3
         };
-        e.data.insert("bounced".into(), 1.0);
     }
 }
 
@@ -3478,5 +3522,120 @@ mod source_motion_regressions {
                 "ordinary left input must exit water and trigger PAUSE"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod body_settlement_contract_tests {
+    use super::*;
+
+    #[test]
+    fn captured_contacts_keep_source_branch_precedence_and_impact_velocity() {
+        for impact in [6.0_f64, -3.4, 0.6, 1.0, -1.0] {
+            for mask in 0_u8..16 {
+                let contacts = BodyContacts {
+                    left: mask & 1 != 0,
+                    right: mask & 2 != 0,
+                    top: mask & 4 != 0,
+                    bottom: mask & 8 != 0,
+                };
+                let mut body = Entity::new(1, "oYeti", Vec2::new(80.0, 80.0));
+                // A blocked movement adapter has changed its local y velocity;
+                // source settlement must consume the separately retained value.
+                body.vel = Vec2::new(4.0, 0.0);
+                settle_body(&mut body, contacts, impact);
+                let dx = if contacts.right {
+                    -1.0
+                } else if contacts.left {
+                    1.0
+                } else {
+                    0.0
+                };
+                let dy = f64::from(contacts.top && !contacts.bottom);
+                assert_eq!(body.pos, Vec2::new(80.0 + dx, 80.0 + dy));
+                let reflected = if contacts.left || contacts.right {
+                    -2.0
+                } else {
+                    4.0
+                };
+                let vy = if !contacts.bottom {
+                    impact
+                } else if impact > 1.0 {
+                    -impact * 0.5
+                } else if impact.abs() < 1.0 {
+                    0.0
+                } else {
+                    impact
+                };
+                assert_eq!(
+                    body.vel,
+                    Vec2::new(
+                        if contacts.bottom {
+                            reflected * 0.3
+                        } else {
+                            reflected
+                        },
+                        vy
+                    )
+                );
+                assert_eq!(
+                    body.bounds(),
+                    Rect::new(body.pos.x + 2.0, body.pos.y + 6.0, 12.0, 10.0)
+                );
+                assert_eq!(
+                    body.value("bounced"),
+                    0.0,
+                    "scrCheckCollisions does not own the landing latch"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn source_contacts_use_active_solid_ancestry_including_held_targets() {
+        let mut world = World::new(20, 16, Area::Ice, 1);
+        let body = Entity::new(900, "oYeti", Vec2::new(80.0, 80.0));
+        let b = body.bounds();
+        let id = world.spawn("oBlock", Vec2::new(b.x + b.w, b.y));
+        assert!(body_contacts(&world, &body).right);
+        world.entity_mut(id).unwrap().held = true;
+        assert!(
+            body_contacts(&world, &body).right,
+            "explicit oSolid query has no held exclusion"
+        );
+        world.entity_mut(id).unwrap().engine_active = false;
+        assert!(!body_contacts(&world, &body).right);
+        world.entity_mut(id).unwrap().engine_active = true;
+        world.entity_mut(id).unwrap().alive = false;
+        assert!(!body_contacts(&world, &body).right);
+        let id = world.spawn("oGoldNugget", Vec2::new(b.x + b.w, b.y));
+        world.entity_mut(id).unwrap().solid = true;
+        assert!(
+            !body_contacts(&world, &body).right,
+            "engine solid does not imply source oSolid family"
+        );
+    }
+
+    #[test]
+    fn source_contacts_are_captured_before_narrowing_and_later_world_changes() {
+        let mut world = World::new(20, 16, Area::Ice, 1);
+        let mut body = Entity::new(5, "oYeti", Vec2::new(80.0, 80.0));
+        for (key, value) in [
+            ("collision_left", 2.0),
+            ("collision_top", 0.0),
+            ("collision_right", 14.0),
+            ("collision_bottom", 16.0),
+        ] {
+            body.data.insert(key.into(), value);
+        }
+        let id = world.spawn("oBlock", Vec2::new(94.0, 65.0));
+        let contacts = body_contacts(&world, &body);
+        assert!(contacts.right, "one row of contact above narrowed top6");
+        world.entity_mut(id).unwrap().alive = false;
+        settle_body(&mut body, contacts, 0.6);
+        assert_eq!(
+            body.pos.x, 79.0,
+            "settlement consumes captured flags without querying the changed world"
+        );
     }
 }

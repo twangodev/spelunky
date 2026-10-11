@@ -274,8 +274,18 @@ fn yeti(game: &mut Game, e: &mut Entity) {
         super::inherited::gravity(e, 0.6)
     };
     let recovery_y = (e.vel.y + gravity).min(10.0);
-    let impact_y = recovery_y;
-    let (wall, floor) = move_body(&game.world, e, gravity);
+    let mut impact_y = recovery_y;
+    move_body(&game.world, e, gravity);
+    let contacts = super::body_contacts(&game.world, e);
+    // The source moveTo resolves displacement without clearing stored yVel.
+    e.vel.y = impact_y;
+    let wall = contacts.left || contacts.right;
+    let floor = contacts.bottom;
+    // Source clears supported non-STUNNED yVel before testing hp/status.
+    if floor && e.state != 98 {
+        e.vel.y = 0.0;
+        impact_y = 0.0;
+    }
     if e.state != 99 && e.state != 98 && e.health < 1 {
         e.state = 99;
     }
@@ -302,7 +312,7 @@ fn yeti(game: &mut Game, e: &mut Entity) {
         if e.vel.x > 0.0 || e.vel.y > 0.0 {
             e.state = 98;
         }
-        settle_yeti(e, wall, floor, impact_y);
+        settle_yeti(e, contacts, impact_y);
         if e.vel.x == 0.0 && e.vel.y == 0.0 && e.health < 1 {
             e.state = 99;
         }
@@ -352,7 +362,7 @@ fn yeti(game: &mut Game, e: &mut Entity) {
             }
         }
         if e.state >= 98 {
-            settle_yeti(e, wall, floor, impact_y);
+            settle_yeti(e, contacts, impact_y);
             if e.vel.x == 0.0 && e.vel.y == 0.0 && e.health < 1 {
                 e.state = 99;
             }
@@ -499,36 +509,8 @@ fn yeti(game: &mut Game, e: &mut Entity) {
     }
 }
 
-fn settle_yeti(e: &mut Entity, wall: bool, floor: bool, impact_y: f64) {
-    // scrCheckCollisions narrows the body after a knockdown and applies ground
-    // friction and a half-height bounce. Capture impact speed before move_body
-    // zeroes its resolved vertical collision velocity.
-    for (key, value) in [
-        ("collision_left", 2.0),
-        ("collision_top", 6.0),
-        ("collision_right", 14.0),
-        ("collision_bottom", 16.0),
-    ] {
-        e.data.insert(key.into(), value);
-    }
-    if wall {
-        e.vel.x *= -0.5;
-    }
-    if floor {
-        e.vel.y = if impact_y > 1.0 {
-            -impact_y * 0.5
-        } else if impact_y.abs() < 1.0 {
-            0.0
-        } else {
-            impact_y
-        };
-        e.vel.x = if e.vel.x.abs() < 0.1 {
-            0.0
-        } else {
-            e.vel.x * 0.3
-        };
-        e.data.insert("bounced".into(), 1.0);
-    }
+fn settle_yeti(e: &mut Entity, contacts: super::BodyContacts, impact_y: f64) {
+    super::settle_body(e, contacts, impact_y);
     e.vel.x = (e.vel.x.abs() - 0.1).max(0.0) * e.vel.x.signum();
     if e.vel.x.abs() < 0.5 {
         e.vel.x = 0.0;
@@ -3075,12 +3057,44 @@ mod tests {
         let id = g.world.spawn("oYeti", Vec2::new(64.0, 64.0));
         let yeti = g.world.entity_mut(id).unwrap();
         yeti.health = 0;
+        yeti.state = 98;
+        yeti.timer = 20;
         yeti.vel = Vec2::new(4.0, 3.0);
         g.step(&crate::InputFrame::default());
         let yeti = g.world.entity(id).unwrap();
         assert!((yeti.vel.x - 1.1).abs() < 1e-9);
         assert!((yeti.vel.y + 1.8).abs() < 1e-9);
         assert_eq!(yeti.bounds(), Rect::new(70.0, 70.0, 12.0, 10.0));
+        assert_eq!(
+            yeti.timer, 19,
+            "source already-STUNNED support decrements its counter"
+        );
+    }
+
+    #[test]
+    fn integrated_yeti_corpse_initial_idle_zeroes_supported_speed_before_hp_transition() {
+        let mut g = game();
+        g.player.pos = Vec2::new(200.0, 200.0);
+        for x in 0..20 {
+            g.world.set_tile(x, 5, "oBlock");
+        }
+        let id = g.world.spawn("oYeti", Vec2::new(64.0, 64.0));
+        let yeti = g.world.entity_mut(id).unwrap();
+        assert_eq!(yeti.state, 0, "source Create starts IDLE");
+        yeti.health = 0;
+        yeti.vel = Vec2::new(4.0, 3.0);
+        g.step(&crate::InputFrame::default());
+        let yeti = g.world.entity(id).unwrap();
+        assert!((yeti.vel.x - 1.1).abs() < 1e-9);
+        assert_eq!(
+            yeti.vel.y, 0.0,
+            "supported non-STUNNED yVel is cleared before hp transitions to DEAD"
+        );
+        assert_eq!(yeti.bounds(), Rect::new(70.0, 70.0, 12.0, 10.0));
+        assert_eq!(
+            yeti.state, 98,
+            "positive xVel reenters STUNNED after the DEAD branch"
+        );
     }
 
     #[test]

@@ -779,9 +779,22 @@ fn damsel(game: &mut Game, e: &mut Entity) {
 }
 
 fn shopkeeper(game: &mut Game, e: &mut Entity) {
-    let impact_y = (e.vel.y + super::inherited::gravity(e, 0.6)).min(10.0);
+    let mut impact_y = (e.vel.y
+        + if e.held {
+            0.0
+        } else {
+            super::inherited::gravity(e, 0.6)
+        })
+    .min(8.0);
     let (wall, grounded) = move_body(&game.world, e, if e.held { 0.0 } else { 0.6 });
     e.vel.y = e.vel.y.min(8.0);
+    let contacts = super::body_contacts(&game.world, e);
+    // The source moveTo resolves displacement without clearing stored yVel.
+    e.vel.y = impact_y;
+    if contacts.bottom && e.state != 98 {
+        e.vel.y = 0.0;
+        impact_y = 0.0;
+    }
     if (e.state >= 98 || !e.held)
         && game.world.solid_at(
             e.pos.x + 8.0,
@@ -881,7 +894,7 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
         if e.value("has_gun") > 0.0 {
             keeper_drop_gun(game, e);
         }
-        super::settle_body(&game.world, e, impact_y);
+        super::settle_body(e, contacts, impact_y);
         if e.vel.x == 0.0 && e.vel.y == 0.0 && e.health <= 0 {
             e.state = 99;
         }

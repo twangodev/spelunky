@@ -769,6 +769,9 @@ fn caveman(game: &mut Game, e: &mut Entity) {
         })
     .min(10.0);
     let (_, grounded) = move_body(&game.world, e, if e.held { 0.0 } else { 0.6 });
+    let contacts = super::body_contacts(&game.world, e);
+    // The source moveTo resolves displacement without clearing stored yVel.
+    e.vel.y = impact_y;
     let crush_y = if e.state >= 98 { 12.0 } else { 8.0 };
     if (!e.held || e.state >= 98) && crushed(game, e, Vec2::new(8.0, crush_y)) {
         blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 3);
@@ -782,7 +785,7 @@ fn caveman(game: &mut Game, e: &mut Entity) {
     if e.health < 1 && e.state < 98 {
         e.state = 99;
     }
-    if grounded && e.state != 98 {
+    if contacts.bottom && e.state != 98 {
         e.vel.y = 0.0;
         impact_y = 0.0;
     }
@@ -893,7 +896,7 @@ fn caveman(game: &mut Game, e: &mut Entity) {
         }
     }
     if e.state >= 98 {
-        super::settle_body(&game.world, e, impact_y);
+        super::settle_body(e, contacts, impact_y);
         // Source enters DEAD only after the collision settlement and before
         // ordinary friction. Credit occurs in the next Step's DEAD branch.
         if e.vel.x == 0.0 && e.vel.y == 0.0 && e.health < 1 {

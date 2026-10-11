@@ -491,8 +491,11 @@ fn hawk(game: &mut Game, e: &mut Entity) {
     } else {
         super::inherited::gravity(e, 0.6)
     };
-    let impact_y = (e.vel.y + gravity).min(10.0);
+    let mut impact_y = (e.vel.y + gravity).min(10.0);
     let (wall, landed) = move_body(&game.world, e, gravity);
+    let contacts = super::body_contacts(&game.world, e);
+    // The source moveTo resolves displacement without clearing stored yVel.
+    e.vel.y = impact_y;
     let grounded = landed || ground(&game.world, e);
     // oHawkman Step checks the lower corpse origin after moveTo, and the
     // center for a live, unheld actor. This must not run before movement.
@@ -506,6 +509,10 @@ fn hawk(game: &mut Game, e: &mut Entity) {
     }
     if e.state != 98 && e.state != 99 && e.health < 1 {
         e.state = 99;
+    }
+    if super::body_contacts(&game.world, e).bottom && e.state != 98 {
+        e.vel.y = 0.0;
+        impact_y = 0.0;
     }
     let body_step = e.state >= 98;
     if e.state == 99 {
@@ -553,7 +560,7 @@ fn hawk(game: &mut Game, e: &mut Entity) {
     }
     if body_step {
         if e.state >= 98 {
-            super::settle_body(&game.world, e, impact_y);
+            super::settle_body(e, contacts, impact_y);
             if e.vel.x == 0.0 && e.vel.y == 0.0 && e.health < 1 {
                 e.state = 99;
             }
