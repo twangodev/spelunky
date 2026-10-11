@@ -66,24 +66,9 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
         if game.player.held.is_none() || e.state < 98 {
             e.held = false;
         }
-        if e.held {
-            let sprite = match (e.object.as_str(), e.health > 0) {
-                ("oCaveman", true) => Some("sCavemanHeldL"),
-                ("oCaveman", false) => Some("sCavemanDHeldL"),
-                ("oYeti", true) => Some("sYetiHeldL"),
-                ("oYeti", false) => Some("sYetiDHeldL"),
-                ("oHawkman", true) => Some("sHawkHeldL"),
-                ("oHawkman", false) => Some("sHawkDHeldL"),
-                ("oShopkeeper" | "oShopkeeper2", true) => Some("sShopHeldL"),
-                ("oShopkeeper" | "oShopkeeper2", false) => Some("sShopDHeldL"),
-                _ => None,
-            };
-            if let Some(sprite) = sprite {
-                e.set_sprite(sprite);
-            }
-        }
     }
-    // These inherited families use 16px sprites, except the two 32px kings.
+    // Retain the existing fallback for an unknown sprite. Canonical sprites
+    // below resolve their current canvas dimensions for the fluid probes.
     let dimensions: (f64, f64) = if matches!(e.object.as_str(), "oYetiKing" | "oTombLord") {
         (32.0, 32.0)
     } else {
@@ -91,9 +76,13 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
     };
     e.data
         .insert("depth".into(), if e.held { 1.0 } else { 60.0 });
+    // Source sprite_width/height describe the current image canvas; neither
+    // the object default nor the origin-adjusted collision mask is its center.
+    let fluid_dimensions = crate::catalog::sprite_dimensions(&e.sprite)
+        .map_or(dimensions, |(w, h)| (f64::from(w), f64::from(h)));
     let center = Vec2::new(
-        e.pos.x + (dimensions.0 / 2.0).floor(),
-        e.pos.y + (dimensions.1 / 2.0).floor(),
+        e.pos.x + (fluid_dimensions.0 / 2.0).floor(),
+        e.pos.y + (fluid_dimensions.1 / 2.0).floor(),
     );
     let swimming = point(&game.world, center, "oWaterSwim");
     if swimming && e.value("swimming") == 0.0 {
@@ -149,7 +138,7 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
     }
     if point(
         &game.world,
-        Vec2::new(center.x, e.pos.y + dimensions.1 - 2.0),
+        Vec2::new(center.x, e.pos.y + fluid_dimensions.1 - 2.0),
         "oLava",
     ) {
         e.health = 0;

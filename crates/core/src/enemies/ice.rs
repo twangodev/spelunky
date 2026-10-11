@@ -296,6 +296,14 @@ fn yeti(game: &mut Game, e: &mut Entity) {
         if e.vel.x == 0.0 && e.vel.y == 0.0 && e.health < 1 {
             e.state = 99;
         }
+        // Source's final held-sprite selection also follows the DEAD branch.
+        if e.held {
+            e.set_sprite(if e.health > 0 {
+                "sYetiHeldL"
+            } else {
+                "sYetiDHeldL"
+            });
+        }
         return;
     }
     if e.state == 98 {
