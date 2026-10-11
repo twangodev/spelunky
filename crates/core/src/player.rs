@@ -996,6 +996,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let in_water = water(w, p.pos);
     let in_web = ledge_point(w, p.pos, "oWeb");
     let water_jump = precise_line(w, edge_rect(p, Side::Top, 1.0, false), "oWater");
+    let col_ice_bot = ledge_point(w, Vec2::new(p.pos.x, p.pos.y + 8.0), "oIce");
     let water_surface = in_water && !water(w, Vec2::new(p.pos.x, p.pos.y - 9.0));
     let mut fall = value(p, "fall_timer", 0.0);
     let mut gravity = value(p, "gravity", 1.0);
@@ -1489,7 +1490,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             };
         }
     }
-    if object_at(w, Vec2::new(p.pos.x, p.pos.y + 8.0), &["oIce", "oIceBlock"])
+    if col_ice_bot
         && p.state != PlayerState::Ducking
         && !has(p, &["Spike Shoes", "SpikeShoes", "spike_shoes"])
     {
