@@ -1143,13 +1143,22 @@ mod tests {
         let mut game = room();
         game.spawn("oLava", Vec2::new(32.0, 32.0));
         game.spawn("oLava", Vec2::new(32.0, 32.0));
-        // Kali can heal without a source life cap. A collision_point query
-        // subtracts 99 once even when authored lava instances overlap.
+        // Source Player Step caps transient overhealing to 99 before hurt.
+        // One point query then subtracts 99 despite overlapping lava and immunity.
         game.player.health = 200;
         game.player.invincible = 60;
         game.step(&crate::InputFrame::default());
-        assert_eq!(game.player.health, 101);
-        assert_eq!(game.state, crate::RunState::Playing);
+        assert_eq!(game.player.health, 0);
+        assert_eq!(game.state, crate::RunState::Dead);
+        assert_eq!(game.player.invincible, 60);
+        assert_eq!(
+            game.events
+                .iter()
+                .filter(|event| matches!(event, GameEvent::Damage { amount: 99 }))
+                .count(),
+            1,
+            "overlapping lava must produce exactly one damage action"
+        );
     }
     #[test]
     fn web_freezes_rock_but_spares_spiders() {
