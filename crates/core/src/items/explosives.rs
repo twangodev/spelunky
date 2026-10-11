@@ -1946,6 +1946,19 @@ fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
         // fragment, independently from cleanDeath and the loot branch.
         remove_xoc_fragment(&mut game.world, entity.pos);
     }
+    if family == "oDoor" {
+        // Door owns an unguarded two-small-piece event, with a narrower
+        // horizontal range than the guarded tan rubble families below.
+        for _ in 0..2 {
+            let pos = Vec2::new(
+                entity.pos.x + 8.0 + f64::from(game.rng.range(5)) - f64::from(game.rng.range(5)),
+                entity.pos.y + 8.0 + f64::from(game.rng.range(9)) - f64::from(game.rng.range(9)),
+            );
+            let id = game.spawn("oRubbleSmall", pos);
+            game.world.entity_mut(id).unwrap().set_sprite("sRubbleTanSmall");
+        }
+        return;
+    }
     if !solid_outputs_enabled(game, entity) {
         if family == "oSacAltarLeft" {
             crate::traps::altar::destroyed(game, entity);
@@ -1963,7 +1976,8 @@ fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
         "oBrick" | "oTree" => Some(("sRubble", "sRubbleSmall")),
         "oBrickSmooth" | "oGrave" | "oSign" | "oAltarLeft" | "oAltarRight" | "oSacAltarLeft"
         | "oArrowTrapLeft" | "oArrowTrapRight" | "oTrapBlock" | "oSpearTrapTop"
-        | "oSpearTrapBottom" => Some(("sRubbleTan", "sRubbleTanSmall")),
+        | "oSpearTrapBottom" | "oSmashTrap" | "oSmashTrapLit" | "oCeilingTrap"
+        | "oArrowRepeaterL" | "oArrowRepeaterR" => Some(("sRubbleTan", "sRubbleTanSmall")),
         "oLush" | "oTemple" => Some(("sRubbleLush", "sRubbleLushSmall")),
         "oBlock" | "oPushBlock" | "oXocBlock" if !city => Some(("sRubbleLush", "sRubbleLushSmall")),
         _ => None,
@@ -5143,6 +5157,10 @@ mod held_rope_literal_clearance_companion {
         assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
     }
 }
+
+#[cfg(test)]
+#[path = "explosives_trap_destroy_tests.rs"]
+mod trap_destroy_tests;
 
 #[cfg(test)]
 #[path = "sticky_bomb_contract_tests.rs"]
