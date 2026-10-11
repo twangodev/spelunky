@@ -214,6 +214,19 @@ pub(super) fn collision(
                 true
             }
         }
+        ("oDamsel", Instance::Entity(id)) => {
+            let Some(attack) = game.world.entity(id).cloned() else {
+                return false;
+            };
+            if crate::catalog::is_a(&attack.object, "oWhip")
+                || crate::catalog::is_a(&attack.object, "oWhipPre")
+            {
+                damsel_melee(game, e, &attack);
+                true
+            } else {
+                false
+            }
+        }
         ("oBarrierEmitter", Instance::Entity(id)) => {
             let hit = game.world.entity(id).is_some_and(|item| {
                 item.object == "oBullet"
@@ -251,6 +264,52 @@ pub(super) fn collision(
             }
         }
         _ => false,
+    }
+}
+
+fn damsel_melee(game: &mut Game, damsel: &mut Entity, attack: &Entity) {
+    let machete = attack.text.get("type").map_or_else(
+        || {
+            crate::catalog::is_a(&attack.object, "oSlash")
+                || crate::catalog::is_a(&attack.object, "oMachetePre")
+        },
+        |kind| kind == "Machete",
+    );
+    if machete && damsel.value("hit_cooldown") == 0.0 {
+        // Ordinary attack producers write damage. The fallback preserves the
+        // native Create value for directly authored hitboxes without that field.
+        let native_damage = if ["oSlash", "oMachetePre", "oMattockHit", "oMattockPre"]
+            .iter()
+            .any(|object| crate::catalog::is_a(&attack.object, object))
+        {
+            2.0
+        } else {
+            1.0
+        };
+        let damage = attack.data.get("damage").copied().unwrap_or(native_damage);
+        damsel.health -= damage as i32;
+        damsel.data.insert("hit_cooldown".into(), 10.0);
+        game.sound("sndHit", damsel.pos);
+        game.sound("sndDamsel", damsel.pos);
+        if damsel.value("blood_left") > 0.0 {
+            create_blood(game, damsel, super::sprite_blood_center(damsel), 1);
+            if damsel.health < 0 {
+                damsel
+                    .data
+                    .insert("blood_left".into(), damsel.value("blood_left") - 1.0);
+            }
+        }
+    } else if damsel.state != 2
+        && (damsel.state < 4 || damsel.state == 5 || damsel.state == 6)
+        && damsel.value("hit_cooldown") == 0.0
+    {
+        damsel.vel.y = -2.0;
+        damsel.data.insert("hit_cooldown".into(), 10.0);
+        game.sound("sndHit", damsel.pos);
+        game.sound("sndDamsel", damsel.pos);
+        if damsel.value("forSale") != 0.0 {
+            crate::economy::anger(game, damsel.pos, "HEY, ONLY I CAN DO THAT!");
+        }
     }
 }
 
