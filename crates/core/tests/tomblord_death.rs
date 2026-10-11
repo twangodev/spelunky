@@ -1,6 +1,11 @@
 //! Source oracle for oTombLord Step.xml:42-56 and oBone inherited/own Create.
-//! Prepared under a runtime/build hold: this regression has NOT BEEN RUN.
 use spelunky_core::{Game, InputFrame, Rng, RulesPreset, Vec2, level::Level};
+
+// scrLoadLevel places authored cells at (16 + column*16, 16 + row*16).
+// These guards use world coordinates, including that surrounding border.
+const CUSTOM_LEVEL_BORDER: f64 = 16.0;
+const WORLD_FLOOR_TOP: f64 = CUSTOM_LEVEL_BORDER + 8.0 * 16.0;
+const WORLD_COVER_RIGHT: f64 = CUSTOM_LEVEL_BORDER + 12.0 * 16.0;
 
 fn authored_pistol_and_tomb(level_number: u32, rules: RulesPreset) -> (Game, u64) {
     let mut level = Level {
@@ -16,7 +21,7 @@ fn authored_pistol_and_tomb(level_number: u32, rules: RulesPreset) -> (Game, u64
         level.set_tile(x, 8, '1').unwrap();
     }
     // Authored low cover intercepts the Lord's high flies while a standing
-    // Pistol muzzle at y=118 remains below it. No actor is frozen or retuned.
+    // Pistol muzzle at y=134 remains below it. No actor is frozen or retuned.
     for x in 0..=11 {
         level.set_tile(x, 6, '1').unwrap();
     }
@@ -33,6 +38,17 @@ fn authored_pistol_and_tomb(level_number: u32, rules: RulesPreset) -> (Game, u64
         .unwrap()
         .id;
     let actor = game.world.entity(lord).unwrap();
+    assert_eq!(
+        actor.pos,
+        Vec2::new(
+            CUSTOM_LEVEL_BORDER + 13.0 * 16.0,
+            CUSTOM_LEVEL_BORDER + 6.0 * 16.0
+        ),
+        "source custom-loader border applies to the authored Tomb Lord cell"
+    );
+    assert_eq!(game.world.tile(14, 9).unwrap().object, "oBrick");
+    assert_eq!(game.world.tile(12, 7).unwrap().object, "oBrick");
+    assert!(game.world.tile(13, 7).unwrap().object.is_empty());
     assert_eq!(actor.health, 20);
     assert_eq!(actor.value("bloodless"), 1.0);
     for _ in 0..8 {
@@ -132,11 +148,11 @@ fn ordinary_pistol_shots_kill_authored_tomb_with_interleaved_bone_creates_and_la
                 actor.pos.y + source_displacement(actor.vel.y, time),
             );
             assert!(
-                origin.x > 192.0,
+                origin.x > WORLD_COVER_RIGHT,
                 "final movement is clear of the authored fly cover"
             );
             assert!(
-                origin.y + 32.0 <= 128.0,
+                origin.y + 32.0 <= WORLD_FLOOR_TOP,
                 "final upward Bullet recoil stays above floor"
             );
             let first_serial = game.world.creation_serial;
@@ -325,7 +341,7 @@ fn lethal_ordinary_pistol_during_attack_still_emits_source_post_destroy_fly() {
             target.pos.x + source_displacement(target.vel.x, time),
             target.pos.y + source_displacement(target.vel.y, time),
         );
-        assert!(origin.x > 192.0 && origin.y + 32.0 <= 128.0);
+        assert!(origin.x > WORLD_COVER_RIGHT && origin.y + 32.0 <= WORLD_FLOOR_TOP);
         let first_serial = game.world.creation_serial;
         let mut expected_rng = game.rng.clone();
         // Corrected death prefix: two discarded Blood origins, then four
