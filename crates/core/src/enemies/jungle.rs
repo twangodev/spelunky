@@ -303,6 +303,7 @@ fn frog(game: &mut Game, e: &mut Entity) {
 }
 
 fn monkey(game: &mut Game, e: &mut Entity) {
+    e.data.insert("depth".into(), 40.0);
     let (wall, _) = move_body(
         &game.world,
         e,
@@ -414,6 +415,7 @@ fn monkey(game: &mut Game, e: &mut Entity) {
             }
         }
         7 => {
+            e.data.insert("depth".into(), 120.0);
             e.vel = Vec2::default();
             e.pos = Vec2::new(
                 game.player.pos.x + e.value("grab_x"),
