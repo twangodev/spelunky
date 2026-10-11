@@ -412,7 +412,22 @@ pub(crate) fn handles(object: &str) -> bool {
     is_collectible(object)
 }
 
-pub(crate) fn step_instance(_game: &mut Game, _id: u64) {}
+pub(crate) fn step_instance(game: &mut Game, id: u64) {
+    // oJetpack inherits Item Step, then checks the existing Player's visibility.
+    if !game.player.engine_active || game.player.data.get("visible").copied().unwrap_or(1.0) != 0.0
+    {
+        return;
+    }
+    if let Some(entity) = game.world.entity_mut(id) {
+        if entity.object == "oJetpack" {
+            entity.alive = false;
+            // Inherited oItem Destroy clears only holdItem when held.
+            if entity.held {
+                game.player.held = None;
+            }
+        }
+    }
+}
 pub(crate) fn builtin_motion(_game: &mut Game, _id: u64) {}
 pub(crate) fn animation_end(_game: &mut Game, _id: u64) {}
 
