@@ -154,6 +154,54 @@ fn object_at(w: &World, pos: Vec2, names: &[&str]) -> bool {
             e.alive && names.contains(&e.object.as_str()) && e.sprite_bounds().contains(pos)
         })
 }
+/// Literal ledge collision_point(..., family, 0, 0): active instances,
+/// source family membership, and each instance's cached bounding box.
+fn ledge_point(w: &World, point: Vec2, family: &str) -> bool {
+    w.tiles.iter().enumerate().any(|(index, tile)| {
+        tile.engine_active
+            && crate::catalog::is_a(&tile.object, family)
+            && w.tile_collision_mask((index % w.width) as i32, (index / w.width) as i32)
+                .contains(point, CollisionPrecision::BoundingBox)
+    }) || w.entities.iter().any(|entity| {
+        entity.alive
+            && entity.engine_active
+            && crate::catalog::is_a(&entity.object, family)
+            && entity.mask_contains(point, CollisionPrecision::BoundingBox)
+    })
+}
+
+fn arrow_ledge(w: &World, point: Vec2, arrow_order: &[u64]) -> bool {
+    let upper = Vec2::new(point.x, point.y - 5.0);
+    if !(ledge_point(w, upper, "oArrow")
+        || ledge_point(w, Vec2::new(point.x, point.y - 6.0), "oArrow"))
+        || ledge_point(w, Vec2::new(point.x, point.y - 9.0), "oArrow")
+        || ledge_point(w, Vec2::new(point.x, point.y + 9.0), "oArrow")
+    {
+        return false;
+    }
+    // The point queries gate the attempt; nearest searches ALL active Arrows.
+    // Strict comparison retains the source parent-array order for equal ties.
+    let squared_distance = |entity: &Entity| {
+        let dx = entity.pos.x - upper.x;
+        let dy = entity.pos.y - upper.y;
+        dx * dx + dy * dy
+    };
+    arrow_order
+        .iter()
+        .filter_map(|id| w.entity(*id))
+        .filter(|entity| {
+            entity.alive && entity.engine_active && crate::catalog::is_a(&entity.object, "oArrow")
+        })
+        .fold(None, |nearest: Option<&Entity>, entity| {
+            if nearest.is_none_or(|current| squared_distance(entity) < squared_distance(current)) {
+                Some(entity)
+            } else {
+                nearest
+            }
+        })
+        .is_some_and(|entity| entity.value("stuck") != 0.0)
+}
+
 fn ladder_at(w: &World, pos: Vec2) -> Option<Vec2> {
     ladder_match(w, pos, true)
 }
@@ -764,6 +812,13 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     if active {
         active_prelude(game);
     }
+    let arrow_order: Vec<u64> = crate::dispatcher::descendant_instances(game, "oArrow")
+        .into_iter()
+        .filter_map(|instance| match instance {
+            crate::dispatcher::Instance::Entity(id) => Some(id),
+            _ => None,
+        })
+        .collect();
     let p = &mut game.player;
     if p.state == PlayerState::Dead || p.is_stunned() {
         // Source keeps its platform state separate from dead/stunned. The
@@ -1102,49 +1157,39 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         p.state = PlayerState::Standing;
     }
 
-    if !col_top
-        && hang_count == 0.0
-        && p.pos.y > 16.0
-        && !grounded_state(p.state)
-        && p.state != PlayerState::Climbing
-    {
-        let dir = if input.right && col_right {
-            1.0
-        } else if input.left && col_left {
-            -1.0
-        } else {
-            0.0
+    if !col_top && hang_count == 0.0 && p.pos.y > 16.0 && !grounded_state(p.state) {
+        let side_point =
+            |direction: f64, offset: f64| Vec2::new(p.pos.x + direction * 9.0, p.pos.y + offset);
+        let touches = |direction: f64, family: &str| {
+            ledge_point(w, side_point(direction, -5.0), family)
+                || ledge_point(w, side_point(direction, -6.0), family)
         };
-        if dir != 0.0 {
-            let edge = Vec2::new(p.pos.x + dir * 9.0, p.pos.y - 5.0);
-            let upper_edge = Vec2::new(edge.x, p.pos.y - 6.0);
-            let grip = has(p, &["Climbing Gloves", "Gloves", "gloves"]) && p.vel.y > 0.0;
-            if ((solid_point(w, edge) || solid_point(w, upper_edge))
-                && (grip
-                    || (!solid_point(w, Vec2::new(edge.x, p.pos.y - 9.0))
-                        && !solid_point(w, Vec2::new(p.pos.x, p.pos.y + 9.0)))))
-                || object_at(w, edge, &["oTree"])
-                || object_at(w, upper_edge, &["oTree"])
-            {
-                p.state = PlayerState::Hanging;
-                p.pos.x = gm_round(p.pos.x);
-                p.pos.y = gm_round(p.pos.y / 8.0) * 8.0;
-                p.previous_pos = p.pos;
-                p.vel.y = 0.0;
-                ay = 0.0;
-                gravity = 0.0;
-            }
+        let ordinary = |direction: f64| {
+            touches(direction, "oSolid")
+                && !ledge_point(w, side_point(direction, -9.0), "oSolid")
+                && !ledge_point(w, Vec2::new(p.pos.x, p.pos.y + 9.0), "oSolid")
+        };
+        // Preserve the source's complete predicate order, including its outer
+        // Gloves branch. A failed right candidate must still try the left.
+        let grab = if has(p, &["Climbing Gloves", "Gloves", "gloves"]) && p.vel.y > 0.0 {
+            (input.right && col_right && touches(1.0, "oSolid"))
+                || (input.left && col_left && touches(-1.0, "oSolid"))
+        } else {
+            (input.right && col_right && touches(1.0, "oTree"))
+                || (input.left && col_left && touches(-1.0, "oTree"))
+                || (input.right && col_right && ordinary(1.0))
+                || (input.left && col_left && ordinary(-1.0))
+        };
+        if grab {
+            p.state = PlayerState::Hanging;
+            p.pos.x = gm_round(p.pos.x);
+            p.pos.y = gm_round(p.pos.y / 8.0) * 8.0;
+            p.previous_pos = p.pos;
+            p.vel.y = 0.0;
+            ay = 0.0;
+            gravity = 0.0;
         }
-        if hang_count == 0.0
-            && p.state == PlayerState::Falling
-            && w.entities.iter().any(|e| {
-                e.alive
-                    && e.object == "oArrow"
-                    && e.value("stuck") > 0.0
-                    && (e.pos.x - p.pos.x).abs() < 8.0
-                    && (e.pos.y - (p.pos.y - 5.0)).abs() < 2.0
-            })
-        {
+        if p.state == PlayerState::Falling && arrow_ledge(w, p.pos, &arrow_order) {
             p.state = PlayerState::Hanging;
             p.vel.y = 0.0;
             ay = 0.0;
@@ -3830,3 +3875,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "player/ledge_tests.rs"]
+mod ledge_tests;
