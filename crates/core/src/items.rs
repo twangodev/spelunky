@@ -1379,8 +1379,10 @@ fn advance_item_body(game: &mut Game, entity: &mut Entity) -> bool {
             entity.vel.y = 0.0;
         }
     }
-    if left && !right {
-        entity.pos.x += 1.0;
+    if left {
+        if !right {
+            entity.pos.x += 1.0;
+        }
         if fragile {
             entity.vel.y = 0.0;
         }
