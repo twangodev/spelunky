@@ -392,6 +392,8 @@ fn entity_mirrored(entity: &Entity, name: &str) -> bool {
     } else if matches!(entity.object.as_str(), "oPDummy" | "oPDummy2" | "oPDummy3") {
         // These Draw events assign the scale from facing on every draw.
         entity.facing > 0
+    } else if catalog::is_a(&entity.object, "oEnemy") {
+        spelunky_core::enemies::source_facing(entity) > 0
     } else if entity.data.contains_key("image_xscale") {
         entity.value("image_xscale") < 0.0
     } else {
@@ -5647,3 +5649,7 @@ mod tests {
         assert_eq!(game.tick, 0);
     }
 }
+
+#[cfg(test)]
+#[path = "inherited_enemy_draw_tests.rs"]
+mod inherited_enemy_draw_tests;

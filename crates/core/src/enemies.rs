@@ -27,7 +27,7 @@ pub fn is_enemy(object: &str) -> bool {
 
 /// Source facing is distinct from the dir/aim fields reused by these AIs.
 /// Families with actual facing writes continue using the existing property.
-pub(crate) fn source_facing(entity: &Entity) -> i8 {
+pub fn source_facing(entity: &Entity) -> i8 {
     entity.data.get("source_facing").map_or(
         entity.facing,
         |facing| {
@@ -89,7 +89,9 @@ pub fn init_entity(e: &mut Entity) {
         // Step can subsequently write source facing; preserve it separately.
         if matches!(
             e.object.as_str(),
-            "oSpider"
+            "oBat"
+                | "oUFO"
+                | "oSpider"
                 | "oSpiderHang"
                 | "oGiantSpider"
                 | "oGiantSpiderHang"
