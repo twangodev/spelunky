@@ -1468,7 +1468,7 @@ fn apply_melee(
             (pos.x, e.pos.x + 8.0)
         };
         e.vel.x = if hit_x < target_x { 2.0 } else { -2.0 };
-        if e.object == "oYeti" {
+        if matches!(e.object.as_str(), "oCaveman" | "oHawkman" | "oYeti") {
             e.set_image_speed(0.5);
         }
     }
