@@ -409,16 +409,35 @@ fn player_actions(game: &mut Game, input: &InputFrame) {
             }
         }
     } else {
-        if input.cycle_pressed && game.player.attack_timer == 0 {
-            explosives::cycle_inventory(game);
-        }
         let interacted = collectibles::interact(game, input);
+        let inventory_selected = if game.is_level() && game.player.attack_timer == 0 {
+            if input.cycle_pressed {
+                explosives::cycle_inventory(game);
+                true
+            } else if input.rope_pressed && game.player.ropes > 0 {
+                explosives::use_rope(game, input);
+                true
+            } else if input.bomb_pressed && game.player.bombs > 0 {
+                if !weapons::arm_bomb_arrow(game) {
+                    explosives::use_bomb(game, input);
+                }
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
         let character_input = InputFrame {
-            attack_pressed: input.attack_pressed && !interacted,
+            attack_pressed: input.attack_pressed && !interacted && !inventory_selected,
             ..*input
         };
         crate::characters::tick(game, &character_input);
-        if !interacted && game.player.attack_timer == 0 && input.attack_pressed {
+        if !interacted
+            && !inventory_selected
+            && game.player.attack_timer == 0
+            && input.attack_pressed
+        {
             if let Some(id) = game.player.held {
                 if game
                     .world
@@ -454,14 +473,6 @@ fn player_actions(game: &mut Game, input: &InputFrame) {
                 pick_up(game);
             } else if !game.flags.contains("character_tunnelman") {
                 start_whip(game);
-            }
-        }
-        if game.player.attack_timer == 0 {
-            if input.bomb_pressed && !weapons::arm_bomb_arrow(game) {
-                explosives::use_bomb(game, input);
-            }
-            if input.rope_pressed {
-                explosives::use_rope(game, input);
             }
         }
     }
