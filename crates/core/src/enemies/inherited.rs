@@ -60,6 +60,9 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
                 },
         );
         e.facing = game.player.facing;
+        if let Some(facing) = e.data.get_mut("source_facing") {
+            *facing = f64::from(game.player.facing > 0);
+        }
         if game.player.held.is_none() || e.state < 98 {
             e.held = false;
         }

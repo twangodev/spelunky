@@ -376,7 +376,11 @@ pub(super) fn collision(game: &mut Game, this: Instance, other: Instance) {
                         target.pos.y -= if enemy { 16.0 } else { 24.0 };
                         target.vel.y = -8.0;
                         if enemy || target.object == "oDamsel" {
-                            target.vel.x += if target.facing < 0 { -1.0 } else { 1.0 };
+                            target.vel.x += if crate::enemies::source_facing(target) < 0 {
+                                -1.0
+                            } else {
+                                1.0
+                            };
                         }
                         true
                     } else {

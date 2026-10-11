@@ -10,6 +10,8 @@ mod npcs;
 #[cfg(test)]
 mod ordinary_item_blood_tests;
 pub(crate) mod shop_dialogue;
+#[cfg(test)]
+mod source_facing_tests;
 mod temple;
 mod undead;
 
@@ -17,6 +19,17 @@ use crate::dispatcher::Instance;
 
 pub fn is_enemy(object: &str) -> bool {
     crate::catalog::is_a(object, "oEnemy")
+}
+
+/// Source facing is distinct from the dir/aim fields reused by these AIs.
+/// Families with actual facing writes continue using the existing property.
+pub(crate) fn source_facing(entity: &Entity) -> i8 {
+    entity.data.get("source_facing").map_or(
+        entity.facing,
+        |facing| {
+            if *facing == 0.0 { -1 } else { 1 }
+        },
+    )
 }
 
 /// Create events execute at instance creation, including outside AI viewports.
@@ -66,6 +79,23 @@ pub fn init_entity(e: &mut Entity) {
         e.data.insert("heavy".into(), 1.0);
     }
     if is_enemy(&e.object) {
+        // These Creates finish facing LEFT, while the port uses `facing`
+        // for their separate AI direction. Only Spider's inherited held
+        // Step can subsequently write source facing; preserve it separately.
+        if matches!(
+            e.object.as_str(),
+            "oSpider"
+                | "oSpiderHang"
+                | "oGiantSpider"
+                | "oGiantSpiderHang"
+                | "oPiranha"
+                | "oDeadFish"
+                | "oScarab"
+                | "oJaws"
+                | "oAlienBoss"
+        ) {
+            e.data.insert("source_facing".into(), 0.0);
+        }
         // Inherited oEnemy Create sets false; only Bat/UFO override it.
         e.data.insert(
             "flying".into(),
