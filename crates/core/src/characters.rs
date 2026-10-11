@@ -213,6 +213,10 @@ mod tests {
         tick(&mut game, &attack);
         assert_eq!(game.player.attack_timer, 0);
         game.player.held = None;
+        // The direct helper receives the platform controller's duck pose;
+        // Down alone is not Player Step1219's attack-onset guard.
+        game.player.state = PlayerState::Ducking;
+        game.player.set_sprite("sTunnelDuckL");
         tick(
             &mut game,
             &InputFrame {
@@ -221,6 +225,8 @@ mod tests {
             },
         );
         assert_eq!(game.player.attack_timer, 0);
+        game.player.state = PlayerState::Standing;
+        game.player.set_sprite("sTunnelLeft");
         tick(&mut game, &attack);
         assert_eq!(game.player.attack_timer, 11);
         assert_eq!(game.player.sprite, "sTunnelAttackL");

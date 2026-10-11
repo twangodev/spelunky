@@ -1805,6 +1805,9 @@ mod tests {
     fn game_step_mattock_head_inherits_motion_pickup_and_throw() {
         let mut game = game();
         game.player.pos = Vec2::new(200.0, 80.0);
+        // Keep the original head trajectory clear, then support Player at
+        // y78 for the later controlled reposition and Down pickup.
+        game.spawn("oHardBlock", Vec2::new(96.0, 86.0));
         let id = game.world.spawn("oMattockHead", Vec2::new(100.0, 80.0));
         game.world.entity_mut(id).unwrap().vel = Vec2::new(2.0, -2.0);
         game.step(&InputFrame::default());
@@ -1818,15 +1821,25 @@ mod tests {
         assert_eq!(head.value("bboxBottom"), 4.0);
 
         game.player.pos = head.pos;
+        game.player.previous_pos = game.player.pos;
         game.player.vel = Vec2::default();
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
         game.step(&InputFrame {
             down: true,
+            attack: true,
             attack_pressed: true,
             ..Default::default()
         });
+        assert_eq!(game.player.state, PlayerState::Ducking);
         assert_eq!(game.player.held, Some(id));
         assert!(game.world.entity(id).unwrap().held);
         game.step(&InputFrame {
+            attack_released: true,
+            ..Default::default()
+        });
+        game.step(&InputFrame {
+            attack: true,
             attack_pressed: true,
             ..Default::default()
         });
@@ -2620,15 +2633,19 @@ mod tests {
         crate::characters::apply(&mut game, crate::characters::Character::TunnelMan);
         game.player.grounded = true;
         let pos = game.player.pos;
-        game.world.spawn("oCrate", pos);
+        // This subsystem fixture bypasses Game.step; synchronous Create must
+        // register the crate before the source parent-array container query.
+        let crate_id = game.spawn("oCrate", pos);
         tick(
             &mut game,
             &InputFrame {
                 up: true,
+                attack: true,
                 attack_pressed: true,
                 ..InputFrame::default()
             },
         );
+        assert!(game.world.entity(crate_id).is_none());
         assert!(!game.player.data.contains_key("character_attack_active"));
         assert!(
             !game

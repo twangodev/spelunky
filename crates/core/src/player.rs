@@ -2513,8 +2513,22 @@ mod tests {
             assert_eq!(g.world.entity(jetpack).unwrap().value("cost"), 20000.0);
             // Source Create assigns shop costs. With no Shopkeeper, oItem
             // clears them in its later Step, after the player's pickup event.
-            // Let that real Step run before beginning the input-only swap.
-            g.step(&InputFrame::default());
+            // Begin a real whip while that Item Step clears the costs. Source
+            // Player Step1219 gives an airborne empty-hand attack priority over
+            // Down+Attack pickup; the following attack reaches its pickup
+            // else-if because the first whip is still in progress.
+            g.step(&InputFrame {
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            assert!(g.player.attack_timer > 0);
+            // Release before the next ordinary press; keep the whip in progress.
+            g.step(&InputFrame {
+                attack_released: true,
+                ..Default::default()
+            });
+            assert!(g.player.attack_timer > 0);
             assert_eq!(g.world.entity(cape).unwrap().value("cost"), 0.0);
             assert_eq!(g.world.entity(jetpack).unwrap().value("cost"), 0.0);
             g.step(&InputFrame {

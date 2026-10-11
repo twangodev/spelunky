@@ -782,6 +782,11 @@ mod tests {
     #[test]
     fn equipment_requires_pickup_and_replaces_back_slot() {
         let mut g = game();
+        // The shell starts falling. Author support so Down reaches the
+        // source pickup branch rather than the preceding airborne attack.
+        for x in 0..g.world.width {
+            g.world.set_tile(x, 3, "oHardBlock");
+        }
         let pos = g.player.pos;
         g.player.equipment.insert("Jetpack".into());
         let cape = g.spawn("oCapePickup", pos);
@@ -792,6 +797,12 @@ mod tests {
             .unwrap()
             .data
             .insert("cost".into(), 0.0);
+        g.step(&InputFrame {
+            down: true,
+            ..Default::default()
+        });
+        assert_eq!(g.player.state, crate::PlayerState::Ducking);
+        assert_eq!(g.player.attack_timer, 0);
         g.step(&InputFrame {
             down: true,
             attack: true,
@@ -811,9 +822,20 @@ mod tests {
     #[test]
     fn equipment_pickup_does_not_reach_through_nearer_item() {
         let mut g = game();
+        // The shell starts falling. Author support so Down reaches the
+        // source pickup branch rather than the preceding airborne attack.
+        for x in 0..g.world.width {
+            g.world.set_tile(x, 3, "oHardBlock");
+        }
         let pos = g.player.pos;
         let rock = g.spawn("oRock", Vec2::new(pos.x, pos.y + 1.));
         g.spawn("oCapePickup", Vec2::new(pos.x, pos.y + 5.));
+        g.step(&InputFrame {
+            down: true,
+            ..Default::default()
+        });
+        assert_eq!(g.player.state, crate::PlayerState::Ducking);
+        assert_eq!(g.player.attack_timer, 0);
         g.step(&InputFrame {
             down: true,
             attack: true,

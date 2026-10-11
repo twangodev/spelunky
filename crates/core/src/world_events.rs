@@ -2596,6 +2596,21 @@ mod tests {
             .unwrap()
             .data
             .insert("cost".into(), 0.0);
+        // Source Player Step1219 starts a whip before airborne Down+Attack
+        // pickup. Use a real first attack so the next attack reaches the
+        // pickup else-if while whipping, without changing the actor state.
+        g.step(&InputFrame {
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert!(g.player.attack_timer > 0);
+        // Release before the next ordinary press; keep the whip in progress.
+        g.step(&InputFrame {
+            attack_released: true,
+            ..Default::default()
+        });
+        assert!(g.player.attack_timer > 0);
         g.step(&InputFrame {
             down: true,
             attack: true,
