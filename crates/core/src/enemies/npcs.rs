@@ -725,10 +725,6 @@ fn damsel(game: &mut Game, e: &mut Entity) {
                             && web.sprite_bounds().intersects(e.sprite_bounds())
                     });
             if grounded || supported {
-                e.vel.x *= 0.7;
-                if e.vel.x.abs() < 0.5 {
-                    e.vel.x = 0.0;
-                }
                 if e.value("dead") == 0.0 {
                     if e.timer > 0 {
                         e.timer -= 1;
@@ -1416,10 +1412,10 @@ mod tests {
     #[test]
     fn actual_step_damsel_spear_gate_selects_nearest_from_the_whole_family() {
         for (two_traps, damsel_x, reverse_storage, expected_x_velocity) in [
-            (false, 122.0, false, 2.8),
-            (true, 122.0, false, -2.8),
-            (true, 120.0, false, 2.8),
-            (true, 120.0, true, 2.8),
+            (false, 122.0, false, 4.0),
+            (true, 122.0, false, -4.0),
+            (true, 120.0, false, 4.0),
+            (true, 120.0, true, 4.0),
         ] {
             let mut game = Game::shell(7, RulesPreset::Classic);
             for x in 0..game.world.width {
