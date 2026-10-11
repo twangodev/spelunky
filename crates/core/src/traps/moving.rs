@@ -705,23 +705,34 @@ fn move_solid(game: &mut Game, entity: &mut Entity, delta: Vec2, carried: &mut b
             let rb = (player.x + player.w - 1.0).round_ties_even();
             let tb = player.y.round_ties_even();
             let bb = (player.y + player.h).round_ties_even();
+            // Source scripts round each complete endpoint expression. At half
+            // ties, rounding a bound before adding an offset changes the pixel.
+            let left_side = (player.x - 1.0).round_ties_even();
+            let right_side = (player.x + player.w).round_ties_even();
+            let side_bottom = (player.y + player.h - 1.0).round_ties_even();
+            let underside = (player.y - 1.0).round_ties_even();
             let top_line = Rect::new(lb, bb, rb - lb + 1.0, 1.0);
-            let bottom_line = Rect::new(lb, tb - 1.0, rb - lb + 1.0, 1.0);
+            let bottom_line = Rect::new(lb, underside, rb - lb + 1.0, 1.0);
             let rider = if horizontal {
                 viscid && can_carry && entity.mask_intersects(top_line, CollisionPrecision::Precise)
             } else if step.y > 0.0 {
                 viscid
                     && entity.mask_intersects(
-                        shifted(top_line, Vec2::new(0.0, 1.0)),
+                        Rect::new(
+                            lb,
+                            (player.y + player.h + 1.0).round_ties_even(),
+                            rb - lb + 1.0,
+                            1.0,
+                        ),
                         CollisionPrecision::Precise,
                     )
             } else {
                 entity.mask_intersects(top_line, CollisionPrecision::Precise)
             };
             let side = if step.x > 0.0 {
-                Rect::new(lb - 1.0, tb, 1.0, (bb - 1.0).round_ties_even() - tb + 1.0)
+                Rect::new(left_side, tb, 1.0, side_bottom - tb + 1.0)
             } else {
-                Rect::new(rb + 1.0, tb, 1.0, (bb - 1.0).round_ties_even() - tb + 1.0)
+                Rect::new(right_side, tb, 1.0, side_bottom - tb + 1.0)
             };
             let touching = if horizontal {
                 entity.mask_intersects(side, CollisionPrecision::Precise)
@@ -736,15 +747,15 @@ fn move_solid(game: &mut Game, entity: &mut Entity, delta: Vec2, carried: &mut b
             }
             let obstruction = if horizontal {
                 Rect::new(
-                    if step.x > 0.0 { rb + 1.0 } else { lb - 1.0 },
+                    if step.x > 0.0 { right_side } else { left_side },
                     tb,
                     1.0,
-                    bb - tb,
+                    side_bottom - tb + 1.0,
                 )
             } else {
                 Rect::new(
                     lb,
-                    if step.y > 0.0 { bb } else { tb - 1.0 },
+                    if step.y > 0.0 { bb } else { underside },
                     rb - lb + 1.0,
                     1.0,
                 )
@@ -2164,3 +2175,7 @@ mod tests {
 #[cfg(test)]
 #[path = "player_moving_blood_contract_tests.rs"]
 mod player_moving_blood_contract_tests;
+
+#[cfg(test)]
+#[path = "moving_character_endpoint_rounding_tests.rs"]
+mod moving_character_endpoint_rounding_tests;
