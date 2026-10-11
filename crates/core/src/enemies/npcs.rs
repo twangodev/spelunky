@@ -1060,7 +1060,8 @@ fn scarab(game: &mut Game, e: &mut Entity) {
     if e.vel == Vec2::default() {
         if e.timer > 0 {
             e.timer -= 1;
-        } else {
+        }
+        if e.timer == 0 {
             if e.pos.distance(game.player.pos) < 64.0 {
                 steer_toward(e, game.player.pos, -4.0);
             } else {
