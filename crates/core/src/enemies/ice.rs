@@ -507,7 +507,10 @@ fn yeti(game: &mut Game, e: &mut Entity) {
     if e.value("sight") == 0.0 && matches!(e.state, 0 | 1) {
         let id = game.spawn("oEnemySight", e.pos);
         if let Some(sight) = game.world.entity_mut(id) {
-            sight.vel.x = f64::from(e.facing) * 10.0;
+            sight
+                .data
+                .insert("hspeed".into(), f64::from(e.facing) * 10.0);
+            sight.data.insert("vspeed".into(), 0.0);
             sight.data.insert("owner".into(), e.id as f64);
         }
         e.data.insert("sight".into(), 5.0);
