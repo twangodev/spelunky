@@ -140,6 +140,23 @@ fn natural_acquisition_fall_landing_and_fresh_jump_leave_used_canopy_at_pre_move
         );
         assert_eq!(game.player.health, 4);
         assert_eq!(count(&game, "oParachute"), 1);
+        // Movement first reaches the floor after the controller's landing
+        // query. On the next Step the source prelude still sees positive
+        // incoming yVel and increments fallTimer before the controller settles
+        // it. Classic's jump branch requires fallTimer == 0, so settle that
+        // actual first-contact frame before sending the fresh jump edge.
+        assert_eq!(game.player.state, PlayerState::Falling);
+        assert!(game.player.vel.y > 0.0);
+        assert_eq!(count(&game, "oParaUsed"), 0);
+        let landing = game.player.pos;
+        game.step(&InputFrame::default());
+        assert_eq!(game.player.pos, landing);
+        assert_eq!(game.player.state, PlayerState::Standing);
+        assert!(game.player.grounded);
+        assert_eq!(game.player.vel, Vec2::default());
+        assert_eq!(game.player.health, 4);
+        assert_eq!(count(&game, "oParachute"), 1);
+        assert_eq!(count(&game, "oParaUsed"), 0);
         let origin = game.player.pos;
         game.step(&InputFrame {
             jump: true,
