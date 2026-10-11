@@ -273,6 +273,9 @@ impl App {
         self.editor.cancel_pointer();
     }
     fn reset_room_timing(&mut self) {
+        if let Some(game) = &mut self.game {
+            resume_room_music(game);
+        }
         self.donation_confirm = false;
         self.timing.reset(self.now());
         self.input.clear_edges();
@@ -298,6 +301,15 @@ impl App {
         if let Some(game) = &self.game {
             capture_lifetime_stats(game, &mut self.store.data);
         }
+    }
+    fn shutdown(&mut self, event_loop: &ActiveEventLoop) {
+        self.exit_requested = true;
+        self.snapshot_lifetime_stats();
+        let _ = self.store.save();
+        self.input.clear();
+        self.audio.stop_music();
+        self.audio.pause(true);
+        event_loop.exit();
     }
     fn settings_changed(&mut self) {
         let settings = &self.store.data.settings;
@@ -362,6 +374,7 @@ impl App {
             self.start_game(false);
         }
         if let Some(game) = &mut self.game {
+            resume_room_music(game);
             game.flags.extend(
                 self.store
                     .data
@@ -456,6 +469,46 @@ impl App {
             self.fullscreen();
             return;
         }
+        let control = source_host_control(self.screen, self.game.as_ref(), key);
+        match control {
+            Some(SourceHostControl::Suicide) => {
+                if let Some(game) = &mut self.game {
+                    apply_source_suicide(game);
+                }
+                self.screen(Screen::Playing);
+                self.audio.stop_music();
+                return;
+            }
+            Some(SourceHostControl::Quit) => {
+                self.exit_requested = true;
+                self.input.clear();
+                self.audio.stop_music();
+                self.audio.pause(true);
+                return;
+            }
+            Some(SourceHostControl::Editor | SourceHostControl::CustomLevels) => {
+                self.editor_play = false;
+                self.source_message = None;
+                if let Some(game) = &mut self.game {
+                    game.flags.remove("editor_test");
+                    game.flags.insert("source_music_stopped".into());
+                    if control == Some(SourceHostControl::CustomLevels) {
+                        game.flags.insert("source_load_level_menu".into());
+                    } else {
+                        game.flags.remove("source_load_level_menu");
+                    }
+                }
+                if control == Some(SourceHostControl::Editor) {
+                    self.editor = EditorUi::new();
+                    self.screen(Screen::Editor);
+                } else {
+                    self.screen(Screen::Custom);
+                }
+                self.audio.stop_music();
+                return;
+            }
+            None => {}
+        }
         match self.screen {
             Screen::Donation => {
                 if matches!(key, KeyCode::Enter | KeyCode::Escape) {
@@ -526,6 +579,20 @@ impl App {
             key
         };
         if key == KeyCode::Escape {
+            if self.screen == Screen::Custom
+                && self
+                    .game
+                    .as_ref()
+                    .is_some_and(|game| game.flags.contains("source_load_level_menu"))
+            {
+                if let Some(game) = &mut self.game {
+                    game.flags.remove("source_load_level_menu");
+                    game.flags.retain(|flag| !flag.starts_with("title_start:"));
+                    game.flags.insert("title_start:2".into());
+                }
+                self.open_hub(spelunky_core::hub::HubKind::Title);
+                return;
+            }
             match self.screen {
                 Screen::Pause => self.screen(Screen::Playing),
                 Screen::Finished if self.editor_play => self.screen(Screen::Editor),
@@ -947,6 +1014,7 @@ impl App {
         self.donation_confirm = false;
         if let Some(game) = &mut self.game {
             game.next_level();
+            resume_room_music(game);
         }
         self.screen(Screen::Playing);
     }
@@ -962,6 +1030,9 @@ impl App {
             .collect()
     }
     fn update(&mut self) {
+        if self.exit_requested {
+            return;
+        }
         let now = self.now();
         let host_frame = self.timing.begin_frame(now);
         if self.focused && !self.occluded {
@@ -1198,7 +1269,14 @@ impl App {
             self.store.data.settings.music_volume,
             self.store.data.settings.effects_volume,
         );
-        let (music, looping) = if self.screen == Screen::Title {
+        let stopped_source_menu = matches!(self.screen, Screen::Editor | Screen::Custom)
+            && self
+                .game
+                .as_ref()
+                .is_some_and(|game| game.flags.contains("source_music_stopped"));
+        let (music, looping) = if stopped_source_menu {
+            ("", true)
+        } else if self.screen == Screen::Title {
             ("title", true)
         } else if matches!(
             self.screen,
@@ -1213,7 +1291,10 @@ impl App {
         };
         if music.is_empty()
             && self.game.as_ref().is_some_and(|game| {
-                game.ending.is_some() || game.opening.is_some() || game.flags.contains("hub")
+                game.ending.is_some()
+                    || game.opening.is_some()
+                    || game.flags.contains("hub")
+                    || game.flags.contains("source_music_stopped")
             })
         {
             self.audio.stop_music();
@@ -1873,6 +1954,44 @@ fn test_snapshot(
         },
     })
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SourceHostControl {
+    Suicide,
+    Quit,
+    Editor,
+    CustomLevels,
+}
+fn source_host_control(
+    screen: Screen,
+    game: Option<&Game>,
+    key: KeyCode,
+) -> Option<SourceHostControl> {
+    if screen == Screen::Pause {
+        return match key {
+            KeyCode::F1 if game.is_some_and(|game| game.player.health > 0 && game.is_level()) => {
+                Some(SourceHostControl::Suicide)
+            }
+            KeyCode::F10 => Some(SourceHostControl::Quit),
+            _ => None,
+        };
+    }
+    if screen == Screen::Playing && game.is_some_and(|game| game.world.name == "rTitle") {
+        return match key {
+            KeyCode::F2 => Some(SourceHostControl::Editor),
+            KeyCode::F3 => Some(SourceHostControl::CustomLevels),
+            _ => None,
+        };
+    }
+    None
+}
+fn apply_source_suicide(game: &mut Game) {
+    game.player.vel = spelunky_core::Vec2::new(if game.player.facing < 0 { -3. } else { 3. }, -6.);
+    game.player.health = -99;
+    game.flags.insert("source_music_stopped".into());
+}
+fn resume_room_music(game: &mut Game) {
+    game.flags.remove("source_music_stopped");
+}
 fn game_music_request(game: &Game) -> (&'static str, bool) {
     (
         game_music(game),
@@ -1897,6 +2016,9 @@ fn game_music(game: &Game) -> &'static str {
         } else {
             ""
         };
+    }
+    if game.flags.contains("source_music_stopped") {
+        return "";
     }
     if game.flags.contains("hub") {
         return if game.flags.contains("hub_title") {
@@ -2390,12 +2512,12 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        if self.exit_requested {
+            self.shutdown(event_loop);
+            return;
+        }
         match event {
-            WindowEvent::CloseRequested => {
-                self.snapshot_lifetime_stats();
-                let _ = self.store.save();
-                event_loop.exit()
-            }
+            WindowEvent::CloseRequested => self.shutdown(event_loop),
             WindowEvent::Resized(size) => {
                 if let Some(renderer) = &mut self.renderer {
                     renderer.resize(size.width, size.height);
@@ -2464,6 +2586,10 @@ impl ApplicationHandler<UserEvent> for App {
                         } else {
                             self.key(key, event.text.as_deref())
                         }
+                        if self.exit_requested {
+                            self.shutdown(event_loop);
+                            return;
+                        }
                     }
                 }
             }
@@ -2515,10 +2641,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 self.update();
                 if self.exit_requested {
-                    self.exit_requested = false;
-                    self.snapshot_lifetime_stats();
-                    let _ = self.store.save();
-                    event_loop.exit();
+                    self.shutdown(event_loop);
                     return;
                 }
                 // Sample once after simulation; scene and diagnostics share this fraction.
@@ -2719,6 +2842,135 @@ fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn source_f1_requires_pause_life_and_an_active_level_while_f10_only_requires_pause() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        assert_eq!(
+            source_host_control(Screen::Playing, Some(&game), KeyCode::F1),
+            None
+        );
+        assert_eq!(
+            source_host_control(Screen::Pause, Some(&game), KeyCode::F1),
+            Some(SourceHostControl::Suicide)
+        );
+        game.player.health = 0;
+        assert_eq!(
+            source_host_control(Screen::Pause, Some(&game), KeyCode::F1),
+            None
+        );
+        assert_eq!(
+            source_host_control(Screen::Pause, Some(&game), KeyCode::F10),
+            Some(SourceHostControl::Quit)
+        );
+        assert_eq!(
+            source_host_control(Screen::Playing, Some(&game), KeyCode::F10),
+            None
+        );
+        game.load_hub(spelunky_core::hub::HubKind::Title);
+        assert_eq!(
+            source_host_control(Screen::Pause, Some(&game), KeyCode::F1),
+            None
+        );
+        assert_eq!(
+            source_host_control(Screen::Pause, Some(&game), KeyCode::F10),
+            Some(SourceHostControl::Quit)
+        );
+    }
+    #[test]
+    fn source_title_function_keys_exist_during_title_opening_but_not_intro_or_pause() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        spelunky_core::opening::begin_intro(&mut game);
+        for key in [KeyCode::F2, KeyCode::F3] {
+            assert_eq!(source_host_control(Screen::Playing, Some(&game), key), None);
+        }
+        game.flags.insert("title_start:0".into());
+        game.load_hub(spelunky_core::hub::HubKind::Title);
+        assert!(game.opening.is_some());
+        assert_eq!(
+            source_host_control(Screen::Playing, Some(&game), KeyCode::F2),
+            Some(SourceHostControl::Editor)
+        );
+        assert_eq!(
+            source_host_control(Screen::Playing, Some(&game), KeyCode::F3),
+            Some(SourceHostControl::CustomLevels)
+        );
+        for key in [KeyCode::F2, KeyCode::F3] {
+            assert_eq!(source_host_control(Screen::Pause, Some(&game), key), None);
+        }
+    }
+    #[test]
+    fn source_f1_sets_raw_health_and_knockback_before_ordinary_ankh_processing() {
+        for facing in [-1, 1] {
+            let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+            game.player.facing = facing;
+            game.player.invincible = 77;
+            game.player.equipment.insert("Ankh".into());
+            apply_source_suicide(&mut game);
+            assert_eq!(game.player.health, -99);
+            assert_eq!(
+                game.player.vel,
+                spelunky_core::Vec2::new(f64::from(facing) * 3., -6.)
+            );
+            assert_eq!(game.player.invincible, 77);
+            assert!(game.player.has("Ankh"));
+            assert_eq!(game.state, RunState::Playing);
+            assert!(game.events.is_empty());
+            assert_eq!(game_music(&game), "");
+            game.step(&spelunky_core::InputFrame::default());
+            assert_eq!(game.player.health, 4);
+            assert!(!game.player.has("Ankh"));
+            assert_eq!(game.state, RunState::Playing);
+            assert!(
+                game.events.iter().any(
+                    |event| matches!(event, GameEvent::Sound {name,..} if name == "sndTeleport")
+                )
+            );
+            assert!(
+                !game
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, GameEvent::Damage { .. } | GameEvent::Died))
+            );
+            assert_eq!(
+                game_music(&game),
+                "",
+                "Ankh revival does not restart F1-stopped music"
+            );
+            assert_eq!(game.lifetime_stats.level_deaths, [0; 16]);
+        }
+    }
+    #[test]
+    fn source_f1_ordinary_death_keeps_level_death_for_later_acknowledgment() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        apply_source_suicide(&mut game);
+        game.step(&spelunky_core::InputFrame::default());
+        assert_eq!(game.state, RunState::Dead);
+        assert_eq!(game.player.health, 0);
+        assert!(
+            game.events
+                .iter()
+                .any(|event| matches!(event, GameEvent::Died))
+        );
+        assert!(
+            !game
+                .events
+                .iter()
+                .any(|event| matches!(event, GameEvent::Damage { .. }))
+        );
+        assert_eq!(game.lifetime_stats.level_deaths, [0; 16]);
+    }
+    #[test]
+    fn source_f1_stopped_music_resumes_only_after_a_later_room_entry() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        game.player.equipment.insert("Ankh".into());
+        apply_source_suicide(&mut game);
+        game.step(&spelunky_core::InputFrame::default());
+        assert_eq!(game_music(&game), "");
+        game.next_level();
+        resume_room_music(&mut game);
+        assert_eq!(game_music(&game), "cave");
+        assert!(!game.flags.contains("source_music_stopped"));
+    }
     #[test]
     fn browser_presentation_caps_preserve_actual_core_tick_and_rng_traces() {
         let fixture = camera_follow_fixture();
