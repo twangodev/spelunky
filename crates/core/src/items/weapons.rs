@@ -1127,9 +1127,8 @@ pub fn step_instance(game: &mut Game, id: u64) {
             e.data.insert("rotation".into(), angle);
         }
         "oFlare" => {
-            if !inherited_item_step(game, &mut e) {
-                return;
-            }
+            // The child event continues after inherited lava destruction.
+            inherited_item_step(game, &mut e);
             e.data.insert(
                 "dist_to_player".into(),
                 crate::world_events::mask_distance(e.sprite_bounds(), game.player.sprite_bounds()),
@@ -1218,7 +1217,13 @@ pub fn step_instance(game: &mut Game, id: u64) {
         }
         _ => {}
     }
-    if let Some(original) = game.world.entity_mut(id) {
+    let continue_retired = e.object == "oFlare";
+    if let Some(original) = game
+        .world
+        .entities
+        .iter_mut()
+        .find(|original| original.id == id && (original.alive || continue_retired))
+    {
         *original = e;
     }
 }
