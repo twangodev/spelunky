@@ -3941,8 +3941,9 @@ mod tests {
             })
             .collect();
 
-        for rate in [30, 60, 120, 240] {
-            let slots = rate / spelunky_core::TICK_RATE;
+        for rate in [30, 60, 120, 144, 240] {
+            let minimum_slots = rate / spelunky_core::TICK_RATE;
+            let maximum_slots = (rate + spelunky_core::TICK_RATE - 1) / spelunky_core::TICK_RATE;
             let mut timing = HostTiming::default();
             timing.reset(0.);
             let mut game = fixture.clone();
@@ -3951,9 +3952,10 @@ mod tests {
             let mut distances = [0.; 4];
             let mut poses = vec![None; 4];
             // Include the startup interval and four complete interpolation
-            // intervals. Integer callback slots define the expected phases;
-            // floating clock arithmetic is checked with a tolerance.
-            for callback in 0..5 * slots {
+            // intervals. Timestamp phases also cover 144 Hz, whose source
+            // intervals alternate between four and five display callbacks.
+            for callback in 0..(5 * rate + spelunky_core::TICK_RATE - 1) / spelunky_core::TICK_RATE
+            {
                 let now = f64::from(callback) / f64::from(rate);
                 let frame = timing.begin_frame(now);
                 for _ in 0..timing.advance(frame).ticks {
@@ -3962,13 +3964,19 @@ mod tests {
                     tick += 1;
                     timing.history_ready = true;
                 }
-                assert_eq!(tick, (callback / slots) as usize, "{rate}Hz callback");
+                assert_eq!(
+                    tick,
+                    (callback * spelunky_core::TICK_RATE / rate) as usize,
+                    "{rate}Hz callback"
+                );
                 if tick == 0 {
                     assert_eq!(timing.alpha(), 1., "startup has no old room history");
                     continue;
                 }
                 let alpha = timing.render_alpha(now, true);
-                let phase = f64::from(callback % slots) / f64::from(slots);
+                let phase = f64::from(callback) * f64::from(spelunky_core::TICK_RATE)
+                    / f64::from(rate)
+                    - tick as f64;
                 assert!((alpha - phase).abs() < 1e-8, "{rate}Hz phase {phase}");
                 let before_draw = trace(&game);
                 let drawn = game.presentation();
@@ -3992,14 +4000,22 @@ mod tests {
             }
             assert_eq!(tick, 4);
             for (positions, distance) in motion.iter().zip(distances) {
-                assert_eq!(positions.len(), slots as usize, "{rate}Hz sample count");
+                assert!(
+                    (minimum_slots as usize..=maximum_slots as usize).contains(&positions.len()),
+                    "{rate}Hz sample count {}",
+                    positions.len()
+                );
                 for pair in positions.windows(2) {
                     assert!(
                         pair[1] > pair[0],
                         "{rate}Hz must draw distinct motion samples"
                     );
                     assert!(
-                        (pair[1] - pair[0] - distance / f64::from(slots)).abs() < 1e-4,
+                        (pair[1]
+                            - pair[0]
+                            - distance * f64::from(spelunky_core::TICK_RATE) / f64::from(rate))
+                        .abs()
+                            < 1e-4,
                         "{rate}Hz motion must use evenly spaced interpolation"
                     );
                 }
@@ -5837,6 +5853,160 @@ mod tests {
             spelunky_core::level::Level::parse(&text).unwrap(),
             spelunky_core::level::Level::default()
         );
+    }
+    #[test]
+    fn reactivated_falling_debris_does_not_replay_frozen_motion_at_display_rates() {
+        let atlas = Atlas::load().unwrap();
+        for rate in [60, 144, 240] {
+            let (game, id, frozen) = reactivated_falling_debris();
+            let live = game.world.entity(id).unwrap();
+            assert!(live.engine_active);
+            assert_eq!(live.pos, frozen.pos, "Rubble Step precedes reactivation");
+            assert_eq!(
+                live.previous_pos, frozen.previous_pos,
+                "source xprevious must remain unchanged for collision reversion"
+            );
+            assert_ne!(
+                live.previous_pos, live.pos,
+                "the witness needs stale motion"
+            );
+            let draw = game.presentation();
+            let jar = draw.world.entity(id).unwrap();
+            let frame = atlas.sprite(&jar.sprite, jar.animation).unwrap();
+            let view = Viewport::from_surface(2400, 720);
+            let hash = game.state_hash();
+            let draw_hash = draw.state_hash();
+            let rng = game.rng.clone().next_u64();
+            // Samples inside one simulation interval. 144 Hz has a fractional
+            // number of callbacks per source tick; no integer-slot shortcut.
+            for alpha in (0..((rate + 29) / 30))
+                .map(|callback| f64::from(callback) * 30. / f64::from(rate))
+                .filter(|alpha| *alpha < 1.)
+                .chain(std::iter::once(1.))
+            {
+                let camera = view.camera(
+                    draw.previous_camera.lerp(draw.camera, alpha),
+                    draw.world.width as f64 * 16.,
+                    draw.world.height as f64 * 16.,
+                );
+                let quads = scene::game_scene_in_view(&game, alpha, false, &atlas, view);
+                let q = quads.iter().find(|q| q.uv == frame.uv).unwrap();
+                let actual = [
+                    f64::from(q.rect[0] + frame.origin[0]) + camera.x,
+                    f64::from(q.rect[1] + frame.origin[1]) + camera.y,
+                ];
+                assert!(
+                    (actual[0] - frozen.pos.x).abs() < 1e-4
+                        && (actual[1] - frozen.pos.y).abs() < 1e-4,
+                    "{rate} Hz alpha {alpha}: frozen={:?}, rendered={actual:?}",
+                    frozen.pos
+                );
+                assert_eq!(game.state_hash(), hash);
+                assert_eq!(game.presentation().state_hash(), draw_hash);
+                assert_eq!(game.rng.clone().next_u64(), rng);
+            }
+        }
+    }
+
+    fn reactivated_falling_debris() -> (Game, u64, spelunky_core::Entity) {
+        use spelunky_core::{InputFrame, PlayerState, RulesPreset, Vec2, World};
+        let mut game = Game::shell(5, RulesPreset::Classic);
+        game.world = World::new(80, 40, Area::Mines, 1);
+        for x in 0..80 {
+            game.world.set_tile(x, 10, "oBrick");
+        }
+        game.player.pos = Vec2::new(500., 152.);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        game.update_camera();
+        game.previous_camera = game.camera;
+        let id = game.spawn("oRubbleDark", Vec2::new(214., 40.));
+        let mut frozen = None;
+        for _ in 0..30 {
+            game.step(&InputFrame {
+                right: true,
+                ..Default::default()
+            });
+            let jar = game.world.entity(id).expect("falling witness must survive");
+            if !jar.engine_active {
+                assert_ne!(
+                    jar.previous_pos, jar.pos,
+                    "gravity must move before freezing"
+                );
+                frozen = Some(jar.clone());
+                break;
+            }
+        }
+        let frozen = frozen.expect("walking right must freeze the debris");
+        let atlas = Atlas::load().unwrap();
+        let view = Viewport::from_surface(2400, 720);
+        let draw = game.presentation();
+        let hidden = draw
+            .dispatcher
+            .hidden_entities()
+            .iter()
+            .find(|e| e.id == id)
+            .expect("inactive debris must already be rendered from hidden storage");
+        assert_eq!(hidden.pos, frozen.pos);
+        let frame = atlas.sprite(&hidden.sprite, hidden.animation).unwrap();
+        let hash = game.state_hash();
+        for alpha in [0., 0.25, 0.5, 0.75, 1.] {
+            let camera = view.camera(
+                draw.previous_camera.lerp(draw.camera, alpha),
+                draw.world.width as f64 * 16.,
+                draw.world.height as f64 * 16.,
+            );
+            let quads = scene::game_scene_in_view(&game, alpha, false, &atlas, view);
+            let q = quads.iter().find(|q| q.uv == frame.uv).unwrap();
+            assert!(
+                (f64::from(q.rect[1] + frame.origin[1]) + camera.y - frozen.pos.y).abs() < 1e-4
+            );
+            assert_eq!(game.state_hash(), hash);
+        }
+        for _ in 0..30 {
+            game.step(&InputFrame {
+                left: true,
+                ..Default::default()
+            });
+            let jar = game.world.entity(id).expect("frozen witness must survive");
+            if jar.engine_active {
+                return (game, id, frozen);
+            }
+            assert_eq!(jar.pos, frozen.pos);
+        }
+        panic!("walking back must reactivate the debris");
+    }
+
+    #[test]
+    fn reactivation_preserves_authoritative_trace_and_active_debris_motion() {
+        let (mut game, id, frozen) = reactivated_falling_debris();
+        println!(
+            "REACTIVATION_TRACE initial hash={} rng={} jar={:?} previous={:?}",
+            game.state_hash(),
+            game.rng.clone().next_u64(),
+            game.world.entity(id).unwrap().pos,
+            game.world.entity(id).unwrap().previous_pos
+        );
+        // The next normal active tick must interpolate actual newly simulated
+        // gravity. A global freeze or a map leaking into later frames fails.
+        game.step(&spelunky_core::InputFrame::default());
+        let live = game.world.entity(id).unwrap();
+        let draw = game.presentation().world.entity(id).unwrap();
+        assert!(live.engine_active);
+        assert_eq!(live.previous_pos, frozen.pos);
+        assert_ne!(live.pos, frozen.pos);
+        assert_eq!(draw.previous_pos, live.previous_pos);
+        assert_eq!(draw.pos, live.pos);
+        for tick in 0..10 {
+            println!(
+                "REACTIVATION_TRACE tick={tick} hash={} rng={} events={:?}",
+                game.state_hash(),
+                game.rng.clone().next_u64(),
+                game.events
+            );
+            game.step(&spelunky_core::InputFrame::default());
+        }
     }
 }
 

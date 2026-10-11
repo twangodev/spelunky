@@ -1186,7 +1186,12 @@ impl Game {
     }
     pub fn capture_draw_view(&mut self) {
         self.draw_view = None;
-        self.draw_view = Some(Box::new(self.clone()));
+        let mut draw = Box::new(self.clone());
+        if !self.flags.contains("render_discontinuity") {
+            self.dispatcher
+                .prepare_draw_interpolation(&mut draw.world.entities);
+        }
+        self.draw_view = Some(draw);
     }
     /// Create callbacks run synchronously before producer assignments.
     pub fn spawn(&mut self, object: impl Into<String>, pos: Vec2) -> u64 {

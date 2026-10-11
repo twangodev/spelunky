@@ -105,8 +105,23 @@ pub struct State {
     known_terrain: BTreeMap<usize, (u64, String)>,
     #[serde(skip)]
     synced_revision: Option<(u64, u64, u64)>,
+    // Source xprevious is unchanged while inactive, but it must not replay
+    // old movement when that actor becomes visible in a fresh Draw snapshot.
+    #[serde(skip)]
+    interpolation_starts: BTreeMap<u64, Vec2>,
 }
 impl State {
+    pub(crate) fn prepare_draw_interpolation(&self, entities: &mut [Entity]) {
+        if self.phase != Phase::Draw {
+            return;
+        }
+        for entity in entities {
+            if let Some(&origin) = self.interpolation_starts.get(&entity.id) {
+                entity.previous_pos = origin;
+            }
+        }
+    }
+
     /// Frozen instances omitted from world storage by source activation.
     /// Presentation callers should read this from `Game::presentation()`;
     /// borrowing the slice does not activate, register, or advance its actors.
@@ -1238,6 +1253,13 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
         crate::traps::create(game, Instance::Entity(id));
     }
     sync_newborns(game);
+    game.dispatcher.interpolation_starts = game
+        .world
+        .entities
+        .iter()
+        .filter(|entity| !entity.engine_active && entity.previous_pos != entity.pos)
+        .map(|entity| (entity.id, entity.pos))
+        .collect();
     game.dispatcher.storage_order = game.world.entities.iter().map(|e| e.id).collect();
     game.dispatcher.running = true;
     partition(game);
