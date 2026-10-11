@@ -208,7 +208,7 @@ fn no_trap_natural_grab_control_keeps_hanging_art() {
 }
 
 #[test]
-fn ordinary_attacks_birth_one_pre_and_forward_part_with_one_forward_sound() {
+fn ordinary_attacks_birth_source_sequential_parts_without_duplicates() {
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         for character in [
             characters::Character::Explorer,
@@ -238,6 +238,17 @@ fn ordinary_attacks_birth_one_pre_and_forward_part_with_one_forward_sound() {
                         assert_eq!(entity.value("damage"), if tunnelman { 2.0 } else { 1.0 });
                     }
                 }
+                // The source queries the live oWhip family each Step. A retired
+                // first MattockHit permits a later hit, but never two live hits.
+                assert!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(|e| e.alive && e.object == front)
+                        .count()
+                        <= 1,
+                    "no simultaneous forward parts {character:?}/{rules:?} tick {tick}"
+                );
                 sounds += game
                     .events
                     .iter()
@@ -247,10 +258,21 @@ fn ordinary_attacks_birth_one_pre_and_forward_part_with_one_forward_sound() {
                     .count();
             }
             assert_eq!(pre_ids.len(), 1, "normal pre {character:?}/{rules:?}");
-            assert_eq!(front_ids.len(), 1, "normal front {character:?}/{rules:?}");
+            // Source Player Step tests image_index > 4 and live oWhip count
+            // every frame. The 3-frame MattockHit advances by 0.5, including
+            // its birth frame, and retires after six advances. The 11-frame
+            // Tunnel attack starts at 0.6 then advances by 1: first birth at
+            // 4.6, retirement while Player reaches 10.6, then a second birth
+            // before Player AnimationEnd. Ordinary Whip survives that window.
+            let expected_front_parts = if tunnelman { 2 } else { 1 };
             assert_eq!(
-                sounds, 1,
-                "no shared-query duplicate {character:?}/{rules:?}"
+                front_ids.len(),
+                expected_front_parts,
+                "normal front {character:?}/{rules:?}"
+            );
+            assert_eq!(
+                sounds, expected_front_parts,
+                "one sound per sequential forward birth {character:?}/{rules:?}"
             );
         }
     }
