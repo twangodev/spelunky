@@ -134,10 +134,6 @@ fn ground(world: &World, e: &Entity) -> bool {
 }
 
 pub fn tick(game: &mut Game, e: &mut Entity) {
-    if e.health <= 0 && matches!(e.object.as_str(), "oPiranha" | "oJaws") {
-        die(game, e);
-        return;
-    }
     match e.object.as_str() {
         "oFrog" | "oFireFrog" => frog(game, e),
         "oMonkey" => monkey(game, e),
@@ -518,6 +514,12 @@ fn monkey_steal(game: &mut Game, e: &Entity) {
 }
 
 fn fish(game: &mut Game, e: &mut Entity) {
+    if e.health <= 0 {
+        die(game, e);
+        // The source retires this receiver, then executes the independent
+        // swimming, bubble, and dry FishBone tail of its current Step.
+        super::destroyed(game, e);
+    }
     // All Piranha states pass displacement directly to moveTo; they never
     // assign xVel/yVel. Preserve velocity supplied by external collisions.
     let stored_velocity = e.vel;
@@ -609,6 +611,7 @@ fn fish(game: &mut Game, e: &mut Entity) {
     if !water(&game.world, Vec2::new(e.pos.x + 4.0, e.pos.y + 4.0)) {
         game.spawn("oFishBone", e.pos);
         e.alive = false;
+        super::destroyed(game, e);
     }
     e.vel = stored_velocity;
 }
@@ -650,10 +653,12 @@ fn jaws(game: &mut Game, e: &mut Entity) {
     // Source tests the mouth, not the middle of the 64-pixel body.
     if !water(&game.world, Vec2::new(e.pos.x + 8.0, e.pos.y + 16.0)) {
         e.health -= 1;
-        if e.health <= 0 {
-            die(game, e);
-            return;
-        }
+    }
+    if e.health <= 0 {
+        die(game, e);
+        // Mouth drying precedes the sole death block. Loot and immediate
+        // Enemy Destroy finish before the remaining state/bubble statements.
+        super::destroyed(game, e);
     }
     let swimming = super::player_alive(game)
         && game.player.data.get("swimming").copied().unwrap_or(0.0) != 0.0;
