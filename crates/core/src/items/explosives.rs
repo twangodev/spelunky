@@ -802,12 +802,21 @@ fn projectile_motion(world: &World, entity: &mut Entity, sticky: bool) -> bool {
         super::solid_edge(world, rect, entity.id)
     };
     if world.solid_at_except(entity.pos.x, entity.pos.y, entity.id) {
-        let (top, bottom, left, right) = (
-            contact(entity.pos, 0, -1),
-            contact(entity.pos, 0, 1),
+        let (left, right, bottom, top) = (
             contact(entity.pos, -1, 0),
             contact(entity.pos, 1, 0),
+            contact(entity.pos, 0, 1),
+            contact(entity.pos, 0, -1),
         );
+        // The inherited embedded branch retains its pre-escape probes.
+        for (name, value) in [
+            ("colLeft", left),
+            ("colRight", right),
+            ("colBot", bottom),
+            ("colTop", top),
+        ] {
+            entity.data.insert(name.into(), f64::from(value));
+        }
         if top && !bottom {
             entity.pos.y += 1.0;
         } else if left && !right {
@@ -869,6 +878,15 @@ fn projectile_motion(world: &World, entity: &mut Entity, sticky: bool) -> bool {
     );
     let side = left || right;
     let ceiling = contact(entity.pos, 0, -1);
+    // oItem saves this snapshot immediately after moveTo, before responses.
+    for (name, value) in [
+        ("colLeft", left),
+        ("colRight", right),
+        ("colBot", floor),
+        ("colTop", ceiling),
+    ] {
+        entity.data.insert(name.into(), f64::from(value));
+    }
     if !side {
         entity.data.insert("stuck".into(), 0.0);
     }

@@ -424,12 +424,21 @@ fn tick_item_body(game: &Game, e: &mut Entity) {
     }
     let contact = |e: &Entity, x, y| super::body_contact(&game.world, e, x, y);
     if game.world.solid_at_except(e.pos.x, e.pos.y, e.id) {
-        let (top, bottom, left, right) = (
-            contact(e, 0, -1),
-            contact(e, 0, 1),
+        let (left, right, bottom, top) = (
             contact(e, -1, 0),
             contact(e, 1, 0),
+            contact(e, 0, 1),
+            contact(e, 0, -1),
         );
+        // The inherited embedded branch retains its pre-escape probes.
+        for (name, value) in [
+            ("colLeft", left),
+            ("colRight", right),
+            ("colBot", bottom),
+            ("colTop", top),
+        ] {
+            e.data.insert(name.into(), f64::from(value));
+        }
         if top && !bottom {
             e.pos.y += 1.0;
         } else if left && !right {
@@ -455,7 +464,21 @@ fn tick_item_body(game: &Game, e: &mut Entity) {
         }
         e.pos.y += f64::from(dy.signum());
     }
-    let (left, right, bottom) = (contact(e, -1, 0), contact(e, 1, 0), contact(e, 0, 1));
+    let (left, right, bottom, top) = (
+        contact(e, -1, 0),
+        contact(e, 1, 0),
+        contact(e, 0, 1),
+        contact(e, 0, -1),
+    );
+    // oItem saves this snapshot immediately after moveTo, before responses.
+    for (name, value) in [
+        ("colLeft", left),
+        ("colRight", right),
+        ("colBot", bottom),
+        ("colTop", top),
+    ] {
+        e.data.insert(name.into(), f64::from(value));
+    }
     if !left && !right {
         e.data.insert("stuck".into(), 0.0);
     }

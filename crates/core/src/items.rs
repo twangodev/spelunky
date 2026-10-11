@@ -1050,10 +1050,20 @@ fn advance_item_body(game: &mut Game, entity: &mut Entity) -> bool {
         .world
         .solid_at_except(entity.pos.x, entity.pos.y, entity.id);
     if embedded && !overrides_parent {
-        let top = body_contact(&game.world, entity, 0, -1);
-        let bottom = body_contact(&game.world, entity, 0, 1);
         let left = body_contact(&game.world, entity, -1, 0);
         let right = body_contact(&game.world, entity, 1, 0);
+        let bottom = body_contact(&game.world, entity, 0, 1);
+        let top = body_contact(&game.world, entity, 0, -1);
+        // oItem Step refreshes every contact flag before its embedded escape.
+        // Child Steps consume this snapshot even when the escape moves us.
+        for (name, value) in [
+            ("colLeft", left),
+            ("colRight", right),
+            ("colBot", bottom),
+            ("colTop", top),
+        ] {
+            entity.data.insert(name.into(), f64::from(value));
+        }
         if top && !bottom {
             entity.pos.y += 1.0;
         } else if left && !right {
@@ -2890,3 +2900,6 @@ mod skull_bullet_source_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod embedded_contact_tests;
