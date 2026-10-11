@@ -2042,13 +2042,75 @@ fn hud_in_view(
         sprite(quads, atlas, icon, 0.0, x, 8.0, false, WHITE);
         font(quads, atlas, &value, x + 16.0, 8.0, 1.0, WHITE, "sFont");
     }
+    if player.has("Compass") {
+        let [ox, oy] = view.ui_origin();
+        let exit_x = (game.world.exit.x - camera.x) as f32 + ox;
+        let exit_y = (game.world.exit.y - camera.y) as f32 + oy;
+        let below_view = exit_y > view.height;
+        let direction = if below_view {
+            if exit_x < 0.0 {
+                "LL"
+            } else if exit_x > view.width - 16.0 {
+                "LR"
+            } else {
+                "Down"
+            }
+        } else if exit_x < 0.0 {
+            "Left"
+        } else if exit_x > view.width - 16.0 {
+            "Right"
+        } else {
+            ""
+        };
+        // scrDrawHUD uses smaller occupied artwork during source messages.
+        // Both variants retain their original 16-pixel sprite geometry.
+        let name = if direction.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "sCompass{}{direction}",
+                if game.data.get("message_timer").copied().unwrap_or(0.0) > 0.0 {
+                    "Small"
+                } else {
+                    ""
+                }
+            )
+        };
+        let start = quads.len();
+        sprite_in_view(
+            quads,
+            atlas,
+            &name,
+            0.0,
+            exit_x.clamp(0.0, view.width - 16.0),
+            if below_view {
+                view.height - 16.0
+            } else {
+                exit_y
+            },
+            false,
+            WHITE,
+            view,
+        );
+        // The final panel placement moves fixed HUD only; compass is already in full-view coordinates.
+        for quad in &mut quads[start..] {
+            quad.rect[0] -= ox;
+            quad.rect[1] -= oy;
+        }
+    }
     sprite(quads, atlas, "sHoldItemIcon", 0.0, 8.0, 24.0, false, WHITE);
-    if let Some(held) = player
+    let held = player
         .held
         .and_then(|id| game.world.entity(id))
-        .filter(|entity| entity.engine_active)
-    {
-        if let Some(name) = entity_sprite(atlas, held) {
+        .filter(|entity| entity.engine_active);
+    let holding_bow = held.is_some_and(|entity| entity.object == "oBow");
+    if let Some(held) = held {
+        let icon = if holding_bow {
+            Some("sBowDisp")
+        } else {
+            entity_sprite(atlas, held)
+        };
+        if let Some(name) = icon {
             sprite(quads, atlas, name, 0.0, 16.0, 32.0, false, WHITE);
         }
     }
@@ -2076,6 +2138,27 @@ fn hud_in_view(
             _ => name,
         };
         if player.has(name) || player.has(spaced) {
+            let frame = if name == "Kapala" {
+                let blood = game.data.get("bloodLevel").copied().unwrap_or(0.0);
+                if blood == 0.0 {
+                    0.0
+                } else if blood <= 2.0 {
+                    1.0
+                } else if blood <= 4.0 {
+                    2.0
+                } else if blood <= 6.0 {
+                    3.0
+                } else if blood <= 8.0 {
+                    4.0
+                } else {
+                    // The source still advances the equipment slot if no
+                    // Kapala frame matches (natural collection resets at 9).
+                    x += 20.0;
+                    continue;
+                }
+            } else {
+                0.0
+            };
             sprite(
                 quads,
                 atlas,
@@ -2084,7 +2167,7 @@ fn hud_in_view(
                 } else {
                     format!("s{name}Icon")
                 },
-                0.0,
+                frame,
                 x,
                 24.0,
                 false,
@@ -2093,42 +2176,26 @@ fn hud_in_view(
             x += 20.0;
         }
     }
-    if player.has("Compass") {
-        let [ox, oy] = view.ui_origin();
-        let exit_x = (game.world.exit.x - camera.x) as f32 + ox;
-        let exit_y = (game.world.exit.y - camera.y) as f32 + oy;
-        let name = if exit_y > view.height {
-            if exit_x < 0.0 {
-                "sCompassLL"
-            } else if exit_x > view.width - 16.0 {
-                "sCompassLR"
-            } else {
-                "sCompassDown"
-            }
-        } else if exit_x < 0.0 {
-            "sCompassLeft"
-        } else if exit_x > view.width - 16.0 {
-            "sCompassRight"
-        } else {
-            ""
-        };
-        let start = quads.len();
-        sprite_in_view(
+    // Source bow HUD displays ammunition, not the animated world bow's charge.
+    if holding_bow {
+        let mut arrows = game.data.get("arrows").copied().unwrap_or(0.0);
+        while arrows > 0.0 {
+            sprite(quads, atlas, "sArrowIcon", 0.0, x, 24.0, false, WHITE);
+            x += 4.0;
+            arrows -= 1.0;
+        }
+    }
+    let collect = game.data.get("collect").copied().unwrap_or(0.0);
+    if collect > 0.0 {
+        text(
             quads,
             atlas,
-            name,
-            0.0,
-            exit_x.clamp(0.0, view.width - 16.0),
-            exit_y.clamp(40.0, view.height - 16.0),
-            false,
-            WHITE,
-            view,
+            &format!("+{collect}"),
+            176.0,
+            24.0,
+            1.0,
+            [1.0, 1.0, 0.0, 1.0],
         );
-        // The final panel placement moves fixed HUD only; compass is already in full-view coordinates.
-        for quad in &mut quads[start..] {
-            quad.rect[0] -= ox;
-            quad.rect[1] -= oy;
-        }
     }
     let seconds = game.tick / u64::from(TICK_RATE);
     text(
@@ -2278,6 +2345,286 @@ mod tests {
 
     use super::*;
     use spelunky_core::RulesPreset;
+
+    #[test]
+    fn source_hud_kapala_uses_literal_fill_frames_and_preserves_equipment_slots() {
+        let atlas = Atlas::load().unwrap();
+        // scrDrawHUD119-123: all natural blood values plus the unmatched
+        // value9 control. Source still advances n when no frame is drawn.
+        for (blood, frame) in [
+            (0.0, Some(0.0)),
+            (1.0, Some(1.0)),
+            (2.0, Some(1.0)),
+            (3.0, Some(2.0)),
+            (4.0, Some(2.0)),
+            (5.0, Some(3.0)),
+            (6.0, Some(3.0)),
+            (7.0, Some(4.0)),
+            (8.0, Some(4.0)),
+            (9.0, None),
+        ] {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            for equipment in ["UdjatEye", "Ankh", "Crown", "Kapala", "Spectacles"] {
+                game.player.equipment.insert(equipment.into());
+            }
+            game.data.insert("bloodLevel".into(), blood);
+            let before = game.state_hash();
+            let random = game.rng.clone().next_u64();
+            for view in [
+                Viewport::canonical(),
+                Viewport::from_surface(1280, 720),
+                Viewport::from_surface(720, 960),
+            ] {
+                let mut quads = Vec::new();
+                hud_in_view(&mut quads, &game, Vec2::new(0.0, 0.0), &atlas, view);
+                place_authored_panel(&mut quads, view);
+                let [ox, oy] = view.ui_origin();
+                let kapala_frames: Vec<_> = (0..5)
+                    .map(|frame| atlas.sprite("sKapalaIcon", f64::from(frame)).unwrap().uv)
+                    .collect();
+                let actual: Vec<_> = quads
+                    .iter()
+                    .filter(|quad| kapala_frames.contains(&quad.uv))
+                    .collect();
+                if let Some(frame) = frame {
+                    assert_eq!(actual.len(), 1, "blood={blood}");
+                    assert_eq!(actual[0].uv, atlas.sprite("sKapalaIcon", frame).unwrap().uv);
+                    assert_eq!(actual[0].rect, [88.0 + ox, 24.0 + oy, 16.0, 16.0]);
+                    assert_eq!(actual[0].color, WHITE);
+                    assert_eq!(actual[0].blend, QuadBlend::Alpha);
+                } else {
+                    assert!(actual.is_empty(), "source has no frame for blood9");
+                }
+                let spectacles = atlas.sprite("sSpectaclesIcon", 0.0).unwrap();
+                let quad = quads.iter().find(|quad| quad.uv == spectacles.uv).unwrap();
+                assert_eq!(quad.rect, [108.0 + ox, 24.0 + oy, 16.0, 16.0]);
+                assert_eq!(game.state_hash(), before);
+                assert_eq!(game.rng.clone().next_u64(), random);
+            }
+        }
+    }
+
+    #[test]
+    fn source_hud_real_bow_charge_and_treasure_show_ammo_and_pending_money() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = adaptive_room();
+        for equipment in ["Crown", "Kapala"] {
+            game.player.equipment.insert(equipment.into());
+        }
+        let bow = game.spawn("oBow", game.player.pos);
+        game.player.held = Some(bow);
+        game.world.entity_mut(bow).unwrap().held = true;
+        game.data.insert("arrows".into(), 6.0);
+        let gold = game.spawn("oGoldBar", game.player.pos);
+        game.step(&spelunky_core::InputFrame {
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|entity| entity.id == gold && entity.alive)
+        );
+        assert_eq!(game.data.get("collect"), Some(&500.0));
+        assert_eq!(game.player.data.get("bow_armed"), Some(&1.0));
+        for _ in 0..20 {
+            game.step(&spelunky_core::InputFrame {
+                attack: true,
+                ..Default::default()
+            });
+        }
+        assert!(game.world.entity(bow).unwrap().animation > 0.0);
+        assert_eq!(game.data.get("collect"), Some(&500.0));
+        let before = game.state_hash();
+        let random = game.rng.clone().next_u64();
+        for alpha in [0.0, 0.125, 0.5, 0.875, 1.0] {
+            let quads = game_scene(&game, alpha, false, &atlas);
+            let bow_display = atlas.sprite("sBowDisp", 0.0).unwrap();
+            let slot = quads.iter().find(|quad| quad.uv == bow_display.uv).unwrap();
+            assert_eq!(slot.rect, [8.0, 24.0, 16.0, 16.0]);
+            let ammo = atlas.sprite("sArrowIcon", 0.0).unwrap();
+            let arrows: Vec<_> = quads.iter().filter(|quad| quad.uv == ammo.uv).collect();
+            assert_eq!(arrows.len(), 6);
+            for (index, quad) in arrows.iter().enumerate() {
+                assert_eq!(quad.rect, [68.0 + index as f32 * 4.0, 24.0, 16.0, 16.0]);
+                assert_eq!(quad.color, WHITE);
+                assert_eq!(quad.blend, QuadBlend::Alpha);
+            }
+            let mut expected_popup = Vec::new();
+            text(
+                &mut expected_popup,
+                &atlas,
+                "+500",
+                176.0,
+                24.0,
+                1.0,
+                [1.0, 1.0, 0.0, 1.0],
+            );
+            let popup: Vec<_> = quads
+                .iter()
+                .filter(|quad| quad.color == [1.0, 1.0, 0.0, 1.0] && quad.rect[1] == 24.0)
+                .cloned()
+                .collect();
+            assert_eq!(quad_bytes(&popup), quad_bytes(&expected_popup));
+            let final_arrow = quads.iter().rposition(|quad| quad.uv == ammo.uv).unwrap();
+            let first_popup = quads
+                .iter()
+                .position(|quad| {
+                    quad.uv == expected_popup[0].uv && quad.rect == expected_popup[0].rect
+                })
+                .unwrap();
+            assert!(
+                final_arrow < first_popup,
+                "source draws pending money after ammunition"
+            );
+            assert_eq!(game.state_hash(), before);
+            assert_eq!(game.rng.clone().next_u64(), random);
+        }
+        game.step(&spelunky_core::InputFrame::default());
+        assert_eq!(game.data.get("arrows"), Some(&5.0));
+        assert_eq!(game.data.get("collect"), Some(&400.0));
+        let quads = game_scene(&game, 0.5, false, &atlas);
+        let ammo = atlas.sprite("sArrowIcon", 0.0).unwrap();
+        assert_eq!(quads.iter().filter(|quad| quad.uv == ammo.uv).count(), 5);
+        let mut expected_popup = Vec::new();
+        text(
+            &mut expected_popup,
+            &atlas,
+            "+400",
+            176.0,
+            24.0,
+            1.0,
+            [1.0, 1.0, 0.0, 1.0],
+        );
+        let popup: Vec<_> = quads
+            .iter()
+            .filter(|quad| quad.color == [1.0, 1.0, 0.0, 1.0] && quad.rect[1] == 24.0)
+            .cloned()
+            .collect();
+        assert_eq!(quad_bytes(&popup), quad_bytes(&expected_popup));
+        for _ in 0..5 {
+            game.step(&spelunky_core::InputFrame::default());
+        }
+        assert_eq!(game.data.get("collect"), Some(&0.0));
+        assert_eq!(game.player.money, 500);
+        let quads = game_scene(&game, 0.5, false, &atlas);
+        assert!(
+            !quads
+                .iter()
+                .any(|quad| quad.color == [1.0, 1.0, 0.0, 1.0] && quad.rect[1] == 24.0)
+        );
+        // Stored arrows alone do not add ammo HUD when a bow is not held.
+        game.player.held = None;
+        game.draw_view = None;
+        let mut quads = Vec::new();
+        hud(&mut quads, &game, Vec2::new(0.0, 0.0), &atlas);
+        assert!(!quads.iter().any(|quad| quad.uv == ammo.uv));
+    }
+
+    #[test]
+    fn source_hud_compass_uses_message_art_raw_side_y_and_source_draw_order() {
+        let atlas = Atlas::load().unwrap();
+        let all_arrows: Vec<_> = ["", "Small"]
+            .into_iter()
+            .flat_map(|size| {
+                ["LL", "LR", "Down", "Left", "Right"].map(|direction| {
+                    atlas
+                        .sprite(&format!("sCompass{size}{direction}"), 0.0)
+                        .unwrap()
+                        .uv
+                })
+            })
+            .collect();
+        for view in [
+            Viewport::canonical(),
+            Viewport::from_surface(1280, 720),
+            Viewport::from_surface(720, 960),
+        ] {
+            let right = view.width - 16.0;
+            for (exit, expected) in [
+                (
+                    Vec2::new(-1.0, f64::from(view.height + 1.0)),
+                    Some(("LL", 0.0, view.height - 16.0)),
+                ),
+                (
+                    Vec2::new(f64::from(right + 1.0), f64::from(view.height + 1.0)),
+                    Some(("LR", right, view.height - 16.0)),
+                ),
+                (
+                    Vec2::new(100.0, f64::from(view.height + 1.0)),
+                    Some(("Down", 100.0, view.height - 16.0)),
+                ),
+                (
+                    Vec2::new(f64::from(right), f64::from(view.height + 1.0)),
+                    Some(("Down", right, view.height - 16.0)),
+                ),
+                (Vec2::new(-1.0, 24.0), Some(("Left", 0.0, 24.0))),
+                (Vec2::new(-1.0, -8.0), Some(("Left", 0.0, -8.0))),
+                (
+                    Vec2::new(f64::from(right + 1.0), f64::from(view.height - 8.0)),
+                    Some(("Right", right, view.height - 8.0)),
+                ),
+                (Vec2::new(100.0, f64::from(view.height)), None),
+                (Vec2::new(0.0, 100.0), None),
+                (Vec2::new(f64::from(right), 100.0), None),
+            ] {
+                for message in [0.0, 1.0] {
+                    let mut game = Game::shell(1, RulesPreset::Classic);
+                    game.player.equipment.insert("Compass".into());
+                    game.data.insert("message_timer".into(), message);
+                    game.world.exit = exit;
+                    let [ox, oy] = view.ui_origin();
+                    // hud_in_view receives expanded camera plus uiOrigin;
+                    // fixture rendered camera is independently fixed at0,0.
+                    let mut quads = Vec::new();
+                    hud_in_view(
+                        &mut quads,
+                        &game,
+                        Vec2::new(f64::from(ox), f64::from(oy)),
+                        &atlas,
+                        view,
+                    );
+                    place_authored_panel(&mut quads, view);
+                    let actual: Vec<_> = quads
+                        .iter()
+                        .filter(|quad| all_arrows.contains(&quad.uv))
+                        .collect();
+                    if let Some((direction, x, y)) = expected {
+                        assert_eq!(actual.len(), 1, "exit={exit:?} message={message}");
+                        let name = format!(
+                            "sCompass{}{direction}",
+                            if message > 0.0 { "Small" } else { "" }
+                        );
+                        assert_eq!(actual[0].uv, atlas.sprite(&name, 0.0).unwrap().uv);
+                        assert!((actual[0].rect[0] - x).abs() < 0.0001);
+                        assert!((actual[0].rect[1] - y).abs() < 0.0001);
+                        assert_eq!(actual[0].rect[2..], [16.0, 16.0]);
+                        assert_eq!(actual[0].color, WHITE);
+                        assert_eq!(actual[0].blend, QuadBlend::Alpha);
+                        let compass_index = quads
+                            .iter()
+                            .position(|quad| quad.uv == actual[0].uv)
+                            .unwrap();
+                        let held = atlas.sprite("sHoldItemIcon", 0.0).unwrap();
+                        let held_index = quads.iter().position(|quad| quad.uv == held.uv).unwrap();
+                        assert!(
+                            compass_index < held_index,
+                            "source compass precedes held/equipment HUD"
+                        );
+                    } else {
+                        assert!(
+                            actual.is_empty(),
+                            "strict source visibility boundary exit={exit:?}"
+                        );
+                    }
+                    assert_eq!(game.data.get("message_timer"), Some(&message));
+                }
+            }
+        }
+    }
 
     fn adaptive_room() -> Game {
         let mut game = Game::shell(5, RulesPreset::Classic);
