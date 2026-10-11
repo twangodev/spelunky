@@ -180,47 +180,95 @@ fn hit(game: &mut Game, direction: i32, trace: &mut Vec<String>) {
     panic!("FIXTURE_TIMING: initial ArrowTrap produced no source hit: {trace:#?}");
 }
 
-fn wait_at_recovery_boundary(game: &mut Game, trace: &mut Vec<String>) {
+/// Recovery is keyed to stationary stun art, independently of vertical bounce.
+/// Run without an axis keeps runHeld=0 and preserves the existing speed cap:
+/// it selects neither the running cap6 nor the ordinary neutral-ground cap3.
+/// Down would select Ducking, which independently assigns cap3.
+fn recover_and_land_without_ground_idle_reset(game: &mut Game, trace: &mut Vec<String>) -> f64 {
+    let mut first_recovery_limit = None;
     for _ in 0..RECOVERY_BOUND {
         assert_eq!(game.state, RunState::Playing, "FIXTURE_TIMING: {trace:#?}");
         assert_eq!(
             game.player.health, 2,
             "FIXTURE_TIMING: unexpected secondary injury: {trace:#?}"
         );
-        assert!(
-            game.player.is_stunned(),
-            "FIXTURE_TIMING: recovery already passed: {trace:#?}"
-        );
-        let stationary = matches!(game.player.sprite.as_str(), "sStunL" | "sDamselStunL");
-        if game.player.stun == 1 && stationary {
-            // Timer1 alone is insufficient: zero horizontal velocity can
-            // select stationary stun art during a remaining vertical bounce.
+        if first_recovery_limit.is_none() {
             assert!(
-                game.player.grounded,
-                "FIXTURE_TIMING: timer1 airborne: {trace:#?}"
+                game.player.is_stunned(),
+                "FIXTURE_TIMING: recovery boundary missed: {trace:#?}"
+            );
+        } else {
+            assert!(
+                !game.player.is_stunned(),
+                "FIXTURE_TIMING: new stun after recovery: {trace:#?}"
+            );
+        }
+        let stationary = matches!(game.player.sprite.as_str(), "sStunL" | "sDamselStunL");
+        let expires = first_recovery_limit.is_none() && game.player.stun == 1 && stationary;
+        game.step(&InputFrame {
+            run: true,
+            ..Default::default()
+        });
+        trace.push(diagnostic(game));
+        assert_eq!(game.state, RunState::Playing, "FIXTURE_TIMING: {trace:#?}");
+        assert_eq!(
+            game.player.health, 2,
+            "FIXTURE_TIMING: unexpected injury: {trace:#?}"
+        );
+        if expires {
+            assert_eq!(
+                game.player.stun, 0,
+                "CONTRACT: stationary-art timer1 expires on next Step: {trace:#?}"
+            );
+            assert!(
+                !game.player.is_stunned(),
+                "CONTRACT: stationary-art expiry admits controller: {trace:#?}"
             );
             assert_eq!(
-                game.player.vel,
-                Vec2::default(),
-                "FIXTURE_TIMING: timer1 still moving: {trace:#?}"
-            );
-            assert_eq!(
-                game.player.pos.y + 8.,
-                FLOOR_TOP,
-                "FIXTURE_TIMING: wrong support: {trace:#?}"
-            );
-            assert_eq!(
-                value(game, "fall_timer"),
+                value(game, "bounced"),
                 0.,
-                "FIXTURE_TIMING: pending fall injury: {trace:#?}"
+                "CONTRACT: first recovered controller clears bounce: {trace:#?}"
+            );
+            first_recovery_limit = Some(value(game, "velocity_limit_x"));
+        }
+        if first_recovery_limit.is_some() {
+            assert_eq!(
+                game.player.stun, 0,
+                "FIXTURE_TIMING: new timer after recovery: {trace:#?}"
+            );
+            assert!(
+                !game.player.is_stunned(),
+                "FIXTURE_TIMING: new stun after recovery: {trace:#?}"
+            );
+            assert_eq!(
+                value(game, "run_held"),
+                0.,
+                "FIXTURE_TIMING: direction-free Run must not accelerate: {trace:#?}"
+            );
+            assert_eq!(
+                value(game, "source_k_down"),
+                0.,
+                "FIXTURE_TIMING: recovered controller samples no Down: {trace:#?}"
             );
             assert_eq!(value(game, "duck_to_hang"), 0., "{trace:#?}");
-            return;
+            if game.player.grounded
+                && game.player.vel == Vec2::default()
+                && value(game, "fall_timer") == 0.
+            {
+                // Keep true grounded/zero-speed/fall-free Jump prerequisites,
+                // but observe them after source recovery instead of at timer1.
+                assert_eq!(
+                    game.player.pos.y + 8.,
+                    FLOOR_TOP,
+                    "FIXTURE_TIMING: wrong support: {trace:#?}"
+                );
+                return first_recovery_limit.unwrap();
+            }
         }
-        game.step(&InputFrame::default());
-        trace.push(diagnostic(game));
     }
-    panic!("FIXTURE_TIMING: no settled stationary timer1 boundary: {trace:#?}");
+    panic!(
+        "FIXTURE_TIMING: no actual recovery followed by settled grounded launch boundary: {trace:#?}"
+    );
 }
 
 fn directional_jump(direction: i32, pressed: bool) -> InputFrame {
@@ -302,7 +350,7 @@ fn jump_and_observe(
 }
 
 #[test]
-fn actual_arrow_stun_retains_ten_on_first_recovery_jump_in_both_directions() {
+fn actual_arrow_stun_retains_ten_on_first_grounded_jump_after_recovery_in_both_directions() {
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         for character in [
             characters::Character::Explorer,
@@ -313,7 +361,12 @@ fn actual_arrow_stun_retains_ten_on_first_recovery_jump_in_both_directions() {
                 let mut trace = Vec::new();
                 settle(&mut game, &mut trace);
                 hit(&mut game, direction, &mut trace);
-                wait_at_recovery_boundary(&mut game, &mut trace);
+                let first_recovery_limit =
+                    recover_and_land_without_ground_idle_reset(&mut game, &mut trace);
+                assert_eq!(
+                    first_recovery_limit, 10.,
+                    "CONTRACT: first actual recovered controller retains stun cap10: {trace:#?}"
+                );
                 jump_and_observe(&mut game, direction, 10., true, &mut trace);
             }
         }
@@ -332,7 +385,7 @@ fn neutral_ground_recovery_legitimately_replaces_ten_with_three_before_jump() {
                 let mut trace = Vec::new();
                 settle(&mut game, &mut trace);
                 hit(&mut game, direction, &mut trace);
-                wait_at_recovery_boundary(&mut game, &mut trace);
+                recover_and_land_without_ground_idle_reset(&mut game, &mut trace);
                 game.step(&InputFrame::default());
                 trace.push(diagnostic(&game));
                 assert!(!game.player.is_stunned(), "{trace:#?}");
