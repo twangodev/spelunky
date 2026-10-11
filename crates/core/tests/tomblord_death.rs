@@ -300,8 +300,12 @@ fn lethal_ordinary_pistol_during_attack_still_emits_source_post_destroy_fly() {
                 .world
                 .entity(lord)
                 .expect("Lord remains until final shot");
-            let final_window =
-                target.health == 4 && target.state == 3 && target.animation <= 0.5 && !fired_final;
+            // Wait one attack Step so the shot reaches the source's
+            // 7..12 death-tail emission window in this authored room.
+            let final_window = target.health == 4
+                && target.state == 3
+                && (0.75..=1.0).contains(&target.animation)
+                && !fired_final;
             let shoot = if target.health > 4 {
                 tick % 24 == 0
             } else {
