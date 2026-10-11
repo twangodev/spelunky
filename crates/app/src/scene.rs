@@ -1951,6 +1951,133 @@ fn hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas) {
 
 #[cfg(test)]
 mod tests {
+    // Author a legal room, then use only actual tick inputs. No midrun player,
+    // image-index, animation-speed or controller-counter assignments.
+    fn natural_duck_to_hang_callback(right: bool) -> Game {
+        let mut level = spelunky_core::level::Level::default();
+        level
+            .set_tile(if right { 12 } else { 14 }, 18, '@')
+            .unwrap();
+        let platform = if right { 3..=13 } else { 14..=24 };
+        for x in platform {
+            level.set_tile(x, 19, '1').unwrap();
+        }
+        let mut game = Game::shell(42, spelunky_core::RulesPreset::Classic);
+        game.load_custom(&level, "natural-duck-to-hang", "");
+        let mut trace = Vec::new();
+        for _ in 0..4 {
+            game.step(&spelunky_core::InputFrame::default());
+            trace.push((
+                game.tick,
+                game.state_hash(),
+                game.rng.clone().next_u64(),
+                serde_json::to_string(&game.events).unwrap(),
+            ));
+        }
+        assert!(game.player.grounded, "authored entrance did not settle");
+        let mut entered = false;
+        for _ in 0..80 {
+            game.step(&spelunky_core::InputFrame {
+                down: true,
+                right,
+                left: !right,
+                ..Default::default()
+            });
+            trace.push((
+                game.tick,
+                game.state_hash(),
+                game.rng.clone().next_u64(),
+                serde_json::to_string(&game.events).unwrap(),
+            ));
+            entered |= game.player.data.get("duck_to_hang") == Some(&1.);
+            if entered && game.presentation().player.pos != game.player.pos {
+                assert_eq!(game.presentation().player.sprite, "sDuckToHangL");
+                assert_eq!(game.player.state, spelunky_core::PlayerState::Hanging);
+                eprintln!(
+                    "DUCK_AUTHORITATIVE_TRACE right={right} {}",
+                    serde_json::to_string(&trace).unwrap()
+                );
+                return game;
+            }
+        }
+        panic!(
+            "natural crawl failed to finish duck-to-hang: right={right}, state={:?}, pos={:?}, sprite={}, animation={}",
+            game.player.state, game.player.pos, game.player.sprite, game.player.animation
+        );
+    }
+    fn natural_duck_draw_anchor(game: &Game, alpha: f64, atlas: &Atlas) -> [f64; 2] {
+        let player = &game.presentation().player;
+        let frame = atlas.sprite(&player.sprite, player.animation).unwrap();
+        let mirrored = player.facing > 0;
+        let mut uv = frame.uv;
+        if mirrored {
+            uv[0] += uv[2];
+            uv[2] = -uv[2];
+        }
+        let quads = game_scene(game, alpha, false, atlas);
+        let quad = quads
+            .iter()
+            .find(|quad| quad.uv == uv)
+            .expect("source last Draw frame absent");
+        [
+            f64::from(
+                quad.rect[0]
+                    + if mirrored {
+                        frame.size[0] - frame.origin[0]
+                    } else {
+                        frame.origin[0]
+                    },
+            ),
+            f64::from(quad.rect[1] + frame.origin[1]),
+        ]
+    }
+
+    fn natural_duck_to_hang_animation_end_scene_has_no_camera_rebound(right: bool) {
+        let atlas = Atlas::load().unwrap();
+        {
+            let mut game = natural_duck_to_hang_callback(right);
+            let hash = game.state_hash();
+            let frozen_frame = game.presentation().player.animation;
+            let frozen_sprite = game.presentation().player.sprite.clone();
+            let expected_x =
+                game.presentation().player.pos.x - game.presentation().previous_camera.x;
+            for alpha in [0., 0.125, 0.5, 0.875, 1.] {
+                let anchor = natural_duck_draw_anchor(&game, alpha, &atlas);
+                assert!(
+                    (anchor[0] - expected_x).abs() < 1e-4,
+                    "right={right} alpha={alpha}: {anchor:?}"
+                );
+                assert!(
+                    (anchor[1] - 144.).abs() < 1e-4,
+                    "right={right} alpha={alpha}: {anchor:?}"
+                );
+                assert_eq!(game.presentation().player.animation, frozen_frame);
+                assert_eq!(game.presentation().player.sprite, frozen_sprite);
+                assert_eq!(
+                    game.state_hash(),
+                    hash,
+                    "render altered authoritative state"
+                );
+            }
+            let previous = natural_duck_draw_anchor(&game, 1., &atlas);
+            game.step(&spelunky_core::InputFrame::default());
+            let next = natural_duck_draw_anchor(&game, 0., &atlas);
+            assert!(
+                (previous[1] - next[1]).abs() < 1e-4,
+                "right={right}: {previous:?} -> {next:?}"
+            );
+            assert_eq!(game.presentation().player.sprite, "sHangLeft");
+        }
+    }
+    #[test]
+    fn natural_duck_to_hang_left_scene_has_no_camera_rebound() {
+        natural_duck_to_hang_animation_end_scene_has_no_camera_rebound(false);
+    }
+    #[test]
+    fn natural_duck_to_hang_right_scene_has_no_camera_rebound() {
+        natural_duck_to_hang_animation_end_scene_has_no_camera_rebound(true);
+    }
+
     use super::*;
     use spelunky_core::RulesPreset;
 

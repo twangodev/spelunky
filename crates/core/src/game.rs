@@ -209,12 +209,16 @@ impl Game {
         self.flags.remove("render_discontinuity");
         dispatcher::step(self, input);
         self.update_camera();
-        // Draw freezes actors before Animation callbacks. Camera following
-        // finishes afterward, so retain that actor snapshot while supplying
-        // the camera endpoints needed to interpolate the same tick's view.
+        // Draw freezes actors before Animation callbacks. Keep camera following
+        // in that same phase when Animation End repositions the live player.
+        // The authoritative camera and collision history remain untouched.
         if let Some(draw) = self.draw_view.as_mut() {
-            draw.previous_camera = self.previous_camera;
-            draw.camera = self.camera;
+            if draw.player.pos != self.player.pos {
+                draw.update_camera();
+            } else {
+                draw.previous_camera = self.previous_camera;
+                draw.camera = self.camera;
+            }
         }
     }
 
@@ -462,6 +466,124 @@ impl Game {
 
 #[cfg(test)]
 mod tests {
+    // Author a legal room, then use only actual tick inputs. No midrun player,
+    // image-index, animation-speed or controller-counter assignments.
+    fn natural_duck_to_hang_callback(right: bool) -> Game {
+        let mut level = crate::level::Level::default();
+        level
+            .set_tile(if right { 12 } else { 14 }, 18, '@')
+            .unwrap();
+        let platform = if right { 3..=13 } else { 14..=24 };
+        for x in platform {
+            level.set_tile(x, 19, '1').unwrap();
+        }
+        let mut game = Game::shell(42, crate::RulesPreset::Classic);
+        game.load_custom(&level, "natural-duck-to-hang", "");
+        let mut trace = Vec::new();
+        for _ in 0..4 {
+            game.step(&crate::InputFrame::default());
+            trace.push((
+                game.tick,
+                game.state_hash(),
+                game.rng.clone().next_u64(),
+                serde_json::to_string(&game.events).unwrap(),
+            ));
+        }
+        assert!(game.player.grounded, "authored entrance did not settle");
+        let mut entered = false;
+        for _ in 0..80 {
+            game.step(&crate::InputFrame {
+                down: true,
+                right,
+                left: !right,
+                ..Default::default()
+            });
+            trace.push((
+                game.tick,
+                game.state_hash(),
+                game.rng.clone().next_u64(),
+                serde_json::to_string(&game.events).unwrap(),
+            ));
+            entered |= game.player.data.get("duck_to_hang") == Some(&1.);
+            if entered && game.presentation().player.pos != game.player.pos {
+                assert_eq!(game.presentation().player.sprite, "sDuckToHangL");
+                assert_eq!(game.player.state, crate::PlayerState::Hanging);
+                eprintln!(
+                    "DUCK_AUTHORITATIVE_TRACE right={right} {}",
+                    serde_json::to_string(&trace).unwrap()
+                );
+                return game;
+            }
+        }
+        panic!(
+            "natural crawl failed to finish duck-to-hang: right={right}, state={:?}, pos={:?}, sprite={}, animation={}",
+            game.player.state, game.player.pos, game.player.sprite, game.player.animation
+        );
+    }
+    fn natural_duck_to_hang_animation_end_keeps_draw_camera_in_actor_phase(right: bool) {
+        {
+            let mut game = natural_duck_to_hang_callback(right);
+            let drawn = game.presentation();
+            // Animation End moves the live actor, but the source last Draw
+            // frame remains frozen at its original position/image index.
+            assert_eq!(game.player.pos.y - drawn.player.pos.y, 16.);
+            assert_eq!(
+                game.player.pos.x - drawn.player.pos.x,
+                if right { 6. } else { -5. }
+            );
+            assert_eq!(game.player.previous_pos, game.player.pos);
+            assert_eq!(drawn.player.previous_pos, drawn.player.pos);
+            assert_eq!(drawn.player.sprite, "sDuckToHangL");
+            assert_eq!(
+                drawn.player.animation.floor() as usize,
+                catalog::sprite_frame_count("sDuckToHangL") - 1
+            );
+            assert!(!drawn.flags.contains("render_discontinuity"));
+            assert_eq!(
+                game.camera.y,
+                game.player.pos.y - 144.,
+                "authoritative camera changed"
+            );
+            assert_eq!(
+                drawn.previous_camera.y,
+                drawn.player.pos.y - 144.,
+                "captured previous camera changed"
+            );
+            assert_eq!(
+                drawn.camera.y,
+                drawn.player.pos.y - 144.,
+                "Draw camera followed post-Animation actor"
+            );
+            let previous_draw_end_y = drawn.player.pos.y - drawn.camera.y;
+            let live_position = game.player.pos;
+            let live_camera = game.camera;
+            game.step(&InputFrame::default());
+            assert_eq!(
+                game.player.pos, live_position,
+                "source hanging actor unexpectedly moved"
+            );
+            assert_eq!(
+                game.camera, live_camera,
+                "source hanging camera unexpectedly moved"
+            );
+            assert_eq!(game.presentation().player.sprite, "sHangLeft");
+            let next = game.presentation();
+            assert_eq!(
+                next.player.previous_pos.y - next.previous_camera.y,
+                previous_draw_end_y,
+                "joined tick boundary displaced the player on screen"
+            );
+        }
+    }
+    #[test]
+    fn natural_duck_to_hang_left_camera_in_actor_phase() {
+        natural_duck_to_hang_animation_end_keeps_draw_camera_in_actor_phase(false);
+    }
+    #[test]
+    fn natural_duck_to_hang_right_camera_in_actor_phase() {
+        natural_duck_to_hang_animation_end_keeps_draw_camera_in_actor_phase(true);
+    }
+
     use super::*;
     #[test]
     fn seeded_tick_replay_is_reproducible() {
