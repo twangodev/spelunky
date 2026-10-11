@@ -620,12 +620,6 @@ pub(crate) fn item_step_impacts(game: &mut Game, item_id: u64) {
         return;
     }
     let radius = if fragile { 3. } else { 2. };
-    let area = Rect::new(
-        item.pos.x - radius,
-        item.pos.y - radius,
-        2. * radius + 1.,
-        2. * radius + 1.,
-    );
     let first = Vec2::new(item.pos.x - radius, item.pos.y - radius);
     let second = Vec2::new(item.pos.x + radius, item.pos.y + radius);
     let overlaps_enemy = game.world.entities.iter().any(|e| {
@@ -657,7 +651,7 @@ pub(crate) fn item_step_impacts(game: &mut Game, item_id: u64) {
                 && e.alive
                 && e.id != item_id
                 && e.object == "oDamsel"
-                && e.sprite_bounds().intersects(area)
+                && e.collision_mask().intersects_rectangle_bbox(first, second)
         })
         .map(|e| e.id);
     let mut broke = false;
