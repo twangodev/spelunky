@@ -295,6 +295,17 @@ fn environmental_prelude(game: &mut Game) {
     } else {
         set(&mut game.player, "red_color", 0.0);
     }
+    // oPlayer1 Step78-86 resets hidden corpses before environmental and
+    // dead/stunned motion. The later bounced branch still adds one pixel.
+    let dead = game.player.state == PlayerState::Dead || game.state == RunState::Dead;
+    let invisible =
+        value(&game.player, "hidden", 0.0) != 0.0 || value(&game.player, "visible", 1.0) == 0.0;
+    if dead && invisible {
+        game.player.vel = Vec2::default();
+        set(&mut game.player, "gravity", 0.0);
+        set(&mut game.player, "my_gravity", 0.0);
+        set(&mut game.player, "bounced", 1.0);
+    }
     let pos = game.player.pos;
     if collision_rect(
         &game.world,
