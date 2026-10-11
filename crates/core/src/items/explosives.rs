@@ -52,6 +52,24 @@ fn solid_point(world: &World, pos: Vec2) -> bool {
     world.solid_point_except(pos, 0)
 }
 
+/// Literal precision-zero Solid rectangle/point query used by the two Rope
+/// actions. Source endpoints are inclusive and may form a zero-area point.
+fn rope_solid_rectangle(world: &World, first: Vec2, second: Vec2) -> bool {
+    world.tiles.iter().enumerate().any(|(index, tile)| {
+        crate::catalog::is_a(&tile.object, "oSolid")
+            && world
+                .tile_collision_mask((index % world.width) as i32, (index / world.width) as i32)
+                .intersects_rectangle_bbox(first, second)
+    }) || world.entities.iter().any(|entity| {
+        entity.alive
+            && entity.engine_active
+            && crate::catalog::is_a(&entity.object, "oSolid")
+            && entity
+                .collision_mask()
+                .intersects_rectangle_bbox(first, second)
+    })
+}
+
 /// First use arms a carried bomb; subsequent use can throw it normally.
 pub fn arm_bomb(bomb: &mut Entity) {
     init_entity(bomb);
@@ -355,42 +373,96 @@ pub fn cycle_inventory(game: &mut Game) {
 
 /// A carried rope has already been removed from the rope inventory.
 pub fn use_held_rope(game: &mut Game, id: u64, input: &InputFrame) -> bool {
-    if !game
+    let Some(held) = game
         .world
         .entity(id)
-        .is_some_and(|entity| entity.object == "oRopeThrow" && entity.held)
-    {
+        .filter(|entity| entity.object == "oRopeThrow" && entity.held)
+        .cloned()
+    else {
         return false;
+    };
+    if !can_use(game) || (!input.down && crate::player::cached_col_top(&game.player)) {
+        return true;
     }
-    let before = game.player.ropes;
-    game.player.ropes += 1;
-    let mut rope_input = *input;
-    rope_input.rope_pressed = true;
-    use_rope(game, &rope_input);
-    if game.player.ropes == before {
+    let player_pos = game.player.pos;
+    let facing = f64::from(game.player.facing);
+    {
+        let rope = game.world.entity_mut(id).unwrap();
+        rope.held = false;
+        rope.data.insert("armed".into(), 1.0);
+        rope.data.insert("px".into(), player_pos.x);
+        rope.data.insert("py".into(), player_pos.y);
+    }
+    if input.down {
+        // scrUseItem creates the attempted anchor before any placement query.
+        // The old held actor remains available for a failed attempt's origin.
+        let attempt = game.spawn(
+            "oRopeThrow",
+            Vec2::new(player_pos.x + 16.0 * facing, player_pos.y),
+        );
+        let mut pos = game.world.entity(attempt).unwrap().pos;
+        pos.x = (pos.x / 16.0).round_ties_even() * 16.0;
+        pos.y = pos.y.round_ties_even();
+        {
+            let rope = game.world.entity_mut(attempt).unwrap();
+            rope.pos = pos;
+            rope.data.insert("t".into(), 1.0);
+        }
+        let probe_pos = pos;
+        let point_clear = |x| {
+            let point = Vec2::new(x, player_pos.y);
+            !rope_solid_rectangle(&game.world, point, point)
+        };
+        let clear_side = |offset: f64| {
+            let first = Vec2::new(probe_pos.x + offset, probe_pos.y);
+            let second = Vec2::new(probe_pos.x + offset + 1.0, probe_pos.y + 16.0);
+            !rope_solid_rectangle(&game.world, first, second)
+        };
+        let mut fits = true;
+        if player_pos.x < pos.x && point_clear(player_pos.x + 2.0) {
+            if clear_side(-8.0) {
+                pos.x -= 8.0;
+            } else if clear_side(7.0) {
+                pos.x += 8.0;
+            } else {
+                fits = false;
+            }
+        } else if point_clear(player_pos.x - 2.0) {
+            if clear_side(7.0) {
+                pos.x += 8.0;
+            } else if clear_side(-8.0) {
+                pos.x -= 8.0;
+            } else {
+                fits = false;
+            }
+        }
+        // The source deliberately has no final else that clears `fits`.
+        {
+            let rope = game.world.entity_mut(attempt).unwrap();
+            rope.pos = pos;
+            rope.data.insert("t".into(), f64::from(fits));
+        }
+        if fits {
+            game.spawn("oRopeTop", pos);
+            let rope = game.world.entity_mut(attempt).unwrap();
+            rope.data.insert("armed".into(), 0.0);
+            rope.data.insert("falling".into(), 1.0);
+            rope.vel = Vec2::default();
+        } else {
+            let thrown = game.spawn("oRopeThrow", held.pos);
+            game.world.entity_mut(thrown).unwrap().vel = Vec2::new(3.2 * facing, 0.5);
+            game.world.entity_mut(attempt).unwrap().alive = false;
+        }
         game.world.entity_mut(id).unwrap().alive = false;
         game.player.held = None;
-        restore_stashed_item(game);
     } else {
-        game.player.ropes = before;
-        if input.down && can_use(game) {
-            // scrUseItem's carried-rope path throws the reserved rope when
-            // downward anchoring fails; the dedicated rope button keeps it.
-            let rope = game.world.entity_mut(id).unwrap();
-            rope.held = false;
-            rope.pos = Vec2::new(
-                game.player.pos.x + 4.0 * f64::from(game.player.facing),
-                game.player.pos.y + 2.0,
-            );
-            rope.previous_pos = rope.pos;
-            rope.vel = Vec2::new(3.2 * f64::from(game.player.facing), 0.5);
-            rope.data.insert("armed".into(), 0.0);
-            rope.data.insert("falling".into(), 0.0);
-            game.player.held = None;
-            restore_stashed_item(game);
-            game.sound("sndThrow", game.player.pos);
-        }
+        // Upward use launches the SAME reserved actor and leaves its y intact.
+        let rope = game.world.entity_mut(id).unwrap();
+        rope.pos.x = player_pos.x;
+        rope.vel = Vec2::new(0.0, -12.0);
     }
+    restore_stashed_item(game);
+    game.sound("sndThrow", player_pos);
     true
 }
 
@@ -2947,8 +3019,14 @@ mod tests {
         });
         assert!(g.player.held.is_none());
         assert_eq!(g.player.ropes, 3);
-        let rope = g.world.entity(reserved).unwrap();
-        assert!(!rope.held);
+        assert!(g.world.entity(reserved).is_none());
+        let rope = g
+            .world
+            .entities
+            .iter()
+            .find(|rope| rope.alive && rope.object == "oRopeThrow" && !rope.held)
+            .unwrap();
+        assert_ne!(rope.id, reserved);
         assert_eq!(rope.value("falling"), 0.0);
         assert_eq!(rope.vel.x, 3.2);
     }
