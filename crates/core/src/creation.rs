@@ -49,7 +49,9 @@ pub(crate) fn initialize_entity_local(world: &mut World, rng: &mut Rng, id: u64)
     // world. The local context cannot mutate storage, so the original slot is
     // still authoritative when the body returns.
     let mut entity = world.entities.remove(index);
-    crate::enemies::create_local(&mut EntityCreateContext { world, rng }, &mut entity);
+    let mut context = EntityCreateContext { world, rng };
+    crate::enemies::create_local(&mut context, &mut entity);
+    crate::traps::create_local(&mut context, &mut entity);
     world.entities.insert(index, entity);
 }
 

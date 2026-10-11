@@ -181,28 +181,32 @@ pub(super) fn init_entity(entity: &mut Entity) {
     }
 }
 
-pub(super) fn create(game: &mut Game, instance: Instance) {
-    let Instance::Entity(id) = instance else {
-        return;
-    };
-    let Some(entity) = game.world.entity(id) else {
-        return;
-    };
+/// RNG-only source Create body shared by generated births and runtime Create.
+/// Both Smash classes own dir=rand(0,3); their MovingSolid parent draws nothing.
+/// Existing saved markers and caller-supplied direction retain their behavior.
+pub(super) fn create_local(rng: &mut crate::Rng, entity: &mut Entity) {
     if !handles(&entity.object) || entity.data.contains_key("moving_context_initialized") {
         return;
     }
     let direction = if matches!(entity.object.as_str(), "oSmashTrap" | "oSmashTrapLit") {
-        Some(f64::from(game.rng.range(4)))
+        Some(f64::from(rng.range(4)))
     } else {
         None
-    };
-    let Some(entity) = game.world.entity_mut(id) else {
-        return;
     };
     entity.data.insert("moving_context_initialized".into(), 1.0);
     if let Some(direction) = direction {
         entity.data.entry("direction".into()).or_insert(direction);
     }
+}
+
+pub(super) fn create(game: &mut Game, instance: Instance) {
+    let Instance::Entity(id) = instance else {
+        return;
+    };
+    let Some(entity) = game.world.entity_mut(id) else {
+        return;
+    };
+    create_local(&mut game.rng, entity);
 }
 
 pub(super) fn animation_end(game: &mut Game, instance: Instance) {
@@ -1155,6 +1159,129 @@ mod tests {
         }
         assert!(game.player.grounded);
         game
+    }
+
+    #[test]
+    fn generated_smash_create_draw_precedes_following_population_roll() {
+        for object in ["oSmashTrap", "oSmashTrapLit"] {
+            for seed in [1, 7, 123] {
+                let mut world = crate::World::new(12, 12, crate::Area::Temple, 13);
+                let mut rng = crate::Rng::new(seed);
+                let mut expected = rng.clone();
+                let direction = expected.range(4);
+                // scrEntityGen creates the trap before calling scrTreasureGen.
+                // This checks source draw ORDER with the port's RNG; it does
+                // not claim the portable RNG equals the original GM stream.
+                let following_population_roll = expected.range(40);
+                let id = crate::creation::spawn_generated_entity(
+                    &mut world,
+                    &mut rng,
+                    object,
+                    Vec2::new(80.0, 80.0),
+                );
+                assert_eq!(rng.range(40), following_population_roll, "{object}/{seed}");
+                let entity = world.entity(id).unwrap();
+                assert_eq!(entity.data.get("direction"), Some(&f64::from(direction)));
+                assert_eq!(entity.value("moving_context_initialized"), 1.0);
+                assert_eq!(rng.next_u64(), expected.next_u64());
+            }
+        }
+    }
+
+    #[test]
+    fn generated_smash_local_then_runtime_create_preserves_overrides_and_rng() {
+        for object in ["oSmashTrap", "oSmashTrapLit"] {
+            let mut game = Game::shell(123, RulesPreset::Classic);
+            let id = crate::creation::spawn_generated_entity(
+                &mut game.world,
+                &mut game.rng,
+                object,
+                Vec2::new(80.0, 80.0),
+            );
+            // Source assignments following instance_create own the final state.
+            let entity = game.world.entity_mut(id).unwrap();
+            entity.data.insert("direction".into(), 3.0);
+            entity.data.insert("xv".into(), 4.0);
+            entity.timer = 17;
+            entity.state = 1;
+            let mut expected = game.rng.clone();
+            crate::creation::initialize_entity_local(&mut game.world, &mut game.rng, id);
+            crate::traps::create(&mut game, Instance::Entity(id));
+            crate::traps::create(&mut game, Instance::Entity(id));
+            // Serialized initialization markers must still suppress a redraw.
+            let bytes = serde_json::to_vec(&game.world).unwrap();
+            game.world = serde_json::from_slice(&bytes).unwrap();
+            crate::creation::initialize_entity_local(&mut game.world, &mut game.rng, id);
+            crate::traps::create(&mut game, Instance::Entity(id));
+            let entity = game.world.entity(id).unwrap();
+            assert_eq!(entity.value("direction"), 3.0);
+            assert_eq!(entity.value("xv"), 4.0);
+            assert_eq!(entity.timer, 17);
+            assert_eq!(entity.state, 1);
+            assert_eq!(game.rng.next_u64(), expected.next_u64());
+        }
+    }
+
+    #[test]
+    fn smash_runtime_create_preserves_authored_direction_and_existing_marker_semantics() {
+        for object in ["oSmashTrap", "oSmashTrapLit"] {
+            let mut game = Game::shell(7, RulesPreset::Classic);
+            let mut expected = game.rng.clone();
+            let direction = expected.range(4);
+            let id = game.spawn(object, Vec2::new(80.0, 80.0));
+            assert_eq!(
+                game.world.entity(id).unwrap().value("direction"),
+                f64::from(direction)
+            );
+            assert_eq!(game.rng.clone().next_u64(), expected.clone().next_u64());
+            let authored = game.world.spawn(object, Vec2::new(112.0, 80.0));
+            game.world
+                .entity_mut(authored)
+                .unwrap()
+                .data
+                .insert("direction".into(), 2.0);
+            expected.range(4);
+            crate::traps::create(&mut game, Instance::Entity(authored));
+            assert_eq!(game.world.entity(authored).unwrap().value("direction"), 2.0);
+            let initialized = game.world.spawn(object, Vec2::new(144.0, 80.0));
+            let entity = game.world.entity_mut(initialized).unwrap();
+            entity.data.insert("moving_context_initialized".into(), 0.0);
+            entity.data.insert("direction".into(), 1.0);
+            crate::creation::initialize_entity_local(&mut game.world, &mut game.rng, initialized);
+            crate::traps::create(&mut game, Instance::Entity(initialized));
+            assert_eq!(
+                game.world.entity(initialized).unwrap().value("direction"),
+                1.0
+            );
+            assert_eq!(game.rng.next_u64(), expected.next_u64());
+        }
+    }
+
+    #[test]
+    fn generated_non_smash_moving_classes_do_not_draw_smash_direction() {
+        for object in [
+            "oThwompTrap",
+            "oDoor",
+            "oBoulder",
+            "oPushBlock",
+            "oSmashTrapTile",
+            "oMovingSolid",
+        ] {
+            let mut world = crate::World::new(12, 12, crate::Area::Temple, 13);
+            let mut rng = crate::Rng::new(7);
+            let mut expected = rng.clone();
+            let id = crate::creation::spawn_generated_entity(
+                &mut world,
+                &mut rng,
+                object,
+                Vec2::new(80.0, 80.0),
+            );
+            assert!(
+                !world.entity(id).unwrap().data.contains_key("direction"),
+                "{object}"
+            );
+            assert_eq!(rng.next_u64(), expected.next_u64(), "{object}");
+        }
     }
 
     #[test]

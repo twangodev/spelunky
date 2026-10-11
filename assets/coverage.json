@@ -492,7 +492,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 346,
+          "line": 354,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -530,7 +530,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 347,
+          "line": 355,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -573,7 +573,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 342,
+          "line": 350,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -611,7 +611,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 344,
+          "line": 352,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -648,7 +648,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 343,
+          "line": 351,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -686,7 +686,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 345,
+          "line": 353,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -1634,12 +1634,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 233,
+          "line": 237,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 475,
+          "line": 479,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
@@ -2298,7 +2298,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 481,
+          "line": 485,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
@@ -2974,12 +2974,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 293,
+          "line": 297,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 480,
+          "line": 484,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
@@ -3319,7 +3319,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 479,
+          "line": 483,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
@@ -5324,7 +5324,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 481,
+          "line": 485,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
@@ -6210,7 +6210,7 @@
       "handlers": [
         {
           "kind": "hazard_dispatch_registration",
-          "line": 338,
+          "line": 346,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -7593,7 +7593,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 481,
+          "line": 485,
           "module": "crates/core/src/traps/moving.rs"
         }
       ],
@@ -8420,7 +8420,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 481,
+          "line": 485,
           "module": "crates/core/src/traps/moving.rs"
         }
       ],
@@ -8773,7 +8773,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 481,
+          "line": 485,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
@@ -10250,7 +10250,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 476,
+          "line": 480,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
@@ -10286,7 +10286,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 476,
+          "line": 480,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
@@ -10481,7 +10481,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 349,
+          "line": 357,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -10523,7 +10523,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 350,
+          "line": 358,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -10594,7 +10594,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 348,
+          "line": 356,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -10626,7 +10626,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 351,
+          "line": 359,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -10893,7 +10893,7 @@
       "handlers": [
         {
           "kind": "hazard_dispatch_registration",
-          "line": 337,
+          "line": 345,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -11367,7 +11367,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 481,
+          "line": 485,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
@@ -12191,7 +12191,7 @@
       "handlers": [
         {
           "kind": "hazard_dispatch_registration",
-          "line": 339,
+          "line": 347,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -12215,7 +12215,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 340,
+          "line": 348,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -12261,7 +12261,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 341,
+          "line": 349,
           "module": "crates/core/src/traps.rs"
         }
       ],

@@ -74,6 +74,14 @@ pub(crate) fn initialize_kali_head(world: &mut crate::World, rng: &mut crate::Rn
     entity.data.insert("kali_create_initialized".into(), 1.);
 }
 
+/// World/RNG-only trap Create bodies also run at generated instance birth.
+pub(crate) fn create_local(
+    context: &mut crate::creation::EntityCreateContext<'_>,
+    entity: &mut Entity,
+) {
+    moving::create_local(context.rng, entity);
+}
+
 pub(crate) fn create(game: &mut Game, instance: Instance) {
     if !handles(instance.object(game)) {
         return;
