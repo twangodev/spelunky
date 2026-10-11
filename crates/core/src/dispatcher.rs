@@ -633,6 +633,7 @@ pub fn descendant_instances(game: &Game, parent: &str) -> Vec<Instance> {
     game.dispatcher.registration_order.iter().copied().filter(|i| !matches!(i,Instance::Entity(id) if i.object(game)=="oTerrainMetadata" && game.world.entities.iter().any(|e|e.id==*id)) && catalog::is_a(&source_object(game,*i),parent)).collect()
 }
 fn level_step(game: &mut Game) {
+    crate::camera_shake::level_step(game);
     let region = Rect::new(
         game.camera.x - 96.0,
         game.camera.y - 96.0,

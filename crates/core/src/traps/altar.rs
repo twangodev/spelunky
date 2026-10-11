@@ -401,7 +401,7 @@ fn punish(game: &mut Game) {
     *game.data.entry("favor".into()).or_default() -= 16.0;
     let count = game.data.get("kali_punish").copied().unwrap_or(0.0) as u32;
     game.data.insert("kali_punish".into(), (count + 1) as f64);
-    game.data.insert("shake".into(), 10.0);
+    crate::camera_shake::request(game, 10.0);
     game.events.push(GameEvent::Message(
         "YOU DARE DEFILE MY ALTAR? I WILL PUNISH YOU!".into(),
     ));
@@ -532,7 +532,7 @@ pub(crate) fn idol_pickup(game: &mut Game, id: u64) {
             {
                 entity.alarms[0] = 100;
             }
-            game.data.insert("shake".into(), 100.0);
+            crate::camera_shake::request(game, 100.0);
         }
         Area::Jungle => {
             if game.flags.contains("cemetery") || game.flags.contains("cemetary") {
@@ -572,7 +572,7 @@ pub(crate) fn idol_pickup(game: &mut Game, id: u64) {
                         door.vel.y = 1.0;
                     }
                 }
-                game.data.insert("shake".into(), 20.0);
+                crate::camera_shake::request(game, 20.0);
             } else {
                 let ids: Vec<_> = game
                     .world
@@ -587,7 +587,7 @@ pub(crate) fn idol_pickup(game: &mut Game, id: u64) {
                     crate::items::explosives::destroy_solid_self(game, id);
                 }
                 game.sound("sndThump", pos);
-                game.data.insert("shake".into(), 10.0);
+                crate::camera_shake::request(game, 10.0);
             }
         }
         Area::Ice => {}

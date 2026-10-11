@@ -1077,7 +1077,7 @@ fn olmec(game: &mut Game, e: &mut Entity) {
         }
         4 => {
             e.vel = Vec2::new(0.0, 0.1);
-            game.data.insert("shake".into(), 10.0);
+            crate::camera_shake::request(game, 10.0);
         }
         5 => {
             if e.timer > 0 {
@@ -1093,7 +1093,7 @@ fn olmec(game: &mut Game, e: &mut Entity) {
                 if e.value("slammed") == 0.0 {
                     spawn(game, "oOlmecSlam", Vec2::new(e.pos.x, e.pos.y + 64.0));
                     e.data.insert("slammed".into(), 1.0);
-                    game.data.insert("shake".into(), 5.0);
+                    crate::camera_shake::request(game, 5.0);
                 } else {
                     let idle = game.rng.chance(1, 2);
                     let inactive = game.player.data.get("active") == Some(&0.0);
@@ -1893,6 +1893,13 @@ mod tests {
                     assert_eq!(boss.state, 1);
                     assert!(boss.vel.y < 0.0);
                 }
+                339 => {
+                    // oLevel's96 border follows the naturally jumping boss
+                    // before control returns to the player (view_object=Olmec).
+                    assert!(boss.pos.y < 496.0);
+                    assert_eq!(game.camera.y, boss.pos.y.round_ties_even() - 96.0);
+                    assert_eq!(game.data.get("camera_vborder"), Some(&96.0));
+                }
                 _ => {}
             }
         }
@@ -1934,7 +1941,10 @@ mod tests {
                 released_at = Some(tick);
                 assert_eq!(boss.state, 0);
                 assert_eq!(boss.timer, 99);
-                assert_eq!(game.camera, Vec2::new(0.0, 400.0));
+                // Alarm5 sets border64, then this same frame's oLevel
+                // Step restores96 before following playerY552:552-(240-96).
+                assert_eq!(game.camera, Vec2::new(0.0, 408.0));
+                assert_eq!(game.data.get("camera_vborder"), Some(&96.0));
                 break;
             }
             assert_eq!(game.player.pos, start, "locked player, tick {tick}");

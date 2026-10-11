@@ -297,8 +297,7 @@ pub(super) fn destroyed(game: &mut Game, e: &mut Entity) {
                 let vy = f64::from(1 + game.rng.range(3));
                 game.world.entity_mut(id).unwrap().vel.y = vy;
             }
-            let shake = game.data.entry("shake".into()).or_default();
-            *shake = (*shake).max(10.0);
+            crate::camera_shake::request(game, 10.0);
             game.sound("sndSmallExplode", e.pos);
             for barrier in &mut game.world.entities {
                 if barrier.object == "oBarrier" {

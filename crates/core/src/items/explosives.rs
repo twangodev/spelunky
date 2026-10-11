@@ -1341,10 +1341,7 @@ fn announce_explosion(game: &mut Game, explosion: &mut Entity) {
         radius: 24.0,
     });
     game.sound("sndExplosion", explosion.pos);
-    game.data
-        .entry("shake".into())
-        .and_modify(|value| *value = value.max(5.0))
-        .or_insert(5.0);
+    crate::camera_shake::request(game, 5.0);
 }
 
 /// oPlayer1 Step queries overlap once, then uses the nearest explosion's origin.
@@ -1811,10 +1808,7 @@ fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
     }
     if family == "oTrapBlock" && entity.value("dying") != 0.0 {
         game.sound("sndThump", entity.pos);
-        game.data
-            .entry("shake".into())
-            .and_modify(|value| *value = value.max(10.0))
-            .or_insert(10.0);
+        crate::camera_shake::request(game, 10.0);
     }
     if family == "oSacAltarLeft" {
         // Defilement follows rubble, outside the clean-death output guard.

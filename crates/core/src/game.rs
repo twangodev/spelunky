@@ -116,6 +116,9 @@ impl Game {
         self.player.engine_active = true;
         self.data.insert("xmoney".into(), 0.);
         self.data.insert("xtime".into(), 0.);
+        // oLevel Create clears duration, but not global.shakeToggle.
+        self.data.insert("shake".into(), 0.);
+        self.data.remove("camera_vborder");
         self.player.pos = self.world.entrance;
         self.player.previous_pos = self.player.pos;
         self.player.vel = Vec2::default();
@@ -374,20 +377,39 @@ impl Game {
         }
         let boss_room = self.world.area == Area::Boss && !self.flags.contains("custom");
         if boss_room && self.player.data.get("active") == Some(&0.0) {
-            // Zero borders let the scripted pan persist while Olmec remains
-            // inside the view; follow him only when he leaves its edges.
+            // Olmec Create initially sets zero borders. Each later oLevel
+            // Step supplies the current vertical border, including shake.
             if let Some(boss) = self
                 .world
                 .entities
                 .iter()
                 .find(|e| e.alive && e.object == "oOlmec")
             {
-                self.camera.x = self.camera.x.clamp(boss.pos.x - VIEW_WIDTH, boss.pos.x);
-                self.camera.y = self.camera.y.clamp(boss.pos.y - VIEW_HEIGHT, boss.pos.y);
+                // The original pre-Draw follow converts the target origin
+                // to integers before applying borders, then clamps to room.
+                let target = Vec2::new(boss.pos.x.round_ties_even(), boss.pos.y.round_ties_even());
+                let border = self.data.get("camera_vborder").copied().unwrap_or(0.0);
+                self.camera.x = self.camera.x.clamp(target.x - VIEW_WIDTH, target.x);
+                self.camera.y = self
+                    .camera
+                    .y
+                    .clamp(target.y - VIEW_HEIGHT + border, target.y - border);
+                self.camera.x = self
+                    .camera
+                    .x
+                    .clamp(0.0, (self.world.width as f64 * 16.0 - VIEW_WIDTH).max(0.0));
+                self.camera.y = self.camera.y.clamp(
+                    0.0,
+                    (self.world.height as f64 * 16.0 - VIEW_HEIGHT).max(0.0),
+                );
             }
             return;
         }
-        let vertical_border = if boss_room { 64.0 } else { 96.0 };
+        let vertical_border = self
+            .data
+            .get("camera_vborder")
+            .copied()
+            .unwrap_or(if boss_room { 64.0 } else { 96.0 });
         let relative = Vec2::new(
             self.player.pos.x - self.camera.x,
             self.player.pos.y - self.camera.y,
