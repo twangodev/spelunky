@@ -1042,6 +1042,8 @@ fn populate_internal(
             let before = cemetery_v2_tests::trace_before(world, rng);
             cemetery_prepass(world, rng, context);
             #[cfg(test)]
+            crate::creation::capture_generated_cemetery_prepass(world);
+            #[cfg(test)]
             cemetery_v2_tests::trace_after(world, rng, before);
         }
         jungle_primary::populate(

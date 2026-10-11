@@ -80,6 +80,7 @@ fn spawn_generated_with_item_context(
                     level: world.level,
                     rng_before,
                     entity_after: entity.clone(),
+                    after_cemetery_prepass: None,
                 });
             }
         });
@@ -120,6 +121,7 @@ pub(crate) struct GeneratedCreateTrace {
     pub level: u32,
     pub rng_before: Rng,
     pub entity_after: Entity,
+    pub after_cemetery_prepass: Option<Entity>,
 }
 
 #[cfg(test)]
@@ -131,6 +133,20 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn begin_generated_create_trace() {
     GENERATED_CREATE_TRACES.with(|traces| *traces.borrow_mut() = Some(Vec::new()));
+}
+
+#[cfg(test)]
+pub(crate) fn capture_generated_cemetery_prepass(world: &World) {
+    GENERATED_CREATE_TRACES.with(|traces| {
+        if let Some(traces) = traces.borrow_mut().as_mut() {
+            for trace in traces
+                .iter_mut()
+                .filter(|trace| trace.entity_after.object == "oGrave")
+            {
+                trace.after_cemetery_prepass = world.entity(trace.entity_after.id).cloned();
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -203,9 +219,14 @@ mod grave_create_tests {
     #[test]
     fn grave_create_generated_cemetery_variants_precede_caller_shotgun_roll() {
         let mut graves = 0;
-        let mut first_grave_controls = 0;
+        let mut survivors = 0;
+        let mut retired = 0;
         for seed in 0..8 {
             let mut game = Game::shell(seed, RulesPreset::Classic);
+            assert_eq!(
+                game.generation_revision,
+                crate::GenerationRevision::SourceClassicV2
+            );
             game.flags.extend([
                 "cemetery".into(),
                 "no_dark_level".into(),
@@ -216,39 +237,47 @@ mod grave_create_tests {
             game.next_level();
             let traces = take_generated_create_traces();
             assert_eq!(game.world.level, 5);
-            let mut shotgun_exists = false;
-            let mut first_grave = true;
-            for trace in traces {
-                if trace.entity_after.object == "oShotgun" {
-                    shotgun_exists = true;
-                }
-                if trace.entity_after.object != "oGrave" {
-                    continue;
-                }
+            for trace in traces
+                .into_iter()
+                .filter(|trace| trace.entity_after.object == "oGrave")
+            {
                 graves += 1;
                 let mut source = trace.rng_before.clone();
                 let expected = SOURCE_GRAVE_SPRITES[source.range(5) as usize];
                 assert_eq!(trace.entity_after.sprite, expected, "seed {seed}");
-                let final_grave = game.world.entity(trace.entity_after.id).unwrap();
-                assert!(final_grave.sprite == expected || final_grave.sprite == "sGraveAsh");
-                if first_grave && !shotgun_exists {
-                    // scrEntityGen188 creates Grave synchronously; line189's
-                    // next rand(1,40) follows its variant roll, before loot.
-                    let expected_after_caller = if source.range(40) == 0 {
-                        "sGraveAsh"
-                    } else {
-                        expected
-                    };
-                    assert_eq!(final_grave.sprite, expected_after_caller, "seed {seed}");
-                    first_grave_controls += 1;
+                // Check the completed cemetery caller before the later Solid
+                // pass can legitimately destroy this Grave or its support.
+                let caller = trace
+                    .after_cemetery_prepass
+                    .expect("Grave survives its cemetery caller");
+                assert!(caller.alive && caller.engine_active);
+                assert_eq!(caller.id, trace.entity_after.id);
+                assert_eq!(caller.creation_serial, trace.entity_after.creation_serial);
+                assert_eq!(caller.pos, trace.entity_after.pos);
+                // The source writes receiver-local ashGrave; global.ashGrave
+                // remains false, so every Grave has the immediate next roll.
+                let expected_after_caller = if source.range(40) == 0 {
+                    "sGraveAsh"
+                } else {
+                    expected
+                };
+                assert_eq!(caller.sprite, expected_after_caller, "seed {seed}");
+                if let Some(final_grave) = game.world.entity(caller.id) {
+                    assert_eq!(final_grave.sprite, caller.sprite, "seed {seed}");
+                    survivors += 1;
+                } else {
+                    retired += 1;
                 }
-                first_grave = false;
             }
         }
         assert!(graves > 0, "exercise natural generated cemetery births");
         assert!(
-            first_grave_controls > 0,
-            "exercise the source's next shotgun roll"
+            survivors > 0,
+            "check variants retained through later phases"
+        );
+        assert!(
+            retired > 0,
+            "exercise the later source Solid-pass lifecycle"
         );
     }
 }
