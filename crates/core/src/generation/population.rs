@@ -1013,12 +1013,14 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
                     }
                 }
                 if floor && y > 1 && y < 37 && far && !occupied(world, x, y - 1) {
-                    if tile == "oDark"
+                    // Source :370 evaluates its roll before every pure guard.
+                    let spring_roll = rng.chance(1, 10);
+                    if spring_roll
+                        && tile == "oDark"
                         && !solid(world, x, y - 2)
                         && !solid(world, x, y - 3)
                         && !solid(world, x, y - 4)
                         && at(x, y).distance(world.exit) > 64.0
-                        && rng.chance(1, 10)
                     {
                         spawn(world, rng, "oSpringTrap", x, y - 1);
                     } else if rng.chance(1, 20) {
@@ -3762,6 +3764,54 @@ mod tests {
         assert_eq!(world.entities[0].pos, Vec2::new(80.0, 96.0));
         assert_eq!(world.entities[1].pos, Vec2::new(88.0, 108.0));
         assert_eq!(world.entities[2].pos, Vec2::new(88.0, 104.0));
+    }
+
+    #[test]
+    fn eager_ice_spring_floor_keeps_roll_before_sprite_and_exit_guards() {
+        for (object, near_exit, seed) in [
+            ("oIce", false, 0),
+            ("oIce", false, 2),
+            ("oDark", false, 2),
+            ("oDark", true, 2),
+        ] {
+            let mut world = World::new(42, 38, Area::Ice, 9);
+            world.entrance = at(1, 1);
+            world.exit = if near_exit { at(8, 6) } else { at(38, 30) };
+            world.set_tile(6, 6, object);
+            // Same start room suppresses the earlier UFO/ceiling branch.
+            assert!(start_room(&world, 6, 5));
+            assert!(at(6, 6).distance(world.entrance) > 64.0);
+            // An authored nearby idol suppresses only later treasure generation.
+            world.spawn("oGoldIdol", Vec2::new(136.0, 116.0));
+            let flags = BTreeSet::from(["made_udjat_eye".into(), "made_market_entrance".into()]);
+            let mut actual = Rng::new(seed);
+            let mut source = actual.clone();
+            let spring_roll = source.range(10) == 0;
+            let spring = spring_roll && object == "oDark" && !near_exit;
+            let yeti = !spring && source.range(20) == 0;
+            populate(&mut world, &mut actual, &flags);
+            assert_eq!(
+                exists(&world, "oSpringTrap"),
+                spring,
+                "{object} near_exit={near_exit} seed={seed}"
+            );
+            assert_eq!(exists(&world, "oYeti"), yeti);
+            assert_eq!(actual.next_u64(), source.next_u64());
+        }
+    }
+
+    #[test]
+    fn eager_ice_spring_outer_floor_exclusion_suppresses_all_branch_draws() {
+        let mut world = World::new(42, 38, Area::Ice, 9);
+        world.entrance = at(6, 6);
+        world.exit = at(38, 30);
+        world.set_tile(6, 6, "oDark");
+        let flags = BTreeSet::from(["made_udjat_eye".into(), "made_market_entrance".into()]);
+        let mut actual = Rng::new(2);
+        let mut source = actual.clone();
+        populate(&mut world, &mut actual, &flags);
+        assert!(!exists(&world, "oSpringTrap") && !exists(&world, "oYeti"));
+        assert_eq!(actual.next_u64(), source.next_u64());
     }
 
     #[test]
