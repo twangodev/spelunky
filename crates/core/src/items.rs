@@ -457,7 +457,10 @@ fn player_actions(game: &mut Game, input: &InputFrame) {
     {
         game.player.held = None;
     }
-    if player_dead(game) || game.player.is_stunned() {
+    if player_dead(game)
+        || game.player.is_stunned()
+        || game.player.data.get("active").copied().unwrap_or(1.0) == 0.0
+    {
         // Source action input is skipped; held release already preceded tumble
         // movement, and whip cancellation belongs to late Player Step1816.
     } else {
@@ -480,54 +483,99 @@ fn player_actions(game: &mut Game, input: &InputFrame) {
         } else {
             false
         };
+        // Player Step1219 guards only the empty-hand attack onset. Its
+        // following pickup and held scrUseItem branches have their own guards.
+        let empty_attack =
+            game.player.held.is_none() && input.attack_pressed && empty_attack_allowed(game);
         let character_input = InputFrame {
-            attack_pressed: input.attack_pressed && !interacted && !inventory_selected,
+            attack_pressed: empty_attack && !interacted && !inventory_selected,
             ..*input
         };
         crate::characters::tick(game, &character_input);
-        if !interacted
-            && !inventory_selected
-            && game.player.attack_timer == 0
-            && input.attack_pressed
-        {
+        if !interacted && !inventory_selected && input.attack_pressed {
             if let Some(id) = game.player.held {
-                if game
-                    .world
-                    .entity(id)
-                    .is_some_and(|e| e.object == "oRopeThrow")
-                {
-                    explosives::use_held_rope(game, id, input);
-                } else if game
-                    .world
-                    .entity(id)
-                    .is_some_and(|e| e.object == "oBomb" && e.value("armed") == 0.0)
-                {
-                    explosives::arm_bomb(game.world.entity_mut(id).unwrap());
-                } else if input.down {
-                    let needs_duck = game
-                        .world
-                        .entity(id)
-                        .is_some_and(|e| is_usable_weapon(&e.object));
-                    if !needs_duck || game.player.state == PlayerState::Ducking {
-                        throw_item(game, id, input);
-                    } else {
-                        // scrUseItem's kDown drop attempt is followed by a
-                        // separate non-ducking weapon-use check. In the air,
-                        // Down therefore still fires guns/swings a machete.
-                        weapons::use_weapon(game, id, input);
-                    }
-                } else if !weapons::use_weapon(game, id, input)
-                    && !utility::use_utility(game, id, input)
-                {
-                    throw_item(game, id, input);
+                use_held_item(game, id, input);
+            } else if empty_attack {
+                if !game.flags.contains("character_tunnelman") {
+                    start_whip(game);
                 }
             } else if input.down {
                 pick_up(game);
-            } else if !game.flags.contains("character_tunnelman") {
-                start_whip(game);
             }
         }
     }
+}
+
+/// Literal scrPlayerIsDucking predicate. Whipping preserves attack art even
+/// with Down held, so platform state does not replace this sprite test.
+pub(crate) fn player_is_ducking(player: &Player) -> bool {
+    matches!(
+        player.sprite.as_str(),
+        "sDuckLeft"
+            | "sCrawlLeft"
+            | "sDamselDuckL"
+            | "sDamselCrawlL"
+            | "sTunnelDuckL"
+            | "sTunnelCrawlL"
+    )
+}
+
+fn empty_attack_allowed(game: &Game) -> bool {
+    game.player.attack_timer == 0
+        && game.player.state != PlayerState::Ducking
+        && game.player.data.get("duck_to_hang").copied().unwrap_or(0.0) == 0.0
+        && !matches!(game.player.sprite.as_str(), "sPExit" | "sDamselExit")
+}
+
+fn use_held_item(game: &mut Game, id: u64, input: &InputFrame) {
+    let Some(item) = game.world.entity(id) else {
+        return;
+    };
+    let object = item.object.clone();
+    // scrUseItem's sprite-specific reserved objects precede its type branches.
+    if item.sprite == "sBomb" {
+        explosives::arm_bomb(game.world.entity_mut(id).unwrap());
+        return;
+    }
+    if item.sprite == "sRopeEnd" {
+        explosives::use_held_rope(game, id, input);
+        return;
+    }
+    if matches!(object.as_str(), "oMachete" | "oMattock") && game.player.attack_timer > 0 {
+        return;
+    }
+    if input.down && is_usable_weapon(&object) {
+        if player_is_ducking(&game.player) {
+            drop_held_weapon(game, id);
+            return;
+        }
+        // Bow/Teleporter use else, while guns separately test non-ducking.
+        if matches!(object.as_str(), "oBow" | "oTeleporter") {
+            return;
+        }
+    }
+    if !weapons::use_weapon(game, id, input) && !utility::use_utility(game, id, input) {
+        throw_item(game, id, input);
+    }
+}
+
+/// Specialized scrUseItem Down drops omit generic throw offsets, wall/Mitt
+/// adjustments and sndThrow. Their own safe/alarm/velocity writes are literal.
+fn drop_held_weapon(game: &mut Game, id: u64) {
+    let facing = f64::from(game.player.facing);
+    let player_vx = game.player.vel.x;
+    if let Some(item) = game.world.entity_mut(id) {
+        item.held = false;
+        item.data.insert("safe".into(), 1.0);
+        item.data.insert("safe_ticks".into(), 10.0);
+        item.alarms[2] = 10;
+        item.vel = Vec2::new(
+            (facing * if item.value("heavy") != 0.0 { 4.0 } else { 8.0 } + player_vx) * 0.4,
+            0.5,
+        );
+    }
+    game.player.held = None;
+    game.player.pickup_item_type.clear();
 }
 
 fn update_depth(game: &Game, entity: &mut Entity) {
@@ -776,7 +824,7 @@ fn throw_item(game: &mut Game, id: u64, input: &InputFrame) {
     let velocity = game.player.vel;
     let grounded = game.player.grounded;
     let mitt = game.player.has("Mitt");
-    let ducking = input.down && grounded;
+    let ducking = player_is_ducking(&game.player);
     let throwing_bomb = game.world.entity(id).is_some_and(|e| e.object == "oBomb");
     let overhead = game
         .world

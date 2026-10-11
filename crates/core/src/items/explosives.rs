@@ -45,11 +45,12 @@ pub fn init_entity(entity: &mut Entity) {
     entity.data.insert("explosives_initialized".into(), 1.0);
 }
 
+fn can_act(game: &Game) -> bool {
+    game.state == RunState::Playing && !super::player_dead(game) && !game.player.is_stunned()
+}
+
 fn can_use(game: &Game) -> bool {
-    game.state == RunState::Playing
-        && !super::player_dead(game)
-        && !game.player.is_stunned()
-        && game.player.attack_timer == 0
+    can_act(game) && game.player.attack_timer == 0
 }
 
 fn solid_point(world: &World, pos: Vec2) -> bool {
@@ -385,7 +386,7 @@ pub fn use_held_rope(game: &mut Game, id: u64, input: &InputFrame) -> bool {
     else {
         return false;
     };
-    if !can_use(game) || (!input.down && crate::player::cached_col_top(&game.player)) {
+    if !can_act(game) || (!input.down && crate::player::cached_col_top(&game.player)) {
         return true;
     }
     let player_pos = game.player.pos;

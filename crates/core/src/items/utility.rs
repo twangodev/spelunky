@@ -103,32 +103,35 @@ pub fn use_utility(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
     if input.down {
         return false;
     }
-    if game.player.state == PlayerState::Ducking
-        || game.player.attack_timer > 0
-        || (!input.up
-            && game
-                .player
-                .data
-                .get("weapon_cooldown")
-                .copied()
-                .unwrap_or(0.0)
-                > 0.0)
-    {
-        return true;
-    }
-
     let origin = game.player.pos;
-    let distance = 16.0 * f64::from(4 + game.rng.range(5));
-    let mut target = origin;
-    if input.up {
-        target.y -= distance;
+    let firing = game
+        .player
+        .data
+        .get("weapon_cooldown")
+        .copied()
+        .unwrap_or(0.0);
+    let mut target = if input.up {
+        // scrUseItem's Up target assignment has no duck/firing/whipping gate.
+        let mut target = Vec2::new(origin.x, origin.y - 16.0 * f64::from(4 + game.rng.range(5)));
         while target.y < 16.0 {
             target.y += 16.0;
         }
+        target
+    } else if !super::player_is_ducking(&game.player) && firing == 0.0 {
+        Vec2::new(
+            (origin.x + f64::from(game.player.facing) * 16.0 * f64::from(4 + game.rng.range(5)))
+                .clamp(8.0, game.world.width as f64 * 16.0 - 8.0),
+            origin.y,
+        )
     } else {
-        target.x += f64::from(game.player.facing) * distance;
-        target.x = target.x.clamp(8.0, game.world.width as f64 * 16.0 - 8.0);
-    }
+        // The source skips only assignment and reuses its persistent tx/ty.
+        // With no prior assignment, its uninitialized-variable error path is
+        // unresolved; retain the port's existing no-op rather than invent zero.
+        let (Some(&x), Some(&y)) = (game.player.data.get("tx"), game.player.data.get("ty")) else {
+            return true;
+        };
+        Vec2::new(x, y)
+    };
     // Classic searches only three tiles upward, even if the result stays solid.
     for _ in 0..3 {
         if target.y <= 16.0
@@ -138,6 +141,8 @@ pub fn use_utility(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
         }
         target.y -= 16.0;
     }
+    game.player.data.insert("tx".into(), target.x);
+    game.player.data.insert("ty".into(), target.y);
     for _ in 0..3 {
         let pos = Vec2::new(
             origin.x - 4.0 + f64::from(game.rng.range(9)),

@@ -164,16 +164,16 @@ pub fn use_weapon(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
     ) {
         return false;
     }
-    if (input.down && object == "oBow")
-        || game.player.state == PlayerState::Ducking
-        || game
-            .player
-            .data
-            .get("weapon_cooldown")
-            .copied()
-            .unwrap_or(0.0)
-            > 0.0
-        || game.player.attack_timer > 0
+    let ducking = super::player_is_ducking(&game.player);
+    let firing = game
+        .player
+        .data
+        .get("weapon_cooldown")
+        .copied()
+        .unwrap_or(0.0);
+    let melee = matches!(object.as_str(), "oMachete" | "oMattock");
+    if (melee && (ducking || game.player.attack_timer > 0))
+        || (!melee && object != "oBow" && (ducking || firing != 0.0))
     {
         return true;
     }
@@ -181,16 +181,18 @@ pub fn use_weapon(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
     let pos = game.player.pos;
     match object.as_str() {
         "oBow" => {
-            if game.player.data.get("bow_armed").copied().unwrap_or(0.0) != 0.0 {
+            if input.down {
                 return true;
             }
-            if game.data.get("arrows").copied().unwrap_or(0.0) <= 0.0 {
-                game.events
-                    .push(GameEvent::Message("I'M OUT OF ARROWS!".into()));
-            } else {
+            let armed = game.player.data.get("bow_armed").copied().unwrap_or(0.0) != 0.0;
+            let arrows = game.data.get("arrows").copied().unwrap_or(0.0);
+            if !ducking && firing == 0.0 && !armed && arrows > 0.0 {
                 game.player.data.insert("bow_armed".into(), 1.0);
                 game.player.data.insert("bow_strength".into(), 0.0);
                 game.sound("sndBowPull", pos);
+            } else if arrows <= 0.0 {
+                game.events
+                    .push(GameEvent::Message("I'M OUT OF ARROWS!".into()));
             }
         }
         "oMachete" | "oMattock" => {

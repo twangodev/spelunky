@@ -98,7 +98,6 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         // oPlayer1 Step's item/innate attack branch checks the independent
         // stunned flag, including enemy throws that assign no timer.
         || game.player.is_stunned()
-        || game.player.held.is_some()
     {
         if active {
             game.player.attack_timer = 0;
@@ -112,9 +111,13 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         }
         return;
     }
+    // Holding suppresses innate work, not an already active whipping flag.
+    // Player Animation End and late hurt retain ownership of that clear.
+    if game.player.held.is_some() {
+        return;
+    }
     if !active {
         if !input.attack_pressed
-            || input.down
             || !game.player.grounded
             || game.player.state == PlayerState::Ducking
             || game.player.attack_timer > 0
