@@ -3520,6 +3520,15 @@ mod tests {
     fn browser_presentation_caps_preserve_actual_core_tick_and_rng_traces() {
         let fixture = camera_follow_fixture();
         let mut expected = fixture.clone();
+        let trace = |game: &Game| {
+            let mut rng = game.rng.clone();
+            (
+                game.state_hash(),
+                game.presentation().state_hash(),
+                [rng.next_u64(), rng.next_u64(), rng.next_u64()],
+                game.events.clone(),
+            )
+        };
         let input_at = |tick| spelunky_core::InputFrame {
             right: tick < 30,
             left: tick >= 30,
@@ -3528,10 +3537,12 @@ mod tests {
             jump_released: tick == 10,
             ..Default::default()
         };
+        let mut expected_traces = Vec::new();
         for tick in 0..60 {
             expected.step(&input_at(tick));
+            expected_traces.push(trace(&expected));
         }
-        for refresh in [60, 120, 144, 240] {
+        for refresh in [30, 60, 120, 144, 240] {
             for cap in [None, Some(30), Some(60), Some(120), Some(144), Some(240)] {
                 let mut cadence = crate::timing::PresentationCadence::default();
                 let mut timing = HostTiming::default();
@@ -3546,6 +3557,11 @@ mod tests {
                     let frame = timing.begin_frame(now);
                     for _ in 0..timing.advance(frame).ticks {
                         game.step(&input_at(tick));
+                        assert_eq!(
+                            trace(&game),
+                            expected_traces[tick],
+                            "{refresh}Hz RAF, cap {cap:?}, tick {tick}"
+                        );
                         tick += 1;
                     }
                 }
@@ -3557,6 +3573,115 @@ mod tests {
                     expected.presentation().state_hash()
                 );
             }
+        }
+    }
+
+    #[test]
+    fn presentation_rates_draw_fractional_motion_with_authoritative_sprite_phase() {
+        use spelunky_core::{InputFrame, PlayerState, Vec2};
+
+        let atlas = Atlas::load().unwrap();
+        let mut fixture = camera_follow_fixture();
+        // A normal walking interval below the horizontal camera-follow border.
+        // Initial setup only: all later endpoints come from actual Game::step.
+        fixture.player.pos = Vec2::new(88., 472.);
+        fixture.player.previous_pos = fixture.player.pos;
+        fixture.player.vel = Vec2::default();
+        fixture.player.state = PlayerState::Standing;
+        fixture.player.grounded = true;
+        fixture.player.sprite = "sStandLeft".into();
+        fixture.camera = Vec2::new(0., 328.);
+        fixture.previous_camera = fixture.camera;
+        let input = InputFrame {
+            right: true,
+            ..Default::default()
+        };
+        // Classic waits for more than two held-direction ticks to accelerate.
+        // Reach ordinary walking through input, without forcing its counters.
+        for _ in 0..2 {
+            fixture.step(&input);
+        }
+        let trace = |game: &Game| {
+            let mut rng = game.rng.clone();
+            (
+                game.state_hash(),
+                game.presentation().state_hash(),
+                [rng.next_u64(), rng.next_u64(), rng.next_u64()],
+                game.events.clone(),
+            )
+        };
+        let mut reference = fixture.clone();
+        let expected: Vec<_> = (0..4)
+            .map(|_| {
+                reference.step(&input);
+                trace(&reference)
+            })
+            .collect();
+
+        for rate in [30, 60, 120, 240] {
+            let slots = rate / spelunky_core::TICK_RATE;
+            let mut timing = HostTiming::default();
+            timing.reset(0.);
+            let mut game = fixture.clone();
+            let mut tick = 0;
+            let mut motion = vec![Vec::new(); 4];
+            let mut distances = [0.; 4];
+            let mut poses = vec![None; 4];
+            // Include the startup interval and four complete interpolation
+            // intervals. Integer callback slots define the expected phases;
+            // floating clock arithmetic is checked with a tolerance.
+            for callback in 0..5 * slots {
+                let now = f64::from(callback) / f64::from(rate);
+                let frame = timing.begin_frame(now);
+                for _ in 0..timing.advance(frame).ticks {
+                    game.step(&input);
+                    assert_eq!(trace(&game), expected[tick], "{rate}Hz tick {tick}");
+                    tick += 1;
+                    timing.history_ready = true;
+                }
+                assert_eq!(tick, (callback / slots) as usize, "{rate}Hz callback");
+                if tick == 0 {
+                    assert_eq!(timing.alpha(), 1., "startup has no old room history");
+                    continue;
+                }
+                let alpha = timing.render_alpha(now, true);
+                let phase = f64::from(callback % slots) / f64::from(slots);
+                assert!((alpha - phase).abs() < 1e-8, "{rate}Hz phase {phase}");
+                let before_draw = trace(&game);
+                let drawn = game.presentation();
+                assert_eq!(drawn.previous_camera.x, 0.);
+                assert_eq!(drawn.camera.x, 0.);
+                let distance = drawn.player.pos.x - drawn.player.previous_pos.x;
+                assert!(distance > 0., "ordinary walking must move at {rate}Hz");
+                let anchor = drawn_player_anchor(&game, alpha, &atlas);
+                let expected_x = drawn.player.previous_pos.x + distance * phase;
+                assert!((anchor[0] - expected_x).abs() < 1e-4, "{rate}Hz {phase}");
+                let pose = (drawn.player.sprite.clone(), drawn.player.animation);
+                let slot = tick - 1;
+                if let Some(first) = &poses[slot] {
+                    assert_eq!(&pose, first, "rendering must retain authored sprite phase");
+                } else {
+                    poses[slot] = Some(pose);
+                }
+                motion[slot].push(anchor[0]);
+                distances[slot] = distance;
+                assert_eq!(trace(&game), before_draw, "actual scene is read-only");
+            }
+            assert_eq!(tick, 4);
+            for (positions, distance) in motion.iter().zip(distances) {
+                assert_eq!(positions.len(), slots as usize, "{rate}Hz sample count");
+                for pair in positions.windows(2) {
+                    assert!(
+                        pair[1] > pair[0],
+                        "{rate}Hz must draw distinct motion samples"
+                    );
+                    assert!(
+                        (pair[1] - pair[0] - distance / f64::from(slots)).abs() < 1e-4,
+                        "{rate}Hz motion must use evenly spaced interpolation"
+                    );
+                }
+            }
+            assert_eq!(trace(&game), expected[3]);
         }
     }
 
