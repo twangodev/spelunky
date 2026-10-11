@@ -651,13 +651,8 @@ fn spider(game: &mut Game, e: &mut Entity, giant: bool) {
     }
     if e.health <= 0 {
         spider_death(game, e, giant);
-        if giant {
-            // Giant Spider has its own loot/squirt event; its separate
-            // post-Destroy continuation is outside this normal-Spider fix.
-            return;
-        }
         super::destroyed(game, e);
-        // Normal Spider's source event continues after instance_destroy.
+        // Both source Spider events continue after instance_destroy.
     }
     let grounded = grounded || bottom(&game.world, e);
     let ceiling = top(&game.world, e);
