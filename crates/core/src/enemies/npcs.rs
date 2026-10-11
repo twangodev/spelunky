@@ -1108,14 +1108,14 @@ fn scarab(game: &mut Game, e: &mut Entity) {
     }
 }
 
-fn water(game: &Game, pos: Vec2) -> bool {
-    game.world
-        .tile((pos.x / 16.0).floor() as i32, (pos.y / 16.0).floor() as i32)
-        .is_some_and(|t| matches!(t.object.as_str(), "oWater" | "oWaterSwim"))
-        || game.world.entities.iter().any(|e| {
-            e.alive
-                && matches!(e.object.as_str(), "oWater" | "oWaterSwim")
-                && e.bounds().contains(pos)
+// oDeadFish uses collision_point(..., oWater, 0, 0), including Lava.
+fn dead_fish_water(game: &Game, pos: Vec2) -> bool {
+    game.world.tiles_point(pos, "oWater")
+        || game.world.entities.iter().any(|water| {
+            water.alive
+                && water.engine_active
+                && crate::catalog::is_a(&water.object, "oWater")
+                && water.mask_contains(pos, CollisionPrecision::BoundingBox)
         })
 }
 
@@ -1130,19 +1130,15 @@ fn dead_fish(game: &mut Game, e: &mut Entity) {
         }
         super::record_death(game, e);
         e.alive = false;
-        return;
+        // Own instance_destroy finishes Enemy Destroy before this Step resumes.
+        super::destroyed(game, e);
     }
-    if !water(game, Vec2::new(e.pos.x + 4.0, e.pos.y + 4.0)) {
-        game.spawn("oFishBone", e.pos);
-        e.alive = false;
-        return;
-    }
-    let swimming = water(game, game.player.pos) && super::player_alive(game);
+    let swimming = dead_fish_water(game, game.player.pos) && super::player_alive(game);
     let dist = e.pos.distance(game.player.pos);
     if e.state == 0 {
         e.vel = Vec2::new(f64::from(e.facing), 0.0);
         let probe = Vec2::new(e.pos.x + if e.facing > 0 { 10.0 } else { -2.0 }, e.pos.y);
-        if water(game, probe) && !game.world.solid_at(probe.x, probe.y) {
+        if dead_fish_water(game, probe) && !game.world.solid_at(probe.x, probe.y) {
             move_body(&game.world, e, 0.0);
         } else {
             e.facing *= -1;
@@ -1160,7 +1156,7 @@ fn dead_fish(game: &mut Game, e: &mut Entity) {
     } else if dist < 90.0 && swimming {
         steer_toward(e, game.player.pos, 1.0);
         let next = Vec2::new(e.pos.x + e.vel.x, e.pos.y + e.vel.y);
-        if water(game, next) {
+        if dead_fish_water(game, next) {
             move_body(&game.world, e, 0.0);
         }
     } else {
@@ -1172,6 +1168,12 @@ fn dead_fish(game: &mut Game, e: &mut Entity) {
     } else {
         "sDeadFishRight"
     });
+    // Source checks for dry land after the independent AI and sprite tail.
+    if !dead_fish_water(game, Vec2::new(e.pos.x + 4.0, e.pos.y + 4.0)) {
+        game.spawn("oFishBone", e.pos);
+        e.alive = false;
+        super::destroyed(game, e);
+    }
 }
 
 fn barrier(game: &mut Game, e: &mut Entity) {
@@ -1539,7 +1541,7 @@ mod tests {
             game.rules = rules;
             for y in 4..8 {
                 for x in 4..8 {
-                    game.world.set_tile(x, y, "oWater");
+                    game.world.set_tile(x, y, "oWaterSwim");
                 }
             }
             let fish = game.spawn("oDeadFish", Vec2::new(80.0, 80.0));

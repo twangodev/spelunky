@@ -155,7 +155,7 @@ fn natural_fish_swimming_directions_remain_independent_of_inherited_left() {
             let mut game = room(seed, rules, 40.0);
             for y in 4..=8 {
                 for x in 4..=10 {
-                    game.world.set_tile(x, y, "oWater");
+                    game.world.set_tile(x, y, "oWaterSwim");
                 }
             }
             let fish = game.spawn(object, Vec2::new(96.0, 96.0));
