@@ -270,6 +270,11 @@ pub(crate) fn offering_entity(game: &mut Game, entity: &mut crate::Entity) {
     } else {
         Vec2::new(entity.pos.x + 8., entity.pos.y + 8.)
     };
+    // Both source offering callers create Flame, play the sound and create
+    // capped Blood before scrGetFavorMsg's equipment roll.
+    game.spawn("oFlame", pos);
+    game.sound("sndSmallExplode", pos);
+    crate::enemies::create_blood(game, entity, pos, 3);
     let prior = game.data.get("favor").copied().unwrap_or(0.);
     let devoured = prior <= -8.;
     if !devoured {
@@ -278,19 +283,36 @@ pub(crate) fn offering_entity(game: &mut Game, entity: &mut crate::Entity) {
     if prior < 0. && !devoured && favor > 0. {
         entity.data.insert("favor".into(), 0.);
     }
-    entity.alive = false;
-    game.spawn("oFlame", pos);
-    game.sound("sndSmallExplode", pos);
+    let first = match (damsel, devoured) {
+        (true, true) => "KALI DEVOURS YOUR SACRIFICE!",
+        (true, false) => "KALI ACCEPTS YOUR SACRIFICE!",
+        (false, true) => "KALI DEVOURS THE SACRIFICE!",
+        (false, false) => "KALI ACCEPTS THE SACRIFICE!",
+    };
+    let outcome = reward(game, altar, entity.pos.y);
+    if outcome.failed {
+        // The failed expression aborts the enclosing source code block before
+        // messageTimer, shake and instance_destroy. Prior message writes stay.
+        game.events.push(GameEvent::Dialogue(crate::SourceMessage {
+            first: first.into(),
+            second: outcome.second.into(),
+            ticks: game
+                .data
+                .get("message_timer")
+                .copied()
+                .unwrap_or(0.)
+                .max(0.) as u32,
+        }));
+        *game.data.entry("source_runtime_errors".into()).or_default() += 1.;
+        game.events.push(GameEvent::Message(
+            "SOURCE RUNTIME ERROR: scrGetFavorMsg: oSacAltarRight.x has no active instance; sacrifice code block aborted."
+                .into(),
+        ));
+        return;
+    }
+    crate::enemies::shop_dialogue::say(game, first, outcome.second, 200);
     game.data.insert("shake".into(), 10.);
-    game.events.push(GameEvent::Message(
-        if devoured {
-            "KALI DEVOURS THE SACRIFICE!"
-        } else {
-            "KALI ACCEPTS THE SACRIFICE!"
-        }
-        .into(),
-    ));
-    reward(game, altar, entity.pos.y);
+    entity.alive = false;
 }
 
 fn sacrifice_value(object: &str) -> Option<f64> {
@@ -306,23 +328,33 @@ fn sacrifice_value(object: &str) -> Option<f64> {
     })
 }
 
-fn reward(game: &mut Game, altar: Vec2, offering_y: f64) {
+/// Direct object-qualified reads select the first current active member,
+/// irrespective of whether it is represented as a tile or dynamic instance.
+fn right_altar_position(game: &mut Game) -> Option<Vec2> {
+    crate::dispatcher::register_instances(game);
+    crate::dispatcher::descendant_instances(game, "oSacAltarRight")
+        .into_iter()
+        .filter(|instance| crate::dispatcher::is_active(game, *instance))
+        .find_map(|instance| match instance {
+            crate::dispatcher::Instance::Entity(id) => game.world.entity(id).map(|altar| altar.pos),
+            crate::dispatcher::Instance::Terrain(index) => game
+                .world
+                .tiles
+                .get(index)
+                .filter(|tile| !tile.object.is_empty())
+                .map(|_| instance.position(game)),
+            crate::dispatcher::Instance::Player => None,
+        })
+}
+
+struct RewardOutcome {
+    second: &'static str,
+    failed: bool,
+}
+
+fn reward(game: &mut Game, _altar: Vec2, offering_y: f64) -> RewardOutcome {
     let favor = game.data.get("favor").copied().unwrap_or(0.0);
     let gift = game.data.get("kali_gift").copied().unwrap_or(0.0);
-    let gift_pos = game
-        .world
-        .entities
-        .iter()
-        .find(|e| e.alive && e.object == "oSacAltarRight")
-        .map(|e| Vec2::new(e.pos.x, offering_y - 8.0))
-        .or_else(|| {
-            game.world
-                .tiles
-                .iter()
-                .position(|tile| tile.object == "oSacAltarRight")
-                .map(|index| Vec2::new((index % game.world.width) as f64 * 16.0, offering_y - 8.0))
-        })
-        .unwrap_or(Vec2::new(altar.x + 16.0, offering_y - 8.0));
     let message = if favor <= -8.0 {
         "SHE SEEMS VERY ANGRY WITH YOU!"
     } else if favor < 0.0 {
@@ -342,12 +374,34 @@ fn reward(game: &mut Game, altar: Vec2, offering_y: f64) {
             "YOU FEEL INVIGORATED!"
         }
     } else if favor >= 16.0 && gift < 2.0 {
-        spawn_gift(game, "oKapala", gift_pos);
         game.data.insert("kali_gift".into(), 2.0);
+        if let Some(right) = right_altar_position(game) {
+            spawn_gift(game, "oKapala", Vec2::new(right.x, offering_y - 8.0));
+        } else {
+            // The unguarded getter errors before instance_create invokes its
+            // builtin; propagate through scrGetFavorMsg to its caller block.
+            // The original modal Ignore/Abort choice remains unmodeled.
+            return RewardOutcome {
+                second: "SHE BESTOWS A GIFT UPON YOU!",
+                failed: true,
+            };
+        }
         "SHE BESTOWS A GIFT UPON YOU!"
     } else if favor >= 16.0 {
         "SHE SEEMS VERY HAPPY WITH YOU!"
     } else if favor >= 8.0 && gift < 1.0 {
+        game.data.insert("kali_gift".into(), 1.0);
+        let Some(altar) = right_altar_position(game) else {
+            return RewardOutcome {
+                second: "SHE BESTOWS A GIFT UPON YOU!",
+                failed: false,
+            };
+        };
+        let gift_pos = Vec2::new(altar.x, offering_y - 8.0);
+        for x_velocity in [-1.0, 1.0] {
+            let id = game.spawn("oPoof", gift_pos);
+            game.world.entity_mut(id).unwrap().vel = Vec2::new(x_velocity, 0.0);
+        }
         let objects = [
             "oCapePickup",
             "oGloves",
@@ -379,14 +433,16 @@ fn reward(game: &mut Game, altar: Vec2, offering_y: f64) {
                 "oJetpack"
             });
         spawn_gift(game, object, gift_pos);
-        game.data.insert("kali_gift".into(), 1.0);
         "SHE BESTOWS A GIFT UPON YOU!"
     } else if favor >= 8.0 {
         "SHE SEEMS HAPPY WITH YOU."
     } else {
         "SHE SEEMS PLEASED WITH YOU."
     };
-    game.events.push(GameEvent::Message(message.into()));
+    RewardOutcome {
+        second: message,
+        failed: false,
+    }
 }
 
 fn spawn_gift(game: &mut Game, object: &str, pos: Vec2) {
@@ -797,12 +853,11 @@ mod tests {
                 assert_eq!(game.data.get("skulls").copied().unwrap_or(0.), 0.);
                 assert_eq!(game.lifetime_stats.idols_converted, 0);
                 assert_eq!(game.data.get("idolsConverted").copied().unwrap_or(0.), 0.);
-                assert!(
-                    game.world
-                        .entities
-                        .iter()
-                        .any(|entity| entity.object == "oBigCollect")
-                );
+                assert!(game
+                    .world
+                    .entities
+                    .iter()
+                    .any(|entity| entity.object == "oBigCollect"));
                 assert_eq!(
                     messages
                         .iter()
@@ -833,11 +888,9 @@ mod tests {
                     assert!(game.world.entity(idol).is_some());
                     assert_eq!(game.data.get("collect").copied().unwrap_or(0.), 0.);
                     assert_eq!(game.data.get("idols").copied().unwrap_or(0.), 0.);
-                    assert!(
-                        !messages
-                            .iter()
-                            .any(|message| message.first == "PLEASURE DOING BUSINESS!")
-                    );
+                    assert!(!messages
+                        .iter()
+                        .any(|message| message.first == "PLEASURE DOING BUSINESS!"));
                 }
             }
         }
@@ -1044,6 +1097,549 @@ mod tests {
         }
     }
 
+    fn source_favor8_unowned_gift(draw: u32) -> &'static str {
+        match draw {
+            0 => "oCapePickup",
+            1 => "oGloves",
+            2 => "oSpectacles",
+            3 => "oMitt",
+            4 => "oSpringShoes",
+            5 => "oSpikeShoes",
+            6 => "oPaste",
+            7 => "oCompass",
+            _ => unreachable!(),
+        }
+    }
+
+    fn source_detritus_draws(rng: &mut crate::Rng) {
+        rng.unit();
+        rng.unit();
+        rng.unit();
+        rng.range(6);
+    }
+
+    #[test]
+    fn natural_live_damsel_carry_throw_sacrifice_creates_ordered_reward_poofs() {
+        for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = Game::shell(17, preset);
+            for x in 0..game.world.width {
+                game.world.set_tile(x, 10, "oBlock");
+            }
+            game.world.set_tile(11, 10, "oSacAltarLeft");
+            game.world.set_tile(12, 10, "oSacAltarRight");
+            game.world.set_tile(11, 11, "oBlock");
+            game.world.set_tile(12, 11, "oBlock");
+            game.player.pos = Vec2::new(96., 152.);
+            game.player.previous_pos = game.player.pos;
+            let donor = game.spawn("oDamsel", game.player.pos);
+            let action = crate::InputFrame {
+                down: true,
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            };
+            game.step(&action);
+            assert_eq!(game.player.held, Some(donor));
+            assert_eq!(game.world.entity(donor).unwrap().health, 4);
+            for _ in 0..60 {
+                if game.player.pos.x >= 160. {
+                    break;
+                }
+                game.step(&crate::InputFrame {
+                    right: true,
+                    ..Default::default()
+                });
+                assert_eq!(game.data.get("favor").copied().unwrap_or(0.), 0.);
+            }
+            for _ in 0..16 {
+                game.step(&crate::InputFrame::default());
+            }
+            assert_eq!(game.player.held, Some(donor));
+            assert!(game.player.pos.x >= 160. && game.player.pos.x < 176.);
+            game.step(&action);
+            assert_eq!(game.player.held, None);
+            assert_eq!(game.world.entity(donor).unwrap().state, 2);
+            assert!(!game.world.entity(donor).unwrap().held);
+            let mut witnessed = false;
+            for _ in 0..180 {
+                let offering = game.world.entity(donor).unwrap();
+                let at_callback = offering.value("sacrifice_count") == 0.
+                    && offering.vel == Vec2::default()
+                    && game.world.tiles_point(
+                        Vec2::new(offering.pos.x, offering.pos.y + 8.),
+                        "oSacAltarLeft",
+                    );
+                let offering_pos = offering.pos;
+                let mut expected_rng = game.rng.clone();
+                if at_callback {
+                    assert_eq!(offering.health, 4, "live sacrifice from actual carry/throw");
+                    source_detritus_draws(&mut expected_rng); // unconditional Flame
+                    for _ in 0..3 {
+                        source_detritus_draws(&mut expected_rng); // source Blood cap admits all
+                    }
+                }
+                let expected_gift = if at_callback {
+                    Some(source_favor8_unowned_gift(expected_rng.range(8)))
+                } else {
+                    None
+                };
+                game.step(&crate::InputFrame::default());
+                if game.world.entity(donor).is_some() {
+                    continue;
+                }
+                assert!(
+                    at_callback,
+                    "offering must disappear through its real countdown"
+                );
+                assert_eq!(game.data["favor"], 8.);
+                assert_eq!(game.data["kali_gift"], 1.);
+                assert_eq!(game.data["shake"], 10.);
+                assert_eq!(game.data["message_timer"], 200.);
+                assert!(game.events.iter().any(|event| matches!(event,
+                    GameEvent::Dialogue(message) if message.first == "KALI ACCEPTS YOUR SACRIFICE!"
+                        && message.second == "SHE BESTOWS A GIFT UPON YOU!" && message.ticks == 200
+                )));
+                let flame = game
+                    .world
+                    .entities
+                    .iter()
+                    .find(|e| e.object == "oFlame")
+                    .unwrap();
+                let blood: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oBlood")
+                    .collect();
+                assert_eq!(blood.len(), 3);
+                let poofs: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oPoof")
+                    .collect();
+                assert_eq!(poofs.len(), 2);
+                let gift = game
+                    .world
+                    .entities
+                    .iter()
+                    .find(|e| e.object == expected_gift.unwrap())
+                    .unwrap();
+                assert!(blood
+                    .iter()
+                    .all(|e| e.creation_serial > flame.creation_serial));
+                assert!(blood
+                    .iter()
+                    .all(|e| e.creation_serial < poofs[0].creation_serial));
+                assert!(poofs[0].creation_serial < poofs[1].creation_serial);
+                assert!(poofs[1].creation_serial < gift.creation_serial);
+                assert_eq!(gift.value("cost"), 0.);
+                assert_eq!(gift.value("forSale"), 0.);
+                for (poof, direction) in poofs.iter().zip([-1., 1.]) {
+                    assert_eq!(poof.vel, Vec2::new(direction, 0.));
+                    assert_eq!(poof.pos, Vec2::new(192. + direction, offering_pos.y - 8.));
+                    assert_eq!(poof.image_speed(), 0.4);
+                    let drawn = game.presentation().world.entity(poof.id).unwrap();
+                    assert_eq!(drawn.animation, 0.);
+                }
+                assert_eq!(game.rng.clone().next_u64(), expected_rng.next_u64());
+                let ids = [poofs[0].id, poofs[1].id];
+                for _ in 0..13 {
+                    game.step(&crate::InputFrame::default());
+                }
+                assert!(ids.iter().all(|id| game.world.entity(*id).is_some()));
+                game.step(&crate::InputFrame::default());
+                assert!(ids.iter().all(|id| game.world.entity(*id).is_none()));
+                witnessed = true;
+                break;
+            }
+            assert!(
+                witnessed,
+                "input-thrown live Damsel must naturally settle and be sacrificed"
+            );
+        }
+    }
+
+    #[test]
+    fn natural_live_damsel_missing_right_favor16_aborts_sacrifice_after_prior_effects() {
+        for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = Game::shell(17, preset);
+            for x in 0..game.world.width {
+                game.world.set_tile(x, 10, "oBlock");
+            }
+            // Authored partial altar: both supported surfaces are left halves;
+            // no right receiver exists for the unguarded favor16 x expression.
+            for x in [11, 12] {
+                game.world.set_tile(x, 10, "oSacAltarLeft");
+                game.world.set_tile(x, 11, "oBlock");
+            }
+            game.data.insert("favor".into(), 8.);
+            game.player.pos = Vec2::new(96., 152.);
+            game.player.previous_pos = game.player.pos;
+            let donor = game.spawn("oDamsel", game.player.pos);
+            let action = crate::InputFrame {
+                down: true,
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            };
+            game.step(&action);
+            assert_eq!(game.player.held, Some(donor));
+            for _ in 0..60 {
+                if game.player.pos.x >= 160. {
+                    break;
+                }
+                game.step(&crate::InputFrame {
+                    right: true,
+                    ..Default::default()
+                });
+            }
+            for _ in 0..16 {
+                game.step(&crate::InputFrame::default());
+            }
+            assert_eq!(game.player.held, Some(donor));
+            assert!(game.player.pos.x >= 160. && game.player.pos.x < 176.);
+            game.step(&action);
+            assert_eq!(game.player.held, None);
+            assert_eq!(game.world.entity(donor).unwrap().state, 2);
+            let mut witnessed = false;
+            for _ in 0..180 {
+                let offering = game.world.entity(donor).unwrap();
+                let at_callback = offering.value("sacrifice_count") == 0.
+                    && offering.vel == Vec2::default()
+                    && game.world.tiles_point(
+                        Vec2::new(offering.pos.x, offering.pos.y + 8.),
+                        "oSacAltarLeft",
+                    );
+                let mut expected_rng = game.rng.clone();
+                if at_callback {
+                    assert_eq!(offering.health, 4);
+                    for _ in 0..4 {
+                        source_detritus_draws(&mut expected_rng);
+                    }
+                }
+                game.step(&crate::InputFrame::default());
+                if game
+                    .data
+                    .get("source_runtime_errors")
+                    .copied()
+                    .unwrap_or(0.)
+                    == 0.
+                {
+                    assert!(
+                        game.world.entity(donor).is_some(),
+                        "source error precedes Destroy"
+                    );
+                    continue;
+                }
+                assert!(
+                    at_callback,
+                    "error must arise from the real sacrifice countdown"
+                );
+                let retained = game.world.entity(donor).unwrap();
+                assert_eq!(retained.health, 4);
+                assert_eq!(game.data["favor"], 16.);
+                assert_eq!(game.data["kali_gift"], 2.);
+                assert_eq!(game.data.get("message_timer").copied().unwrap_or(0.), 0.);
+                assert_eq!(game.data.get("shake").copied().unwrap_or(0.), 0.);
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(|e| e.object == "oBlood")
+                        .count(),
+                    3
+                );
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(|e| e.object == "oFlame")
+                        .count(),
+                    1
+                );
+                assert!(!game
+                    .world
+                    .entities
+                    .iter()
+                    .any(|e| e.object == "oKapala" || e.object == "oPoof"));
+                assert!(game.events.iter().any(|event| matches!(event,
+                    GameEvent::Dialogue(message) if message.first == "KALI ACCEPTS YOUR SACRIFICE!"
+                        && message.second == "SHE BESTOWS A GIFT UPON YOU!" && message.ticks == 0
+                )));
+                assert!(game.events.iter().any(|event| matches!(event,
+                    GameEvent::Message(message) if message.contains("SOURCE RUNTIME ERROR")
+                )));
+                assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
+                witnessed = true;
+                break;
+            }
+            assert!(
+                witnessed,
+                "actual carry/throw must reach the missing-right error"
+            );
+        }
+    }
+
+    #[test]
+    fn favor8_missing_or_inactive_right_altar_latches_without_effects_or_rng() {
+        for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for inactive in [false, true] {
+                let mut game = Game::shell(3, preset);
+                if inactive {
+                    let id = game.spawn("oSacAltarRight", Vec2::new(80., 64.));
+                    game.world.entity_mut(id).unwrap().engine_active = false;
+                }
+                game.data.insert("favor".into(), 8.);
+                let mut expected_rng = game.rng.clone();
+                reward(&mut game, Vec2::new(64., 64.), 56.);
+                assert_eq!(game.data["kali_gift"], 1.);
+                assert!(!game
+                    .world
+                    .entities
+                    .iter()
+                    .any(|e| e.object == "oPoof" || crate::items::is_item(&e.object)));
+                assert_eq!(game.rng.clone().next_u64(), expected_rng.next_u64());
+            }
+        }
+    }
+
+    #[test]
+    fn favor16_missing_inactive_or_destroyed_right_reports_source_error_without_fabricated_gift() {
+        for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for target in ["absent", "inactive", "destroyed"] {
+                let mut game = Game::shell(17, preset);
+                if target != "absent" {
+                    let right = game.spawn("oSacAltarRight", Vec2::new(224., 64.));
+                    let entity = game.world.entity_mut(right).unwrap();
+                    if target == "inactive" {
+                        entity.engine_active = false;
+                    } else {
+                        entity.alive = false;
+                    }
+                }
+                game.spawn("oSacAltarLeft", Vec2::new(64., 64.));
+                let donor = game.spawn("oDamsel", Vec2::new(72., 56.));
+                let index = game
+                    .world
+                    .entities
+                    .iter()
+                    .position(|e| e.id == donor)
+                    .unwrap();
+                let mut donor = game.world.entities.remove(index);
+                donor.state = 2;
+                donor.data.insert("sacrifice_count".into(), 0.);
+                game.data.insert("favor".into(), 8.);
+                let mut expected_rng = game.rng.clone();
+                for _ in 0..4 {
+                    source_detritus_draws(&mut expected_rng);
+                }
+                offering_entity(&mut game, &mut donor);
+                assert!(donor.alive, "failed reward must not reach donor Destroy");
+                assert_eq!(game.data["favor"], 16.);
+                assert_eq!(game.data.get("message_timer").copied().unwrap_or(0.), 0.);
+                assert_eq!(game.data.get("shake").copied().unwrap_or(0.), 0.);
+                assert_eq!(game.data["kali_gift"], 2.);
+                assert_eq!(game.data["source_runtime_errors"], 1.);
+                assert!(game.events.iter().any(|event| matches!(event,
+                    GameEvent::Message(message) if message.contains("SOURCE RUNTIME ERROR")
+                        && message.contains("scrGetFavorMsg")
+                        && message.contains("oSacAltarRight.x")
+                )));
+                assert!(!game
+                    .world
+                    .entities
+                    .iter()
+                    .any(|entity| { entity.object == "oKapala" || entity.object == "oPoof" }));
+                assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
+            }
+        }
+    }
+
+    #[test]
+    fn favor8_right_altar_uses_active_source_order_across_tiles_entities_and_visibility() {
+        for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for tile_active in [false, true] {
+                let mut game = Game::shell(11, preset);
+                game.world.set_tile(5, 4, "oSacAltarRight");
+                game.world.tiles[4 * game.world.width + 5].engine_active = tile_active;
+                let later = game.spawn("oSacAltarRight", Vec2::new(224., 64.));
+                game.world
+                    .entity_mut(later)
+                    .unwrap()
+                    .data
+                    .insert("visible".into(), 0.);
+                game.data.insert("favor".into(), 8.);
+                let mut expected_rng = game.rng.clone();
+                let object = source_favor8_unowned_gift(expected_rng.range(8));
+                reward(&mut game, Vec2::new(64., 64.), 56.);
+                let x = if tile_active { 80. } else { 224. };
+                let poofs: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oPoof")
+                    .collect();
+                assert_eq!(poofs.len(), 2);
+                assert_eq!(poofs[0].pos, Vec2::new(x, 48.));
+                assert_eq!(poofs[1].pos, Vec2::new(x, 48.));
+                assert_eq!(poofs[0].vel.x, -1.);
+                assert_eq!(poofs[1].vel.x, 1.);
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .find(|e| e.object == object)
+                        .unwrap()
+                        .pos,
+                    Vec2::new(x, 48.)
+                );
+                assert_eq!(game.rng.clone().next_u64(), expected_rng.next_u64());
+            }
+        }
+    }
+
+    #[test]
+    fn sacrifice_blood_cap_precedes_uncapped_poofs_and_equipment_roll() {
+        for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for initial_detritus in [0, 14, 15, 16, 31, 32] {
+                let mut game = altar_room();
+                game.rules = preset;
+                for _ in 0..initial_detritus {
+                    game.spawn("oBone", Vec2::new(200., 100.));
+                }
+                let id = game.spawn("oDamsel", Vec2::new(72., 56.));
+                let index = game.world.entities.iter().position(|e| e.id == id).unwrap();
+                let mut donor = game.world.entities.remove(index);
+                donor.state = 2;
+                donor.data.insert("sacrifice_count".into(), 0.);
+                let admitted_blood = (15_i32 - initial_detritus).clamp(0, 3) as usize;
+                let mut expected_rng = game.rng.clone();
+                source_detritus_draws(&mut expected_rng);
+                for _ in 0..admitted_blood {
+                    source_detritus_draws(&mut expected_rng);
+                }
+                let object = source_favor8_unowned_gift(expected_rng.range(8));
+                offering_entity(&mut game, &mut donor);
+                assert!(!donor.alive);
+                assert_eq!(game.data["favor"], 8.);
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(|e| e.alive && e.object == "oBlood")
+                        .count(),
+                    admitted_blood
+                );
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(|e| e.alive && e.object == "oPoof")
+                        .count(),
+                    2
+                );
+                assert!(game
+                    .world
+                    .entities
+                    .iter()
+                    .any(|e| e.alive && e.object == object));
+                assert_eq!(game.rng.clone().next_u64(), expected_rng.next_u64());
+            }
+        }
+    }
+
+    #[test]
+    fn favor8_owned_equipment_cycle_and_full_inventory_fallback_use_one_roll() {
+        for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for seed in 0..8 {
+                for jetpack in [false, true] {
+                    let mut game = altar_room();
+                    game.rules = preset;
+                    game.rng = crate::Rng::new(seed);
+                    for name in [
+                        "Cape",
+                        "Gloves",
+                        "Spectacles",
+                        "Mitt",
+                        "SpringShoes",
+                        "SpikeShoes",
+                        "Paste",
+                        "Compass",
+                    ] {
+                        game.player.equipment.insert(name.into());
+                    }
+                    if jetpack {
+                        game.player.equipment.insert("Jetpack".into());
+                    }
+                    game.data.insert("favor".into(), 8.);
+                    let mut expected_rng = game.rng.clone();
+                    expected_rng.range(8);
+                    reward(&mut game, Vec2::new(64., 64.), 56.);
+                    let expected = if jetpack { "oBombBox" } else { "oJetpack" };
+                    assert!(game
+                        .world
+                        .entities
+                        .iter()
+                        .any(|e| e.object == expected && e.value("cost") == 0.));
+                    assert_eq!(
+                        game.world
+                            .entities
+                            .iter()
+                            .filter(|e| e.object == "oPoof")
+                            .count(),
+                        2
+                    );
+                    assert_eq!(game.rng.clone().next_u64(), expected_rng.next_u64());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn later_kali_reward_thresholds_do_not_create_favor8_poofs_or_extra_rolls() {
+        for (favor, gift, bombs, expected_gift, heal) in [
+            (4., 0., 4, 0., false),
+            (8., 1., 4, 1., false),
+            (16., 0., 4, 2., false),
+            (16., 2., 4, 2., false),
+            (32., 0., 79, 3., false),
+            (32., 0., 80, 1., true),
+            (47., 3., 4, 3., false),
+            (48., 3., 4, 4., true),
+        ] {
+            let mut game = altar_room();
+            game.data.insert("favor".into(), favor);
+            game.data.insert("kali_gift".into(), gift);
+            game.player.bombs = bombs;
+            let health = game.player.health;
+            let mut expected_rng = game.rng.clone();
+            let expected_health = health
+                + if heal {
+                    4 + expected_rng.range(5) as i32
+                } else {
+                    0
+                };
+            reward(&mut game, Vec2::new(64., 64.), 56.);
+            assert_eq!(game.data["kali_gift"], expected_gift);
+            assert_eq!(game.player.health, expected_health);
+            assert_eq!(
+                game.player.bombs,
+                if favor == 32. && bombs == 79 {
+                    99
+                } else {
+                    bombs
+                }
+            );
+            assert!(!game.world.entities.iter().any(|e| e.object == "oPoof"));
+            assert_eq!(
+                game.world.entities.iter().any(|e| e.object == "oKapala"),
+                favor == 16. && gift == 0.
+            );
+            assert_eq!(game.rng.clone().next_u64(), expected_rng.next_u64());
+        }
+    }
+
     fn altar_room() -> Game {
         let mut game = Game::shell(17, RulesPreset::Classic);
         game.world.set_tile(4, 5, "oBlock");
@@ -1109,12 +1705,11 @@ mod tests {
             game.world.entity(id)
         );
         assert_eq!(game.data["favor"], 8.0);
-        assert!(
-            game.world
-                .entities
-                .iter()
-                .any(|e| { e.data.get("forSale") == Some(&0.0) && e.pos == Vec2::new(80.0, 40.0) })
-        );
+        assert!(game
+            .world
+            .entities
+            .iter()
+            .any(|e| { e.data.get("forSale") == Some(&0.0) && e.pos == Vec2::new(80.0, 40.0) }));
 
         let mut game = altar_room();
         let id = game.world.spawn("oDamsel", Vec2::new(72.0, 56.0));
