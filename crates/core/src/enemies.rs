@@ -65,6 +65,16 @@ pub fn init_entity(e: &mut Entity) {
     if is_enemy(&e.object) || e.object == "oDamsel" {
         e.data.insert("heavy".into(), 1.0);
     }
+    if is_enemy(&e.object) {
+        // oEnemy Create enables carrying; these own Create events override it.
+        let can_pick_up = !matches!(
+            e.object.as_str(),
+            "oYetiKing" | "oTombLord" | "oJaws" | "oAlienBoss"
+        );
+        e.data
+            .entry("canPickUp".into())
+            .or_insert(f64::from(can_pick_up));
+    }
     e.data.insert("stun_time".into(), 200.0);
     e.data.entry("counts_as_kill".into()).or_insert(1.0);
     e.data.entry("blood_left".into()).or_insert(4.0);

@@ -584,6 +584,38 @@ fn pick_up(game: &mut Game) {
         .iter()
         .any(|entity| entity.mask_intersects(area, CollisionPrecision::BoundingBox))
     {
+        // Source's Enemy query is an else-if: any overlapping Item prevents
+        // this fallback, even when that branch's nearest Item is ineligible.
+        let enemies: Vec<_> = crate::dispatcher::descendant_instances(game, "oEnemy")
+            .into_iter()
+            .filter_map(|instance| match instance {
+                crate::dispatcher::Instance::Entity(id) => game.world.entity(id),
+                _ => None,
+            })
+            .filter(|entity| entity.engine_active)
+            .collect();
+        if enemies
+            .iter()
+            .any(|entity| entity.mask_intersects(area, CollisionPrecision::BoundingBox))
+        {
+            let nearest = enemies
+                .into_iter()
+                .fold(None, |nearest: Option<&Entity>, entity| {
+                    if nearest.is_none_or(|current| {
+                        entity.pos.distance(game.player.pos) < current.pos.distance(game.player.pos)
+                    }) {
+                        Some(entity)
+                    } else {
+                        nearest
+                    }
+                })
+                .filter(|entity| entity.state >= 98 && entity.value("canPickUp") != 0.0)
+                .map(|entity| entity.id);
+            if let Some(id) = nearest {
+                game.world.entity_mut(id).unwrap().held = true;
+                game.player.held = Some(id);
+            }
+        }
         return;
     }
     let nearest = items
