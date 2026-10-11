@@ -438,7 +438,24 @@ pub(crate) fn player_spikes(game: &mut Game) {
         h.object == "oSpikes"
             && Rect::new(pos.x - 4., pos.y - 4., 9., 13.).intersects(current_rect(game, h))
     });
-    let Some(spikes) = spikes else {
+    if spikes.is_some() && game.state == crate::RunState::Dead {
+        let point = Vec2::new(pos.x, pos.y + 9.0);
+        let supported = game.world.tiles_point(point, "oSolid")
+            || game.world.entities.iter().any(|entity| {
+                entity.alive
+                    && entity.engine_active
+                    && crate::catalog::is_a(&entity.object, "oSolid")
+                    && entity.mask_contains(point, crate::CollisionPrecision::BoundingBox)
+            });
+        if !supported {
+            game.player.pos.y += 0.05;
+        } else {
+            game.player.data.insert("my_gravity".into(), 0.6);
+        }
+    } else {
+        game.player.data.insert("my_gravity".into(), 0.6);
+    }
+    let Some(_) = spikes else {
         return;
     };
     let fall = game.player.data.get("fall_ticks").copied().unwrap_or(0.);
@@ -451,9 +468,67 @@ pub(crate) fn player_spikes(game: &mut Game) {
             crate::player::script_player_blood(game, 3);
             lethal(game);
             game.player.vel = Vec2::default();
+            game.player.data.insert("my_gravity".into(), 0.0);
         }
-        if let Some(entity) = spikes.id.and_then(|id| game.world.entity_mut(id)) {
-            entity.sprite = "sSpikesBlood".into();
+        crate::dispatcher::register_instances(game);
+        let player_mask = game.player.collision_mask();
+        let selected = crate::dispatcher::descendant_instances(game, "oSpikes")
+            .into_iter()
+            .find(|instance| {
+                if !crate::dispatcher::is_active(game, *instance) {
+                    return false;
+                }
+                let mask = match *instance {
+                    Instance::Entity(id) => {
+                        let Some(entity) = game.world.entity(id) else {
+                            return false;
+                        };
+                        entity.collision_mask()
+                    }
+                    Instance::Terrain(index) => game.world.tile_collision_mask(
+                        (index % game.world.width) as i32,
+                        (index / game.world.width) as i32,
+                    ),
+                    Instance::Player => return false,
+                };
+                player_mask.intersects_mask(&mask)
+            });
+        match selected {
+            Some(Instance::Entity(id)) => {
+                game.world
+                    .entity_mut(id)
+                    .unwrap()
+                    .set_sprite("sSpikesBlood");
+            }
+            Some(Instance::Terrain(index)) => {
+                let origin = Vec2::new(
+                    (index % game.world.width) as f64 * 16.0,
+                    (index / game.world.width) as f64 * 16.0,
+                );
+                let metadata = game
+                    .world
+                    .entities
+                    .iter()
+                    .find(|entity| {
+                        entity.alive
+                            && entity.object == "oTerrainMetadata"
+                            && (entity.pos.x / 16.0).floor() == (origin.x / 16.0).floor()
+                            && (entity.pos.y / 16.0).floor() == (origin.y / 16.0).floor()
+                    })
+                    .map(|entity| entity.id)
+                    .unwrap_or_else(|| {
+                        game.spawn(
+                            "oTerrainMetadata",
+                            Vec2::new(origin.x + 8.0, origin.y + 8.0),
+                        )
+                    });
+                game.world
+                    .entity_mut(metadata)
+                    .unwrap()
+                    .text
+                    .insert("terrain_sprite".into(), "sSpikesBlood".into());
+            }
+            _ => {}
         }
     }
 }
