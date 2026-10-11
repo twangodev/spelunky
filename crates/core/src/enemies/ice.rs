@@ -1156,6 +1156,7 @@ fn yeti_player_collision(game: &mut Game, e: &mut Entity) {
             game.player.pos = Vec2::new(e.pos.x + if e.facing > 0 { 0.0 } else { 16.0 }, e.pos.y);
             game.player.previous_pos = game.player.pos;
             enter(e, 3);
+            e.vel.x = 0.0;
             game.player.vel = Vec2::new(f64::from(e.facing) * 6.0, -6.0);
             game.player.state = PlayerState::Stunned;
             game.player.data.insert("wall_hurt".into(), 1.0);
@@ -2424,6 +2425,90 @@ mod tests {
         assert_eq!(king.value("counter"), 30.0);
         assert_eq!(king.value("attack_timer"), 100.0);
         assert_eq!(king.value("animation_speed"), 0.25);
+    }
+
+    fn natural_yeti_grab_room(player_x: f64) -> (Game, u64) {
+        let mut g = boss_item_room();
+        g.player.pos = Vec2::new(player_x, 152.0);
+        g.player.previous_pos = g.player.pos;
+        // Preserve source Yeti Create's IDLE/counter0/xVel2.5. Its first Step
+        // moves normally and enters WALK before the real Character collision.
+        let id = g.spawn("oYeti", Vec2::new(128.0, 144.0));
+        assert_eq!(g.world.entity(id).unwrap().vel.x, 2.5);
+        assert_eq!(g.world.entity(id).unwrap().state, 0);
+        (g, id)
+    }
+
+    #[test]
+    fn actual_step_natural_yeti_grab_stops_thrower_before_the_following_move() {
+        for (player_x, facing) in [(136.0, -1), (144.0, 1)] {
+            let (mut g, id) = natural_yeti_grab_room(player_x);
+            g.step(&crate::InputFrame::default());
+            let yeti = g.world.entity(id).unwrap();
+            assert!(
+                yeti.pos.x > 128.0,
+                "the source Create velocity actually moved"
+            );
+            assert!(
+                !yeti.held,
+                "the parent held branch must not mask the omission"
+            );
+            assert_eq!(yeti.state, 3, "actual Character collision entered THROW");
+            assert_eq!(yeti.sprite, "sYetiThrowL");
+            assert_eq!(yeti.facing, facing);
+            assert_eq!(
+                yeti.vel.x, 0.0,
+                "Character THROW entry explicitly stops xVel"
+            );
+            assert_eq!(
+                yeti.value("counter"),
+                0.0,
+                "THROW does not reset the counter"
+            );
+            assert!(g.player.is_stunned());
+            assert_eq!(
+                g.player.stun, 0,
+                "source throw uses an independent stunned flag"
+            );
+            assert_eq!(g.player.vel, Vec2::new(f64::from(facing) * 6.0, -6.0));
+            let stopped_x = yeti.pos.x;
+            let thrown_x = g.player.pos.x;
+            for _ in 0..3 {
+                g.step(&crate::InputFrame::default());
+                let yeti = g.world.entity(id).unwrap();
+                assert_eq!(yeti.state, 3);
+                assert_eq!(yeti.pos.x, stopped_x, "moveTo runs before the THROW branch");
+                assert_eq!(yeti.vel.x, 0.0);
+            }
+            assert!((g.player.pos.x - thrown_x) * f64::from(facing) > 5.0);
+            assert_eq!(g.player.health, 4);
+        }
+    }
+
+    #[test]
+    fn actual_step_yeti_stops_itself_but_preserves_player_and_dropped_item_momentum() {
+        for (player_x, facing) in [(136.0, -1), (144.0, 1)] {
+            let (mut g, yeti_id) = natural_yeti_grab_room(player_x);
+            // A valid initial carried item; the fixture performs no state or
+            // position edits after simulation starts. The real grab drops it.
+            let rock = g.spawn("oRock", g.player.pos);
+            g.player.held = Some(rock);
+            g.world.entity_mut(rock).unwrap().held = true;
+            g.step(&crate::InputFrame::default());
+            let yeti = g.world.entity(yeti_id).unwrap();
+            assert_eq!(yeti.state, 3);
+            assert_eq!(yeti.vel.x, 0.0);
+            assert_eq!(g.player.held, None);
+            let dropped = g.world.entity(rock).unwrap();
+            assert!(!dropped.held);
+            let velocity = Vec2::new(f64::from(facing) * 6.0, -6.0);
+            assert_eq!(g.player.vel, velocity);
+            assert_eq!(
+                dropped.vel, velocity,
+                "the zero belongs to Yeti, not the thrown pair"
+            );
+            assert_eq!(g.player.health, 4);
+        }
     }
 
     #[test]
