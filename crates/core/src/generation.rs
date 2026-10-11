@@ -7,6 +7,8 @@ use std::sync::OnceLock;
 
 #[path = "generation/blocks.rs"]
 mod blocks;
+#[path = "generation/canopy.rs"]
+mod canopy;
 #[path = "generation/init_cleanup.rs"]
 mod init_cleanup;
 #[path = "generation/population.rs"]
@@ -825,7 +827,13 @@ pub(crate) fn generate_with_campaign(
     // Population does; preserve any real parent checkWater request it emits.
     world.fluid_dirty = false;
     population::populate_with_campaign(&mut world, rng, &selected, context, state, &path.rooms);
-    terrain::setup_generated(&mut world, rng, graphics_high);
+    terrain::setup_generated_with_revision(
+        &mut world,
+        rng,
+        graphics_high,
+        state.revision,
+        has(&selected, "cemetery"),
+    );
     if graphics_high {
         background_extras(&mut world, rng);
     }
@@ -856,6 +864,14 @@ pub(crate) fn initialize_hub_fringe(world: &mut World, rng: &mut Rng) {
     for origin in origins {
         let source_x = if rng.range(3) < 2 { 0.0 } else { 16.0 };
         terrain::decoration(world, "bgCaveTop", origin, source_x, 16.0, 3.0);
+    }
+}
+
+/// The only authored oBricks room with this family is rSun (12 Vines).
+/// Its SetupWalls Vine pass runs even when the Brick fringe is disabled.
+pub(crate) fn initialize_hub_canopy(world: &mut World, revision: crate::GenerationRevision) {
+    if revision == crate::GenerationRevision::SourceClassicV2 {
+        canopy::vines(world);
     }
 }
 

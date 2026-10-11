@@ -27,7 +27,7 @@ const UNDERGROUND: [(&str, f64, f64); 19] = [
     ("oRopePile", 0.0, 0.0),
 ];
 
-fn metadata(world: &mut World, x: usize, y: usize) -> u64 {
+pub(super) fn metadata(world: &mut World, x: usize, y: usize) -> u64 {
     let p = Vec2::new(x as f64 * 16.0 + 8.0, y as f64 * 16.0 + 8.0);
     if let Some(id) = world
         .entities
@@ -377,7 +377,24 @@ fn create_terrain(
 /// scrSetupWalls runs after population, so its probes see the solids/traps
 /// population added or removed. Keep its initialization guard independent of
 /// terrain Create to avoid rerolling buried contents while setting up edges.
+#[cfg(test)]
 pub(super) fn setup_generated(world: &mut World, rng: &mut Rng, graphics_high: bool) {
+    setup_generated_with_revision(
+        world,
+        rng,
+        graphics_high,
+        crate::GenerationRevision::HistoricalV1,
+        false,
+    );
+}
+
+pub(super) fn setup_generated_with_revision(
+    world: &mut World,
+    rng: &mut Rng,
+    graphics_high: bool,
+    revision: crate::GenerationRevision,
+    cemetery: bool,
+) {
     let city = world.name == "City of Gold";
     for y in 0..world.height {
         for x in 0..world.width {
@@ -451,9 +468,16 @@ pub(super) fn setup_generated(world: &mut World, rng: &mut Rng, graphics_high: b
         let exposed = lava_exposed(world, origin);
         setup_lava(world.entity_mut(id).unwrap(), rng, exposed, false);
     }
-    // scrSetupWalls:458–472 follows Water/Lava and Vine setup. The preceding
-    // Vine visual phase and later Tree/TreeBranch phases remain missing.
+    // Preserve the historical layout/masks and RNG continuation, including
+    // imported canonical RNG state whose generation revision is HistoricalV1.
+    let source_canopy = revision == crate::GenerationRevision::SourceClassicV2;
+    if source_canopy {
+        super::canopy::vines(world);
+    }
     super::blocks::setup(world, rng);
+    if source_canopy {
+        super::canopy::trees_and_branches(world, rng, cemetery);
+    }
 }
 
 /// scrInitLevel propagates surface sprites after background details and

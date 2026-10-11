@@ -626,7 +626,7 @@ pub fn game_scene_in_view(
     let mut quads = Vec::with_capacity(1000);
     background_in_view(&mut quads, game, camera, pixel_snap, atlas, view);
     let mut layers: Vec<(i32, u64, Vec<DrawQuad>)> = Vec::new();
-    let terrain_sprites: BTreeMap<(usize, usize), (&str, f64)> = hidden
+    let terrain_sprites: BTreeMap<(usize, usize), (&str, f64, Option<i32>)> = hidden
         .iter()
         .copied()
         .chain(
@@ -648,7 +648,11 @@ pub fn game_scene_in_view(
                         (entity.pos.x / 16.0).floor() as usize,
                         (entity.pos.y / 16.0).floor() as usize,
                     ),
-                    (name.as_str(), entity.animation),
+                    (
+                        name.as_str(),
+                        entity.animation,
+                        entity.data.get("depth").map(|depth| *depth as i32),
+                    ),
                 )
             })
         })
@@ -661,7 +665,7 @@ pub fn game_scene_in_view(
         let tile_y = index / game.world.width.max(1);
         let override_sprite = terrain_sprites.get(&(tile_x, tile_y)).copied();
         let Some(name) = override_sprite
-            .map(|(name, _)| name)
+            .map(|(name, _, _)| name)
             .or_else(|| catalog::sprite(&tile.object))
             .or_else(|| {
                 (tile.object == "oSolid").then_some(match game.world.area {
@@ -688,13 +692,16 @@ pub fn game_scene_in_view(
             &mut layer,
             atlas,
             name,
-            override_sprite.map_or(0.0, |(_, frame)| frame),
+            override_sprite.map_or(0.0, |(_, frame, _)| frame),
             x,
             y,
             false,
             WHITE,
         );
-        layers.push((definition.map_or(100, |def| def.depth), index as u64, layer));
+        let depth = override_sprite
+            .and_then(|(_, _, depth)| depth)
+            .unwrap_or_else(|| definition.map_or(100, |def| def.depth));
+        layers.push((depth, index as u64, layer));
     }
     for metadata in entities
         .clone()
@@ -4465,6 +4472,57 @@ mod tests {
             !game_scene(&game, 1.0, false, &atlas)
                 .iter()
                 .any(|q| q.blend == QuadBlend::Multiply)
+        );
+    }
+
+    #[test]
+    fn stored_tree_top_depth_override_matches_a_dynamic_tree_top() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = spelunky_core::World::new(20, 20, Area::Jungle, 5);
+        game.world.set_tile(4, 4, "oTree");
+        let metadata = game.world.spawn("oTerrainMetadata", Vec2::new(72.0, 72.0));
+        let e = game.world.entity_mut(metadata).unwrap();
+        e.sprite.clear();
+        e.text.insert("terrain_sprite".into(), "sTreeTop".into());
+        e.data.insert("depth".into(), 1.0);
+        let dynamic = game.world.spawn("oTree", Vec2::new(112.0, 64.0));
+        let e = game.world.entity_mut(dynamic).unwrap();
+        e.set_sprite("sTreeTop");
+        e.data.insert("depth".into(), 1.0);
+        // Depth 1 must draw after a depth-2 canopy neighbour for both storage forms.
+        let branch = game.world.spawn("oTreeBranch", Vec2::new(80.0, 64.0));
+        game.world
+            .entity_mut(branch)
+            .unwrap()
+            .set_sprite("sTreeBranchRight");
+        game.camera = Vec2::default();
+        game.previous_camera = game.camera;
+        let quads = game_scene(&game, 1.0, false, &atlas);
+        let top_uv = atlas.sprite("sTreeTop", 0.0).unwrap().uv;
+        let branch_uv = atlas.sprite("sTreeBranchRight", 0.0).unwrap().uv;
+        let branch_index = quads.iter().position(|q| q.uv == branch_uv).unwrap();
+        for x in [64.0, 112.0] {
+            let index = quads
+                .iter()
+                .position(|q| q.uv == top_uv && q.rect[0] == x)
+                .unwrap();
+            assert!(index > branch_index, "tree tops use source depth 1");
+        }
+        game.world
+            .entity_mut(metadata)
+            .unwrap()
+            .data
+            .remove("depth");
+        let ordinary = game_scene(&game, 1.0, false, &atlas);
+        let tile_index = ordinary
+            .iter()
+            .position(|q| q.uv == top_uv && q.rect[0] == 64.0)
+            .unwrap();
+        let branch_index = ordinary.iter().position(|q| q.uv == branch_uv).unwrap();
+        assert!(
+            tile_index < branch_index,
+            "absent override keeps catalog depth and tile tie order"
         );
     }
 

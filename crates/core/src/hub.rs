@@ -611,6 +611,7 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
     if !game.flags.contains("low_graphics") {
         crate::generation::initialize_hub_fringe(&mut game.world, &mut game.rng);
     }
+    crate::generation::initialize_hub_canopy(&mut game.world, game.generation_revision);
     game.data.insert("hub_draw_status".into(), 0.0);
     if kind.challenge() {
         game.data.insert("source_hub_music_alarm".into(), 100.0);
@@ -2339,6 +2340,46 @@ mod tests {
         assert_eq!(g.data["mini1"], 42.0);
         assert!(g.flags.contains("hub_challenge_finished"));
     }
+    #[test]
+    fn sun_setup_walls_initializes_authored_vines_even_with_low_graphics() {
+        for low_graphics in [false, true] {
+            for revision in [
+                GenerationRevision::HistoricalV1,
+                GenerationRevision::SourceClassicV2,
+            ] {
+                let mut game = Game::shell(7, RulesPreset::Classic);
+                game.generation_revision = revision;
+                if low_graphics {
+                    game.flags.insert("low_graphics".into());
+                }
+                game.load_hub(HubKind::Sun);
+                assert_eq!(
+                    game.world
+                        .tiles
+                        .iter()
+                        .filter(|t| t.object == "oVine")
+                        .count(),
+                    12
+                );
+                for x in [7, 12] {
+                    for (y, expected) in [(2, "sVineSource"), (7, "sVineBottom")] {
+                        let sprite = game.world.entities.iter().find_map(|e| {
+                            (e.alive
+                                && e.object == "oTerrainMetadata"
+                                && e.pos == Vec2::new(x as f64 * 16.0 + 8.0, y as f64 * 16.0 + 8.0))
+                            .then(|| e.text.get("terrain_sprite").map(String::as_str))
+                            .flatten()
+                        });
+                        assert_eq!(
+                            sprite,
+                            (revision == GenerationRevision::SourceClassicV2).then_some(expected)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn authored_rooms_have_source_dimensions_and_spawns() {
         let flags = BTreeSet::new();
