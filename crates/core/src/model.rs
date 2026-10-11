@@ -1208,6 +1208,12 @@ mod geometry_tests {
         assert_eq!(p.bounds(), Rect::new(27.0, 40.0, 10.0, 16.0));
         assert_eq!(p.sprite_bounds(), Rect::new(26.0, 40.0, 12.0, 16.0));
         p.facing = 1;
+        assert_eq!(
+            p.sprite_bounds(),
+            Rect::new(26.0, 40.0, 12.0, 16.0),
+            "changing facing does not execute the source Draw event"
+        );
+        p.data.insert("image_xscale".into(), -1.0);
         assert_eq!(p.sprite_bounds(), Rect::new(27.0, 40.0, 12.0, 16.0));
         p.sprite = "sDuckLeft".into();
         assert_eq!(p.sprite_bounds(), Rect::new(25.0, 47.0, 15.0, 9.0));

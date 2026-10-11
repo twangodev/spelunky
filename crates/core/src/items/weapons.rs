@@ -2538,11 +2538,16 @@ mod tests {
         let (mut game, _) = flat_room("oMachete");
         let id = game.world.spawn("oFlare", Vec2::new(200.0, 140.0));
         game.world.entity_mut(id).unwrap().vel.x = 6.0;
+        // Flare Step samples after inherited motion, before the first Player
+        // Draw changes its persisted image_xscale from Create's +1 to -1.
+        let player_before_draw = game.player.clone();
         let before = crate::world_events::mask_distance(
             game.world.entity(id).unwrap().sprite_bounds(),
-            game.player.sprite_bounds(),
+            player_before_draw.sprite_bounds(),
         );
         game.step(&InputFrame::default());
+        assert_eq!(game.player.pos, player_before_draw.pos);
+        assert_eq!(game.player.sprite, player_before_draw.sprite);
         let flare = game.world.entity(id).unwrap();
         assert_eq!(flare.pos.x, 206.0);
         let sampled = flare.value("dist_to_player");
@@ -2552,7 +2557,15 @@ mod tests {
         );
         assert_eq!(
             sampled,
-            crate::world_events::mask_distance(flare.sprite_bounds(), game.player.sprite_bounds())
+            crate::world_events::mask_distance(
+                flare.sprite_bounds(),
+                player_before_draw.sprite_bounds()
+            )
+        );
+        assert_ne!(
+            sampled,
+            crate::world_events::mask_distance(flare.sprite_bounds(), game.player.sprite_bounds()),
+            "the later Player Draw changes the mask after Flare Step sampled it"
         );
     }
 

@@ -2721,6 +2721,10 @@ mod tests {
             .insert("message".into(), "SPRITE EDGE".into());
         g.step(&InputFrame::default());
         assert!(
+            !g.events.contains(&GameEvent::Message("SPRITE EDGE".into())),
+            "first Collision uses Create scale +1 before the first Draw"
+        );
+        assert!(
             !g.player
                 .bounds()
                 .intersects(g.world.entity(sign).unwrap().sprite_bounds())
@@ -2730,6 +2734,9 @@ mod tests {
                 .sprite_bounds()
                 .intersects(g.world.entity(sign).unwrap().sprite_bounds())
         );
+        // The first Draw persisted the right-facing scale. The following
+        // Collision can now reach the same sign without moving either actor.
+        g.step(&InputFrame::default());
         assert!(g.events.contains(&GameEvent::Message("SPRITE EDGE".into())));
     }
     #[test]
