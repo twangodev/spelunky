@@ -405,6 +405,9 @@ pub(super) fn setup_generated(world: &mut World, rng: &mut Rng, graphics_high: b
         let exposed = lava_exposed(world, origin);
         setup_lava(world.entity_mut(id).unwrap(), rng, exposed, false);
     }
+    // scrSetupWalls:458–472 follows Water/Lava and Vine setup. The preceding
+    // Vine visual phase and later Tree/TreeBranch phases remain missing.
+    super::blocks::setup(world, rng);
 }
 
 /// scrInitLevel propagates surface sprites after background details and
@@ -677,7 +680,7 @@ mod tests {
     use crate::model::Area;
 
     #[test]
-    fn generated_population_is_independent_of_later_graphics_rng() {
+    fn mines_population_before_block_promotion_is_independent_of_graphics_rng() {
         let source = include_str!(
             "../../../../references/classic-1.1/Scripts/Level Generation/scrInitLevel.gml"
         );
@@ -687,12 +690,27 @@ mod tests {
         let surface = source.find("scrCheckWaterTop();").unwrap();
         assert!(population < walls && walls < details && details < surface);
 
-        let high = crate::generation::generate(&mut Rng::new(42), 1, &Default::default());
-        let low = crate::generation::generate(
-            &mut Rng::new(42),
-            1,
-            &["low_graphics".into()].into_iter().collect(),
+        let walls_source = include_str!(
+            "../../../../references/classic-1.1/Scripts/Level Generation/scrSetupWalls.gml"
         );
+        let graphics = walls_source.find("if (global.graphicsHigh)").unwrap();
+        let fringe_roll = walls_source[graphics..].find("rand(1,3)").unwrap() + graphics;
+        let blocks = walls_source.find("with oBlock").unwrap();
+        assert!(graphics < fringe_roll && fringe_roll < blocks);
+
+        let generate_arm = |flags: &std::collections::BTreeSet<String>| {
+            use super::super::blocks::TRACE;
+            TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
+            let world = crate::generation::generate(&mut Rng::new(42), 1, flags);
+            let mut traces = TRACE.with(|trace| trace.borrow_mut().take().unwrap());
+            assert_eq!(traces.len(), 1);
+            let trace = traces.pop().unwrap();
+            super::super::blocks::tests::assert_source_outcome(&world, &trace);
+            (world, trace.before)
+        };
+        let (high, high_before_promotion) = generate_arm(&Default::default());
+        let (low, low_before_promotion) =
+            generate_arm(&["low_graphics".into()].into_iter().collect());
         let actors = |world: &World| {
             world
                 .entities
@@ -715,9 +733,9 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(
-            actors(&high),
-            actors(&low),
-            "source cosmetic draws occur after enemy/treasure population"
+            actors(&high_before_promotion),
+            actors(&low_before_promotion),
+            "Mines enemy/treasure population precedes graphics and Block promotion"
         );
         let decorations = |world: &World| {
             world

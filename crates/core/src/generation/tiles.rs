@@ -680,7 +680,7 @@ fn spawn(w: &mut World, r: &mut Rng, object: &str, p: Vec2) -> u64 {
     let e = w.entity_mut(id).unwrap();
     let sprite = match object {
         "oTreeBranch" => "sTreeBranchRight",
-        "oPushBlock" | "oCeilingTrap" => "sBlock",
+        "oCeilingTrap" => "sBlock",
         "oTempleFake" => "sTemple",
         "oWaterSwim" => "sWater",
         "oKaliHead" => "sKaliHead1",

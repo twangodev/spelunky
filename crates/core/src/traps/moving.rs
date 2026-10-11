@@ -157,6 +157,26 @@ pub(super) fn init_entity(entity: &mut Entity) {
     }
     entity.data.insert("moving_fixed_initialized".into(), 1.0);
     match entity.object.as_str() {
+        "oPushBlock" => {
+            // DrawnSprite → Solid → MoveableSolid → PushBlock Create.
+            // All defaults are fixed; the city sprite needs local context.
+            entity.vel = Vec2::default();
+            for (key, value) in [
+                ("blinkToggle", 0.0),
+                ("invincible", 0.0),
+                ("shopWall", 0.0),
+                ("cleanDeath", 0.0),
+                ("push_gravity", 0.6),
+                ("collision_left", 0.0),
+                ("collision_top", 0.0),
+                ("collision_right", 16.0),
+                ("collision_bottom", 16.0),
+            ] {
+                entity.data.insert(key.into(), value);
+            }
+            entity.text.insert("type".into(), "None".into());
+            entity.text.insert("treasure".into(), String::new());
+        }
         "oCeilingTrap" => {
             entity.set_image_speed(0.4);
             entity.timer = 3;
@@ -181,10 +201,10 @@ pub(super) fn init_entity(entity: &mut Entity) {
     }
 }
 
-/// RNG-only source Create body shared by generated births and runtime Create.
-/// Both Smash classes own dir=rand(0,3); their MovingSolid parent draws nothing.
+/// Local source Create bodies shared by generated and runtime births.
+/// Smash classes draw dir=rand(0,3); PushBlock selects its city sprite without RNG.
 /// Existing saved markers and caller-supplied direction retain their behavior.
-pub(super) fn create_local(rng: &mut crate::Rng, entity: &mut Entity) {
+pub(super) fn create_local(rng: &mut crate::Rng, entity: &mut Entity, city: bool) {
     if !handles(&entity.object) || entity.data.contains_key("moving_context_initialized") {
         return;
     }
@@ -194,6 +214,9 @@ pub(super) fn create_local(rng: &mut crate::Rng, entity: &mut Entity) {
         None
     };
     entity.data.insert("moving_context_initialized".into(), 1.0);
+    if entity.object == "oPushBlock" && city {
+        entity.set_sprite("sGoldBlock");
+    }
     if let Some(direction) = direction {
         entity.data.entry("direction".into()).or_insert(direction);
     }
@@ -203,10 +226,13 @@ pub(super) fn create(game: &mut Game, instance: Instance) {
     let Instance::Entity(id) = instance else {
         return;
     };
+    let city = game.world.name == "City of Gold"
+        || game.flags.contains("cityOfGold")
+        || game.flags.contains("city_of_gold");
     let Some(entity) = game.world.entity_mut(id) else {
         return;
     };
-    create_local(&mut game.rng, entity);
+    create_local(&mut game.rng, entity, city);
 }
 
 pub(super) fn animation_end(game: &mut Game, instance: Instance) {

@@ -1984,11 +1984,11 @@ fn temple_parent_attachment(
         .map(|entity| entity.id)
 }
 
-/// Exact non-inheriting oBlock Destroy body for generation's Arrow pass.
+/// Literal non-inheriting oBlock Destroy body for generation replacements.
 /// This does not widen the supported Temple-primary callback families. City
 /// state is the generator's normalized world name, selected from either flag
 /// alias before population. global.cleanSolids is absent from this own event.
-pub(crate) fn destroy_generated_block_own(
+pub(crate) fn destroy_generated_block_literal(
     world: &mut World,
     rng: &mut Rng,
     source: &Entity,
@@ -2033,6 +2033,19 @@ pub(crate) fn destroy_generated_block_own(
             }
         }
     }
+}
+
+/// Arrow replacement retains the existing deferred-content compatibility
+/// adapter after the literal Block event. SetupWalls promotion uses only the
+/// literal event: Block Create never produces buried item contents.
+pub(crate) fn destroy_generated_block_own(
+    world: &mut World,
+    rng: &mut Rng,
+    source: &Entity,
+    city: bool,
+) {
+    destroy_generated_block_literal(world, rng, source, city);
+    let center = Vec2::new(source.pos.x + 8.0, source.pos.y + 8.0);
     // Block owns no treasure-label loot. These concrete contents are the
     // port's existing deferred Create representation; retaining them does not
     // repair their earlier birth timing. Frozen occupants have a separate

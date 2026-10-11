@@ -5,6 +5,8 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
+#[path = "generation/blocks.rs"]
+mod blocks;
 #[path = "generation/population.rs"]
 mod population;
 #[path = "generation/special.rs"]

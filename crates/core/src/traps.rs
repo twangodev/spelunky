@@ -79,7 +79,7 @@ pub(crate) fn create_local(
     context: &mut crate::creation::EntityCreateContext<'_>,
     entity: &mut Entity,
 ) {
-    moving::create_local(context.rng, entity);
+    moving::create_local(context.rng, entity, context.world.name == "City of Gold");
 }
 
 pub(crate) fn create(game: &mut Game, instance: Instance) {
