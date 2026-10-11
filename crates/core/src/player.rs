@@ -902,7 +902,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let input = &effective;
     let w = &mut game.world;
     let mut sound = None;
-    let col_bot = below(w, p);
+    let col_solid_bot = edge(w, p, Side::Bottom, 1.0);
+    let col_bot = col_solid_bot || platform(w, p, p.pos, 1.0);
+    let col_platform_bot = precise_line(w, edge_rect(p, Side::Bottom, 1.0, false), "oPlatform");
     let col_left = edge(w, p, Side::Left, 1.0);
     let col_right = edge(w, p, Side::Right, 1.0);
     let col_top = edge(w, p, Side::Top, 1.0);
@@ -1268,20 +1270,25 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     }
 
     if input.down && grounded_state(p.state) && p.attack_timer == 0 {
-        if edge(w, p, Side::Bottom, 1.0) {
+        if col_solid_bot {
             p.state = PlayerState::Ducking;
-        } else if let Some(ladder) = ladder_segment_at(w, Vec2::new(p.pos.x, p.pos.y + 16.0)) {
-            if (p.pos.x - ladder.x).abs() < 4.0 {
-                p.pos.x = ladder.x;
-                p.vel = Vec2::default();
-                ax = 0.0;
-                ay = 0.0;
-                p.state = PlayerState::Climbing;
+        } else if col_platform_bot {
+            // characterStepEvent550 clears the previous fall before either
+            // attaching to the ladder below or beginning a platform drop.
+            fall = 0.0;
+            if let Some(ladder) = ladder_segment_at(w, Vec2::new(p.pos.x, p.pos.y + 16.0)) {
+                if (p.pos.x - ladder.x).abs() < 4.0 {
+                    p.pos.x = ladder.x;
+                    p.vel = Vec2::default();
+                    ax = 0.0;
+                    ay = 0.0;
+                    p.state = PlayerState::Climbing;
+                }
+            } else {
+                p.pos.y += 1.0;
+                p.state = PlayerState::Falling;
+                ay += gravity;
             }
-        } else {
-            p.pos.y += 1.0;
-            p.state = PlayerState::Falling;
-            ay += gravity;
         }
     }
     if !input.down && p.state == PlayerState::Ducking {
