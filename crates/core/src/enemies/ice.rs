@@ -268,15 +268,14 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
 fn yeti(game: &mut Game, e: &mut Entity) {
     // moveTo stops displacement without changing stored yVel. Recovery leaves
     // STUNNED before the source scrCheckCollisions guard, so retain that value.
-    let recovery_y = (e.vel.y
-        + if e.held {
-            0.0
-        } else {
-            super::inherited::gravity(e, 0.6)
-        })
-    .min(10.0);
-    let impact_y = (e.vel.y + super::inherited::gravity(e, 0.6)).min(10.0);
-    let (wall, floor) = move_body(&game.world, e, 0.6);
+    let gravity = if e.held {
+        0.0
+    } else {
+        super::inherited::gravity(e, 0.6)
+    };
+    let recovery_y = (e.vel.y + gravity).min(10.0);
+    let impact_y = recovery_y;
+    let (wall, floor) = move_body(&game.world, e, gravity);
     if e.state != 99 && e.state != 98 && e.health < 1 {
         e.state = 99;
     }
