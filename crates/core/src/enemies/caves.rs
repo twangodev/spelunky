@@ -739,6 +739,27 @@ fn spider(game: &mut Game, e: &mut Entity, giant: bool) {
     }
 }
 
+// The current Step receiver is detached from World while it executes. A live
+// sight emitter retains its existing owner; after Destroy, instance_place must
+// instead search the remaining live family using the receiver's sprite mask.
+pub(super) fn continuation_sight_owner(game: &mut Game, e: &Entity) -> f64 {
+    if e.alive {
+        return e.id as f64;
+    }
+    crate::dispatcher::register_instances(game);
+    crate::dispatcher::descendant_instances(game, &e.object)
+        .into_iter()
+        .find_map(|instance| match instance {
+            crate::dispatcher::Instance::Entity(id) => game
+                .world
+                .entity(id)
+                .filter(|other| other.engine_active && e.event_intersects(other))
+                .map(|other| other.id as f64),
+            _ => None,
+        })
+        .unwrap_or(-4.0) // GameMaker noone
+}
+
 fn caveman(game: &mut Game, e: &mut Entity) {
     let mut impact_y = (e.vel.y
         + if e.held {
@@ -753,7 +774,8 @@ fn caveman(game: &mut Game, e: &mut Entity) {
         blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 3);
         e.alive = false;
         game.sound("sndCavemanDie", e.pos);
-        return;
+        // instance_destroy completes Enemy Destroy, then this Step continues.
+        super::destroyed(game, e);
     }
     let grounded = grounded || bottom(&game.world, e);
     let hit_side = side(&game.world, e, -1) || side(&game.world, e, 1);
@@ -830,8 +852,10 @@ fn caveman(game: &mut Game, e: &mut Entity) {
                     e.timer -= 1;
                 } else if e.health > 0 {
                     e.state = 0;
-                    e.held = false;
-                    if game.player.held == Some(e.id) {
+                    // Destroy already cleared Player holdItem, but left this
+                    // receiver's held flag intact for the remaining Step.
+                    if e.held {
+                        e.held = false;
                         game.player.held = None;
                         game.player.pickup_item_type.clear();
                     }
@@ -855,12 +879,13 @@ fn caveman(game: &mut Game, e: &mut Entity) {
         let sight_timer = e.value("sight_timer");
         if sight_timer <= 0.0 {
             let id = game.spawn("oEnemySight", e.pos);
+            let owner = continuation_sight_owner(game, e);
             if let Some(sight) = game.world.entity_mut(id) {
                 sight
                     .data
                     .insert("hspeed".into(), f64::from(e.facing) * 10.0);
                 sight.data.insert("vspeed".into(), 0.0);
-                sight.data.insert("owner".into(), e.id as f64);
+                sight.data.insert("owner".into(), owner);
             }
             e.data.insert("sight_timer".into(), 5.0);
         } else {

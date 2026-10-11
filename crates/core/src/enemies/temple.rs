@@ -501,7 +501,8 @@ fn hawk(game: &mut Game, e: &mut Entity) {
         super::create_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 3);
         e.alive = false;
         game.sound("sndCavemanDie", e.pos);
-        return;
+        // The own Step resumes after the synchronous inherited Destroy.
+        super::destroyed(game, e);
     }
     if e.state != 98 && e.state != 99 && e.health < 1 {
         e.state = 99;
@@ -634,13 +635,14 @@ fn hawk(game: &mut Game, e: &mut Entity) {
         let timer = e.value("sight_timer");
         if timer <= 0.0 {
             let id = game.spawn("oEnemySight", e.pos);
+            let owner = super::caves::continuation_sight_owner(game, e);
             if let Some(sight) = game.world.entity_mut(id) {
                 // Source direction/speed are engine motion, not xVel/yVel.
                 sight
                     .data
                     .insert("hspeed".into(), f64::from(e.facing) * 10.0);
                 sight.data.insert("vspeed".into(), 0.0);
-                sight.data.insert("owner".into(), e.id as f64);
+                sight.data.insert("owner".into(), owner);
             }
             e.data.insert("sight_timer".into(), 5.0);
         } else {
