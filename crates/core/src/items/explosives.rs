@@ -508,43 +508,83 @@ pub fn use_rope(game: &mut Game, input: &InputFrame) {
     if !input.down && crate::player::cached_col_top(&game.player) {
         return;
     }
-    let mut throw_pos = pos;
     if input.down {
-        // Downward placement prefers the near side of the adjacent tile.
-        let direction = f64::from(game.player.facing);
-        if solid_point(&game.world, Vec2::new(pos.x + 8.0 * direction, pos.y)) {
-            return;
+        // Source Create precedes every placement query. Even a failed attempt
+        // consumes its instance ID before instance_destroy, without charging rope.
+        let offset = if game.player.facing < 0 { -16.0 } else { 16.0 };
+        let initial = Vec2::new(pos.x + offset, pos.y);
+        let id = game.spawn("oRopeThrow", initial);
+        let snapped = Vec2::new(
+            (initial.x / 16.0).round_ties_even() * 16.0,
+            initial.y.round_ties_even(),
+        );
+        {
+            let rope = game.world.entity_mut(id).unwrap();
+            rope.data.insert("t".into(), 1.0);
+            rope.pos = snapped;
         }
-        let snapped = ((pos.x + 16.0 * direction) / 16.0).round_ties_even() * 16.0;
-        let preferred = snapped - 8.0 * direction;
-        let alternate = snapped + 8.0 * direction;
-        let clear = |x| {
-            !game.world.collides_except(
-                Rect::new(if x < snapped { x } else { x - 1.0 }, pos.y, 2.0, 17.0),
-                0,
+        // These are collision_point/rectangle(..., oSolid, 0, 0), using raw
+        // endpoints and cached bounding boxes, not platform movement probes.
+        let player_left = pos.x < snapped.x;
+        let point = Vec2::new(pos.x + if player_left { 8.0 } else { -8.0 }, pos.y);
+        let point_blocked = rope_solid_rectangle(&game.world, point, point);
+        let left_clear = || {
+            !rope_solid_rectangle(
+                &game.world,
+                Vec2::new(snapped.x - 8.0, snapped.y),
+                Vec2::new(snapped.x - 7.0, snapped.y + 16.0),
             )
         };
-        throw_pos.x = if clear(preferred) {
-            preferred
-        } else if clear(alternate) {
-            alternate
+        let right_clear = || {
+            !rope_solid_rectangle(
+                &game.world,
+                Vec2::new(snapped.x + 7.0, snapped.y),
+                Vec2::new(snapped.x + 8.0, snapped.y + 16.0),
+            )
+        };
+        let placed_x = if point_blocked {
+            None
+        } else if player_left {
+            if left_clear() {
+                Some(snapped.x - 8.0)
+            } else if right_clear() {
+                Some(snapped.x + 8.0)
+            } else {
+                None
+            }
+        } else if right_clear() {
+            Some(snapped.x + 8.0)
+        } else if left_clear() {
+            Some(snapped.x - 8.0)
         } else {
+            None
+        };
+        let Some(x) = placed_x else {
+            let rope = game.world.entity_mut(id).unwrap();
+            rope.data.insert("t".into(), 0.0);
+            rope.alive = false;
             return;
         };
-    }
-    let id = game.spawn("oRopeThrow", throw_pos);
-    let rope = game.world.entity_mut(id).unwrap();
-    init_entity(rope);
-    rope.data.insert("px".into(), pos.x);
-    if input.down {
+        let anchor = Vec2::new(x, snapped.y);
+        game.world.entity_mut(id).unwrap().pos = anchor;
+        // Top Create executes before the receiver's launch fields change.
+        spawn_rope_part(game, "oRopeTop", anchor);
+        let rope = game.world.entity_mut(id).unwrap();
+        rope.data.insert("armed".into(), 0.0);
         rope.data.insert("falling".into(), 1.0);
-        spawn_rope_part(game, "oRopeTop", throw_pos);
+        rope.vel = Vec2::default();
+        game.player.ropes -= 1;
+        game.sound("sndThrow", anchor);
     } else {
+        let id = game.spawn("oRopeThrow", pos);
+        let rope = game.world.entity_mut(id).unwrap();
         rope.data.insert("armed".into(), 1.0);
-        rope.vel.y = -12.0;
+        rope.data.insert("px".into(), pos.x);
+        rope.data.insert("py".into(), pos.y);
+        rope.vel = Vec2::new(0.0, -12.0);
+        game.player.ropes -= 1;
+        game.sound("sndThrow", pos);
     }
-    game.player.ropes -= 1;
-    game.sound("sndThrow", pos);
 }
 
 pub(crate) fn handles(object: &str) -> bool {
@@ -4803,5 +4843,208 @@ mod spear_destroy_source_oracle {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod rope_action_time_source_companions {
+    use super::*;
+
+    fn naturally_reserved() -> (Game, u64) {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.world = World::new(30, 20, Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oHardBlock");
+        }
+        game.player.pos = Vec2::new(88.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        game.player.facing = 1;
+        let rock = game.spawn("oRock", game.player.pos);
+        game.step(&InputFrame {
+            down: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.held, Some(rock));
+        game.step(&InputFrame::default());
+        game.step(&InputFrame {
+            cycle_pressed: true,
+            ..Default::default()
+        });
+        game.step(&InputFrame::default());
+        game.step(&InputFrame {
+            cycle_pressed: true,
+            ..Default::default()
+        });
+        game.step(&InputFrame::default());
+        assert!(game.world.entity(rock).is_none());
+        assert_eq!(game.player.pickup_item_type, "Rock");
+        assert_eq!(game.player.ropes, 3);
+        let reserved = game.player.held.unwrap();
+        let rope = game.world.entity(reserved).unwrap();
+        assert_eq!(rope.object, "oRopeThrow");
+        assert!(rope.held);
+        assert_eq!(rope.pos, Vec2::new(92.0, 154.0));
+        (game, reserved)
+    }
+
+    #[test]
+    fn held_rope_up_action_keeps_old_y_and_same_actor_before_469_step() {
+        let (mut game, reserved) = naturally_reserved();
+        let old = game.world.entity(reserved).unwrap().clone();
+        let player_pos = game.player.pos;
+        let next_id = game.world.next_id;
+        let mut expected_rng = game.rng.clone();
+        assert!(use_held_rope(&mut game, reserved, &InputFrame::default()));
+        let launched = game.world.entity(reserved).unwrap();
+        assert!(!launched.held);
+        assert_eq!(launched.pos, Vec2::new(player_pos.x, old.pos.y));
+        assert_ne!(launched.pos.y, player_pos.y);
+        assert_eq!(launched.vel, Vec2::new(0.0, -12.0));
+        assert_eq!(launched.value("armed"), 1.0);
+        assert_eq!(launched.value("px"), player_pos.x);
+        assert_eq!(launched.value("py"), player_pos.y);
+        assert_eq!(launched.value("falling"), 0.0);
+        assert_eq!(game.player.ropes, 3);
+        let restored = game.world.entity(game.player.held.unwrap()).unwrap();
+        assert_eq!(restored.id, next_id);
+        assert_eq!(restored.object, "oRock");
+        assert!(restored.held);
+        assert_eq!(restored.value("cost"), 0.0);
+        assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
+    }
+
+    #[test]
+    fn held_rope_failed_anchor_creates_fresh_fallback_at_old_actor_position() {
+        let (mut game, reserved) = naturally_reserved();
+        let old_pos = game.world.entity(reserved).unwrap().pos;
+        let attempt = game.world.next_id;
+        let mut expected_rng = game.rng.clone();
+        // The full floor intersects both inclusive y..y+16 side rectangles.
+        assert!(use_held_rope(
+            &mut game,
+            reserved,
+            &InputFrame {
+                down: true,
+                ..Default::default()
+            }
+        ));
+        assert!(game.world.entity(reserved).is_none());
+        assert!(game.world.entity(attempt).is_none());
+        let fallback = game.world.entity(attempt + 1).unwrap();
+        assert_eq!(fallback.object, "oRopeThrow");
+        assert_eq!(fallback.pos, old_pos);
+        assert_ne!(fallback.pos, game.player.pos);
+        assert_eq!(fallback.vel, Vec2::new(3.2, 0.5));
+        assert!(!fallback.held);
+        for key in ["armed", "falling", "fall_count", "px", "py"] {
+            assert_eq!(fallback.value(key), 0.0, "fresh fallback {key}");
+        }
+        assert_eq!(fallback.age, 0);
+        assert_eq!(fallback.alarms, [-1; 12]);
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oRopeTop")
+        );
+        assert_eq!(game.player.ropes, 3);
+        let restored = game.world.entity(game.player.held.unwrap()).unwrap();
+        assert_eq!(restored.id, attempt + 2);
+        assert_eq!(restored.object, "oRock");
+        assert_eq!(game.world.next_id, attempt + 3);
+        assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
+    }
+
+    #[test]
+    fn dedicated_failed_anchor_runs_create_without_spending_or_replacing_reservation() {
+        let (mut game, reserved) = naturally_reserved();
+        let before = game.world.entity(reserved).unwrap().clone();
+        let attempt = game.world.next_id;
+        let mut expected_rng = game.rng.clone();
+        use_rope(
+            &mut game,
+            &InputFrame {
+                down: true,
+                rope_pressed: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            game.world.next_id,
+            attempt + 1,
+            "failed Create consumes identity"
+        );
+        assert!(game.world.entity(attempt).is_none());
+        assert_eq!(game.player.held, Some(reserved));
+        let still_held = game.world.entity(reserved).unwrap();
+        assert!(still_held.held);
+        assert_eq!(still_held.pos, before.pos);
+        assert_eq!(still_held.vel, before.vel);
+        assert_eq!(still_held.value("armed"), 0.0);
+        assert_eq!(game.player.ropes, 3);
+        assert_eq!(game.player.pickup_item_type, "Rock");
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oRopeTop")
+        );
+        assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
+    }
+}
+
+#[cfg(test)]
+mod held_rope_literal_clearance_companion {
+    use super::*;
+    #[test]
+    fn neither_two_pixel_point_clear_does_not_clear_source_attempt_t() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.world = World::new(30, 20, Area::Mines, 1);
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oHardBlock");
+        }
+        game.player.pos = Vec2::new(152.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        game.step(&InputFrame {
+            cycle_pressed: true,
+            ..Default::default()
+        });
+        game.step(&InputFrame::default());
+        game.step(&InputFrame {
+            cycle_pressed: true,
+            ..Default::default()
+        });
+        let reserved = game.player.held.unwrap();
+        // Controlled adjacent Solid instances leave the Player center open.
+        // This companion captures the source action, before later physics/hurt.
+        game.spawn("oBrickSmooth", Vec2::new(135.0, 144.0));
+        game.spawn("oBrickSmooth", Vec2::new(154.0, 144.0));
+        let attempt = game.world.next_id;
+        let mut expected_rng = game.rng.clone();
+        assert!(use_held_rope(
+            &mut game,
+            reserved,
+            &InputFrame {
+                down: true,
+                ..Default::default()
+            }
+        ));
+        assert!(game.world.entity(reserved).is_none());
+        let rope = game.world.entity(attempt).unwrap();
+        assert_eq!(rope.pos, Vec2::new(160.0, 152.0));
+        assert_eq!(rope.value("t"), 1.0);
+        assert_eq!(rope.value("falling"), 1.0);
+        assert_eq!(game.world.entity(attempt + 1).unwrap().object, "oRopeTop");
+        assert_eq!(game.world.next_id, attempt + 2);
+        assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
     }
 }
