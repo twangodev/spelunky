@@ -1169,24 +1169,161 @@ fn spear(
         }
     }
 }
-fn arrows(world: &mut World, rng: &mut Rng, supports: &[(i32, i32)]) {
-    for &(x, y) in supports {
-        if world.tile(x, y).is_none_or(|t| t.object != "oBlock") || in_shop(world, x, y) {
+struct ArrowReceiver {
+    serial: u64,
+    instance: FamilyInstance,
+    metadata: Option<u64>,
+    source: crate::Entity,
+}
+
+fn arrow_receiver(
+    world: &World,
+    serial: u64,
+    instance: FamilyInstance,
+    origin: Vec2,
+) -> Option<ArrowReceiver> {
+    let (source, metadata) = match instance {
+        FamilyInstance::Tile(index) => {
+            let tile = world.tiles.get(index)?;
+            if tile.creation_serial != serial || tile.object != "oBlock" {
+                return None;
+            }
+            let center = Vec2::new(origin.x + 8.0, origin.y + 8.0);
+            let metadata = world.entities.iter().find(|entity| {
+                entity.alive && entity.object == "oTerrainMetadata" && entity.pos == center
+            });
+            let mut source = crate::Entity::new(0, "oBlock", origin);
+            source.creation_serial = serial;
+            if let Some(metadata) = metadata {
+                source.data = metadata.data.clone();
+                source.text = metadata.text.clone();
+            }
+            (source, metadata.map(|entity| entity.id))
+        }
+        FamilyInstance::Entity(id) => {
+            let source = world.entity(id)?;
+            if source.creation_serial != serial || source.object != "oBlock" {
+                return None;
+            }
+            (source.clone(), None)
+        }
+    };
+    Some(ArrowReceiver {
+        serial,
+        instance,
+        metadata,
+        source,
+    })
+}
+
+fn clean_arrow_receiver(world: &mut World, receiver: &mut ArrowReceiver) {
+    receiver.source.data.insert("cleanDeath".into(), 1.0);
+    match receiver.instance {
+        FamilyInstance::Tile(_) => {
+            let id = *receiver.metadata.get_or_insert_with(|| {
+                world.spawn(
+                    "oTerrainMetadata",
+                    Vec2::new(receiver.source.pos.x + 8.0, receiver.source.pos.y + 8.0),
+                )
+            });
+            if let Some(metadata) = world.entity_mut(id) {
+                metadata.data.insert("cleanDeath".into(), 1.0);
+            }
+        }
+        FamilyInstance::Entity(id) => {
+            if let Some(entity) = world.entity_mut(id) {
+                entity.data.insert("cleanDeath".into(), 1.0);
+            }
+        }
+    }
+}
+
+fn retire_arrow_receiver(world: &mut World, rng: &mut Rng, receiver: &ArrowReceiver) -> bool {
+    // Trap Create precedes this call. Recheck identity, never retire by origin:
+    // a coincident Block or the freshly created Trap is a different receiver.
+    let current = match receiver.instance {
+        FamilyInstance::Tile(index) => world
+            .tiles
+            .get(index)
+            .is_some_and(|tile| tile.creation_serial == receiver.serial && tile.object == "oBlock"),
+        FamilyInstance::Entity(id) => world.entity(id).is_some_and(|entity| {
+            entity.creation_serial == receiver.serial && entity.object == "oBlock"
+        }),
+    };
+    if !current {
+        return false;
+    }
+    // instance_destroy runs the own Destroy callback before marking the
+    // original receiver destroyed. These stock births do not replace it.
+    let city = world.name == "City of Gold";
+    crate::items::explosives::destroy_generated_block_own(world, rng, &receiver.source, city);
+    match receiver.instance {
+        FamilyInstance::Tile(index) => {
+            let dirty = world.fluid_dirty;
+            world.set_tile(index % world.width, index / world.width, "");
+            // oBlock owns a non-inheriting Destroy event: no checkWater write.
+            world.fluid_dirty = dirty;
+            if let Some(id) = receiver.metadata {
+                if let Some(metadata) = world.entity_mut(id) {
+                    metadata.alive = false;
+                }
+            }
+        }
+        FamilyInstance::Entity(id) => {
+            if let Some(entity) = world.entity_mut(id) {
+                entity.alive = false;
+            }
+        }
+    }
+    true
+}
+
+fn arrows(world: &mut World, rng: &mut Rng, _supports: &[(i32, i32)]) {
+    // Source with(oBlock) is a fresh family pass, including stored instances.
+    // No Block descendants, family births, activation or array rebuild occur
+    // in these callbacks. Existing generation creation-order limits remain.
+    let receivers = family_instances(world, "oBlock");
+    let entrance = family_origins(world, "oEntrance").into_iter().next();
+    for (serial, instance, origin) in receivers {
+        let Some(mut receiver) = arrow_receiver(world, serial, instance, origin) else {
+            continue;
+        };
+        if world.area == Area::Temple {
+            // Source :500 precedes even the outer shop condition.
+            clean_arrow_receiver(world, &mut receiver);
+        }
+        let in_shop = world.entities.iter().any(|entity| {
+            entity.alive
+                && entity.object == "oShopkeeper"
+                && source_room(entity.pos) == source_room(origin)
+        });
+        if in_shop {
             continue;
         }
-        let pos = at(x, y);
-        let distance = pos.distance(world.entrance);
-        if distance <= 48.0
-            || ((pos.y - world.entrance.y).abs() < 8.0 && distance < 144.0)
-            || !rng.chance(1, if world.area == Area::Temple { 3 } else { 4 })
-        {
+        // Stock generated rooms always have an Entrance. Legacy isolated
+        // worlds without one cannot reproduce the qualified source query;
+        // retain Temple's unconditional assignment but omit probability work.
+        let Some(entrance) = entrance else {
+            continue;
+        };
+        let distance = origin.distance(entrance);
+        let roll = rng.chance(1, if world.area == Area::Temple { 3 } else { 4 });
+        if distance <= 48.0 || (origin.y == entrance.y && distance < 144.0) || !roll {
             continue;
         }
-        let left = solid(world, x + 1, y) && !solid(world, x - 1, y) && !solid(world, x - 2, y);
-        let right = solid(world, x - 1, y)
-            && !solid(world, x + 1, y)
-            && !solid(world, x + 2, y)
-            && !solid(world, x + 3, y);
+        let left = source_point_family(world, Vec2::new(origin.x + 16.0, origin.y), "oSolid")
+            && !source_rectangle_family(
+                world,
+                Rect::new(origin.x - 32.0, origin.y, 32.0, 16.0),
+                "oSolid",
+            );
+        let right = !left
+            && source_point_family(world, Vec2::new(origin.x - 16.0, origin.y), "oSolid")
+            && !source_rectangle_family(
+                world,
+                Rect::new(origin.x + 16.0, origin.y, 33.0, 16.0),
+                "oSolid",
+            );
         let name = match (left, right, world.dark) {
             (true, _, false) => "oArrowTrapLeft",
             (true, _, true) => "oArrowTrapLeftLit",
@@ -1194,10 +1331,11 @@ fn arrows(world: &mut World, rng: &mut Rng, supports: &[(i32, i32)]) {
             (_, true, true) => "oArrowTrapRightLit",
             _ => continue,
         };
-        spawn(world, rng, name, x, y);
-        if let Some(e) = world.entities.last_mut() {
-            e.solid = true;
+        let trap = crate::creation::spawn_generated_entity(world, rng, name, origin);
+        if let Some(trap) = world.entity_mut(trap) {
+            trap.solid = true;
         }
+        retire_arrow_receiver(world, rng, &receiver);
     }
 }
 
@@ -1349,6 +1487,477 @@ mod tests {
                 && e.pos == Vec2::new(480.0, 352.0)),
             "successful Tiki stops the separate spear statement"
         );
+    }
+
+    fn arrow_source_room(area: Area, dynamic: bool, right: bool) -> (World, Option<u64>) {
+        let mut world = World::new(42, 34, area, if area == Area::Mines { 1 } else { 13 });
+        world.entrance = at(1, 1);
+        world.spawn("oEntrance", Vec2::new(16.0, 16.0));
+        world.set_tile(if right { 19 } else { 21 }, 5, "oHardBlock");
+        let id = if dynamic {
+            Some(world.spawn("oBlock", Vec2::new(320.0, 80.0)))
+        } else {
+            world.set_tile(20, 5, "oBlock");
+            None
+        };
+        (world, id)
+    }
+
+    fn arrow_source_metadata(world: &mut World, dynamic: Option<u64>) -> u64 {
+        dynamic.unwrap_or_else(|| world.spawn("oTerrainMetadata", at(20, 5)))
+    }
+
+    fn arrow_source_winning_seed(area: Area) -> u64 {
+        // Independent literal seed controls: Mines6=>rand4=1, Temple11=>rand3=1.
+        if area == Area::Mines { 6 } else { 11 }
+    }
+
+    #[test]
+    fn source_arrow_near_then_far_seed6_consumes_protected_guard() {
+        let mut world = World::new(42, 34, Area::Mines, 1);
+        world.entrance = at(1, 1);
+        world.spawn("oEntrance", Vec2::new(16.0, 16.0));
+        world.set_tile(3, 1, "oBlock");
+        world.set_tile(11, 1, "oBlock");
+        world.set_tile(12, 1, "oHardBlock");
+        let mut actual = Rng::new(6);
+        let mut expected = actual.clone();
+        assert_eq!(1 + expected.range(4), 1);
+        assert_eq!(1 + expected.range(4), 2);
+        arrows(&mut world, &mut actual, &[(3, 1), (11, 1), (12, 1)]);
+        assert!(
+            !world
+                .entities
+                .iter()
+                .any(|e| e.object.starts_with("oArrowTrap"))
+        );
+        assert_eq!(world.tile(3, 1).unwrap().object, "oBlock");
+        assert_eq!(world.tile(11, 1).unwrap().object, "oBlock");
+        assert_eq!(actual.next_u64(), expected.next_u64());
+    }
+
+    #[test]
+    fn source_arrow_success_creates_trap_then_exact_block_own_destroy() {
+        for area in [Area::Mines, Area::Temple] {
+            for dynamic in [false, true] {
+                for right in [false, true] {
+                    for dark in [false, true] {
+                        for prior_clean in [false, true] {
+                            for dirty in [false, true] {
+                                let (mut world, receiver) = arrow_source_room(area, dynamic, right);
+                                world.dark = dark;
+                                let metadata = arrow_source_metadata(&mut world, receiver);
+                                let source = world.entity_mut(metadata).unwrap();
+                                source
+                                    .data
+                                    .insert("cleanDeath".into(), f64::from(prior_clean));
+                                source.data.insert("invincible".into(), 1.0);
+                                source.data.insert("shopWall".into(), 1.0);
+                                // Block's own event does not inherit support cleanup.
+                                let spikes = world.spawn("oSpikes", Vec2::new(320.0, 64.0));
+                                world.fluid_dirty = dirty;
+                                let mut actual = Rng::new(arrow_source_winning_seed(area));
+                                let mut expected = actual.clone();
+                                assert_eq!(
+                                    expected.range(if area == Area::Mines { 4 } else { 3 }),
+                                    0
+                                );
+                                let debris = area == Area::Mines && !prior_clean;
+                                let mut positions = Vec::new();
+                                let mut birth_rng = Vec::new();
+                                if debris {
+                                    for _ in 0..3 {
+                                        positions.push(Vec2::new(
+                                            328.0 + f64::from(expected.range(9))
+                                                - f64::from(expected.range(9)),
+                                            88.0 + f64::from(expected.range(9))
+                                                - f64::from(expected.range(9)),
+                                        ));
+                                        birth_rng.push(expected.clone().next_u64());
+                                    }
+                                }
+                                crate::creation::begin_generated_create_trace();
+                                arrows(&mut world, &mut actual, &[(20, 5)]);
+                                let trace = crate::creation::take_generated_create_traces();
+                                assert_eq!(trace.len(), 1 + if debris { 3 } else { 0 });
+                                let expected_trap = match (right, dark) {
+                                    (false, false) => "oArrowTrapLeft",
+                                    (false, true) => "oArrowTrapLeftLit",
+                                    (true, false) => "oArrowTrapRight",
+                                    (true, true) => "oArrowTrapRightLit",
+                                };
+                                let trap = &trace[0].entity_after;
+                                assert_eq!(trap.object, expected_trap);
+                                assert_eq!(trap.pos, Vec2::new(320.0, 80.0));
+                                assert_eq!(trap.alarms[1], 1);
+                                assert_eq!(trap.value("invincible"), 0.0);
+                                assert_eq!(trap.value("cleanDeath"), 0.0);
+                                assert_eq!(trap.value("shopWall"), 0.0);
+                                assert!(world.entity(metadata).is_none());
+                                assert!(world.tile(20, 5).unwrap().object.is_empty());
+                                assert!(world.entity(spikes).is_some());
+                                assert_eq!(world.fluid_dirty, dirty);
+                                for (index, ((birth, pos), marker)) in trace
+                                    .iter()
+                                    .skip(1)
+                                    .zip(positions)
+                                    .zip(birth_rng)
+                                    .enumerate()
+                                {
+                                    assert_eq!(
+                                        birth.entity_after.object,
+                                        if index == 0 {
+                                            "oRubble"
+                                        } else {
+                                            "oRubbleSmall"
+                                        }
+                                    );
+                                    assert_eq!(birth.entity_after.pos, pos);
+                                    assert_eq!(birth.entity_after.vel, Vec2::default());
+                                    assert_eq!(birth.entity_after.value("gravity"), 0.6);
+                                    assert_eq!(birth.rng_before.clone().next_u64(), marker);
+                                    let final_entity = world.entity(birth.entity_after.id).unwrap();
+                                    assert_eq!(
+                                        final_entity.sprite,
+                                        if index == 0 {
+                                            "sRubbleLush"
+                                        } else {
+                                            "sRubbleLushSmall"
+                                        }
+                                    );
+                                }
+                                assert_eq!(actual.next_u64(), expected.next_u64());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn source_arrow_temple_clean_assignment_survives_every_failed_guard() {
+        for dynamic in [false, true] {
+            for reason in ["shop", "near", "losing_roll", "geometry"] {
+                let (mut world, receiver) = arrow_source_room(Area::Temple, dynamic, false);
+                let metadata = arrow_source_metadata(&mut world, receiver);
+                if reason == "shop" {
+                    world.spawn("oShopkeeper", Vec2::new(320.0, 80.0));
+                } else if reason == "near" {
+                    world
+                        .entities
+                        .iter_mut()
+                        .find(|e| e.object == "oEntrance")
+                        .unwrap()
+                        .pos = Vec2::new(304.0, 80.0);
+                } else if reason == "geometry" {
+                    world.set_tile(21, 5, "");
+                }
+                let mut actual = Rng::new(if reason == "losing_roll" { 29 } else { 11 });
+                let mut expected = actual.clone();
+                if reason != "shop" {
+                    expected.range(3);
+                }
+                arrows(&mut world, &mut actual, &[(20, 5)]);
+                assert_eq!(
+                    world.entity(metadata).unwrap().value("cleanDeath"),
+                    1.0,
+                    "{reason}"
+                );
+                assert!(
+                    !world
+                        .entities
+                        .iter()
+                        .any(|e| e.object.starts_with("oArrowTrap"))
+                );
+                assert_eq!(actual.next_u64(), expected.next_u64());
+            }
+        }
+    }
+
+    #[test]
+    fn source_arrow_creation_order_retires_only_selected_coincident_receiver() {
+        for area in [Area::Mines, Area::Temple] {
+            let (mut world, _) = arrow_source_room(area, true, false);
+            let selected = world
+                .entities
+                .iter()
+                .find(|e| e.object == "oBlock")
+                .unwrap()
+                .id;
+            // Dynamic Block was born before this coincident tile. This is the
+            // opposite of storage-form iteration order, and must stay so.
+            world.set_tile(20, 5, "oBlock");
+            let metadata = world.spawn("oTerrainMetadata", at(20, 5));
+            let untouched_metadata = world.spawn("oTerrainMetadata", at(20, 5));
+            let ruby = world.spawn("oRubyBig", at(20, 5));
+            let mut actual = Rng::new(arrow_source_winning_seed(area));
+            let mut expected = actual.clone();
+            assert_eq!(expected.range(if area == Area::Mines { 4 } else { 3 }), 0);
+            if area == Area::Mines {
+                for _ in 0..12 {
+                    expected.range(9);
+                }
+            }
+            assert_ne!(expected.range(if area == Area::Mines { 4 } else { 3 }), 0);
+            arrows(&mut world, &mut actual, &[(20, 5)]);
+            assert!(world.entity(selected).is_none());
+            assert_eq!(world.tile(20, 5).unwrap().object, "oBlock");
+            assert!(world.entity(metadata).is_some());
+            assert!(world.entity(untouched_metadata).is_some());
+            assert!(world.entity(ruby).is_some());
+            if area == Area::Temple {
+                assert_eq!(world.entity(metadata).unwrap().value("cleanDeath"), 1.0);
+                assert_eq!(
+                    world
+                        .entity(untouched_metadata)
+                        .unwrap()
+                        .value("cleanDeath"),
+                    0.0
+                );
+            }
+            assert_eq!(
+                world
+                    .entities
+                    .iter()
+                    .filter(|e| e.alive && e.object.starts_with("oArrowTrap"))
+                    .count(),
+                1
+            );
+            assert_eq!(actual.next_u64(), expected.next_u64());
+        }
+    }
+
+    #[test]
+    fn source_arrow_preserves_concrete_deferred_contents_and_ignores_block_labels() {
+        for area in [Area::Mines, Area::Temple] {
+            for treasure in ["Big Ruby", "oRubyBig", "oJetpack"] {
+                let (mut world, _) = arrow_source_room(area, false, false);
+                let metadata = world.spawn("oTerrainMetadata", at(20, 5));
+                let source = world.entity_mut(metadata).unwrap();
+                source.data.insert("embedded_treasure".into(), 1.0);
+                source.data.insert("treasure_dx".into(), -2.0);
+                source.data.insert("treasure_dy".into(), 3.0);
+                source.text.insert("treasure".into(), treasure.into());
+                let existing = world.spawn("oRubyBig", Vec2::new(328.0, 88.0));
+                let mut actual = Rng::new(arrow_source_winning_seed(area));
+                let mut expected = actual.clone();
+                expected.range(if area == Area::Mines { 4 } else { 3 });
+                if area == Area::Mines {
+                    for _ in 0..12 {
+                        expected.range(9);
+                    }
+                }
+                arrows(&mut world, &mut actual, &[(20, 5)]);
+                assert!(world.entity(existing).is_some());
+                let new_items: Vec<_> = world
+                    .entities
+                    .iter()
+                    .filter(|e| {
+                        e.alive
+                            && e.id != existing
+                            && matches!(e.object.as_str(), "oRubyBig" | "oJetpack")
+                    })
+                    .collect();
+                assert_eq!(new_items.len(), usize::from(treasure.starts_with('o')));
+                if treasure.starts_with('o') {
+                    assert_eq!(new_items[0].object, treasure);
+                    assert_eq!(new_items[0].pos, Vec2::new(326.0, 91.0));
+                }
+                assert_eq!(actual.next_u64(), expected.next_u64());
+            }
+        }
+    }
+
+    #[test]
+    fn source_arrow_city_gold_create_precedes_each_launch_rng() {
+        let (mut world, _) = arrow_source_room(Area::Mines, false, false);
+        world.name = "City of Gold".into(); // Controlled global.cityOfGold=true source branch.
+        let mut actual = Rng::new(6);
+        let mut expected = actual.clone();
+        assert_eq!(expected.range(4), 0);
+        let mut expected_gold = Vec::new();
+        for _ in 0..4 {
+            let pos = Vec2::new(
+                328.0 + f64::from(expected.range(5)) - f64::from(expected.range(5)),
+                88.0 + f64::from(expected.range(5)) - f64::from(expected.range(5)),
+            );
+            let birth = expected.clone().next_u64();
+            let velocity = Vec2::new(
+                f64::from(expected.range(4)) - f64::from(expected.range(4)),
+                2.0 + f64::from(expected.range(3)),
+            );
+            expected_gold.push((pos, birth, velocity));
+        }
+        crate::creation::begin_generated_create_trace();
+        arrows(&mut world, &mut actual, &[(20, 5)]);
+        let trace = crate::creation::take_generated_create_traces();
+        assert_eq!(trace.len(), 5);
+        for (index, (birth, (pos, marker, velocity))) in
+            trace.iter().skip(1).zip(expected_gold).enumerate()
+        {
+            assert_eq!(
+                birth.entity_after.object,
+                if index == 3 {
+                    "oGoldNugget"
+                } else {
+                    "oGoldChunk"
+                }
+            );
+            assert_eq!(birth.entity_after.pos, pos);
+            assert_eq!(birth.rng_before.clone().next_u64(), marker);
+            assert_eq!(birth.entity_after.vel, Vec2::default());
+            assert_eq!(world.entity(birth.entity_after.id).unwrap().vel, velocity);
+        }
+        assert_eq!(actual.next_u64(), expected.next_u64());
+    }
+
+    #[test]
+    fn source_arrow_generated_world_has_replacement_not_overlaid_block_and_source_birth_tape() {
+        let flags = BTreeSet::from(["no_dark_level".into()]);
+        let mut rng = Rng::new(7);
+        crate::creation::begin_generated_create_trace();
+        let world = super::super::generate(&mut rng, 1, &flags);
+        let trace = crate::creation::take_generated_create_traces();
+        let mut traps = 0;
+        for (index, birth) in trace.iter().enumerate() {
+            if !birth.entity_after.object.starts_with("oArrowTrap") {
+                continue;
+            }
+            traps += 1;
+            let origin = birth.entity_after.pos;
+            assert_ne!(
+                world
+                    .tile((origin.x / 16.0) as i32, (origin.y / 16.0) as i32)
+                    .unwrap()
+                    .object,
+                "oBlock"
+            );
+            let mut oracle = birth.rng_before.clone();
+            for fragment in 0..3 {
+                let pos = Vec2::new(
+                    origin.x + 8.0 + f64::from(oracle.range(9)) - f64::from(oracle.range(9)),
+                    origin.y + 8.0 + f64::from(oracle.range(9)) - f64::from(oracle.range(9)),
+                );
+                let rubble = &trace[index + 1 + fragment];
+                assert_eq!(
+                    rubble.entity_after.object,
+                    if fragment == 0 {
+                        "oRubble"
+                    } else {
+                        "oRubbleSmall"
+                    }
+                );
+                assert_eq!(rubble.entity_after.pos, pos);
+                assert_eq!(
+                    rubble.rng_before.clone().next_u64(),
+                    oracle.clone().next_u64()
+                );
+            }
+        }
+        assert!(
+            traps > 0,
+            "natural seed7 must exercise the stock Arrow pass"
+        );
+        let mut other_rng = Rng::new(7);
+        let other_flags = BTreeSet::from(["no_dark_level".into(), "cleanSolids".into()]);
+        let other = super::super::generate(&mut other_rng, 1, &other_flags);
+        assert_eq!(
+            serde_json::to_value(&world).unwrap(),
+            serde_json::to_value(&other).unwrap(),
+            "global.cleanSolids is absent from Block's own Destroy guard"
+        );
+        assert_eq!(rng.next_u64(), other_rng.next_u64());
+    }
+
+    #[test]
+    fn source_arrow_dead_keeper_does_not_gate_and_frozen_contents_do_not_duplicate() {
+        for area in [Area::Mines, Area::Temple] {
+            let (mut world, _) = arrow_source_room(area, false, false);
+            let keeper = world.spawn("oShopkeeper", Vec2::new(320.0, 80.0));
+            world.entity_mut(keeper).unwrap().alive = false;
+            let metadata = world.spawn("oTerrainMetadata", at(20, 5));
+            let source = world.entity_mut(metadata).unwrap();
+            source.data.insert("embedded_treasure".into(), 1.0);
+            source.data.insert("frozen_caveman".into(), 1.0);
+            source.text.insert("treasure".into(), "oCaveman".into());
+            let frozen = world.spawn("oFrozenCaveman", at(20, 5));
+            let mut actual = Rng::new(arrow_source_winning_seed(area));
+            let mut oracle = actual.clone();
+            oracle.range(if area == Area::Mines { 4 } else { 3 });
+            if area == Area::Mines {
+                for _ in 0..12 {
+                    oracle.range(9);
+                }
+            }
+            arrows(&mut world, &mut actual, &[(20, 5)]);
+            assert_eq!(world.tile(20, 5).unwrap().object, "");
+            assert!(
+                world
+                    .entities
+                    .iter()
+                    .any(|e| e.alive && e.object == "oArrowTrapLeft")
+            );
+            assert!(world.entity(frozen).is_some());
+            assert!(!world.entities.iter().any(|e| e.object == "oCaveman"));
+            assert_eq!(actual.next_u64(), oracle.next_u64());
+        }
+    }
+
+    #[test]
+    fn source_arrow_uses_first_raw_entrance_and_exact_fractional_row() {
+        for same_row in [false, true] {
+            let (mut world, receiver) = arrow_source_room(Area::Mines, true, false);
+            let entrance = world
+                .entities
+                .iter_mut()
+                .find(|e| e.object == "oEntrance")
+                .unwrap();
+            entrance.pos = Vec2::new(200.0, 80.0);
+            // Later Entrance and the convenience center must not change the
+            // qualified first-instance source distance/row query.
+            world.spawn("oEntrance", Vec2::new(320.0, 80.0));
+            world.entrance = Vec2::new(328.0, 88.0);
+            if !same_row {
+                world.entity_mut(receiver.unwrap()).unwrap().pos.y += 0.5;
+            }
+            let mut actual = Rng::new(6);
+            let mut oracle = actual.clone();
+            assert_eq!(oracle.range(4), 0);
+            if !same_row {
+                for _ in 0..12 {
+                    oracle.range(9);
+                }
+            }
+            arrows(&mut world, &mut actual, &[(20, 5)]);
+            assert_eq!(world.entity(receiver.unwrap()).is_some(), same_row);
+            let trap = world
+                .entities
+                .iter()
+                .find(|e| e.alive && e.object == "oArrowTrapLeft");
+            assert_eq!(trap.is_some(), !same_row);
+            if let Some(trap) = trap {
+                assert_eq!(trap.pos, Vec2::new(320.0, 80.5));
+            }
+            assert_eq!(actual.next_u64(), oracle.next_u64());
+        }
+    }
+
+    #[test]
+    fn source_arrow_temple_shop_survivor_gains_missing_clean_metadata() {
+        let (mut world, _) = arrow_source_room(Area::Temple, false, false);
+        world.spawn("oShopkeeper", Vec2::new(320.0, 80.0));
+        let mut actual = Rng::new(11);
+        let mut oracle = actual.clone();
+        arrows(&mut world, &mut actual, &[(20, 5)]);
+        assert_eq!(world.tile(20, 5).unwrap().object, "oBlock");
+        let metadata = world
+            .entities
+            .iter()
+            .find(|e| e.alive && e.object == "oTerrainMetadata" && e.pos == at(20, 5))
+            .unwrap();
+        assert_eq!(metadata.value("cleanDeath"), 1.0);
+        assert_eq!(actual.next_u64(), oracle.next_u64());
     }
 
     fn jungle_spear_guard_fixture(dark: bool, upper_water: bool) -> World {

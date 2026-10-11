@@ -1679,6 +1679,77 @@ fn temple_parent_attachment(
         .map(|entity| entity.id)
 }
 
+/// Exact non-inheriting oBlock Destroy body for generation's Arrow pass.
+/// This does not widen the supported Temple-primary callback families. City
+/// state is the generator's normalized world name, selected from either flag
+/// alias before population. global.cleanSolids is absent from this own event.
+pub(crate) fn destroy_generated_block_own(
+    world: &mut World,
+    rng: &mut Rng,
+    source: &Entity,
+    city: bool,
+) {
+    assert_eq!(source.object, "oBlock");
+    let center = Vec2::new(source.pos.x + 8.0, source.pos.y + 8.0);
+    if source.value("cleanDeath") == 0.0 {
+        if !city {
+            for (object, sprite) in [
+                ("oRubble", "sRubbleLush"),
+                ("oRubbleSmall", "sRubbleLushSmall"),
+                ("oRubbleSmall", "sRubbleLushSmall"),
+            ] {
+                let pos = Vec2::new(
+                    center.x + f64::from(rng.range(9)) - f64::from(rng.range(9)),
+                    center.y + f64::from(rng.range(9)) - f64::from(rng.range(9)),
+                );
+                // RubblePiece/Create has fixed defaults and no RNG. Its local
+                // Create and the caller's sprite assignment finish before the
+                // next fragment's coordinate draws.
+                let id = crate::creation::spawn_generated_entity(world, rng, object, pos);
+                if let Some(rubble) = world.entity_mut(id) {
+                    rubble.set_sprite(sprite);
+                }
+            }
+        } else {
+            for object in ["oGoldChunk", "oGoldChunk", "oGoldChunk", "oGoldNugget"] {
+                let pos = Vec2::new(
+                    center.x + f64::from(rng.range(5)) - f64::from(rng.range(5)),
+                    center.y + f64::from(rng.range(5)) - f64::from(rng.range(5)),
+                );
+                // Source creates each collectible before launch RNG/overrides.
+                let id = crate::creation::spawn_generated_entity(world, rng, object, pos);
+                let velocity = Vec2::new(
+                    f64::from(rng.range(4)) - f64::from(rng.range(4)),
+                    2.0 + f64::from(rng.range(3)),
+                );
+                if let Some(gold) = world.entity_mut(id) {
+                    gold.vel = velocity;
+                }
+            }
+        }
+    }
+    // Block owns no treasure-label loot. These concrete contents are the
+    // port's existing deferred Create representation; retaining them does not
+    // repair their earlier birth timing. Frozen occupants have a separate
+    // adapter and must not be materialized a second time here.
+    if source.value("embedded_treasure") != 0.0 && source.value("frozen_caveman") == 0.0 {
+        if let Some(object) = source
+            .text
+            .get("treasure")
+            .filter(|name| name.starts_with('o'))
+        {
+            let pos = Vec2::new(
+                center.x + source.value("treasure_dx"),
+                center.y + source.value("treasure_dy"),
+            );
+            let id = crate::creation::spawn_generated_entity(world, rng, object, pos);
+            if let Some(item) = world.entity_mut(id) {
+                item.state = 1;
+            }
+        }
+    }
+}
+
 /// The clean Destroy callbacks reachable from scrEntityGen's Temple support
 /// replacement. The caller captures the complete receiver before retirement,
 /// restores the pre-removal fluid flag, then invokes this callback body.
