@@ -360,15 +360,15 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
                     1.0,
                 );
                 if super::solid_edge(&game.world, below, entity.id) {
-                    let sprite = format!("sDice{}", entity.value("value") as u32);
-                    crate::animation::assign(&mut entity.sprite, &mut entity.animation, &sprite);
                     if entity.value("rolling") != 0.0 && entity.vel.y == 0.0 {
                         if entity.value("rolled") != 0.0 {
-                            game.flags.insert("shopkeepers_angry".into());
+                            crate::economy::anger(game, entity.pos, "COME BACK HERE, THIEF!");
                         }
                         entity.data.insert("rolled".into(), 1.0);
                         entity.data.insert("rolling".into(), 0.0);
                     }
+                    let sprite = format!("sDice{}", entity.value("value") as u32);
+                    crate::animation::assign(&mut entity.sprite, &mut entity.animation, &sprite);
                 }
             }
         }

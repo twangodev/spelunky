@@ -657,7 +657,8 @@ pub(crate) fn item_step_impacts(game: &mut Game, item_id: u64) {
         .entities
         .iter()
         .find(|e| {
-            e.alive
+            item.object != "oDice"
+                && e.alive
                 && e.id != item_id
                 && e.object == "oDamsel"
                 && e.sprite_bounds().intersects(area)
@@ -696,9 +697,79 @@ pub(crate) fn item_step_impacts(game: &mut Game, item_id: u64) {
             }
         });
     }
+    if item.object == "oDice" {
+        // Dice's separate Damsel statement follows the entire Enemy branch.
+        dice_damsel_impact(game, &item);
+    }
     if broke {
         crate::items::break_item(game, item_id);
     }
+}
+
+/// oDice Step200-220: bbox rectangle only gates the subsequent whole-family
+/// nearest query. Target selection and eligibility run after the Enemy body.
+fn dice_damsel_impact(game: &mut Game, item: &Entity) {
+    crate::dispatcher::register_instances(game);
+    let members = crate::dispatcher::descendant_instances(game, "oDamsel");
+    let first = Vec2::new(item.pos.x - 2.0, item.pos.y - 2.0);
+    let second = Vec2::new(item.pos.x + 2.0, item.pos.y + 2.0);
+    let overlaps = members.iter().any(|instance| {
+        let Instance::Entity(id) = *instance else {
+            return false;
+        };
+        game.world.entity(id).is_some_and(|target| {
+            target.engine_active
+                && target
+                    .collision_mask()
+                    .intersects_rectangle_bbox(first, second)
+        })
+    });
+    if !overlaps {
+        return;
+    }
+    let mut nearest = None;
+    let mut distance = f64::INFINITY;
+    for instance in members {
+        let Instance::Entity(id) = instance else {
+            continue;
+        };
+        let Some(target) = game.world.entity(id) else {
+            continue;
+        };
+        let candidate = target.pos.distance(item.pos);
+        if target.engine_active && candidate < distance {
+            nearest = Some(id);
+            distance = candidate;
+        }
+    }
+    let Some(id) = nearest else {
+        return;
+    };
+    if !game
+        .world
+        .entity(id)
+        .is_some_and(|target| target.value("invincible") == 0.0 && !matches!(target.state, 2 | 99))
+    {
+        return;
+    }
+    // Direct instance_create, not scrCreateBlood's bloodless/16 precheck.
+    // Blood's synchronous inherited Detritus Create still owns its 32 cap.
+    game.spawn("oBlood", item.pos);
+    let target = game.world.entity_mut(id).unwrap();
+    let release = target.held;
+    target.held = false;
+    target.health -= 1;
+    target.vel.y = -6.0;
+    target.state = 2;
+    target.timer = 120;
+    target.vel.x = item.vel.x * 0.3;
+    if release {
+        // The source clears the Player pointer unconditionally when held.
+        game.player.held = None;
+        game.player.pickup_item_type.clear();
+    }
+    // No hit_cooldown, safe, assaulted or source Blood-script side effects.
+    game.sound("sndHit", item.pos);
 }
 
 pub(super) fn create_blood(game: &mut Game, e: &Entity, pos: Vec2, count: u32) {
