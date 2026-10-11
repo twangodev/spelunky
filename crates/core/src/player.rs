@@ -1452,18 +1452,26 @@ fn stunned_tick(w: &mut World, p: &mut Player, time: u64) -> bool {
     if edge(w, p, Side::Left, 1.0) || edge(w, p, Side::Right, 1.0) {
         p.vel.x *= -0.5;
     }
-    if below(w, p) {
+    // Source Step376 uses the pure platform-bottom line here. The separate
+    // downward moveTo query still rejects platforms overlapping the body.
+    if edge(w, p, Side::Bottom, 1.0)
+        || precise_line(w, edge_rect(p, Side::Bottom, 1.0, false), "oPlatform")
+    {
         p.vel.y = if p.vel.y > 1.0 { -p.vel.y * 0.5 } else { 0.0 };
-        p.vel.x *= if object_at(w, Vec2::new(p.pos.x, p.pos.y + 16.0), &["oIce"]) {
-            0.8
-        } else {
-            0.3
-        };
+        // Source Step384 tests the incoming speed before floor friction.
         if p.vel.x.abs() < 0.1 {
             p.vel.x = 0.0;
+        } else {
+            p.vel.x *= if object_at(w, Vec2::new(p.pos.x, p.pos.y + 16.0), &["oIce"]) {
+                0.8
+            } else {
+                0.3
+            };
         }
         set(p, "bounced", 1.0);
     }
+    // xVelLimit is a persistent source variable, also read after recovery.
+    set(p, "velocity_limit_x", 10.0);
     p.vel.x = p.vel.x.clamp(-10.0, 10.0);
     p.vel.y = p.vel.y.clamp(-10.0, 10.0);
     let down = value(p, "source_k_down", 0.0) != 0.0;
