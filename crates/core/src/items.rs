@@ -1,5 +1,7 @@
 //! Classic item interactions. Reference: oItem, oPlayer1 Step and scrUseItem.
 use crate::model::*;
+#[path = "items/buried_create.rs"]
+mod buried_create;
 #[path = "items/collectibles.rs"]
 pub mod collectibles;
 #[path = "items/explosives.rs"]
@@ -129,11 +131,18 @@ pub(crate) fn handles(object: &str) -> bool {
         || matches!(object, "oWhip" | "oWhipPre")
 }
 
+/// Context-dependent but RNG-free Create fields for the selected terrain
+/// children. A marker protects subsequent producer overrides on reentry.
+pub(crate) fn initialize_terrain_child(entity: &mut Entity, has_spectacles: bool) {
+    buried_create::initialize(entity, has_spectacles);
+}
+
 pub(crate) fn create_instance(game: &mut Game, id: u64) {
     let Some(mut entity) = game.world.entity(id).cloned() else {
         return;
     };
     init_entity(&mut entity);
+    initialize_terrain_child(&mut entity, game.player.has("Spectacles"));
     if entity.object == "oDice" {
         initialize_dice(&mut game.rng, &mut entity);
     } else if entity.object == "oWebBall" {

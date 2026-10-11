@@ -2,7 +2,8 @@
 //!
 //! This context deliberately covers only Create bodies whose dependencies are
 //! the instance, the destination world, and the gameplay RNG. Player/global
-//! state, sounds, and other Game-dependent effects remain in runtime Create.
+//! state, sounds, and other Game-dependent effects remain in runtime Create,
+//! except the explicit Spectacles snapshot for terrain's RNG-free item children.
 #[cfg(test)]
 use crate::Entity;
 use crate::{Rng, Vec2, World};
@@ -19,11 +20,36 @@ pub(crate) fn spawn_generated_entity(
     object: &str,
     pos: Vec2,
 ) -> u64 {
+    spawn_generated_with_item_context(world, rng, object, pos, None)
+}
+
+/// Complete the selected RNG-free item Create with actual generation globals
+/// before its producer overwrites Underground-set price/sale fields.
+pub(crate) fn spawn_generated_terrain_child(
+    world: &mut World,
+    rng: &mut Rng,
+    object: &str,
+    pos: Vec2,
+    has_spectacles: bool,
+) -> u64 {
+    spawn_generated_with_item_context(world, rng, object, pos, Some(has_spectacles))
+}
+
+fn spawn_generated_with_item_context(
+    world: &mut World,
+    rng: &mut Rng,
+    object: &str,
+    pos: Vec2,
+    has_spectacles: Option<bool>,
+) -> u64 {
     let id = world.spawn(object, pos);
     #[cfg(test)]
     let rng_before =
         GENERATED_CREATE_TRACES.with(|traces| traces.borrow().as_ref().map(|_| rng.clone()));
     initialize_entity_local(world, rng, id);
+    if let Some(has_spectacles) = has_spectacles {
+        crate::items::initialize_terrain_child(world.entity_mut(id).unwrap(), has_spectacles);
+    }
     #[cfg(test)]
     if let Some(rng_before) = rng_before
         && let Some(entity) = world.entity(id)

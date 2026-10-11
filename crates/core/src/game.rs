@@ -4,7 +4,14 @@ impl Game {
     pub fn new(seed: u64, rules: RulesPreset) -> Self {
         let mut game = Self::shell(seed, rules);
         game.flags.insert("no_dark_level".into());
-        game.world = generation::generate(&mut game.rng, 1, &game.flags);
+        game.world = generation::generate_with_context(
+            &mut game.rng,
+            1,
+            &game.flags,
+            generation::GenerationContext {
+                has_spectacles: game.player.has("Spectacles"),
+            },
+        );
         game.reset_position();
         game
     }
@@ -254,7 +261,14 @@ impl Game {
                 self.flags.insert("used_shortcut".into());
             }
             self.flags.insert("no_dark_level".into());
-            self.world = generation::generate(&mut self.rng, level.clamp(1, 16), &self.flags);
+            self.world = generation::generate_with_context(
+                &mut self.rng,
+                level.clamp(1, 16),
+                &self.flags,
+                generation::GenerationContext {
+                    has_spectacles: self.player.has("Spectacles"),
+                },
+            );
         }
         self.reset_position();
     }
@@ -276,7 +290,14 @@ impl Game {
             self.events.push(GameEvent::Won);
             return;
         }
-        self.world = generation::generate(&mut self.rng, next, &self.flags);
+        self.world = generation::generate_with_context(
+            &mut self.rng,
+            next,
+            &self.flags,
+            generation::GenerationContext {
+                has_spectacles: self.player.has("Spectacles"),
+            },
+        );
         self.flags.retain(|f| {
             !matches!(
                 f.as_str(),

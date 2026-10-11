@@ -1673,7 +1673,14 @@ fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibili
                 let dx = metadata.data.get("treasure_dx").copied().unwrap_or(0.0);
                 let dy = metadata.data.get("treasure_dy").copied().unwrap_or(0.0);
                 let id = game.spawn(object, Vec2::new(center.x + dx, center.y + dy));
-                game.world.entity_mut(id).unwrap().state = 1;
+                let child = game.world.entity_mut(id).unwrap();
+                if treasure.starts_with('o') && crate::catalog::is_a(object, "oItem") {
+                    // Concrete descriptors retain deferred Set2 Create debt;
+                    // its producer clears price AFTER the child's constructor.
+                    child.data.insert("cost".into(), 0.0);
+                    child.data.insert("forSale".into(), 0.0);
+                }
+                child.state = 1;
             }
         }
         if metadata.value("frozen_caveman") != 0.0 && outputs_enabled {
@@ -2060,8 +2067,20 @@ pub(crate) fn destroy_generated_block_own(
                 center.x + source.value("treasure_dx"),
                 center.y + source.value("treasure_dy"),
             );
-            let id = crate::creation::spawn_generated_entity(world, rng, object, pos);
+            // New descriptors preserve the real generation-time snapshot;
+            // older serialized records use the explicit fresh-run fallback.
+            let id = crate::creation::spawn_generated_terrain_child(
+                world,
+                rng,
+                object,
+                pos,
+                source.value("create_has_spectacles") != 0.0,
+            );
             if let Some(item) = world.entity_mut(id) {
+                if crate::catalog::is_a(object, "oItem") {
+                    item.data.insert("cost".into(), 0.0);
+                    item.data.insert("forSale".into(), 0.0);
+                }
                 item.state = 1;
             }
         }
@@ -2154,8 +2173,19 @@ pub(crate) fn destroy_temple_support_clean(world: &mut World, rng: &mut Rng, sou
                 source.pos.x + 8.0 + source.value("treasure_dx"),
                 source.pos.y + 8.0 + source.value("treasure_dy"),
             );
-            let id = crate::creation::spawn_generated_entity(world, rng, object, pos);
-            world.entity_mut(id).unwrap().state = 1;
+            let id = crate::creation::spawn_generated_terrain_child(
+                world,
+                rng,
+                object,
+                pos,
+                source.value("create_has_spectacles") != 0.0,
+            );
+            let child = world.entity_mut(id).unwrap();
+            if crate::catalog::is_a(object, "oItem") {
+                child.data.insert("cost".into(), 0.0);
+                child.data.insert("forSale".into(), 0.0);
+            }
+            child.state = 1;
         }
     }
 }

@@ -1,7 +1,8 @@
 //! Original terrain Create-event treasure rolls and scrSetupWalls silhouettes.
 //!
 //! Tile instances are represented by invisible, centered metadata entities.
-//! Their contents become available when the containing terrain is destroyed.
+//! Generated Lush/Temple Create children are already live before population;
+//! legacy descriptors and other terrain families retain deferred adapters.
 use crate::model::{Entity, Rng, Vec2, World};
 
 const UNDERGROUND: [(&str, f64, f64); 19] = [
@@ -175,7 +176,7 @@ pub(super) fn initialize(world: &mut World, rng: &mut Rng) {
 }
 
 pub(super) fn initialize_custom(world: &mut World, rng: &mut Rng) {
-    create_terrain(world, rng, true);
+    create_terrain(world, rng, true, super::GenerationContext::default());
     initialize_custom_instances(world, rng);
 }
 
@@ -190,11 +191,25 @@ pub(super) fn initialize_with_graphics(world: &mut World, rng: &mut Rng, graphic
 /// original base/treasure sprites and buried contents without SetupWalls masks,
 /// fringes, drips or water surfaces. Room-stamp/Create interleaving remains a
 /// separate compatibility concern; this port currently batches the Create pass.
+#[cfg(test)]
 pub(super) fn create_generated(world: &mut World, rng: &mut Rng) {
-    create_terrain(world, rng, false);
+    create_generated_with_context(world, rng, super::GenerationContext::default());
 }
 
-fn create_terrain(world: &mut World, rng: &mut Rng, custom: bool) {
+pub(super) fn create_generated_with_context(
+    world: &mut World,
+    rng: &mut Rng,
+    context: super::GenerationContext,
+) {
+    create_terrain(world, rng, false, context);
+}
+
+fn create_terrain(
+    world: &mut World,
+    rng: &mut Rng,
+    custom: bool,
+    context: super::GenerationContext,
+) {
     let city = world.name == "City of Gold";
     for y in 0..world.height {
         for x in 0..world.width {
@@ -209,6 +224,8 @@ fn create_terrain(world: &mut World, rng: &mut Rng, custom: bool) {
             if world.entity(id).unwrap().value("terrain_initialized") != 0.0 {
                 continue;
             }
+            #[cfg(test)]
+            let create_trace = create_contents_tests::observe_before(world, rng, x, y, id, custom);
             let explicit_sprite = world
                 .entity(id)
                 .unwrap()
@@ -296,15 +313,44 @@ fn create_terrain(world: &mut World, rng: &mut Rng, custom: bool) {
             if frozen {
                 e.data.insert("frozen_caveman".into(), 1.0);
             }
-            // Explicit temple Big Ruby assignments from room templates win.
-            if !e.text.contains_key("treasure") {
+            if !custom && matches!(object.as_str(), "oLush" | "oTemple") {
+                // Own Create births are independent of caller-assigned OWN
+                // Destroy treasure, including the R-template's Big Ruby.
+                // Do not record new deferred debt: clean/normal destruction
+                // must retain this child's identity, alarm and mutable state.
+                if let Some((name, dx, dy)) = treasure {
+                    let pos = Vec2::new(x as f64 * 16.0 + 8.0 + dx, y as f64 * 16.0 + 8.0 + dy);
+                    let child = crate::creation::spawn_generated_terrain_child(
+                        world,
+                        rng,
+                        name,
+                        pos,
+                        context.has_spectacles,
+                    );
+                    let child = world.entity_mut(child).unwrap();
+                    if crate::catalog::is_a(name, "oItem") {
+                        // scrGenerateItem(...,2) overwrites price AFTER Create.
+                        child.data.insert("cost".into(), 0.0);
+                        child.data.insert("forSale".into(), 0.0);
+                    }
+                }
+            } else if !e.text.contains_key("treasure") {
+                // Existing custom/other-family and serialized metadata adapter.
                 if let Some((name, dx, dy)) = treasure {
                     e.data.insert("embedded_treasure".into(), 1.0);
                     e.data.insert("treasure_dx".into(), dx);
                     e.data.insert("treasure_dy".into(), dy);
+                    if crate::catalog::is_a(name, "oItem") {
+                        e.data.insert(
+                            "create_has_spectacles".into(),
+                            f64::from(context.has_spectacles),
+                        );
+                    }
                     e.text.insert("treasure".into(), name.into());
                 }
             }
+            #[cfg(test)]
+            create_contents_tests::observe_after(world, rng, create_trace);
         }
     }
     // oLava Create selects its spurt timer when the instance is created, before
@@ -1118,3 +1164,7 @@ mod tests {
         assert_eq!(w.entities[0].value("gold_chunks"), 0.0);
     }
 }
+
+#[cfg(test)]
+#[path = "terrain_create_contents_tests.rs"]
+mod create_contents_tests;

@@ -548,8 +548,25 @@ fn expand(script: &Script, rng: &mut Rng, template: &str) -> String {
     String::from_utf8(bytes).expect("ASCII source templates")
 }
 
-/// Generate a seeded Classic level. Flags select unlocked special destinations.
+/// Game state read by source Create bodies while a new room is generated.
+/// Standalone generation uses fresh-run defaults; Game projects real equipment.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct GenerationContext {
+    pub has_spectacles: bool,
+}
+
+/// Generate a seeded Classic level with fresh-run Create context.
+/// Flags select unlocked special destinations.
 pub fn generate(rng: &mut Rng, level: u32, flags: &BTreeSet<String>) -> World {
+    generate_with_context(rng, level, flags, GenerationContext::default())
+}
+
+pub(crate) fn generate_with_context(
+    rng: &mut Rng,
+    level: u32,
+    flags: &BTreeSet<String>,
+    context: GenerationContext,
+) -> World {
     let area = Area::for_level(level);
     let mut selected = flags.clone();
     if area == Area::Jungle
@@ -707,7 +724,7 @@ pub fn generate(rng: &mut Rng, level: u32, flags: &BTreeSet<String>) -> World {
     special::apply(&mut world, rng, &selected);
     apply_wanted_posters(&mut world, &selected);
     let graphics_high = !has(&selected, "low_graphics");
-    terrain::create_generated(&mut world, rng);
+    terrain::create_generated_with_context(&mut world, rng, context);
     // Construction/carving does not dispatch source Solid Destroy events.
     // Population does; preserve any real parent checkWater request it emits.
     world.fluid_dirty = false;
