@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const TICK_RATE: u32 = 30;
 /// Versioned replay/record identity for this simulation contract.
-pub const SIMULATION_VERSION: u32 = 1;
+pub const SIMULATION_VERSION: u32 = 2;
+pub const HISTORICAL_SIMULATION_VERSION: u32 = 1;
 pub const TILE_SIZE: f64 = 16.0;
 pub const VIEW_WIDTH: f64 = 320.0;
 pub const VIEW_HEIGHT: f64 = 240.0;
@@ -1122,6 +1123,20 @@ pub enum RunState {
     Won,
 }
 
+/// Generation behavior is independent of RNG identity. Missing historical
+/// snapshots retain their original behavior, including old canonical snapshots.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GenerationRevision {
+    #[default]
+    HistoricalV1,
+    SourceClassicV2,
+}
+impl GenerationRevision {
+    fn is_historical(&self) -> bool {
+        *self == Self::HistoricalV1
+    }
+}
+
 fn classic_down_to_run() -> bool {
     true
 }
@@ -1144,6 +1159,8 @@ pub struct Game {
     pub player: Player,
     pub world: World,
     pub rng: Rng,
+    #[serde(default, skip_serializing_if = "GenerationRevision::is_historical")]
+    pub generation_revision: GenerationRevision,
     pub events: Vec<GameEvent>,
     pub state: RunState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1255,6 +1272,10 @@ impl Game {
         }
     }
     fn shell_from_rng(seed: u64, rules: RulesPreset, rng: Rng) -> Self {
+        let generation_revision = match rng.algorithm() {
+            RngAlgorithm::LegacySplitMix64V1 => GenerationRevision::HistoricalV1,
+            RngAlgorithm::Gm8Lcg32V1 => GenerationRevision::SourceClassicV2,
+        };
         Self {
             draw_view: None,
             seed,
@@ -1266,6 +1287,7 @@ impl Game {
             player: Player::default(),
             world: World::new(42, 34, Area::Mines, 1),
             rng,
+            generation_revision,
             events: Vec::new(),
             state: RunState::Playing,
             ending: None,

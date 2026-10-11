@@ -358,6 +358,101 @@ fn protect_gold_door_support(world: &mut World, instance: FamilyInstance) {
     }
 }
 
+// scrEntityGen:174–208 is a complete Lush pass before the Solid pass.
+// Its Grave/item births do not grow, destroy, or activate the Lush family,
+// so captured identities with live checks preserve this bounded with-body.
+fn cemetery_prepass(world: &mut World, rng: &mut Rng, context: super::GenerationContext) {
+    for (serial, instance, origin) in family_instances(world, "oLush") {
+        let live = match instance {
+            FamilyInstance::Tile(index) => world.tiles.get(index).is_some_and(|tile| {
+                tile.creation_serial == serial
+                    && tile.engine_active
+                    && crate::catalog::is_a(&tile.object, "oLush")
+            }),
+            FamilyInstance::Entity(id) => world.entity(id).is_some_and(|entity| {
+                entity.alive
+                    && entity.engine_active
+                    && entity.creation_serial == serial
+                    && crate::catalog::is_a(&entity.object, "oLush")
+            }),
+        };
+        if !live {
+            continue;
+        }
+        let above = Vec2::new(origin.x, origin.y - 16.0);
+        let clear = !source_point_family(world, above, "oSolid")
+            && !source_point_family(world, above, "oEntrance")
+            && !source_point_family(world, above, "oExit");
+        // GM8 evaluates this rand even when a collision operand is false.
+        let grave_roll = rng.range(20) == 0;
+        if !clear || !grave_roll || [160.0, 176.0, 320.0, 336.0, 480.0, 496.0].contains(&origin.x) {
+            continue;
+        }
+        let grave = crate::creation::spawn_generated_entity(world, rng, "oGrave", above);
+        cemetery_receiver_value(world, instance, "obj", grave as f64);
+        // global.ashGrave was reset false, but :195 writes *receiver-local*
+        // ashGrave. No later receiver is suppressed by an earlier Ash grave.
+        if rng.range(40) == 0 {
+            world.entity_mut(grave).unwrap().sprite = "sGraveAsh".into();
+            let shotgun = crate::creation::spawn_generated_jungle_child(
+                world,
+                rng,
+                "oShotgun",
+                Vec2::new(origin.x + 8.0, origin.y + 8.0),
+                context.has_spectacles,
+            );
+            let child = world.entity_mut(shotgun).unwrap();
+            child.data.insert("cost".into(), 0.0);
+            child.data.insert("forSale".into(), 0.0);
+            cemetery_receiver_value(world, instance, "obj", shotgun as f64);
+            cemetery_receiver_value(world, instance, "ashGrave", 1.0);
+        } else {
+            let center = Vec2::new(origin.x + 8.0, origin.y + 8.0);
+            if !source_point_family(world, center, "oTreasure") {
+                let object = if rng.range(2) == 0 {
+                    Some("oGoldNugget")
+                } else if rng.range(4) == 0 {
+                    Some("oSapphireBig")
+                } else if rng.range(6) == 0 {
+                    Some("oEmeraldBig")
+                } else if rng.range(8) == 0 {
+                    Some("oRubyBig")
+                } else {
+                    None
+                };
+                if let Some(object) = object {
+                    crate::creation::spawn_generated_jungle_child(
+                        world,
+                        rng,
+                        object,
+                        center,
+                        context.has_spectacles,
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn cemetery_receiver_value(world: &mut World, instance: FamilyInstance, key: &str, value: f64) {
+    match instance {
+        FamilyInstance::Tile(index) => {
+            super::tiles::terrain_property(
+                world,
+                index % world.width,
+                index / world.width,
+                key,
+                value,
+            );
+        }
+        FamilyInstance::Entity(id) => {
+            if let Some(entity) = world.entity_mut(id) {
+                entity.data.insert(key.into(), value);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 struct JunglePopulationTrace {
     world_before: World,
@@ -873,6 +968,39 @@ fn mines_ceiling(world: &mut World, rng: &mut Rng, giant_spider: bool, x: i32, y
 }
 
 pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String>) {
+    populate_internal(
+        world,
+        rng,
+        flags,
+        super::GenerationContext::default(),
+        None,
+        None,
+    );
+}
+
+pub(super) fn populate_with_campaign(
+    world: &mut World,
+    rng: &mut Rng,
+    flags: &BTreeSet<String>,
+    context: super::GenerationContext,
+    campaign: &mut super::GenerationState,
+    room_path: &[[u8; 4]; 5],
+) {
+    if campaign.revision == crate::GenerationRevision::HistoricalV1 {
+        populate(world, rng, flags);
+    } else {
+        populate_internal(world, rng, flags, context, Some(campaign), Some(room_path));
+    }
+}
+
+fn populate_internal(
+    world: &mut World,
+    rng: &mut Rng,
+    flags: &BTreeSet<String>,
+    context: super::GenerationContext,
+    campaign: Option<&mut super::GenerationState>,
+    room_path: Option<&[[u8; 4]; 5]>,
+) {
     if world.area == Area::Boss {
         return;
     }
@@ -906,6 +1034,29 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
     let tomb_lord = world.area == Area::Temple && (world.level == 13 || rng.chance(1, 4));
     let mut market_chance = 160_u32;
     let mut gold_chance = 160_u32;
+    if world.area == Area::Jungle
+        && let Some(campaign) = campaign
+    {
+        if cemetery {
+            #[cfg(test)]
+            let before = cemetery_v2_tests::trace_before(world, rng);
+            cemetery_prepass(world, rng, context);
+            #[cfg(test)]
+            cemetery_v2_tests::trace_after(world, rng, before);
+        }
+        jungle_primary::populate(
+            world,
+            rng,
+            &water,
+            &mut state,
+            campaign,
+            room_path.expect("canonical generation carries actual roomPath"),
+            need_market,
+            context.has_spectacles,
+        );
+        jungle_population(world, rng, cemetery);
+        return;
+    }
     // Snapshot iteration mirrors `with oSolid`: spawned entities are not terrain.
     let supports: Vec<_> = (1..world.height as i32 - 1)
         .flat_map(|y| (1..world.width as i32 - 1).map(move |x| (x, y)))
@@ -4311,3 +4462,10 @@ mod tests {
         assert!(!world.solid_at(crate_pos.x, crate_pos.y));
     }
 }
+
+#[path = "jungle_primary.rs"]
+mod jungle_primary;
+
+#[cfg(test)]
+#[path = "cemetery_v2_tests.rs"]
+mod cemetery_v2_tests;

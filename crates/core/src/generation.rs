@@ -9,6 +9,11 @@ use std::sync::OnceLock;
 mod blocks;
 #[path = "generation/population.rs"]
 mod population;
+#[path = "generation/selectors.rs"]
+mod selectors;
+#[cfg(test)]
+#[path = "generation/selectors_tests.rs"]
+mod selectors_tests;
 #[path = "generation/special.rs"]
 mod special;
 #[path = "generation/terrain.rs"]
@@ -235,10 +240,11 @@ fn room_path(rng: &mut Rng, area: Area, level: u32, flags: &mut BTreeSet<String>
     path
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
 struct Features {
     idol: bool,
     altar: bool,
+    damsel: bool,
     market_shops: BTreeSet<u32>,
 }
 
@@ -255,6 +261,8 @@ fn choose_room<'a>(
     level: u32,
     flags: &BTreeSet<String>,
     features: &mut Features,
+    world: &World,
+    source_classic: bool,
 ) -> (&'a str, &'static str) {
     let mines = script_name == "scrRoomGen";
     let jungle = script_name == "scrRoomGen2";
@@ -263,7 +271,26 @@ fn choose_room<'a>(
     let market = script_name == "scrRoomGenMarket";
     let yeti = script_name == "scrRoomGenYeti";
     let mut shop = "General";
-    let (kind, number) = if script_name == "scrRoomGen5" {
+    let (kind, number) = if source_classic {
+        let selected = selectors::select(
+            rng,
+            selectors::Context {
+                script_name,
+                path,
+                above,
+                start,
+                end,
+                col,
+                row,
+                level,
+                flags,
+                world,
+            },
+            features,
+        );
+        shop = selected.shop;
+        (selected.kind, selected.number)
+    } else if script_name == "scrRoomGen5" {
         (
             if row < 3 { "boss_upper" } else { "boss_lower" }.to_string(),
             rand(rng, 1, 6),
@@ -555,6 +582,31 @@ pub(crate) struct GenerationContext {
     pub has_spectacles: bool,
 }
 
+/// Persistent campaign input/output for the versioned Jungle producer.
+/// The signed range is the independently proved source_rand domain, not a
+/// source global clamp. Historical generation never reads or writes it.
+pub(crate) const MAX_JUNGLE_PRIMARY_RECEIVERS: i32 = 22_812;
+pub(crate) const MIN_SUPPORTED_MARKET_CHANCE: i32 = -(1 << 21) + MAX_JUNGLE_PRIMARY_RECEIVERS;
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct GenerationState {
+    pub revision: crate::GenerationRevision,
+    pub market_chance: i32,
+    pub made_market_entrance: bool,
+}
+impl GenerationState {
+    pub(crate) fn fresh(rng: &Rng) -> Self {
+        Self {
+            revision: match rng.algorithm() {
+                crate::RngAlgorithm::LegacySplitMix64V1 => crate::GenerationRevision::HistoricalV1,
+                crate::RngAlgorithm::Gm8Lcg32V1 => crate::GenerationRevision::SourceClassicV2,
+            },
+            market_chance: 160,
+            made_market_entrance: false,
+        }
+    }
+}
+
 /// Generate a seeded Classic level with fresh-run Create context.
 /// Flags select unlocked special destinations.
 pub fn generate(rng: &mut Rng, level: u32, flags: &BTreeSet<String>) -> World {
@@ -567,6 +619,30 @@ pub(crate) fn generate_with_context(
     flags: &BTreeSet<String>,
     context: GenerationContext,
 ) -> World {
+    let mut state = GenerationState::fresh(rng);
+    generate_with_campaign(rng, level, flags, context, &mut state)
+}
+
+pub(crate) fn generate_with_campaign(
+    rng: &mut Rng,
+    level: u32,
+    flags: &BTreeSet<String>,
+    context: GenerationContext,
+    state: &mut GenerationState,
+) -> World {
+    // Validate before room construction, callbacks, or RNG draws. Historical
+    // serialized state remains historical even if its RNG is canonical.
+    if state.revision == crate::GenerationRevision::SourceClassicV2 {
+        assert_eq!(
+            rng.algorithm(),
+            crate::RngAlgorithm::Gm8Lcg32V1,
+            "SourceClassicV2 requires canonical RNG identity"
+        );
+        assert!(
+            (MIN_SUPPORTED_MARKET_CHANCE..=(1 << 21)).contains(&state.market_chance),
+            "marketChance history is outside the proved campaign domain with one-room draw headroom"
+        );
+    }
     let area = Area::for_level(level);
     let mut selected = flags.clone();
     if area == Area::Jungle
@@ -678,6 +754,10 @@ pub(crate) fn generate_with_context(
     let script = &archive().scripts[script_name];
     let mut features = Features::default();
     features.idol = has(&selected, "sacrifice_pit");
+    // scrLevelGen87 sets the room-generation latch before stamping the pit.
+    // It is unrelated to the selected playable character.
+    features.damsel = state.revision == crate::GenerationRevision::SourceClassicV2
+        && has(&selected, "sacrifice_pit");
     for row in 0..if has(&selected, "lake") { 5 } else { 4 } {
         for col in 0..4 {
             let start = row == 0 && col == path.start;
@@ -695,6 +775,8 @@ pub(crate) fn generate_with_context(
                 level,
                 &selected,
                 &mut features,
+                &world,
+                state.revision == crate::GenerationRevision::SourceClassicV2,
             );
             let expanded = expand(script, rng, template);
             if area == Area::Boss && row == 3 {
@@ -707,6 +789,18 @@ pub(crate) fn generate_with_context(
                     false,
                     false,
                     shop,
+                );
+            } else if state.revision == crate::GenerationRevision::SourceClassicV2 {
+                tiles::stamp_with_damsel(
+                    &mut world,
+                    rng,
+                    &expanded,
+                    col,
+                    row,
+                    start,
+                    end,
+                    shop,
+                    features.damsel,
                 );
             } else {
                 tiles::stamp(&mut world, rng, &expanded, col, row, start, end, shop);
@@ -728,7 +822,7 @@ pub(crate) fn generate_with_context(
     // Construction/carving does not dispatch source Solid Destroy events.
     // Population does; preserve any real parent checkWater request it emits.
     world.fluid_dirty = false;
-    population::populate(&mut world, rng, &selected);
+    population::populate_with_campaign(&mut world, rng, &selected, context, state, &path.rooms);
     terrain::setup_generated(&mut world, rng, graphics_high);
     if graphics_high {
         background_extras(&mut world, rng);
@@ -1312,11 +1406,21 @@ mod tests {
         // exit-origin LEFT SmashTrap and clear, supported local approach,
         // before any player or trap steps. The approach is checked below.
         let mut game = Game::shell(118, RulesPreset::Classic);
+        // This fixed geometry recording predates the SourceClassicV2 selectors.
+        game.generation_revision = crate::GenerationRevision::HistoricalV1;
         // Retain the natural exit-trap layout with both features made earlier:
         // scrInitLevel:180,188 skips each scheduling chain once already made.
         game.flags.insert("made_udjat_eye".into());
         game.flags.insert("made_market_entrance".into());
-        game.world = generate(&mut game.rng, 13, &game.flags);
+        let mut generation_state = GenerationState::fresh(&game.rng);
+        generation_state.revision = game.generation_revision;
+        game.world = generate_with_campaign(
+            &mut game.rng,
+            13,
+            &game.flags,
+            GenerationContext::default(),
+            &mut generation_state,
+        );
         // The static canonical discovery pins this natural layout before
         // any movement. Source doors are created at a tile origin and the
         // logical interaction position is its center.

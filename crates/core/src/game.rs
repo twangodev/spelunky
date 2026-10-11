@@ -28,16 +28,20 @@ impl Game {
         )?))
     }
 
+    /// Restore the pre-Jungle-revision contract before initial generation.
+    pub fn new_historical_with_algorithm(
+        seed: u64,
+        rules: RulesPreset,
+        algorithm: RngAlgorithm,
+    ) -> Result<Self, RngSeedError> {
+        let mut game = Self::shell_with_algorithm(seed, rules, algorithm)?;
+        game.generation_revision = GenerationRevision::HistoricalV1;
+        Ok(Self::generate_first_room(game))
+    }
+
     fn generate_first_room(mut game: Self) -> Self {
         game.flags.insert("no_dark_level".into());
-        game.world = generation::generate_with_context(
-            &mut game.rng,
-            1,
-            &game.flags,
-            generation::GenerationContext {
-                has_spectacles: game.player.has("Spectacles"),
-            },
-        );
+        game.generate_campaign_room(1);
         game.reset_position();
         game
     }
@@ -445,16 +449,58 @@ impl Game {
                 self.flags.insert("used_shortcut".into());
             }
             self.flags.insert("no_dark_level".into());
-            self.world = generation::generate_with_context(
-                &mut self.rng,
-                level.clamp(1, 16),
-                &self.flags,
-                generation::GenerationContext {
-                    has_spectacles: self.player.has("Spectacles"),
-                },
-            );
+            self.generate_campaign_room(level.clamp(1, 16));
         }
         self.reset_position();
+    }
+
+    pub fn simulation_version(&self) -> u32 {
+        match self.generation_revision {
+            GenerationRevision::HistoricalV1 => HISTORICAL_SIMULATION_VERSION,
+            GenerationRevision::SourceClassicV2 => SIMULATION_VERSION,
+        }
+    }
+
+    fn generate_campaign_room(&mut self, level: u32) {
+        let context = generation::GenerationContext {
+            has_spectacles: self.player.has("Spectacles"),
+        };
+        let historical = self.generation_revision == GenerationRevision::HistoricalV1;
+        let market = if historical {
+            160.0
+        } else {
+            self.data.get("marketChance").copied().unwrap_or(160.0)
+        };
+        // Invalid edited/synthetic histories are rejected BEFORE procedural
+        // generation starts; neither signed state nor random draws are clamped.
+        assert!(
+            historical
+                || (market.is_finite()
+                    && market.fract() == 0.0
+                    && (f64::from(generation::MIN_SUPPORTED_MARKET_CHANCE)..=f64::from(1 << 21))
+                        .contains(&market)),
+            "marketChance history is outside the proved integer campaign domain with one-room draw headroom"
+        );
+        let mut state = generation::GenerationState {
+            revision: self.generation_revision,
+            market_chance: market as i32,
+            made_market_entrance: self.flags.contains("made_market_entrance")
+                || self.flags.contains("madeMarketEntrance"),
+        };
+        self.world = generation::generate_with_campaign(
+            &mut self.rng,
+            level,
+            &self.flags,
+            context,
+            &mut state,
+        );
+        if !historical {
+            self.data
+                .insert("marketChance".into(), f64::from(state.market_chance));
+            if state.made_market_entrance {
+                self.flags.insert("made_market_entrance".into());
+            }
+        }
     }
 
     pub fn next_level(&mut self) {
@@ -469,14 +515,7 @@ impl Game {
             self.events.push(GameEvent::Won);
             return;
         }
-        self.world = generation::generate_with_context(
-            &mut self.rng,
-            next,
-            &self.flags,
-            generation::GenerationContext {
-                has_spectacles: self.player.has("Spectacles"),
-            },
-        );
+        self.generate_campaign_room(next);
         self.flags.retain(|f| {
             !matches!(
                 f.as_str(),
@@ -1588,3 +1627,272 @@ mod tests {
         assert_eq!(game.player.pos, Vec2::new(344., 184.));
     }
 }
+
+// Append this separate test module to crates/core/src/game.rs. Prepared without
+// compilation or execution; these tests exercise version/transport contracts.
+#[cfg(test)]
+mod jungle_version_contract_tests {
+    use crate::{
+        Game, GenerationRevision, HISTORICAL_SIMULATION_VERSION, InputFrame, RngAlgorithm,
+        RulesPreset, SIMULATION_VERSION, generation, replay,
+    };
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    #[test]
+    fn jungle_contract_missing_revision_keeps_canonical_snapshot_historical() {
+        let shell = Game::shell(42, RulesPreset::Classic);
+        let mut old_snapshot = serde_json::to_value(&shell).unwrap();
+        old_snapshot
+            .as_object_mut()
+            .unwrap()
+            .remove("generation_revision");
+        let mut restored: Game = serde_json::from_value(old_snapshot.clone()).unwrap();
+        assert_eq!(restored.rng.algorithm(), RngAlgorithm::Gm8Lcg32V1);
+        assert_eq!(
+            restored.generation_revision,
+            GenerationRevision::HistoricalV1
+        );
+        assert_eq!(restored.simulation_version(), HISTORICAL_SIMULATION_VERSION);
+        assert_eq!(serde_json::to_value(&restored).unwrap(), old_snapshot);
+
+        // A historical canonical snapshot must not begin reading the new
+        // campaign projection merely because its RNG is canonical.
+        restored.data.insert("marketChance".into(), -9_999_999.0);
+        restored.generate_campaign_room(1);
+        assert_eq!(restored.data["marketChance"], -9_999_999.0);
+        assert_eq!(
+            restored.generation_revision,
+            GenerationRevision::HistoricalV1
+        );
+        assert!(
+            serde_json::to_value(&restored)
+                .unwrap()
+                .get("generation_revision")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn jungle_contract_fresh_canonical_revision_survives_serialization() {
+        let fresh = Game::new(42, RulesPreset::Classic);
+        assert_eq!(
+            fresh.generation_revision,
+            GenerationRevision::SourceClassicV2
+        );
+        assert_eq!(fresh.simulation_version(), SIMULATION_VERSION);
+        assert_eq!(fresh.data["marketChance"], 160.0);
+        let json = serde_json::to_value(&fresh).unwrap();
+        assert_eq!(json["generation_revision"], "SourceClassicV2");
+        let restored: Game = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(
+            restored.generation_revision,
+            GenerationRevision::SourceClassicV2
+        );
+        assert_eq!(serde_json::to_value(&restored).unwrap(), json);
+    }
+
+    #[test]
+    fn jungle_contract_historical_constructor_selects_revision_before_generation() {
+        for algorithm in [RngAlgorithm::LegacySplitMix64V1, RngAlgorithm::Gm8Lcg32V1] {
+            let historical =
+                Game::new_historical_with_algorithm(42, RulesPreset::Classic, algorithm).unwrap();
+            assert_eq!(
+                historical.generation_revision,
+                GenerationRevision::HistoricalV1
+            );
+            assert_eq!(historical.rng.algorithm(), algorithm);
+            assert_eq!(
+                historical.simulation_version(),
+                HISTORICAL_SIMULATION_VERSION
+            );
+            assert!(!historical.data.contains_key("marketChance"));
+            assert!(
+                serde_json::to_value(&historical)
+                    .unwrap()
+                    .get("generation_revision")
+                    .is_none()
+            );
+        }
+        for seed in [0, u64::MAX] {
+            let legacy = Game::legacy(seed, RulesPreset::Classic);
+            let explicit = Game::new_historical_with_algorithm(
+                seed,
+                RulesPreset::Classic,
+                RngAlgorithm::LegacySplitMix64V1,
+            )
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(legacy).unwrap(),
+                serde_json::to_value(explicit).unwrap()
+            );
+        }
+        assert!(
+            Game::new_historical_with_algorithm(
+                u64::from(u32::MAX) + 1,
+                RulesPreset::Classic,
+                RngAlgorithm::Gm8Lcg32V1,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn jungle_contract_versioned_replays_route_all_three_supported_pairs() {
+        let frames = [
+            InputFrame::default(),
+            InputFrame {
+                right: true,
+                ..InputFrame::default()
+            },
+            InputFrame {
+                jump: true,
+                jump_pressed: true,
+                ..InputFrame::default()
+            },
+        ];
+        for (algorithm, version) in [
+            (
+                RngAlgorithm::LegacySplitMix64V1,
+                HISTORICAL_SIMULATION_VERSION,
+            ),
+            (RngAlgorithm::Gm8Lcg32V1, HISTORICAL_SIMULATION_VERSION),
+            (RngAlgorithm::Gm8Lcg32V1, SIMULATION_VERSION),
+        ] {
+            let mut manual = if version == HISTORICAL_SIMULATION_VERSION {
+                Game::new_historical_with_algorithm(42, RulesPreset::Classic, algorithm).unwrap()
+            } else {
+                Game::new_with_algorithm(42, RulesPreset::Classic, algorithm).unwrap()
+            };
+            for frame in &frames {
+                manual.step(frame);
+            }
+            let result = replay::from_frames_with_simulation_version(
+                42,
+                RulesPreset::Classic,
+                &frames,
+                algorithm,
+                version,
+            )
+            .unwrap();
+            assert_eq!(result.simulation_version, version);
+            assert_eq!(result.algorithm, algorithm);
+            assert_eq!(result.hash, format!("{:016x}", manual.state_hash()));
+            assert_eq!(result.ticks, manual.tick);
+        }
+        let historical = replay::from_frames_with_simulation_version(
+            42,
+            RulesPreset::Classic,
+            &frames,
+            RngAlgorithm::Gm8Lcg32V1,
+            HISTORICAL_SIMULATION_VERSION,
+        )
+        .unwrap();
+        let fresh = replay::from_frames(42, RulesPreset::Classic, &frames).unwrap();
+        assert_eq!(fresh.simulation_version, SIMULATION_VERSION);
+        assert_ne!(
+            historical.hash, fresh.hash,
+            "the serialized contracts are distinct"
+        );
+        let existing_legacy_api = replay::from_frames_with_algorithm(
+            u64::MAX,
+            RulesPreset::Classic,
+            &[],
+            RngAlgorithm::LegacySplitMix64V1,
+        )
+        .unwrap();
+        assert_eq!(
+            existing_legacy_api.simulation_version,
+            HISTORICAL_SIMULATION_VERSION
+        );
+    }
+
+    #[test]
+    fn jungle_contract_unsupported_replay_pair_rejected_before_constructor_validation() {
+        for version in [0, SIMULATION_VERSION, u32::MAX] {
+            assert!(
+                replay::validate_simulation_version(RngAlgorithm::LegacySplitMix64V1, version)
+                    .is_err()
+            );
+            assert!(
+                replay::from_frames_with_simulation_version(
+                    42,
+                    RulesPreset::Classic,
+                    &[],
+                    RngAlgorithm::LegacySplitMix64V1,
+                    version,
+                )
+                .unwrap_err()
+                .contains("Unsupported replay simulation version")
+            );
+        }
+        // This seed would fail canonical construction. Contract validation
+        // must win first, rather than constructing any procedural game.
+        let error = replay::from_frames_with_simulation_version(
+            u64::MAX,
+            RulesPreset::Classic,
+            &[],
+            RngAlgorithm::Gm8Lcg32V1,
+            u32::MAX,
+        )
+        .unwrap_err();
+        assert!(error.contains("Unsupported replay simulation version"));
+    }
+
+    #[test]
+    fn jungle_contract_market_state_carries_between_rooms_and_resets_for_new_run() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.data.insert("marketChance".into(), -37.0);
+        game.flags.insert("madeMarketEntrance".into());
+        game.generate_campaign_room(1);
+        assert_eq!(game.data["marketChance"], -37.0);
+        assert!(game.flags.contains("made_market_entrance"));
+        game.data.insert("next_level".into(), 2.0);
+        game.next_level();
+        assert_eq!(game.world.level, 2);
+        assert_eq!(game.data["marketChance"], -37.0);
+        assert!(game.flags.contains("made_market_entrance"));
+
+        let before_clear_rng = game.rng.state_bits();
+        game.clear_run_globals();
+        assert_eq!(game.data["marketChance"], 160.0);
+        assert!(!game.flags.contains("made_market_entrance"));
+        assert_eq!(game.rng.state_bits(), before_clear_rng);
+
+        game.data.insert("marketChance".into(), -37.0);
+        game.flags.insert("made_market_entrance".into());
+        game.start_from_hub(false, 1);
+        assert_eq!(game.data["marketChance"], 160.0);
+        assert!(!game.flags.contains("made_market_entrance"));
+        assert_eq!(
+            game.generation_revision,
+            GenerationRevision::SourceClassicV2
+        );
+    }
+
+    #[test]
+    fn jungle_contract_invalid_market_projection_rejected_before_procedural_rng() {
+        for invalid in [
+            f64::NAN,
+            f64::INFINITY,
+            1.5,
+            f64::from(generation::MIN_SUPPORTED_MARKET_CHANCE) - 1.0,
+            f64::from(1 << 21) + 1.0,
+        ] {
+            let mut game = Game::shell(42, RulesPreset::Classic);
+            game.data.insert("marketChance".into(), invalid);
+            let before_rng = game.rng.state_bits();
+            let before_world = serde_json::to_value(&game.world).unwrap();
+            assert!(catch_unwind(AssertUnwindSafe(|| game.generate_campaign_room(5))).is_err());
+            assert_eq!(game.rng.state_bits(), before_rng);
+            assert_eq!(serde_json::to_value(&game.world).unwrap(), before_world);
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "jungle_public_contract_tests.rs"]
+mod jungle_public_contract_tests;
+
+#[cfg(test)]
+#[path = "selectors_public_tests.rs"]
+mod selectors_public_tests;

@@ -137,12 +137,20 @@ pub(crate) fn initialize_terrain_child(entity: &mut Entity, has_spectacles: bool
     buried_create::initialize(entity, has_spectacles);
 }
 
+pub(crate) fn initialize_source_jungle_child(entity: &mut Entity, has_spectacles: bool) {
+    buried_create::initialize_source_jungle(entity, has_spectacles);
+}
+
 pub(crate) fn create_instance(game: &mut Game, id: u64) {
     let Some(mut entity) = game.world.entity(id).cloned() else {
         return;
     };
     init_entity(&mut entity);
-    initialize_terrain_child(&mut entity, game.player.has("Spectacles"));
+    if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+        initialize_source_jungle_child(&mut entity, game.player.has("Spectacles"));
+    } else {
+        initialize_terrain_child(&mut entity, game.player.has("Spectacles"));
+    }
     if entity.object == "oDice" {
         initialize_dice(&mut game.rng, &mut entity);
     } else if entity.object == "oWebBall" {

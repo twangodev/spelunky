@@ -86,6 +86,10 @@ pub(crate) fn create_local(
     moving::create_local(context.rng, entity, context.world.name == "City of Gold");
 }
 
+pub(crate) fn initialize_source_jungle_spear(entity: &mut Entity) {
+    detectors::initialize_source_jungle_spear(entity);
+}
+
 pub(crate) fn create(game: &mut Game, instance: Instance) {
     if !handles(instance.object(game)) {
         return;
@@ -96,6 +100,9 @@ pub(crate) fn create(game: &mut Game, instance: Instance) {
                 return;
             };
             init_entity(entity);
+            if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+                initialize_source_jungle_spear(entity);
+            }
             if entity.value("traps_create_initialized") != 0. {
                 return;
             }

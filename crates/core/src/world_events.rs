@@ -434,6 +434,9 @@ pub(crate) fn create_instance(game: &mut Game, id: u64) {
         return;
     };
     let mut e = game.world.entities[index].clone();
+    if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+        crate::creation::initialize_source_jungle_market(&mut e);
+    }
     create_local(
         &mut crate::creation::EntityCreateContext {
             world: &game.world,

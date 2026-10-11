@@ -20,7 +20,7 @@ pub(crate) fn spawn_generated_entity(
     object: &str,
     pos: Vec2,
 ) -> u64 {
-    spawn_generated_with_item_context(world, rng, object, pos, None)
+    spawn_generated_with_item_context(world, rng, object, pos, None, false)
 }
 
 /// Complete the selected RNG-free item Create with actual generation globals
@@ -32,7 +32,19 @@ pub(crate) fn spawn_generated_terrain_child(
     pos: Vec2,
     has_spectacles: bool,
 ) -> u64 {
-    spawn_generated_with_item_context(world, rng, object, pos, Some(has_spectacles))
+    spawn_generated_with_item_context(world, rng, object, pos, Some(has_spectacles), false)
+}
+
+/// Versioned cemetery children extend the finite native constructor set by
+/// Gold Nugget without changing historical runtime/generation state bytes.
+pub(crate) fn spawn_generated_jungle_child(
+    world: &mut World,
+    rng: &mut Rng,
+    object: &str,
+    pos: Vec2,
+    has_spectacles: bool,
+) -> u64 {
+    spawn_generated_with_item_context(world, rng, object, pos, Some(has_spectacles), true)
 }
 
 fn spawn_generated_with_item_context(
@@ -41,6 +53,7 @@ fn spawn_generated_with_item_context(
     object: &str,
     pos: Vec2,
     has_spectacles: Option<bool>,
+    source_jungle: bool,
 ) -> u64 {
     let id = world.spawn(object, pos);
     #[cfg(test)]
@@ -48,7 +61,14 @@ fn spawn_generated_with_item_context(
         GENERATED_CREATE_TRACES.with(|traces| traces.borrow().as_ref().map(|_| rng.clone()));
     initialize_entity_local(world, rng, id);
     if let Some(has_spectacles) = has_spectacles {
-        crate::items::initialize_terrain_child(world.entity_mut(id).unwrap(), has_spectacles);
+        if source_jungle {
+            let entity = world.entity_mut(id).unwrap();
+            crate::items::initialize_source_jungle_child(entity, has_spectacles);
+            crate::traps::initialize_source_jungle_spear(entity);
+            initialize_source_jungle_market(entity);
+        } else {
+            crate::items::initialize_terrain_child(world.entity_mut(id).unwrap(), has_spectacles);
+        }
     }
     #[cfg(test)]
     if let Some(rng_before) = rng_before
@@ -65,6 +85,19 @@ fn spawn_generated_with_item_context(
         });
     }
     id
+}
+
+/// oXMarket inherits the RNG-free oExit Create, then changes its type.
+/// Shared with runtime Create; producer writes must survive bootstrap reentry.
+pub(crate) fn initialize_source_jungle_market(entity: &mut crate::Entity) {
+    if entity.object == "oXMarket" && entity.value("source_jungle_market_create_initialized") == 0.0
+    {
+        entity.text.insert("leadsTo".into(), String::new());
+        entity.text.insert("type".into(), "Market Exit".into());
+        entity
+            .data
+            .insert("source_jungle_market_create_initialized".into(), 1.0);
+    }
 }
 
 pub(crate) fn initialize_entity_local(world: &mut World, rng: &mut Rng, id: u64) {

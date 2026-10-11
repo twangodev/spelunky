@@ -1,5 +1,5 @@
 //! Shared native/Wasm deterministic diagnostic replays.
-use crate::{Game, InputFrame, RngAlgorithm, RulesPreset, RunState, SIMULATION_VERSION};
+use crate::{Game, InputFrame, RngAlgorithm, RulesPreset, RunState};
 use serde::Serialize;
 
 pub const MAX_REPLAY_TICKS: u32 = 100_000;
@@ -61,6 +61,7 @@ pub fn try_scripted_with_algorithm(
         seed,
         rules,
         algorithm,
+        fresh_simulation_version(algorithm),
         ticks,
         (0..ticks).map(scripted_input),
     )
@@ -74,7 +75,8 @@ pub fn from_frames(
     from_frames_with_algorithm(seed, rules, frames, RngAlgorithm::Gm8Lcg32V1)
 }
 
-/// Historical replay imports must explicitly select LegacySplitMix64V1.
+/// Select a fresh generation contract for this algorithm. Recorded imports
+/// should also pass their simulation version to `from_frames_with_simulation_version`.
 pub fn from_frames_with_algorithm(
     seed: u64,
     rules: RulesPreset,
@@ -86,9 +88,48 @@ pub fn from_frames_with_algorithm(
         seed,
         rules,
         algorithm,
+        fresh_simulation_version(algorithm),
         frames.len() as u32,
         frames.iter().copied(),
     )
+}
+
+/// Decode a recording's generation contract as well as its random algorithm.
+/// Version 1 canonical recordings retain the historical generation path.
+pub fn from_frames_with_simulation_version(
+    seed: u64,
+    rules: RulesPreset,
+    frames: &[InputFrame],
+    algorithm: RngAlgorithm,
+    simulation_version: u32,
+) -> Result<ReplayResult, String> {
+    check_ticks(frames.len())?;
+    validate_simulation_version(algorithm, simulation_version)?;
+    run(
+        seed,
+        rules,
+        algorithm,
+        simulation_version,
+        frames.len() as u32,
+        frames.iter().copied(),
+    )
+}
+
+pub fn validate_simulation_version(algorithm: RngAlgorithm, version: u32) -> Result<(), String> {
+    match (algorithm, version) {
+        (_, crate::HISTORICAL_SIMULATION_VERSION)
+        | (RngAlgorithm::Gm8Lcg32V1, crate::SIMULATION_VERSION) => Ok(()),
+        _ => Err(format!(
+            "Unsupported replay simulation version {version} for {algorithm:?}"
+        )),
+    }
+}
+
+fn fresh_simulation_version(algorithm: RngAlgorithm) -> u32 {
+    match algorithm {
+        RngAlgorithm::LegacySplitMix64V1 => crate::HISTORICAL_SIMULATION_VERSION,
+        RngAlgorithm::Gm8Lcg32V1 => crate::SIMULATION_VERSION,
+    }
 }
 
 fn check_ticks(ticks: usize) -> Result<(), String> {
@@ -103,17 +144,23 @@ fn run(
     seed: u64,
     rules: RulesPreset,
     algorithm: RngAlgorithm,
+    simulation_version: u32,
     requested_ticks: u32,
     frames: impl IntoIterator<Item = InputFrame>,
 ) -> Result<ReplayResult, String> {
-    let mut game =
-        Game::new_with_algorithm(seed, rules, algorithm).map_err(|error| error.to_string())?;
+    validate_simulation_version(algorithm, simulation_version)?;
+    let mut game = if simulation_version == crate::HISTORICAL_SIMULATION_VERSION {
+        Game::new_historical_with_algorithm(seed, rules, algorithm)
+    } else {
+        Game::new_with_algorithm(seed, rules, algorithm)
+    }
+    .map_err(|error| error.to_string())?;
     for input in frames {
         game.step(&input);
     }
     Ok(ReplayResult {
         version: REPLAY_VERSION,
-        simulation_version: SIMULATION_VERSION,
+        simulation_version: game.simulation_version(),
         algorithm,
         seed: seed.to_string(),
         rules,
@@ -170,7 +217,10 @@ mod tests {
         assert_eq!(legacy.seed, "18446744073709551615");
         assert_eq!(legacy.algorithm, RngAlgorithm::LegacySplitMix64V1);
         assert_eq!(legacy.version, REPLAY_VERSION);
-        assert_eq!(legacy.simulation_version, SIMULATION_VERSION);
+        assert_eq!(
+            legacy.simulation_version,
+            crate::HISTORICAL_SIMULATION_VERSION
+        );
         assert_eq!(
             legacy.hash,
             format!(

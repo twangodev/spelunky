@@ -23,7 +23,48 @@ pub(super) fn stamp(
     );
 }
 
+/// Versioned source selector globals, consumed at the actual instance births.
+/// Historical callers retain the old adapter without an invented latch.
+pub(super) fn stamp_with_damsel(
+    world: &mut World,
+    rng: &mut Rng,
+    template: &str,
+    room_x: usize,
+    room_y: usize,
+    is_start: bool,
+    is_end: bool,
+    shop_type: &str,
+    damsel: bool,
+) {
+    stamp_at_with_damsel(
+        world,
+        rng,
+        template,
+        1 + room_x * 10,
+        1 + room_y * 8,
+        is_start,
+        is_end,
+        shop_type,
+        Some(damsel),
+    );
+}
+
 pub(super) fn stamp_at(
+    world: &mut World,
+    rng: &mut Rng,
+    template: &str,
+    origin_x: usize,
+    origin_y: usize,
+    is_start: bool,
+    is_end: bool,
+    shop_type: &str,
+) {
+    stamp_at_with_damsel(
+        world, rng, template, origin_x, origin_y, is_start, is_end, shop_type, None,
+    );
+}
+
+fn stamp_at_with_damsel(
     world: &mut World,
     rng: &mut Rng,
     template: &str,
@@ -32,6 +73,7 @@ pub(super) fn stamp_at(
     is_start: bool,
     _is_end: bool,
     shop_type: &str,
+    source_damsel: Option<bool>,
 ) {
     let name = world.name.to_ascii_lowercase();
     let yeti = name.contains("yeti");
@@ -154,7 +196,10 @@ pub(super) fn stamp_at(
                 spawn(
                     world,
                     rng,
-                    if shop_type == "Kissing" && world.area != Area::Temple && !market {
+                    if source_damsel.unwrap_or(shop_type == "Kissing")
+                        && world.area != Area::Temple
+                        && !market
+                    {
                         "oLampRed"
                     } else {
                         "oLamp"

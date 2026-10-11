@@ -1,15 +1,26 @@
-//! RNG-free inherited Create bodies for terrain's three Big gems and nineteen
+//! RNG-free inherited Create bodies for terrain's Gold Nugget, three Big gems and nineteen
 //! Underground-set items. The caller still owns post-Create sale overrides.
 use crate::Entity;
 
 pub(super) fn initialize(entity: &mut Entity, has_spectacles: bool) {
+    if !matches!(
+        entity.object.as_str(),
+        "oGoldNugget" | "oLampItem" | "oLampRedItem"
+    ) {
+        initialize_source_jungle(entity, has_spectacles);
+    }
+}
+
+pub(super) fn initialize_source_jungle(entity: &mut Entity, has_spectacles: bool) {
     let gem = match entity.object.as_str() {
-        "oSapphireBig" => Some(("Big Sapphire", 1200.0)),
-        "oEmeraldBig" => Some(("Big Emerald", 800.0)),
-        "oRubyBig" => Some(("Big Ruby", 1600.0)),
+        "oGoldNugget" => Some(("Gold Nugget", 500.0, true)),
+        "oSapphireBig" => Some(("Big Sapphire", 1200.0, false)),
+        "oEmeraldBig" => Some(("Big Emerald", 800.0, false)),
+        "oRubyBig" => Some(("Big Ruby", 1600.0, false)),
         _ => None,
     };
     let item = match entity.object.as_str() {
+        "oLampItem" | "oLampRedItem" => ("Lamp", 0.0, "", ""),
         "oJetpack" => ("Jetpack", 20000.0, "", "JETPACK FOR $"),
         "oCapePickup" => ("Cape", 12000.0, "", "A CAPE FOR $"),
         "oShotgun" => ("Shotgun", 15000.0, "", "A SHOTGUN FOR $"),
@@ -69,19 +80,22 @@ pub(super) fn initialize(entity: &mut Entity, has_spectacles: bool) {
     for name in ["xVel", "yVel", "xAcc", "yAcc"] {
         entity.data.insert(name.into(), 0.0);
     }
-    if let Some((kind, value)) = gem {
+    if let Some((kind, value, can_collect)) = gem {
         entity.text.insert("type".into(), kind.into());
         entity.state = 1;
         for (name, value) in [
             ("value", value),
-            ("canCollect", 0.0),
+            ("canCollect", f64::from(can_collect)),
             ("yOff", 4.0),
             ("STATIC", 0.0),
             ("ACTIVE", 1.0),
         ] {
             entity.data.insert(name.into(), value);
         }
-        entity.alarms[0] = 20;
+        // Gold Nugget has no own Alarm write; Big gems delay collection.
+        if !can_collect {
+            entity.alarms[0] = 20;
+        }
     } else {
         for name in [
             "armed",
@@ -121,9 +135,15 @@ pub(super) fn initialize(entity: &mut Entity, has_spectacles: bool) {
         let (kind, cost, description, purchase) = item;
         entity.text.insert("type".into(), kind.into());
         entity.text.insert("shopDesc".into(), description.into());
-        entity
-            .text
-            .insert("buyMessage".into(), format!("{purchase}{cost:.0}."));
+        if matches!(entity.object.as_str(), "oLampItem" | "oLampRedItem") {
+            entity.data.insert("trigger".into(), 1.0);
+            entity.data.insert("heavy".into(), 1.0);
+            entity.data.insert("value".into(), 1000.0);
+        } else {
+            entity
+                .text
+                .insert("buyMessage".into(), format!("{purchase}{cost:.0}."));
+        }
         entity.data.insert("cost".into(), cost);
         if entity.object == "oBow" {
             entity.set_image_speed(0.0);

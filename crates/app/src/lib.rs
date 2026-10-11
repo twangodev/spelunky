@@ -93,6 +93,10 @@ mod replay_tests {
         let canonical = diagnostic_replay("4294967295", 0, true, "gm8_lcg32_v1").unwrap();
         let value: serde_json::Value = serde_json::from_str(&canonical).unwrap();
         assert_eq!(value["algorithm"], "gm8_lcg32_v1");
+        assert_eq!(
+            value["simulation_version"],
+            spelunky_core::SIMULATION_VERSION
+        );
         assert_eq!(value["rules"], "Assisted");
     }
 

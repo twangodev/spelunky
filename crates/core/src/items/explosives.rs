@@ -2495,6 +2495,116 @@ pub(crate) fn destroy_temple_support_clean(world: &mut World, rng: &mut Rng, sou
     }
 }
 
+/// Own/inherited clean Destroy closure for the stock Jungle primary pass.
+/// Invincibility is not an instance_destroy guard. Ordinary source shops are
+/// excluded by roomPath before this callback can run; shop anger needs Game.
+pub(crate) fn destroy_source_jungle_support_clean(
+    world: &mut World,
+    rng: &mut Rng,
+    source: &Entity,
+    spectacles: bool,
+) {
+    assert_ne!(source.value("cleanDeath"), 0.0);
+    assert_eq!(
+        source.value("shopWall"),
+        0.0,
+        "source Jungle replacement excludes shop walls"
+    );
+    let family = solid_destroy_family(&source.object);
+    assert!(
+        matches!(
+            family,
+            "oSolid"
+                | "oLush"
+                | "oTemple"
+                | "oBrickSmooth"
+                | "oGrave"
+                | "oPushBlock"
+                | "oTrapBlock"
+                | "oSign"
+        ),
+        "unsupported source Jungle clean family: {}",
+        source.object
+    );
+    if inherits_solid_destroy(&source.object) {
+        let upper = Vec2::new(source.pos.x + 8.0, source.pos.y - 1.0);
+        for family in ["oSpikes", "oTikiTorch", "oGrave"] {
+            if let Some(id) = source_jungle_attachment(world, source, family, upper, upper) {
+                let target = world.entity(id).unwrap().clone();
+                if family == "oGrave" {
+                    source_jungle_grave_rubble(world, rng, &target);
+                }
+                world.entity_mut(id).unwrap().alive = false;
+            }
+        }
+        let gate = Vec2::new(source.pos.x + 8.0, source.pos.y + 18.0);
+        let translated = Vec2::new(source.pos.x + 8.0, source.pos.y + 16.0);
+        for (family, item) in [("oLampRed", "oLampRedItem"), ("oLamp", "oLampItem")] {
+            if let Some(id) = source_jungle_attachment(world, source, family, gate, translated) {
+                let lamp = world.entity(id).unwrap().pos;
+                // Child Create completes while the original Lamp remains live.
+                crate::creation::spawn_generated_jungle_child(
+                    world,
+                    rng,
+                    item,
+                    Vec2::new(lamp.x + 8.0, lamp.y + 12.0),
+                    spectacles,
+                );
+                world.entity_mut(id).unwrap().alive = false;
+            }
+        }
+        world.fluid_dirty = true;
+    }
+    if family == "oGrave" {
+        source_jungle_grave_rubble(world, rng, source);
+    }
+    // Remaining own bodies are suppressed by cleanDeath. The live Lush/Temple
+    // Create producer has already born contents; no deferred debt is released.
+}
+fn source_jungle_attachment(
+    world: &World,
+    source: &Entity,
+    family: &str,
+    gate: Vec2,
+    translated_origin: Vec2,
+) -> Option<u64> {
+    let mut targets: Vec<_> = world
+        .entities
+        .iter()
+        .filter(|entity| {
+            entity.alive && entity.engine_active && crate::catalog::is_a(&entity.object, family)
+        })
+        .collect();
+    targets.sort_by_key(|entity| entity.creation_serial);
+    if !targets
+        .iter()
+        .any(|entity| entity.mask_contains(gate, CollisionPrecision::BoundingBox))
+    {
+        return None;
+    }
+    let mut translated = source.clone();
+    translated.pos = translated_origin;
+    let mask = translated.collision_mask();
+    targets
+        .into_iter()
+        .find(|entity| mask.intersects_mask(&entity.collision_mask()))
+        .map(|entity| entity.id)
+}
+fn source_jungle_grave_rubble(world: &mut World, rng: &mut Rng, grave: &Entity) {
+    for (object, sprite) in [
+        ("oRubble", "sRubbleTan"),
+        ("oRubbleSmall", "sRubbleTanSmall"),
+        ("oRubbleSmall", "sRubbleTanSmall"),
+    ] {
+        let position = Vec2::new(
+            grave.pos.x + 8.0 + f64::from(rng.range(9)) - f64::from(rng.range(9)),
+            grave.pos.y + 8.0 + f64::from(rng.range(9)) - f64::from(rng.range(9)),
+        );
+        let id = crate::creation::spawn_generated_entity(world, rng, object, position);
+        world.entity_mut(id).unwrap().set_sprite(sprite);
+    }
+}
+
 fn solid_parent_destroy(game: &mut Game, pos: Vec2, shop_wall: bool) {
     if shop_wall {
         crate::economy::anger(game, pos, "DIE, YOU VANDAL!");

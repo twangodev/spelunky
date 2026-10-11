@@ -93,11 +93,12 @@ fn execute(args: Vec<String>) -> Result<String, String> {
         Some("replay-file") if args.len() == 2 => {
             let text = read_text(Path::new(&args[1]), MAX_REPLAY_BYTES)?;
             let parsed = parse_replay(&text)?;
-            let result = replay::from_frames_with_algorithm(
+            let result = replay::from_frames_with_simulation_version(
                 parsed.seed,
                 parsed.rules,
                 &parsed.frames,
                 parsed.algorithm,
+                parsed.simulation_version,
             )?;
             print_json(serde_json::to_value(result).map_err(|e| e.to_string())?)
         }
@@ -190,6 +191,7 @@ fn ascii(world: &World) -> String {
 
 #[derive(Debug)]
 struct ParsedReplay {
+    simulation_version: u32,
     seed: u64,
     rules: RulesPreset,
     algorithm: RngAlgorithm,
@@ -208,7 +210,7 @@ fn parse_replay(text: &str) -> Result<ParsedReplay, String> {
     }) {
         return Err("Unknown replay property; expected seed, rules, frames, version, algorithm, and simulation_version".into());
     }
-    let (algorithm, seed) = match (
+    let (algorithm, seed, simulation_version) = match (
         object.get("version"),
         object.get("algorithm"),
         object.get("simulation_version"),
@@ -219,19 +221,23 @@ fn parse_replay(text: &str) -> Result<ParsedReplay, String> {
                 .get("seed")
                 .and_then(Value::as_u64)
                 .ok_or("Historical replay seed must be an unsigned integer")?;
-            (RngAlgorithm::LegacySplitMix64V1, seed)
+            (
+                RngAlgorithm::LegacySplitMix64V1,
+                seed,
+                spelunky_core::HISTORICAL_SIMULATION_VERSION,
+            )
         }
         (Some(version), Some(algorithm), Some(simulation_version)) => {
             if version.as_u64() != Some(u64::from(replay::REPLAY_VERSION)) {
                 return Err("Unsupported replay version; expected version 1".into());
             }
-            if simulation_version.as_u64() != Some(u64::from(spelunky_core::SIMULATION_VERSION)) {
-                return Err(
-                    "Unsupported replay simulation version; expected simulation_version 1".into(),
-                );
-            }
             let algorithm: RngAlgorithm = serde_json::from_value(algorithm.clone())
                 .map_err(|error| format!("Invalid replay algorithm: {error}"))?;
+            let simulation_version = simulation_version
+                .as_u64()
+                .and_then(|version| u32::try_from(version).ok())
+                .ok_or("Replay simulation version must be an unsigned 32-bit integer")?;
+            replay::validate_simulation_version(algorithm, simulation_version)?;
             let seed_text = object
                 .get("seed")
                 .and_then(Value::as_str)
@@ -243,7 +249,7 @@ fn parse_replay(text: &str) -> Result<ParsedReplay, String> {
             if algorithm == RngAlgorithm::Gm8Lcg32V1 {
                 Rng::try_canonical(seed).map_err(|error| error.to_string())?;
             }
-            (algorithm, seed)
+            (algorithm, seed, simulation_version)
         }
         _ => {
             return Err(
@@ -283,6 +289,7 @@ fn parse_replay(text: &str) -> Result<ParsedReplay, String> {
         parsed.push(serde_json::from_value(merged).map_err(|e| format!("Invalid frame {i}: {e}"))?);
     }
     Ok(ParsedReplay {
+        simulation_version,
         seed,
         rules,
         algorithm,
@@ -456,7 +463,7 @@ mod tests {
                 actual,
                 json!({
                     "version": replay::REPLAY_VERSION,
-                    "simulation_version": spelunky_core::SIMULATION_VERSION,
+                    "simulation_version": spelunky_core::HISTORICAL_SIMULATION_VERSION,
                     "algorithm": RngAlgorithm::LegacySplitMix64V1,
                     "seed": "18446744073709551615",
                     "rules": rules,
@@ -503,7 +510,7 @@ mod tests {
         }
         assert!(parse_replay(r#"{"simulation_version":1,"version":1,"algorithm":"gm8_lcg32_v1","seed":1,"rules":"classic","frames":[]}"#).is_err());
         assert!(parse_replay(r#"{"seed":"1","rules":"classic","frames":[]}"#).is_err());
-        for simulation in ["null", "0", "2", "\"1\""] {
+        for simulation in ["null", "0", "3", "\"1\""] {
             assert!(parse_replay(&format!(r#"{{"version":1,"algorithm":"gm8_lcg32_v1","simulation_version":{simulation},"seed":"1","rules":"classic","frames":[]}}"#)).is_err());
         }
         assert!(parse_replay(r#"{"version":1,"algorithm":"gm8_lcg32_v1","seed":"1","rules":"classic","frames":[]}"#).is_err());

@@ -123,9 +123,25 @@ fn legacy_recorded_ice_islands_are_traversed_without_an_artificial_bottom_floor(
 }
 
 // Separate canonical Rust layout/controller reachability; original runtime was not executed.
-fn traverse_canonical_recording(seed: u32, level: u32, actions: &[u8]) {
+fn traverse_canonical_recording(
+    seed: u32,
+    level: u32,
+    revision: crate::GenerationRevision,
+    actions: &[u8],
+) {
     let mut game = Game::shell(seed, RulesPreset::Classic);
-    game.world = super::generate(&mut Rng::new(seed), level, &BTreeSet::new());
+    game.generation_revision = revision;
+    // Keep the original separate generation RNG and untouched Game RNG seed.
+    let mut generation_rng = Rng::new(seed);
+    let mut generation_state = super::GenerationState::fresh(&generation_rng);
+    generation_state.revision = revision;
+    game.world = super::generate_with_campaign(
+        &mut generation_rng,
+        level,
+        &BTreeSet::new(),
+        super::GenerationContext::default(),
+        &mut generation_state,
+    );
     game.world.entities.retain(|entity| {
         entity.solid
             || catalog::is_a(&entity.object, "oLadder")
@@ -203,15 +219,33 @@ fn traverse_canonical_recording(seed: u32, level: u32, actions: &[u8]) {
 
 #[test]
 fn canonical_seed_zero_mines_is_traversed_from_the_generated_entrance() {
-    // Recorded with full Game.step and physical key edges; retained solid traps stay live.
-    // No reseeding, resource changes, or tile edits during this entrance-to-exit replay.
+    // Preserve the original canonical-RNG recording under its historical selector contract.
+    // Full Game.step, physical key edges, actor filter and assertions stay unchanged.
     traverse_canonical_recording(
         0,
         1,
+        crate::GenerationRevision::HistoricalV1,
         &[
             4, 2, 1, 1, 3, 0, 2, 2, 2, 4, 2, 2, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 4, 2, 2, 4, 0, 2, 4,
             2, 0, 4, 4, 2, 4, 2, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 1, 1, 1,
             3, 3, 0, 0, 1, 0, 1, 1, 0,
+        ],
+    );
+}
+
+#[test]
+fn source_classic_seed_zero_mines_is_traversed_from_the_generated_entrance() {
+    // Actual SourceClassicV2 seed-zero geometry, with the original tape followed
+    // by two left jumps and a right correction onto the newly selected exit ledge.
+    // Full Game.step, physical key edges, actor filter and assertions are shared.
+    traverse_canonical_recording(
+        0,
+        1,
+        crate::GenerationRevision::SourceClassicV2,
+        &[
+            4, 2, 1, 1, 3, 0, 2, 2, 2, 4, 2, 2, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 4, 2, 2, 4, 0, 2, 4,
+            2, 0, 4, 4, 2, 4, 2, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 1, 1, 1,
+            3, 3, 0, 0, 1, 0, 1, 1, 0, 3, 3, 2,
         ],
     );
 }
@@ -222,9 +256,26 @@ fn canonical_seed_zero_ice_is_traversed_without_an_artificial_bottom_floor() {
     traverse_canonical_recording(
         0,
         9,
+        crate::GenerationRevision::HistoricalV1,
         &[
             3, 1, 2, 2, 0, 2, 3, 0, 2, 2, 4, 2, 2, 0, 1, 1, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 3, 1,
             2, 0,
+        ],
+    );
+}
+
+#[test]
+fn source_classic_seed_zero_ice_is_traversed_without_an_artificial_bottom_floor() {
+    // Recorded with full Game.step on SourceClassicV2 seed zero. Ordinary
+    // falls, recovery waits and jumps reach the unchanged supported exit.
+    // The original historical seed-zero tape above remains independent.
+    traverse_canonical_recording(
+        0,
+        9,
+        crate::GenerationRevision::SourceClassicV2,
+        &[
+            4, 4, 4, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 4, 4, 0, 0, 2, 1, 0,
         ],
     );
 }

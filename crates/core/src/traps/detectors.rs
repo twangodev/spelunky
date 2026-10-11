@@ -61,6 +61,38 @@ pub(super) fn init_entity(entity: &mut Entity) {
     }
 }
 
+/// RNG-free source Spear inheritance and own Create. Historical generation
+/// retains its older fixed-default adapter; the new revision shares this body
+/// between generated births and runtime Create without resetting overrides.
+pub(super) fn initialize_source_jungle_spear(entity: &mut Entity) {
+    if !matches!(
+        entity.object.as_str(),
+        "oSpearTrapTop" | "oSpearTrapBottom" | "oSpearTrapLit"
+    ) || entity.value("source_spear_create_initialized") != 0.0
+    {
+        return;
+    }
+    entity
+        .data
+        .insert("source_spear_create_initialized".into(), 1.0);
+    for (key, value) in [
+        ("blinkToggle", 0.0),
+        ("invincible", 0.0),
+        ("shopWall", 0.0),
+        ("cleanDeath", 0.0),
+        ("fired", 0.0),
+        ("firedMax", 50.0),
+        ("prox", 4.0),
+    ] {
+        entity.data.insert(key.into(), value);
+    }
+    entity.text.insert("type".into(), "None".into());
+    entity.text.insert("treasure".into(), String::new());
+    if entity.object != "oSpearTrapBottom" {
+        entity.set_image_speed(0.5);
+    }
+}
+
 /// Source Create initializes alarms even before an instance's first active Step.
 pub(super) fn create(game: &mut Game, instance: Instance) {
     let Some(h) = hazard(game, instance) else {

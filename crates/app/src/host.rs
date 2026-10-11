@@ -2004,7 +2004,7 @@ fn test_snapshot(
         "tick": game.tick, "levelTick": game.level_tick, "alpha": alpha,
         "seed": game.seed.to_string(),
         "rngAlgorithm": game.rng.algorithm(),
-        "simulationVersion": spelunky_core::SIMULATION_VERSION,
+        "simulationVersion": game.simulation_version(),
         "rngState": game.rng.state_bits().to_string(),
         "deathTicks": game.data.get("death_ticks").copied().unwrap_or(0.),
         "money": player.money,
@@ -2461,7 +2461,7 @@ fn campaign_record(game: &Game) -> Option<Record> {
     Some(Record {
         seed: game.seed,
         rng_algorithm: game.rng.algorithm(),
-        simulation_version: spelunky_core::SIMULATION_VERSION,
+        simulation_version: game.simulation_version(),
         rules: game.rules,
         score: game.player.money,
         level: game
@@ -4010,7 +4010,10 @@ mod tests {
         let record = campaign_record(&legacy).unwrap();
         assert_eq!(record.seed, u64::MAX);
         assert_eq!(record.rng_algorithm, RngAlgorithm::LegacySplitMix64V1);
-        assert_eq!(record.simulation_version, spelunky_core::SIMULATION_VERSION);
+        assert_eq!(
+            record.simulation_version,
+            spelunky_core::HISTORICAL_SIMULATION_VERSION
+        );
         assert!(record.fastest_eligible);
     }
 
