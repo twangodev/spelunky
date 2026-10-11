@@ -1547,7 +1547,7 @@ fn announce_explosion(game: &mut Game, explosion: &mut Entity) {
 /// oPlayer1 Step queries overlap once, then uses the nearest explosion's origin.
 /// The latter query intentionally includes explosions that did not overlap.
 pub(crate) fn player_explosion_hurt(game: &mut Game) {
-    if super::player_dead(game) || game.player.is_exiting() {
+    if game.player.is_exiting() {
         return;
     }
     let pos = game.player.pos;
@@ -1578,6 +1578,7 @@ pub(crate) fn player_explosion_hurt(game: &mut Game) {
     game.player.vel = Vec2::new(if pos.x > nearest.x { speed } else { -speed }, -6.0);
     game.player.stun = 100;
     game.player.data.insert("burning".into(), 50.0);
+    crate::player::script_player_blood(game, 1);
 }
 
 fn apply_explosion(game: &mut Game, explosion: &Entity) {
@@ -5199,3 +5200,7 @@ mod trap_destroy_tests;
 #[cfg(test)]
 #[path = "sticky_bomb_contract_tests.rs"]
 mod sticky_bomb_contract_tests;
+
+#[cfg(test)]
+#[path = "player_explosion_blood_contract_tests.rs"]
+mod player_explosion_blood_contract_tests;
