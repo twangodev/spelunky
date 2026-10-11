@@ -1460,7 +1460,6 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     }
     if cape || parachute {
         yf = 0.5;
-        fall = 0.0;
     }
     p.vel.x = (p.vel.x + ax.clamp(-9.0, 9.0)) * xf;
     p.vel.y = (p.vel.y + ay.clamp(-limit_y_acc, limit_y_acc)) * yf;

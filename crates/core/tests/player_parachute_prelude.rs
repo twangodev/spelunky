@@ -346,3 +346,45 @@ fn natural_deployment_landing_and_actual_exit_keep_canopy_while_controller_inact
         assert_eq!(game.player.health, 4);
     }
 }
+
+#[test]
+fn naturally_open_parachute_preserves_prelude_fall_one_on_each_descending_step() {
+    for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+        let mut game = acquired_before_natural_drop(rules, false);
+        deploy(&mut game);
+        assert_eq!(field(&game, "fall_timer"), 0.0);
+        assert_eq!(count(&game, "oParachute"), 1);
+        assert_eq!(count(&game, "oParaUsed"), 0);
+        assert!(!game.player.grounded);
+        assert_eq!(game.player.state, PlayerState::Falling);
+        assert!(game.player.vel.y > 0.0);
+        assert_eq!(game.player.health, 4);
+        assert!(!game.player.is_stunned());
+        assert_eq!(game.state, RunState::Playing);
+        assert_eq!(count(&game, "oBall"), 0);
+
+        // Source Player Step266 resets from actual Para existence, then
+        // Step268-270 increments to one while descending. The controller's
+        // parachute branch (characterStepEvent869-874) only sets friction.
+        for step in 1..=2 {
+            let before = game.player.pos;
+            game.step(&InputFrame::default());
+            assert_eq!(
+                field(&game, "fall_timer"),
+                1.0,
+                "DESCENDING_STEP_{step}: {}",
+                diagnostic(&game)
+            );
+            assert_eq!(count(&game, "oParachute"), 1);
+            assert_eq!(count(&game, "oParaUsed"), 0);
+            assert!(!game.player.has("Parachute"));
+            assert!(!game.player.grounded);
+            assert_eq!(game.player.state, PlayerState::Falling);
+            assert!(game.player.vel.y > 0.0);
+            assert!(game.player.pos.y > before.y);
+            assert_eq!(game.player.health, 4);
+            assert!(!game.player.is_stunned());
+            assert_eq!(game.state, RunState::Playing);
+        }
+    }
+}
