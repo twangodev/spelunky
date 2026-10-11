@@ -1956,10 +1956,10 @@ fn animate(p: &mut Player, input: &InputFrame, w: &World) {
             }
         }
         PlayerState::LookingUp => {
+            speed = p.vel.x.abs() * 0.1 + 0.1;
             if p.vel.x == 0.0 {
                 "sLookLeft"
             } else {
-                speed = p.vel.x.abs() * 0.1 + 0.1;
                 "sLookRunL"
             }
         }
