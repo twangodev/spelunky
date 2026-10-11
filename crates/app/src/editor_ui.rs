@@ -538,6 +538,9 @@ impl EditorUi {
             {
                 let x = (x - self.pan[0]) as f32 * CELL;
                 let y = MAP_Y + (y - self.pan[1]) as f32 * CELL;
+                if editor_icon(self.state.selected_tile).is_some() {
+                    draw_tile(quads, atlas, self.state.selected_tile, x, y, CELL);
+                }
                 rect(quads, [x, y, CELL, 0.5], GOLD);
                 rect(quads, [x, y, 0.5, CELL], GOLD);
                 rect(quads, [x, y + CELL - 0.5, CELL, 0.5], GOLD);
@@ -664,14 +667,26 @@ fn file_name(name: &str) -> Result<String, String> {
     })
 }
 
+// These authored editor icons represent compound water-and-enemy gameplay tiles.
+fn editor_icon(tile: char) -> Option<&'static str> {
+    match tile {
+        'p' => Some("sPiranhaTile"),
+        '{' => Some("sMegaMouthTile"),
+        _ => None,
+    }
+}
+
 fn draw_tile(quads: &mut Vec<DrawQuad>, atlas: &Atlas, tile: char, x: f32, y: f32, size: f32) {
     if tile == '0' {
         return;
     }
     let spawns = spelunky_core::level::tile_spawns(tile);
-    if let Some(frame) = spawns
-        .first()
-        .and_then(|spawn| spawn.sprite.or_else(|| catalog::sprite(spawn.object)))
+    if let Some(frame) = editor_icon(tile)
+        .or_else(|| {
+            spawns
+                .first()
+                .and_then(|spawn| spawn.sprite.or_else(|| catalog::sprite(spawn.object)))
+        })
         .and_then(|sprite| atlas.sprite(sprite, 0.0))
     {
         quads.push(DrawQuad {
@@ -688,6 +703,74 @@ fn draw_tile(quads: &mut Vec<DrawQuad>, atlas: &Atlas, tile: char, x: f32, y: f3
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn authored_fish_icons_render_in_map_palette_and_selected_cursor() {
+        let atlas = Atlas::load().unwrap();
+        let water = atlas.sprite("sWater", 0.0).unwrap();
+        for (tile, sprite) in [('p', "sPiranhaTile"), ('{', "sMegaMouthTile")] {
+            let icon = atlas.sprite(sprite, 0.0).unwrap();
+            assert_ne!(icon.uv, water.uv);
+            let mut ui = EditorUi::new();
+            ui.state.select(tile).unwrap();
+            // Paint through the normal pointer path, then hover an empty cell.
+            ui.pointer(4.0, 40.0, true, false);
+            ui.pointer(12.0, 40.0, false, false);
+            let mut quads = Vec::new();
+            ui.draw(&atlas, &mut quads);
+            let index = ui
+                .state
+                .palette
+                .iter()
+                .position(|&value| value == tile)
+                .unwrap();
+            for rect in [
+                [0.0, MAP_Y, CELL, CELL],
+                [CELL, MAP_Y, CELL, CELL],
+                [
+                    244.0 + (index % 7) as f32 * 10.0,
+                    MAP_Y + (index / 7) as f32 * 10.0,
+                    8.0,
+                    8.0,
+                ],
+            ] {
+                assert!(
+                    quads
+                        .iter()
+                        .any(|quad| quad.rect == rect && quad.uv == icon.uv),
+                    "{tile} must use its authored icon at {rect:?}"
+                );
+                assert!(
+                    !quads
+                        .iter()
+                        .any(|quad| quad.rect == rect && quad.uv == water.uv)
+                );
+            }
+            let EditorCommand::Play(level) = ui.key(KeyCode::F5, None, false) else {
+                panic!("F5 must preserve the edited document");
+            };
+            let world = level.to_world();
+            let count = |object| {
+                world
+                    .entities
+                    .iter()
+                    .filter(|entity| entity.object == object)
+                    .count()
+                    + world
+                        .tiles
+                        .iter()
+                        .filter(|tile| tile.object == object)
+                        .count()
+            };
+            assert_eq!(count("oWaterSwim"), if tile == 'p' { 1 } else { 8 });
+            assert_eq!(count(if tile == 'p' { "oPiranha" } else { "oJaws" }), 1);
+            assert_eq!(
+                count("oPiranhaTile") + count("oMegaMouthTile"),
+                0,
+                "editor artwork must not replace gameplay actors"
+            );
+        }
+    }
+
     #[test]
     fn paint_erase_history_and_play() {
         let mut ui = EditorUi::new();
