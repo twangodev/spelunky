@@ -191,8 +191,7 @@ pub fn use_weapon(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
                 game.player.data.insert("bow_strength".into(), 0.0);
                 game.sound("sndBowPull", pos);
             } else if arrows <= 0.0 {
-                game.events
-                    .push(GameEvent::Message("I'M OUT OF ARROWS!".into()));
+                crate::enemies::shop_dialogue::say(game, "I'M OUT OF ARROWS!", "", 80);
             }
         }
         "oMachete" | "oMattock" => {
