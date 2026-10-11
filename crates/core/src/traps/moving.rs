@@ -401,24 +401,6 @@ pub(super) fn collision(game: &mut Game, this: Instance, other: Instance) {
     store(game, entity);
 }
 
-fn blood(game: &mut Game, count: usize) {
-    if game.player.data.get("bloodless") == Some(&1.0) {
-        return;
-    }
-    for _ in 0..count {
-        if game
-            .world
-            .entities
-            .iter()
-            .filter(|e| e.alive && e.engine_active && crate::catalog::is_a(&e.object, "oDetritus"))
-            .count()
-            < 16
-        {
-            game.world.spawn("oBlood", game.player.pos);
-        }
-    }
-}
-
 /// Source oPlayer1 Step1563, before projectile and trap hurt.
 pub(super) fn player_crush(game: &mut Game) {
     if !super::player_hurt_enabled(game)
@@ -440,7 +422,7 @@ pub(super) fn player_crush(game: &mut Game) {
     game.player.data.insert("active".into(), 0.0);
     game.player.vel.y = -3.0;
     game.sound("sndDie", game.player.pos);
-    blood(game, 3);
+    crate::player::script_player_blood(game, 3);
     game.player.data.insert("hidden".into(), 1.0);
 }
 
@@ -482,7 +464,7 @@ pub(super) fn player_hurt(game: &mut Game) {
         } else {
             -6.0
         };
-        blood(game, 1);
+        crate::player::script_player_blood(game, 1);
         if let Some(id) = game.player.held.take() {
             if let Some(held) = game.world.entity_mut(id) {
                 held.held = false;
@@ -500,7 +482,7 @@ pub(super) fn player_hurt(game: &mut Game) {
         }
         game.player.health -= 10;
         game.events.push(GameEvent::Damage { amount: 10 });
-        blood(game, 1);
+        crate::player::script_player_blood(game, 1);
     }
 }
 
@@ -2175,3 +2157,7 @@ mod tests {
         assert!(game.player.pos.y > 72.0);
     }
 }
+
+#[cfg(test)]
+#[path = "player_moving_blood_contract_tests.rs"]
+mod player_moving_blood_contract_tests;
