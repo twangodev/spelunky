@@ -34,14 +34,14 @@ fn room(
         }
     }
     if trap {
-        let name = if cached_down {
-            "oArrowTrapLeft"
+        let (name, x) = if cached_down {
+            ("oArrowTrapLeft", 328.)
         } else {
-            "oArrowTrapRight"
+            ("oArrowTrapRight", 336.)
         };
-        // Below the starting cell, so its detector has a clear outward ray.
-        // By this height the ordinary walkout has cleared the cell's sides.
-        g.spawn(name, Vec2::new(336., 192.));
+        // Below the starting cell with a clear detector ray. The left mouth
+        // is eight pixels closer: Player hurt runs before the Arrow's Step.
+        g.spawn(name, Vec2::new(x, 192.));
     }
     g
 }

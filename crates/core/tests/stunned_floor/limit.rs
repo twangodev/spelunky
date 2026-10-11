@@ -62,7 +62,7 @@ fn room(rules: RulesPreset, character: characters::Character, direction: i32, tr
     characters::apply(&mut game, character);
     if trap {
         if direction < 0 {
-            game.spawn("oArrowTrapLeft", Vec2::new(336., 192.));
+            game.spawn("oArrowTrapLeft", Vec2::new(328., 192.));
         } else {
             game.spawn("oArrowTrapRight", Vec2::new(336., 192.));
         }
