@@ -160,7 +160,7 @@ export async function restoreDefaultSettings(page) {
   await press(page, 'ArrowUp', 4);
   await page.keyboard.press('Enter');
   await state(page, 'Settings');
-  await press(page, 'ArrowDown', 21);
+  await press(page, 'ArrowUp', 2);
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => {
     const value = JSON.parse(localStorage.getItem('spelunky-rust.save'))?.settings;
