@@ -5,6 +5,10 @@ impl Game {
         Self::generate_first_room(Self::shell(seed, rules))
     }
 
+    pub fn new_with_music(seed: u32, rules: RulesPreset, music: SourceMusicState) -> Self {
+        Self::generate_first_room(Self::shell_with_music(seed, rules, music))
+    }
+
     pub fn try_new(seed: u64, rules: RulesPreset) -> Result<Self, RngSeedError> {
         Ok(Self::generate_first_room(Self::try_shell(seed, rules)?))
     }
@@ -36,6 +40,10 @@ impl Game {
         );
         game.reset_position();
         game
+    }
+
+    pub fn tutorial_with_music(seed: u32, rules: RulesPreset, music: SourceMusicState) -> Self {
+        Self::prepare_tutorial(Self::shell_with_music(seed, rules, music))
     }
 
     pub fn tutorial(seed: u32, rules: RulesPreset) -> Self {
@@ -194,6 +202,7 @@ impl Game {
                 && key != "death_ticks"
                 && key != "water_counter"
                 && key != "water_loop_safety"
+                && key != "source_music_room_created"
                 && key != "progression_initialized"
                 && key != "progression_entrance_x"
                 && key != "progression_entrance_y"
@@ -213,6 +222,8 @@ impl Game {
             self.player.data.insert("active".into(), 0.0);
             self.camera = Vec2::new(0.0, 400.0);
         }
+        self.flags.remove("source_game_inactive");
+        music::room_create(self);
         player::initialize_level_alarms(self);
         self.update_camera();
         self.previous_camera = self.camera;

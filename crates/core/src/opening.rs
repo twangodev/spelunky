@@ -221,6 +221,7 @@ pub fn begin_title(game: &mut Game, start: u8) {
     game.draw_view = None;
     if start != 0 {
         game.opening = None;
+        crate::music::play(game, "musTitle", true);
         return;
     }
     let mut state = OpeningState::new(OpeningKind::Title);
@@ -298,6 +299,7 @@ fn alarms(game: &mut Game, state: &mut OpeningState) {
             (OpeningKind::Title, 3) => {
                 dummy(game, state, "oPDummy4", Vec2::new(600., -32.));
                 state.can_pause = true;
+                crate::music::title_alarm_play(game);
             }
             _ => {}
         }
@@ -553,6 +555,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     passive_initialize(game);
     passive_alarms(game);
     alarms(game, &mut state);
+    if input.music_pressed {
+        crate::music::key_pressed(game);
+    }
     let skip = input.attack_pressed || input.start_pressed;
     if state.kind == OpeningKind::Title && skip && !state.can_pause {
         game.flags.insert("title_start:2".into());

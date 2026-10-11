@@ -75,6 +75,7 @@ pub enum Phase {
     Idle,
     BeginStep,
     Alarm(u8),
+    Keyboard,
     NormalStep,
     BuiltinMotion,
     OutsideRoom,
@@ -813,6 +814,11 @@ fn player_step(game: &mut Game, input: &InputFrame) {
             game.sound("sndDie", game.player.pos);
         }
     }
+    if game.state == crate::RunState::Dead
+        && (game.is_level() || matches!(game.world.name.as_str(), "rSun" | "rMoon" | "rStars"))
+    {
+        crate::music::stop_all(game);
+    }
     crate::player::finish_step(game);
     crate::items::player_collectibles(game);
     crate::progression::player_deposits(game);
@@ -1345,6 +1351,10 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
             }
             last = key;
         }
+    }
+    game.dispatcher.phase = Phase::Keyboard;
+    if input.music_pressed {
+        crate::music::key_pressed(game);
     }
     game.dispatcher.phase = Phase::NormalStep;
     // Controllers participate in resource order alongside actual instances.

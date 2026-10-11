@@ -990,6 +990,7 @@ fn olmec_alarm(game: &mut Game, boss: &mut Entity, index: u8) {
             game.camera.x = 0.0;
             boss.state = 0;
             boss.timer = 100;
+            crate::music::play(game, "musBoss", true);
         }
         _ => {}
     }

@@ -1350,6 +1350,12 @@ fn enter(game: &mut Game, s: &mut EndingState, stage: EndingStage, room: &str) {
     for id in ids {
         init_actor(game, s, id);
     }
+    if matches!(
+        stage,
+        EndingStage::Chamber | EndingStage::Transition | EndingStage::Credits
+    ) {
+        crate::music::stop_all(game);
+    }
     match stage {
         EndingStage::Chamber => {
             if let Some(actor) = game
@@ -1727,6 +1733,9 @@ fn tick_inner(game: &mut Game, input: &InputFrame, world_already_ticked: bool) {
             }
         }
     }
+    if input.music_pressed {
+        crate::music::key_pressed(game);
+    }
     // Step follows the same resource/creation ordering. The controller is an
     // instance at its own resource position, not a before/after-actor hook.
     let mut queue = dispatch_queue(game, &s);
@@ -1933,6 +1942,7 @@ fn controller_alarm(game: &mut Game, s: &mut EndingState, i: usize) {
                 s.alarms[1] = 50;
                 s.music = "musVictory".into();
                 s.music_looping = false;
+                crate::music::play(game, "musVictory", false);
                 set_menu(game, true);
             }
             1 => {
@@ -2099,6 +2109,7 @@ fn actor_alarm(game: &mut Game, s: &mut EndingState, id: u64, i: usize) {
                 s.alarms[1] = 50;
                 s.music = "musVictory".into();
                 s.music_looping = false;
+                crate::music::play(game, "musVictory", false);
             }
             _ => {}
         },
@@ -2214,6 +2225,7 @@ fn actor_step(game: &mut Game, s: &mut EndingState, e: &mut Entity, input: &Inpu
                         if e.object == "oCamel" {
                             s.music = "musCredits".into();
                             s.music_looping = false;
+                            crate::music::play(game, "musCredits", false);
                         }
                     }
                 }
@@ -2672,6 +2684,9 @@ fn controller_step(game: &mut Game, s: &mut EndingState, input: &InputFrame) {
                 if s.fade_level < 1. {
                     s.fade_level += 0.1;
                 } else {
+                    if game.world.name == "rCredits2" {
+                        crate::music::stop_all(game);
+                    }
                     finish(game, s);
                 }
             }

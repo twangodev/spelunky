@@ -613,6 +613,7 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
     }
     game.data.insert("hub_draw_status".into(), 0.0);
     if kind.challenge() {
+        game.data.insert("source_hub_music_alarm".into(), 100.0);
         game.data.insert("challenge_highscore".into(), 0.);
         game.player.health = 8;
         game.data.insert("points".into(), 0.0);
@@ -892,6 +893,9 @@ fn activate_portal(game: &mut Game) {
         _ => HubPortal::Start,
     };
     crate::ending::begin_hub_exit(game, portal);
+    if portal != HubPortal::Change2 {
+        crate::music::stop_all(game);
+    }
     game.sound("sndSteps", game.player.pos);
 }
 
@@ -1026,6 +1030,19 @@ pub(crate) fn challenge_alarm(game: &mut Game, index: u8) {
     let Some(resource) = challenge_alarm_resource(game) else {
         return;
     };
+    let music_index = if resource == 715 { 9 } else { 10 };
+    if index == music_index {
+        let timer = game
+            .data
+            .entry("source_hub_music_alarm".into())
+            .or_insert(-1.0);
+        if *timer > 0.0 {
+            *timer -= 1.0;
+            if *timer == 0.0 {
+                crate::music::start_music(game);
+            }
+        }
+    }
     let key = match index {
         0 => "hub_alarm0",
         10 if resource == 715 => "hub_alarm10",
@@ -1050,6 +1067,7 @@ pub(crate) fn challenge_alarm(game: &mut Game, index: u8) {
             10 if value(game, "timer") < 0.0 => {
                 game.game_over.draw_status = game.game_over.draw_status.max(3);
                 game.flags.insert("source_music_stopped".into());
+                crate::music::stop_all(game);
             }
             11 => moon_alarm11(game),
             _ => {}

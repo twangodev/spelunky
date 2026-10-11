@@ -161,29 +161,7 @@ pub(crate) fn initialize_level(game: &mut Game) {
         .insert("progression_level".into(), game.world.level as f64);
     game.flags.remove("ghost_exists");
     game.flags.remove("ghost_warning");
-    game.flags.remove("music_fade");
-    game.data.insert("music_fade_timer".into(), 0.0);
-    game.data.insert("music_frequency".into(), 44100.0);
-    let music = if game.flags.contains("custom") || game.flags.contains("custom_level") {
-        match game.data.get("custom_music").copied().unwrap_or(0.0) {
-            1.0 => "musLush",
-            2.0 => "musIce",
-            3.0 => "musTemple",
-            4.0 => "musBoss",
-            _ => "musCave",
-        }
-    } else {
-        match game.world.area {
-            Area::Mines => "musCave",
-            Area::Jungle => "musLush",
-            Area::Ice => "musIce",
-            Area::Temple => "musTemple",
-            Area::Boss => "musBoss",
-        }
-    };
-    if music != "musBoss" || game.player.data.get("active").copied().unwrap_or(1.0) != 0.0 {
-        game.set_music_frequency(music, 44100);
-    }
+    crate::music::room_create(game);
     game.flags.remove("udjat_blink");
     game.data.insert("udjat_blink_counter".into(), 0.);
     if game.world.dark {
@@ -402,18 +380,11 @@ pub(crate) fn level_music_step(game: &mut Game) {
         return;
     }
     if game.is_level() {
-        let music = match game.world.area {
-            Area::Jungle => Some("musLush"),
-            Area::Ice => Some("musIce"),
-            Area::Temple => Some("musTemple"),
-            Area::Boss if game.player.data.get("active").copied().unwrap_or(1.0) == 0.0 => None,
-            Area::Boss => Some("musBoss"),
-            Area::Mines => Some("musCave"),
-        };
-        if let Some(music) = music {
-            let hz = game.data.get("music_frequency").copied().unwrap_or(44100.0) - 100.0;
-            game.data.insert("music_frequency".into(), hz);
-            game.set_music_frequency(music, hz as u32);
+        if let Some(music) = crate::music::level_track(game) {
+            // Keep signed source requests, even beyond this port's positive-Hz backend domain.
+            let hz = game.source_music.frequency(music) - 100;
+            game.data.insert("music_frequency".into(), hz as f64);
+            game.set_source_music_frequency(music, hz);
         }
     }
     game.data.insert("music_fade_timer".into(), timer + 1.0);
@@ -802,6 +773,7 @@ fn complete(game: &mut Game, door_id: u64) {
         );
     }
     game.events.push(GameEvent::LevelComplete);
+    crate::music::stop_all(game);
     game.sound("sndSteps", game.player.pos);
     let kind = if ending || (game.world.area == Area::Boss && object == "oExit") {
         crate::ending::EndingKind::Campaign

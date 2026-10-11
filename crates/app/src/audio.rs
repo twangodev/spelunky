@@ -166,7 +166,32 @@ fn pan(value: f32) -> f32 {
     }
 }
 
+const MUSIC_RESOURCES: [&str; 8] = [
+    "title", "cave", "lush", "ice", "temple", "boss", "victory", "credits",
+];
+
+fn is_music_resource(name: &str) -> bool {
+    MUSIC_RESOURCES.contains(&name)
+}
+fn resource_volume(name: &str, music: f32, effects: f32) -> f32 {
+    if is_music_resource(name) {
+        music
+    } else {
+        effects
+    }
+}
+
 pub use backend::Audio;
+impl Audio {
+    /// Source stopAllMusic addresses named resources, including literal
+    /// playSound(musTitle) voices. Existing F1 stop_music remains lane-local.
+    pub fn stop_all_music(&mut self) {
+        self.stop_music();
+        for name in MUSIC_RESOURCES {
+            self.stop_sound(name);
+        }
+    }
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 mod backend {
@@ -273,7 +298,16 @@ mod backend {
                 [-1.0, 0.0, 0.0],
                 [1.0, 0.0, 0.0],
             );
-            sink.set_volume(self.effects_volume);
+            sink.set_volume(resource_volume(
+                name,
+                self.music_volume,
+                self.effects_volume,
+            ));
+            if is_music_resource(name) {
+                sink.set_speed(
+                    self.music_frequencies.get(name).copied().unwrap_or(44_100) as f32 / 44_100.0,
+                );
+            }
             sink.append(source);
             self.effects.push(Effect { name, sink });
         }
@@ -313,6 +347,59 @@ mod backend {
                     track.sink.set_speed(hz as f32 / 44_100.0);
                 }
             }
+        }
+        /// Source named-resource setting also owns literal music playSound voices.
+        pub fn set_source_music_frequency(&mut self, name: &str, hz: u32) {
+            let Some((name, _)) = asset(name) else {
+                return;
+            };
+            if hz == 0 {
+                return;
+            }
+            self.set_music_frequency(name, hz);
+            for effect in &self.effects {
+                if effect.name == name && is_music_resource(name) {
+                    effect.sink.set_speed(hz as f32 / 44_100.0);
+                }
+            }
+        }
+        /// An actual source producer, distinct from presentation polling.
+        pub fn source_music(&mut self, name: &str, looping: bool, if_idle: bool) {
+            let Some(mixer) = self.stream.as_ref().map(|stream| stream.mixer().clone()) else {
+                return;
+            };
+            self.source_music_with_mixer(&mixer, name, looping, if_idle);
+        }
+        fn source_music_with_mixer(
+            &mut self,
+            mixer: &rodio::mixer::Mixer,
+            name: &str,
+            looping: bool,
+            if_idle: bool,
+        ) {
+            let Some((name, _)) = asset(name) else {
+                return;
+            };
+            if !if_idle {
+                // Source literal playSound ignores its second argument.
+                self.play_with_mixer(mixer, name, 0.0, false);
+                return;
+            }
+            if self
+                .effects
+                .iter()
+                .any(|effect| effect.name == name && !effect.sink.empty())
+                || self
+                    .tracks
+                    .iter()
+                    .any(|track| track.name == name && !track.sink.empty())
+            {
+                return;
+            }
+            if self.current == Some(name) {
+                self.current = None;
+            }
+            self.music_with_mixer(mixer, name, looping);
         }
         /// Empty name fades out. Repeating a selection never restarts a completed one-shot.
         pub fn music(&mut self, name: &str, looping: bool) {
@@ -402,7 +489,11 @@ mod backend {
                 track.sink.set_volume(track.gain * self.music_volume);
             }
             for effect in &self.effects {
-                effect.sink.set_volume(self.effects_volume);
+                effect.sink.set_volume(resource_volume(
+                    effect.name,
+                    self.music_volume,
+                    self.effects_volume,
+                ));
             }
         }
         pub fn pause(&mut self, paused: bool) {
@@ -476,6 +567,95 @@ mod backend {
                 rodio::buffer::SamplesBuffer::new(2, 44_100, vec![0.25; 1024]).repeat_infinite(),
             );
             Effect { name, sink }
+        }
+
+        #[test]
+        fn literal_title_oneshot_uses_music_volume_frequency_and_resource_idle_gate() {
+            let (mixer, mut output) = rodio::mixer::mixer(2, 44_100);
+            let mut audio = headless_audio();
+            audio.set_volumes(0.2, 0.8);
+            audio.set_source_music_frequency("musTitle", 34_100);
+            audio.source_music_with_mixer(&mixer, "global.musTitle", false, false);
+            audio.play_with_mixer(&mixer, "sndFlame", 0.0, false);
+            assert_eq!(audio.effects[0].name, "title");
+            assert_eq!(audio.effects[0].sink.volume(), 0.2);
+            assert!((audio.effects[0].sink.speed() - 34_100.0 / 44_100.0).abs() < 1e-6);
+            assert_eq!(audio.effects[1].sink.volume(), 0.8);
+            audio.source_music_with_mixer(&mixer, "title.ogg", true, true);
+            assert!(
+                audio.tracks.is_empty(),
+                "literal Title voice blocks gated playMusic"
+            );
+            audio.source_music_with_mixer(&mixer, "musTitle", false, false);
+            assert_eq!(
+                audio.effects.iter().filter(|e| e.name == "title").count(),
+                2,
+                "literal producer is not idle-gated"
+            );
+            audio.set_volumes(0.8, 0.2);
+            audio.set_source_music_frequency("musTitle", 22_050);
+            for effect in &audio.effects {
+                if effect.name == "title" {
+                    assert_eq!(effect.sink.volume(), 0.8);
+                    assert_eq!(effect.sink.speed(), 0.5);
+                } else {
+                    assert_eq!(effect.sink.volume(), 0.2);
+                    assert_eq!(effect.sink.speed(), 1.0);
+                }
+            }
+            // Real decoder EOF proves this literal route is a one-shot.
+            let (_, bytes) = asset("musTitle").unwrap();
+            let decoder = Decoder::try_from(Cursor::new(bytes)).unwrap();
+            let frames = decoder.count();
+            for _ in 0..frames.saturating_mul(8).saturating_add(16_384) {
+                let _ = output.next();
+            }
+            assert!(
+                audio
+                    .effects
+                    .iter()
+                    .filter(|e| e.name == "title")
+                    .all(|e| e.sink.empty())
+            );
+            audio.source_music_with_mixer(&mixer, "musTitle", true, true);
+            assert_eq!(
+                audio.tracks.len(),
+                1,
+                "actual producer can rearm after resource EOF"
+            );
+            assert_eq!(audio.tracks[0].sink.speed(), 0.5);
+        }
+        #[test]
+        fn source_stop_all_reaches_music_effect_resources_without_changing_f1_stop() {
+            let (selected, mut selected_output) = rodio::mixer::mixer(2, 44_100);
+            let (other, mut other_output) = rodio::mixer::mixer(2, 44_100);
+            let mut audio = headless_audio();
+            for name in MUSIC_RESOURCES {
+                audio.effects.push(infinite_effect(&selected, name));
+            }
+            audio.effects.push(infinite_effect(&other, "flame"));
+            audio.set_source_music_frequency("musTitle", 34_100);
+            audio.set_volumes(0.2, 0.8);
+            audio.stop_music();
+            assert_eq!(
+                audio.effects.len(),
+                9,
+                "F1 lane-local stop remains unchanged"
+            );
+            audio.stop_all_music();
+            assert_eq!(audio.effects.len(), 1);
+            assert_eq!(audio.effects[0].name, "flame");
+            assert_eq!(audio.music_frequencies["title"], 34_100);
+            assert_eq!((audio.music_volume, audio.effects_volume), (0.2, 0.8));
+            for _ in 0..4096 {
+                let _ = selected_output.next();
+            }
+            assert!((0..8192).all(|_| selected_output.next().unwrap_or(0.0).abs() < 1e-8));
+            assert!(
+                (0..8192).fold(false, |heard, _| other_output.next().unwrap_or(0.0).abs()
+                    > 1e-8
+                    || heard)
+            );
         }
 
         #[test]
@@ -808,6 +988,7 @@ mod backend {
         gain_node: GainNode,
         gain: f32,
         target: f32,
+        end: f64,
     }
     pub struct Audio {
         context: Option<AudioContext>,
@@ -970,12 +1151,75 @@ mod backend {
             if hz == 0 {
                 return;
             }
-            self.music_frequencies.insert(name, hz);
-            for track in &self.tracks {
+            let old_hz = self.music_frequencies.insert(name, hz).unwrap_or(44_100);
+            let now = self
+                .context
+                .as_ref()
+                .map_or(0.0, AudioContext::current_time);
+            for track in &mut self.tracks {
                 if track.name == name {
                     track.source.playback_rate().set_value(hz as f32 / 44_100.0);
+                    track.end =
+                        now + (track.end - now).max(0.0) * f64::from(old_hz) / f64::from(hz);
                 }
             }
+        }
+        pub fn set_source_music_frequency(&mut self, name: &str, hz: u32) {
+            let Some((name, _)) = asset(name) else {
+                return;
+            };
+            if hz == 0 {
+                return;
+            }
+            let old_hz = self.music_frequencies.get(name).copied().unwrap_or(44_100);
+            self.set_music_frequency(name, hz);
+            let now = self
+                .context
+                .as_ref()
+                .map_or(0.0, AudioContext::current_time);
+            for effect in &mut self.effects {
+                if effect.name == name && is_music_resource(name) {
+                    effect
+                        .source
+                        .playback_rate()
+                        .set_value(hz as f32 / 44_100.0);
+                    effect.end =
+                        now + (effect.end - now).max(0.0) * f64::from(old_hz) / f64::from(hz);
+                }
+            }
+        }
+        pub fn source_music(&mut self, name: &str, looping: bool, if_idle: bool) {
+            let Some((name, _)) = asset(name) else {
+                return;
+            };
+            if !if_idle {
+                self.play(name, 0.0);
+                return;
+            }
+            let now = self
+                .context
+                .as_ref()
+                .map_or(0.0, AudioContext::current_time);
+            if self.queued.iter().any(|(queued, _)| *queued == name)
+                || self
+                    .effects
+                    .iter()
+                    .any(|effect| effect.name == name && effect.end > now)
+                || self
+                    .tracks
+                    .iter()
+                    .any(|track| track.name == name && track.end > now)
+                || (self
+                    .requested_music
+                    .is_some_and(|(pending, _)| pending == name)
+                    && self.current_music != Some(name))
+            {
+                return;
+            }
+            if self.current_music == Some(name) {
+                self.current_music = None;
+            }
+            self.music(name, looping);
         }
         pub fn music(&mut self, name: &str, looping: bool) {
             if name.is_empty() {
@@ -1051,7 +1295,17 @@ mod backend {
                 return;
             };
             source.set_buffer(Some(&buffer));
-            gain.gain().set_value(self.effects_volume);
+            gain.gain().set_value(resource_volume(
+                name,
+                self.music_volume,
+                self.effects_volume,
+            ));
+            let rate = if is_music_resource(name) {
+                self.music_frequencies.get(name).copied().unwrap_or(44_100) as f32 / 44_100.0
+            } else {
+                1.0
+            };
+            source.playback_rate().set_value(rate);
             panner
                 .pan()
                 .set_value(self.sound_pans.get(name).copied().unwrap_or(position));
@@ -1075,7 +1329,7 @@ mod backend {
                 source,
                 gain,
                 panner,
-                end: context.current_time() + buffer.duration(),
+                end: context.current_time() + buffer.duration() / f64::from(rate),
             });
         }
         fn start_music(&mut self, name: &'static str, looping: bool) {
@@ -1118,6 +1372,13 @@ mod backend {
                 gain_node,
                 gain: 0.0,
                 target: 1.0,
+                end: if looping {
+                    f64::INFINITY
+                } else {
+                    context.current_time()
+                        + buffer.duration() * 44_100.0
+                            / f64::from(self.music_frequencies.get(name).copied().unwrap_or(44_100))
+                },
             });
             self.current_music = Some(name);
         }
@@ -1201,6 +1462,70 @@ mod backend {
                 paused: false,
                 last_update: 0.0,
             }
+        }
+
+        #[test]
+        fn source_stop_all_cancels_pending_music_in_both_lanes_and_keeps_settings() {
+            let mut audio = pending_audio();
+            audio.set_volumes(0.2, 0.8);
+            audio.set_source_music_frequency("musTitle", 34_100);
+            audio.source_music("musTitle", false, false);
+            audio.play("sndFlame", 0.0);
+            audio.source_music("musCave", true, true);
+            assert_eq!(audio.requested_music, Some(("cave", true)));
+            audio.stop_music();
+            assert!(audio.queued.iter().any(|(name, _)| *name == "title"));
+            audio.source_music("musCave", true, true);
+            audio.stop_all_music();
+            assert_eq!(
+                audio.queued.iter().copied().collect::<Vec<_>>(),
+                vec![("flame", 0.0)]
+            );
+            assert_eq!(audio.requested_music, None);
+            assert_eq!(audio.music_frequencies["title"], 34_100);
+            assert_eq!(
+                resource_volume("title", audio.music_volume, audio.effects_volume),
+                0.2
+            );
+            assert_eq!(
+                resource_volume("flame", audio.music_volume, audio.effects_volume),
+                0.8
+            );
+            // Decode completion caches only; explicit later bypass rearms Title.
+            audio.source_music("global.musTitle", false, false);
+            assert_eq!(audio.queued.back(), Some(&("title", 0.0)));
+            assert_eq!(audio.requested_music, None);
+            audio.set_volumes(0.8, 0.2);
+            assert_eq!(
+                resource_volume("title", audio.music_volume, audio.effects_volume),
+                0.8
+            );
+            assert_eq!(audio.music_frequencies["title"], 34_100);
+        }
+        #[test]
+        fn source_music_idle_checks_pending_literal_resource_and_bypass_can_overlap() {
+            let mut audio = pending_audio();
+            audio.source_music("musTitle", false, false);
+            audio.source_music("title.ogg", true, true);
+            assert_eq!(
+                audio.requested_music, None,
+                "pending effect-path music owns resource idle gate"
+            );
+            audio.source_music("musTitle", false, false);
+            assert_eq!(
+                audio.queued.len(),
+                2,
+                "literal one-shot bypass remains ungated"
+            );
+            audio.stop_all_music();
+            audio.source_music("musTitle", true, true);
+            assert_eq!(audio.requested_music, Some(("title", true)));
+            audio.source_music("musTitle", false, true);
+            assert_eq!(
+                audio.requested_music,
+                Some(("title", true)),
+                "pending decode blocks duplicate playMusic"
+            );
         }
 
         #[test]

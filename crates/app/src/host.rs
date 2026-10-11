@@ -12,7 +12,7 @@ use crate::{
     timing::FixedClock,
     viewport::Viewport,
 };
-use spelunky_core::{Area, Game, GameEvent, RunState};
+use spelunky_core::{Area, Game, GameEvent, RunState, SourceMusicCommand, SourceMusicState};
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use winit::window::Fullscreen;
@@ -172,6 +172,7 @@ struct App {
     atlas: Option<Atlas>,
     input: InputState,
     audio: Audio,
+    source_music: SourceMusicState,
     store: Store,
     timing: HostTiming,
     game: Option<Game>,
@@ -210,7 +211,12 @@ impl App {
         let mut input = InputState::default();
         input.set_bindings(&store.data.settings.bindings);
         input.set_controller_bindings(&store.data.settings.controller_bindings);
-        let mut game = Game::shell(wall_seed(), store.data.settings.rules);
+        let source_music = SourceMusicState::default();
+        let mut game = Game::shell_with_music(
+            wall_seed(),
+            store.data.settings.rules,
+            source_music.session_state(),
+        );
         hydrate_run(&mut game, &store.data);
         spelunky_core::opening::begin_intro(&mut game);
         Self {
@@ -220,6 +226,7 @@ impl App {
             atlas: None,
             input,
             audio: Audio::new(),
+            source_music,
             store,
             timing: HostTiming::default(),
             game: Some(game),
@@ -341,14 +348,32 @@ impl App {
             });
         }
     }
+    fn flush_source_music(&mut self) {
+        self.audio.set_volumes(
+            self.store.data.settings.music_volume,
+            self.store.data.settings.effects_volume,
+        );
+        if let Some(game) = &mut self.game {
+            consume_source_music(&mut self.audio, &mut self.source_music, game);
+        }
+    }
     fn start_game(&mut self, tutorial: bool) {
+        self.flush_source_music();
         self.snapshot_lifetime_stats();
         self.source_message = None;
         let seed = wall_seed() ^ fold_seed_entropy(u128::from(self.now().to_bits()));
         let mut game = if tutorial {
-            Game::tutorial(seed, self.store.data.settings.rules)
+            Game::tutorial_with_music(
+                seed,
+                self.store.data.settings.rules,
+                self.source_music.session_state(),
+            )
         } else {
-            Game::new(seed, self.store.data.settings.rules)
+            Game::new_with_music(
+                seed,
+                self.store.data.settings.rules,
+                self.source_music.session_state(),
+            )
         };
         hydrate_run(&mut game, &self.store.data);
         if tutorial {
@@ -469,6 +494,8 @@ impl App {
         self.open_hub(spelunky_core::hub::HubKind::Scores);
     }
     fn key(&mut self, key: KeyCode, text_value: Option<&str>) {
+        // Deliver earlier room producers before a new F1/selector stop.
+        self.flush_source_music();
         if key == KeyCode::F4
             && !(self.screen == Screen::Settings && self.settings_ui.awaiting_binding())
         {
@@ -732,6 +759,7 @@ impl App {
         }
     }
     fn play_custom(&mut self, name: &str, editor: bool) {
+        self.flush_source_music();
         self.snapshot_lifetime_stats();
         self.source_message = None;
         let Some(contents) = self.store.data.custom_levels.get(name) else {
@@ -739,7 +767,11 @@ impl App {
         };
         match spelunky_core::level::Level::parse(contents) {
             Ok(level) => {
-                let mut game = Game::new(wall_seed(), self.store.data.settings.rules);
+                let mut game = new_custom_game(
+                    wall_seed(),
+                    self.store.data.settings.rules,
+                    &self.source_music,
+                );
                 hydrate_run(&mut game, &self.store.data);
                 load_custom(&mut game, &level, name, "");
                 if editor {
@@ -795,8 +827,13 @@ impl App {
         match command {
             EditorCommand::None => {}
             EditorCommand::Back => {
+                self.flush_source_music();
                 if self.game.is_none() {
-                    let mut game = Game::shell(wall_seed(), self.store.data.settings.rules);
+                    let mut game = Game::shell_with_music(
+                        wall_seed(),
+                        self.store.data.settings.rules,
+                        self.source_music.session_state(),
+                    );
                     hydrate_run(&mut game, &self.store.data);
                     self.game = Some(game);
                 }
@@ -822,9 +859,14 @@ impl App {
                 Err(error) => self.editor.message(error),
             },
             EditorCommand::Play(level) => {
+                self.flush_source_music();
                 self.snapshot_lifetime_stats();
                 self.source_message = None;
-                let mut game = Game::new(wall_seed(), self.store.data.settings.rules);
+                let mut game = new_custom_game(
+                    wall_seed(),
+                    self.store.data.settings.rules,
+                    &self.source_music,
+                );
                 hydrate_run(&mut game, &self.store.data);
                 load_custom(&mut game, &level, self.editor.level_name(), "");
                 game.flags.insert("editor_test".into());
@@ -912,6 +954,7 @@ impl App {
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
+                    self.flush_source_music();
                     self.game = None;
                     self.screen(Screen::Title);
                 }
@@ -1049,6 +1092,15 @@ impl App {
             .collect()
     }
     fn update(&mut self) {
+        self.flush_source_music();
+        if !matches!(self.screen, Screen::Playing | Screen::Finished) {
+            let pressed = self.input.take_music_pressed();
+            if pressed && source_music_input_active(self.screen, self.game.as_ref()) {
+                if let Some(game) = &mut self.game {
+                    spelunky_core::music::key_pressed(game);
+                }
+            }
+        }
         if self.exit_requested {
             return;
         }
@@ -1190,16 +1242,15 @@ impl App {
                 apply_cinematic_start(&mut input, &mut self.cinematic_action);
                 if let Some(game) = &mut self.game {
                     game.down_to_run = self.store.data.settings.down_to_run;
+                    consume_source_music(&mut self.audio, &mut self.source_music, game);
                     game.step(&input);
+                    consume_source_music(&mut self.audio, &mut self.source_music, game);
                     self.timing.history_ready = true;
                     for event in &game.events {
                         match event {
                             GameEvent::SoundStop { name } => self.audio.stop_sound(name),
                             GameEvent::SoundPan { name, pan } => {
                                 self.audio.set_sound_pan(name, *pan)
-                            }
-                            GameEvent::MusicFrequency { name, hz } => {
-                                self.audio.set_music_frequency(name, *hz)
                             }
                             GameEvent::Sound { name, pos } => self
                                 .audio
@@ -1278,16 +1329,19 @@ impl App {
             for _ in 0..frame.ticks {
                 if let Some(game) = &mut self.game {
                     game.down_to_run = self.store.data.settings.down_to_run;
-                    game.step(&spelunky_core::InputFrame::default());
+                    let input = self.input.take_tick();
+                    consume_source_music(&mut self.audio, &mut self.source_music, game);
+                    game.step(&spelunky_core::InputFrame {
+                        music_pressed: input.music_pressed,
+                        ..Default::default()
+                    });
+                    consume_source_music(&mut self.audio, &mut self.source_music, game);
                     self.timing.history_ready = true;
                     for event in &game.events {
                         match event {
                             GameEvent::SoundStop { name } => self.audio.stop_sound(name),
                             GameEvent::SoundPan { name, pan } => {
                                 self.audio.set_sound_pan(name, *pan)
-                            }
-                            GameEvent::MusicFrequency { name, hz } => {
-                                self.audio.set_music_frequency(name, *hz)
                             }
                             GameEvent::Sound { name, pos } => self
                                 .audio
@@ -1349,42 +1403,9 @@ impl App {
             self.store.data.settings.music_volume,
             self.store.data.settings.effects_volume,
         );
-        let stopped_source_menu = matches!(self.screen, Screen::Editor | Screen::Custom)
-            && self
-                .game
-                .as_ref()
-                .is_some_and(|game| game.flags.contains("source_music_stopped"));
-        let (music, looping) = if stopped_source_menu {
-            ("", true)
-        } else if self.screen == Screen::Title {
-            ("title", true)
-        } else if matches!(
-            self.screen,
-            Screen::Playing | Screen::Pause | Screen::Finished | Screen::Donation
-        ) {
-            self.game
-                .as_ref()
-                .map(game_music_request)
-                .unwrap_or(("title", true))
-        } else {
-            ("title", true)
-        };
-        if let Some(hz) = self
-            .game
-            .as_ref()
-            .and_then(|game| initial_level_music_frequency(game, music))
-        {
-            self.audio.set_music_frequency(music, hz);
-        }
-        if self
-            .game
-            .as_ref()
-            .is_some_and(|game| stop_music_immediately(game, music))
-        {
-            self.audio.stop_music();
-        } else {
-            self.audio.music(music, looping);
-        }
+        // Only actual source producers authorize a new play/stop. Presentation
+        // polling must not replace literal M selection or restart after OFF.
+        self.flush_source_music();
         self.audio.update();
     }
     fn draw(&self, alpha: f64) -> Vec<DrawQuad> {
@@ -2113,6 +2134,39 @@ fn apply_source_suicide(game: &mut Game) {
     game.player.health = -99;
     game.flags.insert("source_music_stopped".into());
 }
+fn source_music_input_active(screen: Screen, game: Option<&Game>) -> bool {
+    matches!(
+        screen,
+        Screen::Playing | Screen::Finished | Screen::Title | Screen::Records | Screen::Donation
+    ) && game.is_some_and(spelunky_core::music::has_active_game)
+}
+fn take_source_music(game: &mut Game, session: &mut SourceMusicState) -> Vec<SourceMusicCommand> {
+    let commands = game.source_music.take_commands();
+    *session = game.source_music.session_state();
+    commands
+}
+fn supported_source_frequency(hz: i64) -> Result<u32, i64> {
+    u32::try_from(hz).ok().filter(|hz| *hz > 0).ok_or(hz)
+}
+fn consume_source_music(audio: &mut Audio, session: &mut SourceMusicState, game: &mut Game) {
+    for command in take_source_music(game, session) {
+        match command {
+            SourceMusicCommand::Play {
+                name,
+                looping,
+                if_idle,
+            } => audio.source_music(&name, looping, if_idle),
+            SourceMusicCommand::StopAll => audio.stop_all_music(),
+            SourceMusicCommand::Frequency { name, hz } => {
+                // Raw signed intent remains in session.frequencies. Unsupported
+                // requests retain the last valid backend rate; no clamp/wrap.
+                if let Ok(hz) = supported_source_frequency(hz) {
+                    audio.set_source_music_frequency(&name, hz);
+                }
+            }
+        }
+    }
+}
 fn resume_room_music(game: &mut Game) {
     game.flags.remove("source_music_stopped");
 }
@@ -2125,6 +2179,7 @@ fn prepare_source_selector_return(game: &mut Game) -> bool {
     resume_room_music(game);
     true
 }
+#[cfg(test)]
 fn stop_music_immediately(game: &Game, music: &str) -> bool {
     music.is_empty()
         && (game.state == RunState::Dead
@@ -2136,6 +2191,7 @@ fn stop_music_immediately(game: &Game, music: &str) -> bool {
 /// Source Room Create starts level music before the destination's first Step.
 /// Reset here too, because host polling can start a stored resource before the
 /// core's first-tick reset event is dispatched.
+#[cfg(test)]
 fn initial_level_music_frequency(game: &Game, music: &str) -> Option<u32> {
     (game.is_level()
         && game.level_tick == 0
@@ -2144,6 +2200,7 @@ fn initial_level_music_frequency(game: &Game, music: &str) -> Option<u32> {
         && !music.is_empty())
     .then_some(44_100)
 }
+#[cfg(test)]
 fn game_music_request(game: &Game) -> (&'static str, bool) {
     (
         game_music(game),
@@ -2152,6 +2209,7 @@ fn game_music_request(game: &Game) -> (&'static str, bool) {
             .is_none_or(|ending| ending.music_looping),
     )
 }
+#[cfg(test)]
 fn game_music(game: &Game) -> &'static str {
     if let Some(ending) = &game.ending {
         return match ending.music.as_str() {
@@ -2458,6 +2516,19 @@ fn runtime_level(level: &spelunky_core::level::Level) -> spelunky_core::level::L
         *target = runtime_level_name(target);
     }
     runtime_level
+}
+/// Preserve canonical generation/RNG while withholding music producers from
+/// the temporary ordinary room that custom loading immediately discards.
+fn new_custom_game(
+    seed: u32,
+    rules: spelunky_core::RulesPreset,
+    session: &SourceMusicState,
+) -> Game {
+    let mut temporary = session.session_state();
+    temporary.enabled = false;
+    let mut game = Game::new_with_music(seed, rules, temporary);
+    game.source_music = session.session_state();
+    game
 }
 fn load_custom(game: &mut Game, level: &spelunky_core::level::Level, name: &str, previous: &str) {
     game.load_custom(
@@ -2777,6 +2848,13 @@ impl ApplicationHandler<UserEvent> for App {
                     if pressed {
                         self.audio.unlock();
                     }
+                    self.input.music_key(
+                        key,
+                        pressed,
+                        event.repeat,
+                        is_synthetic,
+                        source_music_input_active(self.screen, self.game.as_ref()),
+                    );
                     if matches!(
                         self.screen,
                         Screen::Playing | Screen::Donation | Screen::Pause
@@ -3045,6 +3123,137 @@ fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn custom_constructor_starts_only_selected_lush_and_preserves_canonical_rng() {
+        let rules = spelunky_core::RulesPreset::Classic;
+        let mut session = SourceMusicState::default();
+        session.frequencies.insert("musCave".into(), 34_100);
+        let mut level = spelunky_core::level::Level::default();
+        level.music = "LUSH".into();
+        level.set_tile(1, 1, '@').unwrap();
+        // Canonical constructors are deliberate: this compares the existing
+        // ordinary generation path to the new custom-loading helper.
+        let mut previous = Game::new_with_music(42, rules, session.session_state());
+        let mut custom = new_custom_game(42, rules, &session);
+        assert!(custom.source_music.pending.is_empty());
+        assert_eq!(custom.source_music.frequency("musCave"), 34_100);
+        assert_eq!(custom.rng.algorithm(), previous.rng.algorithm());
+        assert_eq!(custom.rng.state_bits(), previous.rng.state_bits());
+        previous.source_music.take_commands();
+        load_custom(&mut previous, &level, "lush-fixture", "");
+        load_custom(&mut custom, &level, "lush-fixture", "");
+        assert_eq!(custom.rng.state_bits(), previous.rng.state_bits());
+        let mut actual = custom.rng.clone();
+        let mut expected = previous.rng.clone();
+        for _ in 0..8 {
+            assert_eq!(actual.next_u64(), expected.next_u64());
+        }
+        assert_eq!(custom.source_music.frequency("musCave"), 34_100);
+        assert_eq!(custom.source_music.frequency("musLush"), 44_100);
+        let commands = custom.source_music.take_commands();
+        assert_eq!(commands.len(), 2);
+        assert!(
+            matches!(&commands[0], SourceMusicCommand::Play { name, looping: true, if_idle: true } if name == "musLush")
+        );
+        assert!(
+            matches!(&commands[1], SourceMusicCommand::Frequency { name, hz: 44_100 } if name == "musLush")
+        );
+        assert!(custom.source_music.enabled);
+        // Ordinary new-run construction still emits its eligible Cave start.
+        let ordinary = Game::new_with_music(42, rules, session.session_state());
+        assert!(ordinary.source_music.pending.iter().any(
+            |command| matches!(command, SourceMusicCommand::Play { name, .. } if name == "musCave")
+        ));
+    }
+    #[test]
+    fn source_music_session_drains_before_replacement_without_replaying_commands() {
+        let mut game = Game::legacy(42, spelunky_core::RulesPreset::Classic);
+        game.source_music.take_commands();
+        game.source_music.enabled = false;
+        game.source_music
+            .frequencies
+            .insert("musTitle".into(), 34_100);
+        game.source_music.pending.push(SourceMusicCommand::StopAll);
+        game.source_music
+            .pending
+            .push(SourceMusicCommand::Frequency {
+                name: "musTitle".into(),
+                hz: 34_100,
+            });
+        let mut session = SourceMusicState::default();
+        let commands = take_source_music(&mut game, &mut session);
+        assert!(matches!(
+            &commands[..],
+            [
+                SourceMusicCommand::StopAll,
+                SourceMusicCommand::Frequency { hz: 34_100, .. }
+            ]
+        ));
+        assert!(game.source_music.pending.is_empty());
+        assert!(!session.enabled && session.pending.is_empty());
+        assert_eq!(session.frequencies["musTitle"], 34_100);
+        for tutorial in [false, true] {
+            let mut replacement = if tutorial {
+                Game::tutorial_with_music(
+                    42,
+                    spelunky_core::RulesPreset::Classic,
+                    session.session_state(),
+                )
+            } else {
+                Game::new_with_music(
+                    42,
+                    spelunky_core::RulesPreset::Classic,
+                    session.session_state(),
+                )
+            };
+            assert!(!replacement.source_music.enabled);
+            assert_eq!(replacement.source_music.frequencies["musTitle"], 34_100);
+            assert!(
+                take_source_music(&mut replacement, &mut session).is_empty(),
+                "disabled room Create must not start/reset music"
+            );
+        }
+        assert!(SourceMusicState::default().enabled);
+    }
+    #[test]
+    fn music_input_activation_and_f1_stop_reason_are_independent() {
+        let mut game = Game::legacy(42, spelunky_core::RulesPreset::Classic);
+        assert!(source_music_input_active(Screen::Playing, Some(&game)));
+        assert!(!source_music_input_active(Screen::Pause, Some(&game)));
+        assert!(!source_music_input_active(Screen::Editor, Some(&game)));
+        assert!(!source_music_input_active(Screen::Playing, None));
+        game.flags.insert("source_game_inactive".into());
+        assert!(!source_music_input_active(Screen::Playing, Some(&game)));
+        game.flags.remove("source_game_inactive");
+        game.source_music.enabled = false;
+        apply_source_suicide(&mut game);
+        assert!(!game.source_music.enabled);
+        spelunky_core::music::key_pressed(&mut game);
+        assert!(game.source_music.enabled);
+        assert!(game.flags.contains("source_music_stopped"));
+        resume_room_music(&mut game);
+        assert!(game.source_music.enabled);
+        game.source_music.enabled = false;
+        resume_room_music(&mut game);
+        assert!(!game.source_music.enabled);
+    }
+    #[test]
+    fn signed_source_frequency_adapter_retains_unsupported_raw_requests() {
+        for hz in [0, -100, i64::from(u32::MAX) + 1, i64::MIN] {
+            assert_eq!(supported_source_frequency(hz), Err(hz));
+        }
+        assert_eq!(supported_source_frequency(34_100), Ok(34_100));
+        assert_eq!(supported_source_frequency(44_100), Ok(44_100));
+        let mut game = Game::legacy_shell(42, spelunky_core::RulesPreset::Classic);
+        game.set_source_music_frequency("musCave", -100);
+        let mut session = SourceMusicState::default();
+        let commands = take_source_music(&mut game, &mut session);
+        assert!(matches!(
+            commands.last(),
+            Some(SourceMusicCommand::Frequency { hz: -100, .. })
+        ));
+        assert_eq!(session.frequency("musCave"), -100);
+    }
     use crate::settings_ui::test_rows::{CONFIGURE_CONTROLLER, FIRST_BINDING};
 
     fn controller_remap_enter_wizard(ui: &mut SettingsUi, settings: &mut crate::storage::Settings) {

@@ -127,6 +127,30 @@ impl Default for InputState {
 }
 
 impl InputState {
+    /// Independent physical source key; remapping does not own this edge.
+    /// An inactive controller discards it rather than replaying after resume.
+    pub fn music_key(
+        &mut self,
+        key: KeyCode,
+        pressed: bool,
+        repeat: bool,
+        synthetic: bool,
+        active: bool,
+    ) {
+        if key != KeyCode::KeyM {
+            return;
+        }
+        if !active {
+            self.frame.music_pressed = false;
+            return;
+        }
+        if pressed && !repeat && !synthetic {
+            self.frame.music_pressed = true;
+        }
+    }
+    pub fn take_music_pressed(&mut self) -> bool {
+        std::mem::take(&mut self.frame.music_pressed)
+    }
     pub fn key(&mut self, key: KeyCode, pressed: bool, repeat: bool) {
         if pressed && repeat {
             return;
@@ -679,6 +703,42 @@ fn parse_key(name: &str) -> Option<KeyCode> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn physical_music_key_ignores_bindings_repeat_and_synthetic_replays() {
+        let mut input = InputState::default();
+        input.set_bindings(&BTreeMap::from([("jump".into(), "KeyM".into())]));
+        input.music_key(KeyCode::KeyM, true, false, false, true);
+        input.key(KeyCode::KeyM, true, false);
+        input.key(KeyCode::KeyM, false, false);
+        let first = input.take_tick();
+        assert!(first.music_pressed && first.jump_pressed);
+        assert!(!input.take_tick().music_pressed);
+        for (repeat, synthetic) in [(true, false), (false, true)] {
+            input.music_key(KeyCode::KeyM, true, repeat, synthetic, true);
+            assert!(!input.take_tick().music_pressed);
+        }
+        input.music_key(KeyCode::KeyN, true, false, false, true);
+        assert!(!input.take_tick().music_pressed);
+        input.set_bindings(&BTreeMap::from([("jump".into(), "".into())]));
+        input.music_key(KeyCode::KeyM, true, false, false, true);
+        assert!(input.take_tick().music_pressed);
+    }
+    #[test]
+    fn continuously_paused_music_edge_is_discarded_without_resume_replay() {
+        let mut input = InputState::default();
+        input.music_key(KeyCode::KeyM, true, false, false, false);
+        input.music_key(KeyCode::KeyM, false, false, false, false);
+        assert!(!input.take_music_pressed());
+        assert!(!input.take_tick().music_pressed);
+        // Resume alone does not synthesize a new physical event.
+        assert!(!input.take_music_pressed());
+        input.music_key(KeyCode::KeyM, true, false, false, true);
+        assert!(input.take_music_pressed());
+        assert!(!input.take_tick().music_pressed);
+        input.music_key(KeyCode::KeyM, true, false, false, true);
+        input.clear_edges();
+        assert!(!input.take_tick().music_pressed);
+    }
     use super::*;
 
     fn remap_sample(input: &mut InputState, held: u32) {

@@ -109,6 +109,9 @@ pub struct InputFrame {
     pub attack_released: bool,
     #[serde(default)]
     pub start_pressed: bool,
+    /// Fresh physical M, independent from remappable player actions.
+    #[serde(default)]
+    pub music_pressed: bool,
     pub bomb_pressed: bool,
     pub rope_pressed: bool,
     pub flare_pressed: bool,
@@ -127,6 +130,7 @@ impl InputFrame {
         self.jump_released = false;
         self.attack_pressed = false;
         self.start_pressed = false;
+        self.music_pressed = false;
         self.bomb_pressed = false;
         self.rope_pressed = false;
         self.flare_pressed = false;
@@ -1025,6 +1029,12 @@ pub enum GameEvent {
         name: String,
         pan: f32,
     },
+    MusicPlay {
+        name: String,
+        looping: bool,
+        if_idle: bool,
+    },
+    MusicStopAll,
     /// Source music frequency in Hz. This never changes the simulation clock.
     MusicFrequency {
         name: String,
@@ -1049,6 +1059,54 @@ pub enum GameEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SourceMusicCommand {
+    Play {
+        name: String,
+        looping: bool,
+        if_idle: bool,
+    },
+    StopAll,
+    Frequency {
+        name: String,
+        hz: i64,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceMusicState {
+    pub enabled: bool,
+    #[serde(default)]
+    pub frequencies: BTreeMap<String, i64>,
+    #[serde(skip)]
+    pub pending: Vec<SourceMusicCommand>,
+}
+impl Default for SourceMusicState {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            frequencies: BTreeMap::new(),
+            pending: Vec::new(),
+        }
+    }
+}
+impl SourceMusicState {
+    pub fn frequency(&self, name: &str) -> i64 {
+        self.frequencies.get(name).copied().unwrap_or(44_100)
+    }
+    pub fn take_commands(&mut self) -> Vec<SourceMusicCommand> {
+        std::mem::take(&mut self.pending)
+    }
+    /// Drain the old Game before carrying these globals into a replacement.
+    pub fn session_state(&self) -> Self {
+        Self {
+            enabled: self.enabled,
+            frequencies: self.frequencies.clone(),
+            pending: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceMessage {
     pub first: String,
     pub second: String,
@@ -1070,6 +1128,9 @@ fn classic_down_to_run() -> bool {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Game {
+    /// Persistent source globals plus an outbox that survives event clearing.
+    #[serde(default)]
+    pub source_music: SourceMusicState,
     /// Immutable state observed by the source Draw phase, before Animation.
     #[serde(skip)]
     pub draw_view: Option<Box<Game>>,
@@ -1172,6 +1233,11 @@ impl Game {
     pub fn shell(seed: u32, rules: RulesPreset) -> Self {
         Self::shell_from_rng(u64::from(seed), rules, Rng::new(seed))
     }
+    pub fn shell_with_music(seed: u32, rules: RulesPreset, music: SourceMusicState) -> Self {
+        let mut game = Self::shell(seed, rules);
+        game.source_music = music;
+        game
+    }
     pub fn try_shell(seed: u64, rules: RulesPreset) -> Result<Self, RngSeedError> {
         Ok(Self::shell_from_rng(seed, rules, Rng::try_canonical(seed)?))
     }
@@ -1196,6 +1262,7 @@ impl Game {
             level_tick: 0,
             rules,
             down_to_run: true,
+            source_music: SourceMusicState::default(),
             player: Player::default(),
             world: World::new(42, 34, Area::Mines, 1),
             rng,
@@ -1235,10 +1302,24 @@ impl Game {
         });
     }
     pub fn set_music_frequency(&mut self, name: impl Into<String>, hz: u32) {
-        self.events.push(GameEvent::MusicFrequency {
-            name: name.into(),
-            hz,
-        });
+        let name = name.into();
+        self.set_source_music_frequency(name, i64::from(hz));
+    }
+    pub fn set_source_music_frequency(&mut self, name: impl Into<String>, hz: i64) {
+        let name = name.into();
+        self.source_music.frequencies.insert(name.clone(), hz);
+        self.source_music
+            .pending
+            .push(SourceMusicCommand::Frequency {
+                name: name.clone(),
+                hz,
+            });
+        if let Ok(positive) = u32::try_from(hz) {
+            if positive > 0 {
+                self.events
+                    .push(GameEvent::MusicFrequency { name, hz: positive });
+            }
+        }
     }
     pub fn damage_player(&mut self, amount: i32) {
         if self.player.invincible == 0 && self.player.health > 0 {

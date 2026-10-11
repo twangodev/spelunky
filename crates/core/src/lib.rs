@@ -13,6 +13,7 @@ pub mod generation;
 pub mod items;
 pub mod level;
 pub mod model;
+pub mod music;
 pub mod player;
 pub mod progression;
 pub mod traps;
@@ -30,3 +31,6 @@ pub mod statistics;
 
 #[cfg(test)]
 mod sound_contract_tests;
+
+#[cfg(test)]
+mod music_toggle_tests;
