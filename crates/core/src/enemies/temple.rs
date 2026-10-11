@@ -594,12 +594,17 @@ fn hawk(game: &mut Game, e: &mut Entity) {
                 e.facing = -e.facing;
             }
             e.vel.x = 1.5 * e.facing as f64;
-            if grounded
-                && (!game.world.solid_at(
-                    e.pos.x + if e.facing < 0 { -1.0 } else { 16.0 },
-                    e.pos.y + 16.0,
-                ) || game.rng.chance(1, 100))
-            {
+            if !game.world.solid_at(
+                e.pos.x + if e.facing < 0 { -1.0 } else { 16.0 },
+                e.pos.y + 16.0,
+            ) {
+                e.state = 0;
+                e.timer = 20 + game.rng.range(31);
+                e.vel.x = 0.0;
+            }
+            // Source WALK still rolls after a ledge changes status to IDLE.
+            // A successful roll draws and overwrites the first counter.
+            if game.rng.chance(1, 100) {
                 e.state = 0;
                 e.timer = 20 + game.rng.range(31);
                 e.vel.x = 0.0;
@@ -1260,8 +1265,13 @@ fn magma_man(game: &mut Game, e: &mut Entity) {
         if !game.world.solid_at(
             e.pos.x + if e.facing < 0 { -1.0 } else { 16.0 },
             e.pos.y + 16.0,
-        ) || game.rng.chance(1, 100)
-        {
+        ) {
+            e.state = 0;
+            e.timer = 20 + game.rng.range(31);
+            e.vel.x = 0.0;
+        }
+        // This is independent of the preceding ledge branch in the source.
+        if game.rng.chance(1, 100) {
             e.state = 0;
             e.timer = 20 + game.rng.range(31);
             e.vel.x = 0.0;
@@ -1302,6 +1312,175 @@ fn magma(game: &mut Game, e: &mut Entity) {
 mod tests {
     use super::*;
     use crate::model::{Area, RulesPreset};
+
+    // Literal WALK statements from oHawkman Step.xml 106-139 and
+    // oMagmaMan Step.xml 66-99. Each rand(a,b) consumes one draw. This oracle
+    // intentionally does not call production range/chance or WALK helpers.
+    // It covers this state segment, not MagmaMan's separate burn-emission RNG.
+    fn literal_temple_walk(
+        rng: &mut crate::model::Rng,
+        ledge: bool,
+        facing: i8,
+    ) -> (i32, u32, f64, bool) {
+        let mut state = 1;
+        let mut counter = 37;
+        let mut x_vel = 1.5 * f64::from(facing);
+        if ledge {
+            state = 0;
+            counter = 20 + (rng.next_u64() % 31) as u32;
+            x_vel = 0.0;
+        }
+        let idle_roll = 1 + rng.next_u64() % 100;
+        if idle_roll == 1 {
+            state = 0;
+            counter = 20 + (rng.next_u64() % 31) as u32;
+            x_vel = 0.0;
+        }
+        (state, counter, x_vel, idle_roll == 1)
+    }
+
+    fn temple_walk_fixture(object: &str, facing: i8, ledge: bool) -> (Game, u64) {
+        let mut game = room();
+        if ledge {
+            // Feet remain supported by tile 5, while x-1 and x+16 have no
+            // forward support. This reaches WALK, not MagmaMan's falling exit.
+            game.world = World::new(24, 20, Area::Temple, 13);
+            game.world.set_tile(5, 10, "oTemple");
+        }
+        let id = game.spawn(object, Vec2::new(80.0, 144.0));
+        let actor = game.world.entity_mut(id).unwrap();
+        actor.state = 1;
+        actor.timer = 37;
+        actor.facing = facing;
+        actor.vel = Vec2::default();
+        actor.data.insert("sight_timer".into(), 5.0);
+        (game, id)
+    }
+
+    fn assert_temple_walk_actor_step(object: &str) {
+        // Fixed seeds independently cover both outcomes of the unconditional
+        // idle roll after the optional ledge timer draw. Seed 0 at a ledge
+        // draws counter 36, then idle=1, then counter 22: the second wins.
+        for (ledge, idle_success, seed) in [
+            (false, false, 0),
+            (false, true, 29),
+            (true, false, 1),
+            (true, true, 0),
+        ] {
+            for facing in [-1, 1] {
+                let (mut game, id) = temple_walk_fixture(object, facing, ledge);
+                game.rng = crate::model::Rng::new(seed);
+                let mut expected_rng = game.rng.clone();
+                let (state, counter, mut x_vel, actual_idle) =
+                    literal_temple_walk(&mut expected_rng, ledge, facing);
+                assert_eq!(actual_idle, idle_success);
+                if object == "oHawkman" {
+                    x_vel = (x_vel.abs() - 0.1).max(0.0) * x_vel.signum();
+                }
+                super::super::step_instance(&mut game, id);
+                let actor = game.world.entity(id).expect("WALK actor survives");
+                let case = format!("{object} ledge={ledge} idle={idle_success} facing={facing}");
+                assert_eq!(actor.state, state, "{case}");
+                assert_eq!(actor.timer, counter, "{case}");
+                assert_eq!(actor.facing, facing, "{case}");
+                assert!((actor.vel.x - x_vel).abs() < 1e-12, "{case}");
+                for _ in 0..8 {
+                    assert_eq!(game.rng.next_u64(), expected_rng.next_u64(), "{case}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn actual_hawkman_step_temple_walk_ledge_rng() {
+        assert_temple_walk_actor_step("oHawkman");
+    }
+
+    #[test]
+    fn actual_magma_man_step_temple_walk_ledge_rng() {
+        assert_temple_walk_actor_step("oMagmaMan");
+    }
+
+    #[test]
+    fn actual_airborne_hawkman_step_temple_walk_ledge_rng() {
+        let (mut game, id) = temple_walk_fixture("oHawkman", 1, true);
+        game.world.entity_mut(id).unwrap().pos.y = 112.0;
+        game.rng = crate::model::Rng::new(0);
+        let mut expected_rng = game.rng.clone();
+        let (state, counter, x_vel, idle_success) = literal_temple_walk(&mut expected_rng, true, 1);
+        assert!(idle_success);
+        super::super::step_instance(&mut game, id);
+        let actor = game.world.entity(id).unwrap();
+        assert_eq!(
+            (actor.state, actor.timer, actor.vel.x),
+            (state, counter, x_vel)
+        );
+        assert!(actor.vel.y > 0.0, "this control is airborne");
+        for _ in 0..8 {
+            assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
+        }
+    }
+
+    #[test]
+    fn actual_sidewall_turn_temple_walk_ledge_rng() {
+        for object in ["oHawkman", "oMagmaMan"] {
+            for facing in [-1, 1] {
+                let (mut game, id) = temple_walk_fixture(object, facing, false);
+                let wall_x = if facing < 0 { 4 } else { 6 };
+                game.world.set_tile(wall_x, 9, "oTemple");
+                let actor = game.world.entity_mut(id).unwrap();
+                // The body bounds touch the wall; Hawkman moveTo encounters
+                // it before the WALK block. Neither actor starts embedded.
+                actor.pos.x = if facing < 0 { 78.0 } else { 82.0 };
+                actor.vel.x = 2.5 * f64::from(facing);
+                game.rng = crate::model::Rng::new(0);
+                let mut expected_rng = game.rng.clone();
+                let (state, counter, mut x_vel, idle_success) =
+                    literal_temple_walk(&mut expected_rng, false, -facing);
+                assert!(!idle_success);
+                if object == "oHawkman" {
+                    x_vel = (x_vel.abs() - 0.1).max(0.0) * x_vel.signum();
+                }
+                super::super::step_instance(&mut game, id);
+                let actor = game.world.entity(id).unwrap();
+                assert_eq!(actor.facing, -facing, "{object}");
+                assert_eq!((actor.state, actor.timer), (state, counter), "{object}");
+                assert!((actor.vel.x - x_vel).abs() < 1e-12, "{object}");
+                for _ in 0..8 {
+                    assert_eq!(game.rng.next_u64(), expected_rng.next_u64(), "{object}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn actual_idle_entry_does_not_fall_through_temple_walk_ledge_rng() {
+        for object in ["oHawkman", "oMagmaMan"] {
+            let (mut game, id) = temple_walk_fixture(object, 1, true);
+            let actor = game.world.entity_mut(id).unwrap();
+            actor.state = 0;
+            actor.timer = 0;
+            // Seed 1's second draw is not MagmaMan's voluntary 1-in-6
+            // transformation. A newly selected WALK waits until the next Step.
+            game.rng = crate::model::Rng::new(1);
+            let mut expected_rng = game.rng.clone();
+            let facing = if expected_rng.next_u64() % 2 == 0 {
+                -1
+            } else {
+                1
+            };
+            if object == "oMagmaMan" {
+                assert_ne!(1 + expected_rng.next_u64() % 6, 1);
+            }
+            super::super::step_instance(&mut game, id);
+            let actor = game.world.entity(id).unwrap();
+            assert_eq!((actor.state, actor.timer, actor.facing), (1, 0, facing));
+            assert_eq!(actor.vel.x, 0.0);
+            for _ in 0..8 {
+                assert_eq!(game.rng.next_u64(), expected_rng.next_u64(), "{object}");
+            }
+        }
+    }
 
     #[test]
     fn actual_step_tomb_lord_bullet_damage_preserves_source_bloodless_rng() {
