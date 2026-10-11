@@ -6,7 +6,8 @@ mod common;
 
 use common::complete_source_exit;
 use spelunky_core::{
-    Area, Game, InputFrame, PlayerState, Rect, RulesPreset, RunState, Vec2, World,
+    Area, CollisionPrecision, Game, InputFrame, PlayerState, Rect, RulesPreset, RunState, Vec2,
+    World,
     ending::{self, EndingKind, EndingStage},
 };
 
@@ -26,6 +27,29 @@ fn temple_door_room() -> Game {
 
 fn pickup(game: &mut Game, object: &str) -> u64 {
     let id = game.spawn(object, game.player.pos);
+    // Player319 runs before Crown789: a newly spawned priced pickup needs
+    // its inherited Item Step to clear its no-shop price before the input edge.
+    game.step(&InputFrame::default());
+    let item = game
+        .world
+        .entity(id)
+        .expect("pickup survives its first Step");
+    assert_eq!(item.value("cost"), 0., "{object}: free pickup fixture");
+    assert!(item.engine_active, "{object}: pickup must be active");
+    assert_ne!(item.value("canPickUp"), 0., "{object}: pickup eligibility");
+    assert!(
+        !game.world.solid_at_except(item.pos.x, item.pos.y, id),
+        "{object}: pickup origin must be outside solids"
+    );
+    let contact = Rect::new(game.player.pos.x - 8., game.player.pos.y, 17., 9.);
+    assert!(
+        item.mask_intersects(contact, CollisionPrecision::BoundingBox),
+        "{object}: pickup mask must overlap the source contact gate"
+    );
+    assert_eq!(game.state, RunState::Playing, "{object}: live fixture");
+    assert!(game.player.health > 0, "{object}: healthy fixture");
+    assert!(!game.player.is_stunned(), "{object}: unstunned fixture");
+    assert_eq!(game.player.attack_timer, 0, "{object}: idle attack fixture");
     game.step(&InputFrame {
         down: true,
         attack: true,
