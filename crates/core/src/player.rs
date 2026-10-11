@@ -1312,10 +1312,29 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         p.set_image_speed(0.8);
         set(p, "source_platform_grounded", 0.0);
         set(p, "source_platform_climbing", 0.0);
-        if let Some(id) = p.held.take() {
+        let direction = f64::from(p.facing);
+        if let Some(id) = p.held {
             if let Some(held) = w.entity_mut(id) {
-                held.held = false;
-                held.vel = Vec2::new(f64::from(p.facing), -4.0);
+                // The ledge script adjusts the existing held origin before
+                // scrDropItem; Crystal Skull inherits the Gold Idol type.
+                if crate::catalog::is_a(&held.object, "oGoldIdol") {
+                    held.pos.y -= 8.0;
+                }
+            }
+            crate::items::drop_held_with_velocity(game, Vec2::new(direction, -4.0));
+        }
+        // `with oMonkey` affects every active GRAB instance, including actors
+        // outside their own Step viewport guard. It consumes no random draws.
+        for monkey in &mut game.world.entities {
+            if monkey.alive
+                && monkey.engine_active
+                && crate::catalog::is_a(&monkey.object, "oMonkey")
+                && monkey.state == 7
+            {
+                monkey.vel = Vec2::new(direction, -4.0);
+                monkey.state = 1;
+                monkey.data.insert("vine_counter".into(), 20.0);
+                monkey.data.insert("grab_counter".into(), 60.0);
             }
         }
         return;
