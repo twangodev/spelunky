@@ -761,6 +761,31 @@ fn complete(game: &mut Game, door_id: u64) {
         crate::ending::EndingKind::Transition
     };
     crate::ending::begin_exit(game, kind);
+    if !ending {
+        // Player Step932–943: ordinary exits knock off every active GRAB
+        // monkey before its own later source Step can steal during the exit.
+        // `with` follows the current descendant array and samples both rand
+        // calls per affected instance, even when their difference is zero.
+        let monkeys = crate::dispatcher::descendant_instances(game, "oMonkey");
+        for instance in monkeys {
+            let crate::dispatcher::Instance::Entity(id) = instance else {
+                continue;
+            };
+            if !game
+                .world
+                .entity(id)
+                .is_some_and(|monkey| monkey.engine_active && monkey.state == 7)
+            {
+                continue;
+            }
+            let x_vel = f64::from(game.rng.range(2)) - f64::from(game.rng.range(2));
+            let monkey = game.world.entity_mut(id).unwrap();
+            monkey.vel = Vec2::new(x_vel, -4.);
+            monkey.state = 1;
+            monkey.data.insert("vine_counter".into(), 20.);
+            monkey.data.insert("grab_counter".into(), 60.);
+        }
+    }
 }
 
 /// Player Step775–984: portal actions and Game Over precede its hurt block.
@@ -1697,6 +1722,109 @@ mod tests {
             assert_eq!(ending.data["thiefLevel"], 1.);
             assert!(ending.flags.contains("wanted"));
             assert!(!ending.data.contains_key("next_level"));
+        }
+    }
+
+    #[test]
+    fn natural_monkey_grab_is_released_by_ordinary_exit_but_not_ending_portal() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for portal in ["oExit", "oXEnd"] {
+                let mut level = crate::level::Level::default();
+                level.starting_bombs = 0;
+                level.starting_ropes = 0;
+                level.set_tile(6, 7, '@').unwrap();
+                for x in 0..crate::level::LEVEL_WIDTH {
+                    level.set_tile(x, 8, '1').unwrap();
+                }
+                let mut game = Game::shell(31, rules);
+                game.load_custom(&level, "monkey-exit", "");
+                game.spawn(portal, Vec2::new(128., 128.));
+                for _ in 0..8 {
+                    game.step(&InputFrame::default());
+                }
+                assert!(game.player.grounded);
+                game.spawn(
+                    "oGoldBar",
+                    Vec2::new(game.player.pos.x, game.player.pos.y + 4.),
+                );
+                for _ in 0..60 {
+                    if game.player.money == 500 {
+                        break;
+                    }
+                    game.step(&InputFrame::default());
+                }
+                assert_eq!(game.player.money, 500, "real treasure pickup/count-up");
+                let monkey = game.spawn(
+                    "oMonkey",
+                    Vec2::new(game.player.pos.x - 8., game.player.pos.y - 8.),
+                );
+                game.step(&InputFrame::default());
+                assert_eq!(
+                    game.world.entity(monkey).unwrap().state,
+                    7,
+                    "actual automatic collision must acquire GRAB"
+                );
+                // Wait using real source counters, without forcing a state or
+                // timer, so the old GRAB would steal during the live exit.
+                for _ in 0..80 {
+                    if game.world.entity(monkey).unwrap().timer <= 24 {
+                        break;
+                    }
+                    game.step(&InputFrame::default());
+                }
+                assert_eq!(game.world.entity(monkey).unwrap().state, 7);
+                let mut expected_rng = game.rng.clone();
+                let mut entered = false;
+                for _ in 0..20 {
+                    expected_rng = game.rng.clone();
+                    if portal == "oExit" {
+                        expected_rng.range(2);
+                        expected_rng.range(2);
+                    }
+                    game.step(&InputFrame {
+                        right: true,
+                        up: true,
+                        ..Default::default()
+                    });
+                    if game.ending.is_some() {
+                        entered = true;
+                        break;
+                    }
+                }
+                assert!(entered, "actual Right+Up must enter {portal}");
+                assert_eq!(
+                    serde_json::to_value(&game.rng).unwrap(),
+                    serde_json::to_value(expected_rng).unwrap(),
+                    "ordinary exit consumes exactly two source release draws"
+                );
+                let actor = game.world.entity(monkey).unwrap();
+                if portal == "oExit" {
+                    assert_ne!(actor.state, 7);
+                    assert_eq!(actor.value("vine_counter"), 19.);
+                    assert_eq!(actor.value("grab_counter"), 59.);
+                    let mut entered_transition = false;
+                    for _ in 0..40 {
+                        if game.ending.as_ref().unwrap().stage
+                            == crate::ending::EndingStage::Transition
+                        {
+                            entered_transition = true;
+                            break;
+                        }
+                        game.step(&InputFrame::default());
+                        assert_eq!(
+                            game.player.money, 500,
+                            "released monkey must not steal during the live exit"
+                        );
+                    }
+                    assert!(entered_transition);
+                } else {
+                    assert_eq!(
+                        actor.state, 7,
+                        "source XEnd start-portal branch does not release monkeys"
+                    );
+                    assert_eq!(actor.value("grab_counter"), 0.);
+                }
+            }
         }
     }
 
