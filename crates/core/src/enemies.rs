@@ -203,7 +203,10 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         e.data
             .insert("simulation_tick".into(), game.engine_time() as f64);
         inherited::tick(game, e);
-        if !e.alive {
+        // FireFrog's Water conversion destroys its receiver inside the parent
+        // event, but its own following Step action still executes. Other
+        // inherited children retain their existing adapter contract here.
+        if !e.alive && e.object != "oFireFrog" {
             return;
         }
         if e.object == "oDamsel" && e.state == 4 {

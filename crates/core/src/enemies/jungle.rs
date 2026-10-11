@@ -253,7 +253,12 @@ fn frog(game: &mut Game, e: &mut Entity) {
     }
     if e.health <= 0 {
         die(game, e);
-        return;
+        if e.object != "oFireFrog" {
+            return;
+        }
+        // The Bomb birth precedes immediate Enemy Destroy; FireFrog then
+        // continues its collision/state/sprite tail on the retired receiver.
+        super::destroyed(game, e);
     }
     if collision_offset(&game.world, e, 1.0, 0.0) {
         e.vel.x = -1.0;
@@ -1492,7 +1497,7 @@ mod tests {
         assert_eq!(e.timer, 40);
     }
     #[test]
-    fn inherited_water_extinguishes_fire_frog_before_death_bomb() {
+    fn inherited_water_conversion_retains_hp_zero_old_child_bomb_branch() {
         let mut game = Game::shell(8, RulesPreset::Classic);
         pond(&mut game);
         let mut e = entity("oFireFrog", Vec2::new(50.0, 50.0));
@@ -1508,12 +1513,14 @@ mod tests {
             .unwrap();
         assert_eq!(frog.state, 2);
         assert_eq!(frog.health, 1);
-        assert!(
-            !game
-                .world
+        assert_eq!(
+            game.world
                 .entities
                 .iter()
-                .any(|e| e.object == "oFireFrogBomb")
+                .filter(|e| e.object == "oFireFrogBomb")
+                .count(),
+            1,
+            "Water destroys the old receiver but does not abort its hp<1 child action"
         );
     }
 

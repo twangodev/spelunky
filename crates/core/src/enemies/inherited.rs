@@ -107,6 +107,9 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
             frog.state = e.state;
         }
         e.alive = false;
+        // Enemy Destroy clears backlinks synchronously, before the remaining
+        // inherited burn statements and FireFrog's subsequent own Step action.
+        super::destroyed(game, e);
         // Source instance_destroy keeps executing this inherited event,
         // including its burning roll on the receiver being transformed.
     }
