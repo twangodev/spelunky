@@ -7,7 +7,7 @@ mod projectile_query_contract {
         let mut game = Game::shell(73, rules);
         game.world = World::new(80, 30, Area::Mines, 1);
         for x in 0..80 {
-            game.world.set(x, 10, "oHardBlock");
+            game.world.set_tile(x, 10, "oHardBlock");
         }
         game.player.pos = Vec2::new(40.0, 152.0);
         game

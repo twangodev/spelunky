@@ -3099,7 +3099,7 @@ mod source_motion_regressions {
     fn water(game: &mut Game, first_row: i32) {
         for y in first_row..=9 {
             for x in 4..=10 {
-                game.world.set_tile(x, y, "oWaterSwim");
+                game.world.set_tile(x, y as usize, "oWaterSwim");
             }
         }
     }
