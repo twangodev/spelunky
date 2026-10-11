@@ -2998,8 +2998,10 @@ fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
 }
 #[cfg(test)]
 mod tests {
+    use crate::settings_ui::test_rows::{CONFIGURE_CONTROLLER, FIRST_BINDING};
+
     fn controller_remap_enter_wizard(ui: &mut SettingsUi, settings: &mut crate::storage::Settings) {
-        for _ in 0..21 {
+        for _ in 0..CONFIGURE_CONTROLLER {
             ui.key(KeyCode::ArrowDown, settings);
         }
         ui.key(KeyCode::Enter, settings);
@@ -3008,7 +3010,7 @@ mod tests {
 
     #[test]
     fn controller_remap_host_suppresses_later_menu_edges_in_the_capture_entry_frame() {
-        for row in [7, 21] {
+        for row in [FIRST_BINDING, CONFIGURE_CONTROLLER] {
             let mut ui = SettingsUi::new();
             let mut settings = crate::storage::Settings::default();
             for _ in 0..row {
@@ -3029,7 +3031,7 @@ mod tests {
             assert!(ui.awaiting_binding());
             assert_eq!(settings.bindings, keyboard);
             assert_eq!(settings.controller_bindings, controller);
-            if row == 21 {
+            if row == CONFIGURE_CONTROLLER {
                 ui.controller(crate::controller::Button::East, &mut settings);
                 assert_eq!(
                     settings.controller_bindings["jump"], "East",
@@ -3071,7 +3073,7 @@ mod tests {
     fn controller_remap_host_does_not_convert_controller_menu_edges_to_keyboard_bindings() {
         let mut ui = SettingsUi::new();
         let mut settings = crate::storage::Settings::default();
-        for _ in 0..7 {
+        for _ in 0..FIRST_BINDING {
             ui.key(KeyCode::ArrowDown, &mut settings);
         }
         ui.key(KeyCode::Enter, &mut settings);
@@ -3135,7 +3137,7 @@ mod tests {
     fn controller_remap_host_does_not_capture_the_button_that_opened_the_wizard() {
         let mut ui = SettingsUi::new();
         let mut settings = crate::storage::Settings::default();
-        for _ in 0..21 {
+        for _ in 0..CONFIGURE_CONTROLLER {
             ui.key(KeyCode::ArrowDown, &mut settings);
         }
         let before = settings.controller_bindings.clone();

@@ -351,6 +351,14 @@ fn short(value: &str, length: usize) -> String {
     }
 }
 
+// Share real row positions with host navigation tests without exposing a
+// production API or skipping ordinary menu key handling.
+#[cfg(test)]
+pub(crate) mod test_rows {
+    pub(crate) const FIRST_BINDING: usize = super::FIRST_BINDING;
+    pub(crate) const CONFIGURE_CONTROLLER: usize = super::CONFIGURE_CONTROLLER;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
