@@ -1175,36 +1175,30 @@ fn solid_edge(world: &World, probe: Rect, excluded: u64) -> bool {
 
 fn body_contact(world: &World, entity: &Entity, dx: i8, dy: i8) -> bool {
     let bounds = body_bounds(entity, entity.pos);
-    let probe = if dx < 0 {
-        Rect::new(
-            (bounds.x - 1.0).round_ties_even(),
-            bounds.y.round_ties_even(),
-            1.0,
-            bounds.h,
-        )
-    } else if dx > 0 {
-        Rect::new(
-            (bounds.x + bounds.w).round_ties_even(),
-            bounds.y.round_ties_even(),
-            1.0,
-            bounds.h,
-        )
-    } else if dy < 0 {
-        Rect::new(
-            bounds.x.round_ties_even(),
-            (bounds.y - 1.0).round_ties_even(),
-            bounds.w,
-            1.0,
+    let (first, second) = if dx != 0 {
+        let x = if dx < 0 {
+            bounds.x - 1.0
+        } else {
+            bounds.x + bounds.w
+        }
+        .round_ties_even();
+        (
+            Vec2::new(x, bounds.y.round_ties_even()),
+            Vec2::new(x, (bounds.y + bounds.h - 1.0).round_ties_even()),
         )
     } else {
-        Rect::new(
-            bounds.x.round_ties_even(),
-            (bounds.y + bounds.h).round_ties_even(),
-            bounds.w,
-            1.0,
+        let y = if dy < 0 {
+            bounds.y - 1.0
+        } else {
+            bounds.y + bounds.h
+        }
+        .round_ties_even();
+        (
+            Vec2::new(bounds.x.round_ties_even(), y),
+            Vec2::new((bounds.x + bounds.w - 1.0).round_ties_even(), y),
         )
     };
-    solid_edge(world, probe, entity.id)
+    world.solid_line_except(first, second, entity.id)
 }
 
 fn body_horizontal_move_contact(world: &World, entity: &Entity, dx: i8) -> bool {
@@ -1215,17 +1209,11 @@ fn body_horizontal_move_contact(world: &World, entity: &Entity, dx: i8) -> bool 
         bounds.x - 1.0
     } else {
         bounds.x + bounds.w
-    };
-    let top = (bounds.y + 5.0).round_ties_even();
-    let bottom = (bounds.y + bounds.h - 1.0).round_ties_even();
-    solid_edge(
-        world,
-        Rect::new(
-            x.round_ties_even(),
-            top.min(bottom),
-            1.0,
-            (bottom - top).abs() + 1.0,
-        ),
+    }
+    .round_ties_even();
+    world.solid_line_except(
+        Vec2::new(x, (bounds.y + 5.0).round_ties_even()),
+        Vec2::new(x, (bounds.y + bounds.h - 1.0).round_ties_even()),
         entity.id,
     )
 }
