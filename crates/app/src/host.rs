@@ -189,6 +189,8 @@ struct App {
     focused: bool,
     occluded: bool,
     next_frame: f64,
+    #[cfg(target_arch = "wasm32")]
+    presentation_cadence: crate::timing::PresentationCadence,
     cursor: [f32; 2],
     cursor_physical: Option<[f64; 2]>,
     mouse_left: bool,
@@ -233,6 +235,8 @@ impl App {
             focused: true,
             occluded: false,
             next_frame: 0.,
+            #[cfg(target_arch = "wasm32")]
+            presentation_cadence: crate::timing::PresentationCadence::default(),
             cursor: [0.; 2],
             cursor_physical: None,
             mouse_left: false,
@@ -2494,6 +2498,21 @@ impl ApplicationHandler<UserEvent> for App {
             },
             WindowEvent::RedrawRequested => {
                 let frame_started = self.now();
+                #[cfg(target_arch = "wasm32")]
+                if !self
+                    .presentation_cadence
+                    .ready(frame_started, self.store.data.settings.frame_cap)
+                {
+                    // Sample browser controllers at display cadence even when
+                    // presentation is capped. InputState retains press/release
+                    // and menu edges until the next rendered update consumes them.
+                    if self.focused && !self.occluded {
+                        self.input.update_gamepad();
+                    }
+                    // Leave timing and queued input untouched until presentation
+                    // is due. about_to_wait schedules the next browser RAF.
+                    return;
+                }
                 self.update();
                 if self.exit_requested {
                     self.exit_requested = false;
@@ -2548,7 +2567,9 @@ impl ApplicationHandler<UserEvent> for App {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         #[cfg(target_arch = "wasm32")]
         {
-            event_loop.set_control_flow(ControlFlow::Poll);
+            // Winit's web request_redraw is requestAnimationFrame. Keep one RAF
+            // chain instead of polling browser tasks between display frames.
+            event_loop.set_control_flow(ControlFlow::Wait);
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
@@ -2698,6 +2719,76 @@ fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn browser_presentation_caps_preserve_actual_core_tick_and_rng_traces() {
+        let fixture = camera_follow_fixture();
+        let mut expected = fixture.clone();
+        let input_at = |tick| spelunky_core::InputFrame {
+            right: tick < 30,
+            left: tick >= 30,
+            jump: (5..10).contains(&tick),
+            jump_pressed: tick == 5,
+            jump_released: tick == 10,
+            ..Default::default()
+        };
+        for tick in 0..60 {
+            expected.step(&input_at(tick));
+        }
+        for refresh in [60, 120, 144, 240] {
+            for cap in [None, Some(30), Some(60), Some(120), Some(144), Some(240)] {
+                let mut cadence = crate::timing::PresentationCadence::default();
+                let mut timing = HostTiming::default();
+                timing.reset(0.);
+                let mut game = fixture.clone();
+                let mut tick = 0;
+                for callback in 0..=refresh * 2 {
+                    let now = f64::from(callback) / f64::from(refresh);
+                    if !cadence.ready(now, cap) {
+                        continue;
+                    }
+                    let frame = timing.begin_frame(now);
+                    for _ in 0..timing.advance(frame).ticks {
+                        game.step(&input_at(tick));
+                        tick += 1;
+                    }
+                }
+                assert_eq!(tick, 60, "{refresh}Hz RAF, cap {cap:?}");
+                assert_eq!(game.state_hash(), expected.state_hash());
+                assert_eq!(game.rng.clone().next_u64(), expected.rng.clone().next_u64());
+                assert_eq!(
+                    game.presentation().state_hash(),
+                    expected.presentation().state_hash()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn skipped_browser_raf_keeps_keyboard_tap_edges_until_the_next_tick() {
+        let mut cadence = crate::timing::PresentationCadence::default();
+        let mut timing = HostTiming::default();
+        timing.reset(0.);
+        let mut input = InputState::default();
+        assert!(cadence.ready(0., Some(30)));
+        let frame = timing.begin_frame(0.);
+        assert_eq!(timing.advance(frame).ticks, 0);
+        input.key(KeyCode::KeyZ, true, false);
+        input.key(KeyCode::KeyZ, false, false);
+        input.key(KeyCode::KeyB, true, false);
+        input.key(KeyCode::KeyB, false, false);
+        for callback in 1..8 {
+            assert!(!cadence.ready(f64::from(callback) / 240., Some(30)));
+        }
+        assert!(cadence.ready(1. / 30., Some(30)));
+        let frame = timing.begin_frame(1. / 30.);
+        assert_eq!(timing.advance(frame).ticks, 1);
+        let tick = input.take_tick();
+        assert!(tick.jump_pressed && tick.jump_released && !tick.jump);
+        assert!(tick.bomb_pressed);
+        let next = input.take_tick();
+        assert!(!next.jump_pressed && !next.jump_released && !next.bomb_pressed);
+    }
+
     #[test]
     fn render_alpha_eight_ms_work_is_read_only_for_actual_core_traces() {
         for rate in [60, 120, 144, 240] {

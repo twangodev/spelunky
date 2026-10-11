@@ -956,6 +956,28 @@ mod tests {
     }
 
     #[test]
+    fn capped_browser_keeps_controller_taps_sampled_on_skipped_raf_callbacks() {
+        let mut input = InputState::default();
+        let mut cadence = crate::timing::PresentationCadence::default();
+        assert!(cadence.ready(0., Some(30)));
+        for callback in 1..=8 {
+            let mut actions = Actions::default();
+            actions.set(Action::Jump, callback == 1);
+            // The real web host samples controllers on both skipped RAFs and
+            // rendered updates; these are browser-standard decoded snapshots.
+            input.accept_gamepads(actions, if callback == 1 { 1 << 4 } else { 0 });
+            if cadence.ready(f64::from(callback) / 240., Some(30)) {
+                assert_eq!(callback, 8);
+                let tick = input.take_tick();
+                assert!(tick.jump_pressed && tick.jump_released && !tick.jump);
+                assert_eq!(input.ui_pressed(), vec![UiButton::Confirm]);
+                assert_eq!(input.take_tick(), InputFrame::default());
+                assert!(input.ui_pressed().is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn short_press_survives_until_tick_and_edges_are_consumed_once() {
         let mut input = InputState::default();
         input.key(KeyCode::KeyZ, true, false);
