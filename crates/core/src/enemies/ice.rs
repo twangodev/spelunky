@@ -643,7 +643,9 @@ fn king(game: &mut Game, e: &mut Entity) {
         }
         super::record_death(game, e);
         e.alive = false;
-        return;
+        // Enemy Destroy finishes at the source statement; the retired King
+        // still executes its following state/yell/ThinIce statements.
+        super::destroyed(game, e);
     }
     counter(e, "hit_cooldown");
     counter(e, "attack_timer");
@@ -712,7 +714,8 @@ fn king_yell_ice(game: &mut Game, receiver: &Entity) {
 
     // Object-qualified oYetiKing.x/y select the first active family member.
     // with_actor detaches this event's receiver, so retain its position at its
-    // original registration slot instead of treating the only King as absent.
+    // original registration slot while alive. A retired King is absent from
+    // instance_exists/object-qualified lookup despite its continuing event.
     let target = game
         .dispatcher
         .registration_order
@@ -720,15 +723,15 @@ fn king_yell_ice(game: &mut Game, receiver: &Entity) {
         .copied()
         .find_map(|instance| {
             if instance == Instance::Entity(receiver.id) {
-                return Some(receiver.pos);
+                return (receiver.alive && receiver.engine_active).then_some(receiver.pos);
             }
             (crate::dispatcher::is_active(game, instance)
                 && crate::catalog::is_a(instance.object(game), "oYetiKing")
                 && matches!(instance, Instance::Entity(id) if game.world.entity(id).is_some()))
             .then(|| instance.position(game))
         })
-        // Focused event callers may supply a receiver before registration.
-        .unwrap_or(receiver.pos);
+        // Focused event callers may supply a live receiver before registration.
+        .or_else(|| (receiver.alive && receiver.engine_active).then_some(receiver.pos));
 
     // Source with(oIce) captures its initial count and skips dead slots before
     // the body. Its only family deletion is the current receiver; IceBlock,
@@ -742,6 +745,11 @@ fn king_yell_ice(game: &mut Game, receiver: &Entity) {
         {
             continue;
         }
+        // Source guards each Ice body with instance_exists(oYetiKing).
+        // The separate ThinIce pass still runs when this was the last King.
+        let Some(target) = target else {
+            continue;
+        };
         let roll = game.rng.range(60);
         let origin = instance.position(game);
         if roll == 0
