@@ -666,11 +666,13 @@ fn rock_player_contact(game: &mut Game) {
                 .misc_death(crate::statistics::MiscDeath::Rock);
         }
         game.player.vel = Vec2::new(vx, -4.0);
-        game.player.stun = 20;
         if damaged {
             game.events.push(GameEvent::Damage { amount: 2 });
         }
+        // oPlayer1 Step1630: synchronous script Blood precedes sound/stun.
+        crate::player::script_player_blood(game, 3);
         game.sound("sndHurt", game.player.pos);
+        game.player.stun = 20;
     }
 }
 
@@ -3187,3 +3189,7 @@ mod bullet_character_source_tests {
 }
 
 include!("arrow_player_blood_tests.rs");
+
+#[cfg(test)]
+#[path = "rock_player_blood_tests.rs"]
+mod rock_player_blood_source_tests;
