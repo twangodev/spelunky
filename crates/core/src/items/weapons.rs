@@ -871,10 +871,8 @@ pub fn player_step(game: &mut Game) {
 /// Source release is independent from aggregate held state in mixed-device play.
 /// The compatibility driver above retains held-only subsystem fixtures.
 pub(crate) fn player_step_with_release(game: &mut Game, attack_released: bool) {
-    let bow_strength = game.player.data.get("bow_strength").copied().unwrap_or(0.0);
     for item in game.world.entities.iter_mut().filter(|e| e.alive && e.held) {
         let base = match item.object.as_str() {
-            "oBow" => "Bow",
             "oPistol" => "Pistol",
             "oShotgun" => "Shotgun",
             "oSceptre" => "Sceptre",
@@ -900,17 +898,6 @@ pub(crate) fn player_step_with_release(game: &mut Game, attack_released: bool) {
             )
         };
         item.set_sprite(&sprite);
-        if item.object == "oBow" {
-            item.animation = if bow_strength >= 10.0 {
-                3.0
-            } else if bow_strength > 6.0 {
-                2.0
-            } else if bow_strength > 2.0 {
-                1.0
-            } else {
-                0.0
-            };
-        }
     }
     if let Some(cooldown) = game.player.data.get_mut("weapon_cooldown") {
         *cooldown = (*cooldown - 1.0).max(0.0);
@@ -937,6 +924,30 @@ pub(crate) fn player_step_with_release(game: &mut Game, attack_released: bool) {
             }
         }
     }
+}
+
+/// oBow's own Step follows inherited oItem Step and Player charge/release.
+/// The child frame refresh is unconditional, even outside oItem's 16px gate.
+pub(super) fn bow_step(game: &Game, bow: &mut Entity) {
+    bow.animation = if bow.held {
+        bow.set_sprite(if game.player.facing < 0 {
+            "sBowLeft"
+        } else {
+            "sBowRight"
+        });
+        let strength = game.player.data.get("bow_strength").copied().unwrap_or(0.0);
+        if strength >= 10.0 {
+            3.0
+        } else if strength > 6.0 {
+            2.0
+        } else if strength > 2.0 {
+            1.0
+        } else {
+            0.0
+        }
+    } else {
+        0.0
+    };
 }
 
 /// oPlayer pre/forward weapon queries precede action input in the source.

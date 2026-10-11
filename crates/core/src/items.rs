@@ -318,6 +318,9 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         return;
     };
     update_depth(game, &mut entity);
+    if entity.object == "oBow" {
+        weapons::bow_step(game, &mut entity);
+    }
     if let Some(slot) = game.world.entities.iter_mut().find(|e| e.id == id) {
         *slot = entity;
     }
