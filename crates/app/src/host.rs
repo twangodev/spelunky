@@ -185,6 +185,7 @@ struct App {
     donation_confirm: bool,
     recorded: bool,
     cinematic_action: bool,
+    pause_start_requested: bool,
     exit_requested: bool,
     focused: bool,
     occluded: bool,
@@ -232,6 +233,7 @@ impl App {
             donation_confirm: false,
             recorded: false,
             cinematic_action: false,
+            pause_start_requested: false,
             exit_requested: false,
             focused: true,
             occluded: false,
@@ -266,6 +268,7 @@ impl App {
     }
     fn reset_timing(&mut self) {
         self.cinematic_action = false;
+        self.pause_start_requested = false;
         self.donation_confirm = false;
         self.timing.reset(self.now());
         self.input.clear_gameplay();
@@ -517,6 +520,18 @@ impl App {
                 if matches!(key, KeyCode::Enter | KeyCode::Escape) {
                     self.continue_transition();
                 }
+            }
+            Screen::Pause => {
+                self.pause_start_requested |= key == KeyCode::Escape;
+                // Source BeginStep resolves all queued independent edges together.
+                // A rebound menu key must not also select a modern pause item.
+                if self.pause_start_requested
+                    || self.input.action_key("bomb", key)
+                    || self.input.action_key("rope", key)
+                {
+                    return;
+                }
+                self.menu_key(key);
             }
             Screen::Playing => {
                 if self
@@ -1057,6 +1072,33 @@ impl App {
         if !buttons.is_empty() {
             self.audio.unlock();
         }
+        if self.screen == Screen::Pause && self.focused && !self.occluded {
+            let input = self.input.take_tick();
+            let start = std::mem::take(&mut self.pause_start_requested)
+                || buttons.contains(&UiButton::Pause);
+            if let Some(control) = source_paused_control(self.game.as_ref(), &input, start) {
+                // Bomb's branch consumes Rope/Start even if its room/life guard fails.
+                buttons.clear();
+                match control {
+                    SourcePausedControl::Blocked => {}
+                    SourcePausedControl::Suicide => {
+                        let stop_music = self.game.as_mut().is_some_and(apply_source_pause_suicide);
+                        self.screen(Screen::Playing);
+                        if stop_music {
+                            self.audio.stop_music();
+                        }
+                    }
+                    SourcePausedControl::Quit => {
+                        self.exit_requested = true;
+                        self.input.clear();
+                        self.audio.stop_music();
+                        self.audio.pause(true);
+                        return;
+                    }
+                    SourcePausedControl::Resume => self.screen(Screen::Playing),
+                }
+            }
+        }
         let controller_screen = self.screen;
         for button in buttons {
             // One physical control may be both Confirm/Cancel and remapped
@@ -1114,7 +1156,14 @@ impl App {
                 let capturing =
                     self.screen == Screen::Settings && self.settings_ui.awaiting_binding();
                 if let Some(key) = controller_menu_key(button, capturing) {
-                    self.key(key, None);
+                    if self.screen == Screen::Pause {
+                        // These are menu edges, not physical keyboard presses.
+                        // Source action edges were resolved above; keyboard aliases
+                        // must not swallow a controller navigation or confirmation.
+                        self.menu_key(key);
+                    } else {
+                        self.key(key, None);
+                    }
                 }
             }
         }
@@ -1996,6 +2045,43 @@ fn source_host_control(
     }
     None
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SourcePausedControl {
+    Blocked,
+    Suicide,
+    Quit,
+    Resume,
+}
+fn source_paused_control(
+    game: Option<&Game>,
+    input: &spelunky_core::InputFrame,
+    start: bool,
+) -> Option<SourcePausedControl> {
+    if input.bomb_pressed {
+        Some(
+            if game.is_some_and(|game| game.player.health > 0 && game.is_level()) {
+                SourcePausedControl::Suicide
+            } else {
+                SourcePausedControl::Blocked
+            },
+        )
+    } else if input.rope_pressed {
+        Some(SourcePausedControl::Quit)
+    } else if start {
+        Some(SourcePausedControl::Resume)
+    } else {
+        None
+    }
+}
+fn apply_source_pause_suicide(game: &mut Game) -> bool {
+    game.player.vel = spelunky_core::Vec2::new(if game.player.facing < 0 { -3. } else { 3. }, -6.);
+    game.player.health = -99;
+    let stop_music = !game.player.equipment.contains("Ankh");
+    if stop_music {
+        game.flags.insert("source_music_stopped".into());
+    }
+    stop_music
+}
 fn apply_source_suicide(game: &mut Game) {
     game.player.vel = spelunky_core::Vec2::new(if game.player.facing < 0 { -3. } else { 3. }, -6.);
     game.player.health = -99;
@@ -2642,7 +2728,10 @@ impl ApplicationHandler<UserEvent> for App {
                     if pressed {
                         self.audio.unlock();
                     }
-                    if matches!(self.screen, Screen::Playing | Screen::Donation) {
+                    if matches!(
+                        self.screen,
+                        Screen::Playing | Screen::Donation | Screen::Pause
+                    ) {
                         self.input.key(key, pressed, event.repeat);
                     }
                     if pressed && !event.repeat {
@@ -3144,6 +3233,155 @@ mod tests {
         assert_eq!(game.world.name, "rTitle");
         assert!(game.opening.is_none());
         assert_eq!(game_music(&game), "title");
+    }
+    #[test]
+    fn source_paused_bomb_consumes_rope_and_start_even_when_life_or_room_blocks_suicide() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        let all = spelunky_core::InputFrame {
+            bomb_pressed: true,
+            rope_pressed: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            source_paused_control(Some(&game), &all, true),
+            Some(SourcePausedControl::Suicide)
+        );
+        game.player.health = 0;
+        assert_eq!(
+            source_paused_control(Some(&game), &all, true),
+            Some(SourcePausedControl::Blocked)
+        );
+        game.player.health = 4;
+        for room in [
+            "rTitle",
+            "rHighscores",
+            "rSunRoom",
+            "rMoonRoom",
+            "rStarsRoom",
+            "rIntro",
+            "rTransition1",
+            "rEnd",
+        ] {
+            game.world.name = room.into();
+            assert_eq!(
+                source_paused_control(Some(&game), &all, true),
+                Some(SourcePausedControl::Blocked),
+                "{room}"
+            );
+        }
+        for room in [
+            "rTutorial",
+            "rLoadLevel",
+            "rLevel",
+            "rLevel2",
+            "rLevel3",
+            "rOlmec",
+        ] {
+            game.world.name = room.into();
+            assert_eq!(
+                source_paused_control(Some(&game), &all, true),
+                Some(SourcePausedControl::Suicide),
+                "{room}"
+            );
+        }
+        assert_eq!(
+            source_paused_control(None, &all, true),
+            Some(SourcePausedControl::Blocked)
+        );
+        let rope = spelunky_core::InputFrame {
+            rope_pressed: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            source_paused_control(None, &rope, true),
+            Some(SourcePausedControl::Quit)
+        );
+        assert_eq!(
+            source_paused_control(None, &Default::default(), true),
+            Some(SourcePausedControl::Resume)
+        );
+        assert_eq!(
+            source_paused_control(None, &Default::default(), false),
+            None
+        );
+    }
+    #[test]
+    fn source_paused_bomb_ankh_revival_keeps_music_but_preserves_an_existing_stop() {
+        for already_stopped in [false, true] {
+            let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+            game.player.equipment.insert("Ankh".into());
+            game.player.invincible = 77;
+            if already_stopped {
+                game.flags.insert("source_music_stopped".into());
+            }
+            assert!(!apply_source_pause_suicide(&mut game));
+            assert_eq!(game.player.health, -99);
+            assert_eq!(game.player.invincible, 77);
+            assert!(game.player.has("Ankh"));
+            assert!(game.events.is_empty());
+            let bombs = game.player.bombs;
+            game.step(&spelunky_core::InputFrame {
+                bomb_pressed: true,
+                ..Default::default()
+            });
+            assert_eq!(
+                game.player.bombs, bombs,
+                "nonpositive life blocks the player Bomb action before Ankh revival"
+            );
+            assert_eq!(game.state, RunState::Playing);
+            assert_eq!(game.player.health, 4);
+            assert!(!game.player.has("Ankh"));
+            assert_eq!(game_music(&game), if already_stopped { "" } else { "cave" });
+            assert!(
+                !game
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, GameEvent::Damage { .. } | GameEvent::Died))
+            );
+        }
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        assert!(apply_source_pause_suicide(&mut game));
+        assert!(game.flags.contains("source_music_stopped"));
+        game.step(&Default::default());
+        assert_eq!(game.state, RunState::Dead);
+        assert_eq!(game.lifetime_stats.level_deaths, [0; 16]);
+    }
+    #[test]
+    fn source_paused_bound_actions_keep_validated_aliases_and_require_a_fresh_edge() {
+        let mut input = InputState::default();
+        let mut bindings = std::collections::BTreeMap::new();
+        bindings.insert("bomb".into(), "Enter,KeyQ".into());
+        bindings.insert("rope".into(), "Enter".into());
+        input.set_bindings(&bindings);
+        assert!(input.action_key("bomb", KeyCode::Enter));
+        input.key(KeyCode::Enter, true, false);
+        let game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        assert_eq!(
+            source_paused_control(Some(&game), &input.take_tick(), true),
+            Some(SourcePausedControl::Suicide)
+        );
+        assert_eq!(
+            source_paused_control(Some(&game), &input.take_tick(), false),
+            None
+        );
+        input.key(KeyCode::Enter, true, true);
+        assert_eq!(
+            source_paused_control(Some(&game), &input.take_tick(), false),
+            None
+        );
+        input.key(KeyCode::Enter, false, false);
+        input.take_tick();
+        input.key(KeyCode::Enter, true, false);
+        assert_eq!(
+            source_paused_control(Some(&game), &input.take_tick(), false),
+            Some(SourcePausedControl::Suicide)
+        );
+        bindings.insert("bomb".into(), "invalid".into());
+        bindings.insert("rope".into(), "".into());
+        input.set_bindings(&bindings);
+        assert!(input.action_key("bomb", KeyCode::KeyB));
+        assert!(!input.action_key("bomb", KeyCode::Enter));
+        assert!(!input.action_key("rope", KeyCode::KeyR));
     }
     #[test]
     fn source_f1_requires_pause_life_and_an_active_level_while_f10_only_requires_pause() {

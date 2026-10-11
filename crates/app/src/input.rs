@@ -164,6 +164,13 @@ impl InputState {
         self.clear();
     }
 
+    /// Query the validated keyboard alternatives, including default fallbacks.
+    pub fn action_key(&self, action: &str, key: KeyCode) -> bool {
+        self.bindings
+            .get(action)
+            .is_some_and(|keys| keys.contains(&key))
+    }
+
     pub fn set_controller_bindings(&mut self, bindings: &BTreeMap<String, String>) {
         self.controller_bindings = controller::validated_bindings(bindings);
         self.clear();
@@ -1371,6 +1378,36 @@ mod tests {
         assert!(input.take_tick().attack_pressed);
     }
 
+    #[test]
+    fn pause_controller_ui_edges_do_not_become_rebound_keyboard_bomb_or_rope() {
+        for (action, key) in [("bomb", "ArrowDown"), ("rope", "Enter")] {
+            let mut input = InputState::default();
+            input.set_bindings(&BTreeMap::from([(action.into(), key.into())]));
+            // set_bindings requires a neutral controller sample before new edges.
+            input.accept_gamepads(Actions::default(), 0);
+            let mut down = Actions::default();
+            down.set(Action::Down, true);
+            input.accept_gamepads(down, 1 << 1);
+            assert_eq!(input.ui_pressed(), [UiButton::Down]);
+            let frame = input.take_tick();
+            assert!(frame.down_pressed);
+            assert!(!frame.bomb_pressed && !frame.rope_pressed);
+            input.accept_gamepads(Actions::default(), 0);
+            input.take_tick();
+            let mut confirm = Actions::default();
+            confirm.set(Action::Jump, true);
+            input.accept_gamepads(confirm, 1 << 4);
+            assert_eq!(input.ui_pressed(), [UiButton::Confirm]);
+            let frame = input.take_tick();
+            assert!(frame.jump_pressed);
+            assert!(!frame.bomb_pressed && !frame.rope_pressed);
+            // A genuine rebound physical keyboard press still produces the action.
+            input.key(parse_key(key).unwrap(), true, false);
+            let frame = input.take_tick();
+            assert_eq!(frame.bomb_pressed, action == "bomb");
+            assert_eq!(frame.rope_pressed, action == "rope");
+        }
+    }
     #[test]
     fn controller_disconnect_preserves_keyboard_and_releases_controller() {
         let mut input = InputState::default();
