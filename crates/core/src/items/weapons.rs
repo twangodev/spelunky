@@ -546,7 +546,7 @@ pub(super) fn item_rotation(velocity: Vec2, stuck: bool, previous: f64) -> f64 {
 }
 
 fn hit_player(game: &mut Game, projectile: &mut Entity, damage: i32) {
-    if game.player.is_exiting() || super::player_dead(game) {
+    if game.player.is_exiting() || projectile.object != "oBullet" && super::player_dead(game) {
         return;
     }
     // Classic projectile damage bypasses contact-damage invulnerability.
@@ -571,6 +571,11 @@ fn hit_player(game: &mut Game, projectile: &mut Entity, damage: i32) {
             .enemy_death(crate::statistics::EnemyDeath::Shopkeeper);
     }
     game.player.vel = Vec2::new(projectile.vel.x, -4.0);
+    if projectile.object == "oBullet" {
+        // Character collision creates Blood directly at the receiver's origin,
+        // even on a corpse. It does not use scrCreateBlood's bloodless/16 cap.
+        game.spawn("oBlood", game.player.pos);
+    }
     game.player.stun = 20;
     if damaged {
         game.events.push(GameEvent::Damage { amount: damage });
@@ -2891,5 +2896,181 @@ mod tests {
                 .health
                 < hp
         );
+    }
+}
+
+#[cfg(test)]
+mod bullet_character_source_tests {
+    use super::*;
+    use crate::dispatcher::Instance;
+
+    // Literal oBlood inherited/own Create: its caller is direct instance_create,
+    // not scrCreateBlood. The four draws also run after inherited cap removal.
+    fn literal_blood_create(rng: &mut Rng) -> (Vec2, f64) {
+        let velocity = Vec2::new(rng.unit() * 4.0 - rng.unit() * 4.0, -1.0 - rng.unit() * 2.0);
+        let gravity = f64::from(1 + rng.range(6)) * 0.1;
+        (velocity, gravity)
+    }
+
+    #[test]
+    fn bullet_character_literal_health_exit_dead_flags_caps_rng_and_retirement() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for (health, dead, room) in [
+                (8, false, "rLevel"),
+                (4, false, "rLevel"),
+                (0, false, "rLevel"),
+                (-2, false, "rLevel"),
+                (8, true, "rLevel"),
+                (0, true, "rLevel"),
+                (4, false, "rTitle"),
+            ] {
+                for sprite in ["sStandLeft", "sPExit", "sDamselExit", "sTunnelExit"] {
+                    for count in [0, 15, 16, 31, 32] {
+                        for (safe, owner, protected, bloodless) in [
+                            (false, false, false, false),
+                            (true, false, false, false),
+                            (true, true, true, false),
+                            (true, true, true, true),
+                        ] {
+                            let mut game = Game::shell(7, rules);
+                            game.world.name = room.into();
+                            game.player.pos = Vec2::new(104.0, 120.0);
+                            game.player.health = health;
+                            game.player.vel = Vec2::new(1.0, 2.0);
+                            game.player.invincible = if protected { 100 } else { 0 };
+                            game.player.stun = if protected { 9 } else { 0 };
+                            if dead {
+                                game.player.state = PlayerState::Dead;
+                                game.state = RunState::Dead;
+                            }
+                            game.player.set_sprite(sprite);
+                            game.player
+                                .data
+                                .insert("bloodless".into(), f64::from(bloodless));
+                            if bloodless {
+                                game.flags.insert("bloodless".into());
+                            }
+                            for _ in 0..count {
+                                game.spawn("oBone", Vec2::new(200.0, 120.0));
+                            }
+                            let held = game.spawn("oRock", game.player.pos);
+                            game.world.entity_mut(held).unwrap().held = true;
+                            game.player.held = Some(held);
+                            let bullet = game.spawn("oBullet", Vec2::new(104.0, 118.0));
+                            let projectile = game.world.entity_mut(bullet).unwrap();
+                            projectile.vel = Vec2::new(12.0, 0.5);
+                            projectile.data.insert("safe".into(), f64::from(safe));
+                            projectile
+                                .data
+                                .insert("owner_player".into(), f64::from(owner));
+                            let mut oracle = game.rng.clone();
+                            let exiting = sprite != "sStandLeft";
+                            let expected_birth = if exiting {
+                                None
+                            } else {
+                                Some(literal_blood_create(&mut oracle))
+                            };
+                            collision(&mut game, bullet, Instance::Player);
+                            let births: Vec<_> = game
+                                .world
+                                .entities
+                                .iter()
+                                .filter(|e| e.id > bullet)
+                                .collect();
+                            assert_eq!(
+                                births.len(),
+                                usize::from(!exiting),
+                                "health={health} dead={dead} sprite={sprite} count={count}"
+                            );
+                            if let Some((velocity, gravity)) = expected_birth {
+                                let blood = births[0];
+                                assert_eq!(blood.object, "oBlood");
+                                assert_eq!(blood.pos, Vec2::new(104.0, 120.0));
+                                assert_eq!(blood.vel, velocity);
+                                assert_eq!(blood.value("gravity"), gravity);
+                                assert_eq!(blood.alive, count < 32);
+                                assert_eq!(blood.value("life"), 60.0);
+                                assert_eq!(blood.value("bounce"), 0.0);
+                                assert_eq!(blood.value("invincible"), 1.0);
+                                assert_eq!(blood.value("collectible"), 0.0);
+                                assert_eq!(&blood.alarms[..3], &[1, 1, 5]);
+                                assert_eq!(blood.image_speed(), 0.3);
+                            }
+                            let damaged = !exiting && health > 0;
+                            assert_eq!(
+                                game.player.health,
+                                if damaged { health - 4 } else { health }
+                            );
+                            assert_eq!(
+                                game.player.vel,
+                                if exiting {
+                                    Vec2::new(1.0, 2.0)
+                                } else {
+                                    Vec2::new(12.0, -4.0)
+                                }
+                            );
+                            assert_eq!(
+                                game.player.stun,
+                                if exiting {
+                                    if protected { 9 } else { 0 }
+                                } else {
+                                    20
+                                }
+                            );
+                            assert_eq!(game.world.entity(bullet).is_some(), exiting);
+                            assert_eq!(
+                                game.player.held,
+                                Some(held),
+                                "Bullet does not release held item in this callback"
+                            );
+                            assert_eq!(
+                                game.lifetime_stats.enemy_deaths[19],
+                                u64::from(damaged && health <= 4 && room == "rLevel")
+                            );
+                            assert_eq!(game.lifetime_stats.misc_deaths, [0; 12]);
+                            assert_eq!(
+                                game.events
+                                    .iter()
+                                    .filter(|e| matches!(e, GameEvent::Damage { amount: 4 }))
+                                    .count(),
+                                usize::from(damaged)
+                            );
+                            assert_eq!(game.events.iter().filter(|e| matches!(e, GameEvent::Sound{name,..} if name=="sndHurt")).count(), usize::from(!exiting));
+                            assert_eq!(game.rng.clone().next_u64(), oracle.next_u64());
+                            if !exiting {
+                                let before = serde_json::to_value(&game.world).unwrap();
+                                let events = game.events.len();
+                                let rng = game.rng.clone().next_u64();
+                                collision(&mut game, bullet, Instance::Player);
+                                assert_eq!(serde_json::to_value(&game.world).unwrap(), before);
+                                assert_eq!(game.events.len(), events);
+                                assert_eq!(game.rng.next_u64(), rng);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn arrow_shared_hit_keeps_existing_dead_guard_and_no_bullet_blood() {
+        for dead in [false, true] {
+            let mut game = Game::shell(7, RulesPreset::Classic);
+            game.player.health = 8;
+            game.player.pos = Vec2::new(104.0, 120.0);
+            if dead {
+                game.player.state = PlayerState::Dead;
+                game.state = RunState::Dead;
+            }
+            let mut arrow = Entity::new(100, "oArrow", game.player.pos);
+            arrow.vel.x = 12.0;
+            let rng = game.rng.clone().next_u64();
+            hit_player(&mut game, &mut arrow, 4);
+            assert_eq!(game.player.health, if dead { 8 } else { 4 });
+            assert_eq!(arrow.alive, dead);
+            assert!(!game.world.entities.iter().any(|e| e.object == "oBlood"));
+            assert_eq!(game.rng.next_u64(), rng);
+        }
     }
 }
