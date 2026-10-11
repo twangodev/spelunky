@@ -1093,7 +1093,11 @@ fn step_bomb_body(game: &mut Game, bomb: &mut Entity) {
             bomb.data.insert("sticky_y".into(), pos.y - bomb.pos.y);
             // oItem Step248/266 overwrites the backlink. The earlier bomb is
             // deliberately left attached: the one-bomb restriction is commented out.
-            game.world.entity_mut(id).unwrap().data.insert("bomb_id".into(), bomb.id as f64);
+            game.world
+                .entity_mut(id)
+                .unwrap()
+                .data
+                .insert("bomb_id".into(), bomb.id as f64);
         }
     }
 }
@@ -1103,13 +1107,18 @@ fn step_bomb_body(game: &mut Game, bomb: &mut Entity) {
 fn sticky_target(game: &mut Game, pos: Vec2) -> Option<(u64, Vec2)> {
     use crate::dispatcher::Instance;
     crate::dispatcher::register_instances(game);
-    let contact = |e: &Entity| e.collision_mask().intersects_rectangle_bbox(
-        Vec2::new(pos.x - 2.0, pos.y - 2.0),
-        Vec2::new(pos.x + 2.0, pos.y + 2.0),
-    );
+    let contact = |e: &Entity| {
+        e.collision_mask().intersects_rectangle_bbox(
+            Vec2::new(pos.x - 2.0, pos.y - 2.0),
+            Vec2::new(pos.x + 2.0, pos.y + 2.0),
+        )
+    };
     let enemies: Vec<_> = crate::dispatcher::descendant_instances(game, "oEnemy")
         .into_iter()
-        .filter_map(|i| match i { Instance::Entity(id) => game.world.entity(id), _ => None })
+        .filter_map(|i| match i {
+            Instance::Entity(id) => game.world.entity(id),
+            _ => None,
+        })
         .filter(|e| e.engine_active)
         .collect();
     if enemies.iter().any(|e| contact(e)) {
@@ -1126,7 +1135,10 @@ fn sticky_target(game: &mut Game, pos: Vec2) -> Option<(u64, Vec2)> {
     }
     crate::dispatcher::descendant_instances(game, "oDamsel")
         .into_iter()
-        .filter_map(|i| match i { Instance::Entity(id) => game.world.entity(id), _ => None })
+        .filter_map(|i| match i {
+            Instance::Entity(id) => game.world.entity(id),
+            _ => None,
+        })
         .find(|e| e.engine_active && contact(e))
         .map(|e| (e.id, e.pos))
 }
@@ -1134,8 +1146,17 @@ fn sticky_target(game: &mut Game, pos: Vec2) -> Option<(u64, Vec2)> {
 /// Literal oBomb Destroy. It clears the receiver unconditionally, even when
 /// another live bomb has since overwritten that receiver's bombID.
 pub(crate) fn destroy_bomb(game: &mut Game, id: u64) {
-    let Some(bomb) = game.world.entities.iter_mut().find(|e| e.id == id && e.object == "oBomb") else { return; };
-    if bomb.alive || bomb.value("bomb_destroyed") != 0.0 { return; }
+    let Some(bomb) = game
+        .world
+        .entities
+        .iter_mut()
+        .find(|e| e.id == id && e.object == "oBomb")
+    else {
+        return;
+    };
+    if bomb.alive || bomb.value("bomb_destroyed") != 0.0 {
+        return;
+    }
     bomb.data.insert("bomb_destroyed".into(), 1.0);
     let target = bomb.value("attached_id") as u64;
     if let Some(receiver) = game.world.entity_mut(target) {
@@ -1146,9 +1167,13 @@ pub(crate) fn destroy_bomb(game: &mut Game, id: u64) {
 /// oEnemy Destroy and Damsel's own inherited Item/own Destroy chain.
 /// Scarab replaces Enemy Destroy without action_inherited.
 pub(crate) fn sticky_receiver_destroyed(game: &mut Game, receiver: &mut Entity) {
-    if receiver.alive || receiver.value("sticky_destroyed") != 0.0
+    if receiver.alive
+        || receiver.value("sticky_destroyed") != 0.0
         || !(crate::enemies::is_enemy(&receiver.object) && receiver.object != "oScarab"
-            || receiver.object == "oDamsel") { return; }
+            || receiver.object == "oDamsel")
+    {
+        return;
+    }
     receiver.data.insert("sticky_destroyed".into(), 1.0);
     if let Some(bomb) = game.world.entity_mut(receiver.value("bomb_id") as u64) {
         bomb.data.insert("attached_id".into(), 0.0);
@@ -1157,10 +1182,16 @@ pub(crate) fn sticky_receiver_destroyed(game: &mut Game, receiver: &mut Entity) 
 
 /// Fallback for cross-system retirements; normal Bomb Alarm runs synchronously.
 pub(crate) fn finish_sticky_destroy_events(game: &mut Game) {
-    let ids: Vec<_> = game.world.entities.iter()
+    let ids: Vec<_> = game
+        .world
+        .entities
+        .iter()
         .filter(|e| !e.alive && e.object == "oBomb" && e.value("bomb_destroyed") == 0.0)
-        .map(|e| e.id).collect();
-    for id in ids { destroy_bomb(game, id); }
+        .map(|e| e.id)
+        .collect();
+    for id in ids {
+        destroy_bomb(game, id);
+    }
 }
 
 fn warn_shopkeeper(game: &mut Game, bomb: &Entity) {
@@ -1955,7 +1986,10 @@ fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
                 entity.pos.y + 8.0 + f64::from(game.rng.range(9)) - f64::from(game.rng.range(9)),
             );
             let id = game.spawn("oRubbleSmall", pos);
-            game.world.entity_mut(id).unwrap().set_sprite("sRubbleTanSmall");
+            game.world
+                .entity_mut(id)
+                .unwrap()
+                .set_sprite("sRubbleTanSmall");
         }
         return;
     }

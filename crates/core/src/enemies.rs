@@ -422,10 +422,19 @@ fn destroyed(game: &mut Game, e: &mut Entity) {
 /// Finish a cross-system actor instance_destroy before the caller resumes.
 /// Raw lookup retains the receiver whose alive flag the producer just cleared.
 pub(crate) fn finish_actor_destroy(game: &mut Game, id: u64) {
-    let Some(mut actor) = game.world.entities.iter()
-        .find(|e| e.id == id && !e.alive && (is_actor(&e.object) || is_enemy(&e.object))).cloned() else { return; };
+    let Some(mut actor) = game
+        .world
+        .entities
+        .iter()
+        .find(|e| e.id == id && !e.alive && (is_actor(&e.object) || is_enemy(&e.object)))
+        .cloned()
+    else {
+        return;
+    };
     destroyed(game, &mut actor);
-    if let Some(stored) = game.world.entities.iter_mut().find(|e| e.id == id) { *stored = actor; }
+    if let Some(stored) = game.world.entities.iter_mut().find(|e| e.id == id) {
+        *stored = actor;
+    }
 }
 
 /// Source cross-system instance_destroy of an emitter finishes its own Destroy
@@ -450,14 +459,23 @@ pub(crate) fn destroy_barrier_emitter(game: &mut Game, id: u64) {
 pub(crate) fn finish_destroy_events(game: &mut Game) {
     // Most actor callbacks finish Destroy through with_actor. Preserve the
     // backlink callback for deaths written by another family before cleanup.
-    let dead: Vec<_> = game.world.entities.iter()
-        .filter(|e| !e.alive && e.value("sticky_destroyed") == 0.0
-            && (is_enemy(&e.object) || e.object == "oDamsel"))
-        .map(|e| e.id).collect();
+    let dead: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|e| {
+            !e.alive
+                && e.value("sticky_destroyed") == 0.0
+                && (is_enemy(&e.object) || e.object == "oDamsel")
+        })
+        .map(|e| e.id)
+        .collect();
     for id in dead {
         if let Some(mut receiver) = game.world.entities.iter().find(|e| e.id == id).cloned() {
             crate::items::explosives::sticky_receiver_destroyed(game, &mut receiver);
-            if let Some(stored) = game.world.entities.iter_mut().find(|e| e.id == id) { *stored = receiver; }
+            if let Some(stored) = game.world.entities.iter_mut().find(|e| e.id == id) {
+                *stored = receiver;
+            }
         }
     }
     crate::items::explosives::finish_sticky_destroy_events(game);

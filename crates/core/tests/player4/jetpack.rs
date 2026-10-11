@@ -1,14 +1,20 @@
 //! Proposed integration regressions for the private Jetpack refuel increment.
 //! Source review only: this file has not been built or executed.
 //! Source Player Step: lava -> owned-Jetpack refuel -> pit -> active controller.
-use spelunky_core::{level::Level, Game, InputFrame, PlayerState, RulesPreset};
+use spelunky_core::{Game, InputFrame, PlayerState, RulesPreset, level::Level};
 
 fn fuel(game: &Game) -> f64 {
     game.player.data.get("jetpack_fuel").copied().unwrap_or(0.0)
 }
 
 fn source_grounded(state: PlayerState) -> bool {
-    matches!(state, PlayerState::Standing | PlayerState::Running | PlayerState::Ducking | PlayerState::LookingUp)
+    matches!(
+        state,
+        PlayerState::Standing
+            | PlayerState::Running
+            | PlayerState::Ducking
+            | PlayerState::LookingUp
+    )
 }
 
 fn initial_floor_and_pack(rules: RulesPreset) -> Game {
@@ -73,11 +79,26 @@ fn naturally_owned_jetpack_consumes_fuel_in_air_and_refills_after_landing() {
         assert_eq!(fuel(&game), 0.0);
         game.step(&InputFrame::default());
         assert_eq!(fuel(&game), 50.0);
-        game.step(&InputFrame { jump: true, jump_pressed: true, ..Default::default() });
+        game.step(&InputFrame {
+            jump: true,
+            jump_pressed: true,
+            ..Default::default()
+        });
         assert!(!source_grounded(game.player.state));
-        assert_eq!(fuel(&game), 50.0, "a fresh ground jump does not activate thrust");
-        game.step(&InputFrame { jump_released: true, ..Default::default() });
-        game.step(&InputFrame { jump: true, jump_pressed: true, ..Default::default() });
+        assert_eq!(
+            fuel(&game),
+            50.0,
+            "a fresh ground jump does not activate thrust"
+        );
+        game.step(&InputFrame {
+            jump_released: true,
+            ..Default::default()
+        });
+        game.step(&InputFrame {
+            jump: true,
+            jump_pressed: true,
+            ..Default::default()
+        });
         assert_eq!(fuel(&game), 49.0);
         let mut landed = false;
         for _ in 0..60 {

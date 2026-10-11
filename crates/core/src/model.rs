@@ -266,11 +266,7 @@ impl Player {
         )
     }
     fn collision_transform(&self) -> (Vec2, f64) {
-        let xscale = self
-            .data
-            .get("image_xscale")
-            .copied()
-            .unwrap_or(1.0);
+        let xscale = self.data.get("image_xscale").copied().unwrap_or(1.0);
         let yscale = self.data.get("image_yscale").copied().unwrap_or(1.0);
         let angle = -self
             .data

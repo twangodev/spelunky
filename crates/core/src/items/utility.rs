@@ -170,11 +170,16 @@ pub fn use_utility(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
     // by the platform engine. In particular the standing sprite is 12px wide
     // while the normal movement rectangle is 10px wide.
     let player_bounds = game.player.sprite_bounds();
-    let receiver = game.world.entities.iter().find(|e| {
-        e.alive
-            && crate::catalog::is_a(&e.object, "oEnemy")
-            && e.sprite_bounds().intersects(player_bounds)
-    }).cloned();
+    let receiver = game
+        .world
+        .entities
+        .iter()
+        .find(|e| {
+            e.alive
+                && crate::catalog::is_a(&e.object, "oEnemy")
+                && e.sprite_bounds().intersects(player_bounds)
+        })
+        .cloned();
     if let Some(receiver) = receiver {
         // scrUseItem runs scrCreateBlood in the receiver's context, at the
         // player's destination, before HP subtraction and synchronous Destroy.

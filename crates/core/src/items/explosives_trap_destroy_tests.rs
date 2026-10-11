@@ -55,10 +55,21 @@ fn own_door_destroy_is_unconditional_narrow_and_once_only() {
             let expected = source_rubble_positions(&mut source, origin, true);
             assert!(destroy_solid_self(&mut game, id));
             let actual = debris(&game);
-            assert_eq!(actual.len(), 2, "cleanDeath={clean_death}, cleanSolids={clean_solids}");
+            assert_eq!(
+                actual.len(),
+                2,
+                "cleanDeath={clean_death}, cleanSolids={clean_solids}"
+            );
             assert_eq!(actual.iter().map(|e| e.pos).collect::<Vec<_>>(), expected);
-            assert!(actual.iter().all(|e| e.object == "oRubbleSmall" && e.sprite == "sRubbleTanSmall"));
-            assert!(!game.world.fluid_dirty, "Door own event does not inherit Solid");
+            assert!(
+                actual
+                    .iter()
+                    .all(|e| e.object == "oRubbleSmall" && e.sprite == "sRubbleTanSmall")
+            );
+            assert!(
+                !game.world.fluid_dirty,
+                "Door own event does not inherit Solid"
+            );
             assert!(!destroy_solid_self(&mut game, id));
             assert_eq!(debris(&game).len(), 2);
             assert_eq!(game.rng.next_u64(), source.next_u64());
@@ -93,7 +104,12 @@ fn natural_bomb_input_destroys_authored_door_with_two_small_tan_pieces() {
         ..Default::default()
     });
     assert_eq!(game.player.bombs, 3);
-    assert!(game.world.entities.iter().any(|e| e.alive && e.object == "oBomb" && e.value("armed") != 0.0));
+    assert!(
+        game.world
+            .entities
+            .iter()
+            .any(|e| e.alive && e.object == "oBomb" && e.value("armed") != 0.0)
+    );
     let mut removed = false;
     for tick in 0..180 {
         game.step(&InputFrame {
@@ -103,7 +119,11 @@ fn natural_bomb_input_destroys_authored_door_with_two_small_tan_pieces() {
         if game.world.entity(door).is_none() {
             let actual = debris(&game);
             assert_eq!(actual.len(), 2, "ordinary Door Explosion Collision");
-            assert!(actual.iter().all(|e| e.object == "oRubbleSmall" && e.sprite == "sRubbleTanSmall"));
+            assert!(
+                actual
+                    .iter()
+                    .all(|e| e.object == "oRubbleSmall" && e.sprite == "sRubbleTanSmall")
+            );
             assert_eq!(game.player.health, original_health);
             removed = true;
             break;
@@ -114,14 +134,24 @@ fn natural_bomb_input_destroys_authored_door_with_two_small_tan_pieces() {
 
 #[test]
 fn own_non_spear_trap_destroy_uses_literal_three_piece_clean_guards() {
-    for object in ["oSmashTrap", "oSmashTrapLit", "oCeilingTrap", "oArrowRepeaterL", "oArrowRepeaterR"] {
+    for object in [
+        "oSmashTrap",
+        "oSmashTrapLit",
+        "oCeilingTrap",
+        "oArrowRepeaterL",
+        "oArrowRepeaterR",
+    ] {
         for clean_death in [false, true] {
             for clean_solids in [false, true] {
                 let mut game = callback_room();
                 let origin = Vec2::new(96.0, 80.0);
                 let id = game.spawn(object, origin);
                 assert_eq!(game.world.entity(id).unwrap().value("invincible"), 0.0);
-                game.world.entity_mut(id).unwrap().data.insert("cleanDeath".into(), if clean_death { 1.0 } else { 0.0 });
+                game.world
+                    .entity_mut(id)
+                    .unwrap()
+                    .data
+                    .insert("cleanDeath".into(), if clean_death { 1.0 } else { 0.0 });
                 if clean_solids {
                     game.flags.insert("cleanSolids".into());
                     game.data.insert("cleanSolids".into(), 1.0);
@@ -135,13 +165,24 @@ fn own_non_spear_trap_destroy_uses_literal_three_piece_clean_guards() {
                 };
                 assert!(destroy_solid_self(&mut game, id));
                 let actual = debris(&game);
-                assert_eq!(actual.iter().map(|e| e.pos).collect::<Vec<_>>(), expected, "{object}/{clean_death}/{clean_solids}");
+                assert_eq!(
+                    actual.iter().map(|e| e.pos).collect::<Vec<_>>(),
+                    expected,
+                    "{object}/{clean_death}/{clean_solids}"
+                );
                 if !expected.is_empty() {
                     assert_eq!(actual[0].object, "oRubble");
                     assert_eq!(actual[0].sprite, "sRubbleTan");
-                    assert!(actual[1..].iter().all(|e| e.object == "oRubbleSmall" && e.sprite == "sRubbleTanSmall"));
+                    assert!(
+                        actual[1..]
+                            .iter()
+                            .all(|e| e.object == "oRubbleSmall" && e.sprite == "sRubbleTanSmall")
+                    );
                 }
-                assert!(!game.world.fluid_dirty, "{object} own event must not inherit Solid");
+                assert!(
+                    !game.world.fluid_dirty,
+                    "{object} own event must not inherit Solid"
+                );
                 assert!(!destroy_solid_self(&mut game, id));
                 assert_eq!(game.rng.next_u64(), source.next_u64());
             }
