@@ -936,13 +936,13 @@ pub fn attack_step(game: &mut Game) {
 
 /// Source oPlayer hurt queries run before later resource-ordered projectile Step.
 pub fn player_hurt_queries(game: &mut Game) {
-    let query = Rect::new(game.player.pos.x - 8.0, game.player.pos.y - 8.0, 17.0, 17.0);
-    if game
-        .world
-        .entities
-        .iter()
-        .any(|e| e.alive && e.object == "oArrow" && e.sprite_bounds().intersects(query))
-    {
+    let first = Vec2::new(game.player.pos.x - 8.0, game.player.pos.y - 8.0);
+    let second = Vec2::new(game.player.pos.x + 8.0, game.player.pos.y + 8.0);
+    if game.world.entities.iter().any(|e| {
+        e.alive
+            && e.object == "oArrow"
+            && e.collision_mask().intersects_rectangle_bbox(first, second)
+    }) {
         let nearest = game
             .world
             .entities
@@ -2884,6 +2884,12 @@ mod tests {
         assert_eq!(
             game.player.health, 4,
             "entering the hurt query after Player Step waits until next Step"
+        );
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().pos.x, 76.0);
+        assert_eq!(
+            game.player.health, 4,
+            "source cached bbox ends at71; right+1 equals query min72, so it still misses"
         );
         game.step(&InputFrame::default());
         assert_eq!(game.player.health, 2);

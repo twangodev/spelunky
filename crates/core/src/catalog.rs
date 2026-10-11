@@ -372,6 +372,28 @@ impl CollisionMask {
         )
     }
 
+    /// The source `collision_rectangle(..., 0, ...)` predicate. Query corners
+    /// remain raw inclusive endpoints; the target uses its cached aggregate
+    /// integer bounds for the verified source transforms, as point queries do.
+    /// This also permits reversed corners and zero-area query rectangles.
+    pub fn intersects_rectangle_bbox(&self, first: Vec2, second: Vec2) -> bool {
+        if !first.x.is_finite()
+            || !first.y.is_finite()
+            || !second.x.is_finite()
+            || !second.y.is_finite()
+        {
+            return false;
+        }
+        let bounds = self.point_bounds();
+        // Canonical 0x4AC834..0x4AC923 compares the raw endpoints against
+        // inclusive cached edges. In particular, do not add one to query max.
+        bounds.is_valid()
+            && bounds.x + bounds.w > first.x.min(second.x)
+            && bounds.x <= first.x.max(second.x)
+            && bounds.y + bounds.h > first.y.min(second.y)
+            && bounds.y <= first.y.max(second.y)
+    }
+
     pub fn intersects(&self, rect: Rect, precision: CollisionPrecision) -> bool {
         if !self.bounds.intersects(rect) {
             return false;
