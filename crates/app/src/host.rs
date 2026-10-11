@@ -52,6 +52,7 @@ struct HostTiming {
     last_frame: f64,
     generation: u64,
     alpha: f64,
+    alpha_sample: Option<f64>,
     history_ready: bool,
 }
 impl Default for HostTiming {
@@ -61,12 +62,14 @@ impl Default for HostTiming {
             last_frame: 0.,
             generation: 0,
             alpha: 0.,
+            alpha_sample: None,
             history_ready: false,
         }
     }
 }
 #[derive(Clone, Copy)]
 struct HostFrame {
+    sampled_at: f64,
     elapsed: f64,
     generation: u64,
 }
@@ -76,9 +79,11 @@ impl HostTiming {
         self.last_frame = now;
         self.generation = self.generation.wrapping_add(1);
         self.history_ready = false;
+        self.alpha_sample = None;
     }
     fn begin_frame(&mut self, now: f64) -> HostFrame {
         let frame = HostFrame {
+            sampled_at: now,
             elapsed: (now - self.last_frame).max(0.),
             generation: self.generation,
         };
@@ -93,11 +98,41 @@ impl HostTiming {
         };
         let step = self.clock.advance(elapsed);
         self.alpha = step.alpha;
+        self.alpha_sample = (frame.generation == self.generation && frame.sampled_at.is_finite())
+            .then_some(frame.sampled_at);
         step
     }
     fn alpha(&self) -> f64 {
         if self.history_ready { self.alpha } else { 1. }
     }
+    /// Account for update work without consuming it from the fixed clock.
+    /// The next advance still receives the complete elapsed frame interval.
+    fn render_alpha(&self, now: f64, running: bool) -> f64 {
+        let alpha = self.alpha();
+        if !running || !self.history_ready {
+            return alpha;
+        }
+        let Some(sampled_at) = self.alpha_sample else {
+            return alpha;
+        };
+        if !now.is_finite() || now < sampled_at {
+            return alpha;
+        }
+        (alpha + (now - sampled_at) * f64::from(spelunky_core::TICK_RATE)).clamp(0., 1.)
+    }
+}
+
+fn render_clock_running(
+    screen: Screen,
+    focused: bool,
+    occluded: bool,
+    game: Option<&Game>,
+) -> bool {
+    focused
+        && !occluded
+        && (screen == Screen::Playing
+            || (screen == Screen::Finished
+                && game.is_some_and(|game| game.state == RunState::Dead)))
 }
 
 pub fn run() -> Result<(), String> {
@@ -1166,7 +1201,7 @@ impl App {
         }
         self.audio.update();
     }
-    fn draw(&self) -> Vec<DrawQuad> {
+    fn draw(&self, alpha: f64) -> Vec<DrawQuad> {
         let Some(atlas) = &self.atlas else {
             return vec![];
         };
@@ -1176,14 +1211,7 @@ impl App {
         ) {
             self.game
                 .as_ref()
-                .map(|g| {
-                    scene::game_scene(
-                        g,
-                        self.timing.alpha(),
-                        self.store.data.settings.pixel_snap,
-                        atlas,
-                    )
-                })
+                .map(|g| scene::game_scene(g, alpha, self.store.data.settings.pixel_snap, atlas))
                 .unwrap_or_default()
         } else {
             let mut q = vec![];
@@ -1622,7 +1650,7 @@ impl App {
         quads
     }
     #[cfg(target_arch = "wasm32")]
-    fn publish_test_snapshot(&self) {
+    fn publish_test_snapshot(&self, alpha: f64) {
         let Some(window) = web_sys::window() else {
             return;
         };
@@ -1636,7 +1664,7 @@ impl App {
         let mut snapshot = test_snapshot(
             self.screen,
             self.game.as_ref(),
-            &self.timing,
+            alpha,
             self.store.data.settings.pixel_snap,
         );
         snapshot["sourceMessage"] = self.source_message.as_ref().map(|message| {
@@ -1689,7 +1717,7 @@ impl App {
 fn test_snapshot(
     screen: Screen,
     game: Option<&Game>,
-    timing: &HostTiming,
+    alpha: f64,
     pixel_snap: bool,
 ) -> serde_json::Value {
     let Some(game) = game else {
@@ -1699,7 +1727,7 @@ fn test_snapshot(
     let alpha = if presentation.flags.contains("render_discontinuity") {
         1.
     } else {
-        timing.alpha()
+        alpha
     };
     let interpolate = |previous: spelunky_core::Vec2, current: spelunky_core::Vec2| {
         if previous.distance(current) > 64. {
@@ -2395,9 +2423,19 @@ impl ApplicationHandler<UserEvent> for App {
                     event_loop.exit();
                     return;
                 }
-                let quads = self.draw();
+                // Sample once after simulation; scene and diagnostics share this fraction.
+                let alpha = self.timing.render_alpha(
+                    self.now(),
+                    render_clock_running(
+                        self.screen,
+                        self.focused,
+                        self.occluded,
+                        self.game.as_ref(),
+                    ),
+                );
+                let quads = self.draw(alpha);
                 #[cfg(target_arch = "wasm32")]
-                self.publish_test_snapshot();
+                self.publish_test_snapshot(alpha);
                 if let Some(window) = &self.window {
                     window.pre_present_notify();
                 }
@@ -2464,6 +2502,250 @@ fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn render_alpha_eight_ms_work_is_read_only_for_actual_core_traces() {
+        for rate in [60, 120, 144, 240] {
+            let mut immediate = HostTiming::default();
+            let mut busy = HostTiming::default();
+            immediate.reset(10.);
+            busy.reset(10.);
+            let mut first = camera_follow_fixture();
+            let mut second = first.clone();
+            let mut count = 0;
+            for frame in 1..=rate {
+                let now = 10. + f64::from(frame) / f64::from(rate);
+                let first_frame = immediate.begin_frame(now);
+                let second_frame = busy.begin_frame(now);
+                let ticks = immediate.advance(first_frame).ticks;
+                assert_eq!(busy.advance(second_frame).ticks, ticks);
+                for _ in 0..ticks {
+                    let input = spelunky_core::InputFrame {
+                        right: count < 15,
+                        left: count >= 15,
+                        jump: (5..10).contains(&count),
+                        jump_pressed: count == 5,
+                        jump_released: count == 10,
+                        ..Default::default()
+                    };
+                    first.step(&input);
+                    second.step(&input);
+                    immediate.history_ready = true;
+                    busy.history_ready = true;
+                    count += 1;
+                    assert_eq!(first.state_hash(), second.state_hash());
+                    assert_eq!(first.rng.clone().next_u64(), second.rng.clone().next_u64());
+                    assert_eq!(
+                        serde_json::to_value(&first.events).unwrap(),
+                        serde_json::to_value(&second.events).unwrap()
+                    );
+                    assert_eq!(
+                        first.presentation().state_hash(),
+                        second.presentation().state_hash()
+                    );
+                }
+                let before = second.state_hash();
+                let base = immediate.render_alpha(now, true);
+                let corrected = busy.render_alpha(now + if ticks > 0 { 0.008 } else { 0. }, true);
+                assert!(corrected >= base);
+                assert!(corrected <= 1.);
+                assert_eq!(second.state_hash(), before, "render sampling changed core");
+                // Sampling twice must not consume time or create another core tick.
+                assert_eq!(
+                    busy.render_alpha(now + if ticks > 0 { 0.008 } else { 0. }, true),
+                    corrected
+                );
+            }
+            assert_eq!(count, 30, "rate {rate}");
+        }
+    }
+
+    #[test]
+    fn render_alpha_work_and_next_frame_share_one_phase_without_double_counting() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = camera_follow_fixture();
+        let mut timing = HostTiming::default();
+        timing.reset(10.);
+        let boundary = 10. + 1. / 30.;
+        let frame = timing.begin_frame(boundary);
+        assert_eq!(timing.advance(frame).ticks, 1);
+        game.step(&spelunky_core::InputFrame {
+            right: true,
+            ..Default::default()
+        });
+        timing.history_ready = true;
+        let alpha = timing.render_alpha(boundary + 0.008, true);
+        assert!((alpha - 0.24).abs() < 1e-10);
+        assert!(
+            timing.alpha() < 1e-10,
+            "read-only sample advanced accumulator"
+        );
+        let hash = game.state_hash();
+        let snapshot = test_snapshot(Screen::Playing, Some(&game), alpha, false);
+        let drawn = game.presentation();
+        let expected_x =
+            drawn.player.previous_pos.x + (drawn.player.pos.x - drawn.player.previous_pos.x) * 0.24;
+        assert!((snapshot["rendered"]["x"].as_f64().unwrap() - expected_x).abs() < 1e-9);
+        let anchor = drawn_player_anchor(&game, alpha, &atlas);
+        assert!((snapshot["rendered"]["screenX"].as_f64().unwrap() - anchor[0]).abs() < 1e-4);
+        assert_eq!(game.state_hash(), hash);
+
+        // First subsequent 240Hz opportunity after an 8ms blocking update.
+        let next = boundary + 3. / 240.;
+        let frame = timing.begin_frame(next);
+        assert_eq!(timing.advance(frame).ticks, 0);
+        assert!((timing.render_alpha(next, true) - 0.375).abs() < 1e-10);
+        assert!((timing.render_alpha(next + 0.001, true) - 0.405).abs() < 1e-10);
+        let end = timing.render_alpha(boundary + 1. / 30., true);
+        assert!((end - 1.).abs() < 1e-10);
+        let frame = timing.begin_frame(boundary + 1. / 30.);
+        assert_eq!(timing.advance(frame).ticks, 1);
+        assert!(timing.render_alpha(boundary + 1. / 30., true) < 1e-10);
+        let previous_end = test_snapshot(Screen::Playing, Some(&game), 1., false);
+        game.step(&spelunky_core::InputFrame {
+            right: true,
+            ..Default::default()
+        });
+        let next_start = test_snapshot(
+            Screen::Playing,
+            Some(&game),
+            timing.render_alpha(boundary + 1. / 30., true),
+            false,
+        );
+        assert!(
+            (previous_end["rendered"]["x"].as_f64().unwrap()
+                - next_start["rendered"]["x"].as_f64().unwrap())
+            .abs()
+                < 1e-9
+        );
+        assert!(
+            (previous_end["camera"]["renderedX"].as_f64().unwrap()
+                - next_start["camera"]["renderedX"].as_f64().unwrap())
+            .abs()
+                < 1e-9
+        );
+        // New endpoints meet the previous endpoint; no extrapolation when late.
+        assert_eq!(timing.render_alpha(boundary + 1., true), 1.);
+    }
+
+    #[test]
+    fn render_alpha_preserves_reset_history_and_rejects_invalid_sample_times() {
+        let mut timing = HostTiming::default();
+        timing.reset(10.);
+        let frame = timing.begin_frame(10. + 1. / 30.);
+        assert_eq!(timing.advance(frame).ticks, 1);
+        assert_eq!(timing.render_alpha(20., true), 1., "no room history yet");
+        timing.history_ready = true;
+        let base = timing.alpha();
+        for now in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 10.] {
+            assert_eq!(timing.render_alpha(now, true), base);
+        }
+        assert_eq!(timing.render_alpha(20., false), base);
+        let old_frame = timing.begin_frame(20.);
+        timing.reset(20.);
+        assert_eq!(timing.advance(old_frame).ticks, 0);
+        assert_eq!(timing.render_alpha(20.008, true), 1.);
+        assert!(timing.alpha_sample.is_none(), "old generation was retained");
+        // Even a later history mark cannot resurrect an earlier room's sample.
+        timing.history_ready = true;
+        assert_eq!(timing.render_alpha(20.008, true), timing.alpha());
+        timing.reset(20.);
+        for frame in 1..8 {
+            let now = 20. + f64::from(frame) / 240.;
+            let sample = timing.begin_frame(now);
+            assert_eq!(timing.advance(sample).ticks, 0);
+            assert_eq!(timing.render_alpha(now + 0.008, true), 1.);
+        }
+        let now = 20. + 1. / 30.;
+        let sample = timing.begin_frame(now);
+        assert_eq!(timing.advance(sample).ticks, 1);
+        timing.history_ready = true;
+        assert!((timing.render_alpha(now + 0.008, true) - 0.24).abs() < 1e-10);
+        let invalid = timing.begin_frame(f64::NAN);
+        timing.advance(invalid);
+        assert!(timing.alpha_sample.is_none());
+        assert_eq!(timing.render_alpha(100., true), timing.alpha());
+    }
+
+    #[test]
+    fn render_alpha_gates_match_playing_and_finished_dead_only() {
+        let mut game = camera_follow_fixture();
+        let mut timing = HostTiming::default();
+        timing.reset(10.);
+        let now = 10. + 1. / 30.;
+        let frame = timing.begin_frame(now);
+        timing.advance(frame);
+        timing.history_ready = true;
+        for screen in [
+            Screen::Title,
+            Screen::Pause,
+            Screen::Settings,
+            Screen::Editor,
+            Screen::Custom,
+            Screen::Shortcuts,
+            Screen::Records,
+            Screen::About,
+            Screen::Donation,
+            Screen::Finished,
+        ] {
+            let running = render_clock_running(screen, true, false, Some(&game));
+            assert!(!running, "{screen:?}");
+            assert_eq!(timing.render_alpha(now + 0.008, running), timing.alpha());
+        }
+        assert!(render_clock_running(
+            Screen::Playing,
+            true,
+            false,
+            Some(&game)
+        ));
+        assert!(!render_clock_running(
+            Screen::Playing,
+            false,
+            false,
+            Some(&game)
+        ));
+        assert!(!render_clock_running(
+            Screen::Playing,
+            true,
+            true,
+            Some(&game)
+        ));
+        assert!(!render_clock_running(Screen::Finished, true, false, None));
+        game.state = RunState::Dead;
+        assert!(render_clock_running(
+            Screen::Finished,
+            true,
+            false,
+            Some(&game)
+        ));
+        assert!(!render_clock_running(
+            Screen::Finished,
+            false,
+            false,
+            Some(&game)
+        ));
+        assert!(!render_clock_running(
+            Screen::Finished,
+            true,
+            true,
+            Some(&game)
+        ));
+        // A source teleport/discontinuity retains the existing scene snap.
+        game.flags.insert("render_discontinuity".into());
+        game.player.previous_pos.x = game.player.pos.x - 4.;
+        let atlas = Atlas::load().unwrap();
+        let alpha = timing.render_alpha(now + 0.008, true);
+        let snapshot = test_snapshot(Screen::Playing, Some(&game), alpha, false);
+        assert_eq!(snapshot["alpha"], 1.);
+        let actual: Vec<_> = scene::game_scene(&game, alpha, false, &atlas)
+            .iter()
+            .map(|quad| quad.rect)
+            .collect();
+        let snapped: Vec<_> = scene::game_scene(&game, 1., false, &atlas)
+            .iter()
+            .map(|quad| quad.rect)
+            .collect();
+        assert_eq!(actual, snapped);
+    }
     use super::*;
     #[test]
     fn scores_reset_persists_source_sentinels_and_preserves_the_selected_character_and_lifetime_stats()
@@ -2579,7 +2861,12 @@ mod tests {
         game.ending = Some(ending);
         game.state = RunState::Ending;
         let hash = game.state_hash();
-        let snapshot = test_snapshot(Screen::Playing, Some(&game), &HostTiming::default(), false);
+        let snapshot = test_snapshot(
+            Screen::Playing,
+            Some(&game),
+            HostTiming::default().alpha(),
+            false,
+        );
         assert_eq!(snapshot["ending"]["kind"], "Transition");
         assert_eq!(snapshot["ending"]["stage"], "Transition");
         assert_eq!(snapshot["ending"]["drawLoot"], 2);
@@ -2668,7 +2955,7 @@ mod tests {
             history_ready: true,
             ..HostTiming::default()
         };
-        let snapshot = test_snapshot(Screen::Playing, Some(&game), &timing, false);
+        let snapshot = test_snapshot(Screen::Playing, Some(&game), timing.alpha(), false);
         assert_eq!(snapshot["screen"], "Playing");
         assert_eq!(snapshot["seed"], "42");
         assert_eq!(snapshot["player"]["x"], 100.);
@@ -2685,12 +2972,12 @@ mod tests {
         assert_eq!(snapshot["world"]["entityCount"], game.world.entities.len());
         assert_eq!(game.state_hash(), hash);
         timing.reset(10.);
-        let paused = test_snapshot(Screen::Pause, Some(&game), &timing, false);
+        let paused = test_snapshot(Screen::Pause, Some(&game), timing.alpha(), false);
         assert_eq!(paused["alpha"], 1.);
         assert_eq!(paused["rendered"]["x"], paused["player"]["x"]);
         timing.history_ready = true;
         game.flags.insert("render_discontinuity".into());
-        let teleported = test_snapshot(Screen::Playing, Some(&game), &timing, false);
+        let teleported = test_snapshot(Screen::Playing, Some(&game), timing.alpha(), false);
         assert_eq!(teleported["alpha"], 1.);
         assert_eq!(teleported["rendered"]["x"], teleported["player"]["x"]);
     }
@@ -2755,7 +3042,7 @@ mod tests {
                     history_ready: true,
                     ..Default::default()
                 };
-                let snapshot = test_snapshot(Screen::Playing, Some(&game), &timing, false);
+                let snapshot = test_snapshot(Screen::Playing, Some(&game), timing.alpha(), false);
                 assert!(
                     (snapshot["rendered"]["screenX"].as_f64().unwrap() - anchor[0]).abs() < 0.0001
                 );
@@ -2832,7 +3119,12 @@ mod tests {
             .data
             .insert("dist_to_player".into(), 18.);
         let hash = game.state_hash();
-        let snapshot = test_snapshot(Screen::Playing, Some(&game), &HostTiming::default(), false);
+        let snapshot = test_snapshot(
+            Screen::Playing,
+            Some(&game),
+            HostTiming::default().alpha(),
+            false,
+        );
         assert_eq!(snapshot["world"]["dark"], true);
         assert_eq!(snapshot["darkness"], -0.3);
         assert_eq!(snapshot["darkness_lerp"], 0.7);
@@ -2851,8 +3143,12 @@ mod tests {
         );
         assert_eq!(game.state_hash(), hash);
         game.data.remove("darkness");
-        let uninitialized =
-            test_snapshot(Screen::Playing, Some(&game), &HostTiming::default(), false);
+        let uninitialized = test_snapshot(
+            Screen::Playing,
+            Some(&game),
+            HostTiming::default().alpha(),
+            false,
+        );
         assert!(uninitialized["darkness"].is_null());
     }
     #[test]
