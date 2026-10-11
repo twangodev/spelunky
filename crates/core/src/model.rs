@@ -608,7 +608,37 @@ impl World {
         group: &str,
         precision: CollisionPrecision,
     ) -> bool {
-        self.tiles_match(r, group, None, precision)
+        self.tiles_match(r, group, None, None, precision)
+    }
+
+    /// Explicit source axis-aligned collision_line query over tile instances.
+    pub fn tiles_line_precision(
+        &self,
+        first: Vec2,
+        second: Vec2,
+        group: &str,
+        precision: CollisionPrecision,
+    ) -> bool {
+        if !first.x.is_finite()
+            || !first.y.is_finite()
+            || !second.x.is_finite()
+            || !second.y.is_finite()
+            || (first.x != second.x && first.y != second.y)
+        {
+            return false;
+        }
+        self.tiles_match(
+            Rect::new(
+                first.x.min(second.x),
+                first.y.min(second.y),
+                (first.x - second.x).abs() + 1.0,
+                (first.y - second.y).abs() + 1.0,
+            ),
+            group,
+            None,
+            Some((first, second)),
+            precision,
+        )
     }
 
     /// Point form of the same tile-instance mask query, with exact half-open
@@ -627,6 +657,7 @@ impl World {
             Rect::new(point.x, point.y, 0.001, 0.001),
             group,
             Some(point),
+            None,
             precision,
         )
     }
@@ -636,16 +667,21 @@ impl World {
         r: Rect,
         group: &str,
         point: Option<Vec2>,
+        line: Option<(Vec2, Vec2)>,
         precision: CollisionPrecision,
     ) -> bool {
         if !r.is_valid() || self.width == 0 {
             return false;
         }
         let matches = |mask: &crate::catalog::CollisionMask| {
-            point.map_or_else(
-                || mask.intersects(r, precision),
-                |p| mask.contains(p, precision),
-            )
+            if let Some((first, second)) = line {
+                mask.intersects_axis_line(first, second, precision)
+            } else {
+                point.map_or_else(
+                    || mask.intersects(r, precision),
+                    |p| mask.contains(p, precision),
+                )
+            }
         };
         let envelope = crate::catalog::group_bounds(group).unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
         let x0 = (((r.x - envelope.x - envelope.w) / TILE_SIZE).floor() as i32).max(0);

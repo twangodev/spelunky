@@ -61,6 +61,22 @@ fn precise_rect(w: &World, r: Rect, group: &str) -> bool {
     collision_rect_precision(w, r, group, CollisionPrecision::Precise)
 }
 
+fn precise_line(w: &World, r: Rect, group: &str) -> bool {
+    let first = Vec2::new(r.x, r.y);
+    let second = Vec2::new(r.x + r.w - 1.0, r.y + r.h - 1.0);
+    w.tiles_line_precision(first, second, group, CollisionPrecision::Precise)
+        || w.entities.iter().any(|e| {
+            e.alive
+                && !e.held
+                && (crate::catalog::is_a(&e.object, group) || (group == "oSolid" && e.solid))
+                && e.collision_mask().intersects_axis_line(
+                    first,
+                    second,
+                    CollisionPrecision::Precise,
+                )
+        })
+}
+
 fn collision_rect_precision(
     w: &World,
     r: Rect,
@@ -111,7 +127,7 @@ fn edge_rect(p: &Player, side: Side, distance: f64, move_probe: bool) -> Rect {
 }
 
 fn edge(w: &World, p: &Player, side: Side, distance: f64) -> bool {
-    precise_rect(w, edge_rect(p, side, distance, false), "oSolid")
+    precise_line(w, edge_rect(p, side, distance, false), "oSolid")
 }
 
 fn solid_point(w: &World, pos: Vec2) -> bool {
@@ -538,7 +554,7 @@ fn platform(w: &World, p: &Player, pos: Vec2, dy: f64) -> bool {
     }
     debug_assert_eq!(pos, p.pos);
     !precise_rect(w, bounds_at(p, pos), "oPlatform")
-        && precise_rect(w, edge_rect(p, Side::Bottom, dy, false), "oPlatform")
+        && precise_line(w, edge_rect(p, Side::Bottom, dy, false), "oPlatform")
 }
 fn below(w: &World, p: &Player) -> bool {
     edge(w, p, Side::Bottom, 1.0) || platform(w, p, p.pos, 1.0)
@@ -568,7 +584,7 @@ fn move_by(w: &mut World, p: &mut Player, tick: u64, down: bool, movement: Vec2)
     for _ in 0..dx.unsigned_abs() {
         let next = Vec2::new(p.pos.x + f64::from(dx.signum()), p.pos.y);
         let probe = edge_rect(p, if dx > 0 { Side::Right } else { Side::Left }, 1.0, true);
-        if precise_rect(w, probe, "oSolid") {
+        if precise_line(w, probe, "oSolid") {
             // Source canPushMoveableSolids checks player ancestry, so a player's
             // remaining airborne momentum can also push a block pixel by pixel.
             let target = probe;
@@ -576,7 +592,11 @@ fn move_by(w: &mut World, p: &mut Player, tick: u64, down: bool, movement: Vec2)
                 e.alive
                     && e.solid
                     && crate::catalog::is_a(&e.object, "oMoveableSolid")
-                    && e.mask_intersects(target, CollisionPrecision::Precise)
+                    && e.collision_mask().intersects_axis_line(
+                        Vec2::new(target.x, target.y),
+                        Vec2::new(target.x + target.w - 1.0, target.y + target.h - 1.0),
+                        CollisionPrecision::Precise,
+                    )
             });
             let pushed = block.is_some_and(|index| {
                 let destination = Vec2::new(
@@ -795,12 +815,12 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let col_left = edge(w, p, Side::Left, 1.0);
     let col_right = edge(w, p, Side::Right, 1.0);
     let col_top = edge(w, p, Side::Top, 1.0);
-    let col_moveable_left = precise_rect(w, edge_rect(p, Side::Left, 1.0, false), "oMoveableSolid");
+    let col_moveable_left = precise_line(w, edge_rect(p, Side::Left, 1.0, false), "oMoveableSolid");
     let col_moveable_right =
-        precise_rect(w, edge_rect(p, Side::Right, 1.0, false), "oMoveableSolid");
+        precise_line(w, edge_rect(p, Side::Right, 1.0, false), "oMoveableSolid");
     let in_water = water(w, p.pos);
     let in_web = object_at(w, p.pos, &["oWeb"]);
-    let water_jump = precise_rect(w, edge_rect(p, Side::Top, 1.0, false), "oWater");
+    let water_jump = precise_line(w, edge_rect(p, Side::Top, 1.0, false), "oWater");
     let water_surface = in_water && !water(w, Vec2::new(p.pos.x, p.pos.y - 9.0));
     let was_grounded = grounded_state(p.state);
     let mut fall = value(p, "fall_timer", 0.0);

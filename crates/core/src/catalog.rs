@@ -394,6 +394,81 @@ impl CollisionMask {
             && bounds.y <= first.y.max(second.y)
     }
 
+    /// Source axis-aligned `collision_line`: raw endpoints first meet the
+    /// cached integer aggregate bbox, then clipped endpoints and instance
+    /// origins round independently before selected-mask pixel sampling.
+    /// Fractional positive unit-scale placement is verified against original
+    /// GM8 instructions. Other transforms retain the previous Rect adapter.
+    pub fn intersects_axis_line(
+        &self,
+        first: Vec2,
+        second: Vec2,
+        precision: CollisionPrecision,
+    ) -> bool {
+        if !first.x.is_finite()
+            || !first.y.is_finite()
+            || !second.x.is_finite()
+            || !second.y.is_finite()
+            || (first.x != second.x && first.y != second.y)
+        {
+            return false;
+        }
+        let query = Rect::new(
+            first.x.min(second.x),
+            first.y.min(second.y),
+            (first.x - second.x).abs() + 1.0,
+            (first.y - second.y).abs() + 1.0,
+        );
+        if self.frame.is_none()
+            || !(self.precise || self.rectangle)
+            || self.scale != Vec2::new(1.0, 1.0)
+            || self.angle != 0.0
+        {
+            return self.intersects(query, precision);
+        }
+        let Some((bounds, origin)) = self.event_geometry() else {
+            return self.intersects(query, precision);
+        };
+        // 0x4ACEEC rejects raw endpoints before any RTE conversion, using
+        // inclusive cached edges. A query just outside must stay outside.
+        if !bounds.is_valid()
+            || bounds.x + bounds.w <= first.x.min(second.x)
+            || bounds.x > first.x.max(second.x)
+            || bounds.y + bounds.h <= first.y.min(second.y)
+            || bounds.y > first.y.max(second.y)
+        {
+            return false;
+        }
+        // 0x4AD024 clips a horizontal segment to [L,R+1] before rounding.
+        // A vertical segment surviving the raw bbox test needs no X clipping.
+        if precision == CollisionPrecision::BoundingBox {
+            return true;
+        }
+        let left = first.x.min(second.x).max(bounds.x).round_ties_even() as i32;
+        let right = first
+            .x
+            .max(second.x)
+            .min(bounds.x + bounds.w)
+            .round_ties_even() as i32;
+        let top = first.y.min(second.y).round_ties_even() as i32;
+        let bottom = first.y.max(second.y).round_ties_even() as i32;
+        // 0x48B0D4 delegates an axis line/point to the inclusive rectangle
+        // pixel kernel0x48AB50, which clamps to the aggregate cached bounds.
+        for y in top.max(bounds.y as i32)..=bottom.min((bounds.y + bounds.h - 1.0) as i32) {
+            for x in left.max(bounds.x as i32)..=right.min((bounds.x + bounds.w - 1.0) as i32) {
+                // Rectangle source masks are materialized boolean pixels too:
+                // an aggregate bbox hit alone can include an empty half-tie row.
+                if self.image_pixel(
+                    x - origin.x as i32 + self.origin[0],
+                    y - origin.y as i32 + self.origin[1],
+                ) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub fn intersects(&self, rect: Rect, precision: CollisionPrecision) -> bool {
         if !self.bounds.intersects(rect) {
             return false;

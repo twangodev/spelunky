@@ -1,0 +1,1598 @@
+[
+  {
+    "name": "block-y80-foot80",
+    "pos": [
+      80,
+      80
+    ],
+    "query": [
+      83,
+      80,
+      92,
+      80
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80-foot80-reverse",
+    "pos": [
+      80,
+      80
+    ],
+    "query": [
+      92,
+      80,
+      83,
+      80
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80-left-edge",
+    "pos": [
+      80,
+      80
+    ],
+    "query": [
+      80,
+      80,
+      80,
+      95
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80-point80",
+    "pos": [
+      80,
+      80
+    ],
+    "query": [
+      88,
+      80,
+      88,
+      80
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80-bottom96",
+    "pos": [
+      80,
+      80
+    ],
+    "query": [
+      88,
+      96,
+      88,
+      96
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": false,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": false
+  },
+  {
+    "name": "block-y80-raw-above",
+    "pos": [
+      80,
+      80
+    ],
+    "query": [
+      88,
+      79.75,
+      88,
+      79.75
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": false,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": false
+  },
+  {
+    "name": "block-y80-raw-quarter",
+    "pos": [
+      80,
+      80
+    ],
+    "query": [
+      88,
+      80.25,
+      88,
+      80.25
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80-raw-bottom",
+    "pos": [
+      80,
+      80
+    ],
+    "query": [
+      88,
+      95.75,
+      88,
+      95.75
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": false,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": false
+  },
+  {
+    "name": "block-y80.05-foot80",
+    "pos": [
+      80,
+      80.05
+    ],
+    "query": [
+      83,
+      80,
+      92,
+      80
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80.05-foot80-reverse",
+    "pos": [
+      80,
+      80.05
+    ],
+    "query": [
+      92,
+      80,
+      83,
+      80
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80.05-left-edge",
+    "pos": [
+      80,
+      80.05
+    ],
+    "query": [
+      80,
+      80,
+      80,
+      95
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80.05-point80",
+    "pos": [
+      80,
+      80.05
+    ],
+    "query": [
+      88,
+      80,
+      88,
+      80
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80.05-bottom96",
+    "pos": [
+      80,
+      80.05
+    ],
+    "query": [
+      88,
+      96,
+      88,
+      96
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": false,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": false
+  },
+  {
+    "name": "block-y80.05-raw-above",
+    "pos": [
+      80,
+      80.05
+    ],
+    "query": [
+      88,
+      79.75,
+      88,
+      79.75
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": false,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": false
+  },
+  {
+    "name": "block-y80.05-raw-quarter",
+    "pos": [
+      80,
+      80.05
+    ],
+    "query": [
+      88,
+      80.25,
+      88,
+      80.25
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80.05-raw-bottom",
+    "pos": [
+      80,
+      80.05
+    ],
+    "query": [
+      88,
+      95.75,
+      88,
+      95.75
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": false,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": false
+  },
+  {
+    "name": "block-y80.25-foot80",
+    "pos": [
+      80,
+      80.25
+    ],
+    "query": [
+      83,
+      80,
+      92,
+      80
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80.25-foot80-reverse",
+    "pos": [
+      80,
+      80.25
+    ],
+    "query": [
+      92,
+      80,
+      83,
+      80
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80.25-left-edge",
+    "pos": [
+      80,
+      80.25
+    ],
+    "query": [
+      80,
+      80,
+      80,
+      95
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80.25-point80",
+    "pos": [
+      80,
+      80.25
+    ],
+    "query": [
+      88,
+      80,
+      88,
+      80
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80.25-bottom96",
+    "pos": [
+      80,
+      80.25
+    ],
+    "query": [
+      88,
+      96,
+      88,
+      96
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": false,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": false
+  },
+  {
+    "name": "block-y80.25-raw-above",
+    "pos": [
+      80,
+      80.25
+    ],
+    "query": [
+      88,
+      79.75,
+      88,
+      79.75
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": false,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": false
+  },
+  {
+    "name": "block-y80.25-raw-quarter",
+    "pos": [
+      80,
+      80.25
+    ],
+    "query": [
+      88,
+      80.25,
+      88,
+      80.25
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80.25-raw-bottom",
+    "pos": [
+      80,
+      80.25
+    ],
+    "query": [
+      88,
+      95.75,
+      88,
+      95.75
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": false,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": false
+  },
+  {
+    "name": "block-y80.5-foot80",
+    "pos": [
+      80,
+      80.5
+    ],
+    "query": [
+      83,
+      80,
+      92,
+      80
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      96
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      96
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80.5-foot80-reverse",
+    "pos": [
+      80,
+      80.5
+    ],
+    "query": [
+      92,
+      80,
+      83,
+      80
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      96
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      96
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80.5-left-edge",
+    "pos": [
+      80,
+      80.5
+    ],
+    "query": [
+      80,
+      80,
+      80,
+      95
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      96
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      96
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80.5-point80",
+    "pos": [
+      80,
+      80.5
+    ],
+    "query": [
+      88,
+      80,
+      88,
+      80
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      96
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      96
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80.5-bottom96",
+    "pos": [
+      80,
+      80.5
+    ],
+    "query": [
+      88,
+      96,
+      88,
+      96
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      96
+    ],
+    "expected_hit_static": false,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      96
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": false
+  },
+  {
+    "name": "block-y80.5-raw-above",
+    "pos": [
+      80,
+      80.5
+    ],
+    "query": [
+      88,
+      79.75,
+      88,
+      79.75
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      96
+    ],
+    "expected_hit_static": false,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      96
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": false
+  },
+  {
+    "name": "block-y80.5-raw-quarter",
+    "pos": [
+      80,
+      80.5
+    ],
+    "query": [
+      88,
+      80.25,
+      88,
+      80.25
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      96
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      96
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80.5-raw-bottom",
+    "pos": [
+      80,
+      80.5
+    ],
+    "query": [
+      88,
+      95.75,
+      88,
+      95.75
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      96
+    ],
+    "expected_hit_static": false,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      96
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": false
+  },
+  {
+    "name": "block-y80.55-foot80",
+    "pos": [
+      80,
+      80.55
+    ],
+    "query": [
+      83,
+      80,
+      92,
+      80
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      81,
+      95,
+      96
+    ],
+    "expected_hit_static": false,
+    "expected_rounded_origin": [
+      80,
+      81
+    ],
+    "native_bbox": [
+      80,
+      81,
+      95,
+      96
+    ],
+    "native_rounded_origin": [
+      80,
+      81
+    ],
+    "native_hit": false
+  },
+  {
+    "name": "block-y80.55-foot80-reverse",
+    "pos": [
+      80,
+      80.55
+    ],
+    "query": [
+      92,
+      80,
+      83,
+      80
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      81,
+      95,
+      96
+    ],
+    "expected_hit_static": false,
+    "expected_rounded_origin": [
+      80,
+      81
+    ],
+    "native_bbox": [
+      80,
+      81,
+      95,
+      96
+    ],
+    "native_rounded_origin": [
+      80,
+      81
+    ],
+    "native_hit": false
+  },
+  {
+    "name": "block-y80.55-left-edge",
+    "pos": [
+      80,
+      80.55
+    ],
+    "query": [
+      80,
+      80,
+      80,
+      95
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      81,
+      95,
+      96
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      81
+    ],
+    "native_bbox": [
+      80,
+      81,
+      95,
+      96
+    ],
+    "native_rounded_origin": [
+      80,
+      81
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80.55-point80",
+    "pos": [
+      80,
+      80.55
+    ],
+    "query": [
+      88,
+      80,
+      88,
+      80
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      81,
+      95,
+      96
+    ],
+    "expected_hit_static": false,
+    "expected_rounded_origin": [
+      80,
+      81
+    ],
+    "native_bbox": [
+      80,
+      81,
+      95,
+      96
+    ],
+    "native_rounded_origin": [
+      80,
+      81
+    ],
+    "native_hit": false
+  },
+  {
+    "name": "block-y80.55-bottom96",
+    "pos": [
+      80,
+      80.55
+    ],
+    "query": [
+      88,
+      96,
+      88,
+      96
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      81,
+      95,
+      96
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      81
+    ],
+    "native_bbox": [
+      80,
+      81,
+      95,
+      96
+    ],
+    "native_rounded_origin": [
+      80,
+      81
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "block-y80.55-raw-above",
+    "pos": [
+      80,
+      80.55
+    ],
+    "query": [
+      88,
+      79.75,
+      88,
+      79.75
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      81,
+      95,
+      96
+    ],
+    "expected_hit_static": false,
+    "expected_rounded_origin": [
+      80,
+      81
+    ],
+    "native_bbox": [
+      80,
+      81,
+      95,
+      96
+    ],
+    "native_rounded_origin": [
+      80,
+      81
+    ],
+    "native_hit": false
+  },
+  {
+    "name": "block-y80.55-raw-quarter",
+    "pos": [
+      80,
+      80.55
+    ],
+    "query": [
+      88,
+      80.25,
+      88,
+      80.25
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      81,
+      95,
+      96
+    ],
+    "expected_hit_static": false,
+    "expected_rounded_origin": [
+      80,
+      81
+    ],
+    "native_bbox": [
+      80,
+      81,
+      95,
+      96
+    ],
+    "native_rounded_origin": [
+      80,
+      81
+    ],
+    "native_hit": false
+  },
+  {
+    "name": "block-y80.55-raw-bottom",
+    "pos": [
+      80,
+      80.55
+    ],
+    "query": [
+      88,
+      95.75,
+      88,
+      95.75
+    ],
+    "precision": 1,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      81,
+      95,
+      96
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      81
+    ],
+    "native_bbox": [
+      80,
+      81,
+      95,
+      96
+    ],
+    "native_rounded_origin": [
+      80,
+      81
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "precision0-control-y80.5",
+    "pos": [
+      80,
+      80.5
+    ],
+    "query": [
+      88,
+      96,
+      88,
+      96
+    ],
+    "precision": 0,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      96
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      96
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  },
+  {
+    "name": "precision0-control-y80",
+    "pos": [
+      80,
+      80
+    ],
+    "query": [
+      88,
+      95.75,
+      88,
+      95.75
+    ],
+    "precision": 0,
+    "animation": 0,
+    "mask_kind": "actual-sBlock-rectangle",
+    "expected_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "expected_hit_static": true,
+    "expected_rounded_origin": [
+      80,
+      80
+    ],
+    "native_bbox": [
+      80,
+      80,
+      95,
+      95
+    ],
+    "native_rounded_origin": [
+      80,
+      80
+    ],
+    "native_hit": true
+  }
+]
