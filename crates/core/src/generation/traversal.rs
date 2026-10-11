@@ -22,6 +22,10 @@ fn traverse_legacy_steps(seed: u64, level: u32, actions: &[u8], full_steps: bool
     });
     game.player.pos = game.world.entrance;
     game.player.previous_pos = game.player.pos;
+    // The isolated controller still queries the source instance ledger.
+    if !full_steps {
+        crate::dispatcher::register_instances(&mut game);
+    }
     let spawn = game.player.pos;
     let geometry: Vec<_> = game
         .world
