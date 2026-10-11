@@ -5,7 +5,11 @@ use crate::statistics::LifetimeCounter;
 use crate::*;
 
 pub fn init(e: &mut Entity) {
-    e.data.insert("animation_speed".into(), 0.5);
+    // Barrier has no Create event or parent; retain the runner default of 1.
+    // Its emitter and the NPCs below explicitly select 0.5 in their Creates.
+    if e.object != "oBarrier" {
+        e.set_image_speed(0.5);
+    }
     match e.object.as_str() {
         "oGhost" => {
             e.health = 1;
