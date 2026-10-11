@@ -434,14 +434,9 @@ fn treasure(
     );
 }
 
-fn damsel_chance(rng: &mut Rng, already_exists: bool, source_eager: bool) -> bool {
-    // GM8 evaluates both operands of `not oGame.damsel and rand(...)`.
-    // Preserve the legacy adapter's short circuit outside the Temple pass.
-    let success = if source_eager || !already_exists {
-        rng.chance(1, 8)
-    } else {
-        false
-    };
+fn damsel_chance(rng: &mut Rng, already_exists: bool) -> bool {
+    // The reached source condition draws even with an existing Damsel.
+    let success = rng.chance(1, 8);
     !already_exists && success
 }
 
@@ -519,7 +514,7 @@ fn treasure_at(
             spawn_at(world, rng, "oCrate", above);
         } else if rng.chance(1, 15) {
             spawn_at(world, rng, "oChest", above);
-        } else if damsel_chance(rng, state.damsel, receiver_bounds.is_some())
+        } else if damsel_chance(rng, state.damsel)
             && !if receiver_bounds.is_some() {
                 source_point_family(world, Vec2::new(origin.x + 8.0, origin.y - 8.0), "oWater")
             } else {
@@ -3328,6 +3323,7 @@ mod tests {
             &[
                 (10, "oCrate"),
                 (15, "oChest"),
+                (8, "existing_damsel_guard"),
                 (40 - 2 * level, "bones"),
                 (3, "oGoldBar"),
                 (6, "oGoldBars"),
@@ -3346,7 +3342,12 @@ mod tests {
             ]
         };
         for &(limit, object) in rolls {
-            if 1 + rng.range(limit) == 1 {
+            let roll = 1 + rng.range(limit);
+            // Source :74 draws even though oGame.damsel is already true.
+            if object == "existing_damsel_guard" {
+                continue;
+            }
+            if roll == 1 {
                 return if object == "bones" {
                     if 1 + rng.range(8) == 1 {
                         vec!["oFakeBones"]
@@ -3426,6 +3427,56 @@ mod tests {
             assert_eq!(world.entities.first().map(|e| e.object.as_str()), object);
             assert_eq!(world.entities.len(), usize::from(object.is_some()));
             assert_eq!(state.chest_chance, chest_chance);
+            assert_eq!(actual.next_u64(), source.next_u64());
+        }
+    }
+
+    #[test]
+    fn eager_non_temple_damsel_guard_draws_even_when_an_existing_damsel_blocks_spawn() {
+        for existing in [false, true] {
+            let mut world = World::new(16, 16, Area::Mines, 1);
+            world.entrance = at(1, 1);
+            world.exit = at(14, 14);
+            for (x, y) in [(6, 8), (5, 7), (6, 6)] {
+                world.set_tile(x, y, "oBrick");
+            }
+            if existing {
+                world.spawn("oDamsel", Vec2::new(200.0, 200.0));
+            }
+            let before = world.entities.len();
+            let water = WaterMasks::new(&world);
+            let mut state = treasure_state();
+            state.damsel = existing;
+            let mut actual = Rng::new(6);
+            let mut source = actual.clone();
+            // Source :45/46/56/66/70/74. The Damsel roll succeeds here.
+            for (limit, value) in [(100, 92), (40, 33), (5, 1), (10, 8), (15, 12), (8, 0)] {
+                assert_eq!(source.range(limit), value);
+            }
+            let expected_object = if existing {
+                assert_eq!(source.range(38), 18);
+                assert_eq!(source.range(3), 0);
+                "oGoldBar"
+            } else {
+                "oDamsel"
+            };
+            treasure(&mut world, &mut actual, &water, &mut state, 6, 8);
+            assert_eq!(
+                world.entities[before..]
+                    .iter()
+                    .map(|e| e.object.as_str())
+                    .collect::<Vec<_>>(),
+                [expected_object]
+            );
+            assert_eq!(
+                world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oDamsel")
+                    .count(),
+                1
+            );
+            assert!(state.damsel);
             assert_eq!(actual.next_u64(), source.next_u64());
         }
     }
