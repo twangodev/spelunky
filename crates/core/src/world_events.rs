@@ -303,6 +303,7 @@ pub(crate) fn handles(object: &str) -> bool {
     matches!(
         object,
         "oMsgSign"
+            | "oGrave"
             | "oLamp"
             | "oLampRed"
             | "oTikiTorch"
@@ -494,6 +495,21 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         return;
     };
     match object.as_str() {
+        "oGrave" => {
+            // oGrave owns Step: no inherited Solid Step or clean-death gate.
+            // Its source query uses the origin, not the sprite center.
+            if e.pos.x > game.camera.x - 20.0
+                && e.pos.x < game.camera.x + VIEW_WIDTH + 4.0
+                && e.pos.y > game.camera.y - 20.0
+                && e.pos.y < game.camera.y + VIEW_HEIGHT + 4.0
+                && !point_family(game, Vec2::new(e.pos.x, e.pos.y + 16.0), "oSolid")
+            {
+                crate::items::explosives::destroy_solid_self(game, id);
+            }
+            // Destroy can append rubble and retire this receiver. Do not write
+            // the pre-callback clone back over the marked/dead instance.
+            return;
+        }
         "oTree" => {
             let terrain = e.object == "oTerrainMetadata";
             tree(game, &mut e, terrain);
@@ -3052,6 +3068,178 @@ mod particle_cap_membership_source_tests {
                 }
                 assert_eq!(game.rng.next_u64(), oracle.next_u64());
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod grave_step_tests {
+    use super::*;
+    use crate::{Area, Rng, RulesPreset, World};
+
+    fn room(seed: u64) -> Game {
+        let mut game = Game::shell(seed, RulesPreset::Classic);
+        game.world = World::new(42, 34, Area::Jungle, 5);
+        game.player.pos = Vec2::new(40.0, 40.0);
+        game
+    }
+
+    // Literal Grave Destroy statements. Rubble and RubbleSmall inherit only
+    // fixed DrawnSprite/RubblePiece Create fields, so each birth adds no rolls.
+    // This verifies the port RNG's statement order, not GM8 seed equivalence.
+    fn source_destroy(rng: &mut Rng, origin: Vec2) -> Vec<(&'static str, &'static str, Vec2)> {
+        let mut expected = Vec::new();
+        for (object, sprite) in [
+            ("oRubble", "sRubbleTan"),
+            ("oRubbleSmall", "sRubbleTanSmall"),
+            ("oRubbleSmall", "sRubbleTanSmall"),
+        ] {
+            let x = origin.x + 8.0 + f64::from(rng.range(9)) - f64::from(rng.range(9));
+            let y = origin.y + 8.0 + f64::from(rng.range(9)) - f64::from(rng.range(9));
+            expected.push((object, sprite, Vec2::new(x, y)));
+        }
+        expected
+    }
+
+    fn assert_debris(game: &Game, expected: &[(&str, &str, Vec2)]) {
+        let mut actual: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.alive && matches!(e.object.as_str(), "oRubble" | "oRubbleSmall"))
+            .collect();
+        actual.sort_by_key(|e| e.creation_serial);
+        assert_eq!(actual.len(), expected.len());
+        for (entity, &(object, sprite, pos)) in actual.iter().zip(expected) {
+            assert_eq!(entity.object, object);
+            assert_eq!(entity.sprite, sprite);
+            assert_eq!(entity.pos, pos);
+            // Rubble525/526 already passed Normal Step before Grave743 births.
+            assert_eq!(entity.vel, Vec2::default());
+        }
+    }
+
+    #[test]
+    fn actual_grave_step_unsupported_birth_runs_unguarded_destroy_rng_once() {
+        for seed in 0..16 {
+            for clean in [false, true] {
+                let mut game = room(seed);
+                let origin = Vec2::new(80.0, 64.0);
+                let id = game.spawn("oGrave", origin);
+                if clean {
+                    game.flags.insert("cleanSolids".into());
+                    game.data.insert("cleanSolids".into(), 1.0);
+                    let grave = game.world.entity_mut(id).unwrap();
+                    grave.data.insert("cleanDeath".into(), 1.0);
+                    grave.data.insert("invincible".into(), 1.0);
+                }
+                let mut source = game.rng.clone();
+                let expected = source_destroy(&mut source, origin);
+                game.step(&InputFrame::default());
+                assert!(
+                    game.world.entity(id).is_none(),
+                    "seed {seed}, clean {clean}"
+                );
+                assert_debris(&game, &expected);
+                assert_eq!(game.rng.clone().next_u64(), source.clone().next_u64());
+                game.step(&InputFrame::default());
+                assert_eq!(game.rng.next_u64(), source.next_u64());
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(|e| matches!(e.object.as_str(), "oRubble" | "oRubbleSmall"))
+                        .count(),
+                    3
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn actual_grave_step_falling_support_exposes_origin_during_normal_game_tick() {
+        let mut game = room(7);
+        let support = game.spawn("oPushBlock", Vec2::new(80.0, 80.0));
+        let origin = Vec2::new(80.0, 64.0);
+        let grave = game.spawn("oGrave", origin);
+        assert!(point_family(&game, Vec2::new(80.0, 80.0), "oSolid"));
+        let mut source = game.rng.clone();
+        let expected = source_destroy(&mut source, origin);
+        game.step(&InputFrame::default());
+        assert!(game.world.entity(support).unwrap().pos.y > 80.0);
+        assert!(game.world.entity(grave).is_none());
+        assert_debris(&game, &expected);
+        assert_eq!(game.rng.next_u64(), source.next_u64());
+    }
+
+    #[test]
+    fn actual_grave_step_viewport_guard_has_strict_source_origin_boundaries() {
+        for origin in [
+            Vec2::new(-20.0, 80.0),
+            Vec2::new(VIEW_WIDTH + 4.0, 80.0),
+            Vec2::new(80.0, -20.0),
+            Vec2::new(80.0, VIEW_HEIGHT + 4.0),
+        ] {
+            let mut game = room(11);
+            let id = game.spawn("oGrave", origin);
+            let mut source = game.rng.clone();
+            game.step(&InputFrame::default());
+            assert_eq!(game.camera, Vec2::default());
+            assert!(crate::dispatcher::is_active(
+                &game,
+                crate::dispatcher::Instance::Entity(id)
+            ));
+            assert!(game.world.entity(id).is_some(), "boundary {origin:?}");
+            assert_debris(&game, &[]);
+            assert_eq!(game.rng.next_u64(), source.next_u64());
+        }
+        for origin in [
+            Vec2::new(-19.0, 80.0),
+            Vec2::new(VIEW_WIDTH + 3.0, 80.0),
+            Vec2::new(80.0, -19.0),
+            Vec2::new(80.0, VIEW_HEIGHT + 3.0),
+        ] {
+            let mut game = room(11);
+            let id = game.spawn("oGrave", origin);
+            let mut source = game.rng.clone();
+            let expected = source_destroy(&mut source, origin);
+            game.step(&InputFrame::default());
+            assert!(game.world.entity(id).is_none(), "inside {origin:?}");
+            assert_debris(&game, &expected);
+            assert_eq!(game.rng.next_u64(), source.next_u64());
+        }
+    }
+
+    #[test]
+    fn actual_grave_step_support_uses_solid_family_at_origin_not_overlap_or_platform() {
+        for (dynamic, support_object, offset, survives) in [
+            (false, "oBlock", 0.0, true),
+            (true, "oHardBlock", 0.0, true),
+            (true, "oHardBlock", 1.0, false),
+            (false, "oPlatform", 0.0, false),
+        ] {
+            let mut game = room(19);
+            if dynamic {
+                game.spawn(support_object, Vec2::new(80.0 + offset, 80.0));
+            } else {
+                game.world.set_tile(5, 5, support_object);
+            }
+            let origin = Vec2::new(80.0, 64.0);
+            let id = game.spawn("oGrave", origin);
+            let mut source = game.rng.clone();
+            let expected = if survives {
+                Vec::new()
+            } else {
+                source_destroy(&mut source, origin)
+            };
+            game.step(&InputFrame::default());
+            assert_eq!(
+                game.world.entity(id).is_some(),
+                survives,
+                "{support_object}, {offset}"
+            );
+            assert_debris(&game, &expected);
+            assert_eq!(game.rng.next_u64(), source.next_u64());
         }
     }
 }
