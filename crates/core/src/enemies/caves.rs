@@ -490,7 +490,9 @@ fn snake(game: &mut Game, e: &mut Entity) {
         blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 3);
         super::record_death(game, e);
         e.alive = false;
-        return;
+        // instance_destroy finishes Enemy Destroy, then the current Snake
+        // Step continues through its facing/counter/RNG and sprite tail.
+        super::destroyed(game, e);
     }
     if e.state == 0 {
         if e.timer > 0 {
@@ -930,9 +932,14 @@ mod tests {
             });
             let mut death_rng = None;
             let mut previous_blood = Vec::new();
+            let mut snake_tail = None;
             for _ in 0..30 {
                 if game.world.entity(animal).is_some_and(|e| e.health <= 0) {
                     death_rng = Some(game.rng.clone());
+                    if object == "oSnake" {
+                        let actor = game.world.entity(animal).unwrap();
+                        snake_tail = Some((actor.state, actor.timer));
+                    }
                     previous_blood = game
                         .world
                         .entities
@@ -976,6 +983,15 @@ mod tests {
                 assert!((-4.0..4.0).contains(&drop.vel.x));
                 assert!((-3.0..=-1.0).contains(&drop.vel.y));
                 assert!((0.1..=0.6 + f64::EPSILON).contains(&drop.value("gravity")));
+            }
+            if let Some((state, timer)) = snake_tail {
+                // Source Snake Step continues AFTER instance_destroy. This
+                // tail follows all three synchronous Blood Create events.
+                if state == 0 && timer == 0 {
+                    expected_rng.range(2);
+                } else if state == 1 && expected_rng.range(100) == 0 {
+                    expected_rng.range(31);
+                }
             }
             assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
         }
