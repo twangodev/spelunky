@@ -470,6 +470,21 @@ fn spawn(game: &mut Game, object: &str, pos: Vec2) -> u64 {
     id
 }
 
+fn hawk_idle_wall(world: &World, e: &Entity) -> bool {
+    let point_is_solid = |point| {
+        world.tiles_point_precision(point, "oSolid", crate::CollisionPrecision::Precise)
+            || world.entities.iter().any(|other| {
+                other.id != e.id
+                    && other.alive
+                    && other.engine_active
+                    && crate::catalog::is_a(&other.object, "oSolid")
+                    && other.mask_contains(point, crate::CollisionPrecision::Precise)
+            })
+    };
+    point_is_solid(Vec2::new(e.pos.x - 1.0, e.pos.y))
+        || point_is_solid(Vec2::new(e.pos.x + 16.0, e.pos.y))
+}
+
 fn hawk(game: &mut Game, e: &mut Entity) {
     let gravity = if e.held {
         0.0
@@ -566,9 +581,10 @@ fn hawk(game: &mut Game, e: &mut Entity) {
     let casts_sight = matches!(e.state, 0 | 1);
     match e.state {
         0 => {
-            if grounded && wall {
+            if grounded && hawk_idle_wall(&game.world, e) {
                 e.vel.y = -6.0;
                 e.vel.x = e.facing as f64;
+                e.timer = e.timer.saturating_sub(10);
             }
             if grounded && e.timer > 0 {
                 e.timer -= 1;
@@ -2863,6 +2879,113 @@ mod tests {
             }
         }
         assert!(exercised, "natural wall turn must coincide with a due ray");
+    }
+
+    #[test]
+    fn direct_source_control_hawk_idle_counter_precedes_facing_and_sight() {
+        // These are explicitly injected incoming-state controls, not a claim
+        // that ordinary input produced each boundary counter. The signed
+        // oracle follows source counter-=10, then positive-only decrement.
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for seed in [2, 42] {
+                for wall in [false, true] {
+                    for incoming in [0, 1, 5, 10, 11, 12, 37] {
+                        let mut game = natural_sight_room(rules, seed, wall);
+                        let actor = game.spawn("oHawkman", Vec2::new(112.0, 144.0));
+                        let hawk = game.world.entity_mut(actor).unwrap();
+                        hawk.timer = incoming;
+                        hawk.vel = Vec2::default();
+                        let mut source_counter = i64::from(incoming);
+                        if wall {
+                            source_counter -= 10;
+                        }
+                        if source_counter > 0 {
+                            source_counter -= 1;
+                        }
+                        let expected_state = if source_counter < 1 { 1 } else { 0 };
+                        let mut source_rng = game.rng.clone();
+                        let expected_facing = if expected_state == 1 {
+                            if source_rng.next_u64() % 2 == 0 { -1 } else { 1 }
+                        } else {
+                            1
+                        };
+                        super::super::step_instance(&mut game, actor);
+                        let hawk = game.world.entity(actor).unwrap();
+                        assert_eq!(hawk.timer, source_counter.max(0) as u32);
+                        assert_eq!(hawk.state, expected_state);
+                        assert_eq!(hawk.facing, expected_facing);
+                        assert_eq!(hawk.vel.y, if wall { -6.0 } else { 0.0 });
+                        let ray = game
+                            .world
+                            .entities
+                            .iter()
+                            .find(|e| {
+                                e.object == "oEnemySight" && e.value("owner") == actor as f64
+                            })
+                            .expect("incoming IDLE emits after its counter/facing branch");
+                        assert_eq!(ray.value("hspeed"), f64::from(expected_facing) * 10.0);
+                        assert_eq!(game.rng.next_u64(), source_rng.next_u64());
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn natural_hawk_stationary_idle_wall_jump_shortens_counter_before_walking() {
+        let mut exercised = false;
+        // Two authored walls bound a corridor. A normal WALK random pause
+        // produces IDLE with vx=0 and counter20..50. No actor state, timer,
+        // velocity, or random stream is changed after source-default birth.
+        for seed in 0..32 {
+            let mut game = natural_sight_room(RulesPreset::Classic, seed, true);
+            for y in 0..10 {
+                game.world.set_tile(5, y, "oBlock");
+            }
+            let actor = game.spawn("oHawkman", Vec2::new(96.0, 144.0));
+            let mut saw_walk = false;
+            for _ in 0..480 {
+                let before = game.world.entity(actor).unwrap().clone();
+                saw_walk |= before.state == 1;
+                // Independent geometry of the authored walls at x80..95
+                // and128..143; y144 is the top of the supported actor.
+                let at_wall = (80.0..96.0).contains(&(before.pos.x - 1.0))
+                    || (128.0..144.0).contains(&(before.pos.x + 16.0));
+                let source_jump = saw_walk
+                    && before.state == 0
+                    && before.timer > 0
+                    && before.vel == Vec2::default()
+                    && before.pos.y == 144.0
+                    && at_wall;
+                game.step(&crate::InputFrame::default());
+                if source_jump {
+                    let after = game.world.entity(actor).unwrap();
+                    assert_eq!(after.vel.y, -6.0);
+                    assert_eq!(after.timer, before.timer.saturating_sub(10).saturating_sub(1));
+                    let mut returned_to_walk = after.state == 1;
+                    for _ in 0..240 {
+                        if returned_to_walk {
+                            break;
+                        }
+                        let before = game.world.entity(actor).unwrap().clone();
+                        game.step(&crate::InputFrame::default());
+                        let after = game.world.entity(actor).unwrap();
+                        if before.state == 0 && after.state == 1 {
+                            assert_eq!(after.timer, 0);
+                            assert!(before.timer <= 11);
+                            returned_to_walk = true;
+                        }
+                    }
+                    assert!(returned_to_walk, "corrected counter reaches facing/WALK branch");
+                    exercised = true;
+                    break;
+                }
+            }
+            if exercised {
+                break;
+            }
+        }
+        assert!(exercised, "ordinary WALK pause must reach stationary IDLE wall interaction");
     }
 
     #[test]
