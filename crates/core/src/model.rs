@@ -1016,6 +1016,20 @@ pub enum GameEvent {
         name: String,
         pos: Vec2,
     },
+    /// Stop the named effect resource, including playback waiting for decode.
+    SoundStop {
+        name: String,
+    },
+    /// Persistent source resource pan; ordinary play calls retain this setting.
+    SoundPan {
+        name: String,
+        pan: f32,
+    },
+    /// Source music frequency in Hz. This never changes the simulation clock.
+    MusicFrequency {
+        name: String,
+        hz: u32,
+    },
     Damage {
         amount: i32,
     },
@@ -1209,6 +1223,21 @@ impl Game {
         self.events.push(GameEvent::SoundIfIdle {
             name: name.into(),
             pos,
+        });
+    }
+    pub fn stop_sound(&mut self, name: impl Into<String>) {
+        self.events.push(GameEvent::SoundStop { name: name.into() });
+    }
+    pub fn set_sound_pan(&mut self, name: impl Into<String>, pan: f32) {
+        self.events.push(GameEvent::SoundPan {
+            name: name.into(),
+            pan,
+        });
+    }
+    pub fn set_music_frequency(&mut self, name: impl Into<String>, hz: u32) {
+        self.events.push(GameEvent::MusicFrequency {
+            name: name.into(),
+            hz,
         });
     }
     pub fn damage_player(&mut self, amount: i32) {

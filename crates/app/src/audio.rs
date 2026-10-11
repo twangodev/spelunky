@@ -172,9 +172,10 @@ pub use backend::Audio;
 mod backend {
     use super::*;
     use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source, SpatialSink};
-    use std::{io::Cursor, time::Instant};
+    use std::{collections::HashMap, io::Cursor, time::Instant};
 
     struct Track {
+        name: &'static str,
         sink: Sink,
         gain: f32,
         target: f32,
@@ -190,6 +191,8 @@ mod backend {
         current: Option<&'static str>,
         music_volume: f32,
         effects_volume: f32,
+        sound_pans: HashMap<&'static str, f32>,
+        music_frequencies: HashMap<&'static str, u32>,
         paused: bool,
         last_update: Instant,
     }
@@ -213,6 +216,8 @@ mod backend {
                 current: None,
                 music_volume: 0.65,
                 effects_volume: 0.8,
+                sound_pans: HashMap::new(),
+                music_frequencies: HashMap::new(),
                 paused: false,
                 last_update: Instant::now(),
             }
@@ -257,13 +262,57 @@ mod backend {
             }
             let sink = SpatialSink::connect_new(
                 mixer,
-                [pan(position), 0.0, 0.0],
+                [
+                    self.sound_pans
+                        .get(name)
+                        .copied()
+                        .unwrap_or_else(|| pan(position)),
+                    0.0,
+                    0.0,
+                ],
                 [-1.0, 0.0, 0.0],
                 [1.0, 0.0, 0.0],
             );
             sink.set_volume(self.effects_volume);
             sink.append(source);
             self.effects.push(Effect { name, sink });
+        }
+        /// Cancel matching effect voices only; music is a separate resource lane.
+        pub fn stop_sound(&mut self, name: &str) {
+            let Some((name, _)) = asset(name) else {
+                return;
+            };
+            self.effects.retain(|effect| {
+                if effect.name == name {
+                    effect.sink.stop();
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        /// Persist a named pan for subsequent starts. Existing voices retain
+        /// their start pan; the source DLL's active-voice behavior is unverified.
+        pub fn set_sound_pan(&mut self, name: &str, position: f32) {
+            if let Some((name, _)) = asset(name) {
+                self.sound_pans.insert(name, pan(position));
+            }
+        }
+        /// Apply a positive source frequency only to matching music tracks,
+        /// including the next start. Zero is outside this bounded contract.
+        pub fn set_music_frequency(&mut self, name: &str, hz: u32) {
+            let Some((name, _)) = asset(name) else {
+                return;
+            };
+            if hz == 0 {
+                return;
+            }
+            self.music_frequencies.insert(name, hz);
+            for track in &self.tracks {
+                if track.name == name {
+                    track.sink.set_speed(hz as f32 / 44_100.0);
+                }
+            }
         }
         /// Empty name fades out. Repeating a selection never restarts a completed one-shot.
         pub fn music(&mut self, name: &str, looping: bool) {
@@ -322,12 +371,16 @@ mod backend {
                 self.tracks.remove(0).sink.stop();
             }
             let sink = Sink::connect_new(mixer);
+            sink.set_speed(
+                self.music_frequencies.get(name).copied().unwrap_or(44_100) as f32 / 44_100.0,
+            );
             sink.set_volume(0.0);
             sink.append(source);
             if self.paused {
                 sink.pause();
             }
             self.tracks.push(Track {
+                name,
                 sink,
                 gain: 0.0,
                 target: 1.0,
@@ -414,6 +467,7 @@ mod backend {
                                 .repeat_infinite(),
                         );
                         Track {
+                            name: "title",
                             sink,
                             gain: 1.0,
                             target,
@@ -440,6 +494,8 @@ mod backend {
                     current: Some("title"),
                     music_volume: 0.4,
                     effects_volume: 0.7,
+                    sound_pans: HashMap::new(),
+                    music_frequencies: HashMap::new(),
                     paused: false,
                     last_update: Instant::now(),
                 };
@@ -496,6 +552,8 @@ mod backend {
                     current: None,
                     music_volume: 0.65,
                     effects_volume: 0.8,
+                    sound_pans: HashMap::new(),
+                    music_frequencies: HashMap::new(),
                     paused: false,
                     last_update: Instant::now(),
                 };
@@ -563,6 +621,8 @@ mod backend {
                 current: None,
                 music_volume: 0.65,
                 effects_volume: 0.8,
+                sound_pans: HashMap::new(),
+                music_frequencies: HashMap::new(),
                 paused: false,
                 last_update: Instant::now(),
             };
@@ -621,6 +681,7 @@ mod backend {
         end: f64,
     }
     struct Track {
+        name: &'static str,
         source: AudioBufferSourceNode,
         gain_node: GainNode,
         gain: f32,
@@ -636,6 +697,8 @@ mod backend {
         current_music: Option<&'static str>,
         music_volume: f32,
         effects_volume: f32,
+        sound_pans: HashMap<&'static str, f32>,
+        music_frequencies: HashMap<&'static str, u32>,
         unlocked: bool,
         paused: bool,
         last_update: f64,
@@ -657,6 +720,8 @@ mod backend {
                 current_music: None,
                 music_volume: 0.65,
                 effects_volume: 0.8,
+                sound_pans: HashMap::new(),
+                music_frequencies: HashMap::new(),
                 unlocked: false,
                 paused: false,
                 last_update: 0.0,
@@ -748,6 +813,48 @@ mod backend {
             }
             self.play(name, position);
         }
+        /// Clearing queued playback prevents a pending decode from resurrecting
+        /// the effect. Decode completion only populates the reusable buffer cache.
+        pub fn stop_sound(&mut self, name: &str) {
+            let Some((name, _)) = asset(name) else {
+                return;
+            };
+            self.queued.retain(|(queued, _)| *queued != name);
+            self.effects.retain(|effect| {
+                if effect.name == name {
+                    effect.gain.gain().set_value(0.0);
+                    let _ = AudioScheduledSourceNode::stop(effect.source.unchecked_ref());
+                    let _ = effect.source.disconnect();
+                    let _ = effect.panner.disconnect();
+                    let _ = effect.gain.disconnect();
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        /// Persist a named pan for later and queued starts. Existing voices
+        /// retain their start pan pending source DLL evidence.
+        pub fn set_sound_pan(&mut self, name: &str, position: f32) {
+            if let Some((name, _)) = asset(name) {
+                self.sound_pans.insert(name, pan(position));
+            }
+        }
+        /// Persist positive source frequency through deferred music decoding.
+        pub fn set_music_frequency(&mut self, name: &str, hz: u32) {
+            let Some((name, _)) = asset(name) else {
+                return;
+            };
+            if hz == 0 {
+                return;
+            }
+            self.music_frequencies.insert(name, hz);
+            for track in &self.tracks {
+                if track.name == name {
+                    track.source.playback_rate().set_value(hz as f32 / 44_100.0);
+                }
+            }
+        }
         pub fn music(&mut self, name: &str, looping: bool) {
             if name.is_empty() {
                 self.requested_music = None;
@@ -823,7 +930,9 @@ mod backend {
             };
             source.set_buffer(Some(&buffer));
             gain.gain().set_value(self.effects_volume);
-            panner.pan().set_value(position);
+            panner
+                .pan()
+                .set_value(self.sound_pans.get(name).copied().unwrap_or(position));
             if source.connect_with_audio_node(&panner).is_err()
                 || panner.connect_with_audio_node(&gain).is_err()
                 || gain
@@ -861,6 +970,9 @@ mod backend {
             };
             source.set_buffer(Some(&buffer));
             source.set_loop(looping);
+            source.playback_rate().set_value(
+                self.music_frequencies.get(name).copied().unwrap_or(44_100) as f32 / 44_100.0,
+            );
             gain_node.gain().set_value(0.0);
             if source.connect_with_audio_node(&gain_node).is_err()
                 || gain_node
@@ -879,6 +991,7 @@ mod backend {
                 let _ = old.gain_node.disconnect();
             }
             self.tracks.push(Track {
+                name,
                 source,
                 gain_node,
                 gain: 0.0,

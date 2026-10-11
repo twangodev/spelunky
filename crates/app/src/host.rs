@@ -1194,6 +1194,13 @@ impl App {
                     self.timing.history_ready = true;
                     for event in &game.events {
                         match event {
+                            GameEvent::SoundStop { name } => self.audio.stop_sound(name),
+                            GameEvent::SoundPan { name, pan } => {
+                                self.audio.set_sound_pan(name, *pan)
+                            }
+                            GameEvent::MusicFrequency { name, hz } => {
+                                self.audio.set_music_frequency(name, *hz)
+                            }
                             GameEvent::Sound { name, pos } => self
                                 .audio
                                 .play(name, ((pos.x - game.camera.x) / 320. * 2. - 1.) as f32),
@@ -1275,6 +1282,13 @@ impl App {
                     self.timing.history_ready = true;
                     for event in &game.events {
                         match event {
+                            GameEvent::SoundStop { name } => self.audio.stop_sound(name),
+                            GameEvent::SoundPan { name, pan } => {
+                                self.audio.set_sound_pan(name, *pan)
+                            }
+                            GameEvent::MusicFrequency { name, hz } => {
+                                self.audio.set_music_frequency(name, *hz)
+                            }
                             GameEvent::Sound { name, pos } => self
                                 .audio
                                 .play(name, ((pos.x - game.camera.x) / 320. * 2. - 1.) as f32),
@@ -1355,6 +1369,13 @@ impl App {
         } else {
             ("title", true)
         };
+        if let Some(hz) = self
+            .game
+            .as_ref()
+            .and_then(|game| initial_level_music_frequency(game, music))
+        {
+            self.audio.set_music_frequency(music, hz);
+        }
         if self
             .game
             .as_ref()
@@ -2111,6 +2132,17 @@ fn stop_music_immediately(game: &Game, music: &str) -> bool {
             || game.opening.is_some()
             || game.flags.contains("hub")
             || game.flags.contains("source_music_stopped"))
+}
+/// Source Room Create starts level music before the destination's first Step.
+/// Reset here too, because host polling can start a stored resource before the
+/// core's first-tick reset event is dispatched.
+fn initial_level_music_frequency(game: &Game, music: &str) -> Option<u32> {
+    (game.is_level()
+        && game.level_tick == 0
+        && game.opening.is_none()
+        && game.ending.is_none()
+        && !music.is_empty())
+    .then_some(44_100)
 }
 fn game_music_request(game: &Game) -> (&'static str, bool) {
     (
