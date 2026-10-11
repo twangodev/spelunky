@@ -342,6 +342,29 @@ fn yeti(game: &mut Game, e: &mut Entity) {
                 "sYetiDieLR"
             });
         }
+        // Normal Step binds other to this receiver. The source uses a
+        // bounding-box point query, then one roll before direct Blood Create.
+        let on_spikes = (game.world.width > 0
+            && game.world.tiles.iter().enumerate().any(|(index, spikes)| {
+                spikes.engine_active
+                    && crate::catalog::is_a(&spikes.object, "oSpikes")
+                    && game
+                        .world
+                        .tile_collision_mask(
+                            (index % game.world.width) as i32,
+                            (index / game.world.width) as i32,
+                        )
+                        .contains(e.pos, crate::CollisionPrecision::BoundingBox)
+            }))
+            || game.world.entities.iter().any(|spikes| {
+                spikes.alive
+                    && spikes.engine_active
+                    && crate::catalog::is_a(&spikes.object, "oSpikes")
+                    && spikes.mask_contains(e.pos, crate::CollisionPrecision::BoundingBox)
+            });
+        if on_spikes && e.value("dead") != 0.0 && e.vel.y != 0.0 && game.rng.range(8) == 0 {
+            game.spawn("oBlood", e.pos);
+        }
         if floor && e.value("bounced") == 0.0 {
             e.data.insert("bounced".into(), 1.0);
             super::create_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 1);
