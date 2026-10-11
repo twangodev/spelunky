@@ -470,6 +470,32 @@ pub(crate) fn collision(game: &mut Game, id: u64, other: crate::dispatcher::Inst
     }
 }
 
+// Player Step gates each family with collision_point, then independently
+// selects instance_place using the player's full mask and current family order.
+// Birth registration belongs to the caller's synchronous Create/dispatcher.
+fn container_query(game: &Game, family: &str) -> (bool, Option<u64>) {
+    let targets: Vec<_> = crate::dispatcher::descendant_instances(game, family)
+        .into_iter()
+        .filter_map(|instance| match instance {
+            crate::dispatcher::Instance::Entity(id) => game.world.entity(id),
+            _ => None,
+        })
+        .filter(|entity| entity.engine_active)
+        .collect();
+    let point_hit = targets.iter().any(|entity| {
+        entity.mask_contains(game.player.pos, crate::CollisionPrecision::BoundingBox)
+    });
+    if !point_hit {
+        return (false, None);
+    }
+    let player_mask = game.player.collision_mask();
+    let receiver = targets
+        .into_iter()
+        .find(|entity| player_mask.intersects_mask(&entity.collision_mask()))
+        .map(|entity| entity.id);
+    (true, receiver)
+}
+
 /// Returns true when the attack edge was consumed by a container.
 pub fn interact(game: &mut Game, input: &InputFrame) -> bool {
     if !input.attack_pressed || super::player_dead(game) || game.player.is_stunned() {
@@ -482,33 +508,26 @@ pub fn interact(game: &mut Game, input: &InputFrame) -> bool {
         // Player Step checks Chest before Crate, and counts the point-hit even
         // when the chest is already open. An open chest leaves Attack pressed
         // for the subsequent source branches.
-        let chest = game
-            .world
-            .entities
-            .iter()
-            .find(|e| e.alive && e.object == "oChest" && bounds(e).contains(game.player.pos))
-            .map(|e| (e.id, e.pos, e.sprite == "sChest"));
-        if let Some((id, pos, closed)) = chest {
+        let (point_hit, chest) = container_query(game, "oChest");
+        if point_hit {
             if crate::statistics::is_real_level(game) {
                 game.lifetime_stats
                     .increment(crate::statistics::LifetimeCounter::TotalChests);
                 *game.data.entry("totalChests".into()).or_default() += 1.;
             }
-            if closed {
+            if let Some((id, pos)) = chest
+                .and_then(|id| game.world.entity(id))
+                .filter(|entity| entity.sprite == "sChest")
+                .map(|entity| (entity.id, entity.pos))
+            {
                 open_chest(game, id, pos);
                 return true;
             }
         }
-        let container = game
-            .world
-            .entities
-            .iter()
-            .filter(|e| {
-                e.alive
-                    && matches!(e.object.as_str(), "oCrate" | "oFlareCrate")
-                    && bounds(e).contains(game.player.pos)
-            })
-            .min_by_key(|e| (u8::from(e.object == "oFlareCrate"), e.id))
+        let container = ["oCrate", "oFlareCrate"]
+            .into_iter()
+            .find_map(|family| container_query(game, family).1)
+            .and_then(|id| game.world.entity(id))
             .map(|e| (e.id, e.object.clone(), e.pos));
         if let Some((id, object, pos)) = container {
             if object == "oCrate" && crate::statistics::is_real_level(game) {
