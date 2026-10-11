@@ -561,21 +561,9 @@ fn hawk(game: &mut Game, e: &mut Entity) {
         }
         return;
     }
-    if matches!(e.state, 0 | 1) {
-        // oHawkman Step creates the same moving oEnemySight instances as
-        // Caveman. Their collision event alerts nearby enemies as a group.
-        let timer = e.value("sight_timer");
-        if timer <= 0.0 {
-            let id = spawn(game, "oEnemySight", e.pos);
-            if let Some(sight) = game.world.entity_mut(id) {
-                sight.vel.x = f64::from(e.facing) * 10.0;
-                sight.data.insert("owner".into(), e.id as f64);
-            }
-            e.data.insert("sight_timer".into(), 5.0);
-        } else {
-            e.data.insert("sight_timer".into(), timer - 1.0);
-        }
-    }
+    // IDLE/WALK cast after their own facing and status changes, even if WALK
+    // selects IDLE at a ledge. Other incoming states do not cast this Step.
+    let casts_sight = matches!(e.state, 0 | 1);
     match e.state {
         0 => {
             if grounded && wall {
@@ -625,6 +613,23 @@ fn hawk(game: &mut Game, e: &mut Entity) {
             e.vel.x = 0.0;
         }
         _ => {}
+    }
+    if casts_sight {
+        let timer = e.value("sight_timer");
+        if timer <= 0.0 {
+            let id = game.spawn("oEnemySight", e.pos);
+            if let Some(sight) = game.world.entity_mut(id) {
+                // Source direction/speed are engine motion, not xVel/yVel.
+                sight
+                    .data
+                    .insert("hspeed".into(), f64::from(e.facing) * 10.0);
+                sight.data.insert("vspeed".into(), 0.0);
+                sight.data.insert("owner".into(), e.id as f64);
+            }
+            e.data.insert("sight_timer".into(), 5.0);
+        } else {
+            e.data.insert("sight_timer".into(), timer - 1.0);
+        }
     }
     // oHawkman Step applies friction after choosing state velocity.
     if e.vel.x > 0.0 {
@@ -2722,9 +2727,144 @@ mod tests {
             .filter(|o| o.object == "oEnemySight")
             .collect();
         assert_eq!(rays.len(), 2);
-        assert_eq!(rays[0].vel.x, 10.0);
+        assert_eq!(rays[0].value("hspeed"), 10.0);
+        assert_eq!(rays[0].value("vspeed"), 0.0);
         assert_eq!(rays[0].value("owner"), 100.0);
     }
+    // Source-default actors and authored floor/wall geometry. After birth,
+    // these regressions use ordinary idle input only, without actor edits or
+    // manually spawned sight. EnemySight has no source expiry timer.
+    fn natural_sight_room(rules: RulesPreset, seed: u64, wall: bool) -> Game {
+        let mut game = Game::shell(seed, rules);
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        if wall {
+            for y in 0..10 {
+                game.world.set_tile(8, y, "oBlock");
+            }
+        }
+        game.player.pos = Vec2::new(160.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game
+    }
+
+    #[test]
+    fn natural_hawk_sight_moves_and_wall_retires_it_with_caveman_control() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for object in ["oHawkman", "oCaveman"] {
+                for wall in [false, true] {
+                    let mut game = natural_sight_room(rules, 42, wall);
+                    let actor = game.spawn(object, Vec2::new(96.0, 144.0));
+                    game.step(&crate::InputFrame::default());
+                    let ray = game
+                        .world
+                        .entities
+                        .iter()
+                        .find(|e| {
+                            e.alive
+                                && e.object == "oEnemySight"
+                                && e.value("owner") == actor as f64
+                        })
+                        .expect("the real actor Step must create its sight");
+                    let ray_id = ray.id;
+                    assert_eq!(ray.pos.x - ray.previous_pos.x, 10.0, "{object}");
+                    assert_eq!(ray.pos.y, ray.previous_pos.y, "{object}");
+                    game.step(&crate::InputFrame::default());
+                    assert_eq!(
+                        game.world.entity(ray_id).is_none(),
+                        wall,
+                        "only the wall retires the naturally moving ray: {object}"
+                    );
+                    let mut alerted = game.events.iter().any(|event| {
+                        matches!(event, GameEvent::Sound { name, .. } if name == "sndAlert")
+                    });
+                    for _ in 2..6 {
+                        game.step(&crate::InputFrame::default());
+                        alerted |= game.events.iter().any(|event| {
+                            matches!(event, GameEvent::Sound { name, .. } if name == "sndAlert")
+                        });
+                    }
+                    assert_eq!(alerted, !wall, "{object}");
+                    assert_eq!(game.world.entity(actor).unwrap().state == 2, !wall);
+                    assert_eq!(game.player.health, 4);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn natural_hawk_idle_sight_uses_facing_chosen_this_step() {
+        let mut saw_left = false;
+        let mut saw_right = false;
+        for seed in 0..16 {
+            let mut game = natural_sight_room(RulesPreset::Classic, seed, false);
+            let actor = game.spawn("oHawkman", Vec2::new(96.0, 144.0));
+            assert_eq!(game.world.entity(actor).unwrap().facing, 1);
+            game.step(&crate::InputFrame::default());
+            let hawk = game.world.entity(actor).unwrap();
+            saw_left |= hawk.facing < 0;
+            saw_right |= hawk.facing > 0;
+            let ray = game
+                .world
+                .entities
+                .iter()
+                .find(|e| e.object == "oEnemySight" && e.value("owner") == actor as f64)
+                .expect("IDLE must cast after choosing its facing");
+            assert_eq!(ray.pos.x - ray.previous_pos.x, f64::from(hawk.facing) * 10.0);
+        }
+        assert!(saw_left && saw_right, "exercise both natural facing choices");
+    }
+
+    #[test]
+    fn natural_hawk_walk_wall_turn_precedes_due_sight() {
+        let mut exercised = false;
+        // Vary only initial placement on the same authored floor. This finds a
+        // natural wall turn on the six-tick sight cadence without injecting a
+        // WALK state, facing, sight timer, velocity, or random stream.
+        for initial_x in 84..114 {
+            let mut game = natural_sight_room(RulesPreset::Classic, 42, true);
+            let actor = game.spawn("oHawkman", Vec2::new(f64::from(initial_x), 144.0));
+            for _ in 0..32 {
+                let before = game.world.entity(actor).unwrap().clone();
+                let old_rays: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oEnemySight")
+                    .map(|e| e.id)
+                    .collect();
+                game.step(&crate::InputFrame::default());
+                let after = game.world.entity(actor).unwrap();
+                if before.state == 1
+                    && before.value("sight_timer") == 0.0
+                    && before.facing != after.facing
+                {
+                    let ray = game
+                        .world
+                        .entities
+                        .iter()
+                        .find(|e| {
+                            e.object == "oEnemySight"
+                                && e.value("owner") == actor as f64
+                                && !old_rays.contains(&e.id)
+                        })
+                        .expect("incoming WALK casts even after its wall turn");
+                    assert_eq!(
+                        ray.pos.x - ray.previous_pos.x,
+                        f64::from(after.facing) * 10.0
+                    );
+                    exercised = true;
+                    break;
+                }
+            }
+            if exercised {
+                break;
+            }
+        }
+        assert!(exercised, "natural wall turn must coincide with a due ray");
+    }
+
     #[test]
     fn tomb_attack_refreshes_cooldown_until_animation_end() {
         // oTombLord Step ATTACK assigns attackTimer=100 on every step.
