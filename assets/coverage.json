@@ -78,17 +78,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 145,
+          "line": 148,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1341,
+          "line": 1395,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1423,
+          "line": 1477,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -158,32 +158,32 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 147,
+          "line": 150,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 680,
+          "line": 734,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 716,
+          "line": 770,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1104,
+          "line": 1158,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1343,
+          "line": 1397,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1425,
+          "line": 1479,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -259,17 +259,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 684,
+          "line": 738,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1341,
+          "line": 1395,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1423,
+          "line": 1477,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -352,7 +352,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1900,
+          "line": 2011,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -371,7 +371,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1900,
+          "line": 2011,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -429,7 +429,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 772,
+          "line": 777,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -439,12 +439,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1013,
+          "line": 1083,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 987,
+          "line": 1057,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -470,6 +470,11 @@
     {
       "category": "gameplay",
       "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 2011,
+          "module": "crates/core/src/items/explosives.rs"
+        },
         {
           "kind": "explicit_object_match_arm",
           "line": 83,
@@ -510,6 +515,11 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
+          "line": 2011,
+          "module": "crates/core/src/items/explosives.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
           "line": 83,
           "module": "crates/core/src/traps/detectors.rs"
         },
@@ -548,7 +558,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1900,
+          "line": 2011,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -623,7 +633,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1900,
+          "line": 2011,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -861,12 +871,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 675,
+          "line": 729,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "enemy_dispatch_registration",
-          "line": 65,
+          "line": 67,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -903,12 +913,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 683,
+          "line": 737,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "enemy_dispatch_registration",
-          "line": 66,
+          "line": 68,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -965,12 +975,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 361,
+          "line": 375,
           "module": "crates/core/src/items/utility.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 217,
+          "line": 231,
           "module": "crates/core/src/items/utility.rs"
         },
         {
@@ -1015,17 +1025,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 134,
+          "line": 137,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1326,
+          "line": 1380,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1406,
+          "line": 1460,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -1209,7 +1219,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1904,
+          "line": 2016,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -1353,32 +1363,32 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 629,
+          "line": 632,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 658,
+          "line": 662,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 681,
+          "line": 686,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 773,
+          "line": 778,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 948,
+          "line": 956,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 593,
+          "line": 596,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -1695,7 +1705,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 777,
+          "line": 847,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -1757,7 +1767,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1899,
+          "line": 2010,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -1777,7 +1787,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1900,
+          "line": 2011,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -1866,17 +1876,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1009,
+          "line": 1079,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1155,
+          "line": 1225,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 986,
+          "line": 1056,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -2184,32 +2194,32 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 130,
+          "line": 133,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 711,
+          "line": 765,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1104,
+          "line": 1158,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1134,
+          "line": 1188,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1330,
+          "line": 1384,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1410,
+          "line": 1464,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -2264,7 +2274,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 675,
+          "line": 729,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -2285,6 +2295,11 @@
           "kind": "explicit_object_match_arm",
           "line": 683,
           "module": "crates/core/src/generation/tiles.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 2011,
+          "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
@@ -2820,27 +2835,27 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 141,
+          "line": 144,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 675,
+          "line": 729,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1170,
+          "line": 1224,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1429,
+          "line": 1483,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "enemy_dispatch_registration",
-          "line": 62,
+          "line": 64,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -2855,7 +2870,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1147,
+          "line": 1217,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -3020,27 +3035,27 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 139,
+          "line": 142,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 682,
+          "line": 736,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1337,
+          "line": 1391,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1419,
+          "line": 1473,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "enemy_dispatch_registration",
-          "line": 64,
+          "line": 66,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -3226,7 +3241,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1995,
+          "line": 2107,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -3283,12 +3298,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 325,
+          "line": 339,
           "module": "crates/core/src/items/utility.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 216,
+          "line": 230,
           "module": "crates/core/src/items/utility.rs"
         },
         {
@@ -3459,7 +3474,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1998,
+          "line": 2110,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -3674,7 +3689,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 675,
+          "line": 729,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -3749,17 +3764,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 27,
+          "line": 30,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 953,
+          "line": 961,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 596,
+          "line": 599,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -3857,17 +3872,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 137,
+          "line": 140,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1335,
+          "line": 1389,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1416,
+          "line": 1470,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -3912,22 +3927,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 18,
+          "line": 21,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 629,
+          "line": 632,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 948,
+          "line": 956,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 594,
+          "line": 597,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -3972,7 +3987,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 772,
+          "line": 777,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -4081,12 +4096,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1020,
+          "line": 1090,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 988,
+          "line": 1058,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -4122,12 +4137,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 300,
+          "line": 314,
           "module": "crates/core/src/items/utility.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 215,
+          "line": 229,
           "module": "crates/core/src/items/utility.rs"
         }
       ],
@@ -4158,12 +4173,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 369,
+          "line": 383,
           "module": "crates/core/src/items/utility.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 218,
+          "line": 232,
           "module": "crates/core/src/items/utility.rs"
         },
         {
@@ -4229,7 +4244,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 675,
+          "line": 729,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -4302,17 +4317,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 137,
+          "line": 140,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1334,
+          "line": 1388,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1415,
+          "line": 1469,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -4441,17 +4456,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 142,
+          "line": 145,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 675,
+          "line": 729,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "enemy_dispatch_registration",
-          "line": 59,
+          "line": 61,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -4514,37 +4529,37 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 136,
+          "line": 139,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 679,
+          "line": 733,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 714,
+          "line": 768,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1104,
+          "line": 1158,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1184,
+          "line": 1238,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1329,
+          "line": 1383,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1409,
+          "line": 1463,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -4594,17 +4609,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 679,
+          "line": 733,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1329,
+          "line": 1383,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1409,
+          "line": 1463,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -5017,7 +5032,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1900,
+          "line": 2011,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -5102,32 +5117,32 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 130,
+          "line": 133,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 711,
+          "line": 765,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1104,
+          "line": 1158,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1134,
+          "line": 1188,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1344,
+          "line": 1398,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1426,
+          "line": 1480,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -5194,12 +5209,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 130,
+          "line": 133,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 675,
+          "line": 729,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -5516,7 +5531,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 772,
+          "line": 777,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -5586,22 +5601,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 140,
+          "line": 143,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 681,
+          "line": 735,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1338,
+          "line": 1392,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1420,
+          "line": 1474,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -5998,7 +6013,7 @@
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 220,
+          "line": 234,
           "module": "crates/core/src/items/utility.rs"
         },
         {
@@ -6066,7 +6081,7 @@
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 221,
+          "line": 235,
           "module": "crates/core/src/items/utility.rs"
         },
         {
@@ -6125,7 +6140,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 675,
+          "line": 729,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -6629,7 +6644,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1903,
+          "line": 2015,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -6679,7 +6694,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 781,
+          "line": 851,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -6709,12 +6724,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1102,
+          "line": 1172,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 991,
+          "line": 1061,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -6772,12 +6787,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 149,
+          "line": 152,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 675,
+          "line": 729,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -6822,17 +6837,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 130,
+          "line": 133,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 675,
+          "line": 729,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1218,
+          "line": 1272,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -6878,7 +6893,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 675,
+          "line": 729,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -6928,32 +6943,32 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 130,
+          "line": 133,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 711,
+          "line": 765,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1104,
+          "line": 1158,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1139,
+          "line": 1193,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1336,
+          "line": 1390,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1417,
+          "line": 1471,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -7029,7 +7044,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 782,
+          "line": 852,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -7078,17 +7093,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1102,
+          "line": 1172,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1199,
+          "line": 1269,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 994,
+          "line": 1064,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -7114,12 +7129,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1102,
+          "line": 1172,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 992,
+          "line": 1062,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -7514,17 +7529,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 138,
+          "line": 141,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 713,
+          "line": 767,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1414,
+          "line": 1468,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -7785,17 +7800,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 148,
+          "line": 151,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 675,
+          "line": 729,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1347,
+          "line": 1401,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -7836,7 +7851,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 675,
+          "line": 729,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -7871,7 +7886,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 675,
+          "line": 729,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -8335,22 +8350,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 139,
+          "line": 142,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 675,
+          "line": 729,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1337,
+          "line": 1391,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1418,
+          "line": 1472,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -8418,7 +8433,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 778,
+          "line": 848,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -8482,7 +8497,7 @@
         },
         {
           "kind": "source_player_phase_adapter",
-          "line": 714,
+          "line": 757,
           "module": "crates/core/src/dispatcher.rs"
         }
       ],
@@ -8616,7 +8631,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 675,
+          "line": 729,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -8735,7 +8750,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 675,
+          "line": 729,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -8764,17 +8779,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1047,
+          "line": 1117,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1200,
+          "line": 1270,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 989,
+          "line": 1059,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -8798,7 +8813,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1904,
+          "line": 2016,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -8986,22 +9001,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 33,
+          "line": 36,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 634,
+          "line": 637,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 962,
+          "line": 970,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 597,
+          "line": 600,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -9039,22 +9054,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 34,
+          "line": 37,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 635,
+          "line": 638,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 963,
+          "line": 971,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 599,
+          "line": 602,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -9145,22 +9160,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 24,
+          "line": 27,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 633,
+          "line": 636,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 952,
+          "line": 960,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 595,
+          "line": 598,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -9185,22 +9200,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 33,
+          "line": 36,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 634,
+          "line": 637,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 962,
+          "line": 970,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 598,
+          "line": 601,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -9378,7 +9393,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1996,
+          "line": 2108,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -9416,7 +9431,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1900,
+          "line": 2011,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -9514,7 +9529,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1997,
+          "line": 2109,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -9572,12 +9587,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 143,
+          "line": 146,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "enemy_dispatch_registration",
-          "line": 63,
+          "line": 65,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -9604,7 +9619,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 780,
+          "line": 850,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -9692,42 +9707,42 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 130,
+          "line": 133,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 711,
+          "line": 765,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1060,
+          "line": 1114,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1104,
+          "line": 1158,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1159,
+          "line": 1213,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1345,
+          "line": 1399,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1427,
+          "line": 1481,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "enemy_dispatch_registration",
-          "line": 60,
+          "line": 62,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -9784,42 +9799,42 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 130,
+          "line": 133,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 711,
+          "line": 765,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1060,
+          "line": 1114,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1104,
+          "line": 1158,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1159,
+          "line": 1213,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1345,
+          "line": 1399,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1427,
+          "line": 1481,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "enemy_dispatch_registration",
-          "line": 61,
+          "line": 63,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -9886,7 +9901,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 779,
+          "line": 849,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -9916,12 +9931,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1200,
+          "line": 1270,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 995,
+          "line": 1065,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -9951,12 +9966,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1200,
+          "line": 1270,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 996,
+          "line": 1066,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -10045,7 +10060,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1900,
+          "line": 2011,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -10084,17 +10099,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 130,
+          "line": 133,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1331,
+          "line": 1385,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1411,
+          "line": 1465,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -10136,7 +10151,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 772,
+          "line": 777,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -10168,17 +10183,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1102,
+          "line": 1172,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1200,
+          "line": 1270,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 993,
+          "line": 1063,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -10295,6 +10310,11 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
+          "line": 2011,
+          "module": "crates/core/src/items/explosives.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
           "line": 97,
           "module": "crates/core/src/traps/moving.rs"
         },
@@ -10329,6 +10349,11 @@
     {
       "category": "gameplay",
       "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 2011,
+          "module": "crates/core/src/items/explosives.rs"
+        },
         {
           "kind": "explicit_object_match_arm",
           "line": 97,
@@ -10445,17 +10470,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 130,
+          "line": 133,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1327,
+          "line": 1381,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1407,
+          "line": 1461,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -10516,7 +10541,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1900,
+          "line": 2011,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -10629,7 +10654,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1900,
+          "line": 2011,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -10797,17 +10822,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 135,
+          "line": 138,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1328,
+          "line": 1382,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1408,
+          "line": 1462,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -10850,12 +10875,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1328,
+          "line": 1382,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1408,
+          "line": 1462,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -11259,7 +11284,7 @@
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 219,
+          "line": 233,
           "module": "crates/core/src/items/utility.rs"
         },
         {
@@ -11331,7 +11356,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1903,
+          "line": 2015,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -11597,37 +11622,37 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 144,
+          "line": 147,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 680,
+          "line": 734,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 715,
+          "line": 769,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1104,
+          "line": 1158,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1184,
+          "line": 1238,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1346,
+          "line": 1400,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1428,
+          "line": 1482,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -11703,7 +11728,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1900,
+          "line": 2011,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -11768,7 +11793,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1899,
+          "line": 2010,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -11949,22 +11974,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 146,
+          "line": 149,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1090,
+          "line": 1144,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1342,
+          "line": 1396,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1424,
+          "line": 1478,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -12020,7 +12045,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 675,
+          "line": 729,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -12106,32 +12131,32 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 130,
+          "line": 133,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 711,
+          "line": 765,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1104,
+          "line": 1158,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1134,
+          "line": 1188,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1333,
+          "line": 1387,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1413,
+          "line": 1467,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -12368,12 +12393,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1077,
+          "line": 1147,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 990,
+          "line": 1060,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -12427,7 +12452,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 783,
+          "line": 853,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -12799,7 +12824,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1904,
+          "line": 2016,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -12865,7 +12890,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 675,
+          "line": 729,
           "module": "crates/core/src/enemies.rs"
         }
       ],
@@ -12964,32 +12989,32 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 130,
+          "line": 133,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 711,
+          "line": 765,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1104,
+          "line": 1158,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1147,
+          "line": 1201,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1339,
+          "line": 1393,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1421,
+          "line": 1475,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -13064,32 +13089,32 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 144,
+          "line": 147,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 680,
+          "line": 734,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 715,
+          "line": 769,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1209,
+          "line": 1263,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1340,
+          "line": 1394,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1422,
+          "line": 1476,
           "module": "crates/core/src/enemies.rs"
         },
         {
@@ -13169,17 +13194,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 137,
+          "line": 140,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1332,
+          "line": 1386,
           "module": "crates/core/src/enemies.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1412,
+          "line": 1466,
           "module": "crates/core/src/enemies.rs"
         }
       ],
