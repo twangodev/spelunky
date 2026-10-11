@@ -18,7 +18,12 @@ fn room(
     let mut game = Game::shell(42, rules);
     game.load_custom(&level, "cached-down-v2", "");
     characters::apply(&mut game, character);
-    for x in [104., 120.] {
+    // A leftward Arrow hit must leave the upper support before the next
+    // stunned bottom-line probe. Source oPlayer1 Step376 bounces even with
+    // cached Down and body/platform overlap; an upstream branch at x104
+    // catches that probe at (112,160) and prevents the lower-contact witness.
+    let upper_supports: &[f64] = if before_down { &[120.] } else { &[104., 120.] };
+    for &x in upper_supports {
         game.spawn("oTreeBranchTile", Vec2::new(x, 160.));
     }
     for column in 1..41 {
@@ -112,6 +117,9 @@ fn hit(game: &mut Game, down: bool) -> Vec<String> {
 // A source-valid exact tangent can bounce on the following Step, regardless
 // of kDown, so do not assert complete traversal of the 11-pixel branch mask.
 fn first_lower_contact(game: &mut Game, held_down: bool, top: f64, mut trace: Vec<String>) -> bool {
+    // Both stun controls deliberately hold the opposite live input.
+    let cached_down = f64::from(!held_down);
+    assert_eq!(game.player.data.get("source_k_down"), Some(&cached_down));
     for _ in 0..60 {
         let previous_bottom = game.player.pos.y + 8.;
         game.step(&InputFrame {
@@ -123,6 +131,11 @@ fn first_lower_contact(game: &mut Game, held_down: bool, top: f64, mut trace: Ve
         assert!(
             game.player.is_stunned(),
             "must observe movement before ordinary input resumes: {trace:#?}"
+        );
+        assert_eq!(
+            game.player.data.get("source_k_down"),
+            Some(&cached_down),
+            "stunned controller must preserve the preceding Down: {trace:#?}"
         );
         let bottom = game.player.pos.y + 8.;
         if previous_bottom < top && bottom >= top {
