@@ -252,11 +252,8 @@ fn frog(game: &mut Game, e: &mut Entity) {
     }
     if e.health <= 0 {
         die(game, e);
-        if e.object != "oFireFrog" {
-            return;
-        }
-        // The Bomb birth precedes immediate Enemy Destroy; FireFrog then
-        // continues its collision/state/sprite tail on the retired receiver.
+        // Both Frog events continue their collision/state/sprite tail after
+        // immediate Enemy Destroy. FireFrog's Bomb birth remains inside die.
         super::destroyed(game, e);
     }
     if collision_offset(&game.world, e, 1.0, 0.0) {
