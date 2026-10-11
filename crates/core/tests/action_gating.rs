@@ -550,13 +550,13 @@ fn empty_bow_message_remains_eligible_during_real_firing_cooldown() {
             game.step(&attack());
             assert_eq!(game.player.held, Some(bow));
             assert!(game.events.iter().any(|event| {
-                matches!(event, spelunky_core::GameEvent::Message(text) if text == "I'M OUT OF ARROWS!")
+                matches!(event, spelunky_core::GameEvent::Dialogue(message) if message.first == "I'M OUT OF ARROWS!" && message.second.is_empty() && message.ticks == 80)
             }));
             game.step(&release());
             game.step(&down_attack());
             assert!(game.player.held.is_none());
             assert!(!game.events.iter().any(|event| {
-                matches!(event, spelunky_core::GameEvent::Message(text) if text == "I'M OUT OF ARROWS!")
+                matches!(event, spelunky_core::GameEvent::Dialogue(message) if message.first == "I'M OUT OF ARROWS!")
             }), "Down drop is the preceding branch, not the empty-ammo message");
         }
     }
