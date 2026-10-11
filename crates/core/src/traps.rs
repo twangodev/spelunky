@@ -422,9 +422,9 @@ pub(crate) fn player_spikes(game: &mut Game) {
                 game.lifetime_stats
                     .misc_death(crate::statistics::MiscDeath::Spikes);
             }
+            crate::player::script_player_blood(game, 3);
             lethal(game);
             game.player.vel = Vec2::default();
-            game.sound("sndHurt", pos);
         }
         if let Some(entity) = spikes.id.and_then(|id| game.world.entity_mut(id)) {
             entity.sprite = "sSpikesBlood".into();
@@ -1359,3 +1359,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "traps/player_spikes_blood_contract_tests.rs"]
+mod player_spikes_blood_contract_tests;
