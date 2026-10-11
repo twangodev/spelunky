@@ -1040,7 +1040,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             } else {
                 p.state = PlayerState::Falling;
             }
-            if col_bot {
+            if col_solid_bot {
                 p.state = PlayerState::Standing;
             }
         }
