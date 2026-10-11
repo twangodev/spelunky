@@ -112,10 +112,16 @@ fn actual_bomb_input_damsel_fallback_requires_contact_and_paste() {
 fn actual_two_bomb_inputs_keep_both_attached_and_older_alarm_clears_latest_backlink() {
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         let mut g = room(rules, true);
+        // Authored side support keeps the ordinary Left escape on the floor
+        // while both natural fuses run; source movement has no room-edge clamp.
+        for y in 0..7 {
+            g.world.set_tile(0, y, "oHardBlock");
+        }
         // Ceiling holds the default Bat in HANG: player.y < bat.y+16.
         // Its center at y102 is below the ceiling, so the source crush probe is clear.
         g.world.set_tile(5, 5, "oHardBlock");
-        let receiver = g.spawn("oBat", Vec2::new(84.0, 94.0));
+        // Bat center separation13 exceeds the source damage gate of12.
+        let receiver = g.spawn("oBat", Vec2::new(85.0, 94.0));
         let first = throw_bomb(&mut g);
         let second = throw_bomb(&mut g);
         assert_eq!(
@@ -165,7 +171,8 @@ fn actual_pistol_pickup_and_attack_destroys_attached_receiver_and_releases_bombs
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         let mut g = room(rules, true);
         g.world.set_tile(5, 5, "oHardBlock");
-        let receiver = g.spawn("oBat", Vec2::new(84.0, 94.0));
+        // Duck right-mirror maxX87 stays clear of BatHang minX88.
+        let receiver = g.spawn("oBat", Vec2::new(85.0, 94.0));
         let pistol = g.spawn("oPistol", Vec2::new(80.0, 108.0));
         g.step(&InputFrame::default());
         g.step(&InputFrame {
@@ -256,7 +263,8 @@ fn actual_teleporter_pickup_and_activation_destroy_sticky_receiver() {
         g.seed = 0;
         g.rng = crate::Rng::new(0);
         g.world.set_tile(5, 5, "oHardBlock");
-        let receiver = g.spawn("oBat", Vec2::new(84.0, 94.0));
+        // Duck right-mirror maxX87 stays clear of BatHang minX88.
+        let receiver = g.spawn("oBat", Vec2::new(85.0, 94.0));
         let teleporter = g.spawn("oTeleporter", Vec2::new(80.0, 108.0));
         g.step(&InputFrame::default());
         g.step(&InputFrame {
