@@ -7,6 +7,8 @@ mod ice;
 mod inherited;
 mod jungle;
 mod npcs;
+#[cfg(test)]
+mod ordinary_item_blood_tests;
 pub(crate) mod shop_dialogue;
 mod temple;
 mod undead;
@@ -548,7 +550,7 @@ pub(crate) fn item_step_impacts(game: &mut Game, item_id: u64) {
             {
                 return;
             }
-            apply_item_hit(game, e, &item.object, item.vel, fragile);
+            apply_item_hit(game, e, &item, fragile);
             if fragile {
                 broke = true;
             }
@@ -904,11 +906,20 @@ fn base_character_collision(game: &mut Game, e: &mut Entity) {
     }
 }
 
-fn apply_item_hit(game: &mut Game, e: &mut Entity, object: &str, velocity: Vec2, fragile: bool) {
+fn apply_item_hit(game: &mut Game, e: &mut Entity, item: &Entity, fragile: bool) {
+    let object = item.object.as_str();
+    let velocity = item.vel;
+    // Dice and fragile bodies replace oItem Step and create Blood directly.
+    // Their literal event branches are handled in a separate parity change.
+    let ordinary = !fragile && object != "oDice";
     e.vel.x = velocity.x * 0.3;
     let mut hit = false;
     if e.object == "oDamsel" {
         if object != "oDamsel" {
+            if ordinary {
+                // This call is outside `with obj`: bloodless belongs to the item.
+                create_blood(game, item, e.pos, 1);
+            }
             if e.held {
                 e.held = false;
                 game.player.held = game.player.held.filter(|id| *id != e.id);
@@ -941,6 +952,9 @@ fn apply_item_hit(game: &mut Game, e: &mut Entity, object: &str, velocity: Vec2,
         }
         match e.object.as_str() {
             "oCaveman" | "oManTrap" | "oVampire" | "oYeti" | "oHawkman" if e.state != 98 => {
+                if ordinary && e.object != "oManTrap" {
+                    create_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 1);
+                }
                 e.health -= 1;
                 e.state = 98;
                 e.timer = e.value("stun_time") as u32;
@@ -948,12 +962,19 @@ fn apply_item_hit(game: &mut Game, e: &mut Entity, object: &str, velocity: Vec2,
                 hit = true;
             }
             "oShopkeeper" | "oShopkeeper2" if e.state < 98 => {
+                if ordinary {
+                    create_blood(game, e, e.pos, 1);
+                }
                 e.health -= 1;
                 e.state = 2;
                 e.vel.y = -6.0;
                 hit = true;
             }
             "oGiantSpider" | "oTombLord" if e.value("hit_cooldown") == 0.0 => {
+                if ordinary {
+                    let offset_y = if e.object == "oTombLord" { 16.0 } else { 24.0 };
+                    create_blood(game, e, Vec2::new(e.pos.x + 16.0, e.pos.y + offset_y), 1);
+                }
                 e.health -= 1;
                 e.data.insert(
                     "hit_cooldown".into(),
@@ -962,6 +983,9 @@ fn apply_item_hit(game: &mut Game, e: &mut Entity, object: &str, velocity: Vec2,
                 hit = true;
             }
             "oAlienBoss" if e.state != 99 && e.sprite != "sAlienBossHurt" => {
+                if ordinary {
+                    create_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 1);
+                }
                 e.health -= 1;
                 e.set_sprite("sAlienBossHurt");
                 e.data.insert("animation_speed".into(), 0.8);
@@ -984,6 +1008,9 @@ fn apply_item_hit(game: &mut Game, e: &mut Entity, object: &str, velocity: Vec2,
             "oCaveman" | "oManTrap" | "oVampire" | "oYeti" | "oHawkman" | "oShopkeeper"
             | "oShopkeeper2" | "oGiantSpider" | "oTombLord" | "oAlienBoss" => {}
             _ => {
+                if ordinary {
+                    create_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 1);
+                }
                 e.health -= 1;
                 hit = true;
             }
