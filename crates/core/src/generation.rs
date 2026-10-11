@@ -1290,6 +1290,10 @@ mod tests {
         use crate::model::{Game, InputFrame, RulesPreset, RunState};
 
         let mut game = Game::shell(37, RulesPreset::Classic);
+        // Retain the natural exit-trap layout with both features made earlier:
+        // scrInitLevel:180,188 skips each scheduling chain once already made.
+        game.flags.insert("made_udjat_eye".into());
+        game.flags.insert("made_market_entrance".into());
         game.world = generate(&mut game.rng, 13, &game.flags);
         assert_eq!(game.world.exit, Vec2::new(424.0, 472.0));
         let door_origin = Vec2::new(game.world.exit.x - 8.0, game.world.exit.y - 8.0);

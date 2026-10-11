@@ -1418,13 +1418,15 @@ mod tests {
 
     #[test]
     fn actual_step_generated_damsel_preserves_free_producer_override_at_bootstrap() {
-        let mut g = Game::new(3, RulesPreset::Classic);
+        // The eager InitLevel chance draws changed later population RNG;
+        // seed 0 retains this naturally generated free-Damsel precondition.
+        let mut g = Game::new(0, RulesPreset::Classic);
         let id = g
             .world
             .entities
             .iter()
             .find(|e| e.object == "oDamsel" && e.value("for_sale") == 0.0)
-            .expect("seed 3 generates an ordinary free Damsel")
+            .expect("seed 0 generates an ordinary free Damsel")
             .id;
         assert_eq!(g.world.entity(id).unwrap().data.get("cost"), Some(&0.0));
         assert_eq!(g.world.entity(id).unwrap().value("npc_created"), 0.0);
