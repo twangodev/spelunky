@@ -17,6 +17,7 @@ pub(crate) fn mask_distance(a: Rect, b: Rect) -> f64 {
 }
 
 mod light;
+mod temple;
 pub(crate) use light::{lighting_tick, sample_light_distances};
 
 /// oGame318 fluid pass runs before Player319 and Level553 activation.
@@ -304,6 +305,8 @@ pub(crate) fn handles(object: &str) -> bool {
         object,
         "oMsgSign"
             | "oGrave"
+            | "oTempleFake"
+            | "oTemple"
             | "oLamp"
             | "oLampRed"
             | "oTikiTorch"
@@ -438,6 +441,10 @@ pub(crate) fn create_instance(game: &mut Game, id: u64) {
         },
         &mut e,
     );
+    if e.object == "oTemple" {
+        temple::create(game, id);
+        return;
+    }
     if e.object == "oLeaves" {
         let cemetery = game.flags.contains("cemetery") || game.flags.contains("cemetary");
         initialize_leaves(&mut game.world, id, cemetery);
@@ -495,6 +502,7 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         return;
     };
     match object.as_str() {
+        "oTempleFake" => temple::fake_step(game, &mut e),
         "oGrave" => {
             // oGrave owns Step: no inherited Solid Step or clean-death gate.
             // Its source query uses the origin, not the sprite center.
