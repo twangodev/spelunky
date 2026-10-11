@@ -1,6 +1,6 @@
 //! NPC/ghost behavior from oGhost, oDamsel, oShopkeeper and oScarab events.
 //! Shop purchase UI/dice/kissing-parlor economics belong to the economy system.
-use super::{can_stomp, center, in_stars, move_body, steer_toward};
+use super::{can_stomp, center, in_stars, move_body};
 use crate::statistics::LifetimeCounter;
 use crate::*;
 
@@ -54,6 +54,7 @@ pub fn init(e: &mut Entity) {
         "oDeadFish" => {
             e.set_sprite("sDeadFishRight");
             e.facing = 1;
+            e.data.insert("dir".into(), 0.0);
             e.data.insert("bloodless".into(), 1.0);
         }
         "oBarrier" | "oBarrierEmitter" => {
@@ -1133,15 +1134,17 @@ fn dead_fish(game: &mut Game, e: &mut Entity) {
         // Own instance_destroy finishes Enemy Destroy before this Step resumes.
         super::destroyed(game, e);
     }
-    let swimming = dead_fish_water(game, game.player.pos) && super::player_alive(game);
+    let swimming = game.player.data.get("swimming").copied().unwrap_or(0.0) != 0.0;
     let dist = e.pos.distance(game.player.pos);
+    let mut direction = e.value("dir");
+    let mut movement = None;
     if e.state == 0 {
-        e.vel = Vec2::new(f64::from(e.facing), 0.0);
-        let probe = Vec2::new(e.pos.x + if e.facing > 0 { 10.0 } else { -2.0 }, e.pos.y);
+        let right = direction == 0.0;
+        let probe = Vec2::new(e.pos.x + if right { 10.0 } else { -2.0 }, e.pos.y);
         if dead_fish_water(game, probe) && !game.world.solid_at(probe.x, probe.y) {
-            move_body(&game.world, e, 0.0);
+            movement = Some(Vec2::new(if right { 1.0 } else { -1.0 }, 0.0));
         } else {
-            e.facing *= -1;
+            direction = if right { 180.0 } else { 0.0 };
         }
         if dist < 90.0 && swimming {
             e.state = 1;
@@ -1151,19 +1154,39 @@ fn dead_fish(game: &mut Game, e: &mut Entity) {
             e.timer -= 1;
         } else {
             e.state = 0;
-            e.facing = if game.rng.range(2) == 0 { -1 } else { 1 };
+            direction = f64::from(game.rng.range(2)) * 180.0;
         }
-    } else if dist < 90.0 && swimming {
-        steer_toward(e, game.player.pos, 1.0);
-        let next = Vec2::new(e.pos.x + e.vel.x, e.pos.y + e.vel.y);
-        if dead_fish_water(game, next) {
-            move_body(&game.world, e, 0.0);
+    } else if crate::dispatcher::is_active(game, crate::dispatcher::Instance::Player) {
+        if dist < 90.0 && swimming && super::player_alive(game) {
+            // Source point_direction starts at x/y, then consumes both jitter
+            // draws in order. The resulting degrees are not normalized again.
+            direction = (e.pos.y - game.player.pos.y)
+                .atan2(game.player.pos.x - e.pos.x)
+                .to_degrees()
+                .rem_euclid(360.0)
+                + f64::from(game.rng.range(2))
+                - f64::from(game.rng.range(2));
+            let angle = direction.to_radians();
+            let velocity = Vec2::new(angle.cos(), -angle.sin());
+            if dead_fish_water(game, Vec2::new(e.pos.x + velocity.x, e.pos.y + velocity.y)) {
+                movement = Some(velocity);
+            }
+        } else {
+            e.state = 2;
+            e.timer = 20 + game.rng.range(21);
         }
-    } else {
-        e.state = 2;
-        e.timer = 20 + game.rng.range(21);
     }
-    e.set_sprite(if e.facing < 0 {
+    if let Some(movement) = movement {
+        // moveTo takes arguments; it does not overwrite this actor's xVel/yVel.
+        let velocity = e.vel;
+        e.vel = movement;
+        move_body(&game.world, e, 0.0);
+        e.vel = velocity;
+    }
+    e.data.insert("dir".into(), direction);
+    let left = direction > 90.0 && direction < 270.0;
+    e.facing = if left { -1 } else { 1 };
+    e.set_sprite(if left {
         "sDeadFishLeft"
     } else {
         "sDeadFishRight"
@@ -2837,5 +2860,64 @@ mod keeper_own_crush_tail_tests {
             // Inspect only this event. A second raw Step without advancing its
             // newborn solid GoldNuggets is not an ordinary lifecycle route.
         }
+    }
+}
+#[cfg(test)]
+mod deadfish_isolated_membership_tests {
+    use super::*;
+
+    // These direct own-event fixtures deliberately omit Level553, which would
+    // reactivate nearby Water and Character before an ordinary DeadFish Step.
+    fn inactive_membership_case(canonical: bool) {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = if canonical {
+                Game::shell(42, rules)
+            } else {
+                Game::legacy_shell(42, rules)
+            };
+            game.world = World::new(30, 20, Area::Jungle, 5);
+            game.player.pos = Vec2::new(240.0, 152.0);
+            game.player.previous_pos = game.player.pos;
+            let water = game.spawn("oWaterSwim", Vec2::new(96.0, 96.0));
+            let point = Vec2::new(100.0, 100.0);
+            assert!(dead_fish_water(&game, point));
+            game.world.entity_mut(water).unwrap().engine_active = false;
+            assert!(
+                !dead_fish_water(&game, point),
+                "ISOLATED_QUERY_OMITS_INACTIVE_WATER"
+            );
+            game.world.entity_mut(water).unwrap().engine_active = true;
+            game.world.entity_mut(water).unwrap().alive = false;
+            assert!(
+                !dead_fish_water(&game, point),
+                "ISOLATED_QUERY_OMITS_RETIRED_WATER"
+            );
+            game.world
+                .entities
+                .iter_mut()
+                .find(|e| e.id == water)
+                .unwrap()
+                .alive = true;
+            let id = game.spawn("oDeadFish", Vec2::new(96.0, 96.0));
+            let mut fish = game.world.entity(id).unwrap().clone();
+            fish.state = 1;
+            game.player.engine_active = false;
+            let rng = game.rng.state_bits();
+            dead_fish(&mut game, &mut fish);
+            assert!(fish.alive);
+            assert_eq!(
+                fish.state, 1,
+                "ISOLATED_ABSENT_ACTIVE_CHARACTER_SKIPS_ATTACK_BRANCH"
+            );
+            assert_eq!(game.rng.state_bits(), rng);
+        }
+    }
+    #[test]
+    fn legacy_direct_own_event_omits_inactive_water_and_character() {
+        inactive_membership_case(false);
+    }
+    #[test]
+    fn canonical_direct_own_event_omits_inactive_water_and_character() {
+        inactive_membership_case(true);
     }
 }
