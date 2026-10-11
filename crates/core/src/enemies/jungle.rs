@@ -1925,6 +1925,9 @@ mod tests {
                 )
             })
             .collect();
+        // Jaws Step continues after Destroy: dry IDLE turns right and drops
+        // one pixel, then its due Bubble Create draws rand(1,3) after all loot.
+        let bubble_velocity = -f64::from(1 + rng.range(3)) * 0.1;
         game.step(&crate::InputFrame::default());
         assert!(game.world.entity(jaws).is_none());
         let effects: Vec<_> = game
@@ -1960,8 +1963,21 @@ mod tests {
             assert_eq!(item.pos, Vec2::new(64.0, 64.0));
             assert_eq!(item.vel, velocity);
         }
+        let bubble = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.alive && e.object == "oBubble")
+            .expect("post-Destroy Jaws Step must create its due Bubble");
+        let bubble_id = bubble.id;
+        assert!(effects.last().unwrap().id < bubble_id);
+        // Bubble504 precedes Jaws885, so it retains Create state this frame.
+        assert_eq!(bubble.pos, Vec2::new(48.0, 65.0));
+        assert_eq!(bubble.vel, Vec2::new(0.0, bubble_velocity));
         assert_eq!(game.rng.next_u64(), rng.next_u64());
         game.step(&crate::InputFrame::default());
+        // Its next own Step rises once, then destroys it outside water.
+        assert!(game.world.entity(bubble_id).is_none());
         for (id, (_, velocity, gravity)) in bone_ids.into_iter().zip(bones) {
             let bone = game.world.entity(id).unwrap();
             assert_eq!(bone.vel, Vec2::new(velocity.x, velocity.y + gravity));
