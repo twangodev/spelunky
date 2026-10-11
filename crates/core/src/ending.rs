@@ -47,6 +47,9 @@ pub struct EndingState {
     pub completed_level: u32,
     pub completed_name: String,
     pub music: String,
+    /// Source playMusic argument1; false requests one playback, not a loop.
+    #[serde(default = "EndingState::default_music_looping")]
+    pub music_looping: bool,
     #[serde(default)]
     pub portal: Option<crate::hub::HubPortal>,
     alarms: [i32; 12],
@@ -65,6 +68,9 @@ pub struct EndingState {
     transition_tunnel: bool,
 }
 impl EndingState {
+    fn default_music_looping() -> bool {
+        true
+    }
     pub fn level_money(&self) -> u32 {
         self.level_money
     }
@@ -96,6 +102,7 @@ impl EndingState {
                 String::new()
             },
             music: String::new(),
+            music_looping: true,
             portal: None,
             alarms: [-1; 12],
             actor_alarms: BTreeMap::new(),
@@ -197,6 +204,8 @@ mod tests {
             s.stage == EndingStage::Summary && s.draw_status == 3
         });
         assert_eq!(g.player.money, 150_000);
+        assert_eq!(g.ending.as_ref().unwrap().music, "musVictory");
+        assert!(!g.ending.as_ref().unwrap().music_looping);
         assert!(!g.ending.as_ref().unwrap().record_ready);
         until(&mut g, 500, |s| s.draw_status == 7);
         assert_eq!(g.player.money, 200_000);
@@ -219,6 +228,8 @@ mod tests {
         );
         assert_eq!(g.ending.as_ref().unwrap().stage, EndingStage::Credits);
         assert!(!g.ending.as_ref().unwrap().record_ready);
+        until(&mut g, 300, |s| s.music == "musCredits");
+        assert!(!g.ending.as_ref().unwrap().music_looping);
         until(&mut g, 3000, |s| s.stage == EndingStage::Complete);
         assert_eq!(g.state, RunState::Won);
         assert!(g.ending.as_ref().unwrap().record_ready);
@@ -277,6 +288,8 @@ mod tests {
         }
         tick(&mut g, &InputFrame::default());
         assert_eq!(g.ending.as_ref().unwrap().draw_status, 1);
+        assert_eq!(g.ending.as_ref().unwrap().music, "musVictory");
+        assert!(!g.ending.as_ref().unwrap().music_looping);
         until(&mut g, 500, |s| s.draw_status == 7);
         assert_eq!(g.player.money, 200_000);
         tick(
@@ -461,6 +474,8 @@ mod tests {
             g.state = RunState::Ending;
             g.step(&InputFrame::default());
             assert_eq!(g.world.entity(camel).unwrap().pos.x, 160.);
+            assert_eq!(g.ending.as_ref().unwrap().music, "musCredits");
+            assert!(!g.ending.as_ref().unwrap().music_looping);
             assert_eq!(g.world.entity(desert).unwrap().pos.x, x);
             assert_eq!(
                 g.ending.as_ref().unwrap().scrolling,
@@ -1641,6 +1656,7 @@ fn controller_alarm(game: &mut Game, s: &mut EndingState, i: usize) {
                 s.draw_status = 1;
                 s.alarms[1] = 50;
                 s.music = "musVictory".into();
+                s.music_looping = false;
                 set_menu(game, true);
             }
             1 => {
@@ -1806,6 +1822,7 @@ fn actor_alarm(game: &mut Game, s: &mut EndingState, id: u64, i: usize) {
                 s.draw_status = 1;
                 s.alarms[1] = 50;
                 s.music = "musVictory".into();
+                s.music_looping = false;
             }
             _ => {}
         },
@@ -1920,6 +1937,7 @@ fn actor_step(game: &mut Game, s: &mut EndingState, e: &mut Entity, input: &Inpu
                         e.state = 1;
                         if e.object == "oCamel" {
                             s.music = "musCredits".into();
+                            s.music_looping = false;
                         }
                     }
                 }

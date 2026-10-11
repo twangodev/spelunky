@@ -1188,15 +1188,18 @@ impl App {
             self.store.data.settings.music_volume,
             self.store.data.settings.effects_volume,
         );
-        let music = if self.screen == Screen::Title {
-            "title"
+        let (music, looping) = if self.screen == Screen::Title {
+            ("title", true)
         } else if matches!(
             self.screen,
             Screen::Playing | Screen::Pause | Screen::Finished | Screen::Donation
         ) {
-            self.game.as_ref().map(game_music).unwrap_or("title")
+            self.game
+                .as_ref()
+                .map(game_music_request)
+                .unwrap_or(("title", true))
         } else {
-            "title"
+            ("title", true)
         };
         if music.is_empty()
             && self.game.as_ref().is_some_and(|game| {
@@ -1205,7 +1208,7 @@ impl App {
         {
             self.audio.stop_music();
         } else {
-            self.audio.music(music);
+            self.audio.music(music, looping);
         }
         self.audio.update();
     }
@@ -1859,6 +1862,14 @@ fn test_snapshot(
             "authoritativeX": game.camera.x, "authoritativeY": game.camera.y,
         },
     })
+}
+fn game_music_request(game: &Game) -> (&'static str, bool) {
+    (
+        game_music(game),
+        game.ending
+            .as_ref()
+            .is_none_or(|ending| ending.music_looping),
+    )
 }
 fn game_music(game: &Game) -> &'static str {
     if let Some(ending) = &game.ending {
@@ -3706,8 +3717,24 @@ mod tests {
                 "{code} must not change gameplay rules"
             );
             assert_eq!(game_music(&game), track, "custom music code {code}");
+            assert_eq!(game_music_request(&game), (track, true));
             game.state = RunState::Dead;
             assert_eq!(game_music(&game), "");
+        }
+    }
+
+    #[test]
+    fn natural_custom_summary_keeps_its_one_shot_music_request() {
+        let mut game = Game::shell(42, spelunky_core::RulesPreset::Classic);
+        spelunky_core::ending::begin_custom(&mut game);
+        assert_eq!(game_music_request(&game).0, "");
+        for _ in 0..50 {
+            game.step(&spelunky_core::InputFrame::default());
+        }
+        assert_eq!(game_music_request(&game), ("victory", false));
+        for _ in 0..100 {
+            game.step(&spelunky_core::InputFrame::default());
+            assert_eq!(game_music_request(&game), ("victory", false));
         }
     }
 

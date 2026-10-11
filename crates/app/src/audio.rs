@@ -265,8 +265,8 @@ mod backend {
             sink.append(source);
             self.effects.push(Effect { name, sink });
         }
-        /// Empty name fades the current music out. Repeating a name does not restart it.
-        pub fn music(&mut self, name: &str) {
+        /// Empty name fades out. Repeating a selection never restarts a completed one-shot.
+        pub fn music(&mut self, name: &str, looping: bool) {
             if name.is_empty() {
                 self.current = None;
                 for track in &mut self.tracks {
@@ -274,18 +274,46 @@ mod backend {
                 }
                 return;
             }
+            let Some(mixer) = self.stream.as_ref().map(|stream| stream.mixer().clone()) else {
+                return;
+            };
+            self.music_with_mixer(&mixer, name, looping);
+        }
+        fn music_with_mixer(&mut self, mixer: &rodio::mixer::Mixer, name: &str, looping: bool) {
             let Some((name, bytes)) = asset(name) else {
                 return;
             };
             if self.current == Some(name) {
                 return;
             }
-            let Some(stream) = &self.stream else {
-                return;
-            };
-            let Ok(source) = Decoder::try_from(Cursor::new(bytes)) else {
-                return;
-            };
+            if looping {
+                // Vorbis can expose an initial empty span. Source::repeat_infinite
+                // buffers that span as EOF; the decoder loop reads through it
+                // and rewinds the seekable embedded clip after real EOF.
+                let Ok(source) = Decoder::builder()
+                    .with_data(Cursor::new(bytes))
+                    .with_byte_len(bytes.len() as u64)
+                    .with_seekable(true)
+                    .build_looped()
+                else {
+                    return;
+                };
+                self.start_music_source(mixer, name, source);
+            } else {
+                let Ok(source) = Decoder::try_from(Cursor::new(bytes)) else {
+                    return;
+                };
+                self.start_music_source(mixer, name, source);
+            }
+        }
+        fn start_music_source<S>(
+            &mut self,
+            mixer: &rodio::mixer::Mixer,
+            name: &'static str,
+            source: S,
+        ) where
+            S: Source + Send + 'static,
+        {
             for track in &mut self.tracks {
                 track.target = 0.0;
             }
@@ -293,9 +321,9 @@ mod backend {
             while self.tracks.len() >= 3 {
                 self.tracks.remove(0).sink.stop();
             }
-            let sink = Sink::connect_new(stream.mixer());
+            let sink = Sink::connect_new(mixer);
             sink.set_volume(0.0);
-            sink.append(source.repeat_infinite());
+            sink.append(source);
             if self.paused {
                 sink.pause();
             }
@@ -416,7 +444,7 @@ mod backend {
                     last_update: Instant::now(),
                 };
                 assert!(output.by_ref().take(512).any(|sample| sample > 0.0));
-                audio.music("");
+                audio.music("", true);
                 assert_eq!(audio.tracks.len(), 2);
                 assert!(output.by_ref().take(512).any(|sample| sample > 0.0));
                 audio.pause(paused);
@@ -440,6 +468,91 @@ mod backend {
                 );
             }
         }
+        #[test]
+        fn natural_victory_plays_once_while_loop_requests_continue_and_stop_can_rearm() {
+            let mut game = spelunky_core::Game::shell(42, spelunky_core::RulesPreset::Classic);
+            spelunky_core::ending::begin_custom(&mut game);
+            for _ in 0..50 {
+                game.step(&spelunky_core::InputFrame::default());
+            }
+            let ending = game.ending.as_ref().unwrap();
+            assert_eq!(ending.music, "musVictory");
+            assert!(!ending.music_looping);
+            let (_, bytes) = asset(&ending.music).unwrap();
+            let decoded = Decoder::try_from(Cursor::new(bytes)).unwrap();
+            let channels = usize::from(decoded.channels());
+            let sample_rate = decoded.sample_rate() as usize;
+            // Drain beyond the actual decoded clip length, adapting to the
+            // headless mixer's stereo 44100Hz format. No wall clock sleep.
+            let frames = decoded.count() / channels;
+            let budget =
+                usize::try_from(frames as u64 * 88_200 / sample_rate as u64 + 16_384).unwrap();
+            for looping in [ending.music_looping, true] {
+                let (mixer, mut output) = rodio::mixer::mixer(2, 44_100);
+                let mut audio = Audio {
+                    stream: None,
+                    effects: Vec::new(),
+                    tracks: Vec::new(),
+                    current: None,
+                    music_volume: 0.65,
+                    effects_volume: 0.8,
+                    paused: false,
+                    last_update: Instant::now(),
+                };
+                audio.music_with_mixer(&mixer, &ending.music, looping);
+                // Bypass only wall-clock crossfade progression in this
+                // headless fixture; the actual decoder, queue and mixer run.
+                audio.tracks[0].gain = 1.0;
+                audio.tracks[0].sink.set_volume(audio.music_volume);
+                let (consumed, audible) = output
+                    .by_ref()
+                    .take(budget)
+                    .fold((0, false), |(count, audible), sample| {
+                        (count + 1, audible || sample.abs() > 1e-8)
+                    });
+                assert_eq!(consumed, budget);
+                assert!(audible, "the decoded clip must reach the mixer audibly");
+                if looping {
+                    assert!(!audio.tracks[0].sink.empty());
+                    let tail_audible = (0..4096).fold(false, |audible, _| {
+                        let sample = output.next().unwrap_or(0.0);
+                        audible || sample.abs() > 1e-8
+                    });
+                    assert!(tail_audible, "looped PCM must continue after the first EOF");
+                } else {
+                    assert!(audio.tracks[0].sink.empty(), "one-shot music must end");
+                    // A live Sink keeps its empty mixer queue alive with
+                    // silence; clip completion does not imply mixer EOF.
+                    assert!(output.by_ref().take(4096).all(|sample| sample == 0.0));
+                }
+                // Host polling must not replay a completed one-shot.
+                audio.update();
+                audio.music_with_mixer(&mixer, &ending.music, looping);
+                assert_eq!(audio.tracks.len(), 1);
+                if !looping {
+                    assert!(audio.tracks[0].sink.empty());
+                    assert!(output.by_ref().take(4096).all(|sample| sample == 0.0));
+                }
+                // Explicit cancellation clears the latch, so the same
+                // one-shot can start on a later source request.
+                audio.stop_music();
+                assert!(output.by_ref().take(2048).count() < 2048);
+                audio.music_with_mixer(&mixer, &ending.music, false);
+                assert_eq!(audio.tracks.len(), 1);
+                audio.tracks[0].gain = 1.0;
+                audio.tracks[0].sink.set_volume(audio.music_volume);
+                // Match CPAL's fixed sample pump: a pending stereo source
+                // can return None for one channel-alignment sample.
+                let audible = (0..budget).fold(false, |audible, _| {
+                    let sample = output.next().unwrap_or(0.0);
+                    audible || sample.abs() > 1e-8
+                });
+                assert!(audible, "an explicit stop must rearm audible playback");
+                assert!(audio.tracks[0].sink.empty());
+                audio.stop_music();
+            }
+        }
+
         #[test]
         fn idle_gate_uses_clip_completion_and_aliases_while_normal_play_overlaps() {
             let (mixer, mut output) = rodio::mixer::mixer(2, 44_100);
@@ -519,7 +632,7 @@ mod backend {
         queued: VecDeque<(&'static str, f32)>,
         effects: Vec<Effect>,
         tracks: Vec<Track>,
-        requested_music: Option<&'static str>,
+        requested_music: Option<(&'static str, bool)>,
         current_music: Option<&'static str>,
         music_volume: f32,
         effects_volume: f32,
@@ -635,7 +748,7 @@ mod backend {
             }
             self.play(name, position);
         }
-        pub fn music(&mut self, name: &str) {
+        pub fn music(&mut self, name: &str, looping: bool) {
             if name.is_empty() {
                 self.requested_music = None;
                 self.current_music = None;
@@ -643,7 +756,7 @@ mod backend {
                     track.target = 0.0;
                 }
             } else if let Some((name, _)) = asset(name) {
-                self.requested_music = Some(name);
+                self.requested_music = Some((name, looping));
                 self.decode(name);
             }
         }
@@ -734,7 +847,7 @@ mod backend {
                 end: context.current_time() + buffer.duration(),
             });
         }
-        fn start_music(&mut self, name: &'static str) {
+        fn start_music(&mut self, name: &'static str, looping: bool) {
             let Some(context) = &self.context else {
                 return;
             };
@@ -747,7 +860,7 @@ mod backend {
                 return;
             };
             source.set_buffer(Some(&buffer));
-            source.set_loop(true);
+            source.set_loop(looping);
             gain_node.gain().set_value(0.0);
             if source.connect_with_audio_node(&gain_node).is_err()
                 || gain_node
@@ -793,10 +906,10 @@ mod backend {
                     false
                 }
             });
-            if let Some(name) = self.requested_music {
+            if let Some((name, looping)) = self.requested_music {
                 if self.current_music != Some(name) {
                     self.decode(name);
-                    self.start_music(name);
+                    self.start_music(name, looping);
                 }
             }
             let count = self.queued.len();
