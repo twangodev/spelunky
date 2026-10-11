@@ -1334,8 +1334,16 @@ fn yeti_player_collision(game: &mut Game, e: &mut Entity) {
         if e.state < 98 {
             let damage =
                 (game.player.data.get("fall_timer").copied().unwrap_or(0.0) / 16.0).ceil() as i32;
-            e.health -= damage * if game.player.has("spike_shoes") { 3 } else { 1 };
             game.player.vel.y = -6.0 - 0.2 * game.player.vel.y;
+            if game.player.has("SpikeShoes") {
+                e.health -= damage * 3;
+                game.spawn(
+                    "oBlood",
+                    Vec2::new(game.player.pos.x, game.player.pos.y + 8.0),
+                );
+            } else {
+                e.health -= damage;
+            }
             game.player.data.insert("fall_timer".into(), 0.0);
             e.state = 98;
             e.timer = e.value("stun_time") as u32;
@@ -1353,7 +1361,6 @@ fn yeti_player_collision(game: &mut Game, e: &mut Entity) {
     }
     if game.player.invincible == 0 && e.state < 98 {
         if game.world.solid_at(e.pos.x + 8.0, e.pos.y - 4.0) {
-            hurt_player_cause(game, 1, crate::statistics::EnemyDeath::Yeti);
             game.player.invincible = 30;
             game.player.data.insert("blink".into(), 30.0);
             game.player.vel.x = if game.player.pos.x < e.pos.x {
@@ -1361,6 +1368,8 @@ fn yeti_player_collision(game: &mut Game, e: &mut Entity) {
             } else {
                 6.0
             };
+            game.spawn("oBlood", game.player.pos);
+            hurt_player_cause(game, 1, crate::statistics::EnemyDeath::Yeti);
         } else if e.state != 3 {
             e.facing = if game.player.pos.x > e.pos.x + 8.0 {
                 1
