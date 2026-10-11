@@ -3,6 +3,8 @@
 use crate::model::*;
 
 mod caves;
+#[cfg(test)]
+mod destroy_lifecycle_tests;
 mod fragile_item;
 pub(crate) use fragile_item::step_impacts as fragile_item_step_impacts;
 mod ice;
@@ -203,12 +205,9 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         e.data
             .insert("simulation_tick".into(), game.engine_time() as f64);
         inherited::tick(game, e);
-        // FireFrog's Water conversion destroys its receiver inside the parent
-        // event, but its own following Step action still executes. Other
-        // inherited children retain their existing adapter contract here.
-        if !e.alive && e.object != "oFireFrog" {
-            return;
-        }
+        // Inherited Destroy retires the receiver without aborting the current
+        // event's following child action. with_actor already checks that the
+        // receiver was alive on entry; do not revive it or dispatch a new Step.
         if e.object == "oDamsel" && e.state == 4 {
             npcs::tick(game, e);
             return;
@@ -416,9 +415,17 @@ fn destroyed(game: &mut Game, e: &mut Entity) {
     }
     crate::items::explosives::sticky_receiver_destroyed(game, e);
     npcs::destroyed(game, e);
-    if is_enemy(&e.object) && e.held {
-        game.player.held = None;
-        e.held = false;
+    // Scarab replaces Enemy Destroy without action_inherited. Every other
+    // Enemy inherits this callback, even when another family retires it.
+    if is_enemy(&e.object) && e.object != "oScarab" && e.value("enemy_destroyed") == 0.0 {
+        e.data.insert("enemy_destroyed".into(), 1.0);
+        if e.held {
+            game.player.held = None;
+            // Source writes pickupItem, not pickupItemType. Its instance-local
+            // pickupItem has no readers; preserve the remembered inventory type.
+        }
+        // Destroy does not change the retired receiver's held flag. Remaining
+        // statements in its current event still observe that original value.
     }
 }
 
@@ -468,14 +475,16 @@ pub(crate) fn finish_destroy_events(game: &mut Game) {
         .iter()
         .filter(|e| {
             !e.alive
-                && e.value("sticky_destroyed") == 0.0
-                && (is_enemy(&e.object) || e.object == "oDamsel")
+                && ((is_enemy(&e.object)
+                    && e.object != "oScarab"
+                    && e.value("enemy_destroyed") == 0.0)
+                    || (e.object == "oDamsel" && e.value("sticky_destroyed") == 0.0))
         })
         .map(|e| e.id)
         .collect();
     for id in dead {
         if let Some(mut receiver) = game.world.entities.iter().find(|e| e.id == id).cloned() {
-            crate::items::explosives::sticky_receiver_destroyed(game, &mut receiver);
+            destroyed(game, &mut receiver);
             if let Some(stored) = game.world.entities.iter_mut().find(|e| e.id == id) {
                 *stored = receiver;
             }
@@ -483,19 +492,6 @@ pub(crate) fn finish_destroy_events(game: &mut Game) {
     }
     crate::items::explosives::finish_sticky_destroy_events(game);
     npcs::finish_destroy_events(game);
-    if game
-        .world
-        .entities
-        .iter()
-        .any(|e| !e.alive && is_enemy(&e.object) && e.held)
-    {
-        game.player.held = None;
-        for e in &mut game.world.entities {
-            if !e.alive && is_enemy(&e.object) {
-                e.held = false;
-            }
-        }
-    }
 }
 
 /// oPsychicWaveP owns separate Collision events; its Enemy event preserves

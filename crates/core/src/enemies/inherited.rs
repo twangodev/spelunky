@@ -133,6 +133,9 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
     }
     if point(&game.world, Vec2::new(center.x, e.pos.y - 1.0), "oLava") {
         e.alive = false;
+        // Enemy Destroy runs at this statement, before the lower Lava probe
+        // and later parent/child statements on the retired receiver.
+        super::destroyed(game, e);
         // Source instance_destroy does not return from the current event.
         // Later spear/spike statements still execute on this receiver.
     }
@@ -229,6 +232,12 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
         e.data.insert("inherited_gravity".into(), 0.0);
     }
     crate::traps::altar::offering_entity(game, e);
+    if !e.alive {
+        // A completed sacrifice calls instance_destroy before the moving-body
+        // branch and the child Step. The once latch also covers earlier Water
+        // or Lava destruction in this same parent event.
+        super::destroyed(game, e);
+    }
     if e.state == 98 && (e.vel.x.abs() > 2.0 || e.vel.y.abs() > 2.0) {
         body_projectile(game, e);
     }
@@ -839,8 +848,9 @@ mod tests {
             );
             assert_eq!(
                 g.data.get("kills").copied().unwrap_or(0.0),
-                0.0,
-                "{object} credited lava kill"
+                if object == "oShopkeeper" { 1.0 } else { 0.0 },
+                // Keeper DEAD has no countsAsKill guard; other listed children do.
+                "{object}: source lava death credit"
             );
         }
     }
