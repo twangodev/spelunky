@@ -47,13 +47,60 @@ function fixture() {
   rows[9].fill('1');
   rows[8][4] = '@';
   rows[8][6] = 'n';
+  rows[8][8] = '1'; // Ordinary terrain prevents a fleeing snake escaping the bounded approach.
   rows[8][20] = 'X';
   return [...rows.map(row => row.join('')), 'BROWSER NATURAL SNAKE BLOOD', 'CAVE', '9', '0', '0', 'NONE', '0', '0'].join('\n');
 }
 
+// As with the lighting route, these untrusted DOM events enter the normal
+// canvas/winit listener. Only observed telemetry controls their timing.
+function installBloodRoute(baseline) {
+  const route = window.__bloodRoute = { edges: [], frames: [], done: false, error: null };
+  const canvas = document.getElementById('spelunky-canvas');
+  const old = new Set(baseline), keys = new Set();
+  const setKeys = desired => {
+    const next = new Set(desired);
+    for (const code of new Set([...keys, ...next])) {
+      if (keys.has(code) === next.has(code)) continue;
+      const down = next.has(code);
+      canvas.dispatchEvent(new KeyboardEvent(down ? 'keydown' : 'keyup', {
+        code, key: code === 'KeyX' ? 'x' : code, bubbles: true,
+      }));
+      route.edges.push({ tick: window.__spelunkyTest.tick, code, down });
+    }
+    keys.clear();
+    for (const key of next) keys.add(key);
+  };
+  route.stop = () => { route.done = true; setKeys([]); };
+  let startTick, previousTick;
+  const update = () => {
+    if (route.done) return;
+    const s = window.__spelunkyTest;
+    if (s.screen === 'Playing') {
+      startTick ??= s.tick;
+      if (previousTick !== s.tick) {
+        route.frames.push({ tick: s.tick, x: s.player.x, health: s.player.health });
+        previousTick = s.tick;
+      }
+      const ticks = new Set(window.__bloodProbe.frames.filter(frame =>
+        frame.red.filter(pixel => !old.has(pixel)).length >= 8).map(frame => frame.tick));
+      if (ticks.size >= 3 || window.__bloodProbe.error) route.stop();
+      else if (s.player.health !== 9 || s.tick - startTick > 180) {
+        route.error = s.player.health !== 9 ? 'Player damaged during snake approach' : 'Bounded whip route exhausted';
+        route.stop();
+      } else setKeys([
+        ...(s.player.x < 92 ? ['ArrowRight'] : []),
+        ...((s.tick - startTick) % 18 < 9 ? ['KeyX'] : []),
+      ]);
+    }
+    if (!route.done) requestAnimationFrame(update);
+  };
+  requestAnimationFrame(update);
+}
+
 export async function runBloodAcceptance({ page, result, screenshot }) {
   const entry = result.blood = { status: 'failed',
-    scope: 'Imported snake fixture, ordinary Right+X whip, actual WebGL source-red pixel emergence outside HUD. Core regressions separately prove lethal snake/death-burst semantics; pixels do not independently expose enemy health.' };
+    scope: 'Imported snake with ordinary containment wall; real pause/resume and telemetry-timed untrusted DOM Right/X events through normal input, bounded approach and repeated fresh whip presses. Actual WebGL source-red pixel emergence outside HUD. Core regressions separately prove lethal snake/death-burst semantics; pixels do not independently expose enemy health.' };
   await page.setViewportSize({ width: 320, height: 240 });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await reachTitleMenu(page);
@@ -63,37 +110,46 @@ export async function runBloodAcceptance({ page, result, screenshot }) {
   await page.keyboard.press('F5');
   await page.waitForFunction(() => window.__spelunkyTest?.screen === 'Playing' && window.__spelunkyTest.player.grounded,
     null, { timeout: 15000 });
+  await page.keyboard.press('Escape');
+  await state(page, 'Pause');
   entry.start = await snapshot(page);
   assert.equal(entry.start.player.x, 88);
   assert.equal(entry.start.player.y, 152);
-  await page.evaluate(() => { window.__bloodProbe.armed = true; });
-  await page.waitForFunction(() => window.__bloodProbe.frames.length >= 3 || window.__bloodProbe.error,
-    null, { timeout: 10000 });
-  entry.baseline = await page.evaluate(() => [...new Set(window.__bloodProbe.frames.flatMap(frame => frame.red))]);
-  await screenshot(page, 'snake-before-whip', result);
-  await page.evaluate(() => { window.__bloodProbe.frames = []; });
-  await page.keyboard.down('ArrowRight');
-  await page.keyboard.press('x');
-  await page.waitForFunction(baseline => {
-    const old = new Set(baseline);
-    const ticks = new Set(window.__bloodProbe.frames.filter(frame => frame.red.filter(pixel => !old.has(pixel)).length >= 8).map(frame => frame.tick));
-    return ticks.size >= 3 || window.__bloodProbe.error;
-  }, entry.baseline, { timeout: 10000 });
-  await page.keyboard.up('ArrowRight');
-  await screenshot(page, 'snake-whip-blood-visible', result);
-  await page.keyboard.press('Escape');
-  await state(page, 'Pause');
-  entry.visible = await snapshot(page);
-  entry.frames = await page.evaluate(() => window.__bloodProbe.frames);
-  assert.equal(await page.evaluate(() => window.__bloodProbe.error), null);
-  const baseline = new Set(entry.baseline);
-  entry.newRedByTick = Object.fromEntries(entry.frames.map(frame => [frame.tick, frame.red.filter(pixel => !baseline.has(pixel)).length])
-    .reduce((map, [tick, count]) => map.set(tick, Math.max(count, map.get(tick) || 0)), new Map()));
-  assert.ok(Object.values(entry.newRedByTick).filter(count => count >= 8).length >= 3,
-    'Source blood palette must emerge in production pixels across at least three real ticks');
-  assert.equal(entry.visible.player.health, entry.start.player.health, 'Player damage must not explain these blood pixels');
-  await screenshot(page, 'snake-whip-blood-paused', result);
-  await page.evaluate(() => { window.__bloodProbe.armed = false; });
-  entry.status = 'passed';
-  result.checks.push('Natural snake-whip blood: new source-red production WebGL pixels over multiple ticks, without player damage');
+  assert.equal(entry.start.player.health, 9);
+  try {
+    await page.evaluate(() => { window.__bloodProbe.armed = true; });
+    await page.waitForFunction(() => window.__bloodProbe.frames.length >= 3 || window.__bloodProbe.error,
+      null, { timeout: 10000 });
+    entry.baseline = await page.evaluate(() => [...new Set(window.__bloodProbe.frames.flatMap(frame => frame.red))]);
+    await screenshot(page, 'snake-before-whip', result);
+    await page.evaluate(() => { window.__bloodProbe.frames = []; });
+    await page.evaluate(installBloodRoute, entry.baseline);
+    await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__bloodRoute.done, null, { timeout: 15000 });
+    const routeError = await page.evaluate(() => window.__bloodRoute.error);
+    assert.equal(routeError, null);
+    await screenshot(page, 'snake-whip-blood-visible', result);
+    await page.keyboard.press('Escape');
+    await state(page, 'Pause');
+    entry.visible = await snapshot(page);
+    assert.equal(await page.evaluate(() => window.__bloodProbe.error), null);
+    entry.frames = await page.evaluate(() => window.__bloodProbe.frames);
+    const baseline = new Set(entry.baseline);
+    entry.newRedByTick = Object.fromEntries(entry.frames.map(frame => [frame.tick, frame.red.filter(pixel => !baseline.has(pixel)).length])
+      .reduce((map, [tick, count]) => map.set(tick, Math.max(count, map.get(tick) || 0)), new Map()));
+    assert.ok(Object.values(entry.newRedByTick).filter(count => count >= 8).length >= 3,
+      'Source blood palette must emerge in production pixels across at least three real ticks');
+    assert.equal(entry.visible.player.health, entry.start.player.health, 'Player damage must not explain these blood pixels');
+    await screenshot(page, 'snake-whip-blood-paused', result);
+    entry.status = 'passed';
+    result.checks.push('Natural snake-whip blood: new source-red production WebGL pixels over multiple ticks, without player damage');
+  } finally {
+    entry.route = await page.evaluate(() => {
+      window.__bloodRoute?.stop();
+      return window.__bloodRoute ? { edges: window.__bloodRoute.edges, frames: window.__bloodRoute.frames,
+        done: window.__bloodRoute.done, error: window.__bloodRoute.error } : null;
+    });
+    entry.frames = await page.evaluate(() => { window.__bloodProbe.armed = false; return window.__bloodProbe.frames; });
+    entry.final = await snapshot(page);
+  }
 }

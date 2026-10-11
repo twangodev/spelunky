@@ -14,6 +14,7 @@ import { runAdversarialAcceptance, runOnboardingAcceptance } from './adversarial
 import { installLightingProfile, installLightingSeedControl, installLightingProbe, runLightingAcceptance } from './lighting.mjs';
 import { runCinematicAcceptance } from './cinematics.mjs';
 import { installBloodProbe, runBloodAcceptance } from './blood.mjs';
+import { runCameraAcceptance } from './camera.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const webRoot = path.resolve(process.env.BROWSER_WEB_ROOT || path.join(root, 'web/dist'));
@@ -89,7 +90,7 @@ if (!base) {
 report.url = base;
 report.webRoot = webRoot;
 report.runnerSha256 = Object.fromEntries(await Promise.all(
-  ['smoke.mjs', 'movement.mjs', 'adversarial.mjs', 'lighting.mjs', 'cinematics.mjs', 'blood.mjs'].map(async filename => [
+  ['smoke.mjs', 'movement.mjs', 'adversarial.mjs', 'lighting.mjs', 'cinematics.mjs', 'blood.mjs', 'camera.mjs'].map(async filename => [
     filename, createHash('sha256').update(await readFile(path.join(root, 'tests/browser', filename))).digest('hex'),
   ]),
 ));
@@ -352,6 +353,7 @@ try {
       await runAdversarialAcceptance({ page, result, screenshot });
       await runCinematicAcceptance({ page, result, screenshot });
       await runBloodAcceptance({ page, result, screenshot });
+      await runCameraAcceptance({ page, result, screenshot });
       assert.deepEqual(result.errors, []);
       assert.deepEqual(result.consoleErrors.filter(message => !message.includes('favicon.ico')), []);
       await context.close();

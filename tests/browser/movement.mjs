@@ -225,8 +225,14 @@ export async function runMovementAcceptance({ page, result, screenshot }) {
         const released = await snapshot(page);
         assert.equal(released.player.state, 'Hanging');
         await page.keyboard.down('z');
-        await page.waitForFunction(() => window.__spelunkyTest.player.state !== 'Hanging', null, { timeout: 10000 });
-        entry.launch = await snapshot(page);
+        // Capture the matching redraw atomically: another protocol round trip
+        // can observe the apex several source ticks after a valid upward launch.
+        const launch = await page.waitForFunction(() => {
+          const value = window.__spelunkyTest;
+          return value.player.state !== 'Hanging' ? structuredClone(value) : false;
+        }, null, { timeout: 10000 });
+        entry.launch = await launch.jsonValue();
+        await launch.dispose();
         assert.ok(entry.launch.player.y < entry.hanging.player.y, 'Fresh hanging jump must move upward');
         assert.ok(entry.launch.player.vy < 0, 'Fresh hanging jump must have upward velocity');
         await page.waitForFunction(() => {
