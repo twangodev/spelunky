@@ -1135,21 +1135,28 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
     if game.level_tick == 0 {
         crate::traps::initialize_level(game);
     }
+    // Membership is read-only while this grid-ordered birth list is collected.
+    // Use exact terrain identities; no index survives Create callbacks below.
+    let registered_terrain: HashSet<_> = game
+        .dispatcher
+        .active_order
+        .iter()
+        .chain(&game.dispatcher.inactive_order)
+        .filter_map(|instance| match instance {
+            Instance::Terrain(index) => Some(*index),
+            _ => None,
+        })
+        .collect();
     let new_terrain: Vec<_> = game
         .world
         .tiles
         .iter()
         .enumerate()
         .filter_map(|(i, t)| {
-            (!t.object.is_empty()
-                && !game.dispatcher.active_order.contains(&Instance::Terrain(i))
-                && !game
-                    .dispatcher
-                    .inactive_order
-                    .contains(&Instance::Terrain(i)))
-            .then_some(i)
+            (!t.object.is_empty() && !registered_terrain.contains(&i)).then_some(i)
         })
         .collect();
+    drop(registered_terrain);
     for i in new_terrain {
         crate::traps::create(game, Instance::Terrain(i));
     }
