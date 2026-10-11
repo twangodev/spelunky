@@ -2995,10 +2995,7 @@ mod tests {
                     .entities
                     .iter()
                     .filter(|e| {
-                        e.alive
-                            && e.engine_active
-                            && e.value("owner_player") != 0.0
-                            && crate::catalog::is_a(&e.object, "oWhipPre")
+                        e.alive && e.engine_active && crate::catalog::is_a(&e.object, "oWhipPre")
                     })
                     .map(|e| e.id)
                     .collect();
@@ -3011,17 +3008,13 @@ mod tests {
                 // branch destroys oWhipPre descendants (or their Alarm0 does).
                 assert!(!g.world.entities.iter().any(|e| e.alive
                     && e.engine_active
-                    && e.value("owner_player") != 0.0
                     && crate::catalog::is_a(&e.object, "oWhip")));
                 let surviving_pre_ids: Vec<_> = g
                     .world
                     .entities
                     .iter()
                     .filter(|e| {
-                        e.alive
-                            && e.engine_active
-                            && e.value("owner_player") != 0.0
-                            && crate::catalog::is_a(&e.object, "oWhipPre")
+                        e.alive && e.engine_active && crate::catalog::is_a(&e.object, "oWhipPre")
                     })
                     .map(|e| e.id)
                     .collect();
@@ -3029,7 +3022,6 @@ mod tests {
                 g.step(&InputFrame::default());
                 assert!(!g.world.entities.iter().any(|e| e.alive
                     && e.engine_active
-                    && e.value("owner_player") != 0.0
                     && (crate::catalog::is_a(&e.object, "oWhip")
                         || crate::catalog::is_a(&e.object, "oWhipPre"))));
                 for _ in 0..120 {
