@@ -672,15 +672,41 @@ fn tomb_lord(game: &mut Game, e: &mut Entity) {
         e.health = 0;
     }
     if e.health <= 0 {
-        if game.world.level == 13 {
-            spawn(game, "oSceptre", Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
-        }
+        // The caller evaluates both rand operands even when scrCreateBlood
+        // returns immediately for the Tomb Lord's bloodless Create default.
+        let blood_pos = Vec2::new(
+            e.pos.x + 14.0 + f64::from(game.rng.range(5)),
+            e.pos.y + 14.0 + f64::from(game.rng.range(5)),
+        );
+        super::create_blood(game, e, blood_pos, 4);
         for _ in 0..4 {
-            spawn(game, "oBone", e.pos);
+            let pos = Vec2::new(
+                e.pos.x + 14.0 + f64::from(game.rng.range(5)),
+                e.pos.y + 12.0 + f64::from(game.rng.range(7)),
+            );
+            // Complete inherited/own Bone Create before the next origin rolls.
+            game.spawn("oBone", pos);
+        }
+        if game.world.level == 13 {
+            game.spawn("oSceptre", Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
         }
         super::record_death(game, e);
         e.alive = false;
-        return;
+        // instance_destroy retires the receiver, but does not return from its
+        // current Step. In particular, an ATTACK can still create a Fly below.
+    }
+    let bounds = e.bounds();
+    let left = bounds.x.round_ties_even();
+    let right = (bounds.x + bounds.w - 1.0).round_ties_even();
+    let bottom = (bounds.y + bounds.h).round_ties_even();
+    if e.state != 98
+        && super::solid_mask(
+            &game.world,
+            Rect::new(left, bottom, right - left + 1.0, 1.0),
+            e.id,
+        )
+    {
+        e.vel.y = 0.0;
     }
     countdown(e, "attack_cooldown");
     countdown(e, "hit_cooldown");
@@ -748,6 +774,10 @@ fn tomb_lord(game: &mut Game, e: &mut Entity) {
     }
     if e.state == 1 && e.timer > 0 {
         e.timer -= 1;
+    }
+    // The source's post-state correction also executes after destruction.
+    if super::solid_mask(&game.world, e.bounds(), e.id) {
+        e.pos.y -= 2.0;
     }
     if e.state == 1 {
         e.set_sprite(&format!("sTombLordWalk{}", side(e)));
