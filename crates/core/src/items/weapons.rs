@@ -986,10 +986,12 @@ pub fn step_instance(game: &mut Game, id: u64) {
                 "dist_to_player".into(),
                 crate::world_events::mask_distance(e.sprite_bounds(), game.player.sprite_bounds()),
             );
-            if tile_object(game, e.pos) == "oWater"
+            if game
+                .world
+                .tiles_point_precision(e.pos, "oWater", CollisionPrecision::Precise)
                 || game.world.entities.iter().any(|water| {
                     water.alive
-                        && water.object == "oWater"
+                        && crate::catalog::is_a(&water.object, "oWater")
                         && water.mask_contains(e.pos, CollisionPrecision::Precise)
                 })
             {
@@ -1391,11 +1393,186 @@ mod tests {
     #[test]
     fn flare_is_extinguished_in_water_and_releases_hand() {
         let (mut game, id) = armed("oFlare");
-        game.world.set_tile(5, 5, "oWater");
+        // oWater is sprite-less; real source pools instantiate its child.
+        game.world.set_tile(5, 5, "oWaterSwim");
         tick(&mut game);
         assert!(game.world.entity(id).is_none());
         assert_eq!(game.player.held, None);
     }
+    fn natural_flare_crate_beside_pool(dynamic_water: bool, initial_y: f64) -> (Game, Vec<u64>) {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = World::new(20, 15, Area::Mines, 1);
+        game.player.pos = Vec2::new(88.0, initial_y);
+        for x in 0..20 {
+            game.world.set_tile(x, 10, "oBrick");
+            if x < 6 || x > 10 {
+                game.world.set_tile(x, 6, "oBrick");
+            }
+        }
+        for y in 7..10 {
+            game.world.set_tile(5, y, "oBrick");
+            game.world.set_tile(11, y, "oBrick");
+            for x in 6..11 {
+                if dynamic_water {
+                    game.world
+                        .spawn("oWaterSwim", Vec2::new(x as f64 * 16.0, y as f64 * 16.0));
+                } else {
+                    game.world.set_tile(x, y, "oWaterSwim");
+                }
+            }
+        }
+        let crate_id = game.spawn("oFlareCrate", game.player.pos);
+        game.step(&InputFrame {
+            up: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert!(game.world.entity(crate_id).is_none());
+        let flares: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.object == "oFlare")
+            .collect();
+        assert_eq!(
+            flares.len(),
+            3,
+            "real Up+Attack opens the source flare crate"
+        );
+        for flare in &flares {
+            assert!(!flare.held);
+            assert_eq!(flare.sprite, "sFlare");
+            assert_eq!(flare.value("invincible"), 1.0);
+            assert_eq!(flare.alarms[0], 1, "created after this frame's alarm pass");
+        }
+        let ids = flares.iter().map(|e| e.id).collect();
+        (game, ids)
+    }
+
+    #[test]
+    fn actual_flare_crate_launch_into_water_descendant_extinguishes() {
+        for dynamic_water in [false, true] {
+            // The source allows opening a floating crate while falling.
+            // Start above the dry deck so its first positive launch clears
+            // the lip before landing friction can stop it.
+            let (mut game, ids) = natural_flare_crate_beside_pool(dynamic_water, 64.0);
+            let id = ids
+                .into_iter()
+                .find(|id| game.world.entity(*id).unwrap().vel.x > 0.0)
+                .expect("seed1 source crate launches one flare toward the pool");
+            let mut extinguished = false;
+            let mut cleared_dry_lip = false;
+            let mut trajectory = Vec::new();
+            for _ in 0..60 {
+                game.step(&InputFrame::default());
+                if let Some(flare) = game.world.entity(id) {
+                    trajectory.push((flare.pos, flare.vel));
+                    cleared_dry_lip |= flare.pos.x >= 96.0 && flare.pos.y < 112.0;
+                    let immersed = game.world.tiles_point_precision(
+                        flare.pos,
+                        "oWater",
+                        CollisionPrecision::Precise,
+                    ) || game.world.entities.iter().any(|water| {
+                        water.object == "oWaterSwim"
+                            && water.mask_contains(flare.pos, CollisionPrecision::Precise)
+                    });
+                    assert!(
+                        !immersed,
+                        "flare survived actual WaterSwim immersion (dynamic={dynamic_water}), trajectory={trajectory:?}"
+                    );
+                } else {
+                    assert!(
+                        cleared_dry_lip,
+                        "fixture must prove natural clearance before immersion, trajectory={trajectory:?}"
+                    );
+                    let splashes: Vec<_> = game
+                        .world
+                        .entities
+                        .iter()
+                        .filter(|e| e.object == "oSplash" && e.age == 0)
+                        .collect();
+                    assert_eq!(
+                        splashes.len(),
+                        1,
+                        "one source Flare Step splash, no Flame Destroy smoke"
+                    );
+                    assert!(game.events.iter().any(|event| matches!(event,
+                        GameEvent::Sound { name, pos } if name == "sndSplash" && *pos == splashes[0].pos)));
+                    assert!(
+                        game.world.tiles_point_precision(
+                            splashes[0].pos,
+                            "oWater",
+                            CollisionPrecision::Precise
+                        ) || game
+                            .world
+                            .entities
+                            .iter()
+                            .any(|water| water.object == "oWaterSwim"
+                                && water
+                                    .mask_contains(splashes[0].pos, CollisionPrecision::Precise))
+                    );
+                    assert_eq!(game.player.held, None);
+                    extinguished = true;
+                    break;
+                }
+            }
+            assert!(
+                extinguished,
+                "natural launched flare must extinguish in WaterSwim (dynamic={dynamic_water}), trajectory={trajectory:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn actual_pickup_and_carry_flare_into_water_releases_hand() {
+        for dynamic_water in [false, true] {
+            let (mut game, _) = natural_flare_crate_beside_pool(dynamic_water, 88.0);
+            for _ in 0..20 {
+                game.step(&InputFrame::default());
+            }
+            game.step(&InputFrame {
+                down: true,
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            let id = game
+                .player
+                .held
+                .expect("Down+Attack naturally picks up a settled crate flare");
+            let flare = game.world.entity(id).unwrap();
+            assert_eq!(flare.object, "oFlare");
+            assert!(flare.held);
+            let mut extinguished = false;
+            for _ in 0..60 {
+                game.step(&InputFrame {
+                    right: true,
+                    ..Default::default()
+                });
+                if game.world.entity(id).is_none() {
+                    assert_eq!(
+                        game.player.held, None,
+                        "source water branch releases the held flare"
+                    );
+                    assert!(game.events.iter().any(|event| matches!(event,
+                        GameEvent::Sound { name, .. } if name == "sndSplash")));
+                    extinguished = true;
+                    break;
+                }
+                assert_eq!(
+                    game.player.held,
+                    Some(id),
+                    "do not substitute a throw/drop for immersion"
+                );
+            }
+            assert!(
+                extinguished,
+                "naturally carried flare must extinguish (dynamic={dynamic_water})"
+            );
+        }
+    }
+
     #[test]
     fn mattock_cannot_dig_invincible_terrain() {
         let mut game = Game::shell(3, RulesPreset::Classic);
