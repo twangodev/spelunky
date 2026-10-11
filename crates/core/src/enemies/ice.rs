@@ -131,13 +131,9 @@ pub(super) fn create(game: &mut Game, e: &mut Entity) {
                 .get("create_target_x")
                 .copied()
                 .zip(e.data.get("create_target_y").copied());
-            let target = supplied.map(|(x, y)| Vec2::new(x, y)).or_else(|| {
-                game.world
-                    .entities
-                    .iter()
-                    .find(|boss| boss.alive && boss.engine_active && boss.object == "oAlienBoss")
-                    .map(|boss| Vec2::new(boss.pos.x + 16.0, boss.pos.y + 16.0))
-            });
+            let target = supplied
+                .map(|(x, y)| Vec2::new(x, y))
+                .or_else(|| first_boss_center(game, None));
             if let Some(target) = target {
                 let delta = Vec2::new(target.x - e.pos.x, target.y - e.pos.y);
                 // point_direction at coincident points is zero degrees.
@@ -150,13 +146,37 @@ pub(super) fn create(game: &mut Game, e: &mut Entity) {
     e.data.insert("ice_context_created".into(), 1.0);
 }
 
-fn spawn_psychic_create(game: &mut Game, pos: Vec2, target: Vec2) -> u64 {
-    // The calling Boss is detached while its event runs. Supply that source
-    // origin before Create instead of letting the callback query stale state.
+fn first_boss_center(game: &Game, caller: Option<&Entity>) -> Option<Vec2> {
+    // oAlienBoss.x/y reads the first live member of the current family array.
+    // The calling Boss stays in that array while with_actor detaches its body.
+    // Reading it must not synchronize births while Create's receiver is absent.
+    game.dispatcher
+        .registration_order
+        .iter()
+        .find_map(|instance| {
+            let crate::dispatcher::Instance::Entity(id) = *instance else {
+                return None;
+            };
+            let boss = caller
+                .filter(|actor| actor.id == id)
+                .or_else(|| game.world.entity(id))?;
+            (boss.alive
+                && boss.engine_active
+                && crate::catalog::is_a(&boss.object, "oAlienBoss"))
+            .then_some(Vec2::new(boss.pos.x + 16.0, boss.pos.y + 16.0))
+        })
+}
+
+fn spawn_psychic_create(game: &mut Game, pos: Vec2, caller: &Entity) -> u64 {
+    // Capture the source family read before nested Create; the absent caller
+    // must retain its actual place rather than automatically winning the query.
+    let target = first_boss_center(game, Some(caller));
     let id = game.world.spawn("oPsychicCreate", pos);
-    if let Some(effect) = game.world.entity_mut(id) {
-        effect.data.insert("create_target_x".into(), target.x);
-        effect.data.insert("create_target_y".into(), target.y);
+    if let Some(target) = target {
+        if let Some(effect) = game.world.entity_mut(id) {
+            effect.data.insert("create_target_x".into(), target.x);
+            effect.data.insert("create_target_y".into(), target.y);
+        }
     }
     crate::dispatcher::create(game, id);
     id
@@ -817,7 +837,7 @@ fn boss(game: &mut Game, e: &mut Entity) {
                 e.pos.x + 16.0 + f64::from(game.rng.range(33)) - f64::from(game.rng.range(33)),
                 e.pos.y + 16.0 + f64::from(game.rng.range(33)) - f64::from(game.rng.range(33)),
             );
-            spawn_psychic_create(game, pos, Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
+            spawn_psychic_create(game, pos, e);
         }
         game.spawn("oPsychicWave", Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
         e.data.insert("psychic_recover".into(), 100.0);
@@ -1401,6 +1421,191 @@ mod tests {
         g.player.pos = Vec2::new(100.0, 100.0);
         g
     }
+    fn first_family_psychic_room(rules: RulesPreset, two_bosses: bool) -> (Game, Vec<u64>) {
+        let mut game = Game::shell(42, rules);
+        game.world = World::new(20, 16, Area::Ice, 9);
+        game.world.name = "rLevel".into();
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        // Authored starting conditions precede every actor's synchronous Create.
+        game.player.pos = Vec2::new(176.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        let mut bosses = vec![game.spawn("oAlienBoss", Vec2::new(96.0, 128.0))];
+        if two_bosses {
+            bosses.push(game.spawn("oAlienBoss", Vec2::new(192.0, 128.0)));
+        }
+        (game, bosses)
+    }
+
+    fn assert_psychic_create_heading(effect: &Entity, origin: Vec2, target: Vec2) {
+        let angle = (target.y - origin.y).atan2(target.x - origin.x);
+        let expected = Vec2::new(2.0 * angle.cos(), 2.0 * angle.sin());
+        assert!((effect.vel.x - expected.x).abs() < 1e-12);
+        assert!((effect.vel.y - expected.y).abs() < 1e-12);
+    }
+
+    fn first_family_psychic_attack(game: &mut Game, bosses: &[u64]) {
+        let before_attack_rng = game.rng.clone();
+        for tick in 1..=100 {
+            game.step(&crate::InputFrame::default());
+            assert_eq!(game.player.pos, Vec2::new(176.0, 152.0));
+            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.stun, 0);
+            assert_eq!(game.player.invincible, 0);
+            assert!(!game.world.entities.iter().any(|entity| {
+                matches!(entity.object.as_str(), "oPsychicCreate" | "oPsychicWave")
+            }));
+            for (index, id) in bosses.iter().enumerate() {
+                let boss = game.world.entity(*id).unwrap();
+                assert!(boss.engine_active);
+                assert_eq!(boss.state, 0);
+                assert_eq!(boss.pos, Vec2::new(96.0 + index as f64 * 96.0, 128.0));
+                assert_eq!(boss.value("psychic_recover"), 100.0 - f64::from(tick));
+            }
+        }
+        assert_eq!(
+            game.rng.clone().next_u64(),
+            before_attack_rng.clone().next_u64()
+        );
+
+        let mut expected_rng = game.rng.clone();
+        let mut expected_origins = Vec::new();
+        for id in bosses {
+            let boss = game.world.entity(*id).unwrap();
+            for _ in 0..6 {
+                expected_origins.push(Vec2::new(
+                    boss.pos.x + 16.0 + f64::from(expected_rng.range(33))
+                        - f64::from(expected_rng.range(33)),
+                    boss.pos.y + 16.0 + f64::from(expected_rng.range(33))
+                        - f64::from(expected_rng.range(33)),
+                ));
+            }
+        }
+        game.step(&crate::InputFrame::default());
+
+        let target = Vec2::new(112.0, 144.0);
+        let mut effects: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive && entity.object == "oPsychicCreate")
+            .collect();
+        effects.sort_by_key(|entity| entity.creation_serial);
+        assert_eq!(effects.len(), bosses.len() * 6);
+        for (effect, origin) in effects.iter().zip(expected_origins) {
+            assert_eq!(effect.previous_pos, origin);
+            assert_eq!(effect.value("create_target_x"), target.x);
+            assert_eq!(effect.value("create_target_y"), target.y);
+            assert_psychic_create_heading(effect, origin, target);
+            // Resource665 follows Boss658, so the newborn gets its real Step.
+            assert!((effect.pos.x - origin.x - effect.vel.x).abs() < 1e-12);
+            assert!((effect.pos.y - origin.y - effect.vel.y).abs() < 1e-12);
+        }
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.object == "oPsychicWave")
+                .count(),
+            bosses.len()
+        );
+        for id in bosses {
+            assert_eq!(
+                game.world.entity(*id).unwrap().value("psychic_recover"),
+                100.0
+            );
+        }
+        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.stun, 0);
+        assert_eq!(game.rng.clone().next_u64(), expected_rng.next_u64());
+    }
+
+    #[test]
+    fn actual_step_two_fresh_bosses_capture_first_family_heading_after_recovery() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let (mut game, bosses) = first_family_psychic_room(rules, true);
+            // Both bosses naturally wait100 own Steps, then attack on101.
+            // The second caller's six children must still aim at the first Boss.
+            first_family_psychic_attack(&mut game, &bosses);
+        }
+    }
+
+    #[test]
+    fn actual_step_single_boss_and_initial_storage_order_preserve_create_rng() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let (mut single, bosses) = first_family_psychic_room(rules, false);
+            first_family_psychic_attack(&mut single, &bosses);
+
+            let (mut reordered, bosses) = first_family_psychic_room(rules, true);
+            // Before the first Step, vary only storage. Game::spawn already
+            // registered A then B; no actor state or source array is rewritten.
+            reordered.world.entities.reverse();
+            first_family_psychic_attack(&mut reordered, &bosses);
+        }
+    }
+
+    #[test]
+    fn psychic_create_external_birth_uses_registered_order_and_keeps_supplied_target() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let (mut game, bosses) = first_family_psychic_room(rules, true);
+            game.world.entities.reverse();
+            assert_eq!(game.world.entities[0].id, bosses[1]);
+            let origin = Vec2::new(144.0, 140.0);
+            let unchanged_rng = game.rng.clone();
+            let effect_id = game.spawn("oPsychicCreate", origin);
+            let effect = game.world.entity(effect_id).unwrap();
+            assert_eq!(
+                effect.pos, origin,
+                "Create captures heading without movement"
+            );
+            assert_psychic_create_heading(effect, origin, Vec2::new(112.0, 144.0));
+            let captured_velocity = effect.vel;
+            assert!(
+                crate::dispatcher::descendant_instances(&game, "oPsychicCreate")
+                    .contains(&crate::dispatcher::Instance::Entity(effect_id))
+            );
+            assert_eq!(
+                game.rng.clone().next_u64(),
+                unchanged_rng.clone().next_u64()
+            );
+
+            // Preserve the existing producer-supplied target before Create.
+            let supplied_id = game.world.spawn("oPsychicCreate", origin);
+            let effect = game.world.entity_mut(supplied_id).unwrap();
+            effect.data.insert("create_target_x".into(), 200.0);
+            effect.data.insert("create_target_y".into(), 140.0);
+            crate::dispatcher::create(&mut game, supplied_id);
+            assert_eq!(game.world.entity(supplied_id).unwrap().vel, Vec2::new(2.0, 0.0));
+            assert!(
+                crate::dispatcher::descendant_instances(&game, "oPsychicCreate")
+                    .contains(&crate::dispatcher::Instance::Entity(supplied_id))
+            );
+            assert_eq!(
+                game.rng.clone().next_u64(),
+                unchanged_rng.clone().next_u64()
+            );
+
+            // The externally created effect participates in the next ordinary
+            // world Step immediately; querying Create must not hide its birth.
+            game.step(&crate::InputFrame::default());
+            let effect = game.world.entity(effect_id).unwrap();
+            assert_eq!(effect.previous_pos, origin);
+            assert!((effect.pos.x - origin.x - captured_velocity.x).abs() < 1e-12);
+            assert!((effect.pos.y - origin.y - captured_velocity.y).abs() < 1e-12);
+            assert_eq!(
+                game.world.entity(supplied_id).unwrap().pos,
+                Vec2::new(146.0, 140.0)
+            );
+            assert_eq!(
+                game.rng.clone().next_u64(),
+                unchanged_rng.clone().next_u64()
+            );
+        }
+    }
+
     fn source_frame(game: &mut Game, entity: &mut Entity) {
         tick(game, entity);
         let sprite = entity.sprite.clone();
