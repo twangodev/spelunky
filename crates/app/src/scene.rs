@@ -868,7 +868,14 @@ pub fn game_scene_in_view(
             [1.0, 1.0, 1.0, alpha],
         );
         if let Some(quad) = layer.last_mut() {
-            let rotation = entity.value("rotation");
+            // Fish Bone inherits oItem Draw, whose angle argument is literal0.
+            // Its Step still sets image_angle for collisions; Arrow overrides
+            // Draw and uses that angle, so its visual rotation stays intact.
+            let rotation = if entity.object == "oFishBone" {
+                0.0
+            } else {
+                entity.value("rotation")
+            };
             if rotation.is_finite() {
                 // Core velocity.atan2 uses screen-space y-down coordinates,
                 // already the renderer's positive clockwise convention.
@@ -5174,6 +5181,60 @@ mod tests {
             [quad.rect[0] + quad.pivot[0], quad.rect[1] + quad.pivot[1]],
             [120.0, 100.0]
         );
+    }
+
+    #[test]
+    fn flying_fish_bone_keeps_rotated_collision_mask_but_inherits_zero_angle_draw() {
+        let atlas = Atlas::load().unwrap();
+        let mut level = spelunky_core::level::Level::default();
+        level.set_tile(4, 8, '@').unwrap();
+        for x in 0..40 {
+            level.set_tile(x, 9, '1').unwrap();
+        }
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.load_custom(&level, "fish-bone-draw", "");
+        // Public creation performs the real callbacks. Only initial launch
+        // velocities are authored; every angle below comes from Game::step.
+        let bone = game.spawn("oFishBone", Vec2::new(144.0, 64.0));
+        let arrow = game.spawn("oArrow", Vec2::new(192.0, 64.0));
+        for id in [bone, arrow] {
+            game.world.entity_mut(id).unwrap().vel = Vec2::new(3.0, -2.5);
+        }
+        for _ in 0..5 {
+            game.step(&spelunky_core::InputFrame::default());
+            let draw = game.presentation();
+            let bone = draw.world.entity(bone).expect("flying Fish Bone survives");
+            let arrow = draw.world.entity(arrow).expect("flying Arrow survives");
+            assert!(bone.engine_active && arrow.engine_active);
+            assert!(bone.pos.x > 144.0 && arrow.pos.x > 192.0);
+            assert!(bone.value("rotation").abs() > 0.01);
+            assert!(arrow.value("rotation").abs() > 0.01);
+            let axis_aligned = spelunky_core::catalog::instance_sprite_bounds(
+                &bone.object,
+                &bone.sprite,
+                bone.pos,
+                bone.animation,
+                Vec2::new(1.0, 1.0),
+                0.0,
+            );
+            assert_ne!(bone.sprite_bounds(), axis_aligned,
+                "source collision still uses the actual flight angle");
+            let bone_uv = atlas.sprite(&bone.sprite, bone.animation).unwrap().uv;
+            let arrow_uv = atlas.sprite(&arrow.sprite, arrow.animation).unwrap().uv;
+            let state = game.state_hash();
+            let draw_state = draw.state_hash();
+            for alpha in [0.0, 0.125, 0.5, 0.875, 1.0] {
+                let quads = game_scene(&game, alpha, false, &atlas);
+                let bone_quad = quads.iter().find(|q| q.uv == bone_uv).unwrap();
+                let arrow_quad = quads.iter().find(|q| q.uv == arrow_uv).unwrap();
+                assert_eq!(bone_quad.rotation, 0.0,
+                    "oFishBone inherits the literal-zero-angle oItem Draw");
+                assert_eq!(arrow_quad.rotation, arrow.value("rotation") as f32,
+                    "oArrow's own Draw retains image_angle");
+                assert_eq!(game.state_hash(), state);
+                assert_eq!(game.presentation().state_hash(), draw_state);
+            }
+        }
     }
 
     #[test]
