@@ -1290,13 +1290,10 @@ impl App {
         } else {
             ("title", true)
         };
-        if music.is_empty()
-            && self.game.as_ref().is_some_and(|game| {
-                game.ending.is_some()
-                    || game.opening.is_some()
-                    || game.flags.contains("hub")
-                    || game.flags.contains("source_music_stopped")
-            })
+        if self
+            .game
+            .as_ref()
+            .is_some_and(|game| stop_music_immediately(game, music))
         {
             self.audio.stop_music();
         } else {
@@ -2001,6 +1998,14 @@ fn prepare_source_selector_return(game: &mut Game) -> bool {
     game.flags.insert("title_start:2".into());
     resume_room_music(game);
     true
+}
+fn stop_music_immediately(game: &Game, music: &str) -> bool {
+    music.is_empty()
+        && (game.state == RunState::Dead
+            || game.ending.is_some()
+            || game.opening.is_some()
+            || game.flags.contains("hub")
+            || game.flags.contains("source_music_stopped"))
 }
 fn game_music_request(game: &Game) -> (&'static str, bool) {
     (
@@ -2852,6 +2857,59 @@ fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ordinary_fatal_collision_stops_music_at_player_death_step_but_ankh_keeps_it_playing() {
+        for has_ankh in [false, true] {
+            let mut game = Game::shell(123, spelunky_core::RulesPreset::Classic);
+            game.world = spelunky_core::World::new(40, 30, Area::Mines, 1);
+            for x in 0..40 {
+                game.world.set_tile(x, 10, "oBlock");
+            }
+            game.world.entrance = spelunky_core::Vec2::new(40., 152.);
+            game.player.pos = spelunky_core::Vec2::new(88., 152.);
+            game.player.previous_pos = game.player.pos;
+            game.player.grounded = true;
+            game.player.state = spelunky_core::PlayerState::Standing;
+            if has_ankh {
+                game.player.equipment.insert("Ankh".into());
+            }
+            game.world
+                .spawn("oBullet", spelunky_core::Vec2::new(88., 149.));
+            assert_eq!(game_music(&game), "cave");
+            assert!(!stop_music_immediately(&game, game_music(&game)));
+            game.step(&spelunky_core::InputFrame::default());
+            assert_eq!(game.player.health, 0);
+            assert_eq!(game.state, RunState::Playing);
+            assert_eq!(game_music(&game), "cave");
+            assert!(
+                !stop_music_immediately(&game, game_music(&game)),
+                "The collision occurs after Player Step; the independent dead flag is still clear"
+            );
+            game.step(&spelunky_core::InputFrame::default());
+            if has_ankh {
+                assert_eq!(game.state, RunState::Playing);
+                assert_eq!(game.player.health, 4);
+                assert!(!game.player.has("Ankh"));
+                assert_eq!(game_music(&game), "cave");
+                assert!(!stop_music_immediately(&game, game_music(&game)));
+                assert!(
+                    !game
+                        .events
+                        .iter()
+                        .any(|event| matches!(event, GameEvent::Died))
+                );
+            } else {
+                assert_eq!(game.state, RunState::Dead);
+                assert_eq!(game_music(&game), "");
+                assert!(stop_music_immediately(&game, game_music(&game)));
+                assert!(
+                    game.events
+                        .iter()
+                        .any(|event| matches!(event, GameEvent::Died))
+                );
+            }
+        }
+    }
     #[test]
     fn source_custom_selector_return_clears_session_markers_and_loads_title_start_two() {
         let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
