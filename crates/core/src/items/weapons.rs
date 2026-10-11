@@ -22,8 +22,8 @@ fn owned(e: &mut Entity, damage: f64) {
 }
 
 /// GameMaker uses the selected sprite's mask when no explicit mask is set.
-/// Preserve its source rectangle and origin on both facing directions. This
-/// remains a rectangle approximation of the source's per-frame alpha mask.
+/// Preserve movement bounds and origin on both facing directions. Automatic
+/// Collision events independently use the current frame's precise alpha mask.
 fn selected_sprite_bounds(e: &mut Entity) {
     let name = crate::catalog::object(&e.object)
         .filter(|object| !object.mask.is_empty())

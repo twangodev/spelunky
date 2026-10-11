@@ -338,7 +338,8 @@ pub(crate) fn collision(game: &mut Game, id: u64, other: Instance) {
                 let Some(projectile) = game.world.entity(other_id).cloned() else {
                     return;
                 };
-                if matches!(projectile.object.as_str(), "oWhip" | "oWhipPre")
+                if (crate::catalog::is_a(&projectile.object, "oWhip")
+                    || crate::catalog::is_a(&projectile.object, "oWhipPre"))
                     && crate::dispatcher::collision_owner(&e.object, &projectile.object)
                         == Some("oEnemy")
                 {
@@ -3639,3 +3640,7 @@ mod body_settlement_contract_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "attack_inheritance_tests.rs"]
+mod attack_inheritance_source_tests;
