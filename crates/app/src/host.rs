@@ -579,18 +579,8 @@ impl App {
             key
         };
         if key == KeyCode::Escape {
-            if self.screen == Screen::Custom
-                && self
-                    .game
-                    .as_ref()
-                    .is_some_and(|game| game.flags.contains("source_load_level_menu"))
-            {
-                if let Some(game) = &mut self.game {
-                    game.flags.remove("source_load_level_menu");
-                    game.flags.retain(|flag| !flag.starts_with("title_start:"));
-                    game.flags.insert("title_start:2".into());
-                }
-                self.open_hub(spelunky_core::hub::HubKind::Title);
+            if self.screen == Screen::Custom {
+                self.return_from_custom_selector();
                 return;
             }
             match self.screen {
@@ -706,10 +696,21 @@ impl App {
                 } else if self.selection == names.len() {
                     self.import_dialog()
                 } else {
-                    self.screen(Screen::Title)
+                    self.return_from_custom_selector()
                 }
             }
             _ => self.screen(Screen::Title),
+        }
+    }
+    fn return_from_custom_selector(&mut self) {
+        if self
+            .game
+            .as_mut()
+            .is_some_and(prepare_source_selector_return)
+        {
+            self.open_hub(spelunky_core::hub::HubKind::Title);
+        } else {
+            self.screen(Screen::Title);
         }
     }
     fn play_custom(&mut self, name: &str, editor: bool) {
@@ -1992,6 +1993,15 @@ fn apply_source_suicide(game: &mut Game) {
 fn resume_room_music(game: &mut Game) {
     game.flags.remove("source_music_stopped");
 }
+fn prepare_source_selector_return(game: &mut Game) -> bool {
+    if !game.flags.remove("source_load_level_menu") {
+        return false;
+    }
+    game.flags.retain(|flag| !flag.starts_with("title_start:"));
+    game.flags.insert("title_start:2".into());
+    resume_room_music(game);
+    true
+}
 fn game_music_request(game: &Game) -> (&'static str, bool) {
     (
         game_music(game),
@@ -2842,6 +2852,28 @@ fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn source_custom_selector_return_clears_session_markers_and_loads_title_start_two() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        assert!(!prepare_source_selector_return(&mut game));
+        game.flags.extend(
+            [
+                "source_load_level_menu",
+                "source_music_stopped",
+                "title_start:0",
+            ]
+            .map(str::to_owned),
+        );
+        assert!(prepare_source_selector_return(&mut game));
+        assert!(!game.flags.contains("source_load_level_menu"));
+        assert!(!game.flags.contains("source_music_stopped"));
+        assert!(!game.flags.contains("title_start:0"));
+        assert!(game.flags.contains("title_start:2"));
+        game.load_hub(spelunky_core::hub::HubKind::Title);
+        assert_eq!(game.world.name, "rTitle");
+        assert!(game.opening.is_none());
+        assert_eq!(game_music(&game), "title");
+    }
     #[test]
     fn source_f1_requires_pause_life_and_an_active_level_while_f10_only_requires_pause() {
         let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
