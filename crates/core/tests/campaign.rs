@@ -33,20 +33,105 @@ fn positioned_exit(game: &mut Game) {
         .iter()
         .find(|e| e.alive && e.object == "oExit" && e.bounds().contains(game.world.exit))
         .expect("generated normal exit at the recorded destination");
-    assert!(!game.world.solid_at(door.pos.x, door.pos.y));
+    let origin = door.pos;
     let bounds = door.bounds();
-    position_player(
-        game,
-        Vec2::new(bounds.x + bounds.w / 2.0, bounds.y + bounds.h / 2.0),
+    let center = Vec2::new(bounds.x + bounds.w / 2.0, bounds.y + bounds.h / 2.0);
+    assert!(
+        !game.world.tiles_point(origin, "oSolid") && !game.world.tiles_point(center, "oSolid"),
+        "door terrain must be clear: seed {}, level {}",
+        game.seed,
+        game.world.level
     );
-    // Teleporting does not establish the source ON_GROUND controller state.
-    // Let the live controller settle before requesting the actual exit.
-    game.step(&InputFrame::default());
-    assert_eq!(game.state, RunState::Playing);
-    game.step(&InputFrame {
-        up: true,
-        ..Default::default()
-    });
+    if game.world.solid_at(origin.x, origin.y) {
+        // scrEntityGen:456–471 excludes only the entrance's start room.
+        // A Temple floor may therefore spawn a live Smash on its exit. This
+        // positioned fixture stages a nearby approach, then uses actual input
+        // to bait the trap away and enter; it never deletes the obstruction.
+        let blockers: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|entity| {
+                entity.alive
+                    && entity.solid
+                    && !entity.held
+                    && spelunky_core::catalog::is_a(&entity.object, "oSolid")
+                    && entity.mask_contains(origin, spelunky_core::CollisionPrecision::BoundingBox)
+            })
+            .collect();
+        assert!(
+            !blockers.is_empty()
+                && blockers.iter().all(|entity| {
+                    matches!(entity.object.as_str(), "oSmashTrap" | "oSmashTrapLit")
+                }),
+            "unexpected exit obstruction: seed {}, level {}: {:?}",
+            game.seed,
+            game.world.level,
+            blockers
+                .iter()
+                .map(|entity| (&entity.object, entity.pos))
+                .collect::<Vec<_>>()
+        );
+        let traps: Vec<_> = blockers.iter().map(|entity| entity.id).collect();
+        let approach = [-32.0, 32.0, -16.0, 16.0, -48.0, 48.0]
+            .into_iter()
+            .map(|offset| Vec2::new(center.x + offset, center.y))
+            .find(|pos| {
+                !game
+                    .world
+                    .collides(Rect::new(pos.x - 6.0, pos.y - 8.0, 12.0, 16.0))
+                    && game.world.solid_at(pos.x, pos.y + 9.0)
+            })
+            .expect("exit Smash fixture needs a clear supported approach");
+        let from_left = approach.x < center.x;
+        position_player(game, approach);
+        let mut gate_cleared = false;
+        for tick in 0..90 {
+            let toward_door = if from_left {
+                game.player.pos.x < center.x - 2.0
+            } else {
+                game.player.pos.x > center.x + 2.0
+            };
+            game.step(&InputFrame {
+                left: tick >= 2 && toward_door && !from_left,
+                right: tick >= 2 && toward_door && from_left,
+                jump_pressed: tick == 2,
+                jump: (2..10).contains(&tick),
+                up: true,
+                ..Default::default()
+            });
+            gate_cleared |= !game.world.solid_at(origin.x, origin.y);
+            if game.state != RunState::Playing {
+                break;
+            }
+        }
+        assert!(
+            gate_cleared,
+            "Smash must actually vacate the source exit gate"
+        );
+        assert!(
+            traps.iter().all(|id| game.world.entity(*id).is_some()),
+            "the positioned interaction must preserve its generated Smash"
+        );
+        assert_eq!(
+            game.state,
+            RunState::Ending,
+            "bait and enter: seed {}, level {}, player {:?}",
+            game.seed,
+            game.world.level,
+            game.player.pos
+        );
+    } else {
+        position_player(game, center);
+        // Teleporting does not establish the source ON_GROUND controller state.
+        // Let the live controller settle before requesting the actual exit.
+        game.step(&InputFrame::default());
+        assert_eq!(game.state, RunState::Playing);
+        game.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+    }
     complete_source_exit(game);
 }
 
