@@ -234,6 +234,146 @@ impl Game {
         }
     }
 
+    /// scrClearGlobals changes run globals without replacing the current room,
+    /// actor callbacks, selected character, profile, or random stream.
+    pub(crate) fn clear_run_globals(&mut self) {
+        let tunnel = characters::selected(self) == characters::Character::TunnelMan;
+        self.player.health = if tunnel { 2 } else { 4 };
+        self.player.bombs = if tunnel { 0 } else { 4 };
+        self.player.ropes = if tunnel { 0 } else { 4 };
+        self.player.money = 0;
+        self.player.equipment.clear();
+        for flag in [
+            "ghost_exists",
+            "ghostExists",
+            "ghost_warning",
+            "gameStart",
+            "entityGen",
+            "drawHUD",
+            "check_water",
+            "checkWater",
+            "wanted",
+            "murderer",
+            "shopkeepers_angry",
+            "made_udjat_eye",
+            "madeUdjatEye",
+            "genUdjatEye",
+            "made_market_entrance",
+            "madeMarketEntrance",
+            "genMarketEntrance",
+            "marketEntrance",
+            "made_black_market",
+            "madeBlackMarket",
+            "genBlackMarket",
+            "made_moai",
+            "madeMoai",
+            "made_gold_entrance",
+            "madeGoldEntrance",
+            "genGoldEntrance",
+            "goldEntrance",
+            "city_of_gold",
+            "cityOfGold",
+            "damsel_rescued",
+            "sacrificed_damsel",
+            "udjat_blink",
+        ] {
+            self.flags.remove(flag);
+        }
+        self.flags
+            .retain(|flag| !flag.starts_with("carry:") && !flag.starts_with("title_start:"));
+        self.flags.insert("title_start:0".into());
+        self.flags.insert("no_dark_level".into());
+        for key in [
+            "collect",
+            "collectCounter",
+            "shake",
+            "shakeToggle",
+            "yviewPrev",
+            "xview",
+            "yview",
+            "waterCounter",
+            "crapsPoint",
+            "bloodLevel",
+            "thiefLevel",
+            "favor",
+            "kaliGift",
+            "kaliPunish",
+            "exitX",
+            "exitY",
+            "arrows",
+            "time",
+            "kills",
+            "damsels",
+            "gold",
+            "goldbar",
+            "goldbars",
+            "nuggets",
+            "rubies",
+            "bigrubies",
+            "sapphires",
+            "bigsapphires",
+            "emeralds",
+            "bigemeralds",
+            "diamonds",
+            "scarabs",
+            "idols",
+            "skulls",
+            "xdamsels",
+            "xmoney",
+            "xtime",
+            "bats",
+            "snakes",
+            "spiders",
+            "skeletons",
+            "frogs",
+            "firefrogs",
+            "piranhas",
+            "mantraps",
+            "yetis",
+            "aliens",
+            "ufos",
+            "cavemen",
+            "hawkmen",
+            "monkeys",
+            "zombies",
+            "vampires",
+            "deadfish",
+            "alienbosses",
+            "giantspiders",
+            "yetikings",
+            "megamouths",
+            "tomblords",
+            "shopkeepers",
+            "damselsKilled",
+            "levelType",
+            "collect_counter",
+            "shake_toggle",
+            "water_counter",
+            "kali_gift",
+            "kali_punish",
+            "pending_damsel_kisses",
+        ] {
+            self.data.insert(key.into(), 0.);
+        }
+        for (key, value) in [
+            ("probDarkLevel", 12.),
+            ("probSnakePit", 8.),
+            ("probCemetary", 10.),
+            ("probLake", 10.),
+            ("probYetiLair", 6.),
+            ("probAlien", 10.),
+            ("probSacPit", 8.),
+            ("marketChance", 160.),
+            ("goldChance", 160.),
+            ("flares", 3.),
+            ("arrows", 0.),
+            ("currLevel", 1.),
+            ("levelType", 0.),
+        ] {
+            self.data.insert(key.into(), value);
+        }
+    }
+
     /// Start a destination using the existing source RNG and persistent profile.
     pub fn start_from_hub(&mut self, tutorial: bool, level: u32) {
         let character = characters::selected(self);
@@ -274,11 +414,6 @@ impl Game {
     }
 
     pub fn next_level(&mut self) {
-        if self.flags.contains("tutorial") {
-            self.state = RunState::Won;
-            self.events.push(GameEvent::Won);
-            return;
-        }
         let carry = self.take_transition_carry();
         let kisses = self.take_pending_kisses();
         let next = self
@@ -1239,5 +1374,153 @@ mod tests {
                 .is_none_or(|entity| entity.object != "oRock"),
             "activation must not restore old level instances into its successor room"
         );
+    }
+
+    #[test]
+    fn authored_tutorial_exit_clears_run_at_transition_entry_then_starts_level_one() {
+        for character in [
+            characters::Character::Explorer,
+            characters::Character::Damsel,
+            characters::Character::TunnelMan,
+        ] {
+            let mut game = Game::shell(71, RulesPreset::Classic);
+            characters::apply(&mut game, character);
+            game.start_from_hub(true, 1);
+            game.flags.extend([
+                "first_time".into(),
+                "unlock_sun".into(),
+                "shortcut_5".into(),
+            ]);
+            game.data.insert("tunnel1_remaining".into(), 12345.);
+            game.data.insert("best_mini1".into(), 47.);
+            game.lifetime_stats.total_chests = 17;
+            game.flags.insert("used_shortcut".into());
+            game.flags.insert("low_graphics".into());
+            game.player.health = 1;
+            game.player.money = 1234;
+            game.player.equipment.insert("Jetpack".into());
+            game.data.insert("kills".into(), 3.);
+            game.data.insert("kali_punish".into(), 2.);
+            game.data.insert("pending_damsel_kisses".into(), 2.);
+            // Controlled placement on the original ordinary exit's supported
+            // floor; its authored door, terrain, and animation are untouched.
+            game.player.pos = Vec2::new(56., 248.);
+            game.player.previous_pos = game.player.pos;
+            for _ in 0..5 {
+                game.step(&InputFrame::default());
+            }
+            assert!(game.player.grounded);
+            game.step(&InputFrame {
+                up: true,
+                ..Default::default()
+            });
+            assert_eq!(game.state, RunState::Ending);
+            assert_eq!(
+                game.ending.as_ref().unwrap().stage,
+                ending::EndingStage::Exit
+            );
+            assert_eq!(game.player.money, 1234, "reset must wait for Animation End");
+            assert!(game.flags.contains("tutorial"));
+            for _ in 0..100 {
+                game.step(&InputFrame::default());
+                if game.world.name == "rTransition1" {
+                    break;
+                }
+            }
+            assert_eq!(game.world.name, "rTransition1");
+            let transition = game.ending.as_ref().unwrap();
+            assert_eq!(transition.stage, ending::EndingStage::Transition);
+            assert_eq!(transition.completed_level, 0);
+            assert_eq!(transition.source_time_ms, 0);
+            assert_eq!(transition.level_time_ms, 0);
+            assert_eq!(transition.level_money(), 0);
+            assert_eq!(game.data["next_level"], 1.);
+            assert_eq!(game.data["time"], 0.);
+            assert_eq!(game.data["kills"], 0.);
+            assert_eq!(game.player.money, 0);
+            assert!(game.player.equipment.is_empty());
+            let inventory = if character == characters::Character::TunnelMan {
+                (2, 0, 0)
+            } else {
+                (4, 4, 4)
+            };
+            assert_eq!(
+                (game.player.health, game.player.bombs, game.player.ropes),
+                inventory
+            );
+            assert_eq!(characters::selected(&game), character);
+            assert!(!game.flags.contains("tutorial"));
+            assert!(!game.flags.contains("first_time"));
+            assert!(game.flags.contains("onboarding_consumed"));
+            assert!(
+                game.flags.contains("used_shortcut"),
+                "scrClearGlobals preserves this independent flag"
+            );
+            assert!(game.flags.contains("low_graphics"));
+            assert!(game.flags.contains("unlock_sun"));
+            assert!(game.flags.contains("shortcut_5"));
+            assert_eq!(game.data["tunnel1_remaining"], 12345.);
+            assert_eq!(game.data["best_mini1"], 47.);
+            assert_eq!(game.lifetime_stats.total_chests, 17);
+            assert!(
+                !game
+                    .world
+                    .entities
+                    .iter()
+                    .any(|e| matches!(e.object.as_str(), "oDamselKiss" | "oBall2" | "oChain2"))
+            );
+            // Original Attack first hurries, then a new edge continues after
+            // the source tally completes. No injected Ending state is used.
+            for tick in 0..300 {
+                game.step(&InputFrame {
+                    attack_pressed: tick % 2 == 0,
+                    ..Default::default()
+                });
+                if game.state == RunState::Transition {
+                    break;
+                }
+            }
+            assert_eq!(game.state, RunState::Transition);
+            assert!(
+                !game
+                    .flags
+                    .iter()
+                    .any(|flag| flag.starts_with("hub_destination:"))
+            );
+            game.next_level();
+            assert_eq!(game.world.level, 1);
+            assert_eq!(game.state, RunState::Playing);
+            assert!(!game.flags.contains("hub"));
+            assert_eq!(
+                (game.player.health, game.player.bombs, game.player.ropes),
+                inventory
+            );
+        }
+    }
+
+    #[test]
+    fn authored_tutorial_manual_return_door_still_selects_title() {
+        let mut game = Game::tutorial(72, RulesPreset::Classic);
+        for _ in 0..5 {
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(game.player.pos, Vec2::new(24., 72.));
+        assert!(game.player.grounded);
+        game.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        for _ in 0..100 {
+            game.step(&InputFrame::default());
+            if game.state == RunState::Transition {
+                break;
+            }
+        }
+        assert!(game.flags.contains("hub_destination:title"));
+        assert!(game.flags.contains("title_start:3"));
+        assert_ne!(game.world.name, "rTransition1");
+        game.load_hub(hub::HubKind::Title);
+        assert_eq!(game.world.name, "rTitle");
+        assert_eq!(game.player.pos, Vec2::new(344., 184.));
     }
 }

@@ -910,11 +910,6 @@ impl App {
             }
             return;
         }
-        if game.flags.contains("tutorial") {
-            prepare_tutorial_return(game);
-            self.open_hub(spelunky_core::hub::HubKind::Title);
-            return;
-        }
         if game.flags.contains("custom") {
             match custom_exit(game, &self.store.data.custom_levels, self.editor_play) {
                 CustomExit::Editor => self.screen(Screen::Editor),
@@ -2056,12 +2051,6 @@ fn consume_onboarding(game: &mut Game, data: &mut crate::storage::SaveData) {
     if game.flags.remove("onboarding_consumed") {
         data.first_time = false;
     }
-}
-fn prepare_tutorial_return(game: &mut Game) {
-    game.flags.remove("first_time");
-    game.flags.insert("onboarding_consumed".into());
-    game.flags.insert("title_start:3".into());
-    game.flags.insert("reset_run_on_title".into());
 }
 fn source_elapsed_ms(game: &Game) -> u64 {
     game.source_elapsed_ms()
@@ -3534,7 +3523,7 @@ mod tests {
     }
 
     #[test]
-    fn tutorial_completion_returns_to_the_source_hub_door_and_resets_run_inventory() {
+    fn tutorial_manual_return_uses_its_authored_title_door_and_resets_run_inventory() {
         let mut game = Game::tutorial(42, spelunky_core::RulesPreset::Classic);
         spelunky_core::characters::apply(
             &mut game,
@@ -3546,7 +3535,20 @@ mod tests {
         game.player.ropes = 8;
         game.player.money = 42_000;
         game.player.equipment.insert("Jetpack".into());
-        prepare_tutorial_return(&mut game);
+        for _ in 0..5 {
+            game.step(&spelunky_core::InputFrame::default());
+        }
+        game.step(&spelunky_core::InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        for _ in 0..100 {
+            game.step(&spelunky_core::InputFrame::default());
+            if game.state == RunState::Transition {
+                break;
+            }
+        }
+        assert!(game.flags.contains("hub_destination:title"));
         game.load_hub(spelunky_core::hub::HubKind::Title);
         assert_eq!(game.player.pos, spelunky_core::Vec2::new(344., 184.));
         assert_eq!(
@@ -3589,7 +3591,22 @@ mod tests {
         }
         let mut completed = Game::tutorial(42, save.settings.rules);
         hydrate_run(&mut completed, &save);
-        prepare_tutorial_return(&mut completed);
+        completed.player.pos = spelunky_core::Vec2::new(56., 248.);
+        completed.player.previous_pos = completed.player.pos;
+        for _ in 0..5 {
+            completed.step(&spelunky_core::InputFrame::default());
+        }
+        completed.step(&spelunky_core::InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        for _ in 0..100 {
+            completed.step(&spelunky_core::InputFrame::default());
+            if completed.world.name == "rTransition1" {
+                break;
+            }
+        }
+        assert_eq!(completed.world.name, "rTransition1");
         consume_onboarding(&mut completed, &mut save);
         assert!(!save.first_time);
         assert!(!completed.flags.contains("first_time"));

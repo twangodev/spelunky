@@ -145,6 +145,87 @@ mod tests {
         g.data.insert("time".into(), 549_000.);
         g
     }
+    #[test]
+    fn actual_tutorial_rock_pickup_clears_transition_state_and_all_dummy_copies() {
+        let mut game = Game::tutorial(73, RulesPreset::Classic);
+        // Controlled player placement at the existing tutorial Rock. Pickup,
+        // both original doors, and the complete exit animation stay real.
+        game.player.pos = Vec2::new(648., 264.);
+        game.player.previous_pos = game.player.pos;
+        for _ in 0..5 {
+            game.step(&InputFrame::default());
+        }
+        game.step(&InputFrame {
+            down: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        let held = game
+            .player
+            .held
+            .expect("controller Down+Attack picks up the authored Rock");
+        assert_eq!(game.world.entity(held).unwrap().object, "oRock");
+        assert_eq!(game.player.pickup_item_type, "Rock");
+        game.player.equipment.insert("Cape".into());
+        game.player.pos = Vec2::new(56., 248.);
+        game.player.previous_pos = game.player.pos;
+        for _ in 0..5 {
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(game.player.held, Some(held));
+        game.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        let exit = game
+            .ending
+            .as_ref()
+            .expect("original lower exit starts animation");
+        assert_eq!(exit.stage, EndingStage::Exit);
+        assert!(matches!(exit.pickup_item.as_str(), "Rock" | "oRock"));
+        for _ in 0..100 {
+            game.step(&InputFrame::default());
+            if game.world.name == "rTransition1" {
+                break;
+            }
+        }
+        assert_eq!(game.world.name, "rTransition1");
+        let transition = game.ending.as_ref().unwrap();
+        assert_eq!(transition.stage, EndingStage::Transition);
+        assert!(transition.pickup_item.is_empty());
+        let dummies: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|actor| matches!(actor.object.as_str(), "oPDummy" | "oPDummy2" | "oPDummy6"))
+            .collect();
+        assert!(
+            !dummies.is_empty(),
+            "the authored transition dummy is present"
+        );
+        for dummy in dummies {
+            assert_eq!(dummy.text.get("pickup_item").map(String::as_str), Some(""));
+        }
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .all(|actor| actor.text.get("pickup_item").is_none_or(String::is_empty))
+        );
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|actor| actor.object == "oCape")
+                .count(),
+            1,
+            "source Cape Create precedes global equipment clear"
+        );
+        assert!(!game.player.has("Cape"));
+        assert!(game.player.held.is_none());
+        assert!(!game.flags.iter().any(|flag| flag.starts_with("carry:")));
+    }
+
     fn until(g: &mut Game, limit: usize, predicate: impl Fn(&EndingState) -> bool) {
         for _ in 0..limit {
             if predicate(g.ending.as_ref().unwrap()) {
@@ -1148,6 +1229,32 @@ fn enter(game: &mut Game, s: &mut EndingState, stage: EndingStage, room: &str) {
             }
         }
         EndingStage::Transition => {
+            // oTransition Create clears the tutorial run after its ordinary
+            // exit has advanced currLevel from zero to one. The authored
+            // manual oXTitle portal takes its separate Title path instead.
+            if s.completed_level == 0 && game.flags.contains("tutorial") {
+                // Source creates the Cape before scrClearGlobals. Punishment
+                // and kiss actors are considered afterward, using reset globals.
+                if game.player.has("Cape") {
+                    spawn(game, s, "oCape", Vec2::default());
+                }
+                game.clear_run_globals();
+                game.flags.remove("tutorial");
+                game.flags.remove("first_time");
+                game.flags.insert("onboarding_consumed".into());
+                game.data.insert("next_level".into(), 1.);
+                s.source_time_ms = 0;
+                s.level_time_ms = 0;
+                s.level_money = 0;
+                s.pickup_item.clear();
+                // init_actor ran before this source Create boundary. Its Draw
+                // cache must observe the same cleared global pickupItem.
+                for actor in &mut game.world.entities {
+                    if let Some(item) = actor.text.get_mut("pickup_item") {
+                        item.clear();
+                    }
+                }
+            }
             s.draw_loot = -2;
             s.money_count = 0;
             s.hurry_up = false;
