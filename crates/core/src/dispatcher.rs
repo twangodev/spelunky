@@ -1470,6 +1470,8 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
                     crate::traps::outside_room(game, i);
                 } else if crate::items::handles(&object) {
                     crate::items::outside_room(game, id);
+                } else {
+                    crate::world_events::outside_room(game, id);
                 }
             }
         }

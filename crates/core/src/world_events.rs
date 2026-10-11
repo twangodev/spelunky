@@ -559,10 +559,7 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         "oRubbleDark" => {
             e.pos.y += e.vel.y;
             e.vel.y += 0.6;
-            if point_family(game, e.pos, "oBrick")
-                || point_family(game, e.pos, "oBlock")
-                || outside_room(game, &e)
-            {
+            if point_family(game, e.pos, "oBrick") || point_family(game, e.pos, "oBlock") {
                 e.alive = false;
             }
         }
@@ -1159,13 +1156,14 @@ fn outside(game: &Game, p: Vec2, margin: f64) -> bool {
         || p.y > game.camera.y + VIEW_HEIGHT + margin
 }
 
-fn outside_room(game: &Game, e: &Entity) -> bool {
-    let mask = e.sprite_bounds();
-    mask.is_valid()
-        && (mask.x + mask.w <= 0.0
-            || mask.y + mask.h <= 0.0
-            || mask.x >= game.world.width as f64 * 16.0
-            || mask.y >= game.world.height as f64 * 16.0)
+/// The source's two dark-debris Outside Room events contain action_kill_object.
+/// Boundary eligibility belongs to the engine phase, after Normal Step/motion.
+pub(crate) fn outside_room(game: &mut Game, id: u64) {
+    if let Some(e) = game.world.entity_mut(id) {
+        if matches!(e.object.as_str(), "oRubbleDark" | "oRubbleDarkSmall") {
+            e.alive = false;
+        }
+    }
 }
 
 fn rubble(game: &Game, e: &mut Entity) {
@@ -1190,10 +1188,7 @@ fn rubble(game: &Game, e: &mut Entity) {
     } else if point_family(game, e.pos, "oLava") {
         e.alive = false;
     }
-    if point_family(game, e.pos, "oSolid")
-        || outside(game, e.pos, 32.0)
-        || (e.object == "oRubbleDarkSmall" && outside_room(game, e))
-    {
+    if point_family(game, e.pos, "oSolid") || outside(game, e.pos, 32.0) {
         e.alive = false;
     }
 }
