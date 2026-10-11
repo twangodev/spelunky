@@ -609,7 +609,7 @@ impl World {
         group: &str,
         precision: CollisionPrecision,
     ) -> bool {
-        self.tiles_match(r, group, None, None, precision)
+        self.tiles_match(r, group, None, None, precision, false)
     }
 
     /// Explicit source axis-aligned collision_line query over tile instances.
@@ -619,6 +619,17 @@ impl World {
         second: Vec2,
         group: &str,
         precision: CollisionPrecision,
+    ) -> bool {
+        self.tiles_line_precision_with_activity(first, second, group, precision, false)
+    }
+
+    fn tiles_line_precision_with_activity(
+        &self,
+        first: Vec2,
+        second: Vec2,
+        group: &str,
+        precision: CollisionPrecision,
+        active_only: bool,
     ) -> bool {
         if !first.x.is_finite()
             || !first.y.is_finite()
@@ -639,7 +650,32 @@ impl World {
             None,
             Some((first, second)),
             precision,
+            active_only,
         )
+    }
+
+    /// Source collision_line(..., oSolid, true, true) for axis-aligned script
+    /// probes. Explicit family queries include held solids and skip inactive
+    /// instances; the engine solid flag does not select the queried family.
+    /// Callers round each complete source endpoint expression before querying.
+    pub fn solid_line_except(&self, first: Vec2, second: Vec2, excluded: u64) -> bool {
+        self.tiles_line_precision_with_activity(
+            first,
+            second,
+            "oSolid",
+            CollisionPrecision::Precise,
+            true,
+        ) || self.entities.iter().any(|entity| {
+            entity.id != excluded
+                && entity.alive
+                && entity.engine_active
+                && crate::catalog::is_a(&entity.object, "oSolid")
+                && entity.collision_mask().intersects_axis_line(
+                    first,
+                    second,
+                    CollisionPrecision::Precise,
+                )
+        })
     }
 
     /// Point form of the same tile-instance mask query, with exact half-open
@@ -660,6 +696,7 @@ impl World {
             Some(point),
             None,
             precision,
+            false,
         )
     }
 
@@ -670,6 +707,7 @@ impl World {
         point: Option<Vec2>,
         line: Option<(Vec2, Vec2)>,
         precision: CollisionPrecision,
+        active_only: bool,
     ) -> bool {
         if !r.is_valid() || self.width == 0 {
             return false;
@@ -714,7 +752,7 @@ impl World {
             overrides[index / 64] |= bit;
             // Most point queries target a sparse family such as oWater. Reject
             // unrelated terrain before resolving frame masks or pixel data.
-            if !crate::catalog::is_a(&tile.object, group) {
+            if (active_only && !tile.engine_active) || !crate::catalog::is_a(&tile.object, group) {
                 continue;
             }
             let mask = crate::catalog::instance_mask(
@@ -740,6 +778,7 @@ impl World {
                     continue;
                 }
                 if let Some(tile) = self.tile(x, y)
+                    && (!active_only || tile.engine_active)
                     && crate::catalog::is_a(&tile.object, group)
                     && matches(&crate::catalog::instance_mask(
                         &tile.object,

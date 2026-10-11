@@ -1478,7 +1478,6 @@ pub(crate) fn initialize_detritus(game: &mut Game, e: &mut Entity) {
 
 pub(crate) fn detritus(game: &mut Game, e: &mut Entity) {
     initialize_detritus(game, e);
-    let extent = if e.object == "oMagma" { 8.0 } else { 4.0 };
     if outside(game, e.pos, 4.0) {
         destroy_detritus(game, e);
     }
@@ -1491,59 +1490,77 @@ pub(crate) fn detritus(game: &mut Game, e: &mut Entity) {
     let dx = displacement(e.vel.x, game.engine_time());
     let dy = displacement(e.vel.y, game.engine_time());
     for _ in 0..dx.unsigned_abs() {
-        let next = Vec2::new(e.pos.x + f64::from(dx.signum()), e.pos.y);
-        if game.world.collides_except(
-            Rect::new(
-                e.pos.x + if dx > 0 { extent } else { -extent - 1.0 },
-                e.pos.y - extent + 5.0,
-                1.0,
-                extent * 2.0 - 5.0,
-            ),
+        let bounds = e.bounds();
+        // getIdCollisionLeft/Right use tb+5, unlike the full-height bounce
+        // queries below. Round the complete expressions, not their operands.
+        let x = if dx > 0 {
+            bounds.x + bounds.w
+        } else {
+            bounds.x - 1.0
+        }
+        .round_ties_even();
+        if game.world.solid_line_except(
+            Vec2::new(x, (bounds.y + 5.0).round_ties_even()),
+            Vec2::new(x, ((bounds.y + bounds.h) - 1.0).round_ties_even()),
             e.id,
         ) {
             break;
         }
-        e.pos = next;
+        e.pos.x += f64::from(dx.signum());
     }
     for _ in 0..dy.unsigned_abs() {
-        let next = Vec2::new(e.pos.x, e.pos.y + f64::from(dy.signum()));
-        if game.world.collides_except(
-            Rect::new(
-                e.pos.x - extent,
-                e.pos.y + if dy > 0 { extent } else { -extent - 1.0 },
-                extent * 2.0,
-                1.0,
-            ),
+        let bounds = e.bounds();
+        let y = if dy > 0 {
+            bounds.y + bounds.h
+        } else {
+            bounds.y - 1.0
+        }
+        .round_ties_even();
+        if game.world.solid_line_except(
+            Vec2::new(bounds.x.round_ties_even(), y),
+            Vec2::new(((bounds.x + bounds.w) - 1.0).round_ties_even(), y),
             e.id,
         ) {
             break;
         }
-        e.pos = next;
+        e.pos.y += f64::from(dy.signum());
     }
     if point_family(game, Vec2::new(e.pos.x, e.pos.y - 4.0), "oLava") {
         destroy_detritus(game, e);
     }
-    let bottom = game.world.collides_except(
-        Rect::new(e.pos.x - extent, e.pos.y + extent, extent * 2.0, 1.0),
+    let bounds = e.bounds();
+    let left = bounds.x.round_ties_even();
+    let right = ((bounds.x + bounds.w) - 1.0).round_ties_even();
+    let top = bounds.y.round_ties_even();
+    let bottom_row = ((bounds.y + bounds.h) - 1.0).round_ties_even();
+    let bottom = game.world.solid_line_except(
+        Vec2::new(left, (bounds.y + bounds.h).round_ties_even()),
+        Vec2::new(right, (bounds.y + bounds.h).round_ties_even()),
         e.id,
     );
     if e.value("bounce") != 0.0 {
         if e.vel.y < 6.0 {
             e.vel.y += e.value("gravity");
         }
+        let ceiling = (bounds.y - 1.0).round_ties_even();
         if e.vel.y < 0.0
-            && game.world.collides_except(
-                Rect::new(e.pos.x - extent, e.pos.y - extent - 1.0, extent * 2.0, 1.0),
+            && game.world.solid_line_except(
+                Vec2::new(left, ceiling),
+                Vec2::new(right, ceiling),
                 e.id,
             )
         {
             e.vel.y *= -0.8;
         }
-        if game.world.collides_except(
-            Rect::new(e.pos.x - extent - 1.0, e.pos.y - extent, 1.0, extent * 2.0),
+        let outside_left = (bounds.x - 1.0).round_ties_even();
+        let outside_right = (bounds.x + bounds.w).round_ties_even();
+        if game.world.solid_line_except(
+            Vec2::new(outside_left, top),
+            Vec2::new(outside_left, bottom_row),
             e.id,
-        ) || game.world.collides_except(
-            Rect::new(e.pos.x + extent, e.pos.y - extent, 1.0, extent * 2.0),
+        ) || game.world.solid_line_except(
+            Vec2::new(outside_right, top),
+            Vec2::new(outside_right, bottom_row),
             e.id,
         ) {
             e.vel.x *= -0.5;
