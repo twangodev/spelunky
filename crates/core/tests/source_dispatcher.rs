@@ -397,3 +397,71 @@ fn damsel_collision_uses_previous_draw_scale_before_current_draw_updates_it() {
         "current Draw applies the new facing only after automatic Collision"
     );
 }
+
+#[test]
+fn nonpositive_life_blocks_fresh_bomb_and_rope_before_death_or_ankh_revival() {
+    for life in [0, -99] {
+        for ankh in [false, true] {
+            for bomb in [false, true] {
+                let mut game = flat_room();
+                game.player.health = life;
+                if ankh {
+                    game.player.equipment.insert("Ankh".into());
+                }
+                let resources = (game.player.bombs, game.player.ropes);
+                game.step(&InputFrame {
+                    bomb_pressed: bomb,
+                    rope_pressed: !bomb,
+                    ..Default::default()
+                });
+                assert_eq!(
+                    (game.player.bombs, game.player.ropes),
+                    resources,
+                    "life={life}/ankh={ankh}/bomb={bomb}"
+                );
+                assert!(!game.world.entities.iter().any(|entity| entity.alive
+                    && matches!(entity.object.as_str(), "oBomb" | "oRopeThrow")));
+                assert!(!game.events.iter().any(
+                    |event| matches!(event, GameEvent::Sound {name,..} if name == "sndThrow")
+                ));
+                assert_eq!(
+                    game.state,
+                    if ankh {
+                        RunState::Playing
+                    } else {
+                        RunState::Dead
+                    }
+                );
+                assert_eq!(game.player.health, if ankh { 4 } else { 0 });
+                assert!(!game.player.has("Ankh"));
+                assert_eq!(died_events(&game), usize::from(!ankh));
+                assert_eq!(game.events.iter().filter(|event| matches!(event, GameEvent::Sound {name,..} if name == "sndTeleport")).count(), usize::from(ankh));
+            }
+        }
+    }
+}
+
+#[test]
+fn positive_life_keeps_fresh_bomb_and_rope_actions_and_their_source_births() {
+    for bomb in [false, true] {
+        let mut game = flat_room();
+        let resources = (game.player.bombs, game.player.ropes);
+        game.step(&InputFrame {
+            bomb_pressed: bomb,
+            rope_pressed: !bomb,
+            ..Default::default()
+        });
+        assert_eq!(game.player.bombs, resources.0 - i32::from(bomb));
+        assert_eq!(game.player.ropes, resources.1 - i32::from(!bomb));
+        assert!(game.world.entities.iter().any(
+            |entity| entity.alive && entity.object == if bomb { "oBomb" } else { "oRopeThrow" }
+        ));
+        assert!(
+            game.events
+                .iter()
+                .any(|event| matches!(event, GameEvent::Sound {name,..} if name == "sndThrow"))
+        );
+        assert_eq!(game.state, RunState::Playing);
+        assert_eq!(game.player.health, 4);
+    }
+}

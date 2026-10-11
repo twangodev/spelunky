@@ -726,6 +726,12 @@ fn player_step(game: &mut Game, input: &InputFrame) {
         return;
     }
     let mut item_input = *input;
+    // oPlayer1 Step448–452 explicitly clears these cached edges at nonpositive
+    // life, before inventory actions and the later Ankh revival action.
+    if game.player.health <= 0 {
+        item_input.bomb_pressed = false;
+        item_input.rope_pressed = false;
+    }
     if !game.is_level() {
         item_input.cycle_pressed = false;
         item_input.bomb_pressed = false;
