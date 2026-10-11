@@ -910,6 +910,7 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
     } else if e.state == 3 {
     } else if e.state == 2 {
         e.data.insert("animation_speed".into(), 1.0);
+        crate::economy::keeper_attack_step(game, e);
         if e.value("turn_timer") > 0.0 {
             e.data
                 .insert("turn_timer".into(), e.value("turn_timer") - 1.0);

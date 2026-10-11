@@ -38,25 +38,35 @@ fn count(game: &mut Game, key: &str, counter: LifetimeCounter) {
     }
 }
 
-/// Make the closest living keeper hostile; repeated reports do not add bounty.
+/// scrShopkeeperAnger selects the nearest active keeper before checking its
+/// dead/angered flags. ATTACK Step, rather than this script, latches angered.
 pub fn anger(game: &mut Game, pos: Vec2, reason: &str) {
-    let nearest = game
-        .world
-        .entities
-        .iter()
-        .enumerate()
-        .filter(|(_, e)| e.alive && e.health > 0 && crate::catalog::is_a(&e.object, "oShopkeeper"))
-        .min_by(|(_, a), (_, b)| a.pos.distance(pos).total_cmp(&b.pos.distance(pos)))
-        .map(|(i, _)| i);
-    let Some(index) = nearest else {
+    crate::dispatcher::register_instances(game);
+    let mut nearest = None;
+    let mut nearest_distance = f64::INFINITY;
+    for instance in crate::dispatcher::descendant_instances(game, "oShopkeeper") {
+        let crate::dispatcher::Instance::Entity(id) = instance else {
+            continue;
+        };
+        let Some(keeper) = game.world.entity(id) else {
+            continue;
+        };
+        if !keeper.engine_active {
+            continue;
+        }
+        let distance = keeper.pos.distance(pos);
+        if distance < nearest_distance {
+            nearest_distance = distance;
+            nearest = Some(id);
+        }
+    }
+    let Some(id) = nearest else {
         return;
     };
-    if game.world.entities[index].value("angered") > 0. {
+    let keeper = game.world.entity_mut(id).unwrap();
+    if keeper.value("dead") != 0. || keeper.value("angered") != 0. {
         return;
     }
-    let keeper = &mut game.world.entities[index];
-    keeper.data.insert("angered".into(), 1.);
-    keeper.data.insert("angry".into(), 1.);
     keeper.state = 2;
     let thief = game.data.entry("thiefLevel".into()).or_default();
     *thief += if *thief > 0. { 3. } else { 2. };
@@ -67,6 +77,21 @@ pub fn anger(game: &mut Game, pos: Vec2, reason: &str) {
         reason
     };
     say(game, message, "", 80);
+}
+
+/// The first ATTACK Step clears prices across the active oItem family before
+/// marking this keeper angered (oShopkeeper Step367–374).
+pub(crate) fn keeper_attack_step(game: &mut Game, keeper: &mut Entity) {
+    if keeper.value("angered") != 0. {
+        return;
+    }
+    for item in &mut game.world.entities {
+        if item.alive && item.engine_active && crate::catalog::is_a(&item.object, "oItem") {
+            item.data.insert("cost".into(), 0.);
+            item.data.insert("forSale".into(), 0.);
+        }
+    }
+    keeper.data.insert("angered".into(), 1.);
 }
 
 fn clear_sale(game: &mut Game, id: u64) {
@@ -521,6 +546,188 @@ pub(crate) fn player_pay_step(game: &mut Game, input: &InputFrame) {
 mod tests {
     use super::*;
     use crate::model::{GameEvent, RulesPreset, Vec2};
+    #[test]
+    fn actual_step_two_dice_defer_anger_latch_until_keeper_attack_step() {
+        for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for die_count in [1, 2] {
+                let mut game = Game::shell(123, preset);
+                for x in 0..game.world.width {
+                    game.world.set_tile(x, 10, "oBlock");
+                }
+                game.player.pos = Vec2::new(40., 152.);
+                game.player.previous_pos = game.player.pos;
+                let keeper = game.spawn("oShopkeeper", Vec2::new(96., 144.));
+                for index in 0..die_count {
+                    game.spawn("oDice", Vec2::new(200. + 24. * f64::from(index), 152.));
+                }
+                // Initial authored stock: the first is outside Item's own
+                // viewport but inside Level's activation margin; the second
+                // stays inactive. Neither can clear its own price here.
+                let active_stock = game.spawn("oJetpack", Vec2::new(400., 120.));
+                let inactive_stock = game.spawn("oJetpack", Vec2::new(600., 120.));
+                for id in [active_stock, inactive_stock] {
+                    let stock = game.world.entity_mut(id).unwrap();
+                    stock.data.insert("cost".into(), 20000.);
+                    stock.data.insert("forSale".into(), 1.);
+                }
+
+                game.step(&InputFrame::default());
+
+                let expected_bounty = if die_count == 1 { 2. } else { 5. };
+                assert_eq!(game.data["thiefLevel"], expected_bounty);
+                assert_eq!(game.world.entity(keeper).unwrap().state, 2);
+                assert_eq!(game.world.entity(keeper).unwrap().value("angered"), 0.);
+                let messages = game
+                    .events
+                    .iter()
+                    .filter(|event| {
+                        matches!(event, GameEvent::Dialogue(message)
+                        if message.first == "COME BACK HERE, THIEF!")
+                    })
+                    .count();
+                assert_eq!(messages, die_count as usize);
+                assert!(game.world.entity(active_stock).unwrap().engine_active);
+                assert!(!game.world.entity(inactive_stock).unwrap().engine_active);
+                for id in [active_stock, inactive_stock] {
+                    assert_eq!(game.world.entity(id).unwrap().value("cost"), 20000.);
+                    assert_eq!(game.world.entity(id).unwrap().value("forSale"), 1.);
+                }
+
+                game.step(&InputFrame::default());
+
+                assert_eq!(game.world.entity(keeper).unwrap().value("angered"), 1.);
+                assert_eq!(game.data["thiefLevel"], expected_bounty);
+                assert_eq!(game.world.entity(active_stock).unwrap().value("cost"), 0.);
+                assert_eq!(
+                    game.world.entity(active_stock).unwrap().value("forSale"),
+                    0.
+                );
+                assert_eq!(
+                    game.world.entity(inactive_stock).unwrap().value("cost"),
+                    20000.
+                );
+                assert_eq!(
+                    game.world.entity(inactive_stock).unwrap().value("forSale"),
+                    1.
+                );
+                for _ in 0..3 {
+                    game.step(&InputFrame::default());
+                    assert_eq!(game.data["thiefLevel"], expected_bounty);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn actual_step_natural_keeper_corpse_blocks_farther_keeper_anger_selection() {
+        for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = Game::shell(123, preset);
+            for x in 0..game.world.width {
+                game.world.set_tile(x, 6, "oBlock");
+            }
+            // A separate raised shop keeps the second keeper active and out
+            // of the shotgun trajectory and player attack range throughout.
+            for x in 24..=26 {
+                game.world.set_tile(x, 2, "oBlock");
+            }
+            for y in 0..2 {
+                game.world.set_tile(24, y, "oBlock");
+                game.world.set_tile(26, y, "oBlock");
+            }
+            game.player.pos = Vec2::new(64., 88.);
+            game.player.previous_pos = game.player.pos;
+            let gun = game.spawn("oShotgun", game.player.pos);
+            let corpse = game.spawn("oShopkeeper", Vec2::new(80., 80.));
+            let farther = game.spawn("oShopkeeper", Vec2::new(400., 16.));
+            let die = game.spawn("oDice", Vec2::new(164., 88.));
+            let action = InputFrame {
+                down: true,
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            };
+            game.step(&action);
+            assert_eq!(game.player.held, Some(gun), "natural shotgun pickup");
+            game.step(&InputFrame::default());
+            game.step(&InputFrame {
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            for _ in 0..200 {
+                if game
+                    .world
+                    .entity(corpse)
+                    .is_some_and(|keeper| keeper.value("dead") != 0.)
+                {
+                    break;
+                }
+                game.step(&InputFrame::default());
+            }
+            let dead_keeper = game.world.entity(corpse).unwrap();
+            assert!(
+                dead_keeper.health <= 0,
+                "shotgun must actually kill nearest keeper"
+            );
+            assert_eq!(
+                dead_keeper.value("dead"),
+                1.,
+                "corpse must naturally settle"
+            );
+            assert_eq!(game.data.get("thiefLevel").copied().unwrap_or(0.), 0.);
+            assert!(game.world.entity(farther).unwrap().health > 0);
+            assert_eq!(game.world.entity(farther).unwrap().value("angered"), 0.);
+
+            // All subsequent changes come from inputs: drop the gun, approach
+            // the die, pick it up and carry it beyond the original shop room.
+            game.step(&InputFrame::default());
+            game.step(&action);
+            assert_eq!(game.player.held, None);
+            for _ in 0..60 {
+                if game.player.pos.x >= 160. {
+                    break;
+                }
+                game.step(&InputFrame {
+                    right: true,
+                    ..Default::default()
+                });
+            }
+            for _ in 0..12 {
+                game.step(&InputFrame::default());
+            }
+            assert!((game.player.pos.x - game.world.entity(die).unwrap().pos.x).abs() < 8.);
+            game.step(&action);
+            assert_eq!(game.player.held, Some(die), "natural die pickup");
+            let mut witnessed_outside_call = false;
+            for _ in 0..12 {
+                let caller = game.world.entity(die).unwrap().pos;
+                if !in_shop(&game, caller) {
+                    let nearest = game.world.entity(corpse).unwrap();
+                    let other = game.world.entity(farther).unwrap();
+                    assert!(nearest.engine_active && other.engine_active);
+                    assert_eq!(nearest.value("dead"), 1.);
+                    assert_eq!(other.value("dead"), 0.);
+                    assert_eq!(other.value("angered"), 0.);
+                    assert!(nearest.pos.distance(caller) < other.pos.distance(caller));
+                    witnessed_outside_call = true;
+                }
+                game.step(&InputFrame {
+                    right: true,
+                    ..Default::default()
+                });
+                assert_eq!(game.data.get("thiefLevel").copied().unwrap_or(0.), 0.);
+                assert_eq!(game.world.entity(farther).unwrap().value("angered"), 0.);
+                if witnessed_outside_call {
+                    break;
+                }
+            }
+            assert!(
+                witnessed_outside_call,
+                "die must actually reach an outside-shop caller position"
+            );
+        }
+    }
+
     fn shop() -> (Game, u64) {
         let mut game = Game::shell(1, RulesPreset::Classic);
         game.player.pos = Vec2::new(40., 40.);
