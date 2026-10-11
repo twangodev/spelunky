@@ -407,6 +407,31 @@ fn yeti(game: &mut Game, e: &mut Entity) {
                 e.vel.x = f64::from(e.facing);
                 e.data.insert("counter".into(), e.value("counter") - 10.0);
             }
+            if e.vel.y < 0.0 {
+                let body = super::bounds(e);
+                let top = (body.y - 1.0).round_ties_even();
+                let first = Vec2::new(body.x.round_ties_even(), top);
+                let second = Vec2::new((body.x + body.w - 1.0).round_ties_even(), top);
+                let ceiling = game.world.tiles_line_precision(
+                    first,
+                    second,
+                    "oSolid",
+                    crate::CollisionPrecision::Precise,
+                ) || game.world.entities.iter().any(|other| {
+                    other.id != e.id
+                        && other.alive
+                        && other.engine_active
+                        && crate::catalog::is_a(&other.object, "oSolid")
+                        && other.collision_mask().intersects_axis_line(
+                            first,
+                            second,
+                            crate::CollisionPrecision::Precise,
+                        )
+                });
+                if ceiling {
+                    e.vel.y = 0.0;
+                }
+            }
             if floor && e.value("counter") > 0.0 {
                 counter(e, "counter");
             }
