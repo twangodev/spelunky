@@ -910,6 +910,13 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     } else {
         Vec::new()
     };
+    let web_order: Vec<u64> = crate::dispatcher::descendant_instances(game, "oWeb")
+        .into_iter()
+        .filter_map(|instance| match instance {
+            crate::dispatcher::Instance::Entity(id) => Some(id),
+            _ => None,
+        })
+        .collect();
     let p = &mut game.player;
     if p.state == PlayerState::Dead || p.is_stunned() {
         // Source keeps its platform state separate from dead/stunned. The
@@ -987,7 +994,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let col_moveable_right =
         precise_line(w, edge_rect(p, Side::Right, 1.0, false), "oMoveableSolid");
     let in_water = water(w, p.pos);
-    let in_web = object_at(w, p.pos, &["oWeb"]);
+    let in_web = ledge_point(w, p.pos, "oWeb");
     let water_jump = precise_line(w, edge_rect(p, Side::Top, 1.0, false), "oWater");
     let water_surface = in_water && !water(w, Vec2::new(p.pos.x, p.pos.y - 9.0));
     let mut fall = value(p, "fall_timer", 0.0);
@@ -1181,10 +1188,18 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         gravity = 1.0;
         set(p, "jump_released", 0.0);
         if in_web {
-            let player_mask = p.sprite_bounds();
-            if let Some(web) = w.entities.iter_mut().find(|e| {
-                e.alive && e.object == "oWeb" && e.sprite_bounds().intersects(player_mask)
-            }) {
+            // The origin point only gates escape. instance_place separately
+            // selects the first registered Web overlapping the current masks.
+            let player_mask = p.collision_mask();
+            let selected = web_order.iter().copied().find(|id| {
+                w.entity(*id).is_some_and(|web| {
+                    web.alive
+                        && web.engine_active
+                        && crate::catalog::is_a(&web.object, "oWeb")
+                        && player_mask.intersects_mask(&web.collision_mask())
+                })
+            });
+            if let Some(web) = selected.and_then(|id| w.entity_mut(id)) {
                 let life = web.data.entry("life".into()).or_insert(12.0);
                 *life -= 1.0;
                 // oWeb's Step owns alpha, natural decay, and destruction at
