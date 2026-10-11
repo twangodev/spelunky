@@ -1563,9 +1563,52 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     }
 }
 
-fn duck_to_hang_end(w: &World, p: &mut Player) {
-    p.pos.y = gm_round((p.pos.y + 16.0) / 8.0) * 8.0;
-    if let Some(ladder) = ladder_at(w, Vec2::new(p.pos.x + f64::from(p.facing) * 8.0, p.pos.y)) {
+/// Animation End queries oLadder first, then oLadderTop. Preserve each
+/// family's dispatcher order and its complete active instance point mask.
+fn duck_to_hang_ladder(game: &Game, point: Vec2) -> Option<Vec2> {
+    for family in ["oLadder", "oLadderTop"] {
+        let found = crate::dispatcher::descendant_instances(game, family)
+            .into_iter()
+            .find_map(|instance| {
+                let (mask, origin) = match instance {
+                    crate::dispatcher::Instance::Terrain(index) => {
+                        let tile = game.world.tiles.get(index)?;
+                        if !tile.engine_active {
+                            return None;
+                        }
+                        let x = (index % game.world.width) as i32;
+                        let y = (index / game.world.width) as i32;
+                        (
+                            game.world.tile_collision_mask(x, y),
+                            Vec2::new(f64::from(x) * 16.0, f64::from(y) * 16.0),
+                        )
+                    }
+                    crate::dispatcher::Instance::Entity(id) => {
+                        let entity = game.world.entity(id)?;
+                        if !entity.alive || !entity.engine_active {
+                            return None;
+                        }
+                        (entity.collision_mask(), entity.pos)
+                    }
+                    crate::dispatcher::Instance::Player => return None,
+                };
+                mask.contains(point, CollisionPrecision::BoundingBox)
+                    .then_some(Vec2::new(origin.x + 8.0, origin.y))
+            });
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
+fn duck_to_hang_end(game: &mut Game) {
+    let y = gm_round((game.player.pos.y + 16.0) / 8.0) * 8.0;
+    let point = Vec2::new(game.player.pos.x + f64::from(game.player.facing) * 8.0, y);
+    let ladder = duck_to_hang_ladder(game, point);
+    let p = &mut game.player;
+    p.pos.y = y;
+    if let Some(ladder) = ladder {
         p.pos.x = ladder.x;
         p.state = PlayerState::Climbing;
     } else {
@@ -1799,7 +1842,7 @@ pub fn animation_end(game: &mut Game) {
             crate::characters::animation_end(game);
         }
         "sDuckToHangL" | "sDamselDtHL" | "sTunnelDtHL" => {
-            duck_to_hang_end(&game.world, &mut game.player);
+            duck_to_hang_end(game);
         }
         "sPExit" | "sDamselExit" | "sTunnelExit" => {
             crate::ending::player_animation_end(game);
