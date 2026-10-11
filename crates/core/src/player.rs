@@ -2990,20 +2990,48 @@ mod tests {
                     ..Default::default()
                 });
                 assert_eq!(g.player.stun, 20);
+                let pre_ids: Vec<_> = g
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| {
+                        e.alive
+                            && e.engine_active
+                            && e.value("owner_player") != 0.0
+                            && crate::catalog::is_a(&e.object, "oWhipPre")
+                    })
+                    .map(|e| e.id)
+                    .collect();
+                assert_eq!(pre_ids.len(), usize::from(!bow), "{character:?}/bow={bow}");
                 g.step(&InputFrame::default());
                 assert!(g.player.held.is_none());
                 assert_eq!(g.player.attack_timer, 0);
+                // The late hurt branch destroys only oWhip descendants.
+                // Pre parts survive this Step; the following non-whipping
+                // branch destroys oWhipPre descendants (or their Alarm0 does).
                 assert!(!g.world.entities.iter().any(|e| e.alive
+                    && e.engine_active
                     && e.value("owner_player") != 0.0
-                    && matches!(
-                        e.object.as_str(),
-                        "oWhip"
-                            | "oWhipPre"
-                            | "oMattockPre"
-                            | "oMattockHit"
-                            | "oMachetePre"
-                            | "oSlash"
-                    )));
+                    && crate::catalog::is_a(&e.object, "oWhip")));
+                let surviving_pre_ids: Vec<_> = g
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| {
+                        e.alive
+                            && e.engine_active
+                            && e.value("owner_player") != 0.0
+                            && crate::catalog::is_a(&e.object, "oWhipPre")
+                    })
+                    .map(|e| e.id)
+                    .collect();
+                assert_eq!(surviving_pre_ids, pre_ids, "{character:?}/bow={bow}");
+                g.step(&InputFrame::default());
+                assert!(!g.world.entities.iter().any(|e| e.alive
+                    && e.engine_active
+                    && e.value("owner_player") != 0.0
+                    && (crate::catalog::is_a(&e.object, "oWhip")
+                        || crate::catalog::is_a(&e.object, "oWhipPre"))));
                 for _ in 0..120 {
                     if g.player.stun == 0 {
                         break;
@@ -3492,26 +3520,20 @@ mod tests {
         ] {
             let mut g = room(RulesPreset::Classic);
             g.flags.insert(flag.into());
-            step(
-                &mut g,
-                InputFrame {
-                    jump: true,
-                    jump_pressed: true,
-                    ..Default::default()
-                },
-            );
-            step(
-                &mut g,
-                InputFrame {
-                    jump: true,
-                    ..Default::default()
-                },
-            );
+            g.step(&InputFrame {
+                jump: true,
+                jump_pressed: true,
+                ..Default::default()
+            });
+            g.step(&InputFrame {
+                jump: true,
+                ..Default::default()
+            });
             assert_eq!(g.player.sprite, jump_sprite);
             assert!(crate::catalog::sprite_def(&g.player.sprite).is_some());
             g.player.stun = 10;
             g.player.vel.x = 0.0;
-            step(&mut g, InputFrame::default());
+            g.step(&InputFrame::default());
             assert_eq!(g.player.sprite, stun_sprite);
         }
     }
