@@ -153,3 +153,56 @@ fn actual_attached_bomb_keeps_parent_step_velocity_before_end_step_follow() {
         assert_eq!(b.pos, Vec2::new(target.pos.x - offset.x, target.pos.y - offset.y));
     }
 }
+
+#[test]
+fn actual_teleporter_pickup_and_activation_destroy_sticky_receiver() {
+    for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+        let mut g = room(rules, true);
+        // Portable-RNG seed0 maps inclusive rand(4,8) to4: a64px right teleport.
+        // This does not claim original GM8 seedstream equivalence.
+        g.seed = 0;
+        g.rng = crate::Rng::new(0);
+        g.world.set_tile(5, 5, "oHardBlock");
+        let receiver = g.spawn("oBat", Vec2::new(84.0, 94.0));
+        let teleporter = g.spawn("oTeleporter", Vec2::new(80.0, 108.0));
+        g.step(&InputFrame::default());
+        g.step(&InputFrame { down: true, attack_pressed: true, attack: true, ..Default::default() });
+        assert_eq!(g.player.held, Some(teleporter));
+        g.step(&InputFrame::default());
+        let bomb = throw_bomb(&mut g);
+        assert_eq!(g.world.entity(receiver).unwrap().value("bomb_id"), bomb as f64);
+        assert_eq!(g.world.entity(bomb).unwrap().value("attached_id"), receiver as f64);
+        // Walk away from the hanging receiver, then use the ordinary Teleporter
+        // input to return into its sprite. No actor/timer/velocity is injected.
+        for _ in 0..60 {
+            if g.player.pos.x <= 24.0 { break; }
+            g.step(&InputFrame { left: true, ..Default::default() });
+        }
+        assert!(g.player.pos.x <= 24.0);
+        assert_eq!(g.player.health, 4);
+        assert!(g.world.entity(receiver).is_some());
+        assert!(g.world.entity(bomb).is_some(), "activation precedes the natural fuse");
+        assert_eq!(g.rng.clone().next_u64() % 5, 0, "source first teleport is64px");
+        let activate = InputFrame { right: true, attack: true, attack_pressed: true, ..Default::default() };
+        // A supplementary callback-context witness stops before Bomb Step and
+        // End Step. Setup above used only real Game.step inputs. End Step alone
+        // clears stale IDs, so final-frame assertions cannot prove this timing.
+        let mut callback_probe = g.clone();
+        crate::player::tick(&mut callback_probe, &activate);
+        crate::items::player_step(&mut callback_probe, &activate);
+        let retired = callback_probe.world.entities.iter().find(|e| e.id == receiver)
+            .expect("raw receiver tombstone is retained before engine cleanup");
+        assert!(!retired.alive);
+        assert_eq!(retired.value("sticky_destroyed"), 1.0,
+            "receiver Destroy must finish inside the Teleporter caller");
+        assert_eq!(callback_probe.world.entity(bomb).unwrap().value("attached_id"), 0.0,
+            "backlink must clear before any Bomb Step or End Step can mask the timing");
+        assert_eq!(g.world.entity(bomb).unwrap().value("attached_id"), receiver as f64);
+        g.step(&activate);
+        assert!((84.0..=90.0).contains(&g.player.pos.x));
+        assert_eq!(g.player.pos.y, 104.0);
+        assert!(g.world.entity(receiver).is_none(), "normal Teleporter activation telefrags the Bat");
+        assert_eq!(g.world.entity(bomb).unwrap().value("attached_id"), 0.0);
+        assert_eq!(g.player.health, 4);
+    }
+}

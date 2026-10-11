@@ -823,6 +823,9 @@ pub(crate) fn collision(game: &mut Game, self_id: u64, other: crate::dispatcher:
             {
                 *stored = entity;
             }
+            // Explosion's MagmaMan receiver calls instance_destroy before
+            // later automatic pairs and Bomb End Step can observe its link.
+            crate::enemies::finish_actor_destroy(game, id);
             if fragile {
                 super::break_item(game, id);
             }

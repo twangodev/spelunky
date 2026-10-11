@@ -170,15 +170,21 @@ pub fn use_utility(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
     // by the platform engine. In particular the standing sprite is 12px wide
     // while the normal movement rectangle is 10px wide.
     let player_bounds = game.player.sprite_bounds();
-    if let Some(enemy) = game.world.entities.iter_mut().find(|e| {
+    let destroyed = game.world.entities.iter_mut().find(|e| {
         e.alive
             && crate::catalog::is_a(&e.object, "oEnemy")
             && e.sprite_bounds().intersects(player_bounds)
-    }) {
+    }).map(|enemy| {
         // The original directly destroys the first intersecting enemy, bypassing
         // invulnerability, ordinary attack damage and death drops.
         enemy.health -= 99;
         enemy.alive = false;
+        enemy.id
+    });
+    if let Some(id) = destroyed {
+        // scrUseItem finishes the receiver's Destroy before sndTeleport and
+        // before the later Bomb Item Step can test enemyID for reattachment.
+        crate::enemies::finish_actor_destroy(game, id);
     }
     game.sound("sndTeleport", target);
     true

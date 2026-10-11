@@ -419,6 +419,15 @@ fn destroyed(game: &mut Game, e: &mut Entity) {
     }
 }
 
+/// Finish a cross-system actor instance_destroy before the caller resumes.
+/// Raw lookup retains the receiver whose alive flag the producer just cleared.
+pub(crate) fn finish_actor_destroy(game: &mut Game, id: u64) {
+    let Some(mut actor) = game.world.entities.iter()
+        .find(|e| e.id == id && !e.alive && (is_actor(&e.object) || is_enemy(&e.object))).cloned() else { return; };
+    destroyed(game, &mut actor);
+    if let Some(stored) = game.world.entities.iter_mut().find(|e| e.id == id) { *stored = actor; }
+}
+
 /// Source cross-system instance_destroy of an emitter finishes its own Destroy
 /// synchronously, before later collision resource pairs can query the barrier.
 pub(crate) fn destroy_barrier_emitter(game: &mut Game, id: u64) {
