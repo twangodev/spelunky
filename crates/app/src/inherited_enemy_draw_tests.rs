@@ -206,3 +206,131 @@ fn enemy_own_draw_overrides_and_non_enemy_scale_remain_distinct() {
     assert!(entity_mirrored(&item, "sDamselLeft"));
     assert_eq!(entity_draw_x("oDamsel", 80.0, true), 80.0);
 }
+
+#[test]
+fn ordinary_pistol_hit_reaches_shopkeeper_right_die_lr_draw() {
+    let atlas = Atlas::load().unwrap();
+    for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+        let mut witnessed = false;
+        // Initial immutable seeds select natural authored PATROL facing; no RNG writes.
+        for seed in 0..32 {
+            let mut level = spelunky_core::level::Level::default();
+            level.set_tile(4, 9, '@').unwrap();
+            level.set_tile(4, 8, '-').unwrap();
+            level.set_tile(12, 9, '!').unwrap();
+            for x in 0..40 {
+                level.set_tile(x, 10, '1').unwrap();
+            }
+            let mut game = Game::shell(seed, rules);
+            game.load_custom(&level, "shopkeeper-pistol-draw", "");
+            let id = game
+                .world
+                .entities
+                .iter()
+                .find(|e| e.object == "oShopkeeper")
+                .unwrap()
+                .id;
+            let gun = game
+                .world
+                .entities
+                .iter()
+                .find(|e| e.object == "oPistol")
+                .unwrap()
+                .id;
+            assert_eq!(
+                game.world.entity(gun).unwrap().value("cost"),
+                0.0,
+                "AUTHORED_FREE_PISTOL"
+            );
+            assert_eq!(game.world.entity(gun).unwrap().value("forSale"), 0.0);
+            for _ in 0..4 {
+                game.step(&InputFrame::default());
+            }
+            // The authored free gun falls one row before the ordinary pickup.
+            let pickup_area =
+                spelunky_core::Rect::new(game.player.pos.x - 8.0, game.player.pos.y, 17.0, 9.0);
+            for _ in 0..20 {
+                if game
+                    .world
+                    .entity(gun)
+                    .unwrap()
+                    .mask_intersects(pickup_area, spelunky_core::CollisionPrecision::BoundingBox)
+                {
+                    break;
+                }
+                game.step(&InputFrame::default());
+            }
+            assert!(
+                game.world
+                    .entity(gun)
+                    .unwrap()
+                    .mask_intersects(pickup_area, spelunky_core::CollisionPrecision::BoundingBox),
+                "AUTHORED_GUN_SETTLED_IN_PICKUP_RECTANGLE"
+            );
+            let keeper = game.world.entity(id).unwrap();
+            if keeper.facing != 1 {
+                continue;
+            }
+            assert_eq!(
+                (keeper.health, keeper.state),
+                (20, 1),
+                "NATURAL_PATROL_PRECONDITION"
+            );
+            game.step(&InputFrame {
+                down: true,
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            assert_eq!(
+                game.player.held,
+                Some(gun),
+                "NATURAL_PISTOL_PICKUP_PRECONDITION"
+            );
+            game.step(&InputFrame {
+                attack_released: true,
+                ..Default::default()
+            });
+            assert_eq!(game.player.facing, 1);
+            assert!(!game.flags.contains("wanted"), "NO_THEFT_BEFORE_REAL_HIT");
+            game.step(&InputFrame {
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            game.step(&InputFrame {
+                attack_released: true,
+                ..Default::default()
+            });
+            let mut hit = false;
+            for _ in 0..40 {
+                let keeper = game
+                    .presentation()
+                    .world
+                    .entity(id)
+                    .expect("nonlethal live keeper");
+                if keeper.health < 20 {
+                    assert_eq!(keeper.health, 16, "ONE_REAL_PISTOL_HIT");
+                    assert_eq!(keeper.facing, 1, "RETAINED_SOURCE_RIGHT_PRECONDITION");
+                    hit = true;
+                    if keeper.sprite == "sShopDieLR" {
+                        assert_eq!(keeper.state, 98);
+                        assert!(keeper.vel.x > 0.0 && keeper.vel.y < 0.0);
+                        assert_eq!(game.player.health, 4);
+                        assert_source_body(&game, id, true, &atlas);
+                        witnessed = true;
+                        break;
+                    }
+                }
+                game.step(&InputFrame::default());
+            }
+            assert!(hit, "NATURAL_PISTOL_CONTACT_PRECONDITION");
+            assert!(witnessed, "NATURAL_RIGHT_DIE_LR_PRECONDITION");
+            break;
+        }
+        assert!(
+            witnessed,
+            "authored seed set must include one rightward patrol"
+        );
+    }
+}
