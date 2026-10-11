@@ -158,6 +158,7 @@ pub(crate) fn create_instance(game: &mut Game, id: u64) {
 pub(crate) fn player_step(game: &mut Game, input: &InputFrame) {
     tick_whip(game);
     weapons::attack_step(game);
+    clear_whip_when_not_whipping(game);
     player_actions(game, input);
     weapons::player_step_with_release(game, input.attack_released);
 }
@@ -453,24 +454,8 @@ fn player_actions(game: &mut Game, input: &InputFrame) {
         game.player.held = None;
     }
     if player_dead(game) || game.player.is_stunned() {
-        crate::characters::tick(game, input);
-        cancel_attack(game);
-        weapons::fire_bow_on_drop(game);
-        if let Some(id) = game.player.held.take() {
-            let released_type = game
-                .world
-                .entity(id)
-                .map(explosives::source_type)
-                .unwrap_or_default();
-            if let Some(entity) = game.world.entity_mut(id) {
-                entity.held = false;
-            }
-            if released_type != game.player.pickup_item_type {
-                explosives::restore_stashed_item(game);
-            } else {
-                game.player.pickup_item_type.clear();
-            }
-        }
+        // Source action input is skipped; held release already preceded tumble
+        // movement, and whip cancellation belongs to late Player Step1816.
     } else {
         let interacted = collectibles::interact(game, input);
         let inventory_selected = if game.is_level() && game.player.attack_timer == 0 {
@@ -586,14 +571,43 @@ pub(super) fn player_dead(game: &Game) -> bool {
     game.player.state == PlayerState::Dead || game.state == RunState::Dead
 }
 
-fn cancel_attack(game: &mut Game) {
+pub(crate) fn cancel_player_attack_after_hurt(game: &mut Game) {
+    if game.player.attack_timer == 0 {
+        return;
+    }
     // oPlayer1's dead/stunned branch clears whipping and destroys oWhip
     // (including oSlash/oMattockHit descendants) before item updates.
     game.player.attack_timer = 0;
     game.player.data.remove("whip_elapsed");
+    game.player.data.remove("weapon_melee_age");
+    game.player.data.remove("character_attack_active");
+    game.player.data.remove("character_attack_elapsed");
     for entity in &mut game.world.entities {
-        if crate::catalog::is_a(&entity.object, "oWhip") {
+        if entity.alive && entity.engine_active && crate::catalog::is_a(&entity.object, "oWhip") {
             entity.alive = false;
+        }
+    }
+}
+
+/// Source Step343-360 releases an already-stunned player's held item before
+/// tumble movement, without the late hit branch's velocity or armed writes.
+pub(crate) fn release_held_before_stunned_motion(game: &mut Game) {
+    weapons::fire_bow_on_drop(game);
+    if let Some(id) = game.player.held.take() {
+        let released_type = game
+            .world
+            .entity(id)
+            .map(explosives::source_type)
+            .unwrap_or_default();
+        if let Some(entity) = game.world.entity_mut(id) {
+            entity.held = false;
+            entity.data.insert("visible".into(), 1.0);
+            entity.data.insert("hidden".into(), 0.0);
+        }
+        if released_type != game.player.pickup_item_type {
+            explosives::restore_stashed_item(game);
+        } else {
+            game.player.pickup_item_type.clear();
         }
     }
 }
@@ -601,7 +615,6 @@ fn cancel_attack(game: &mut Game) {
 /// The late oPlayer1 Step release after a projectile hit differs from its
 /// early already-stunned release: the newly dropped item inherits knockback.
 pub(super) fn release_held_after_hit(game: &mut Game) {
-    cancel_attack(game);
     let velocity = Vec2::new(game.player.vel.x, -6.0);
     let Some(id) = drop_held_with_velocity(game, velocity) else {
         return;
@@ -879,11 +892,17 @@ fn start_whip(game: &mut Game) {
     game.player.set_image_speed(0.6);
 }
 
-fn spawn_whip_part(game: &mut Game, pre: bool) {
+fn spawn_whip_part(game: &mut Game, pre: bool, tunnelman: bool) {
     let direction = if pre { -1.0 } else { 1.0 };
     let facing = game.player.facing;
+    let object = match (tunnelman, pre) {
+        (true, true) => "oMattockPre",
+        (true, false) => "oMattockHit",
+        (false, true) => "oWhipPre",
+        (false, false) => "oWhip",
+    };
     let id = game.spawn(
-        if pre { "oWhipPre" } else { "oWhip" },
+        object,
         Vec2::new(
             game.player.pos.x + direction * f64::from(facing) * 16.0,
             game.player.pos.y,
@@ -892,56 +911,87 @@ fn spawn_whip_part(game: &mut Game, pre: bool) {
     let entity = game.world.entity_mut(id).unwrap();
     init_entity(entity);
     entity.facing = facing;
-    entity.data.insert("damage".into(), 1.0);
+    entity
+        .data
+        .insert("damage".into(), if tunnelman { 2.0 } else { 1.0 });
     entity.data.insert("owner".into(), 1.0);
-    entity.set_sprite(if pre {
-        if facing < 0 { "sWhipPreL" } else { "sWhipPreR" }
-    } else if facing < 0 {
-        "sWhipLeft"
+    if tunnelman {
+        entity.data.insert("owner_player".into(), 1.0);
+        entity.data.insert("character_mattock".into(), 1.0);
+        entity.timer = if pre { 3 } else { 5 };
+        if !pre {
+            entity.data.insert("puncture".into(), 1.0);
+        }
+    }
+    if tunnelman {
+        entity.set_sprite(&format!(
+            "sMattock{}{}",
+            if pre { "Pre" } else { "Hit" },
+            if facing < 0 { "L" } else { "R" }
+        ));
     } else {
-        "sWhipRight"
-    });
+        entity.set_sprite(if pre {
+            if facing < 0 { "sWhipPreL" } else { "sWhipPreR" }
+        } else if facing < 0 {
+            "sWhipLeft"
+        } else {
+            "sWhipRight"
+        });
+    }
     if !pre {
         game.sound("sndWhip", game.player.pos);
     }
 }
 
 fn tick_whip(game: &mut Game) {
-    if game.player.attack_timer == 0 {
-        for entity in &mut game.world.entities {
-            if crate::catalog::is_a(&entity.object, "oWhip")
-                || crate::catalog::is_a(&entity.object, "oWhipPre")
-            {
-                entity.alive = false;
-            }
-        }
-        return;
-    }
     if game.player.held.is_some()
-        || game.flags.contains("character_tunnelman")
         || !matches!(
             game.player.sprite.as_str(),
-            "sAttackLeft" | "sDamselAttackL"
+            "sAttackLeft" | "sDamselAttackL" | "sTunnelAttackL"
         )
     {
         return;
     }
     if game.player.animation > 4.0
-        && !game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.alive && e.object == "oWhip")
+        && !game.world.entities.iter().any(|entity| {
+            entity.alive && entity.engine_active && crate::catalog::is_a(&entity.object, "oWhip")
+        })
     {
-        spawn_whip_part(game, false);
+        spawn_whip_part(game, false, game.flags.contains("character_tunnelman"));
+    }
+    // Literal source Step560-574 chain: the Tunnel sprite's own pre test
+    // precedes the generic attack-sprite fallback, including the Tunnel art.
+    if game.player.sprite == "sTunnelAttackL"
+        && game.player.animation < 2.0
+        && !game.world.entities.iter().any(|entity| {
+            entity.alive
+                && entity.engine_active
+                && crate::catalog::is_a(&entity.object, "oMattockPre")
+        })
+    {
+        spawn_whip_part(game, true, true);
     } else if game.player.animation < 2.0
-        && !game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.alive && e.object == "oWhipPre")
+        && !game.world.entities.iter().any(|entity| {
+            entity.alive && entity.engine_active && crate::catalog::is_a(&entity.object, "oWhipPre")
+        })
     {
-        spawn_whip_part(game, true);
+        spawn_whip_part(game, true, false);
+    }
+}
+
+fn clear_whip_when_not_whipping(game: &mut Game) {
+    // Source Step577 follows all pre/forward birth queries. They use sprite,
+    // not whipping, so even a subsequently destroyed birth is observable.
+    if game.player.attack_timer == 0 {
+        for entity in &mut game.world.entities {
+            if entity.alive
+                && entity.engine_active
+                && (crate::catalog::is_a(&entity.object, "oWhip")
+                    || crate::catalog::is_a(&entity.object, "oWhipPre"))
+            {
+                entity.alive = false;
+            }
+        }
     }
 }
 

@@ -774,11 +774,8 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             set(p, "source_platform_grounded", f64::from(standing));
             set(p, "source_platform_climbing", 0.0);
         }
-        let impact = stunned_tick(&mut game.world, p, engine_time);
-        if impact {
-            game.events.push(GameEvent::Damage { amount: 1 });
-            game.sound("sndHurt", game.player.pos);
-        }
+        crate::items::release_held_before_stunned_motion(game);
+        stunned_tick(&mut game.world, &mut game.player, engine_time);
         return;
     }
     // oPlayer1 Step gates characterStepEvent on active, independently of
@@ -1442,7 +1439,7 @@ fn duck_to_hang_end(w: &World, p: &mut Player) {
     set(p, "fall_ticks", 0.0);
 }
 
-fn stunned_tick(w: &mut World, p: &mut Player, time: u64) -> bool {
+fn stunned_tick(w: &mut World, p: &mut Player, time: u64) {
     let dead = p.state == PlayerState::Dead;
     let bounced = value(p, "bounced", 0.0) > 0.0;
     p.vel.y += if bounced { 1.0 } else { 0.6 };
@@ -1476,16 +1473,6 @@ fn stunned_tick(w: &mut World, p: &mut Player, time: u64) -> bool {
     p.vel.y = p.vel.y.clamp(-10.0, 10.0);
     let down = value(p, "source_k_down", 0.0) != 0.0;
     move_player(w, p, time, down);
-    let impact = value(p, "wall_hurt", value(p, "wallHurt", 0.0)) > 0.0
-        && (edge(w, p, Side::Left, 1.0)
-            || edge(w, p, Side::Right, 1.0)
-            || edge(w, p, Side::Bottom, 1.0));
-    if impact {
-        p.health -= 1;
-        let remaining = value(p, "wall_hurt", value(p, "wallHurt", 0.0)) - 1.0;
-        set(p, "wall_hurt", remaining);
-        set(p, "wallHurt", remaining);
-    }
     p.grounded = below(w, p);
     p.state = if dead {
         PlayerState::Dead
@@ -1494,6 +1481,101 @@ fn stunned_tick(w: &mut World, p: &mut Player, time: u64) -> bool {
     } else {
         PlayerState::Falling
     };
+}
+
+fn script_player_blood(game: &mut Game, count: u32) {
+    if value(&game.player, "bloodless", 0.0) != 0.0 {
+        return;
+    }
+    for _ in 0..count {
+        if game
+            .world
+            .entities
+            .iter()
+            .filter(|entity| {
+                entity.alive
+                    && entity.engine_active
+                    && crate::catalog::is_a(&entity.object, "oDetritus")
+            })
+            .count()
+            < 16
+        {
+            game.spawn("oBlood", game.player.pos);
+        }
+    }
+}
+
+fn player_origin_on_spikes(world: &World, pos: Vec2) -> bool {
+    if !pos.x.is_finite() || !pos.y.is_finite() {
+        return false;
+    }
+    if world.width > 0 && world.height > 0 {
+        let envelope =
+            crate::catalog::group_bounds("oSpikes").unwrap_or(Rect::new(0.0, 0.0, 16.0, 16.0));
+        let x0 = (((pos.x - envelope.x - envelope.w) / TILE_SIZE).floor() as i32).max(0);
+        let y0 = (((pos.y - envelope.y - envelope.h) / TILE_SIZE).floor() as i32).max(0);
+        let x1 = (((pos.x - envelope.x) / TILE_SIZE).floor() as i32).min(world.width as i32 - 1);
+        let y1 = (((pos.y - envelope.y) / TILE_SIZE).floor() as i32).min(world.height as i32 - 1);
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                if world.tile(x, y).is_some_and(|tile| {
+                    tile.engine_active && crate::catalog::is_a(&tile.object, "oSpikes")
+                }) && world
+                    .tile_collision_mask(x, y)
+                    .contains(pos, CollisionPrecision::BoundingBox)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    world.entities.iter().any(|entity| {
+        entity.alive
+            && entity.engine_active
+            && crate::catalog::is_a(&entity.object, "oSpikes")
+            && entity.mask_contains(pos, CollisionPrecision::BoundingBox)
+    })
+}
+
+fn wall_injury(game: &mut Game) {
+    game.player.health -= 1;
+    let remaining = value(
+        &game.player,
+        "wall_hurt",
+        value(&game.player, "wallHurt", 0.0),
+    ) - 1.0;
+    set(&mut game.player, "wall_hurt", remaining);
+    set(&mut game.player, "wallHurt", remaining);
+    game.events.push(GameEvent::Damage { amount: 1 });
+}
+
+/// oPlayer1 Step1808-1913, after own-Step hurt and held release, before DIED.
+/// Automatic Collision has not run, so its newly assigned stun belongs to the
+/// following Player Step. The prior dead flag is independent of current HP.
+pub(crate) fn late_hurt_step(game: &mut Game) {
+    let dead = game.player.state == PlayerState::Dead || game.state == RunState::Dead;
+    if !dead && !game.player.is_stunned() {
+        return;
+    }
+    if game
+        .world
+        .entities
+        .iter()
+        .any(|entity| entity.alive && entity.engine_active && entity.object == "oParachute")
+    {
+        game.spawn(
+            "oParaUsed",
+            Vec2::new(game.player.pos.x - 8.0, game.player.pos.y - 24.0),
+        );
+        for entity in &mut game.world.entities {
+            if entity.alive && entity.engine_active && entity.object == "oParachute" {
+                entity.alive = false;
+            }
+        }
+    }
+    set(&mut game.player, "parachute_open", 0.0);
+    crate::items::cancel_player_attack_after_hurt(game);
+    let p = &mut game.player;
     let sprite = character_sprite(
         p,
         if p.vel.x == 0.0 {
@@ -1511,7 +1593,46 @@ fn stunned_tick(w: &mut World, p: &mut Player, time: u64) -> bool {
         },
     );
     p.set_sprite(sprite);
-    impact
+    // Canonical normal Step enters with other==self; these source other.x/y
+    // expressions therefore use the current Player origin, after all withs.
+    if dead
+        && p.vel.y != 0.0
+        && player_origin_on_spikes(&game.world, p.pos)
+        && game.rng.range(8) == 0
+    {
+        script_player_blood(game, 1);
+    }
+    if (edge(&game.world, &game.player, Side::Right, 1.0)
+        || edge(&game.world, &game.player, Side::Left, 1.0)
+        || edge(&game.world, &game.player, Side::Bottom, 1.0))
+        && value(
+            &game.player,
+            "wall_hurt",
+            value(&game.player, "wallHurt", 0.0),
+        ) > 0.0
+    {
+        // Direct births deliberately bypass scrCreateBlood's bloodless/16 gate.
+        for _ in 0..3 {
+            game.spawn("oBlood", game.player.pos);
+        }
+        wall_injury(game);
+        game.sound("sndHurt", game.player.pos);
+    }
+    // This independent test follows sprite selection and can injure again.
+    if edge(&game.world, &game.player, Side::Bottom, 1.0)
+        && value(&game.player, "bounced", 0.0) == 0.0
+    {
+        set(&mut game.player, "bounced", 1.0);
+        script_player_blood(game, 3);
+        if value(
+            &game.player,
+            "wall_hurt",
+            value(&game.player, "wallHurt", 0.0),
+        ) > 0.0
+        {
+            wall_injury(game);
+        }
+    }
 }
 
 /// Dispatch oPlayer1's Animation End after the engine has advanced and wrapped

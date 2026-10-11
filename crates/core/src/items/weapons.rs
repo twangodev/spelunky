@@ -598,9 +598,8 @@ fn hit_player(game: &mut Game, projectile: &mut Entity, damage: i32) {
     }
     game.sound("sndHurt", game.player.pos);
     projectile.alive = false;
-    if projectile.object == "oArrow" {
-        super::release_held_after_hit(game);
-    }
+    // Arrow own-Step release waits for the late Player block after all hurt
+    // queries. Bullet's later automatic Collision has no release in source.
 }
 
 /// oPlayer1 Step checks rocks independently from Arrow collisions. Rocks
@@ -656,7 +655,6 @@ fn rock_player_contact(game: &mut Game) {
             game.events.push(GameEvent::Damage { amount: 2 });
         }
         game.sound("sndHurt", game.player.pos);
-        super::release_held_after_hit(game);
     }
 }
 
@@ -911,96 +909,87 @@ pub(crate) fn player_step_with_release(game: &mut Game, attack_released: bool) {
 
 /// oPlayer pre/forward weapon queries precede action input in the source.
 pub fn attack_step(game: &mut Game) {
-    if (super::player_dead(game) || game.player.is_stunned())
-        && game.player.data.contains_key("weapon_melee_age")
-    {
+    // Source queries the live hand after the early stunned release/restoration,
+    // not the derived phase owner of a previously held weapon.
+    let current = game.player.held.and_then(|id| {
+        game.world
+            .entity(id)
+            .filter(|item| item.alive && item.engine_active)
+            .and_then(|item| match super::explosives::source_type(item).as_str() {
+                "Machete" => Some((id, false)),
+                "Mattock" => Some((id, true)),
+                _ => None,
+            })
+    });
+    let attack_art = matches!(
+        game.player.sprite.as_str(),
+        "sAttackLeft" | "sDamselAttackL" | "sTunnelAttackL"
+    );
+    if !attack_art || current.is_none() {
         if let Some(id) = game.player.data.get("weapon_melee_id").copied() {
             if let Some(held) = game.world.entity_mut(id as u64) {
                 held.data.insert("hidden".into(), 0.0);
             }
         }
+        // Keep whipping: an empty restored hand can still take the source's
+        // ordinary/TunnelMan query before its later hurt cancellation.
         game.player.data.remove("weapon_melee_age");
-        game.player.attack_timer = 0;
+        return;
+    }
+    let (weapon_id, mattock) = current.unwrap();
+    let before = game.player.animation;
+    // Source tests the image index before central animation advance.
+    if before > 4.0
+        && !game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.alive && e.engine_active && crate::catalog::is_a(&e.object, "oWhip"))
+    {
+        let object = if mattock { "oMattockHit" } else { "oSlash" };
+        let facing = game.player.facing;
+        let id = game.spawn(
+            object,
+            Vec2::new(
+                game.player.pos.x + 16.0 * f64::from(facing),
+                game.player.pos.y,
+            ),
+        );
+        let e = game.world.entity_mut(id).unwrap();
+        owned(e, 2.0);
+        e.facing = facing;
+        init_entity(e);
+        e.data.insert("puncture".into(), 1.0);
+        e.data.insert("weapon_id".into(), weapon_id as f64);
+        e.sprite = if mattock {
+            format!("sMattockHit{}", if facing < 0 { "L" } else { "R" })
+        } else {
+            format!("sSlash{}", if facing < 0 { "Left" } else { "Right" })
+        };
+        game.sound("sndWhip", game.player.pos);
+    }
+    // The source explicitly names oMachetePre for both held weapons.
+    // oMattockPre directly inherits oWhipPre and does not satisfy that guard.
+    if before < 2.0
+        && !game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.alive && e.engine_active && crate::catalog::is_a(&e.object, "oMachetePre"))
+    {
+        spawn_pre(game, mattock);
     }
     if let Some(age) = game.player.data.get("weapon_melee_age").copied() {
-        let age = age as u32 + 1;
-        let mattock = game
-            .player
+        game.player
             .data
-            .get("weapon_melee_mattock")
-            .copied()
-            .unwrap_or(0.0)
-            != 0.0;
-        let before = game.player.animation;
-        if game.player.sprite != attack_sprite(game) {
-            if let Some(id) = game.player.data.get("weapon_melee_id").copied() {
-                if let Some(held) = game.world.entity_mut(id as u64) {
-                    held.data.insert("hidden".into(), 0.0);
-                }
-            }
-            game.player.data.remove("weapon_melee_age");
-            return;
-        }
-        // The original guard explicitly names oMachetePre for both weapons.
-        // oMattockPre directly inherits oWhipPre, so it does not satisfy it.
-        if before < 2.0
-            && !game
-                .world
-                .entities
-                .iter()
-                .any(|e| e.alive && crate::catalog::is_a(&e.object, "oMachetePre"))
-        {
-            spawn_pre(game, mattock);
-        }
-        // Source tests the image index before the central animation advance.
-        if before > 4.0
-            && !game
-                .world
-                .entities
-                .iter()
-                .any(|e| e.alive && crate::catalog::is_a(&e.object, "oWhip"))
-        {
-            let object = if mattock { "oMattockHit" } else { "oSlash" };
-            let facing = game.player.facing;
-            let id = game.spawn(
-                object,
-                Vec2::new(
-                    game.player.pos.x + 16.0 * f64::from(facing),
-                    game.player.pos.y,
-                ),
-            );
-            let e = game.world.entity_mut(id).unwrap();
-            owned(e, 2.0);
-            e.facing = facing;
-            init_entity(e);
-            e.data.insert("puncture".into(), 1.0);
-            e.data.insert(
-                "weapon_id".into(),
-                game.player
-                    .data
-                    .get("weapon_melee_id")
-                    .copied()
-                    .unwrap_or(0.0),
-            );
-            e.sprite = if mattock {
-                format!("sMattockHit{}", if facing < 0 { "L" } else { "R" })
-            } else {
-                format!("sSlash{}", if facing < 0 { "Left" } else { "Right" })
-            };
-            game.sound("sndWhip", game.player.pos);
-        }
-        if game.player.sprite != attack_sprite(game) {
-            if let Some(id) = game.player.data.get("weapon_melee_id").copied() {
-                if let Some(held) = game.world.entity_mut(id as u64) {
-                    held.data.insert("hidden".into(), 0.0);
-                }
-            }
-            game.player.data.remove("weapon_melee_age");
-        } else {
-            game.player
-                .data
-                .insert("weapon_melee_age".into(), f64::from(age));
-        }
+            .insert("weapon_melee_age".into(), age + 1.0);
+        game.player
+            .data
+            .insert("weapon_melee_id".into(), weapon_id as f64);
+        game.player.data.insert(
+            "weapon_melee_mattock".into(),
+            if mattock { 1.0 } else { 0.0 },
+        );
     }
 }
 

@@ -795,6 +795,7 @@ fn player_step(game: &mut Game, input: &InputFrame) {
         crate::traps::player_spikes(game);
     }
     crate::items::player_after_hurt(game);
+    crate::player::late_hurt_step(game);
     crate::progression::player_revival(game);
     let protected = game.flags.contains("hub_title") || game.flags.contains("hub_scores");
     if game.player.health <= 0 && !protected {
