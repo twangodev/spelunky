@@ -276,6 +276,17 @@ pub(crate) fn builtin_motion(game: &mut Game, id: u64) {
 }
 
 pub(crate) fn collision(game: &mut Game, id: u64, other: crate::dispatcher::Instance) {
+    if game.world.entity(id).is_some_and(|entity| {
+        crate::catalog::is_a(&entity.object, "oSkull")
+            && crate::catalog::is_a(other.object(game), "oBullet")
+            && crate::dispatcher::collision_owner(&entity.object, other.object(game))
+                == Some("oSkull")
+    }) {
+        // Skull's own Bullet event is only instance_destroy(). Its inherited
+        // Item cleanup and own debris callback leave the bullet unchanged.
+        break_item(game, id);
+        return;
+    }
     if jar_collision(game, id, other) {
         return;
     }
@@ -2707,5 +2718,143 @@ mod jar_collision_source_tests {
             ),
             (8, 8, 8)
         );
+    }
+}
+
+#[cfg(test)]
+mod skull_bullet_source_tests {
+    use super::*;
+    use crate::{GameEvent, Rng, dispatcher::Instance};
+    use std::collections::BTreeSet;
+
+    // Literal Skull Destroy loop and full Bone Create, independent of break_item.
+    // The condition consumes rand(1,2) again on the final failed comparison.
+    fn literal_bones(rng: &mut Rng, left: bool, right: bool, top: bool) -> Vec<(Vec2, f64)> {
+        let mut result = Vec::new();
+        while result.len() < (1 + rng.range(2)) as usize {
+            let _created_x = rng.unit() * 4.0 - rng.unit() * 4.0;
+            let _created_y = -1.0 - rng.unit() * 2.0;
+            let gravity = f64::from(1 + rng.range(6)) * 0.1;
+            let vx = if left {
+                f64::from(1 + rng.range(3))
+            } else if right {
+                -f64::from(1 + rng.range(3))
+            } else {
+                f64::from(1 + rng.range(3)) - f64::from(1 + rng.range(3))
+            };
+            let vy = f64::from(rng.range(4)) * if top { 1.0 } else { -1.0 };
+            result.push((Vec2::new(vx, vy), gravity));
+        }
+        result
+    }
+
+    #[test]
+    fn skull_bullet_runs_literal_destroy_rng_caps_held_and_once_only() {
+        let mut counts = BTreeSet::new();
+        for seed in 0..16 {
+            for existing in [0, 31, 32] {
+                for pieces in [false, true] {
+                    for held in [false, true] {
+                        for (left, right, top) in [
+                            (false, false, false),
+                            (true, false, false),
+                            (false, true, false),
+                            (false, false, true),
+                            (true, true, true),
+                        ] {
+                            let mut game = Game::shell(seed, RulesPreset::Classic);
+                            let pos = Vec2::new(100.0, 100.0);
+                            for _ in 0..existing {
+                                game.spawn("oBone", Vec2::new(200.0, 200.0));
+                            }
+                            let skull = game.spawn("oSkull", pos);
+                            let entity = game.world.entity_mut(skull).unwrap();
+                            entity.held = held;
+                            for (key, value) in [
+                                ("breakPieces", pieces),
+                                ("colLeft", left),
+                                ("colRight", right),
+                                ("colTop", top),
+                            ] {
+                                entity.data.insert(key.into(), f64::from(value));
+                            }
+                            if held {
+                                game.player.held = Some(skull);
+                            }
+                            let bullet = game.spawn("oBullet", pos);
+                            let mut oracle = game.rng.clone();
+                            let expected = if pieces {
+                                literal_bones(&mut oracle, left, right, top)
+                            } else {
+                                Vec::new()
+                            };
+                            if pieces {
+                                counts.insert(expected.len());
+                            }
+                            collision(&mut game, skull, Instance::Entity(bullet));
+                            assert!(
+                                game.world.entity(skull).is_none(),
+                                "Skull Bullet callback missing, seed={seed} pieces={pieces}"
+                            );
+                            assert!(
+                                game.world.entity(bullet).is_some(),
+                                "Skull event leaves projectile unchanged"
+                            );
+                            assert_eq!(game.player.held, None);
+                            let births: Vec<_> = game
+                                .world
+                                .entities
+                                .iter()
+                                .filter(|e| e.id > bullet)
+                                .collect();
+                            assert_eq!(births.len(), expected.len() + usize::from(pieces));
+                            if pieces {
+                                assert_eq!(births[0].object, "oSmokePuff");
+                                assert_eq!(births[0].pos, pos);
+                                assert_eq!(births[0].vel, Vec2::new(0.0, 0.1));
+                                for (index, (bone, (velocity, gravity))) in
+                                    births[1..].iter().zip(&expected).enumerate()
+                                {
+                                    assert_eq!(bone.object, "oBone");
+                                    assert_eq!(bone.pos, Vec2::new(98.0, 98.0));
+                                    // Direct piece.field writes also override a capped newborn.
+                                    assert_eq!(bone.vel, *velocity);
+                                    assert_eq!(bone.value("gravity"), *gravity);
+                                    assert_eq!(bone.alive, existing + index < 32);
+                                    assert_eq!(bone.value("world_effect_initialized"), 1.0);
+                                }
+                            }
+                            assert_eq!(game.events.iter().filter(|e| matches!(e, GameEvent::Sound{name,..} if name=="sndBreak")).count(), usize::from(pieces));
+                            assert_eq!(game.rng.clone().next_u64(), oracle.next_u64());
+                            let world = serde_json::to_value(&game.world).unwrap();
+                            let rng = game.rng.clone().next_u64();
+                            let events = game.events.len();
+                            collision(&mut game, skull, Instance::Entity(bullet));
+                            break_item(&mut game, skull);
+                            assert_eq!(serde_json::to_value(&game.world).unwrap(), world);
+                            assert_eq!(game.rng.next_u64(), rng);
+                            assert_eq!(game.events.len(), events);
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(counts, BTreeSet::from([1, 2]));
+    }
+
+    #[test]
+    fn skull_has_no_whip_or_whip_pre_break_callback() {
+        for object in ["oWhip", "oWhipPre"] {
+            let mut game = Game::shell(2, RulesPreset::Classic);
+            let pos = Vec2::new(100.0, 100.0);
+            let skull = game.spawn("oSkull", pos);
+            let other = game.spawn(object, pos);
+            let expected_rng = game.rng.clone().next_u64();
+            let before = serde_json::to_value(&game.world).unwrap();
+            collision(&mut game, skull, Instance::Entity(other));
+            assert_eq!(serde_json::to_value(&game.world).unwrap(), before);
+            assert_eq!(game.rng.next_u64(), expected_rng);
+            assert!(game.events.is_empty());
+        }
     }
 }
