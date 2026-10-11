@@ -454,6 +454,128 @@ mod backend {
     mod tests {
         use super::*;
 
+        fn headless_audio() -> Audio {
+            Audio {
+                stream: None,
+                effects: Vec::new(),
+                tracks: Vec::new(),
+                current: None,
+                music_volume: 0.65,
+                effects_volume: 0.8,
+                sound_pans: HashMap::new(),
+                music_frequencies: HashMap::new(),
+                paused: false,
+                last_update: Instant::now(),
+            }
+        }
+
+        fn infinite_effect(mixer: &rodio::mixer::Mixer, name: &'static str) -> Effect {
+            let sink =
+                SpatialSink::connect_new(mixer, [0.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+            sink.append(
+                rodio::buffer::SamplesBuffer::new(2, 44_100, vec![0.25; 1024]).repeat_infinite(),
+            );
+            Effect { name, sink }
+        }
+
+        #[test]
+        fn named_stop_cancels_all_matching_effects_and_preserves_other_lanes() {
+            for paused in [false, true] {
+                let (selected, mut selected_output) = rodio::mixer::mixer(2, 44_100);
+                let (other, mut other_output) = rodio::mixer::mixer(2, 44_100);
+                let (music, mut music_output) = rodio::mixer::mixer(1, 44_100);
+                let mut audio = headless_audio();
+                audio.effects.push(infinite_effect(&selected, "bowpull"));
+                audio.effects.push(infinite_effect(&selected, "bowpull"));
+                audio.effects.push(infinite_effect(&other, "flame"));
+                audio.start_music_source(
+                    &music,
+                    "bowpull",
+                    rodio::buffer::SamplesBuffer::new(1, 44_100, vec![0.25; 1024])
+                        .repeat_infinite(),
+                );
+                audio.tracks[0].sink.set_volume(1.0);
+                assert!(selected_output.by_ref().take(2048).any(|v| v > 0.0));
+                audio.pause(paused);
+                audio.stop_sound("global.sndBowPull");
+                audio.stop_sound("BOWPULL.wav");
+                audio.stop_sound("unknown");
+                assert_eq!(audio.effects.len(), 1);
+                assert_eq!(audio.effects[0].name, "flame");
+                assert_eq!(audio.tracks.len(), 1);
+                assert_eq!(audio.current, Some("bowpull"));
+                assert_eq!(audio.paused, paused);
+                assert_eq!((audio.music_volume, audio.effects_volume), (0.65, 0.8));
+                audio.pause(false);
+                // Flush the next control-processing block, then prove silence
+                // without depending on the mixer's empty-queue EOF policy.
+                for _ in 0..2048 {
+                    selected_output.next();
+                }
+                assert!((0..8192).all(|_| selected_output.next().unwrap_or(0.0) == 0.0));
+                assert!(other_output.by_ref().take(2048).any(|v| v > 0.0));
+                assert!(music_output.by_ref().take(2048).any(|v| v > 0.0));
+            }
+        }
+
+        #[test]
+        fn persistent_named_pan_overrides_camera_for_later_alias_plays() {
+            let mut audio = headless_audio();
+            audio.set_sound_pan("global.sndDamsel", -1.0);
+            for alias in ["damsel.wav", "sndDamsel"] {
+                let (mixer, mut output) = rodio::mixer::mixer(2, 44_100);
+                // The camera would place this voice on the opposite side.
+                audio.play_with_mixer(&mixer, alias, 1.0, false);
+                let mut energy = [0.0_f64; 2];
+                for i in 0..65_536 {
+                    energy[i % 2] += f64::from(output.next().unwrap_or(0.0).abs());
+                }
+                assert!(energy[0] > 0.0);
+                assert!(energy[0] > energy[1] * 1.5);
+                audio.stop_sound(alias);
+            }
+            audio.set_sound_pan("sndDamsel", 9.0);
+            assert_eq!(audio.sound_pans["damsel"], 1.0);
+            audio.set_sound_pan("sndDamsel", f32::NAN);
+            assert_eq!(audio.sound_pans["damsel"], 0.0);
+            audio.set_sound_pan("missing", -1.0);
+            assert_eq!(audio.sound_pans.len(), 1);
+        }
+
+        #[test]
+        fn frequency_targets_named_music_and_survives_later_starts_and_polling() {
+            let (mixer, _output) = rodio::mixer::mixer(2, 44_100);
+            let mut audio = headless_audio();
+            audio.effects.push(infinite_effect(&mixer, "cave"));
+            audio.set_music_frequency("global.musCave", 22_050);
+            for name in ["title", "cave", "cave"] {
+                audio.start_music_source(
+                    &mixer,
+                    name,
+                    rodio::buffer::SamplesBuffer::new(2, 44_100, vec![0.25; 1024])
+                        .repeat_infinite(),
+                );
+            }
+            assert_eq!(audio.tracks[0].sink.speed(), 1.0);
+            assert_eq!(audio.tracks[1].sink.speed(), 0.5);
+            assert_eq!(audio.tracks[2].sink.speed(), 0.5);
+            audio.set_music_frequency("CAVE.ogg", 11_025);
+            assert_eq!(audio.tracks[0].sink.speed(), 1.0);
+            assert_eq!(audio.tracks[1].sink.speed(), 0.25);
+            assert_eq!(audio.tracks[2].sink.speed(), 0.25);
+            assert_eq!(audio.effects[0].sink.speed(), 1.0);
+            audio.music_with_mixer(&mixer, "musCave", true);
+            assert_eq!(audio.tracks.len(), 3);
+            assert_eq!(audio.tracks[2].sink.speed(), 0.25);
+            audio.set_music_frequency("musCave", 0);
+            assert_eq!(audio.tracks[2].sink.speed(), 0.25);
+            audio.set_music_frequency("missing", 22_050);
+            assert_eq!(audio.music_frequencies.len(), 1);
+            audio.set_music_frequency("musCave", 44_100);
+            assert_eq!(audio.tracks[1].sink.speed(), 1.0);
+            assert_eq!(audio.tracks[2].sink.speed(), 1.0);
+        }
+
         #[test]
         fn explicit_stop_ends_all_mixer_tracks_without_fading_or_stopping_effects() {
             for paused in [false, true] {
@@ -1056,6 +1178,70 @@ mod backend {
                 }
                 keep
             });
+        }
+    }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn pending_audio() -> Audio {
+            Audio {
+                context: None, // Queue tests do not construct a browser audio device.
+                cache: Rc::default(),
+                queued: VecDeque::new(),
+                effects: Vec::new(),
+                tracks: Vec::new(),
+                requested_music: None,
+                current_music: None,
+                music_volume: 0.65,
+                effects_volume: 0.8,
+                sound_pans: HashMap::new(),
+                music_frequencies: HashMap::new(),
+                unlocked: false,
+                paused: false,
+                last_update: 0.0,
+            }
+        }
+
+        #[test]
+        fn stop_removes_pending_alias_requests_without_cancelling_other_resources() {
+            let mut audio = pending_audio();
+            audio.play("sndBowPull", 0.0);
+            audio.play("bowpull.wav", 1.0);
+            audio.play("sndFlame", -1.0);
+            audio.music("musCave", true);
+            audio.stop_sound("global.sndBowPull");
+            audio.stop_sound("BOWPULL.wav");
+            assert_eq!(
+                audio.queued.iter().copied().collect::<Vec<_>>(),
+                vec![("flame", -1.0)]
+            );
+            assert_eq!(audio.requested_music, Some(("cave", true)));
+            // Decode completion can only cache data: a new explicit play is
+            // required to enqueue this resource after cancellation.
+            audio.play_if_idle("sndBowPull", 0.5);
+            assert_eq!(audio.queued.back(), Some(&("bowpull", 0.5)));
+        }
+
+        #[test]
+        fn named_settings_survive_deferred_music_and_effect_requests() {
+            let mut audio = pending_audio();
+            audio.play("sndDamsel", 1.0);
+            audio.set_sound_pan("global.sndDamsel", -1.0);
+            // start_effect resolves this stored pan when the queued decode
+            // completes, instead of using the earlier camera position.
+            assert_eq!(audio.sound_pans["damsel"], -1.0);
+            assert_eq!(audio.queued.front(), Some(&("damsel", 1.0)));
+            audio.set_music_frequency("global.musCave", 22_050);
+            audio.music("cave.ogg", true);
+            audio.music("musCave", true);
+            assert_eq!(audio.requested_music, Some(("cave", true)));
+            assert_eq!(audio.music_frequencies["cave"], 22_050);
+            audio.set_music_frequency("musCave", 44_100);
+            assert_eq!(audio.music_frequencies["cave"], 44_100);
+            audio.stop_sound("sndDamsel");
+            assert_eq!(audio.sound_pans["damsel"], -1.0);
+            assert_eq!(audio.music_frequencies["cave"], 44_100);
         }
     }
     impl Drop for Audio {

@@ -692,11 +692,18 @@ fn displacement(velocity: f64, tick: u64) -> i32 {
     (magnitude.floor() as i32 + i32::from(extra)) * if velocity < 0.0 { -1 } else { 1 }
 }
 
-fn move_player(w: &mut World, p: &mut Player, tick: u64, down: bool) {
-    move_by(w, p, tick, down, p.vel);
+fn move_player(w: &mut World, p: &mut Player, tick: u64, down: bool, events: &mut Vec<GameEvent>) {
+    move_by(w, p, tick, down, p.vel, events);
 }
 
-fn move_by(w: &mut World, p: &mut Player, tick: u64, down: bool, movement: Vec2) -> (i32, i32) {
+fn move_by(
+    w: &mut World,
+    p: &mut Player,
+    tick: u64,
+    down: bool,
+    movement: Vec2,
+    events: &mut Vec<GameEvent>,
+) -> (i32, i32) {
     let dx = displacement(movement.x, tick);
     let dy = displacement(movement.y, tick);
     for _ in 0..dx.unsigned_abs() {
@@ -727,6 +734,10 @@ fn move_by(w: &mut World, p: &mut Player, tick: u64, down: bool, movement: Vec2)
                     return false;
                 }
                 w.entities[index].pos = destination;
+                events.push(GameEvent::SoundIfIdle {
+                    name: "sndPush".into(),
+                    pos: destination,
+                });
                 true
             });
             if !pushed {
@@ -747,9 +758,16 @@ fn move_by(w: &mut World, p: &mut Player, tick: u64, down: bool, movement: Vec2)
     (dx, dy)
 }
 
-fn slope_move(w: &mut World, p: &mut Player, time: u64, down: bool, col_top: bool) {
+fn slope_move(
+    w: &mut World,
+    p: &mut Player,
+    time: u64,
+    down: bool,
+    col_top: bool,
+    events: &mut Vec<GameEvent>,
+) {
     if !grounded_state(p.state) || p.vel.x == 0.0 {
-        move_player(w, p, time, down);
+        move_player(w, p, time, down, events);
         return;
     }
     let original = p.pos;
@@ -758,7 +776,7 @@ fn slope_move(w: &mut World, p: &mut Player, time: u64, down: bool, col_top: boo
     let rise = if col_top { 0.0 } else { 5.0 };
     p.pos.y -= rise;
     let high = p.pos;
-    let (ix, iy) = move_by(w, p, time, down, Vec2::new(p.vel.x, p.vel.y + rise));
+    let (ix, iy) = move_by(w, p, time, down, Vec2::new(p.vel.x, p.vel.y + rise), events);
     let distance = original.distance(p.pos);
     if distance > f64::from(ix.abs()) {
         let ratio = f64::from(ix.abs()) / distance * 0.9;
@@ -772,6 +790,7 @@ fn slope_move(w: &mut World, p: &mut Player, time: u64, down: bool, col_top: boo
                 gm_round(f64::from(ix) * ratio),
                 gm_round(f64::from(iy) * ratio + rise),
             ),
+            events,
         );
     }
     // The original downhill loop checks cached colBot and restores its start
@@ -902,7 +921,12 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             set(p, "source_platform_climbing", 0.0);
         }
         crate::items::release_held_before_stunned_motion(game);
-        stunned_tick(&mut game.world, &mut game.player, engine_time);
+        stunned_tick(
+            &mut game.world,
+            &mut game.player,
+            engine_time,
+            &mut game.events,
+        );
         return;
     }
     // oPlayer1 Step gates characterStepEvent on active, independently of
@@ -1534,7 +1558,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     if p.vel.y.abs() < 0.1 {
         p.vel.y = 0.0;
     }
-    slope_move(w, p, engine_time, input.down, col_top);
+    slope_move(w, p, engine_time, input.down, col_top, &mut game.events);
     p.grounded = below(w, p) && p.vel.y >= 0.0 && p.state != PlayerState::Climbing;
     if game.rules == RulesPreset::Assisted {
         if !col_bot {
@@ -1626,7 +1650,7 @@ fn duck_to_hang_end(game: &mut Game) {
     set(p, "fall_ticks", 0.0);
 }
 
-fn stunned_tick(w: &mut World, p: &mut Player, time: u64) {
+fn stunned_tick(w: &mut World, p: &mut Player, time: u64, events: &mut Vec<GameEvent>) {
     let dead = p.state == PlayerState::Dead;
     let bounced = value(p, "bounced", 0.0) > 0.0;
     p.vel.y += if bounced { 1.0 } else { 0.6 };
@@ -1659,7 +1683,7 @@ fn stunned_tick(w: &mut World, p: &mut Player, time: u64) {
     p.vel.x = p.vel.x.clamp(-10.0, 10.0);
     p.vel.y = p.vel.y.clamp(-10.0, 10.0);
     let down = value(p, "source_k_down", 0.0) != 0.0;
-    move_player(w, p, time, down);
+    move_player(w, p, time, down, events);
     p.grounded = below(w, p);
     p.state = if dead {
         PlayerState::Dead
@@ -3621,7 +3645,7 @@ mod tests {
         let mut g = room(RulesPreset::Classic);
         g.player.vel.x = 3.0;
         for _ in 0..4 {
-            slope_move(&mut g.world, &mut g.player, 1, false, false);
+            slope_move(&mut g.world, &mut g.player, 1, false, false, &mut g.events);
         }
         assert_eq!(g.player.pos, Vec2::new(100.0, 152.0));
     }
@@ -3632,7 +3656,7 @@ mod tests {
         g.player.vel.x = 4.0;
         let id = g.world.spawn("oPushBlock", Vec2::new(101.0, 156.0));
         g.world.entity_mut(id).unwrap().solid = true;
-        slope_move(&mut g.world, &mut g.player, 1, false, false);
+        slope_move(&mut g.world, &mut g.player, 1, false, false, &mut g.events);
         assert_eq!(g.player.pos, Vec2::new(97.0, 148.0));
         assert!(!solid(&g.world, &g.player, g.player.pos));
     }
@@ -3643,7 +3667,7 @@ mod tests {
         g.player.vel.x = 4.0;
         g.world.set_tile(6, 9, "oBlock");
         g.player.pos.x = 90.0;
-        slope_move(&mut g.world, &mut g.player, 1, false, false);
+        slope_move(&mut g.world, &mut g.player, 1, false, false, &mut g.events);
         assert!(g.player.pos.x <= 91.0);
         assert_eq!(g.player.pos.y, 152.0);
     }
@@ -4071,6 +4095,63 @@ mod tests {
                     && g.player.pos.x < 229.0;
             }
             assert!(landed, "natural sequence did not land atop ledge {facing}");
+        }
+    }
+
+    #[test]
+    fn actual_step_successful_push_pixels_gate_sound_at_block_origin_both_directions() {
+        for direction in [-1.0, 1.0] {
+            let mut g = Game::legacy_shell(1, RulesPreset::Classic);
+            g.world = World::new(20, 20, Area::Mines, 1);
+            for x in 0..20 {
+                g.world.set_tile(x, 10, "oBlock");
+            }
+            g.player.pos = Vec2::new(88.0, 152.0);
+            g.player.previous_pos = g.player.pos;
+            g.player.state = PlayerState::Standing;
+            g.player.grounded = true;
+            g.player.pos.x = if direction > 0.0 { 91.0 } else { 117.0 };
+            g.player.previous_pos = g.player.pos;
+            let id = g.world.spawn("oPushBlock", Vec2::new(96.0, 144.0));
+            g.world
+                .set_tile(if direction > 0.0 { 8 } else { 4 }, 9, "oBlock");
+            let input = InputFrame {
+                left: direction < 0.0,
+                right: direction > 0.0,
+                ..Default::default()
+            };
+            let mut total_pixels = 0;
+            let mut blocked_steps = 0;
+            for _ in 0..80 {
+                let before = g.world.entity(id).unwrap().pos;
+                g.step(&input);
+                let after = g.world.entity(id).unwrap().pos;
+                let pixels = ((after.x - before.x) * direction) as usize;
+                let sounds: Vec<_> = g
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        GameEvent::SoundIfIdle { name, pos } if name == "sndPush" => Some(*pos),
+                        _ => None,
+                    })
+                    .collect();
+                let expected: Vec<_> = (1..=pixels)
+                    .map(|pixel| Vec2::new(before.x + direction * pixel as f64, before.y))
+                    .collect();
+                assert_eq!(sounds, expected);
+                assert!(!g.events.iter().any(|event| {
+                    matches!(event, GameEvent::Sound { name, .. } if name == "sndPush")
+                }));
+                total_pixels += pixels;
+                if total_pixels == 16 && pixels == 0 {
+                    blocked_steps += 1;
+                }
+            }
+            assert_eq!(total_pixels, 16);
+            assert!(
+                blocked_steps > 10,
+                "holding toward the wall never emits another push"
+            );
         }
     }
 }

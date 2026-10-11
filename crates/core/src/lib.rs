@@ -27,3 +27,6 @@ pub(crate) mod creation;
 pub mod hub;
 pub mod opening;
 pub mod statistics;
+
+#[cfg(test)]
+mod sound_contract_tests;

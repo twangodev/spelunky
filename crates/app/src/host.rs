@@ -4862,6 +4862,59 @@ mod tests {
         );
     }
     #[test]
+    fn destination_music_resets_before_first_step_then_preserves_tick_frequency() {
+        let mut game = Game::legacy(42, spelunky_core::RulesPreset::Classic);
+        game.data.insert("music_frequency".into(), 34_100.0);
+        game.next_level();
+        assert_eq!(game.world.level, 2);
+        assert_eq!(game.level_tick, 0);
+        let (music, _) = game_music_request(&game);
+        assert_eq!(music, "cave");
+        // No destination Step has run: the host must reset before music().
+        assert_eq!(initial_level_music_frequency(&game, music), Some(44_100));
+        assert_eq!(initial_level_music_frequency(&game, music), Some(44_100));
+        game.step(&spelunky_core::InputFrame::default());
+        assert!(game.level_tick > 0);
+        // Subsequent polling must leave source tick-driven deceleration intact.
+        game.data.insert("music_frequency".into(), 44_000.0);
+        assert_eq!(
+            initial_level_music_frequency(&game, game_music(&game)),
+            None
+        );
+    }
+
+    #[test]
+    fn initial_frequency_reset_excludes_muted_boss_hubs_and_cinematics() {
+        let mut boss = Game::legacy(42, spelunky_core::RulesPreset::Classic);
+        boss.data.insert("next_level".into(), 16.0);
+        boss.next_level();
+        assert_eq!(boss.level_tick, 0);
+        assert_eq!(game_music(&boss), "");
+        assert_eq!(
+            initial_level_music_frequency(&boss, game_music(&boss)),
+            None
+        );
+
+        let mut game = Game::legacy(42, spelunky_core::RulesPreset::Classic);
+        assert_eq!(initial_level_music_frequency(&game, ""), None);
+        game.load_hub(spelunky_core::hub::HubKind::Title);
+        assert_eq!(game_music(&game), "title");
+        assert_eq!(
+            initial_level_music_frequency(&game, game_music(&game)),
+            None
+        );
+
+        let mut game = Game::legacy(42, spelunky_core::RulesPreset::Classic);
+        spelunky_core::opening::begin_title(&mut game, 0);
+        assert_eq!(initial_level_music_frequency(&game, "title"), None);
+
+        let mut game = Game::legacy(42, spelunky_core::RulesPreset::Classic);
+        spelunky_core::ending::begin_exit(&mut game, spelunky_core::ending::EndingKind::Transition);
+        assert!(game.is_level(), "Exit remains in the level room");
+        assert_eq!(initial_level_music_frequency(&game, "cave"), None);
+    }
+
+    #[test]
     fn custom_music_tracks_are_independent_from_campaign_area_rules() {
         for (code, track) in [
             ("CAVE", "cave"),

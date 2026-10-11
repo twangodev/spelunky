@@ -628,9 +628,7 @@ fn king(game: &mut Game, e: &mut Entity) {
             e.set_image_speed(0.5);
             let frame = e.animation;
             if (7.0..=12.0).contains(&frame) {
-                if frame == 7.0 {
-                    game.sound("sndYetiYell", e.pos);
-                }
+                game.sound_if_idle("sndYetiYell", e.pos);
                 king_yell_ice(game, e);
             }
         }
@@ -3083,6 +3081,60 @@ mod tests {
         assert_eq!(ufo.health, 1);
         assert_eq!(ufo.pos.y, 46.0);
         assert_eq!(ufo.state, 1);
+    }
+
+    #[test]
+    fn actual_step_king_natural_attack_gates_every_yell_window_step() {
+        let mut g = Game::legacy_shell(42, RulesPreset::Classic);
+        g.world = World::new(20, 20, Area::Ice, 9);
+        for x in 0..20 {
+            g.world.set_tile(x, 10, "oBlock");
+        }
+        g.player.pos = Vec2::new(200.0, 152.0);
+        g.player.previous_pos = g.player.pos;
+        let id = g.spawn("oYetiKing", Vec2::new(96.0, 128.0));
+        let mut eligible_steps = 0;
+        let mut eligible_frames = Vec::new();
+        let mut attack_entry_frames = Vec::new();
+        let mut past_window_steps = 0;
+        for _ in 0..64 {
+            let before = g.world.entity(id).unwrap();
+            let was_attacking = before.state == 3;
+            let eligible = was_attacking && (7.0..=12.0).contains(&before.animation);
+            if eligible {
+                eligible_frames.push(before.animation);
+            }
+            if before.state == 3 && before.animation > 12.0 {
+                past_window_steps += 1;
+            }
+            g.step(&crate::InputFrame::default());
+            let boss = g.world.entity(id).unwrap();
+            if !was_attacking && boss.state == 3 {
+                attack_entry_frames.push(boss.animation);
+            }
+            let sounds: Vec<_> = g
+                .events
+                .iter()
+                .filter_map(|event| match event {
+                    GameEvent::SoundIfIdle { name, pos } if name == "sndYetiYell" => Some(*pos),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(sounds, if eligible { vec![boss.pos] } else { vec![] });
+            assert!(!g.events.iter().any(|event| {
+                matches!(event, GameEvent::Sound { name, .. } if name == "sndYetiYell")
+            }));
+            eligible_steps += usize::from(eligible);
+        }
+        // Create uses .25. ATTACK entry resets image_index but retains that
+        // speed until the following Step, so its first end-frame sample is .25.
+        assert_eq!(attack_entry_frames, vec![0.25]);
+        let source_window = vec![
+            7.25, 7.75, 8.25, 8.75, 9.25, 9.75, 10.25, 10.75, 11.25, 11.75,
+        ];
+        assert_eq!(eligible_frames, source_window);
+        assert_eq!(eligible_steps, source_window.len());
+        assert!(past_window_steps > 0);
     }
 }
 

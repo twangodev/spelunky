@@ -1129,6 +1129,7 @@ fn olmec(game: &mut Game, e: &mut Entity) {
         4 => {
             e.vel = Vec2::new(0.0, 0.1);
             crate::camera_shake::request(game, 10.0);
+            game.sound_if_idle("sndFlame", e.pos);
         }
         5 => {
             if e.timer > 0 {
@@ -3283,6 +3284,40 @@ mod tests {
                 ),
                 "velocity={velocity:?}, tick={tick}",
             );
+        }
+    }
+
+    #[test]
+    fn actual_step_olmec_naturally_drowns_with_gated_flame_each_step() {
+        for lava_at_feet in [false, true] {
+            let mut g = Game::legacy_shell(9, RulesPreset::Classic);
+            g.world = World::new(24, 20, Area::Temple, 13);
+            for x in 0..24 {
+                g.world.set_tile(x, 10, "oTemple");
+            }
+            g.player.pos = Vec2::new(230.0, 120.0);
+            if lava_at_feet {
+                g.world.set_tile(5, 9, "oLava");
+            }
+            let id = g.spawn("oOlmec", Vec2::new(80.0, 80.0));
+            // Only the authored room differs; Create supplies all boss state.
+            for _ in 0..6 {
+                g.step(&crate::InputFrame::default());
+                let boss = g.world.entity(id).expect("head remains above lava");
+                assert_eq!(boss.state == 4, lava_at_feet);
+                let flames: Vec<_> = g
+                    .events
+                    .iter()
+                    .filter_map(|event| match event {
+                        GameEvent::SoundIfIdle { name, pos } if name == "sndFlame" => Some(*pos),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(flames, if lava_at_feet { vec![boss.pos] } else { vec![] });
+                assert!(!g.events.iter().any(|event| {
+                    matches!(event, GameEvent::Sound { name, .. } if name == "sndFlame")
+                }));
+            }
         }
     }
 }
