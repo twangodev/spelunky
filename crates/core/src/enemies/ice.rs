@@ -6,6 +6,10 @@
 use super::move_body;
 use crate::{Entity, Game, GameEvent, PlayerState, Rect, Vec2};
 
+#[cfg(test)]
+#[path = "player_hurt_rectangle_contract_tests.rs"]
+mod player_hurt_rectangle_contract_tests;
+
 pub fn matches(object: &str) -> bool {
     matches!(
         object,
@@ -920,12 +924,13 @@ pub(super) fn player_hurt(game: &mut Game) {
         {
             continue;
         }
-        let query = Rect::new(game.player.pos.x - 8.0, game.player.pos.y - 8.0, 16.0, 16.0);
+        let first = Vec2::new(game.player.pos.x - 8.0, game.player.pos.y - 8.0);
+        let second = Vec2::new(game.player.pos.x + 8.0, game.player.pos.y + 8.0);
         if !game.world.entities.iter().any(|entity| {
             entity.alive
                 && entity.engine_active
                 && entity.object == object
-                && entity.sprite_bounds().intersects(query)
+                && entity.collision_mask().intersects_rectangle_bbox(first, second)
         }) {
             continue;
         }
@@ -969,9 +974,17 @@ pub(super) fn player_hurt(game: &mut Game) {
             game.player.state = PlayerState::Stunned;
         } else {
             // PsychicWave has no source blood call; retain its independent path.
-            hurt_player_cause(game, damage, cause);
+            let had_life = game.player.health > 0;
+            if had_life {
+                game.player.health -= damage;
+                game.events.push(GameEvent::Damage { amount: damage });
+                if game.player.health <= 0 && crate::statistics::is_real_level(game) {
+                    game.lifetime_stats.enemy_death(cause);
+                }
+            }
             game.player.vel =
                 Vec2::new(if pos.x < game.player.pos.x { 2.0 } else { -2.0 }, -4.0);
+            game.sound("sndHurt", game.player.pos);
             game.player.stun = stun;
             game.player.state = PlayerState::Stunned;
         }
