@@ -1253,6 +1253,7 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
         game.dispatcher.phase = Phase::Alarm(index);
         let mut last = i32::MIN;
         let mut controller_pending = true;
+        let mut challenge_pending = crate::hub::challenge_alarm_resource(game);
         loop {
             sync_newborns(game);
             let next = game
@@ -1264,6 +1265,7 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
             let Some(key) = next
                 .into_iter()
                 .chain(controller_pending.then_some(318))
+                .chain(challenge_pending)
                 .min()
             else {
                 break;
@@ -1276,6 +1278,10 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
                         crate::progression::game_alarm(game, index as usize);
                     }
                 }
+            }
+            if challenge_pending == Some(key) {
+                challenge_pending = None;
+                crate::hub::challenge_alarm(game, index);
             }
             let instances = game
                 .dispatcher

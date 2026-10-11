@@ -1012,6 +1012,59 @@ fn blood(game: &mut Game, pos: Vec2, count: usize) {
         }
     }
 }
+/// Source controller resources keep their persisted alarms in Game::data.
+/// The dispatcher visits them in its existing alarm-number/resource passes.
+pub(crate) fn challenge_alarm_resource(game: &Game) -> Option<i32> {
+    if !game.flags.contains("hub") {
+        return None;
+    }
+    if game.flags.contains("hub_sun") {
+        Some(721)
+    } else if game.flags.contains("hub_stars") {
+        Some(701)
+    } else {
+        None
+    }
+}
+
+pub(crate) fn challenge_alarm(game: &mut Game, index: u8) {
+    let Some(resource) = challenge_alarm_resource(game) else {
+        return;
+    };
+    let key = match index {
+        0 => "hub_alarm0",
+        11 => "hub_alarm11",
+        _ => return,
+    };
+    let timer = game.data.entry(key.into()).or_insert(-1.0);
+    if *timer < 0.0 {
+        return;
+    }
+    *timer -= 1.0;
+    if *timer != 0.0 || crate::items::player_dead(game) {
+        return;
+    }
+    // Source tests dead, not global life: Player Step can observe fatal life
+    // later in this same frame, after every Alarm callback has completed.
+    match (resource, index) {
+        (721, 0) => sun_alarm0(game),
+        (721, 11) => {
+            let score = (value(game, "points") + 1.0).min(99.0);
+            game.data.insert("points".into(), score);
+            game.data.insert("hub_alarm11".into(), 30.0);
+        }
+        (701, 0) => stars_alarm0(game),
+        (701, 11) => {
+            if f64::from(1 + game.rng.range(100)) < value(game, "stars_kills") {
+                let x = 32.0 + 80.0 * f64::from(game.rng.range(4));
+                game.spawn("oSpider", Vec2::new(x, 0.0));
+            }
+            game.data.insert("hub_alarm11".into(), 20.0);
+        }
+        _ => {}
+    }
+}
+
 fn sun(game: &mut Game) {
     if game
         .world
@@ -1028,55 +1081,51 @@ fn sun(game: &mut Game) {
         if !game.flags.contains("hub_challenge_finished") {
             record(game, "mini1", value(game, "points"));
         }
+    }
+}
+fn sun_alarm0(game: &mut Game) {
+    let x = game.player.pos.x.clamp(40.0, 280.0);
+    if game.world.solid_at(x, 32.0) {
+        game.data.insert("hub_alarm0".into(), 1.0);
         return;
     }
-    if due(game, "hub_alarm11") {
-        let score = (value(game, "points") + 1.0).min(99.0);
-        game.data.insert("points".into(), score);
-        game.data.insert("hub_alarm11".into(), 30.0);
-    }
-    if due(game, "hub_alarm0") {
-        let x = game.player.pos.x.clamp(40.0, 280.0);
-        if game.world.solid_at(x, 32.0) {
-            game.data.insert("hub_alarm0".into(), 1.0);
-            return;
+    let score = value(game, "points");
+    if score >= 80.0 {
+        if !game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.alive && e.object == "oGhost")
+        {
+            game.spawn(
+                "oGhost",
+                Vec2::new(
+                    if game.player.pos.x > 160.0 {
+                        -32.0
+                    } else {
+                        320.0
+                    },
+                    104.0,
+                ),
+            );
         }
-        let score = value(game, "points");
-        if score >= 80.0 {
-            if !game
-                .world
-                .entities
-                .iter()
-                .any(|e| e.alive && e.object == "oGhost")
-            {
-                game.world.spawn(
-                    "oGhost",
-                    Vec2::new(
-                        if game.player.pos.x > 160.0 {
-                            -32.0
-                        } else {
-                            320.0
-                        },
-                        104.0,
-                    ),
-                );
-            }
-        } else if score >= 50.0 {
-            let id = game.world.spawn("oVampire", Vec2::new(152.0, 32.0));
-            game.world.entity_mut(id).unwrap().state = 7;
-            poof_pair(game, Vec2::new(160.0, 40.0), true);
-        } else {
-            let id = game.world.spawn("oBomb", Vec2::new(x, 32.0));
-            let e = game.world.entity_mut(id).unwrap();
-            e.set_sprite("sBombArmed");
-            e.timer = 80;
-            e.data.insert("armed".into(), 1.0);
-            e.data.insert("safe_ticks".into(), 10.0);
-            poof_pair(game, Vec2::new(x, 32.0), true);
-        }
-        let delay = 100 + game.rng.range(101);
-        game.data.insert("hub_alarm0".into(), f64::from(delay));
+    } else if score >= 50.0 {
+        let id = game.spawn("oVampire", Vec2::new(152.0, 32.0));
+        game.world.entity_mut(id).unwrap().state = 7;
+        poof_pair(game, Vec2::new(160.0, 40.0), true);
+    } else {
+        let id = game.spawn("oBomb", Vec2::new(x, 32.0));
+        let e = game.world.entity_mut(id).unwrap();
+        e.set_sprite("sBombArmed");
+        e.timer = 80;
+        e.alarms[0] = 80;
+        e.alarms[2] = 10;
+        e.set_image_speed(0.2);
+        e.data.insert("armed".into(), 1.0);
+        poof_pair(game, Vec2::new(x, 32.0), true);
     }
+    let delay = 100 + game.rng.range(101);
+    game.data.insert("hub_alarm0".into(), f64::from(delay));
 }
 fn stars(game: &mut Game) {
     if game.player.health <= 0
@@ -1086,36 +1135,28 @@ fn stars(game: &mut Game) {
         if !game.flags.contains("hub_challenge_finished") {
             record(game, "mini3", value(game, "stars_kills"));
         }
-        return;
     }
+}
+fn stars_alarm0(game: &mut Game) {
     let kills = value(game, "stars_kills");
-    if due(game, "hub_alarm0") {
-        let x = 32.0 + 80.0 * f64::from(game.rng.range(4));
-        let id = game.world.spawn("oShopkeeper2", Vec2::new(x, 0.0));
-        let e = game.world.entity_mut(id).unwrap();
-        e.text.insert("source_object".into(), "oShopkeeper2".into());
-        e.state = 2;
-        e.data.insert("hasGun".into(), 0.0);
-        e.data.insert("has_gun".into(), 0.0);
-        e.data.insert("deathTimer".into(), 200.0);
-        game.data.insert(
-            "hub_alarm0".into(),
-            match kills as u32 {
-                0..=9 => 200.0,
-                10..=19 => 175.0,
-                20..=29 => 150.0,
-                30..=39 => 125.0,
-                _ => 100.0,
-            },
-        );
-    }
-    if due(game, "hub_alarm11") {
-        if f64::from(1 + game.rng.range(100)) < kills {
-            let x = 32.0 + 80.0 * f64::from(game.rng.range(4));
-            game.world.spawn("oSpider", Vec2::new(x, 0.0));
-        }
-        game.data.insert("hub_alarm11".into(), 20.0);
-    }
+    let x = 32.0 + 80.0 * f64::from(game.rng.range(4));
+    let id = game.spawn("oShopkeeper2", Vec2::new(x, 0.0));
+    let e = game.world.entity_mut(id).unwrap();
+    e.text.insert("source_object".into(), "oShopkeeper2".into());
+    e.state = 2;
+    e.data.insert("hasGun".into(), 0.0);
+    e.data.insert("has_gun".into(), 0.0);
+    e.data.insert("deathTimer".into(), 200.0);
+    game.data.insert(
+        "hub_alarm0".into(),
+        match kills as u32 {
+            0..=9 => 200.0,
+            10..=19 => 175.0,
+            20..=29 => 150.0,
+            30..=39 => 125.0,
+            _ => 100.0,
+        },
+    );
 }
 fn spawn_target(game: &mut Game, x: f64, y: f64) {
     let difficulty = if x == 208.0 {
@@ -2277,10 +2318,9 @@ mod tests {
     }
     #[test]
     fn sun_first_point_at_tick100() {
-        let mut g = challenge(HubKind::Sun);
-        for tick in 1..=100 {
-            g.level_tick = tick;
-            tick_hub(&mut g);
+        let mut g = loaded(HubKind::Sun);
+        for _ in 0..100 {
+            g.step(&InputFrame::default());
         }
         assert_eq!(g.data["points"], 1.0);
         assert_eq!(g.player.health, 8);
