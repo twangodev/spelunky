@@ -446,16 +446,42 @@ fn damsel(game: &mut Game, e: &mut Entity) {
         Rect::new(body.x, body.y + body.h, body.w, 1.0),
         e.id,
     );
-    let exit = game
-        .world
-        .entities
-        .iter()
-        .find(|door| {
-            door.alive
-                && crate::catalog::is_a(&door.object, "oExit")
-                && door.sprite_bounds().contains(e.pos)
+    // Source first gates on any origin-point hit, then instance_place selects
+    // the first full native-mask overlap in the current active Exit array.
+    crate::dispatcher::register_instances(game);
+    let exits: Vec<_> = crate::dispatcher::descendant_instances(game, "oExit")
+        .into_iter()
+        .filter(|instance| crate::dispatcher::is_active(game, *instance))
+        .filter_map(|instance| match instance {
+            crate::dispatcher::Instance::Entity(id) => game
+                .world
+                .entity(id)
+                .map(|door| (door.pos, door.collision_mask())),
+            crate::dispatcher::Instance::Terrain(index) => {
+                let pos = instance.position(game);
+                Some((
+                    pos,
+                    game.world.tile_collision_mask(
+                        (index % game.world.width) as i32,
+                        (index / game.world.width) as i32,
+                    ),
+                ))
+            }
+            crate::dispatcher::Instance::Player => None,
         })
-        .map(|door| door.pos);
+        .collect();
+    let exit = if exits
+        .iter()
+        .any(|(_, mask)| mask.contains(e.pos, CollisionPrecision::BoundingBox))
+    {
+        let own_mask = e.collision_mask();
+        exits
+            .into_iter()
+            .find(|(_, mask)| own_mask.intersects_mask(mask))
+            .map(|(pos, _)| pos)
+    } else {
+        None
+    };
     if let Some(exit) = exit.filter(|_| e.health > 0 && e.state != 2 && !e.held) {
         e.state = 4;
         e.vel = Vec2::default();
@@ -1949,6 +1975,86 @@ mod tests {
         }
         assert!(g.world.entity(id).is_none());
     }
+    fn damsel_exit_query_room(rules: RulesPreset, door_xs: &[f64]) -> (Game, u64) {
+        let mut game = Game::shell(123, rules);
+        game.world = World::new(30, 20, Area::Mines, 1);
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        game.player.pos = Vec2::new(32.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        for &x in door_xs {
+            game.spawn("oExit", Vec2::new(x, 144.0));
+        }
+        let id = game.spawn("oDamsel", Vec2::new(132.0, 152.0));
+        let damsel = game.world.entity(id).unwrap();
+        // Native sDamselLeft: origin(8,8), rectangle mask[2,0..13,15].
+        // Movement bounds[-4,-4..4,8] do not reach the earlier door at112.
+        assert_eq!(damsel.sprite_bounds(), Rect::new(126.0, 144.0, 12.0, 16.0));
+        for door in game.world.entities.iter().filter(|e| e.object == "oExit") {
+            assert_eq!(door.sprite_bounds(), Rect::new(door.pos.x, 144.0, 16.0, 16.0));
+            assert!(damsel.event_intersects(door), "full native masks overlap");
+            assert_eq!(
+                door.mask_contains(damsel.pos, CollisionPrecision::BoundingBox),
+                door.pos.x == 128.0,
+                "only door B contains the Damsel origin"
+            );
+        }
+        (game, id)
+    }
+
+    #[test]
+    fn actual_step_damsel_exit_point_gate_then_first_full_native_mask() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let (mut game, id) = damsel_exit_query_room(rules, &[112.0, 128.0]);
+            game.step(&InputFrame::default());
+            let damsel = game.world.entity(id).unwrap();
+            assert_eq!(damsel.state, 4);
+            assert_eq!(damsel.pos, Vec2::new(120.0, 152.0));
+            assert_eq!(damsel.vel, Vec2::default());
+            assert_eq!(game.data.get("damsels"), Some(&1.0));
+            assert_eq!(game.data.get("xdamsels"), Some(&1.0));
+            assert_eq!(game.lifetime_stats.damsels_saved_total, 1);
+        }
+    }
+
+    #[test]
+    fn actual_step_damsel_exit_single_origin_door_control() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let (mut game, id) = damsel_exit_query_room(rules, &[128.0]);
+            game.step(&InputFrame::default());
+            let damsel = game.world.entity(id).unwrap();
+            assert_eq!(damsel.state, 4);
+            assert_eq!(damsel.pos, Vec2::new(136.0, 152.0));
+            assert_eq!(game.lifetime_stats.damsels_saved_total, 1);
+        }
+    }
+
+    #[test]
+    fn actual_step_damsel_exit_full_mask_alone_does_not_open_point_gate() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let (mut game, id) = damsel_exit_query_room(rules, &[112.0]);
+            game.step(&InputFrame::default());
+            assert_ne!(game.world.entity(id).unwrap().state, 4);
+            assert!(!game.flags.contains("damsel_rescued"));
+            assert_eq!(game.data.get("damsels"), None);
+            assert_eq!(game.data.get("xdamsels"), None);
+            assert_eq!(game.lifetime_stats.damsels_saved_total, 0);
+        }
+    }
+
+    #[test]
+    fn actual_step_damsel_exit_full_mask_respects_reverse_birth_order() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let (mut game, id) = damsel_exit_query_room(rules, &[128.0, 112.0]);
+            game.step(&InputFrame::default());
+            let damsel = game.world.entity(id).unwrap();
+            assert_eq!(damsel.state, 4);
+            assert_eq!(damsel.pos, Vec2::new(136.0, 152.0));
+            assert_eq!(game.lifetime_stats.damsels_saved_total, 1);
+        }
+    }
+
     #[test]
     fn actual_step_rescued_damsel_is_invincible_during_exit_animation() {
         let mut g = actual_room();
