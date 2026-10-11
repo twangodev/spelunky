@@ -276,10 +276,54 @@ pub(crate) fn builtin_motion(game: &mut Game, id: u64) {
 }
 
 pub(crate) fn collision(game: &mut Game, id: u64, other: crate::dispatcher::Instance) {
+    if jar_collision(game, id, other) {
+        return;
+    }
     weapons::collision(game, id, other);
     explosives::collision(game, id, other);
     utility::collision(game, id, other);
     collectibles::collision(game, id, other);
+}
+
+/// Literal Jar own collision events. WhipPre is a separate family and has no
+/// Jar event. The Whip body finishes before instance_destroy's own callback;
+/// default breakPieces therefore produces a second debris/loot burst.
+fn jar_collision(game: &mut Game, id: u64, other: crate::dispatcher::Instance) -> bool {
+    let Some(jar) = game.world.entity(id).cloned() else {
+        return false;
+    };
+    let object = other.object(game);
+    if !crate::catalog::is_a(&jar.object, "oJar")
+        || jar.value("break_done") != 0.0
+        || crate::dispatcher::collision_owner(&jar.object, object) != Some("oJar")
+    {
+        return false;
+    }
+    if crate::catalog::is_a(object, "oWhip") {
+        game.sound("sndBreak", jar.pos);
+        game.spawn("oSmokePuff", jar.pos);
+        for _ in 0..3 {
+            let piece = game.spawn("oRubbleSmall", Vec2::new(jar.pos.x - 2.0, jar.pos.y - 2.0));
+            let velocity = f64::from(1 + game.rng.range(3)) - f64::from(1 + game.rng.range(3));
+            if let Some(piece) = game.world.entity_mut(piece) {
+                piece.vel.x = velocity;
+            }
+        }
+        spawn_jar_loot(game, jar.pos, false, false);
+        if jar.held {
+            // Classic's holdItem/pickupItemType are represented by this link.
+            game.player.held = None;
+        }
+        break_item(game, id);
+        true
+    } else if crate::catalog::is_a(object, "oBullet") {
+        // Bullet's own Jar collision is only instance_destroy(). It leaves
+        // bullet lifetime to the bullet's own Step/collision declarations.
+        break_item(game, id);
+        true
+    } else {
+        false
+    }
 }
 
 pub(crate) fn animation_end(game: &mut Game, id: u64) {
@@ -1251,7 +1295,7 @@ pub fn break_item(game: &mut Game, id: u64) {
     entity.data.insert("break_done".into(), 1.0);
     entity.alive = false;
     let pos = entity.pos;
-    let jar = entity.object == "oJar";
+    let jar = crate::catalog::is_a(&entity.object, "oJar");
     let pieces = entity.data.get("breakPieces").copied().unwrap_or(1.0) != 0.0;
     let left = entity.value("colLeft") != 0.0;
     let right = entity.value("colRight") != 0.0;
@@ -1295,43 +1339,47 @@ pub fn break_item(game: &mut Game, id: u64) {
         }
     }
     if jar {
-        let loot = if game.rng.chance(1, 3) {
-            Some("oGoldChunk")
-        } else if game.rng.chance(1, 6) {
-            Some("oGoldNugget")
-        } else if game.rng.chance(1, 12) {
-            Some("oEmeraldBig")
-        } else if game.rng.chance(1, 12) {
-            Some("oSapphireBig")
-        } else if game.rng.chance(1, 12) {
-            Some("oRubyBig")
-        } else if game.rng.chance(1, 6) {
-            Some("oSpider")
-        } else if game.rng.chance(1, 12) {
-            Some("oSnake")
+        spawn_jar_loot(game, pos, left, right);
+    }
+}
+
+fn spawn_jar_loot(game: &mut Game, pos: Vec2, left: bool, right: bool) {
+    let loot = if game.rng.chance(1, 3) {
+        Some("oGoldChunk")
+    } else if game.rng.chance(1, 6) {
+        Some("oGoldNugget")
+    } else if game.rng.chance(1, 12) {
+        Some("oEmeraldBig")
+    } else if game.rng.chance(1, 12) {
+        Some("oSapphireBig")
+    } else if game.rng.chance(1, 12) {
+        Some("oRubyBig")
+    } else if game.rng.chance(1, 6) {
+        Some("oSpider")
+    } else if game.rng.chance(1, 12) {
+        Some("oSnake")
+    } else {
+        None
+    };
+    if let Some(name) = loot {
+        let spawn = if name == "oSpider" {
+            Vec2::new(pos.x - 8.0, pos.y - 8.0)
+        } else if name == "oSnake" {
+            Vec2::new(
+                pos.x
+                    - if left {
+                        0.0
+                    } else if right {
+                        16.0
+                    } else {
+                        8.0
+                    },
+                pos.y - 8.0,
+            )
         } else {
-            None
+            pos
         };
-        if let Some(name) = loot {
-            let spawn = if name == "oSpider" {
-                Vec2::new(pos.x - 8.0, pos.y - 8.0)
-            } else if name == "oSnake" {
-                Vec2::new(
-                    pos.x
-                        - if left {
-                            0.0
-                        } else if right {
-                            16.0
-                        } else {
-                            8.0
-                        },
-                    pos.y - 8.0,
-                )
-            } else {
-                pos
-            };
-            game.spawn(name, spawn);
-        }
+        game.spawn(name, spawn);
     }
 }
 
@@ -2396,6 +2444,268 @@ mod tests {
             game.events
                 .iter()
                 .any(|e| matches!(e,GameEvent::Sound{name,..} if name=="sndBreak"))
+        );
+    }
+}
+
+#[cfg(test)]
+mod jar_collision_source_tests {
+    use super::*;
+    use crate::{GameEvent, Rng, dispatcher::Instance};
+    use std::collections::{BTreeMap, BTreeSet};
+    type Birth = (&'static str, Vec2, Vec2);
+
+    // Literal source oracle, deliberately independent of spawn_jar_loot and
+    // break_item. Each elseif consumes a roll only when actually reached.
+    fn literal_loot(
+        rng: &mut Rng,
+        pos: Vec2,
+        left: bool,
+        right: bool,
+        out: &mut Vec<Birth>,
+    ) -> &'static str {
+        for (object, denominator) in [
+            ("oGoldChunk", 3),
+            ("oGoldNugget", 6),
+            ("oEmeraldBig", 12),
+            ("oSapphireBig", 12),
+            ("oRubyBig", 12),
+            ("oSpider", 6),
+            ("oSnake", 12),
+        ] {
+            if rng.range(denominator) == 0 {
+                let spawn = if object == "oSpider" {
+                    Vec2::new(pos.x - 8.0, pos.y - 8.0)
+                } else if object == "oSnake" {
+                    Vec2::new(
+                        pos.x
+                            - if left {
+                                0.0
+                            } else if right {
+                                16.0
+                            } else {
+                                8.0
+                            },
+                        pos.y - 8.0,
+                    )
+                } else {
+                    pos
+                };
+                out.push((
+                    object,
+                    spawn,
+                    if object == "oSnake" {
+                        Vec2::new(2.5, 0.0)
+                    } else {
+                        Vec2::default()
+                    },
+                ));
+                return object;
+            }
+        }
+        "none"
+    }
+    fn literal_whip(rng: &mut Rng, pos: Vec2, out: &mut Vec<Birth>) -> &'static str {
+        out.push(("oSmokePuff", pos, Vec2::new(0.0, 0.1)));
+        for _ in 0..3 {
+            let vx = f64::from(1 + rng.range(3)) - f64::from(1 + rng.range(3));
+            out.push((
+                "oRubbleSmall",
+                Vec2::new(pos.x - 2.0, pos.y - 2.0),
+                Vec2::new(vx, 0.0),
+            ));
+        }
+        literal_loot(rng, pos, false, false, out)
+    }
+    fn literal_destroy(
+        rng: &mut Rng,
+        pos: Vec2,
+        left: bool,
+        right: bool,
+        top: bool,
+        out: &mut Vec<Birth>,
+    ) -> &'static str {
+        out.push(("oSmokePuff", pos, Vec2::new(0.0, 0.1)));
+        for _ in 0..3 {
+            let vx = if left {
+                f64::from(1 + rng.range(3))
+            } else if right {
+                -f64::from(1 + rng.range(3))
+            } else {
+                f64::from(1 + rng.range(3)) - f64::from(1 + rng.range(3))
+            };
+            let vy = f64::from(rng.range(4)) * if top { 1.0 } else { -1.0 };
+            out.push((
+                "oRubbleSmall",
+                Vec2::new(pos.x - 2.0, pos.y - 2.0),
+                Vec2::new(vx, vy),
+            ));
+        }
+        literal_loot(rng, pos, left, right, out)
+    }
+    fn branch_seeds() -> BTreeSet<u64> {
+        let mut first = BTreeMap::new();
+        let mut second = BTreeMap::new();
+        let mut bullet = BTreeMap::new();
+        for seed in 0..2048 {
+            let mut rng = Rng::new(seed);
+            let mut ignored = Vec::new();
+            let pos = Vec2::new(100.0, 100.0);
+            first
+                .entry(literal_whip(&mut rng, pos, &mut ignored))
+                .or_insert(seed);
+            second
+                .entry(literal_destroy(
+                    &mut rng,
+                    pos,
+                    false,
+                    false,
+                    false,
+                    &mut ignored,
+                ))
+                .or_insert(seed);
+            let mut rng = Rng::new(seed);
+            bullet
+                .entry(literal_destroy(
+                    &mut rng,
+                    pos,
+                    false,
+                    false,
+                    false,
+                    &mut ignored,
+                ))
+                .or_insert(seed);
+            if first.len() == 8 && second.len() == 8 && bullet.len() == 8 {
+                break;
+            }
+        }
+        assert_eq!((first.len(), second.len(), bullet.len()), (8, 8, 8));
+        first
+            .into_values()
+            .chain(second.into_values())
+            .chain(bullet.into_values())
+            .collect()
+    }
+    #[test]
+    fn literal_jar_whip_bullet_pre_effect_order_rng_held_clean_flags_and_idempotency() {
+        let mut first_branches = BTreeSet::new();
+        let mut destroy_branches = BTreeSet::new();
+        let mut bullet_branches = BTreeSet::new();
+        for seed in branch_seeds() {
+            for projectile in ["oWhip", "oBullet", "oWhipPre"] {
+                for pieces in [false, true] {
+                    for held in [false, true] {
+                        for (left, right, top) in [
+                            (false, false, false),
+                            (true, false, false),
+                            (false, true, true),
+                            (true, true, true),
+                        ] {
+                            let mut game = Game::shell(seed, RulesPreset::Classic);
+                            let pos = Vec2::new(100.0, 100.0);
+                            let jar = game.spawn("oJar", pos);
+                            let other = game.spawn(projectile, pos);
+                            let source = game.world.entity_mut(jar).unwrap();
+                            source.held = held;
+                            for (key, value) in [
+                                ("breakPieces", pieces),
+                                ("colLeft", left),
+                                ("colRight", right),
+                                ("colTop", top),
+                            ] {
+                                source.data.insert(key.into(), f64::from(value));
+                            }
+                            if held {
+                                game.player.held = Some(jar);
+                            }
+                            let mut expected = game.rng.clone();
+                            let mut births = Vec::new();
+                            let mut sounds = 0;
+                            if projectile == "oWhip" {
+                                first_branches.insert(literal_whip(
+                                    &mut expected,
+                                    pos,
+                                    &mut births,
+                                ));
+                                sounds += 1;
+                            }
+                            if projectile != "oWhipPre" && pieces {
+                                let branch = literal_destroy(
+                                    &mut expected,
+                                    pos,
+                                    left,
+                                    right,
+                                    top,
+                                    &mut births,
+                                );
+                                if projectile == "oWhip" {
+                                    destroy_branches.insert(branch);
+                                } else {
+                                    bullet_branches.insert(branch);
+                                }
+                                sounds += 1;
+                            }
+                            collision(&mut game, jar, Instance::Entity(other));
+                            let actual: Vec<_> = game
+                                .world
+                                .entities
+                                .iter()
+                                .filter(|e| e.id > other)
+                                .collect();
+                            assert_eq!(
+                                actual.len(),
+                                births.len(),
+                                "seed={seed} {projectile} pieces={pieces}"
+                            );
+                            for (entity, (object, pos, velocity)) in actual.iter().zip(&births) {
+                                assert_eq!(entity.object, *object);
+                                assert_eq!(entity.pos, *pos);
+                                assert_eq!(entity.vel, *velocity);
+                                assert!(entity.alive && entity.engine_active);
+                                if *object == "oRubbleSmall" {
+                                    assert_eq!(entity.value("gravity"), 0.6);
+                                }
+                                if *object == "oSpider" || *object == "oSnake" {
+                                    assert_eq!(entity.health, 1);
+                                }
+                            }
+                            assert_eq!(game.events.iter().filter(|e| matches!(e,GameEvent::Sound{name,..} if name=="sndBreak")).count(),sounds);
+                            assert_eq!(game.world.entity(jar).is_some(), projectile == "oWhipPre");
+                            assert_eq!(
+                                game.player.held,
+                                if projectile == "oWhipPre" && held {
+                                    Some(jar)
+                                } else {
+                                    None
+                                }
+                            );
+                            assert!(
+                                game.world.entity(other).is_some(),
+                                "Jar callback does not retire projectile"
+                            );
+                            assert_eq!(game.rng.clone().next_u64(), expected.next_u64());
+                            let before = serde_json::to_value(&game.world).unwrap();
+                            let rng_before = game.rng.clone().next_u64();
+                            let events = game.events.len();
+                            collision(&mut game, jar, Instance::Entity(other));
+                            if projectile != "oWhipPre" {
+                                break_item(&mut game, jar);
+                            }
+                            assert_eq!(serde_json::to_value(&game.world).unwrap(), before);
+                            assert_eq!(game.rng.next_u64(), rng_before);
+                            assert_eq!(game.events.len(), events);
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            (
+                first_branches.len(),
+                destroy_branches.len(),
+                bullet_branches.len()
+            ),
+            (8, 8, 8)
         );
     }
 }
