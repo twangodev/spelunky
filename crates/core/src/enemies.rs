@@ -66,6 +66,11 @@ pub fn init_entity(e: &mut Entity) {
         e.data.insert("heavy".into(), 1.0);
     }
     if is_enemy(&e.object) {
+        // Inherited oEnemy Create sets false; only Bat/UFO override it.
+        e.data.insert(
+            "flying".into(),
+            f64::from(matches!(e.object.as_str(), "oBat" | "oUFO")),
+        );
         // oEnemy Create enables carrying; these own Create events override it.
         let can_pick_up = !matches!(
             e.object.as_str(),
@@ -1352,6 +1357,131 @@ pub(super) fn in_stars(game: &Game) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn flying_spring_room(object: &str, rules: RulesPreset) -> (Game, u64, u64) {
+        let mut game = Game::shell(42, rules);
+        game.world = World::new(20, 16, Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        for x in 0..20 {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        game.player.pos = Vec2::new(40.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        let spring = game.spawn("oSpringTrap", Vec2::new(96.0, 144.0));
+        // The source RECTANGLE/AUTO masks are Spring y12..15, BatHang
+        // y0..11, UFO y1..12, and SnakeWalkL y4..15. Bat's two-pixel
+        // offset produces real event overlap while its movement bottom
+        // touches the floor at160. No actor is changed after birth.
+        let enemy = game.spawn(
+            object,
+            Vec2::new(96.0, if object == "oBat" { 146.0 } else { 144.0 }),
+        );
+        assert!(
+            game.world
+                .entity(enemy)
+                .unwrap()
+                .event_intersects(game.world.entity(spring).unwrap())
+        );
+        (game, enemy, spring)
+    }
+
+    #[test]
+    fn natural_bat_spring_contact_preserves_flight_in_both_presets() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let (mut game, enemy, spring) = flying_spring_room("oBat", rules);
+            game.step(&crate::InputFrame::default());
+            let spring = game.world.entity(spring).unwrap();
+            // Check the observable response before the declaration: missing
+            // flying would spring this genuinely overlapping source mask.
+            assert_eq!((spring.state, spring.timer), (0, 0));
+            assert!(
+                !game.events.iter().any(
+                    |event| matches!(event, GameEvent::Sound { name, .. } if name == "sndBoing")
+                )
+            );
+            let bat = game.world.entity(enemy).unwrap();
+            assert_eq!(bat.pos, Vec2::new(96.0, 146.0));
+            assert_eq!(bat.vel, Vec2::default());
+            assert_eq!(bat.state, 1); // The ordinary Hang Step woke it.
+            assert!(bat.event_intersects(spring));
+            assert_eq!(bat.value("flying"), 1.0);
+        }
+    }
+
+    #[test]
+    fn natural_ufo_spring_contact_preserves_search_in_both_presets() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let (mut game, enemy, spring) = flying_spring_room("oUFO", rules);
+            game.step(&crate::InputFrame::default());
+            let spring = game.world.entity(spring).unwrap();
+            assert_eq!((spring.state, spring.timer), (0, 0));
+            assert!(
+                !game.events.iter().any(
+                    |event| matches!(event, GameEvent::Sound { name, .. } if name == "sndBoing")
+                )
+            );
+            let ufo = game.world.entity(enemy).unwrap();
+            assert_eq!(ufo.pos, Vec2::new(96.0, 144.0));
+            assert_eq!(ufo.vel.y, -2.0); // Source SEARCH, rather than -8 launch.
+            assert_eq!(ufo.vel.x.abs(), 1.0);
+            assert_eq!(ufo.state, 0);
+            assert!(ufo.event_intersects(spring));
+            assert_eq!(ufo.value("flying"), 1.0);
+        }
+    }
+
+    #[test]
+    fn natural_grounded_snake_spring_contact_launches_in_both_presets() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let (mut game, enemy, spring) = flying_spring_room("oSnake", rules);
+            let snake = game.world.entity(enemy).unwrap();
+            assert_eq!(snake.bounds().y + snake.bounds().h, 160.0);
+            game.step(&crate::InputFrame::default());
+            let spring = game.world.entity(spring).unwrap();
+            assert_eq!((spring.state, spring.timer), (1, 10));
+            assert_eq!(
+                game.events
+                    .iter()
+                    .filter(
+                        |event| matches!(event, GameEvent::Sound { name, .. } if name == "sndBoing")
+                    )
+                    .count(),
+                1
+            );
+            let snake = game.world.entity(enemy).unwrap();
+            // Initial source xVel2.5 moves three pixels at this clock; the
+            // remaining three-pixel alignment still accepts the collision.
+            assert_eq!(snake.pos, Vec2::new(99.0, 128.0));
+            assert_eq!(snake.vel.y, -8.0);
+            assert_eq!(snake.value("flying"), 0.0);
+            assert_eq!(snake.health, 1);
+        }
+    }
+
+    #[test]
+    fn enemy_create_flying_defaults_match_all_source_descendants_and_run_once() {
+        let mut checked = 0;
+        for object in
+            crate::catalog::object_names().filter(|object| *object != "oEnemy" && is_enemy(object))
+        {
+            let mut enemy = Entity::new(1, object, Vec2::new(96.0, 144.0));
+            init_entity(&mut enemy);
+            assert_eq!(
+                enemy.data.get("flying"),
+                Some(&f64::from(matches!(object, "oBat" | "oUFO"))),
+                "{object}"
+            );
+            // A repeated bootstrap must preserve a caller's post-Create write.
+            enemy.data.insert("flying".into(), 7.0);
+            init_entity(&mut enemy);
+            assert_eq!(enemy.value("flying"), 7.0, "{object}");
+            checked += 1;
+        }
+        assert_eq!(checked, 28);
+    }
+
     // These fixtures use only initial scene setup followed by ordinary input.
     // No hit boxes are spawned manually, and no family/collision callback is
     // invoked directly. Stop at the first hit, before later bounce/death blood.
