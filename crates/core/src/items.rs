@@ -306,6 +306,7 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
     }) {
         crate::enemies::item_step_impacts(game, id);
     }
+    explosives::fire_frog_bomb_own_step(game, id);
     if game
         .world
         .entity(id)
@@ -797,7 +798,9 @@ fn throw_item(game: &mut Game, id: u64, input: &InputFrame) {
         entity.data.insert("safe".into(), 1.0);
         entity.data.insert("safe_ticks".into(), 10.0);
         entity.alarms[2] = 10;
-        entity.data.insert("armed".into(), 1.0);
+        if entity.object != "oFireFrogBomb" {
+            entity.data.insert("armed".into(), 1.0);
+        }
         entity.data.insert("owner".into(), 1.0);
         if wall {
             entity.pos.x -= facing * 8.0;

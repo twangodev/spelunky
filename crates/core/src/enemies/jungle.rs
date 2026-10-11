@@ -187,7 +187,6 @@ fn die(game: &mut Game, e: &mut Entity) {
         let id = game.spawn("oFireFrogBomb", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
         if let Some(bomb) = game.world.entity_mut(id) {
             bomb.timer = 120;
-            bomb.data.insert("armed".into(), 1.0);
             bomb.data.insert("heavy".into(), 1.0);
         }
     }

@@ -19,7 +19,8 @@ pub fn init_entity(entity: &mut Entity) {
             entity.data.entry("sticky_y".into()).or_insert(0.0);
         }
         "oFireFrogBomb" => {
-            entity.data.insert("armed".into(), 1.0);
+            entity.data.insert("armed".into(), 0.0);
+            entity.data.insert("swimming".into(), 0.0);
             entity.data.insert("heavy".into(), 1.0);
             entity.timer = BOMB_FUSE;
             entity.alarms[1] = BOMB_FUSE as i32;
@@ -954,8 +955,11 @@ pub(crate) fn tick_entities(game: &mut Game) {
             .insert("simulation_tick".into(), game.engine_time() as f64);
         match entity.object.as_str() {
             "oBomb" | "oFireFrogBomb" => {
-                tick_bomb(game, &mut entity);
+                let normal_step = tick_bomb(game, &mut entity);
                 warn_shopkeeper(game, &entity);
+                if normal_step && entity.object == "oFireFrogBomb" {
+                    fire_frog_bomb_tail(game, &mut entity);
+                }
             }
             "oRopeThrow" => tick_rope(game, &mut entity),
             "oExplosion" => {
@@ -1016,8 +1020,8 @@ pub fn end_tick(game: &mut Game) {
     }
 }
 
-fn tick_bomb(game: &mut Game, bomb: &mut Entity) {
-    if bomb.value("armed") != 0.0 {
+fn tick_bomb(game: &mut Game, bomb: &mut Entity) -> bool {
+    if bomb.object == "oFireFrogBomb" || bomb.value("armed") != 0.0 {
         bomb.timer = bomb.timer.saturating_sub(1);
         bomb.animation += if bomb.timer <= BOMB_FAST_FUSE {
             1.0
@@ -1033,10 +1037,11 @@ fn tick_bomb(game: &mut Game, bomb: &mut Entity) {
                 game.player.held = None;
             }
             explode(game, bomb.pos);
-            return;
+            return false;
         }
     }
     step_bomb_body(game, bomb);
+    true
 }
 
 fn step_bomb_body(game: &mut Game, bomb: &mut Entity) {
@@ -1044,10 +1049,14 @@ fn step_bomb_body(game: &mut Game, bomb: &mut Entity) {
         return;
     }
     if bomb.held {
-        bomb.pos = Vec2::new(
-            game.player.pos.x + 4.0 * f64::from(game.player.facing),
-            game.player.pos.y + 2.0,
-        );
+        if bomb.object == "oFireFrogBomb" {
+            super::align_held(game, bomb);
+        } else {
+            bomb.pos = Vec2::new(
+                game.player.pos.x + 4.0 * f64::from(game.player.facing),
+                game.player.pos.y + 2.0,
+            );
+        }
         bomb.vel = Vec2::default();
         return;
     }
@@ -1191,6 +1200,83 @@ pub(crate) fn finish_sticky_destroy_events(game: &mut Game) {
         .collect();
     for id in ids {
         destroy_bomb(game, id);
+    }
+}
+
+/// oFireFrogBomb's own event follows the complete inherited Item event, even
+/// when the inherited event has already retired this receiver.
+pub(super) fn fire_frog_bomb_own_step(game: &mut Game, id: u64) {
+    let Some(mut bomb) = game
+        .world
+        .entities
+        .iter()
+        .find(|entity| entity.id == id && entity.object == "oFireFrogBomb")
+        .cloned()
+    else {
+        return;
+    };
+    fire_frog_bomb_tail(game, &mut bomb);
+    if let Some(stored) = game
+        .world
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == id)
+    {
+        *stored = bomb;
+    }
+}
+
+fn fire_frog_bomb_tail(game: &mut Game, bomb: &mut Entity) {
+    if bomb.value("armed") != 0.0 {
+        crate::dispatcher::register_instances(game);
+        let keepers: Vec<_> = crate::dispatcher::descendant_instances(game, "oShopkeeper")
+            .into_iter()
+            .filter_map(|instance| match instance {
+                crate::dispatcher::Instance::Entity(id) => game.world.entity(id),
+                _ => None,
+            })
+            .filter(|keeper| keeper.engine_active)
+            .map(|keeper| (keeper.pos, keeper.collision_mask().point_bounds()))
+            .collect();
+        let bounds = bomb.collision_mask().point_bounds();
+        if !keepers.is_empty()
+            && crate::economy::in_shop(game, bomb.pos)
+            && keepers
+                .iter()
+                .any(|(_, keeper)| crate::world_events::mask_distance(bounds, *keeper) < 96.0)
+        {
+            // `with oShopkeeper` calls the nearest-keeper script from each
+            // active receiver, retaining coincident-origin ties and repetitions.
+            for (origin, _) in keepers {
+                crate::economy::anger(game, origin, "TERRORIST!");
+            }
+        }
+    }
+    let water = game.world.tiles.iter().enumerate().any(|(index, water)| {
+        water.engine_active
+            && crate::catalog::is_a(&water.object, "oWaterSwim")
+            && game
+                .world
+                .tile_collision_mask(
+                    (index % game.world.width) as i32,
+                    (index / game.world.width) as i32,
+                )
+                .contains(bomb.pos, CollisionPrecision::Precise)
+    }) || game.world.entities.iter().any(|water| {
+        water.id != bomb.id
+            && water.alive
+            && water.engine_active
+            && crate::catalog::is_a(&water.object, "oWaterSwim")
+            && water.mask_contains(bomb.pos, CollisionPrecision::Precise)
+    });
+    if water {
+        if bomb.value("swimming") == 0.0 {
+            game.spawn("oSplash", bomb.pos);
+            bomb.data.insert("swimming".into(), 1.0);
+            game.sound("sndSplash", bomb.pos);
+        }
+    } else {
+        bomb.data.insert("swimming".into(), 0.0);
     }
 }
 
@@ -5250,3 +5336,7 @@ mod sticky_bomb_contract_tests;
 #[cfg(test)]
 #[path = "player_explosion_blood_contract_tests.rs"]
 mod player_explosion_blood_contract_tests;
+
+#[cfg(test)]
+#[path = "firefrog_bomb_own_step_tests.rs"]
+mod firefrog_bomb_own_step_tests;

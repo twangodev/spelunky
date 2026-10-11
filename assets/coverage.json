@@ -352,7 +352,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2012,
+          "line": 2098,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -371,7 +371,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2012,
+          "line": 2098,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -429,7 +429,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 777,
+          "line": 778,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -472,7 +472,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2012,
+          "line": 2098,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -515,7 +515,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2012,
+          "line": 2098,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -558,7 +558,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2012,
+          "line": 2098,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -633,7 +633,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2012,
+          "line": 2098,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -1219,7 +1219,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2017,
+          "line": 2103,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -1363,32 +1363,32 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 632,
+          "line": 633,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 662,
+          "line": 663,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 686,
+          "line": 687,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 778,
+          "line": 779,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 956,
+          "line": 957,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 596,
+          "line": 597,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -1767,7 +1767,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2011,
+          "line": 2097,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -1787,7 +1787,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2012,
+          "line": 2098,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -2298,7 +2298,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2012,
+          "line": 2098,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -3241,7 +3241,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2108,
+          "line": 2194,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -3474,7 +3474,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2111,
+          "line": 2197,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -3764,17 +3764,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 30,
+          "line": 31,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 961,
+          "line": 965,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 599,
+          "line": 600,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -3932,17 +3932,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 632,
+          "line": 633,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 956,
+          "line": 957,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 597,
+          "line": 598,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -3987,7 +3987,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 777,
+          "line": 778,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -5032,7 +5032,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2012,
+          "line": 2098,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -5531,7 +5531,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 777,
+          "line": 778,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -6644,7 +6644,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2016,
+          "line": 2102,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -6933,7 +6933,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1035,
+          "line": 1034,
           "module": "crates/core/src/enemies/jungle.rs"
         },
         {
@@ -7519,7 +7519,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1036,
+          "line": 1035,
           "module": "crates/core/src/enemies/jungle.rs"
         },
         {
@@ -8813,7 +8813,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2017,
+          "line": 2103,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -9001,22 +9001,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 36,
+          "line": 37,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 637,
+          "line": 638,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 970,
+          "line": 974,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 600,
+          "line": 601,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -9054,22 +9054,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 37,
+          "line": 38,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 638,
+          "line": 639,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 971,
+          "line": 975,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 602,
+          "line": 603,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -9160,22 +9160,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 27,
+          "line": 28,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 636,
+          "line": 637,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 960,
+          "line": 964,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 598,
+          "line": 599,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -9200,22 +9200,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 36,
+          "line": 37,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 637,
+          "line": 638,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 970,
+          "line": 974,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 601,
+          "line": 602,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -9393,7 +9393,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2109,
+          "line": 2195,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -9431,7 +9431,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2012,
+          "line": 2098,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -9529,7 +9529,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2110,
+          "line": 2196,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -10060,7 +10060,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2012,
+          "line": 2098,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -10151,7 +10151,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 777,
+          "line": 778,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -10310,7 +10310,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2012,
+          "line": 2098,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -10351,7 +10351,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2012,
+          "line": 2098,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -10541,7 +10541,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2012,
+          "line": 2098,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -10654,7 +10654,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2012,
+          "line": 2098,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -11356,7 +11356,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2016,
+          "line": 2102,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -11728,7 +11728,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2012,
+          "line": 2098,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -11793,7 +11793,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2011,
+          "line": 2097,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -12824,7 +12824,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2017,
+          "line": 2103,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
