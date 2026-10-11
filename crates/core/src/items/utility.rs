@@ -936,7 +936,7 @@ mod telefrag_blood_source_tests {
         g.player.previous_pos = g.player.pos;
         g.player.grounded = true;
         g.player.equipment.insert("Paste".into());
-        let receiver = g.spawn("oBat", Vec2::new(84.0, 94.0));
+        let receiver = g.spawn("oBat", Vec2::new(85.0, 94.0));
         let teleporter = g.spawn("oTeleporter", Vec2::new(80.0, 108.0));
         g.step(&InputFrame::default());
         g.step(&InputFrame {
