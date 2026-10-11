@@ -408,13 +408,6 @@ fn fire_bow(game: &mut Game) {
     game.sound("sndArrowTrap", pos);
 }
 
-fn tile_object(game: &Game, pos: Vec2) -> &str {
-    game.world
-        .tile((pos.x / 16.0).floor() as i32, (pos.y / 16.0).floor() as i32)
-        .map(|t| t.object.as_str())
-        .unwrap_or("")
-}
-
 /// oArrow and oFlare explicitly inherit oItem Step before their own code.
 /// Keep movement on the room's integer moveTo clock and preserve the original
 /// order of wall bounce, ground friction, arrow embedding and ceiling bounce.
