@@ -300,8 +300,12 @@ fn natural_bow_unarmed_and_genuinely_exhausted_ammo_keep_frame_zero() {
         assert!(
             game.events
                 .iter()
-                .any(|e| matches!(e, GameEvent::Message(s) if s == "I'M OUT OF ARROWS!"))
+                .any(|e| matches!(e, GameEvent::Dialogue(message)
+                    if message.first == "I'M OUT OF ARROWS!"
+                        && message.second.is_empty()
+                        && message.ticks == 80))
         );
+        assert_eq!(game.data["message_timer"], 80.0);
         assert_eq!(game.data["arrows"], 0.0);
         assert_eq!(game.player.data["bow_armed"], 0.0);
         assert_frame(&game, bow, 0.0);
