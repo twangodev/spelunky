@@ -227,7 +227,9 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
                 npcs::tick(game, e);
             }
         }
-        if e.alive {
+        // Spider's second own-Step code action is outside its viewport
+        // guard and also runs after Destroy in the first code action.
+        if e.alive || e.object == "oSpider" {
             caves::tick_independent_events(game, e);
         }
     });

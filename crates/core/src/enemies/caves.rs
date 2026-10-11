@@ -144,8 +144,7 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
 
 /// Spider's water check is outside its viewport-guarded Step body.
 pub(super) fn tick_independent_events(game: &mut Game, e: &mut Entity) {
-    if e.alive
-        && e.object == "oSpider"
+    if e.object == "oSpider"
         && e.state != 4
         && in_water(game, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0))
     {
@@ -652,7 +651,13 @@ fn spider(game: &mut Game, e: &mut Entity, giant: bool) {
     }
     if e.health <= 0 {
         spider_death(game, e, giant);
-        return;
+        if giant {
+            // Giant Spider has its own loot/squirt event; its separate
+            // post-Destroy continuation is outside this normal-Spider fix.
+            return;
+        }
+        super::destroyed(game, e);
+        // Normal Spider's source event continues after instance_destroy.
     }
     let grounded = grounded || bottom(&game.world, e);
     let ceiling = top(&game.world, e);
