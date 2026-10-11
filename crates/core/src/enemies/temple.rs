@@ -1032,27 +1032,26 @@ fn olmec(game: &mut Game, e: &mut Entity) {
     // Classic tests the left edge at the feet/head. Authored arenas store
     // lava as water-family entities, while custom levels can also use tiles.
     let lava = |world: &World, point: Vec2| {
-        world
-            .tile(
-                (point.x / 16.0).floor() as i32,
-                (point.y / 16.0).floor() as i32,
-            )
-            .is_some_and(|tile| tile.object == "oLava")
-            || world
-                .entities
-                .iter()
-                .any(|lava| lava.alive && lava.object == "oLava" && lava.bounds().contains(point))
+        world.tiles_point(point, "oLava")
+            || world.entities.iter().any(|lava| {
+                lava.alive
+                    && lava.engine_active
+                    && crate::catalog::is_a(&lava.object, "oLava")
+                    && lava.mask_contains(point, crate::CollisionPrecision::BoundingBox)
+            })
     };
+    // Source foot lava selects DROWNING before the independent head test.
+    if lava(&game.world, Vec2::new(e.pos.x, e.pos.y + 64.0)) {
+        e.state = 4;
+    }
     if lava(&game.world, Vec2::new(e.pos.x, e.pos.y - 2.0)) {
         super::record_death(game, e);
         e.alive = false;
         game.flags.insert("olmec_dead".into());
         game.events
             .push(GameEvent::Message("Olmec has fallen!".into()));
-        return;
-    }
-    if lava(&game.world, Vec2::new(e.pos.x, e.pos.y + 64.0)) {
-        e.state = 4;
+        crate::items::explosives::destroy_detached_olmec(game, e);
+        // instance_destroy does not abort the following state chain.
     }
     if e.state != 5 && e.state != 4 {
         e.vel.y = (e.vel.y + 0.2).min(6.0);
@@ -1169,13 +1168,35 @@ fn olmec(game: &mut Game, e: &mut Entity) {
             }
         }
         7 => {
-            let target = Vec2::new(e.pos.x + 32.0, e.pos.y + 16.0);
+            let target = if e.alive {
+                Some(Vec2::new(e.pos.x + 32.0, e.pos.y + 16.0))
+            } else {
+                // Qualified oOlmec.x/y excludes a tombstoned receiver. Create
+                // queries the first remaining live, active family instance.
+                crate::dispatcher::register_instances(game);
+                crate::dispatcher::descendant_instances(game, "oOlmec")
+                    .into_iter()
+                    .find_map(|instance| match instance {
+                        Instance::Entity(id) => game
+                            .world
+                            .entity(id)
+                            .filter(|boss| boss.engine_active)
+                            .map(|boss| Vec2::new(boss.pos.x + 32.0, boss.pos.y + 16.0)),
+                        _ => None,
+                    })
+            };
             for _ in 0..6 {
                 let pos = Vec2::new(
                     e.pos.x + 32.0 + f64::from(game.rng.range(33)) - f64::from(game.rng.range(33)),
                     e.pos.y + 14.0 + f64::from(game.rng.range(33)) - f64::from(game.rng.range(33)),
                 );
-                crate::world_events::spawn_psychic_create_2(game, pos, target);
+                if let Some(target) = target {
+                    crate::world_events::spawn_psychic_create_2(game, pos, target);
+                } else {
+                    // Under Ignore, the failed child Create still returns its
+                    // newborn ID, so Olmec's repeat and later emissions resume.
+                    crate::world_events::spawn_psychic_create_2_without_owner(game, pos);
+                }
             }
             for _ in 0..3 {
                 spawn(

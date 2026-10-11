@@ -869,6 +869,26 @@ pub(crate) fn spawn_psychic_create_2(game: &mut Game, pos: Vec2, target: Vec2) -
     id
 }
 
+/// Ignore returns from a failed child Create to instance_create's caller.
+/// The newborn remains live, with dir unassigned; its later Step reports that
+/// separate error rather than using a fabricated heading to a retired boss.
+pub(crate) fn spawn_psychic_create_2_without_owner(game: &mut Game, pos: Vec2) -> u64 {
+    let id = game.world.spawn("oPsychicCreate2", pos);
+    let effect = game.world.entity_mut(id).unwrap();
+    effect.text.insert("type".into(), String::new());
+    effect.data.insert("blinkToggle".into(), 0.0);
+    effect.vel.y = 0.0;
+    effect.data.insert("y_acc".into(), 0.6);
+    effect.data.insert("psychic_initialized".into(), 1.0);
+    effect.data.insert("psychic_missing_dir".into(), 1.0);
+    *game.data.entry("source_runtime_errors".into()).or_default() += 1.0;
+    game.events.push(GameEvent::Message(
+        "SOURCE RUNTIME ERROR: oPsychicCreate2 Create: oOlmec has no active instance; child Create code block aborted."
+            .into(),
+    ));
+    id
+}
+
 fn initialize_psychic_create(game: &Game, e: &mut Entity) {
     if e.value("psychic_initialized") != 0.0 {
         return;
@@ -890,7 +910,15 @@ fn initialize_psychic_create(game: &Game, e: &mut Entity) {
     e.data.insert("psychic_initialized".into(), 1.0);
 }
 
-fn psychic_create(game: &Game, e: &mut Entity) {
+fn psychic_create(game: &mut Game, e: &mut Entity) {
+    if e.value("psychic_missing_dir") != 0.0 {
+        *game.data.entry("source_runtime_errors".into()).or_default() += 1.0;
+        game.events.push(GameEvent::Message(
+            "SOURCE RUNTIME ERROR: oPsychicCreate2 Step: dir is uninitialized; Step code block aborted."
+                .into(),
+        ));
+        return;
+    }
     initialize_psychic_create(game, e);
     e.pos.x += e.vel.x;
     e.pos.y += e.vel.y;

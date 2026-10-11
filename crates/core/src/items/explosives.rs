@@ -2711,6 +2711,117 @@ fn solid_parent_destroy(game: &mut Game, pos: Vec2, shop_wall: bool) {
 #[path = "explosives_fluid_tests.rs"]
 mod fluid_invalidation_tests;
 
+/// Olmec executes its own Step while detached from World. Its inherited
+/// oSolid Destroy still finishes before the remaining statements in that Step.
+/// Keep this separate from position-only legacy solid callbacks: Olmec uses
+/// its current 64px sprite mask for each translated instance_place query.
+pub(crate) fn destroy_detached_olmec(game: &mut Game, source: &mut Entity) {
+    assert_eq!(source.object, "oOlmec");
+    if source.value("destroy_done") != 0.0 {
+        return;
+    }
+    source.alive = false;
+    source.data.insert("destroy_done".into(), 1.0);
+    if source.value("shopWall") != 0.0 {
+        crate::economy::anger(game, source.pos, "DIE, YOU VANDAL!");
+        game.flags.insert("shopkeepers_angry".into());
+    }
+    let upper = Vec2::new(source.pos.x + 8.0, source.pos.y - 1.0);
+    for family in ["oSpikes", "oTikiTorch", "oGrave"] {
+        if let Some(target) = detached_solid_attachment(game, source, family, upper, upper) {
+            retire_detached_solid_attachment(game, target, family);
+        }
+    }
+    let gate = Vec2::new(source.pos.x + 8.0, source.pos.y + 18.0);
+    let origin = Vec2::new(source.pos.x + 8.0, source.pos.y + 16.0);
+    for (family, item) in [("oLampRed", "oLampRedItem"), ("oLamp", "oLampItem")] {
+        if let Some(target) = detached_solid_attachment(game, source, family, gate, origin) {
+            let pos = target.position(game);
+            // The lamp remains live through its replacement Item's Create.
+            game.spawn(item, Vec2::new(pos.x + 8.0, pos.y + 12.0));
+            retire_detached_solid_attachment(game, target, family);
+        }
+    }
+    game.world.fluid_dirty = true;
+}
+
+fn detached_solid_attachment(
+    game: &mut Game,
+    source: &Entity,
+    family: &str,
+    gate: Vec2,
+    translated_origin: Vec2,
+) -> Option<crate::dispatcher::Instance> {
+    use crate::dispatcher::Instance;
+    crate::dispatcher::register_instances(game);
+    let targets: Vec<_> = crate::dispatcher::descendant_instances(game, family)
+        .into_iter()
+        .filter(|instance| crate::dispatcher::is_active(game, *instance))
+        .collect();
+    let contains = |instance: Instance| match instance {
+        Instance::Entity(id) => game
+            .world
+            .entity(id)
+            .is_some_and(|target| target.mask_contains(gate, CollisionPrecision::BoundingBox)),
+        Instance::Terrain(index) => game
+            .world
+            .tile_collision_mask(
+                (index % game.world.width) as i32,
+                (index / game.world.width) as i32,
+            )
+            .contains(gate, CollisionPrecision::BoundingBox),
+        Instance::Player => false,
+    };
+    if !targets.iter().copied().any(contains) {
+        return None;
+    }
+    let mut translated = source.clone();
+    translated.pos = translated_origin;
+    targets.into_iter().find(|instance| match *instance {
+        Instance::Entity(id) => game
+            .world
+            .entity(id)
+            .is_some_and(|target| translated.event_intersects(target)),
+        Instance::Terrain(index) => {
+            translated
+                .collision_mask()
+                .intersects_mask(&game.world.tile_collision_mask(
+                    (index % game.world.width) as i32,
+                    (index / game.world.width) as i32,
+                ))
+        }
+        Instance::Player => false,
+    })
+}
+
+fn retire_detached_solid_attachment(
+    game: &mut Game,
+    target: crate::dispatcher::Instance,
+    family: &str,
+) {
+    use crate::dispatcher::Instance;
+    match target {
+        Instance::Entity(id) if family == "oGrave" => {
+            destroy_solid_self(game, id);
+        }
+        Instance::Terrain(index) if family == "oGrave" => {
+            destroy_terrain_self(game, index % game.world.width, index / game.world.width);
+        }
+        Instance::Entity(id) => {
+            if let Some(target) = game.world.entity_mut(id) {
+                target.alive = false;
+            }
+        }
+        Instance::Terrain(index) => {
+            let water_was_dirty = game.world.fluid_dirty;
+            game.world
+                .set_tile(index % game.world.width, index / game.world.width, "");
+            game.world.fluid_dirty = water_was_dirty;
+        }
+        Instance::Player => {}
+    }
+}
+
 /// Execute gameplay Destroy effects once for an independently stored solid.
 /// Used by explosions and mattocks; target invincibility is respected here.
 pub(crate) fn destroy_solid_instance(game: &mut Game, id: u64) -> bool {
