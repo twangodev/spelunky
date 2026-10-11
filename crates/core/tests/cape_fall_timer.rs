@@ -1,4 +1,4 @@
-//! Tests-only SOURCE proposal, UNCOMPILED/UNRUN.
+//! Natural Cape pickup and jump inputs exercise source fall timer phases.
 //! Initial authored room + one real CapePickup; subsequent changes are solely
 //! ordinary Game.step(inputs). No equipment/state/velocity/RNG injection.
 use spelunky_core::*;

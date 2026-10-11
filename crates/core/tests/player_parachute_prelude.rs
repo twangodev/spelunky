@@ -1,4 +1,4 @@
-//! Source-derived preparation only: UNCOMPILED_UNEXECUTED.
+//! Natural Parachute inputs and event-boundary controls preserve source phases.
 //! Room, pickup, and inputs establish every Player/equipment/fall/stun state.
 //! Three event-boundary tests explicitly add arriving controlled world hazards.
 use spelunky_core::*;
