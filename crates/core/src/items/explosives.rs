@@ -402,6 +402,16 @@ pub(crate) fn collision(game: &mut Game, self_id: u64, other: crate::dispatcher:
             let Some(mut entity) = game.world.entity(id).cloned() else {
                 return;
             };
+            // The exact Boulder collision overrides the inherited Solid event:
+            // it is unconditional despite the Boulder Create invincibility.
+            if entity.object == "oBoulder" {
+                explosion_boulder(game, &entity);
+                return;
+            }
+            if entity.object == "oBarrierEmitter" {
+                crate::enemies::destroy_barrier_emitter(game, id);
+                return;
+            }
             if crate::catalog::is_a(&entity.object, "oSolid") {
                 if solids_active {
                     if entity.value("invincible") == 0.0 && entity.object != "oHardBlock" {
@@ -441,10 +451,7 @@ pub(crate) fn collision(game: &mut Game, self_id: u64, other: crate::dispatcher:
                 if entity.object == "oDamsel" {
                     entity.state = 2;
                 }
-            } else if matches!(
-                entity.object.as_str(),
-                "oWeb" | "oBoulder" | "oBarrierEmitter"
-            ) {
+            } else if entity.object == "oWeb" {
                 entity.alive = false;
             } else if crate::catalog::is_a(&entity.object, "oItem") {
                 match entity.object.as_str() {
@@ -501,6 +508,40 @@ pub(crate) fn collision(game: &mut Game, self_id: u64, other: crate::dispatcher:
             }
         }
     }
+}
+
+/// oExplosion Collision with oBoulder runs before inherited oSolid routing.
+/// RubblePiece and Rock Creates are fixed, uncapped and consume no RNG.
+fn explosion_boulder(game: &mut Game, boulder: &Entity) {
+    for _ in 0..3 {
+        let pos = Vec2::new(
+            boulder.pos.x + f64::from(game.rng.range(16)) - f64::from(game.rng.range(16)),
+            boulder.pos.y + f64::from(game.rng.range(16)) - f64::from(game.rng.range(16)),
+        );
+        let id = game.spawn("oRubble", pos);
+        game.world.entity_mut(id).unwrap().set_sprite("sRubbleTan");
+        if game.rng.range(3) == 0 {
+            let pos = Vec2::new(
+                boulder.pos.x + f64::from(game.rng.range(16)) - f64::from(game.rng.range(16)),
+                boulder.pos.y + f64::from(game.rng.range(16)) - f64::from(game.rng.range(16)),
+            );
+            game.spawn("oRock", pos);
+        }
+    }
+    for _ in 0..6 {
+        let pos = Vec2::new(
+            boulder.pos.x + f64::from(game.rng.range(16)) - f64::from(game.rng.range(16)),
+            boulder.pos.y + f64::from(game.rng.range(16)) - f64::from(game.rng.range(16)),
+        );
+        let id = game.spawn("oRubbleSmall", pos);
+        game.world
+            .entity_mut(id)
+            .unwrap()
+            .set_sprite("sRubbleTanSmall");
+    }
+    // Literal with other instance_destroy bypasses attack immunity and still
+    // invokes the inherited oSolid Destroy continuation after all fragments.
+    destroy_solid_self(game, boulder.id);
 }
 
 fn explosion_solid_cleanup(game: &mut Game) {
@@ -1137,6 +1178,8 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
     let hits = |bounds| mask_intersects(explosion.pos, frame, bounds);
     let solids_active = game.flags.contains("tutorial") || super::item_body_active(game, explosion);
     let mut solid_collision = false;
+    let mut boulders = Vec::new();
+    let mut emitters = Vec::new();
     for y in 0..game.world.height {
         for x in 0..game.world.width {
             let bounds = Rect::new(x as f64 * 16.0, y as f64 * 16.0, 16.0, 16.0);
@@ -1158,7 +1201,13 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
         if !entity.alive || entity.id == explosion.id || !hits(entity.sprite_bounds()) {
             continue;
         }
-        if crate::catalog::is_a(&entity.object, "oSolid") {
+        if entity.object == "oBoulder" {
+            boulders.push(entity.clone());
+            entity.alive = false;
+        } else if entity.object == "oBarrierEmitter" {
+            emitters.push(entity.id);
+            entity.alive = false;
+        } else if crate::catalog::is_a(&entity.object, "oSolid") {
             solid_collision |= solids_active;
             // The original Collision with oSolid event applies equally to
             // tiles and instances such as push blocks and thin ice.
@@ -1206,7 +1255,7 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
             }
         } else if matches!(
             entity.object.as_str(),
-            "oWeb" | "oBoulder" | "oBarrierEmitter" | "oArrow" | "oFishBone" | "oJar" | "oSkull"
+            "oWeb" | "oArrow" | "oFishBone" | "oJar" | "oSkull"
         ) {
             entity.alive = false;
             if matches!(entity.object.as_str(), "oJar" | "oSkull") {
@@ -1233,6 +1282,12 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
                 game.player.held = None;
             }
         }
+    }
+    for boulder in boulders {
+        explosion_boulder(game, &boulder);
+    }
+    for id in emitters {
+        crate::enemies::destroy_barrier_emitter(game, id);
     }
     for id in fragile_destroys {
         super::break_item(game, id);
@@ -4296,3 +4351,7 @@ mod runtime_clean_terrain_treasure {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "explosion_laser_contract_tests.rs"]
+mod explosion_laser_contract_tests;

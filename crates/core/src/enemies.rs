@@ -385,6 +385,25 @@ fn destroyed(game: &mut Game, e: &mut Entity) {
     }
 }
 
+/// Source cross-system instance_destroy of an emitter finishes its own Destroy
+/// synchronously, before later collision resource pairs can query the barrier.
+pub(crate) fn destroy_barrier_emitter(game: &mut Game, id: u64) {
+    let Some(mut emitter) = game
+        .world
+        .entities
+        .iter()
+        .find(|e| e.id == id && e.object == "oBarrierEmitter" && e.value("npc_destroyed") == 0.0)
+        .cloned()
+    else {
+        return;
+    };
+    emitter.alive = false;
+    npcs::destroyed(game, &mut emitter);
+    if let Some(stored) = game.world.entities.iter_mut().find(|e| e.id == id) {
+        *stored = emitter;
+    }
+}
+
 pub(crate) fn finish_destroy_events(game: &mut Game) {
     npcs::finish_destroy_events(game);
     if game

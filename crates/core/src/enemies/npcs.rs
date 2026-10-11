@@ -296,14 +296,14 @@ pub(super) fn destroyed(game: &mut Game, e: &mut Entity) {
                 let vy = f64::from(1 + game.rng.range(3));
                 game.world.entity_mut(id).unwrap().vel.y = vy;
             }
+            let shake = game.data.entry("shake".into()).or_default();
+            *shake = (*shake).max(10.0);
+            game.sound("sndSmallExplode", e.pos);
             for barrier in &mut game.world.entities {
                 if barrier.object == "oBarrier" {
                     barrier.alive = false;
                 }
             }
-            let shake = game.data.entry("shake".into()).or_default();
-            *shake = (*shake).max(10.0);
-            game.sound("sndSmallExplode", e.pos);
         }
         "oScarab" => {
             e.data.insert("npc_destroyed".into(), 1.0);
@@ -1188,7 +1188,14 @@ fn barrier_item_collision(game: &mut Game, id: u64) {
     let Some(item) = game.world.entity(id) else {
         return;
     };
-    if matches!(item.object.as_str(), "oBullet" | "oWebBall") {
+    if item.object == "oBullet" {
+        let pos = item.pos;
+        game.spawn("oSmokePuff", pos);
+        game.sound("sndHit", pos);
+        game.world.entity_mut(id).unwrap().alive = false;
+        return;
+    }
+    if item.object == "oWebBall" {
         game.world.entity_mut(id).unwrap().alive = false;
         return;
     }

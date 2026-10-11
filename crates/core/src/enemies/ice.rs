@@ -199,10 +199,15 @@ pub(super) fn animation_end(game: &mut Game, e: &mut Entity, ended_sprite: &str)
         }
         ("oAlienBoss", "sAlienBossDie") => {
             e.set_sprite("sAlienBossDead");
-            for emitter in &mut game.world.entities {
-                if emitter.object == "oBarrierEmitter" {
-                    emitter.alive = false;
-                }
+            let emitters: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|emitter| emitter.alive && emitter.object == "oBarrierEmitter")
+                .map(|emitter| emitter.id)
+                .collect();
+            for id in emitters {
+                super::destroy_barrier_emitter(game, id);
             }
         }
         ("oAlienBoss", "sAlienBossHurt") => e.set_sprite("sAlienBoss"),
@@ -992,14 +997,16 @@ pub(super) fn collision(
                     true
                 }
                 "oLaser" => {
-                    // Source checks the solid instance's invincibility. Tile
-                    // destructibility mirrors that flag for terrain objects.
-                    if game.world.tiles[index].is_destructible() {
-                        let pos = other.position(game);
-                        remove_embedded_gold(game, pos);
-                        game.world
-                            .set_tile(index % game.world.width, index / game.world.width, "");
+                    let source = laser_terrain_source(game, index);
+                    if source.value("invincible") == 0.0 {
+                        remove_embedded_gold(game, &source);
+                        crate::items::explosives::destroy_terrain_self(
+                            game,
+                            index % game.world.width,
+                            index / game.world.width,
+                        );
                     }
+                    laser_solid_decoration(game, source.pos);
                     laser_impact(game, e);
                     true
                 }
@@ -1024,18 +1031,14 @@ pub(super) fn collision(
                     true
                 }
                 "oLaser" if solid => {
+                    let target = target.clone();
                     if target.value("invincible") == 0.0 {
-                        let pos = target.pos;
-                        remove_embedded_gold(game, pos);
-                        if let Some(target) = game
-                            .world
-                            .entities
-                            .iter_mut()
-                            .find(|target| target.id == id)
-                        {
-                            target.alive = false;
-                        }
+                        remove_embedded_gold(game, &target);
+                        crate::items::explosives::destroy_solid_self(game, id);
                     }
+                    // The receiver continues here even after instance_destroy,
+                    // and invincible targets also lose one layer-3 tile.
+                    laser_solid_decoration(game, target.pos);
                     laser_impact(game, e);
                     true
                 }
@@ -1080,15 +1083,77 @@ pub(super) fn collision(
     }
 }
 
-fn remove_embedded_gold(game: &mut Game, pos: Vec2) {
-    for object in ["oGold", "oGoldBig"] {
-        if let Some(gold) =
-            game.world.entities.iter_mut().find(|gold| {
-                gold.alive && gold.object == object && gold.sprite_bounds().contains(pos)
-            })
-        {
-            gold.alive = false;
+fn laser_terrain_source(game: &Game, index: usize) -> Entity {
+    let origin = Vec2::new(
+        (index % game.world.width) as f64 * 16.0,
+        (index / game.world.width) as f64 * 16.0,
+    );
+    let object = &game.world.tiles[index].object;
+    let mut source = Entity::new(0, object, origin);
+    // Generated protected terrain records its instance flag in metadata;
+    // otherwise retain the literal invincible defaults of these own Creates.
+    let invincible = matches!(
+        object.as_str(),
+        "oHardBlock" | "oLavaSolid" | "oMoai" | "oMoai2" | "oMoai3" | "oMoaiInside"
+    );
+    source
+        .data
+        .insert("invincible".into(), f64::from(invincible));
+    if let Some(metadata) = game.world.entities.iter().find(|metadata| {
+        metadata.alive
+            && metadata.object == "oTerrainMetadata"
+            && metadata.pos == Vec2::new(origin.x + 8.0, origin.y + 8.0)
+    }) {
+        source.data.extend(metadata.data.clone());
+        if let Some(sprite) = metadata.text.get("terrain_sprite") {
+            source.set_sprite(sprite);
         }
+    }
+    source
+}
+
+fn remove_embedded_gold(game: &mut Game, source: &Entity) {
+    for object in ["oGold", "oGoldBig"] {
+        // Source first gates with collision_point(...,precise=0), then selects
+        // one instance_place using the solid receiver's full sprite mask.
+        if !game.world.entities.iter().any(|gold| {
+            gold.alive
+                && crate::catalog::is_a(&gold.object, object)
+                && gold.mask_contains(source.pos, crate::CollisionPrecision::BoundingBox)
+        }) {
+            continue;
+        }
+        if let Some(id) = game
+            .world
+            .entities
+            .iter()
+            .find(|gold| {
+                gold.alive
+                    && crate::catalog::is_a(&gold.object, object)
+                    && source.event_intersects(gold)
+            })
+            .map(|gold| gold.id)
+        {
+            crate::items::collectibles::destroy_gold(game, id);
+        }
+    }
+}
+
+fn laser_solid_decoration(game: &mut Game, origin: Vec2) {
+    let point = Vec2::new(origin.x, origin.y - 16.0);
+    if let Some(tile) = game.world.entities.iter_mut().find(|tile| {
+        tile.alive
+            && tile.object == "oGenerationDecoration"
+            && tile.value("depth") == 3.0
+            && Rect::new(
+                tile.pos.x,
+                tile.pos.y,
+                tile.data.get("source_w").copied().unwrap_or(16.0),
+                tile.data.get("source_h").copied().unwrap_or(16.0),
+            )
+            .contains(point)
+    }) {
+        tile.alive = false;
     }
 }
 

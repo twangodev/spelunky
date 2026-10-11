@@ -169,6 +169,53 @@ fn spawn(game: &mut Game, object: &str, pos: Vec2, vel: Vec2) -> u64 {
     id
 }
 
+/// oGold/oGoldBig are static DrawnSprite blocks, distinct from oTreasure.
+/// Their own Destroy creates loot synchronously before the caller continues.
+pub(crate) fn destroy_gold(game: &mut Game, id: u64) -> bool {
+    let Some(source) = game.world.entities.iter_mut().find(|source| {
+        source.id == id
+            && source.alive
+            && source.value("gold_destroyed") == 0.0
+            && matches!(source.object.as_str(), "oGold" | "oGoldBig")
+    }) else {
+        return false;
+    };
+    let pos = source.pos;
+    let big = source.object == "oGoldBig";
+    source.alive = false;
+    source.data.insert("gold_destroyed".into(), 1.0);
+    if big {
+        spawn_gold_fragment(game, "oGoldNugget", pos);
+        let mut index = 0;
+        // Literal source for-condition rerolls rand(2,3), including its final
+        // failed comparison. Caching a chunk count changes RNG and outcomes.
+        while index < 2 + game.rng.range(2) {
+            spawn_gold_fragment(game, "oGoldChunk", pos);
+            index += 1;
+        }
+    } else {
+        for _ in 0..3 {
+            spawn_gold_fragment(game, "oGoldChunk", pos);
+        }
+    }
+    true
+}
+
+fn spawn_gold_fragment(game: &mut Game, object: &str, origin: Vec2) {
+    let pos = Vec2::new(
+        origin.x + f64::from(game.rng.range(3)) - f64::from(game.rng.range(3)),
+        origin.y + f64::from(game.rng.range(3)) - f64::from(game.rng.range(3)),
+    );
+    // Treasure/Create is fixed and uncapped. Complete it before the caller's
+    // two horizontal and one vertical velocity draws, preserving source order.
+    let id = game.spawn(object, pos);
+    let velocity = Vec2::new(
+        f64::from(game.rng.range(4)) - f64::from(game.rng.range(4)),
+        3.0 + f64::from(game.rng.range(4)),
+    );
+    game.world.entity_mut(id).unwrap().vel = velocity;
+}
+
 /// Apply a consumed pickup after free pickup, purchase, or theft. Shop policy is
 /// the caller's responsibility; this is the common equivalent of scrStealItem.
 pub fn grant(game: &mut Game, id: u64) -> bool {
