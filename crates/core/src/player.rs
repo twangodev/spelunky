@@ -2285,7 +2285,13 @@ mod tests {
                 for x in 0..40 {
                     level.set_tile(x, 5, '1').unwrap();
                 }
-                let mut game = Game::shell(7, rules);
+                // Source settings.cfg permits disabling default Down-to-run.
+                // This fixture exercises the crawl transition from full-speed
+                // walking, so configure that supported option before any Step.
+                // Existing serde APIs also keep the old-controller arm usable.
+                let mut initial = serde_json::to_value(Game::shell(7, rules)).unwrap();
+                initial["down_to_run"] = serde_json::Value::Bool(false);
+                let mut game: Game = serde_json::from_value(initial).unwrap();
                 game.load_custom(&level, "animation-phase", "");
                 apply(&mut game, character);
                 for _ in 0..8 {
@@ -2319,6 +2325,11 @@ mod tests {
                     "{rules:?}/{character:?}: look transition restarted animation"
                 );
 
+                // Incoming speed must reach the source's fast-Duck threshold;
+                // disabled Down-to-run then chooses the crawl fallback.
+                assert_eq!(game.player.state, PlayerState::Running);
+                assert!(game.player.grounded);
+                assert!((2.0..=3.0).contains(&game.player.vel.x));
                 let before = game.player.animation;
                 game.step(&InputFrame {
                     right: true,
@@ -2326,6 +2337,8 @@ mod tests {
                     ..Default::default()
                 });
                 assert_eq!(game.player.sprite, crawling);
+                assert_eq!(game.player.state, PlayerState::Ducking);
+                assert!(game.player.vel.x > 0.0 && game.player.vel.x < 3.0);
                 let count = crate::catalog::sprite_frame_count(crawling) as f64;
                 let mut expected = before + 0.8;
                 if expected.floor() >= count {
