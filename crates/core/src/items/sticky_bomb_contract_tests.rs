@@ -130,3 +130,26 @@ fn actual_pistol_pickup_and_attack_destroys_attached_receiver_and_releases_bombs
         assert_eq!(g.player.health, 4);
     }
 }
+
+#[test]
+fn actual_attached_bomb_keeps_parent_step_velocity_before_end_step_follow() {
+    for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+        let mut g = room(rules, true);
+        g.spawn("oGiantSpider", Vec2::new(88.0, 72.0));
+        let target = g.spawn("oBat", Vec2::new(94.0, 88.0));
+        let bomb = throw_bomb(&mut g);
+        let b = g.world.entity(bomb).unwrap();
+        assert_eq!(b.value("attached_id"), target as f64);
+        assert_eq!(b.vel.x, 8.0);
+        let offset = Vec2::new(b.value("sticky_x"), b.value("sticky_y"));
+        let before_vy = b.vel.y;
+        g.step(&InputFrame::default());
+        let b = g.world.entity(bomb).unwrap();
+        assert_eq!(b.value("attached_id"), target as f64);
+        assert_eq!(b.vel.x, 8.0, "parent oItem motion does not zero attached velocity");
+        assert!((b.vel.y - (before_vy + 0.6)).abs() < 1e-12,
+            "parent gravity continues before the Bomb End Step override");
+        let target = g.world.entity(target).unwrap();
+        assert_eq!(b.pos, Vec2::new(target.pos.x - offset.x, target.pos.y - offset.y));
+    }
+}

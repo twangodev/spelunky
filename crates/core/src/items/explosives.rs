@@ -1048,18 +1048,8 @@ fn step_bomb_body(game: &mut Game, bomb: &mut Entity) {
         bomb.vel = Vec2::default();
         return;
     }
-    let attached = bomb.value("attached_id") as u64;
-    if attached != 0 {
-        if let Some(target) = game.world.entity(attached) {
-            bomb.pos = Vec2::new(
-                target.pos.x - bomb.value("sticky_x"),
-                target.pos.y - bomb.value("sticky_y"),
-            );
-            bomb.vel = Vec2::default();
-            return;
-        }
-        bomb.data.insert("attached_id".into(), 0.0);
-    }
+    // Attachment is an oBomb End Step position override, not an oItem Step
+    // guard. Retain ordinary motion, gravity and environment checks here.
     if !projectile_motion(
         &game.world,
         bomb,
