@@ -1330,14 +1330,29 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             limit_x = 6.0;
             xf = 0.98;
         } else if p.state == PlayerState::Ducking {
-            if p.vel.x.abs() >= 2.0 {
+            // Classic's default downToRun applies only outside the strict
+            // (-2, 2) slow-crawl range. Left wins when both keys are held.
+            if p.vel.x > -2.0 && p.vel.x < 2.0 {
+                xf = 0.2;
+                limit_x = 3.0;
+                p.set_image_speed(0.8);
+            } else if input.left && game.down_to_run {
+                p.vel.x -= 0.1;
+                limit_x = 6.0;
+                xf = 0.98;
+            } else if input.right && game.down_to_run {
+                p.vel.x += 0.1;
+                limit_x = 6.0;
+                xf = 0.98;
+            } else {
                 p.vel.x *= 0.8;
                 if p.vel.x < 0.5 {
                     p.vel.x = 0.0;
                 }
+                xf = 0.2;
+                limit_x = 3.0;
+                p.set_image_speed(0.8);
             }
-            xf = 0.2;
-            limit_x = 3.0;
         }
         if in_web {
             xf = 0.2;
@@ -1797,7 +1812,6 @@ fn animate(p: &mut Player, input: &InputFrame, w: &World) {
             if input.up { "sLookRunL" } else { "sRunLeft" }
         }
         PlayerState::Ducking => {
-            speed = 0.8;
             if p.vel.x == 0.0 {
                 "sDuckLeft"
             } else if p.vel.x.abs() < 3.0 {

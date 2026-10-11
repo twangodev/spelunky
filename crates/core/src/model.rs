@@ -880,6 +880,10 @@ pub enum RunState {
     Won,
 }
 
+fn classic_down_to_run() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Game {
     /// Immutable state observed by the source Draw phase, before Animation.
@@ -889,6 +893,9 @@ pub struct Game {
     pub tick: u64,
     pub level_tick: u64,
     pub rules: RulesPreset,
+    /// scrInit defaults downToRun to true; settings.cfg can disable it.
+    #[serde(default = "classic_down_to_run")]
+    pub down_to_run: bool,
     pub player: Player,
     pub world: World,
     pub rng: Rng,
@@ -985,6 +992,7 @@ impl Game {
             tick: 0,
             level_tick: 0,
             rules,
+            down_to_run: true,
             player: Player::default(),
             world: World::new(42, 34, Area::Mines, 1),
             rng: Rng::new(seed),

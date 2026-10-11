@@ -1189,6 +1189,7 @@ impl App {
                 let mut input = self.input.take_tick();
                 apply_cinematic_start(&mut input, &mut self.cinematic_action);
                 if let Some(game) = &mut self.game {
+                    game.down_to_run = self.store.data.settings.down_to_run;
                     game.step(&input);
                     self.timing.history_ready = true;
                     for event in &game.events {
@@ -1269,6 +1270,7 @@ impl App {
             let frame = self.timing.advance(host_frame);
             for _ in 0..frame.ticks {
                 if let Some(game) = &mut self.game {
+                    game.down_to_run = self.store.data.settings.down_to_run;
                     game.step(&spelunky_core::InputFrame::default());
                     self.timing.history_ready = true;
                     for event in &game.events {

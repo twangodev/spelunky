@@ -21,7 +21,7 @@ const ACTIONS: [(&str, &str); 14] = [
     ("exit", "ENTER DOOR"),
     ("pause", "PAUSE"),
 ];
-const FIRST_BINDING: usize = 7;
+const FIRST_BINDING: usize = 8;
 const CONFIGURE_CONTROLLER: usize = FIRST_BINDING + ACTIONS.len();
 const RESTORE: usize = CONFIGURE_CONTROLLER + 1;
 const BACK: usize = RESTORE + 1;
@@ -153,6 +153,7 @@ impl SettingsUi {
                 settings.frame_cap = CAPS[next];
             }
             6 if confirm => return SettingsCommand::Fullscreen,
+            7 => settings.down_to_run = !settings.down_to_run,
             FIRST_BINDING..CONFIGURE_CONTROLLER if confirm => {
                 self.binding = Some(self.selected - FIRST_BINDING);
                 self.unsupported_key = false;
@@ -209,6 +210,7 @@ impl SettingsUi {
             4 => "SYNC TO DISPLAY REFRESH WHEN AVAILABLE.",
             5 => "BROWSER FRAME TIMING FOLLOWS THE DISPLAY.",
             6 => "ENTER: TOGGLE FULLSCREEN.",
+            7 => "HOLD DOWN WHILE MOVING TO RUN.",
             FIRST_BINDING..CONFIGURE_CONTROLLER => "ENTER: REPLACE KEYS FOR THIS ACTION.",
             CONFIGURE_CONTROLLER => "ENTER: CONFIGURE CONTROLLER BUTTONS.",
             RESTORE => "RESTORES SETTINGS. RECORDS ARE PRESERVED.",
@@ -321,6 +323,7 @@ fn row(index: usize, settings: &Settings) -> (String, String) {
                 .map_or("UNLIMITED".into(), |cap| cap.to_string()),
         ),
         6 => ("FULLSCREEN", "ENTER".into()),
+        7 => ("DOWN TO RUN", on(settings.down_to_run)),
         FIRST_BINDING..CONFIGURE_CONTROLLER => {
             let (action, label) = ACTIONS[index - FIRST_BINDING];
             let value = settings.bindings.get(action).cloned().unwrap_or_default();
@@ -558,5 +561,23 @@ mod tests {
         );
         assert_eq!(settings.music_volume, Settings::default().music_volume);
         assert_eq!(settings.bindings, Settings::default().bindings);
+    }
+
+    #[test]
+    fn down_to_run_toggle_and_restore_preserve_action_binding_rows() {
+        let mut menu = SettingsUi::new();
+        let mut settings = Settings::default();
+        menu.selected = 7;
+        assert_eq!(row(7, &settings), ("DOWN TO RUN".into(), "ON".into()));
+        assert_eq!(menu.key(KeyCode::ArrowRight, &mut settings), SettingsCommand::Changed);
+        assert!(!settings.down_to_run);
+        assert_eq!(row(7, &settings), ("DOWN TO RUN".into(), "OFF".into()));
+        assert_eq!(menu.key(KeyCode::Enter, &mut settings), SettingsCommand::Changed);
+        assert!(settings.down_to_run);
+        assert_eq!(row(FIRST_BINDING, &settings).0, "MOVE LEFT");
+        settings.down_to_run = false;
+        menu.selected = RESTORE;
+        menu.key(KeyCode::Enter, &mut settings);
+        assert!(settings.down_to_run);
     }
 }

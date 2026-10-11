@@ -12,6 +12,8 @@ const STORAGE_KEY: &str = "spelunky-rust.save";
 pub struct Settings {
     pub rules: RulesPreset,
     pub pixel_snap: bool,
+    /// Source settings default: hold Down while moving to run.
+    pub down_to_run: bool,
     pub music_volume: f32,
     pub effects_volume: f32,
     pub vsync: bool,
@@ -46,6 +48,7 @@ impl Default for Settings {
         Self {
             rules: RulesPreset::Classic,
             pixel_snap: false,
+            down_to_run: true,
             music_volume: 0.6,
             effects_volume: 0.8,
             vsync: true,
@@ -673,5 +676,18 @@ mod tests {
         let partial = SaveData::from_json(r#"{"lifetime_stats":{"total_crates":17}}"#).unwrap();
         assert_eq!(partial.lifetime_stats.total_crates, 17);
         assert_eq!(partial.lifetime_stats.level_deaths, [0; 16]);
+    }
+
+    #[test]
+    fn down_to_run_legacy_settings_default_and_explicit_false_round_trip() {
+        let legacy: Settings = serde_json::from_str("{}").unwrap();
+        assert!(legacy.down_to_run);
+        let disabled: Settings = serde_json::from_str(r#"{"down_to_run":false}"#).unwrap();
+        assert!(!disabled.down_to_run);
+        let serialized = serde_json::to_string(&disabled).unwrap();
+        let reopened: Settings = serde_json::from_str(&serialized).unwrap();
+        assert!(!reopened.down_to_run);
+        assert_eq!(reopened.rules, disabled.rules);
+        assert_eq!(reopened.bindings, disabled.bindings);
     }
 }
