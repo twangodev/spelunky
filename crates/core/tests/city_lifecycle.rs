@@ -137,7 +137,7 @@ fn generated_excavation_site(game: &Game) -> (usize, usize, Vec2, i8) {
                 let pos = Vec2::new(center.x - 16. * f64::from(facing), center.y);
                 if game
                     .world
-                    .collides(Rect::new(pos.x - 6., pos.y - 8., 12., 16.))
+                    .collides_except(Rect::new(pos.x - 6., pos.y - 8., 12., 16.), 0)
                     || !game.world.solid_at(pos.x, pos.y + 9.)
                 {
                     continue;
