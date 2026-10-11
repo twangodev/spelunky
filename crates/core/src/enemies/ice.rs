@@ -322,6 +322,10 @@ fn yeti(game: &mut Game, e: &mut Entity) {
                 "sYetiDieLR"
             });
         }
+        if floor && e.value("bounced") == 0.0 {
+            e.data.insert("bounced".into(), 1.0);
+            super::create_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 1);
+        }
         // Source recovery runs while carried or supported, including a
         // carried Yeti in midair; horizontal settling is independent below.
         if e.held || floor {
@@ -329,6 +333,7 @@ fn yeti(game: &mut Game, e: &mut Entity) {
                 e.timer -= 1;
             } else if e.health > 0 {
                 enter(e, 0);
+                e.data.insert("counter".into(), 0.0);
                 if e.held {
                     e.held = false;
                     game.player.held = None;
@@ -360,6 +365,7 @@ fn yeti(game: &mut Game, e: &mut Entity) {
     }
     match e.state {
         0 => {
+            e.data.insert("bounced".into(), 0.0);
             if floor
                 && (game
                     .world
@@ -3080,3 +3086,7 @@ mod tests {
 #[cfg(test)]
 #[path = "player_laser_blood_contract_tests.rs"]
 mod player_laser_blood_contract_tests;
+
+#[cfg(test)]
+#[path = "yeti_stun_source_tests.rs"]
+mod yeti_stun_source_tests;
