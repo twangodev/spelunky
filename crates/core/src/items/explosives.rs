@@ -1998,6 +1998,7 @@ fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibili
     if let Some(metadata) = &metadata {
         source.data = metadata.data.clone();
         source.text = metadata.text.clone();
+        source.animation = metadata.animation;
         if let Some(sprite) = metadata.text.get("terrain_sprite") {
             source.sprite = sprite.clone();
         }
@@ -2006,7 +2007,7 @@ fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibili
         source.data.insert("defile".into(), 0.0);
     }
     if inherits_solid_destroy(&object) {
-        solid_parent_destroy(game, source.pos, false);
+        solid_parent_destroy(game, &source);
     }
     // Generated metadata already records gold released from source sprites.
     // Block/Xoc families additionally have source global-city loot branches.
@@ -2026,18 +2027,6 @@ fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibili
     solid_destroy_body(game, &source, !stored_gold);
     let outputs_enabled = solid_outputs_enabled(game, &source);
     if let Some(metadata) = &metadata {
-        if metadata.value("shopWall") != 0.0
-            && !matches!(
-                solid_destroy_family(&object),
-                "oSpearTrapTop" | "oSpearTrapBottom"
-            )
-        {
-            // SpearTrap own Destroy never inherits Solid's shop-wall anger.
-            // Other generated metadata retains its existing crime adapter.
-            // Existing generated metadata records shop wall crime explicitly.
-            crate::economy::anger(game, center, "DIE, YOU VANDAL!");
-            game.flags.insert("shopkeepers_angry".into());
-        }
         for (key, object) in [
             ("gold_chunks", "oGoldChunk"),
             ("gold_nuggets", "oGoldNugget"),
@@ -2774,61 +2763,42 @@ fn source_jungle_grave_rubble(world: &mut World, rng: &mut Rng, grave: &Entity) 
     }
 }
 
-fn solid_parent_destroy(game: &mut Game, pos: Vec2, shop_wall: bool) {
-    if shop_wall {
-        crate::economy::anger(game, pos, "DIE, YOU VANDAL!");
-        game.flags.insert("shopkeepers_angry".into());
-    }
-    let upper = Vec2::new(pos.x + 8.0, pos.y - 1.0);
-    let lower = Vec2::new(pos.x + 8.0, pos.y + 18.0);
-    let mut targets: Vec<_> = game
-        .world
-        .entities
-        .iter()
-        .filter(|entity| entity.alive)
-        .filter_map(|entity| {
-            if matches!(entity.object.as_str(), "oSpikes" | "oTikiTorch" | "oGrave")
-                && entity.sprite_bounds().contains(upper)
-            {
-                Some((entity.id, entity.object.clone(), entity.pos))
-            } else if matches!(entity.object.as_str(), "oLamp" | "oLampRed")
-                && entity.sprite_bounds().contains(lower)
-            {
-                Some((entity.id, entity.object.clone(), entity.pos))
-            } else {
-                None
-            }
-        })
-        .collect();
-    // Preserve this legacy adapter's existing callback order and selection;
-    // only defer each receiver's retirement until its own callback finishes.
-    targets.sort_by_key(|(_, object, _)| match object.as_str() {
-        "oGrave" => 1,
-        "oLamp" | "oLampRed" => 2,
-        _ => 0,
-    });
-    for (id, object, pos) in targets {
-        if !game.world.entity(id).is_some_and(|entity| entity.alive) {
-            continue;
-        }
-        if object == "oGrave" {
-            destroy_solid_self(game, id);
-        } else {
-            if matches!(object.as_str(), "oLamp" | "oLampRed") {
-                let item = if object == "oLampRed" {
-                    "oLampRedItem"
-                } else {
-                    "oLampItem"
-                };
-                game.spawn(item, Vec2::new(pos.x + 8.0, pos.y + 12.0));
-            }
-            if let Some(target) = crate::dispatcher::stored_entity_mut(game, id) {
-                target.alive = false;
-            }
+fn solid_parent_destroy(game: &mut Game, source: &Entity) {
+    if source.value("shopWall") != 0.0 {
+        crate::dispatcher::register_instances(game);
+        let callers: Vec<_> = crate::dispatcher::descendant_instances(game, "oShopkeeper")
+            .into_iter()
+            .filter_map(|instance| match instance {
+                crate::dispatcher::Instance::Entity(id) => game
+                    .world
+                    .entity(id)
+                    .filter(|keeper| keeper.engine_active)
+                    .map(|keeper| keeper.pos),
+                _ => None,
+            })
+            .collect();
+        for pos in callers {
+            crate::economy::anger(game, pos, "DIE, YOU VANDAL!");
         }
     }
-    // oSolid Destroy.xml:50 follows attachment callbacks and runs regardless
-    // of the child event's cleanDeath/global.cleanSolids loot guards.
+    let upper = Vec2::new(source.pos.x + 8.0, source.pos.y - 1.0);
+    for family in ["oSpikes", "oTikiTorch", "oGrave"] {
+        if let Some(target) = solid_attachment(game, source, family, upper, upper) {
+            let serial = attachment_terrain_serial(game, target);
+            retire_solid_attachment(game, target, family, serial);
+        }
+    }
+    let gate = Vec2::new(source.pos.x + 8.0, source.pos.y + 18.0);
+    let origin = Vec2::new(source.pos.x + 8.0, source.pos.y + 16.0);
+    for (family, item) in [("oLampRed", "oLampRedItem"), ("oLamp", "oLampItem")] {
+        if let Some(target) = solid_attachment(game, source, family, gate, origin) {
+            let pos = target.position(game);
+            let serial = attachment_terrain_serial(game, target);
+            // The lamp remains live through its replacement Item's Create.
+            game.spawn(item, Vec2::new(pos.x + 8.0, pos.y + 12.0));
+            retire_solid_attachment(game, target, family, serial);
+        }
+    }
     game.world.fluid_dirty = true;
 }
 
@@ -2840,10 +2810,14 @@ mod fluid_invalidation_tests;
 #[path = "solid_destroy_lifecycle_tests.rs"]
 pub(crate) mod lifecycle_tests;
 
+#[cfg(test)]
+#[path = "solid_parent_selection_tests.rs"]
+mod solid_parent_selection_tests;
+
 /// Olmec executes its own Step while detached from World. Its inherited
 /// oSolid Destroy still finishes before the remaining statements in that Step.
-/// Keep this separate from position-only legacy solid callbacks: Olmec uses
-/// its current 64px sprite mask for each translated instance_place query.
+/// The shared parent receives Olmec's current 64px sprite mask for each
+/// translated instance_place query.
 pub(crate) fn destroy_detached_olmec(game: &mut Game, source: &mut Entity) {
     assert_eq!(source.object, "oOlmec");
     let receiver = (
@@ -2866,29 +2840,7 @@ pub(crate) fn destroy_detached_olmec(game: &mut Game, source: &mut Entity) {
     game.world
         .entities
         .insert(index.min(game.world.entities.len()), source.clone());
-    if source.value("shopWall") != 0.0 {
-        crate::economy::anger(game, source.pos, "DIE, YOU VANDAL!");
-        game.flags.insert("shopkeepers_angry".into());
-    }
-    let upper = Vec2::new(source.pos.x + 8.0, source.pos.y - 1.0);
-    for family in ["oSpikes", "oTikiTorch", "oGrave"] {
-        if let Some(target) = detached_solid_attachment(game, source, family, upper, upper) {
-            let serial = detached_attachment_serial(game, target);
-            retire_detached_solid_attachment(game, target, family, serial);
-        }
-    }
-    let gate = Vec2::new(source.pos.x + 8.0, source.pos.y + 18.0);
-    let origin = Vec2::new(source.pos.x + 8.0, source.pos.y + 16.0);
-    for (family, item) in [("oLampRed", "oLampRedItem"), ("oLamp", "oLampItem")] {
-        if let Some(target) = detached_solid_attachment(game, source, family, gate, origin) {
-            let pos = target.position(game);
-            let serial = detached_attachment_serial(game, target);
-            // The lamp remains live through its replacement Item's Create.
-            game.spawn(item, Vec2::new(pos.x + 8.0, pos.y + 12.0));
-            retire_detached_solid_attachment(game, target, family, serial);
-        }
-    }
-    game.world.fluid_dirty = true;
+    solid_parent_destroy(game, source);
     // Child callbacks may write receiver fields or alter activation membership.
     if let Some(published) = crate::dispatcher::take_stored_entity(game, source.id) {
         *source = published;
@@ -2898,7 +2850,7 @@ pub(crate) fn destroy_detached_olmec(game: &mut Game, source: &mut Entity) {
     finish_solid_destroy(game, receiver);
 }
 
-fn detached_solid_attachment(
+fn solid_attachment(
     game: &mut Game,
     source: &Entity,
     family: &str,
@@ -2931,10 +2883,13 @@ fn detached_solid_attachment(
     let mut translated = source.clone();
     translated.pos = translated_origin;
     targets.into_iter().find(|instance| match *instance {
-        Instance::Entity(id) => game
-            .world
-            .entity(id)
-            .is_some_and(|target| translated.event_intersects(target)),
+        Instance::Entity(id) => {
+            id != source.id
+                && game
+                    .world
+                    .entity(id)
+                    .is_some_and(|target| translated.event_intersects(target))
+        }
         Instance::Terrain(index) => {
             translated
                 .collision_mask()
@@ -2947,7 +2902,7 @@ fn detached_solid_attachment(
     })
 }
 
-fn detached_attachment_serial(game: &Game, target: crate::dispatcher::Instance) -> Option<u64> {
+fn attachment_terrain_serial(game: &Game, target: crate::dispatcher::Instance) -> Option<u64> {
     match target {
         crate::dispatcher::Instance::Terrain(index) => {
             Some(game.world.tiles[index].creation_serial)
@@ -2956,7 +2911,7 @@ fn detached_attachment_serial(game: &Game, target: crate::dispatcher::Instance) 
     }
 }
 
-fn retire_detached_solid_attachment(
+fn retire_solid_attachment(
     game: &mut Game,
     target: crate::dispatcher::Instance,
     family: &str,
@@ -3038,7 +2993,7 @@ fn destroy_solid_instance_impl(game: &mut Game, id: u64, respect_invincibility: 
         .unwrap()
         .alive = true;
     if inherits_solid_destroy(&entity.object) {
-        solid_parent_destroy(game, entity.pos, entity.value("shopWall") != 0.0);
+        solid_parent_destroy(game, &entity);
     }
     solid_destroy_body(game, &entity, true);
     if let Some(stored) = crate::dispatcher::stored_entity_mut(game, id) {
@@ -3607,7 +3562,7 @@ mod tests {
                 .count(),
             1
         );
-        assert!(g.flags.contains("shopkeepers_angry"));
+        assert!(!g.flags.contains("shopkeepers_angry"));
     }
 
     #[test]
