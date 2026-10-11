@@ -219,7 +219,14 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         utility::step_instance(game, id);
         return;
     }
-    if crate::catalog::is_a(&entity.object, "oItem") {
+    let fragile = matches!(entity.object.as_str(), "oJar" | "oSkull");
+    if fragile {
+        for name in ["colTop", "colLeft", "colRight", "colBot"] {
+            entity.data.insert(name.into(), 0.0);
+        }
+    }
+    // Jar and Skull replace the parent Step without action_inherited.
+    if !fragile && crate::catalog::is_a(&entity.object, "oItem") {
         crate::economy::item_step(game, &mut entity);
     }
     if matches!(entity.object.as_str(), "oWhip" | "oWhipPre") {
@@ -233,7 +240,7 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
             game.player.pos.y,
         );
     }
-    if entity.held && item_body_active(game, &entity) {
+    if entity.held && (fragile || item_body_active(game, &entity)) {
         align_held(game, &mut entity);
     }
     let mut broken = false;
@@ -242,8 +249,40 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
     } else if collectibles::treasure_value(&entity.object).is_some() {
         advance_treasure_body(game, &mut entity);
     }
+    if fragile {
+        entity
+            .data
+            .insert("depth".into(), if entity.held { 1.0 } else { 100.0 });
+    }
     if let Some(slot) = game.world.entities.iter_mut().find(|e| e.id == id) {
         *slot = entity;
+    }
+    if fragile {
+        // Lava's explicit instance_destroy precedes the remaining own Step;
+        // wall/ceiling/floor damage only sets the final destruction latch.
+        let lava_destroy = game.world.entity(id).is_some_and(|e| {
+            !e.held && lava_at(game, Rect::new(e.pos.x, e.pos.y - 5.0, 0.001, 0.001))
+        });
+        if lava_destroy {
+            break_item(game, id);
+        }
+        // Run BOTH creature queries with the post-response velocity. The
+        // receiver can continue its event after the explicit lava Destroy.
+        let destroy = crate::enemies::fragile_item_step_impacts(game, id) || broken;
+        if destroy {
+            if game.world.entity(id).is_some_and(|e| e.held) {
+                game.player.held = None;
+                game.player.pickup_item_type.clear();
+            }
+            break_item(game, id);
+        }
+        if let Some(mut entity) = game.world.entity(id).cloned() {
+            update_depth(game, &mut entity);
+            if let Some(slot) = game.world.entities.iter_mut().find(|e| e.id == id) {
+                *slot = entity;
+            }
+        }
+        return;
     }
     if broken {
         break_item(game, id);
@@ -801,7 +840,11 @@ fn align_held(game: &Game, entity: &mut Entity) {
     let facing = game.player.facing;
     let ducking = game.player.state == PlayerState::Ducking && game.player.vel.x.abs() < 2.0;
     entity.held = true;
-    entity.vel = Vec2::default();
+    // Their replacement held branch changes position/depth only. Retained
+    // custom velocity still participates in the following creature queries.
+    if !matches!(entity.object.as_str(), "oJar" | "oSkull") {
+        entity.vel = Vec2::default();
+    }
     let heavy = entity.value("heavy") != 0.0;
     let large = matches!(
         entity.object.as_str(),

@@ -3,6 +3,8 @@
 use crate::model::*;
 
 mod caves;
+mod fragile_item;
+pub(crate) use fragile_item::step_impacts as fragile_item_step_impacts;
 mod ice;
 mod inherited;
 mod jungle;
@@ -555,6 +557,16 @@ pub(crate) fn player_hurt(game: &mut Game) {
 
 /// Explicit imprecise rectangle queries in the inherited item Step.
 pub(crate) fn item_step_impacts(game: &mut Game, item_id: u64) {
+    if game
+        .world
+        .entity(item_id)
+        .is_some_and(|item| matches!(item.object.as_str(), "oJar" | "oSkull"))
+    {
+        if fragile_item_step_impacts(game, item_id) {
+            crate::items::break_item(game, item_id);
+        }
+        return;
+    }
     let Some(item) = game.world.entity(item_id).cloned() else {
         return;
     };
