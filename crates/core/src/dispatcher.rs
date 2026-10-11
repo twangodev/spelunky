@@ -800,7 +800,9 @@ fn player_step(game: &mut Game, input: &InputFrame) {
     let protected = game.flags.contains("hub_title") || game.flags.contains("hub_scores");
     if game.player.health <= 0 && !protected {
         let first = game.state != crate::RunState::Dead;
-        game.player.health = 0;
+        if first {
+            game.player.health = 0;
+        }
         game.player.state = crate::PlayerState::Dead;
         game.state = crate::RunState::Dead;
         if first {
