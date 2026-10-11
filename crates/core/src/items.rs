@@ -2054,7 +2054,7 @@ mod tests {
             }
             assert_eq!(game.world.entity(bomb).unwrap().value("depth"), 49.0);
             assert_eq!(game.world.entity(sticky).unwrap().value("depth"), 1.0);
-            assert_eq!(game.world.entity(held).unwrap().value("depth"), 1.0);
+            assert_eq!(game.world.entity(held).unwrap().value("depth"), 0.0);
         }
     }
 

@@ -1466,6 +1466,40 @@ pub fn animation_end(game: &mut Game) {
     }
 }
 
+/// oPlayer1's separate End Step event runs after automatic Collision. It
+/// restores held-item drawing depth and repairs an interrupted ledge animation.
+pub(crate) fn end_step(game: &mut Game) {
+    let p = &game.player;
+    let climbing = p.state == PlayerState::Climbing
+        || (matches!(p.state, PlayerState::Stunned | PlayerState::Dead)
+            && value(p, "source_platform_climbing", 0.0) != 0.0);
+    let depth = if climbing && has(p, &["Cape", "cape", "Jetpack", "jetpack", "Jet Pack"]) {
+        51.0
+    } else {
+        0.0
+    };
+    if let Some(held) = p.held.and_then(|id| game.world.entity_mut(id)) {
+        held.data.insert("depth".into(), depth);
+    }
+    let p = &mut game.player;
+    if value(p, "duck_to_hang", 0.0) > 0.0
+        && !matches!(
+            p.sprite.as_str(),
+            "sDuckToHangL" | "sDamselDtHL" | "sTunnelDtHL"
+        )
+    {
+        set(p, "duck_to_hang", 0.0);
+        // Classic's state=STANDING leaves its independent dead/stunned flags
+        // intact. Keep the port's enum representation of those flags as well,
+        // including enemy throws whose stun timer is zero.
+        if !matches!(p.state, PlayerState::Stunned | PlayerState::Dead) {
+            p.state = PlayerState::Standing;
+        }
+        set(p, "source_platform_grounded", 1.0);
+        set(p, "source_platform_climbing", 0.0);
+    }
+}
+
 /// Final oPlayer1 Step bookkeeping runs after its hurt/revival actions and
 /// before the engine's automatic Collision phase. A fresh late collision keeps
 /// its complete blink/invincibility duration until the following Player Step.

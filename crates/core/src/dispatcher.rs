@@ -1400,10 +1400,10 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
     game.dispatcher.phase = Phase::AutomaticCollision;
     auto_collisions(game);
     game.dispatcher.phase = Phase::EndStep;
-    visit_resources(game, |game, i| {
-        if let Instance::Entity(id) = i {
-            crate::items::end_instance(game, id);
-        }
+    visit_resources(game, |game, i| match i {
+        Instance::Player => crate::player::end_step(game),
+        Instance::Entity(id) => crate::items::end_instance(game, id),
+        Instance::Terrain(_) => {}
     });
     crate::enemies::finish_destroy_events(game);
     let destroyed = game.world.entities.iter().any(|e| !e.alive);
