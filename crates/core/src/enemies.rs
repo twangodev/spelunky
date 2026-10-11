@@ -1295,8 +1295,6 @@ fn apply_melee(
             if e.value("hit_cooldown") > 0.0 {
                 return false;
             }
-            e.data.insert("hit_cooldown".into(), 10.0);
-            e.alarms[0] = 10;
             if !(if pre { machete } else { puncture }) {
                 actual = 0;
                 stun = false;
@@ -1377,7 +1375,15 @@ fn apply_melee(
         }
     }
     e.health -= actual;
-    if matches!(e.object.as_str(), "oCaveman" | "oHawkman") && e.value("blood_left") > 0.0 {
+    // The Yeti's own damaging callbacks credit the hit before Blood.
+    if e.object == "oYeti" && stun {
+        set_counts_as_kill(e, true);
+    }
+    // Yeti's damaging own Whip/WhipPre branches share this guarded script;
+    // its plain-whip bump branch creates no Blood and does not exhaust it.
+    let blood_branch =
+        matches!(e.object.as_str(), "oCaveman" | "oHawkman") || (e.object == "oYeti" && stun);
+    if blood_branch && e.value("blood_left") > 0.0 {
         // Source uses the current full canvas size, never mask dimensions
         // or an origin-adjusted center (including Hawk's 24px resting poses).
         let (width, height) = crate::catalog::sprite_dimensions(&e.sprite).unwrap_or((0, 0));
@@ -1397,7 +1403,7 @@ fn apply_melee(
         }
     }
     e.data.insert("assaulted".into(), 1.0);
-    if actual > 0 {
+    if actual > 0 && e.object != "oYeti" {
         set_counts_as_kill(e, true);
     }
     if e.health <= 0 {
@@ -1407,7 +1413,17 @@ fn apply_melee(
         e.state = 98;
         e.timer = e.value("stun_time") as u32;
         e.vel.y = -3.0;
-        e.vel.x = if pos.x < e.pos.x + 8.0 { 2.0 } else { -2.0 };
+        // Yeti's forward puncture event compares the Player, while its rear
+        // event and the other families compare the attacking instance.
+        let (hit_x, target_x) = if e.object == "oYeti" && !pre {
+            (game.player.pos.x - 8.0, e.pos.x)
+        } else {
+            (pos.x, e.pos.x + 8.0)
+        };
+        e.vel.x = if hit_x < target_x { 2.0 } else { -2.0 };
+        if e.object == "oYeti" {
+            e.set_image_speed(0.5);
+        }
     }
     if bump {
         e.vel.y = -2.0;
@@ -1422,6 +1438,10 @@ fn apply_melee(
         game.flags.insert("shopkeepers_angry".into());
     }
     game.sound("sndHit", e.pos);
+    if e.object == "oYeti" {
+        e.data.insert("hit_cooldown".into(), 10.0);
+        e.alarms[0] = 10;
+    }
     true
 }
 
