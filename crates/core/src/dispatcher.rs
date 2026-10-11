@@ -785,6 +785,7 @@ fn player_step(game: &mut Game, input: &InputFrame) {
     }
     crate::items::player_step(game, &item_input);
     crate::economy::player_pay_step(game, input);
+    crate::traps::player_health_prelude(game);
     if crate::traps::player_hurt_enabled(game) {
         crate::traps::player_crush(game);
         crate::items::player_hurt(game);

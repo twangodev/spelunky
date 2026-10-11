@@ -14,6 +14,10 @@ mod detectors;
 #[path = "traps/moving.rs"]
 mod moving;
 
+#[cfg(test)]
+#[path = "traps/player_health_prelude_contract_tests.rs"]
+mod player_health_prelude_contract_tests;
+
 /// Global platform movement runs before player input, as in oGame Step.
 pub fn pre_tick(game: &mut Game) {
     moving::pre_tick(game);
@@ -372,6 +376,21 @@ fn lethal(game: &mut Game) {
     // Hazard damage must not eagerly replace the player's movement state.
     game.player.health -= 99;
     game.events.push(GameEvent::Damage { amount: 99 });
+}
+
+/// oPlayer1 Step1552-1558, before the single outer own-hurt guard.
+/// Visibility uses the existing inverse adapter so first-fatal Ankh revival
+/// removes this hide in its later source action.
+pub(crate) fn player_health_prelude(game: &mut Game) {
+    if game.player.health < -10000 {
+        game.player.health = -10000;
+    }
+    let visible = game.player.data.get("hidden").copied().unwrap_or(0.0) == 0.0
+        && game.player.data.get("visible").copied().unwrap_or(1.0) != 0.0;
+    if game.player.health < -99 && visible {
+        crate::player::script_player_blood(game, 3);
+        game.player.data.insert("hidden".into(), 1.0);
+    }
 }
 
 pub(crate) fn player_hurt_enabled(game: &Game) -> bool {
