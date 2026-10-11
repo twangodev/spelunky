@@ -371,7 +371,10 @@ pub(super) fn collision(game: &mut Game, this: Instance, other: Instance) {
                         (target.pos.x - entity.pos.x - if enemy { 0.0 } else { 8.0 }).abs() < 6.0;
                     if aligned
                         && ((enemy && target.value("flying") == 0.0)
-                            || (item && !target.held && target.data.get("active") != Some(&0.0)))
+                            || (item
+                                && !target.held
+                                && target.data.get("active") != Some(&0.0)
+                                && target.value("inactive") == 0.0))
                     {
                         target.pos.y -= if enemy { 16.0 } else { 24.0 };
                         target.vel.y = -8.0;
