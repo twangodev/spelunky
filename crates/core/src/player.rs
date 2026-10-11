@@ -83,6 +83,39 @@ fn precise_line(w: &World, r: Rect, group: &str) -> bool {
         })
 }
 
+fn first_solid_line(
+    w: &World,
+    r: Rect,
+    order: &[crate::dispatcher::Instance],
+) -> Option<crate::dispatcher::Instance> {
+    let first = Vec2::new(r.x, r.y);
+    let second = Vec2::new(r.x + r.w - 1.0, r.y + r.h - 1.0);
+    // A false broad-phase answer can avoid resolving every ordered mask.
+    // Keep Entity(0) eligible even though this helper excludes ID zero.
+    if !w.solid_line_except(first, second, 0)
+        && !order.contains(&crate::dispatcher::Instance::Entity(0))
+    {
+        return None;
+    }
+    order.iter().copied().find(|instance| match *instance {
+        crate::dispatcher::Instance::Player => false,
+        crate::dispatcher::Instance::Terrain(index) => w.tiles.get(index).is_some_and(|tile| {
+            tile.engine_active
+                && w.tile_collision_mask((index % w.width) as i32, (index / w.width) as i32)
+                    .intersects_axis_line(first, second, CollisionPrecision::Precise)
+        }),
+        crate::dispatcher::Instance::Entity(id) => w.entity(id).is_some_and(|entity| {
+            entity.alive
+                && entity.engine_active
+                && entity.collision_mask().intersects_axis_line(
+                    first,
+                    second,
+                    CollisionPrecision::Precise,
+                )
+        }),
+    })
+}
+
 fn collision_rect_precision(
     w: &World,
     r: Rect,
@@ -703,8 +736,15 @@ fn displacement(velocity: f64, tick: u64) -> i32 {
     (magnitude.floor() as i32 + i32::from(extra)) * if velocity < 0.0 { -1 } else { 1 }
 }
 
-fn move_player(w: &mut World, p: &mut Player, tick: u64, down: bool, events: &mut Vec<GameEvent>) {
-    move_by(w, p, tick, down, p.vel, events);
+fn move_player(
+    w: &mut World,
+    p: &mut Player,
+    tick: u64,
+    down: bool,
+    solid_order: &[crate::dispatcher::Instance],
+    events: &mut Vec<GameEvent>,
+) {
+    move_by(w, p, tick, down, p.vel, solid_order, events);
 }
 
 fn move_by(
@@ -713,6 +753,7 @@ fn move_by(
     tick: u64,
     down: bool,
     movement: Vec2,
+    solid_order: &[crate::dispatcher::Instance],
     events: &mut Vec<GameEvent>,
 ) -> (i32, i32) {
     let dx = displacement(movement.x, tick);
@@ -720,19 +761,14 @@ fn move_by(
     for _ in 0..dx.unsigned_abs() {
         let next = Vec2::new(p.pos.x + f64::from(dx.signum()), p.pos.y);
         let probe = edge_rect(p, if dx > 0 { Side::Right } else { Side::Left }, 1.0, true);
-        if precise_line(w, probe, "oSolid") {
-            // Source canPushMoveableSolids checks player ancestry, so a player's
-            // remaining airborne momentum can also push a block pixel by pixel.
-            let target = probe;
-            let block = w.entities.iter().position(|e| {
-                e.alive
-                    && e.solid
-                    && crate::catalog::is_a(&e.object, "oMoveableSolid")
-                    && e.collision_mask().intersects_axis_line(
-                        Vec2::new(target.x, target.y),
-                        Vec2::new(target.x + target.w - 1.0, target.y + target.h - 1.0),
-                        CollisionPrecision::Precise,
-                    )
+        if let Some(receiver) = first_solid_line(w, probe, solid_order) {
+            let crate::dispatcher::Instance::Entity(id) = receiver else {
+                break;
+            };
+            let block = w.entities.iter().position(|entity| {
+                entity.id == id
+                    && crate::catalog::object(&entity.object)
+                        .is_some_and(|object| object.parent == "oMoveableSolid")
             });
             let pushed = block.is_some_and(|index| {
                 let destination = Vec2::new(
@@ -775,10 +811,11 @@ fn slope_move(
     time: u64,
     down: bool,
     col_top: bool,
+    solid_order: &[crate::dispatcher::Instance],
     events: &mut Vec<GameEvent>,
 ) {
     if !grounded_state(p.state) || p.vel.x == 0.0 {
-        move_player(w, p, time, down, events);
+        move_player(w, p, time, down, solid_order, events);
         return;
     }
     let original = p.pos;
@@ -787,7 +824,15 @@ fn slope_move(
     let rise = if col_top { 0.0 } else { 5.0 };
     p.pos.y -= rise;
     let high = p.pos;
-    let (ix, iy) = move_by(w, p, time, down, Vec2::new(p.vel.x, p.vel.y + rise), events);
+    let (ix, iy) = move_by(
+        w,
+        p,
+        time,
+        down,
+        Vec2::new(p.vel.x, p.vel.y + rise),
+        solid_order,
+        events,
+    );
     let distance = original.distance(p.pos);
     if distance > f64::from(ix.abs()) {
         let ratio = f64::from(ix.abs()) / distance * 0.9;
@@ -801,6 +846,7 @@ fn slope_move(
                 gm_round(f64::from(ix) * ratio),
                 gm_round(f64::from(iy) * ratio + rise),
             ),
+            solid_order,
             events,
         );
     }
@@ -906,6 +952,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     if active {
         active_prelude(game);
     }
+    let solid_order = crate::dispatcher::descendant_instances(game, "oSolid");
     let arrow_order: Vec<u64> = crate::dispatcher::descendant_instances(game, "oArrow")
         .into_iter()
         .filter_map(|instance| match instance {
@@ -943,6 +990,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             &mut game.world,
             &mut game.player,
             engine_time,
+            &solid_order,
             &mut game.events,
         );
         return;
@@ -1587,7 +1635,15 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     if p.vel.y.abs() < 0.1 {
         p.vel.y = 0.0;
     }
-    slope_move(w, p, engine_time, input.down, col_top, &mut game.events);
+    slope_move(
+        w,
+        p,
+        engine_time,
+        input.down,
+        col_top,
+        &solid_order,
+        &mut game.events,
+    );
     p.grounded = below(w, p) && p.vel.y >= 0.0 && p.state != PlayerState::Climbing;
     if game.rules == RulesPreset::Assisted {
         if !col_bot {
@@ -1679,7 +1735,13 @@ fn duck_to_hang_end(game: &mut Game) {
     set(p, "fall_ticks", 0.0);
 }
 
-fn stunned_tick(w: &mut World, p: &mut Player, time: u64, events: &mut Vec<GameEvent>) {
+fn stunned_tick(
+    w: &mut World,
+    p: &mut Player,
+    time: u64,
+    solid_order: &[crate::dispatcher::Instance],
+    events: &mut Vec<GameEvent>,
+) {
     let dead = p.state == PlayerState::Dead;
     let bounced = value(p, "bounced", 0.0) > 0.0;
     p.vel.y += if bounced { 1.0 } else { 0.6 };
@@ -1712,7 +1774,7 @@ fn stunned_tick(w: &mut World, p: &mut Player, time: u64, events: &mut Vec<GameE
     p.vel.x = p.vel.x.clamp(-10.0, 10.0);
     p.vel.y = p.vel.y.clamp(-10.0, 10.0);
     let down = value(p, "source_k_down", 0.0) != 0.0;
-    move_player(w, p, time, down, events);
+    move_player(w, p, time, down, solid_order, events);
     p.grounded = below(w, p);
     p.state = if dead {
         PlayerState::Dead
@@ -3406,6 +3468,7 @@ mod tests {
     fn step(g: &mut Game, i: InputFrame) {
         g.tick += 1;
         g.level_tick += 1;
+        crate::dispatcher::register_instances(g);
         tick(g, &i);
     }
     #[test]
@@ -3674,7 +3737,17 @@ mod tests {
         let mut g = room(RulesPreset::Classic);
         g.player.vel.x = 3.0;
         for _ in 0..4 {
-            slope_move(&mut g.world, &mut g.player, 1, false, false, &mut g.events);
+            crate::dispatcher::register_instances(&mut g);
+            let solid_order = crate::dispatcher::descendant_instances(&g, "oSolid");
+            slope_move(
+                &mut g.world,
+                &mut g.player,
+                1,
+                false,
+                false,
+                &solid_order,
+                &mut g.events,
+            );
         }
         assert_eq!(g.player.pos, Vec2::new(100.0, 152.0));
     }
@@ -3685,7 +3758,17 @@ mod tests {
         g.player.vel.x = 4.0;
         let id = g.world.spawn("oPushBlock", Vec2::new(101.0, 156.0));
         g.world.entity_mut(id).unwrap().solid = true;
-        slope_move(&mut g.world, &mut g.player, 1, false, false, &mut g.events);
+        crate::dispatcher::register_instances(&mut g);
+        let solid_order = crate::dispatcher::descendant_instances(&g, "oSolid");
+        slope_move(
+            &mut g.world,
+            &mut g.player,
+            1,
+            false,
+            false,
+            &solid_order,
+            &mut g.events,
+        );
         assert_eq!(g.player.pos, Vec2::new(97.0, 148.0));
         assert!(!solid(&g.world, &g.player, g.player.pos));
     }
@@ -3696,7 +3779,17 @@ mod tests {
         g.player.vel.x = 4.0;
         g.world.set_tile(6, 9, "oBlock");
         g.player.pos.x = 90.0;
-        slope_move(&mut g.world, &mut g.player, 1, false, false, &mut g.events);
+        crate::dispatcher::register_instances(&mut g);
+        let solid_order = crate::dispatcher::descendant_instances(&g, "oSolid");
+        slope_move(
+            &mut g.world,
+            &mut g.player,
+            1,
+            false,
+            false,
+            &solid_order,
+            &mut g.events,
+        );
         assert!(g.player.pos.x <= 91.0);
         assert_eq!(g.player.pos.y, 152.0);
     }
