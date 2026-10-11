@@ -495,6 +495,22 @@ fn environment(game: &mut Game) {
     }
 }
 fn remove_hazard(game: &mut Game, h: &Hazard) {
+    if crate::catalog::is_a(&h.object, "oSpearTrapTop")
+        || crate::catalog::is_a(&h.object, "oSpearTrapBottom")
+    {
+        // The SpearTrap Step's instance_destroy invokes its own non-inheriting
+        // Destroy for either storage representation, bypassing attack immunity.
+        if let Some(id) = h.id {
+            crate::items::explosives::destroy_solid_self(game, id);
+        } else {
+            crate::items::explosives::destroy_terrain_self(
+                game,
+                (h.pos.x / 16.0) as usize,
+                (h.pos.y / 16.0) as usize,
+            );
+        }
+        return;
+    }
     if let Some(id) = h.id {
         if let Some(e) = game.world.entity_mut(id) {
             e.alive = false;

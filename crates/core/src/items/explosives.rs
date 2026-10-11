@@ -1407,7 +1407,14 @@ fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibili
     let outputs_enabled = solid_outputs_enabled(game, &source);
     if let Some(metadata) = metadata {
         game.world.entity_mut(metadata.id).unwrap().alive = false;
-        if metadata.value("shopWall") != 0.0 {
+        if metadata.value("shopWall") != 0.0
+            && !matches!(
+                solid_destroy_family(&object),
+                "oSpearTrapTop" | "oSpearTrapBottom"
+            )
+        {
+            // SpearTrap own Destroy never inherits Solid's shop-wall anger.
+            // Other generated metadata retains its existing crime adapter.
             // Existing generated metadata records shop wall crime explicitly.
             crate::economy::anger(game, center, "DIE, YOU VANDAL!");
             game.flags.insert("shopkeepers_angry".into());
@@ -1571,9 +1578,8 @@ fn solid_destroy_body(game: &mut Game, entity: &Entity, release_gold: bool) {
     let rubble_style = match family {
         "oBrick" | "oTree" => Some(("sRubble", "sRubbleSmall")),
         "oBrickSmooth" | "oGrave" | "oSign" | "oAltarLeft" | "oAltarRight" | "oSacAltarLeft"
-        | "oArrowTrapLeft" | "oArrowTrapRight" | "oTrapBlock" => {
-            Some(("sRubbleTan", "sRubbleTanSmall"))
-        }
+        | "oArrowTrapLeft" | "oArrowTrapRight" | "oTrapBlock" | "oSpearTrapTop"
+        | "oSpearTrapBottom" => Some(("sRubbleTan", "sRubbleTanSmall")),
         "oLush" | "oTemple" => Some(("sRubbleLush", "sRubbleLushSmall")),
         "oBlock" | "oPushBlock" | "oXocBlock" if !city => Some(("sRubbleLush", "sRubbleLushSmall")),
         _ => None,
@@ -4374,3 +4380,106 @@ mod runtime_clean_terrain_treasure {
 #[cfg(test)]
 #[path = "explosion_laser_contract_tests.rs"]
 mod explosion_laser_contract_tests;
+
+#[cfg(test)]
+mod spear_destroy_source_oracle {
+    use super::*;
+
+    #[test]
+    fn own_spear_destroy_preserves_literal_fragments_rng_guards_and_no_parent_effects() {
+        for object in ["oSpearTrapTop", "oSpearTrapBottom", "oSpearTrapLit"] {
+            for clean_death in [false, true] {
+                for global_clean in ["none", "flag", "data", "both"] {
+                    for detritus_count in [0, 32] {
+                        let mut game = Game::shell(59, RulesPreset::Classic);
+                        for _ in 0..detritus_count {
+                            game.spawn("oBone", Vec2::new(400.0, 400.0));
+                        }
+                        let receiver = game.spawn(object, Vec2::new(160.0, 80.0));
+                        {
+                            let entity = game.world.entity_mut(receiver).unwrap();
+                            entity
+                                .data
+                                .insert("cleanDeath".into(), f64::from(clean_death));
+                            entity.data.insert("shopWall".into(), 1.0);
+                        }
+                        // These parent-only support effects must not happen:
+                        // neither own Destroy includes action_inherited.
+                        let torch = game.spawn("oTikiTorch", Vec2::new(160.0, 48.0));
+                        let lamp = game.spawn("oLamp", Vec2::new(160.0, 96.0));
+                        assert!(
+                            game.world
+                                .entity(torch)
+                                .unwrap()
+                                .sprite_bounds()
+                                .contains(Vec2::new(168.0, 79.0))
+                        );
+                        assert!(
+                            game.world
+                                .entity(lamp)
+                                .unwrap()
+                                .sprite_bounds()
+                                .contains(Vec2::new(168.0, 98.0))
+                        );
+                        if matches!(global_clean, "flag" | "both") {
+                            game.flags.insert("cleanSolids".into());
+                        }
+                        if matches!(global_clean, "data" | "both") {
+                            game.data.insert("cleanSolids".into(), 1.0);
+                        }
+                        let enabled = !clean_death && global_clean == "none";
+                        let mut oracle = game.rng.clone();
+                        let expected: Vec<_> = (0..if enabled { 3 } else { 0 })
+                            .map(|_| {
+                                Vec2::new(
+                                    168.0 + f64::from(oracle.range(9)) - f64::from(oracle.range(9)),
+                                    88.0 + f64::from(oracle.range(9)) - f64::from(oracle.range(9)),
+                                )
+                            })
+                            .collect();
+                        assert!(destroy_solid_self(&mut game, receiver));
+                        let actual: Vec<_> = game
+                            .world
+                            .entities
+                            .iter()
+                            .filter(|e| crate::catalog::is_a(&e.object, "oRubblePiece"))
+                            .collect();
+                        assert_eq!(
+                            actual.len(),
+                            expected.len(),
+                            "{object} clean={clean_death}/{global_clean} priorDetritus={detritus_count}"
+                        );
+                        for ((piece, position), (kind, sprite)) in
+                            actual.iter().zip(expected).zip([
+                                ("oRubble", "sRubbleTan"),
+                                ("oRubbleSmall", "sRubbleTanSmall"),
+                                ("oRubbleSmall", "sRubbleTanSmall"),
+                            ])
+                        {
+                            assert!(piece.alive && piece.engine_active);
+                            assert_eq!(piece.object, kind);
+                            assert_eq!(piece.sprite, sprite);
+                            assert_eq!(piece.pos, position);
+                            assert_eq!(piece.vel, Vec2::default());
+                            assert_eq!(piece.value("gravity"), 0.6);
+                            assert!(
+                                !crate::catalog::is_a(&piece.object, "oDetritus"),
+                                "Rubble has no Detritus cap"
+                            );
+                        }
+                        assert!(game.world.entity(torch).is_some());
+                        assert!(game.world.entity(lamp).is_some());
+                        assert!(!game.flags.contains("shopkeepers_angry"));
+                        assert!(!game.world.entities.iter().any(|e| e.object == "oLampItem"));
+                        assert_eq!(game.rng.clone().next_u64(), oracle.next_u64());
+                        let count = game.world.entities.len();
+                        let mut repeat_oracle = game.rng.clone();
+                        assert!(!destroy_solid_self(&mut game, receiver));
+                        assert_eq!(game.world.entities.len(), count);
+                        assert_eq!(game.rng.next_u64(), repeat_oracle.next_u64());
+                    }
+                }
+            }
+        }
+    }
+}
