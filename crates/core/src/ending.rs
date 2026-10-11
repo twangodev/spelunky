@@ -1143,12 +1143,22 @@ mod tests {
                         if !last_exit_frame && !ankh {
                             // Early lava leaves enough time for the NEXT dead
                             // Step to select Die. It must NOT finish the exit.
-                            for _ in 0..40 {
+                            // Lava's early source action still subtracts 99
+                            // from dead/hidden players. DIED clamps only the
+                            // first fatal Step; later Steps retain the damage.
+                            for corpse_step in 1..=40 {
                                 g.step(&InputFrame::default());
+                                assert!(g.events.contains(&GameEvent::Damage { amount: 99 }));
+                                assert_eq!(g.player.health, -99 * corpse_step);
+                                assert!(!g.events.contains(&GameEvent::Died));
+                                assert_eq!(
+                                    g.player.data.get("hidden").copied().unwrap_or(0.0),
+                                    if corpse_step == 1 { 0.0 } else { 1.0 }
+                                );
                             }
                             assert_eq!(g.world.name, "Mines");
                             assert_eq!(g.state, RunState::Dead);
-                            assert_eq!(g.player.health, 0);
+                            assert_eq!(g.player.health, -99 * 40);
                             assert!(!g.player.is_exiting());
                             assert_eq!(
                                 g.player.sprite,
