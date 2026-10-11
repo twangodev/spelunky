@@ -660,6 +660,85 @@ fn rock_player_contact(game: &mut Game) {
     }
 }
 
+fn mattock_decorations(game: &mut Game, origin: Vec2) {
+    for y in [origin.y - 16.0, origin.y + 16.0] {
+        game.dispatcher
+            .remove_decoration_at(&mut game.world.entities, 3.0, Vec2::new(origin.x, y));
+    }
+}
+
+fn mattock_sweeps(game: &mut Game) {
+    use crate::dispatcher::Instance;
+    crate::dispatcher::register_instances(game);
+    for instance in crate::dispatcher::descendant_instances(game, "oTreasure") {
+        if let Instance::Entity(id) = instance {
+            if let Some(treasure) = game.world.entity_mut(id) {
+                treasure.state = 1;
+            }
+        }
+    }
+    for instance in crate::dispatcher::descendant_instances(game, "oSpikes") {
+        let point = instance.position(game);
+        let point = Vec2::new(point.x, point.y + 16.0);
+        let supported = crate::dispatcher::descendant_instances(game, "oSolid")
+            .into_iter()
+            .any(|solid| match solid {
+                Instance::Entity(id) => game
+                    .world
+                    .entity(id)
+                    .is_some_and(|body| body.mask_contains(point, CollisionPrecision::BoundingBox)),
+                Instance::Terrain(index) => game.world.tiles.get(index).is_some_and(|tile| {
+                    !tile.object.is_empty()
+                        && game
+                            .world
+                            .tile_collision_mask(
+                                (index % game.world.width) as i32,
+                                (index / game.world.width) as i32,
+                            )
+                            .contains(point, CollisionPrecision::BoundingBox)
+                }),
+                Instance::Player => false,
+            });
+        if !supported {
+            match instance {
+                Instance::Entity(id) => {
+                    if let Some(spikes) = game.world.entity_mut(id) {
+                        spikes.alive = false;
+                    }
+                }
+                Instance::Terrain(index) => {
+                    game.world
+                        .set_tile(index % game.world.width, index / game.world.width, "");
+                }
+                Instance::Player => {}
+            }
+        }
+    }
+}
+
+fn mattock_break(game: &mut Game, origin: Vec2) {
+    game.player.held = None;
+    game.player.pickup_item_type.clear();
+    game.flags.retain(|flag| !flag.starts_with("carry:"));
+    let id = game.spawn("oMattockHead", origin);
+    game.world.entity_mut(id).unwrap().vel.y = -2.0;
+    game.sound("sndMattockBreak", origin);
+    for instance in crate::dispatcher::descendant_instances(game, "oMattock") {
+        let crate::dispatcher::Instance::Entity(id) = instance else {
+            continue;
+        };
+        if let Some(mattock) = game.world.entity_mut(id) {
+            let visible = mattock.data.get("visible").map_or_else(
+                || crate::catalog::object(&mattock.object).is_some_and(|object| object.visible),
+                |value| *value != 0.0,
+            );
+            if !visible || mattock.value("hidden") != 0.0 {
+                mattock.alive = false;
+            }
+        }
+    }
+}
+
 fn mattock_dig(game: &mut Game, e: &Entity) {
     if matches!(game.world.name.as_str(), "rTitle" | "rHighscores") {
         return;
@@ -700,6 +779,7 @@ fn mattock_dig(game: &mut Game, e: &Entity) {
                 if protected || !game.world.tile(x, y).is_some_and(Tile::is_destructible) {
                     return;
                 }
+                mattock_decorations(game, Vec2::new(f64::from(x) * 16.0, f64::from(y) * 16.0));
                 super::explosives::destroy_terrain(game, x as usize, y as usize);
             }
             DigTarget::Dynamic(id) => {
@@ -709,26 +789,16 @@ fn mattock_dig(game: &mut Game, e: &Entity) {
                 if body.value("invincible") != 0.0 {
                     return;
                 }
+                let origin = body.pos;
+                mattock_decorations(game, origin);
                 super::explosives::destroy_solid_instance(game, id);
             }
         }
+        mattock_sweeps(game);
         // Source evaluates rand before checking the character flag.
         let breaks = game.rng.chance(1, 20) && !game.flags.contains("character_tunnelman");
         if breaks {
-            let held = e.value("weapon_id") as u64;
-            if let Some(item) = game.world.entity_mut(held) {
-                item.alive = false;
-            }
-            if game.player.held == Some(held) {
-                game.player.held = None;
-                game.player.pickup_item_type.clear();
-                game.flags.retain(|flag| !flag.starts_with("carry:"));
-            }
-            let id = game.spawn("oMattockHead", e.pos);
-            let head = game.world.entity_mut(id).unwrap();
-            super::init_entity(head);
-            head.vel.y = -2.0;
-            game.sound("sndMattockBreak", e.pos);
+            mattock_break(game, e.pos);
         } else {
             game.sound("sndCrunch", e.pos);
         }

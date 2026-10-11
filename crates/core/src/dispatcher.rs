@@ -113,6 +113,49 @@ impl State {
         &self.hidden_entities
     }
 
+    /// Background tiles remain queryable when their instance adapter is hidden.
+    pub(crate) fn remove_decoration_at(
+        &mut self,
+        entities: &mut [Entity],
+        depth: f64,
+        point: Vec2,
+    ) {
+        let selected = entities
+            .iter()
+            .chain(self.hidden_entities.iter())
+            .filter(|tile| {
+                tile.alive
+                    && tile.object == "oGenerationDecoration"
+                    && tile.value("depth") == depth
+                    && Rect::new(
+                        tile.pos.x,
+                        tile.pos.y,
+                        tile.data.get("source_w").copied().unwrap_or(16.0),
+                        tile.data.get("source_h").copied().unwrap_or(16.0),
+                    )
+                    .contains(point)
+            })
+            .min_by_key(|tile| {
+                (
+                    self.storage_order
+                        .iter()
+                        .position(|id| *id == tile.id)
+                        .unwrap_or(usize::MAX),
+                    tile.creation_serial,
+                )
+            })
+            .map(|tile| tile.id);
+        if let Some(id) = selected {
+            if let Some(tile) = entities
+                .iter_mut()
+                .chain(self.hidden_entities.iter_mut())
+                .find(|tile| tile.id == id)
+            {
+                tile.alive = false;
+            }
+        }
+    }
+
     /// Frozen terrain omitted from world storage, paired with its grid index.
     /// Read from `Game::presentation()` alongside that same snapshot's world.
     /// The storage order and identities are preserved without filtering.
