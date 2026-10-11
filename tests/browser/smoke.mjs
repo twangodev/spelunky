@@ -258,7 +258,7 @@ try {
       await press(page, 'ArrowRight');
       await press(page, 'ArrowDown');
       await press(page, 'ArrowLeft');
-      await press(page, 'ArrowDown', 9); // row 11: jump binding
+      await press(page, 'ArrowDown', 10); // row 12: jump binding
       await press(page, 'Enter');
       await press(page, 'j');
       const settings = (await saved(page)).settings;
