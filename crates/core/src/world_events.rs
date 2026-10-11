@@ -304,6 +304,7 @@ pub(crate) fn handles(object: &str) -> bool {
     matches!(
         object,
         "oMsgSign"
+            | "oEntranceCheck"
             | "oGrave"
             | "oTempleFake"
             | "oTemple"
@@ -505,6 +506,18 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         return;
     };
     match object.as_str() {
+        "oEntranceCheck" => {
+            // This parentless object has no Create default for dir.
+            let Some(dir) = e.data.get("dir") else {
+                *game.data.entry("source_runtime_errors".into()).or_default() += 1.0;
+                game.events.push(GameEvent::Message(
+                    "SOURCE RUNTIME ERROR: oEntranceCheck Step reads undefined dir; code block aborted."
+                        .into(),
+                ));
+                return;
+            };
+            e.pos.x += if *dir == 0.0 { -16.0 } else { 16.0 };
+        }
         "oTempleFake" => temple::fake_step(game, &mut e),
         "oGrave" => {
             // oGrave owns Step: no inherited Solid Step or clean-death gate.
@@ -636,12 +649,82 @@ pub(crate) fn animation_end(game: &mut Game, id: u64) {
     }
 }
 
+fn entrance_check_arrow_type(game: &Game, other: crate::dispatcher::Instance) -> bool {
+    let object = other.object(game);
+    let explicit = match other {
+        crate::dispatcher::Instance::Entity(id) => game
+            .world
+            .entity(id)
+            .and_then(|entity| entity.text.get("type")),
+        crate::dispatcher::Instance::Terrain(index) => {
+            let pos = Vec2::new(
+                (index % game.world.width) as f64 * 16.0 + 8.0,
+                (index / game.world.width) as f64 * 16.0 + 8.0,
+            );
+            let serial = game.world.tiles[index].creation_serial.to_string();
+            let at_receiver = |entity: &&Entity| {
+                entity.alive && entity.object == "oTerrainMetadata" && entity.pos == pos
+            };
+            // V3 producers bind this descriptor before the terrain Create.
+            // A matching receiver wins over any overlapping legacy descriptor;
+            // stale/invalid marked descriptors never become a legacy fallback.
+            // Unmarked imports retain the existing coordinate-only limitation.
+            game.world
+                .entities
+                .iter()
+                .filter(at_receiver)
+                .find(|entity| entity.text.get("source_terrain_serial") == Some(&serial))
+                .or_else(|| {
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(at_receiver)
+                        .find(|entity| !entity.text.contains_key("source_terrain_serial"))
+                })
+                .and_then(|entity| entity.text.get("type"))
+        }
+        crate::dispatcher::Instance::Player => None,
+    };
+    explicit.map_or_else(
+        || {
+            [
+                "oArrowTrapLeft",
+                "oArrowTrapRight",
+                "oArrowRepeaterL",
+                "oArrowRepeaterR",
+                "oTemp",
+            ]
+            .iter()
+            .any(|family| catalog::is_a(object, family))
+        },
+        |kind| kind == "Arrow Trap",
+    )
+}
+
 pub(crate) fn collision(game: &mut Game, id: u64, other: crate::dispatcher::Instance) {
     let Some(mut e) = game.world.entity(id).cloned() else {
         return;
     };
     let object = other.object(game).to_owned();
     match e.object.as_str() {
+        "oEntranceCheck" if catalog::is_a(&object, "oSolid") => {
+            if entrance_check_arrow_type(game, other) {
+                match other {
+                    crate::dispatcher::Instance::Entity(other_id) => {
+                        crate::items::explosives::destroy_solid_self(game, other_id);
+                    }
+                    crate::dispatcher::Instance::Terrain(index) => {
+                        crate::items::explosives::destroy_terrain_self(
+                            game,
+                            index % game.world.width,
+                            index / game.world.width,
+                        );
+                    }
+                    crate::dispatcher::Instance::Player => {}
+                }
+            }
+            e.alive = false;
+        }
         "oPsychicCreateP" if catalog::is_a(&object, "oSolid") => e.alive = false,
         "oFlame" if catalog::is_a(&object, "oWater") => {
             spawn_effect(game, "oSmokePuff", e.pos);

@@ -253,6 +253,15 @@ pub fn grant(game: &mut Game, id: u64) -> bool {
             game.player.bombs += 3;
             "YOU GOT 3 MORE BOMBS!"
         }
+        "oRopeBag" => {
+            game.player.bombs += 3;
+            let display = game.spawn("oItemsGet", Vec2::new(pos.x, pos.y - 14.0));
+            game.world
+                .entity_mut(display)
+                .unwrap()
+                .set_sprite("sBombsGet");
+            "YOU GOT 3 MORE BOMBS!"
+        }
         "oBombBox" => {
             game.player.bombs += 12;
             "YOU GOT 12 MORE BOMBS!"

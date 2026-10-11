@@ -50,6 +50,7 @@ pub(super) fn initialize_source_jungle(entity: &mut Entity, has_spectacles: bool
         "oCompass" => ("Compass", 3000.0, "", "A COMPASS FOR $"),
         "oParaPickup" => ("Parachute", 2000.0, "", "A PARACHUTE FOR $"),
         "oRopePile" => ("Rope Pile", 2500.0, "", "EXTRA ROPE FOR $"),
+        "oRopeBag" => ("Bomb Bag", 0.0, "", ""),
         _ => {
             if gem.is_none() {
                 return;
@@ -139,12 +140,22 @@ pub(super) fn initialize_source_jungle(entity: &mut Entity, has_spectacles: bool
             entity.data.insert("trigger".into(), 1.0);
             entity.data.insert("heavy".into(), 1.0);
             entity.data.insert("value".into(), 1000.0);
-        } else {
+        } else if entity.object != "oRopeBag" {
             entity
                 .text
                 .insert("buyMessage".into(), format!("{purchase}{cost:.0}."));
         }
         entity.data.insert("cost".into(), cost);
+        if entity.object == "oRopeBag" {
+            for (name, value) in [
+                ("bboxLeft", -4.0),
+                ("bboxTop", -6.0),
+                ("bboxRight", 4.0),
+                ("bboxBottom", 6.0),
+            ] {
+                entity.data.insert(name.into(), value);
+            }
+        }
         if entity.object == "oBow" {
             entity.set_image_speed(0.0);
         }

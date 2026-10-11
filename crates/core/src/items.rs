@@ -59,6 +59,7 @@ pub fn is_item(name: &str) -> bool {
                 | "oBall2"
                 | "oRope"
                 | "oRopeThrow"
+                | "oRopeBag"
                 | "oArrow"
                 | "oBow"
                 | "oPistol"
