@@ -821,6 +821,35 @@ fn temple_population(
     made_gold
 }
 
+fn mines_ceiling(world: &mut World, rng: &mut Rng, giant_spider: bool, x: i32, y: i32) {
+    // scrEntityGen:53-65: GM8 evaluates every Boolean operand, including
+    // the roll when a flag or clearance check is false. Else-if statements
+    // remain conditional: a successful spawn suppresses all later rolls.
+    let giant_roll = rng.chance(1, 40);
+    if giant_spider
+        && !exists(world, "oGiantSpiderHang")
+        && !solid(world, x + 1, y + 1)
+        && !solid(world, x + 1, y + 2)
+        && giant_roll
+    {
+        spawn(world, rng, "oGiantSpiderHang", x, y + 1);
+    } else {
+        let lamp_roll = rng.chance(1, 60);
+        if world.dark && lamp_roll {
+            spawn(world, rng, "oLamp", x, y + 1);
+        } else {
+            let scarab_roll = rng.chance(1, 40);
+            if world.dark && scarab_roll {
+                spawn(world, rng, "oScarab", x, y + 1);
+            } else if rng.chance(1, 60) {
+                spawn(world, rng, "oBat", x, y + 1);
+            } else if rng.chance(1, 80) {
+                spawn(world, rng, "oSpiderHang", x, y + 1);
+            }
+        }
+    }
+}
+
 pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String>) {
     if world.area == Area::Boss {
         return;
@@ -892,22 +921,7 @@ pub(super) fn populate(world: &mut World, rng: &mut Rng, flags: &BTreeSet<String
                     continue;
                 }
                 if ceiling && !occupied(world, x, y + 1) {
-                    if giant_spider
-                        && !exists(world, "oGiantSpiderHang")
-                        && !solid(world, x + 1, y + 1)
-                        && !solid(world, x + 1, y + 2)
-                        && rng.chance(1, 40)
-                    {
-                        spawn(world, rng, "oGiantSpiderHang", x, y + 1);
-                    } else if world.dark && rng.chance(1, 60) {
-                        spawn(world, rng, "oLamp", x, y + 1);
-                    } else if world.dark && rng.chance(1, 40) {
-                        spawn(world, rng, "oScarab", x, y + 1);
-                    } else if rng.chance(1, 60) {
-                        spawn(world, rng, "oBat", x, y + 1);
-                    } else if rng.chance(1, 80) {
-                        spawn(world, rng, "oSpiderHang", x, y + 1);
-                    }
+                    mines_ceiling(world, rng, giant_spider, x, y);
                 }
                 if floor && !occupied(world, x, y - 1) {
                     if rng.chance(1, 60) {
@@ -1187,6 +1201,84 @@ fn arrows(world: &mut World, rng: &mut Rng, supports: &[(i32, i32)]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mines_ceiling_eager_seed39_literal_tape_preserves_bright_and_dark_guards() {
+        // scrEntityGen:53-65: within an eligible ceiling statement, each
+        // reached condition evaluates its roll even if an earlier flag is false.
+        // This is a guard-entry RNG state, not a generated-level seed.
+        for giant_enabled in [false, true] {
+            for dark in [false, true] {
+                let mut world = World::new(42, 34, Area::Mines, 1);
+                world.dark = dark;
+                let mut actual = Rng::new(39);
+                let mut oracle = actual.clone();
+                for (denominator, literal_value) in
+                    [(40, 5), (60, 21), (40, 31), (60, 42), (80, 15)]
+                {
+                    assert_eq!(1 + oracle.range(denominator), literal_value);
+                }
+                mines_ceiling(&mut world, &mut actual, giant_enabled, 20, 5);
+                assert!(
+                    world.entities.is_empty(),
+                    "giant={giant_enabled} dark={dark}"
+                );
+                assert_eq!(
+                    actual.next_u64(),
+                    oracle.next_u64(),
+                    "giant={giant_enabled} dark={dark}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mines_ceiling_eager_lamp_success_stops_later_statement_rolls() {
+        let mut world = World::new(42, 34, Area::Mines, 1);
+        world.dark = true;
+        let mut actual = Rng::new(0);
+        let mut oracle = actual.clone();
+        assert_eq!(1 + oracle.range(40), 16); // giant flag false, still evaluated
+        assert_eq!(1 + oracle.range(60), 1); // Lamp succeeds: later else-if bodies wait
+        mines_ceiling(&mut world, &mut actual, false, 20, 5);
+        assert_eq!(world.entities.len(), 1);
+        assert_eq!(world.entities[0].object, "oLamp");
+        assert_eq!(world.entities[0].pos, Vec2::new(320., 96.));
+        assert_eq!(actual.next_u64(), oracle.next_u64());
+    }
+
+    #[test]
+    fn mines_ceiling_eager_giant_success_stops_all_later_rolls() {
+        let mut world = World::new(42, 34, Area::Mines, 1);
+        world.dark = true;
+        let mut actual = Rng::new(29);
+        let mut oracle = actual.clone();
+        assert_eq!(1 + oracle.range(40), 1);
+        mines_ceiling(&mut world, &mut actual, true, 20, 5);
+        assert!(exists(&world, "oGiantSpiderHang"));
+        assert_eq!(actual.next_u64(), oracle.next_u64());
+    }
+
+    #[test]
+    fn mines_ceiling_eager_existing_or_blocked_giant_still_consumes_first_roll() {
+        for already_exists in [false, true] {
+            let mut world = World::new(42, 34, Area::Mines, 1);
+            if already_exists {
+                world.spawn("oGiantSpiderHang", Vec2::new(64., 64.));
+            } else {
+                world.set_tile(21, 6, "oBlock");
+            }
+            let before = world.entities.len();
+            let mut actual = Rng::new(39);
+            let mut oracle = actual.clone();
+            for (denominator, literal_value) in [(40, 5), (60, 21), (40, 31), (60, 42), (80, 15)] {
+                assert_eq!(1 + oracle.range(denominator), literal_value);
+            }
+            mines_ceiling(&mut world, &mut actual, true, 20, 5);
+            assert_eq!(world.entities.len(), before);
+            assert_eq!(actual.next_u64(), oracle.next_u64());
+        }
+    }
 
     #[test]
     fn generated_temple_primary_receiver_callbacks_accept_stock_templates() {
