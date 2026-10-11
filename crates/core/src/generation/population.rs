@@ -1143,7 +1143,10 @@ fn spear(
     if world.area == Area::Temple && solid(world, x - 1, y - 2) && solid(world, x + 1, y - 2) {
         return;
     }
-    if world.dark && world.area == Area::Jungle && !water.wet(x, y - 2) && rng.chance(1, 20) {
+    // scrEntityGen:236 eagerly evaluates rand20 even when darkness or water
+    // rejects Tiki; the separate spear else-if remains conditional.
+    let tiki_roll = world.area == Area::Jungle && rng.chance(1, 20);
+    if world.dark && !water.wet(x, y - 2) && tiki_roll {
         spawn(world, rng, "oTikiTorch", x, y - 2);
     } else if rng.chance(1, 12) {
         spawn(world, rng, "oSpearTrapBottom", x, y);
@@ -1201,6 +1204,118 @@ fn arrows(world: &mut World, rng: &mut Rng, supports: &[(i32, i32)]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn jungle_spear_guard_fixture(dark: bool, upper_water: bool) -> World {
+        let mut world = World::new(42, 34, Area::Jungle, 5);
+        world.dark = dark;
+        world.set_tile(5, 5, "oLush");
+        world.set_tile(5, 6, "oLush");
+        if upper_water {
+            world.set_tile(5, 3, "oWaterSwim");
+        }
+        world
+    }
+
+    #[test]
+    fn jungle_spear_guard_bright_room_consumes_tiki_roll_before_spear() {
+        // scrEntityGen:236-241 after the outer candidate statement matched.
+        // GM8 evaluates rand20 even when darkLevel is false, then enters the
+        // separate else-if rand12 statement. Seed19 is guard-entry RNG state,
+        // not a generated-world seed or a claim about the complete GM stream.
+        let mut world = jungle_spear_guard_fixture(false, false);
+        let water = WaterMasks::new(&world);
+        let mut actual = Rng::new(19);
+        let mut source = actual.clone();
+        assert_eq!(source.range(20), 16);
+        assert_eq!(source.range(12), 2);
+        spear(&mut world, &mut actual, &water, 5, 5, false, true);
+        assert!(
+            world.entities.is_empty(),
+            "neither source roll creates a trap"
+        );
+        assert_eq!(actual.next_u64(), source.next_u64());
+    }
+
+    #[test]
+    fn jungle_spear_guard_upper_water_still_consumes_tiki_roll() {
+        // Water at y-32 rejects only Tiki; y-16 stays dry so the outer
+        // spear-candidate statement is eligible. The false water operand
+        // must not suppress the eager rand20 or its subsequent rand12.
+        let mut world = jungle_spear_guard_fixture(true, true);
+        let water = WaterMasks::new(&world);
+        assert!(water.wet(5, 3), "upper water must have a source mask");
+        assert!(!water.wet(5, 4), "outer spear cell stays dry");
+        let mut actual = Rng::new(19);
+        let mut source = actual.clone();
+        assert_eq!(source.range(20), 16);
+        assert_eq!(source.range(12), 2);
+        spear(&mut world, &mut actual, &water, 5, 5, false, true);
+        assert!(world.entities.is_empty());
+        assert_eq!(actual.next_u64(), source.next_u64());
+    }
+
+    #[test]
+    fn jungle_spear_guard_tiki_success_skips_separate_spear_statement() {
+        let mut world = jungle_spear_guard_fixture(true, false);
+        let water = WaterMasks::new(&world);
+        let mut actual = Rng::new(29);
+        let mut source = actual.clone();
+        assert_eq!(source.range(20), 0);
+        spear(&mut world, &mut actual, &water, 5, 5, false, true);
+        assert_eq!(world.entities.len(), 1);
+        assert_eq!(world.entities[0].object, "oTikiTorch");
+        assert_eq!(world.entities[0].pos, Vec2::new(80.0, 48.0));
+        // Tiki Create only sets image_speed; it adds no RNG draw.
+        assert_eq!(actual.next_u64(), source.next_u64());
+    }
+
+    #[test]
+    fn jungle_spear_guard_fallback_creates_ordered_bright_and_lit_segments() {
+        for dark in [false, true] {
+            let mut world = jungle_spear_guard_fixture(dark, false);
+            let water = WaterMasks::new(&world);
+            let mut actual = Rng::new(0);
+            let mut source = actual.clone();
+            assert_ne!(source.range(20), 0);
+            assert_eq!(source.range(12), 0);
+            spear(&mut world, &mut actual, &water, 5, 5, false, true);
+            let births: Vec<_> = world
+                .entities
+                .iter()
+                .map(|e| (e.object.as_str(), e.pos))
+                .collect();
+            assert_eq!(
+                births,
+                vec![
+                    ("oSpearTrapBottom", Vec2::new(80.0, 80.0)),
+                    (
+                        if dark {
+                            "oSpearTrapLit"
+                        } else {
+                            "oSpearTrapTop"
+                        },
+                        Vec2::new(80.0, 64.0)
+                    ),
+                ]
+            );
+            assert!(world.entities[0].creation_serial < world.entities[1].creation_serial);
+            // These source segment Create bodies introduce no random draws.
+            assert_eq!(actual.next_u64(), source.next_u64());
+        }
+    }
+
+    #[test]
+    fn jungle_spear_guard_rejected_outer_statement_consumes_no_inner_rolls() {
+        for (excluded, far) in [(true, true), (false, false)] {
+            let mut world = jungle_spear_guard_fixture(false, false);
+            let water = WaterMasks::new(&world);
+            let mut actual = Rng::new(19);
+            let mut source = actual.clone();
+            spear(&mut world, &mut actual, &water, 5, 5, excluded, far);
+            assert!(world.entities.is_empty());
+            assert_eq!(actual.next_u64(), source.next_u64());
+        }
+    }
 
     #[test]
     fn mines_ceiling_eager_seed39_literal_tape_preserves_bright_and_dark_guards() {
