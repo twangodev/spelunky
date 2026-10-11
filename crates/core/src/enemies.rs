@@ -815,6 +815,16 @@ fn base_character_collision(game: &mut Game, e: &mut Entity) {
             multiplier * if spiked { 3 } else { 1 }
         };
         e.health -= damage;
+        if spiked {
+            // Parent Character collision emits this extra drop before the
+            // animal's own next-Step death burst, with scrCreateBlood guards.
+            create_blood(
+                game,
+                e,
+                Vec2::new(game.player.pos.x, game.player.pos.y + 8.0),
+                1,
+            );
+        }
         if e.health <= 0 {
             e.data.insert("killed_by_player".into(), 1.0);
         }
@@ -866,6 +876,11 @@ fn base_character_collision(game: &mut Game, e: &mut Entity) {
             }
         }
         game.events.push(GameEvent::Damage { amount: damage });
+        // Literal oEnemy Character event: these inherited contacts bleed at
+        // the enemy origin. Vampire's own callback returns before this path.
+        if matches!(e.object.as_str(), "oBat" | "oPiranha" | "oVampire") {
+            create_blood(game, e, Vec2::new(e.pos.x + 4.0, e.pos.y + 4.0), 1);
+        }
         game.sound("sndHurt", game.player.pos);
         game.player.invincible = 30;
         game.player.data.insert("blink".into(), 30.0);
@@ -1494,6 +1509,164 @@ mod tests {
         assert!(game.world.entity(bullet).is_none());
         assert_eq!(game.data.get("kills"), None);
         assert_eq!(game.lifetime_stats.damsels_killed_total, 0);
+    }
+
+    fn source_contact_blood_room(rules: RulesPreset, object: &str) -> (Game, u64) {
+        let mut game = Game::shell(42, rules);
+        game.world = World::new(20, 16, Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        for x in 0..20 {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        game.player.pos = Vec2::new(136.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.grounded = true;
+        if object == "oPiranha" {
+            // Preserve the real fish Step instead of its dry-land FishBone exit.
+            for x in 7..=10 {
+                game.world.set_tile(x, 9, "oWater");
+            }
+            game.player.data.insert("bubble_timer".into(), 20.0);
+        }
+        let id = game.spawn(object, Vec2::new(128.0, 144.0));
+        let actor = game.world.entity_mut(id).unwrap();
+        actor.vel = Vec2::default();
+        actor.timer = 37;
+        actor.data.insert("bubble_timer".into(), 20.0);
+        (game, id)
+    }
+
+    fn source_contact_live_blood(game: &Game) -> Vec<&Entity> {
+        game.world
+            .entities
+            .iter()
+            .filter(|e| e.alive && e.object == "oBlood")
+            .collect()
+    }
+
+    fn assert_source_contact_blood_create(blood: &Entity) {
+        assert!(blood.engine_active, "the next Draw must see the newborn");
+        assert_eq!(blood.sprite, "sBlood");
+        assert_eq!(blood.value("world_effect_initialized"), 1.0);
+        assert_eq!(blood.alarms, [1, 1, 5, -1, -1, -1, -1, -1, -1, -1, -1, -1]);
+        assert_eq!(blood.value("collectible"), 0.0);
+        assert!((-4.0..4.0).contains(&blood.vel.x));
+        assert!((-3.0..=-1.0).contains(&blood.vel.y));
+        assert!((0.1..=0.6 + f64::EPSILON).contains(&blood.value("gravity")));
+    }
+
+    #[test]
+    fn actual_step_bat_and_piranha_source_contact_blood() {
+        // Literal oEnemy/Character lines14-57: a successful hit emits one
+        // scrCreateBlood(x+4,y+4,1) for Bat/Piranha, never for Snake. The
+        // script independently suppresses bloodless callers and the 16 cap.
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for object in ["oBat", "oPiranha", "oSnake"] {
+                for (detritus, bloodless, invincible) in [
+                    (0, false, false),
+                    (15, false, false),
+                    (16, false, false),
+                    (0, true, false),
+                    (0, false, true),
+                ] {
+                    let (mut game, id) = source_contact_blood_room(rules, object);
+                    game.world
+                        .entity_mut(id)
+                        .unwrap()
+                        .data
+                        .insert("bloodless".into(), f64::from(bloodless));
+                    if invincible {
+                        game.player.invincible = 20;
+                    }
+                    for _ in 0..detritus {
+                        game.spawn("oBone", Vec2::new(280.0, 48.0));
+                    }
+                    game.step(&InputFrame::default());
+                    let actor = game
+                        .world
+                        .entity(id)
+                        .expect("contact is not an animal kill");
+                    assert_eq!(actor.health, 1, "{object}");
+                    assert_eq!(
+                        game.player.health,
+                        if invincible { 4 } else { 3 },
+                        "{object}"
+                    );
+                    let expected = usize::from(
+                        object != "oSnake" && !invincible && !bloodless && detritus < 16,
+                    );
+                    let blood = source_contact_live_blood(&game);
+                    assert_eq!(
+                        blood.len(),
+                        expected,
+                        "{object} detritus={detritus} bloodless={bloodless} invincible={invincible}"
+                    );
+                    if expected == 1 {
+                        assert_eq!(
+                            blood[0].pos,
+                            Vec2::new(actor.pos.x + 4.0, actor.pos.y + 4.0)
+                        );
+                        assert_source_contact_blood_create(blood[0]);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn actual_step_spike_stomp_source_contact_blood() {
+        // Literal parent Character line9 calls scrCreateBlood(player.x,
+        // player.y+8,1) only with SpikeShoes. The animal's next Step still
+        // produces its separate three-drop death burst in both cases.
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for object in ["oSnake", "oFrog"] {
+                for spiked in [false, true] {
+                    for bloodless in [false, true] {
+                        let (mut game, id) = source_contact_blood_room(rules, object);
+                        game.player.pos.y = 144.0;
+                        game.player.previous_pos = game.player.pos;
+                        game.player.grounded = false;
+                        game.player.state = PlayerState::Falling;
+                        if spiked {
+                            game.player.equipment.insert("SpikeShoes".into());
+                        }
+                        game.world
+                            .entity_mut(id)
+                            .unwrap()
+                            .data
+                            .insert("bloodless".into(), f64::from(bloodless));
+                        game.step(&InputFrame::default());
+                        let actor = game
+                            .world
+                            .entity(id)
+                            .expect("death waits for the animal's next Step");
+                        assert_eq!(actor.health, if spiked { -2 } else { 0 }, "{object}");
+                        assert_eq!(game.player.health, 4);
+                        assert!(game.player.vel.y < 0.0, "actual stomp bounces the player");
+                        let blood = source_contact_live_blood(&game);
+                        assert_eq!(blood.len(), usize::from(spiked && !bloodless), "{object}");
+                        if let Some(drop) = blood.first() {
+                            assert_eq!(
+                                drop.pos,
+                                Vec2::new(game.player.pos.x, game.player.pos.y + 8.0)
+                            );
+                            assert_source_contact_blood_create(drop);
+                        }
+                        let contact_ids: Vec<_> = blood.iter().map(|e| e.id).collect();
+                        game.step(&InputFrame::default());
+                        assert!(game.world.entity(id).is_none(), "{object}");
+                        let death: Vec<_> = source_contact_live_blood(&game)
+                            .into_iter()
+                            .filter(|e| !contact_ids.contains(&e.id))
+                            .collect();
+                        assert_eq!(death.len(), if bloodless { 0 } else { 3 }, "{object}");
+                        for drop in death {
+                            assert_source_contact_blood_create(drop);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
