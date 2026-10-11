@@ -1135,8 +1135,6 @@ fn spear(
         || occupied(world, x, y - 1)
         || !solid(world, x, y + 1)
         || (solid(world, x - 1, y) && solid(world, x + 1, y))
-        || x % 10 == 0
-        || x % 10 == 1
     {
         return;
     }
@@ -1148,7 +1146,9 @@ fn spear(
     let tiki_roll = world.area == Area::Jungle && rng.chance(1, 20);
     if world.dark && !water.wet(x, y - 2) && tiki_roll {
         spawn(world, rng, "oTikiTorch", x, y - 2);
-    } else if rng.chance(1, 12) {
+    } else if rng.chance(1, 12) && !matches!(x, 10 | 11 | 20 | 21 | 30 | 31) {
+        // scrEntityGen:240-241 bans only these six raw pixel columns from
+        // spear births, after their roll; Tiki and its roll remain eligible.
         spawn(world, rng, "oSpearTrapBottom", x, y);
         if let Some(e) = world.entities.last_mut() {
             e.solid = true;
@@ -1204,6 +1204,152 @@ fn arrows(world: &mut World, rng: &mut Rng, supports: &[(i32, i32)]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn literal_jungle_column_statement(
+        source: &mut Rng,
+        raw_x: i32,
+        raw_y: i32,
+        dark: bool,
+        upper_water: bool,
+    ) -> Vec<(&'static str, Vec2)> {
+        // Independent transcription of scrEntityGen:236-250. Explicit raw
+        // pixel exclusions do not reuse the grid/modulo implementation.
+        let tiki_roll = source.range(20);
+        if dark && !upper_water && tiki_roll == 0 {
+            return vec![("oTikiTorch", Vec2::new(raw_x.into(), (raw_y - 32).into()))];
+        }
+        let spear_roll = source.range(12);
+        if spear_roll == 0 && ![160, 176, 320, 336, 480, 496].contains(&raw_x) {
+            vec![
+                ("oSpearTrapBottom", Vec2::new(raw_x.into(), raw_y.into())),
+                (
+                    if dark {
+                        "oSpearTrapLit"
+                    } else {
+                        "oSpearTrapTop"
+                    },
+                    Vec2::new(raw_x.into(), (raw_y - 16).into()),
+                ),
+            ]
+        } else {
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn jungle_column_all_grid_positions_match_raw_source_statement_tapes() {
+        let mut tiki_births = 0;
+        let mut spear_births = 0;
+        let mut forbidden_spear_wins = 0;
+        let mut extra_edge_spears = 0;
+        for x in 0..42 {
+            for dark in [false, true] {
+                for upper_water in [false, true] {
+                    //29 wins Tiki;0 wins fallback Spear;19 loses both.
+                    // These are guard-entry port RNG states, not level seeds.
+                    for seed in [29, 0, 19] {
+                        let mut world = World::new(42, 34, Area::Jungle, 5);
+                        world.dark = dark;
+                        world.set_tile(x as usize, 5, "oLush");
+                        world.set_tile(x as usize, 6, "oLush");
+                        if upper_water {
+                            world.set_tile(x as usize, 3, "oWaterSwim");
+                        }
+                        let water = WaterMasks::new(&world);
+                        assert_eq!(water.wet(x, 3), upper_water);
+                        assert!(!water.wet(x, 4));
+                        let mut actual = Rng::new(seed);
+                        let mut source = actual.clone();
+                        let expected = literal_jungle_column_statement(
+                            &mut source,
+                            x * 16,
+                            80,
+                            dark,
+                            upper_water,
+                        );
+                        spear(&mut world, &mut actual, &water, x, 5, false, true);
+                        let births: Vec<_> = world
+                            .entities
+                            .iter()
+                            .map(|e| (e.object.as_str(), e.pos))
+                            .collect();
+                        assert_eq!(
+                            births, expected,
+                            "x={x} dark={dark} upper_water={upper_water} entry_seed={seed}"
+                        );
+                        assert_eq!(
+                            actual.next_u64(),
+                            source.next_u64(),
+                            "statement RNG x={x} dark={dark} upper_water={upper_water} entry_seed={seed}"
+                        );
+                        if expected.first().is_some_and(|e| e.0 == "oTikiTorch") {
+                            tiki_births += 1;
+                        } else if !expected.is_empty() {
+                            spear_births += 1;
+                            if matches!(x, 1 | 40) {
+                                extra_edge_spears += 1;
+                            }
+                        } else if [160, 176, 320, 336, 480, 496].contains(&(x * 16)) && seed == 0 {
+                            forbidden_spear_wins += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(tiki_births > 0 && spear_births > 0);
+        assert!(forbidden_spear_wins > 0 && extra_edge_spears > 0);
+    }
+
+    #[test]
+    fn jungle_column_outer_rejection_still_skips_all_inner_rolls() {
+        for x in [1, 10, 11, 20, 21, 30, 31, 40] {
+            for (excluded, far) in [(true, true), (false, false)] {
+                let mut world = World::new(42, 34, Area::Jungle, 5);
+                world.dark = true;
+                world.set_tile(x as usize, 5, "oLush");
+                world.set_tile(x as usize, 6, "oLush");
+                let water = WaterMasks::new(&world);
+                let mut actual = Rng::new(29);
+                let mut unchanged = actual.clone();
+                spear(&mut world, &mut actual, &water, x, 5, excluded, far);
+                assert!(world.entities.is_empty());
+                assert_eq!(actual.next_u64(), unchanged.next_u64());
+            }
+        }
+    }
+
+    #[test]
+    fn jungle_column_natural_dark_seed27_keeps_tiki_at_spear_banned_column() {
+        // Fixed from a bounded real generate(0..64, Jungle5, default flags)
+        // discovery. This is an unmodified natural layout/darkness selection,
+        // not a guard-entry RNG state or a carved room fixture. scrEntityGen
+        // :236 permits Tiki at rawx480; only the separate :240 spear is banned.
+        // The generated support satisfies the source side-clearance OR.
+        let world = super::super::generate(&mut Rng::new(27), 5, &BTreeSet::new());
+        assert!(world.dark, "darkness is selected naturally for this seed");
+        assert_eq!(world.tile(30, 22).unwrap().object, "oLush");
+        assert_eq!(world.tile(30, 23).unwrap().object, "oLush");
+        for y in [20, 21] {
+            assert!(!world.tiles_point(Vec2::new(480.0, f64::from(y * 16)), "oSolid"));
+        }
+        assert!(
+            !world.tile(29, 22).unwrap().is_solid() || !world.tile(31, 22).unwrap().is_solid(),
+            "source requires at least one open side"
+        );
+        assert!(
+            world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oTikiTorch" && e.pos == Vec2::new(480.0, 320.0)),
+            "source Tiki is not restricted by the spear-only rawx480 ban"
+        );
+        assert!(
+            !world.entities.iter().any(|e| e.alive
+                && e.object == "oSpearTrapBottom"
+                && e.pos == Vec2::new(480.0, 352.0)),
+            "successful Tiki stops the separate spear statement"
+        );
+    }
 
     fn jungle_spear_guard_fixture(dark: bool, upper_water: bool) -> World {
         let mut world = World::new(42, 34, Area::Jungle, 5);
