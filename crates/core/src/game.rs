@@ -439,8 +439,6 @@ impl Game {
                 "black_market"
                     | "genBlackMarket"
                     | "blackMarket"
-                    | "city_of_gold"
-                    | "cityOfGold"
                     | "snake_pit"
                     | "snakePit"
                     | "cemetery"

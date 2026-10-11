@@ -1490,6 +1490,12 @@ pub(crate) fn player_animation_end(game: &mut Game) {
         crate::hub::complete_portal(game, portal);
         return;
     }
+    // oPlayer1 Animation End: the ordinary exit advances currLevel before
+    // this callback, so City remains active until the level-16 transition.
+    if s.kind == EndingKind::Transition && game.data.get("next_level") == Some(&16.) {
+        game.flags.remove("city_of_gold");
+        game.flags.remove("cityOfGold");
+    }
     if game.flags.contains("editor_test") {
         game.state = RunState::Transition;
         return;
