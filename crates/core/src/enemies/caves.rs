@@ -657,9 +657,6 @@ fn spider(game: &mut Game, e: &mut Entity, giant: bool) {
     }
     let grounded = grounded || bottom(&game.world, e);
     let ceiling = top(&game.world, e);
-    if e.state == 4 {
-        return;
-    }
     if side(&game.world, e, 1) {
         e.vel.x = 1.0;
     }
@@ -719,6 +716,8 @@ fn spider(game: &mut Game, e: &mut Entity, giant: bool) {
                 e.vel.x = 1.0;
             }
         }
+        // DROWNED skips the state transitions, not the unconditional probes.
+        4 => {}
         5 if giant => {
             set_sprite(e, "sGiantSpiderSquirt");
             if e.animation >= 5.0 && squirt == 0.0 {
