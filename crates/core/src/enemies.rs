@@ -3077,7 +3077,7 @@ mod tests {
     }
 }
 
-// Prepared from Classic 1.1 sources; UNRUN. Scenes use birth data and ordinary input.
+// Scenes use Classic 1.1 birth data and ordinary input.
 #[cfg(test)]
 mod source_motion_regressions {
     use super::*;
@@ -3140,13 +3140,37 @@ mod source_motion_regressions {
             let mut game = room(42, rules, 240.0);
             let spider = game.spawn("oSpider", Vec2::new(96.0, 144.0));
             assert_eq!(game.world.entity(spider).unwrap().sprite, "sSpiderFlip");
-            for _ in 0..24 {
+            // Seed42 selects alarm10, then launch speed -5. Alarm0 launches
+            // even while the player is beyond the Step bounce-distance gate.
+            for step in 1..=24 {
                 game.step(&crate::InputFrame::default());
+                let actor = game.world.entity(spider).unwrap();
+                if step == 1 {
+                    assert_eq!(actor.alarms[0], 10);
+                } else if step == 10 {
+                    assert_eq!(actor.alarms[0], 1);
+                    assert_eq!(actor.pos, Vec2::new(96.0, 144.0));
+                } else if step == 11 {
+                    // oGame.time starts at1 and advances before movement:
+                    // time12 schedules3 horizontal pixels and5 upward pixels.
+                    assert_eq!(game.engine_time(), 12);
+                    assert_eq!(actor.pos, Vec2::new(99.0, 139.0));
+                    assert_eq!(actor.vel.x, 2.5);
+                    assert!((actor.vel.y + 4.8).abs() < 1e-12);
+                } else if step == 22 {
+                    assert_eq!(actor.sprite, "sSpiderFlip");
+                } else if step == 23 {
+                    assert_eq!(actor.sprite, "sSpider");
+                }
             }
             let actor = game.world.entity(spider).unwrap();
             assert_eq!(actor.sprite, "sSpider");
             assert!(actor.alive);
-            assert_eq!(actor.pos.y, 144.0);
+            // Fourteen natural launch Steps, using moveTo's source-time
+            // fractional schedule and post-move gravity .2, end here.
+            assert_eq!(actor.pos, Vec2::new(131.0, 92.0));
+            assert_eq!(actor.vel.x, 2.5);
+            assert!((actor.vel.y + 2.2).abs() < 1e-12);
         }
     }
 
