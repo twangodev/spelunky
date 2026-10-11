@@ -367,6 +367,15 @@ pub(crate) fn init_entity(e: &mut Entity) {
         e.data.insert("bounce".into(), 1.0);
     }
     match e.object.as_str() {
+        "oGrave" => {
+            // Grave inherits DrawnSprite then Solid Create before its own roll.
+            e.data.insert("blinkToggle".into(), 0.0);
+            e.data.insert("invincible".into(), 0.0);
+            e.data.insert("shopWall".into(), 0.0);
+            e.data.insert("cleanDeath".into(), 0.0);
+            e.text.insert("type".into(), "None".into());
+            e.text.insert("treasure".into(), String::new());
+        }
         "oSmallCollect" | "oBigCollect" | "oHeart" => e.alarms[0] = 30,
         "oItemsGet" => {
             e.alarms[0] = 40;
@@ -402,12 +411,32 @@ pub(crate) fn init_entity(e: &mut Entity) {
     }
 }
 
+/// World/RNG-only Create bodies shared by generated and runtime births.
+pub(crate) fn create_local(
+    context: &mut crate::creation::EntityCreateContext<'_>,
+    entity: &mut Entity,
+) {
+    if entity.object == "oGrave" && entity.value("grave_create_initialized") == 0.0 {
+        // oGrave Create: rand(1,5), then its literal sGrave2..sGrave6 switch.
+        // Cemetery's possible sGraveAsh assignment follows this callback.
+        entity.set_sprite(&format!("sGrave{}", context.rng.range(5) + 2));
+        entity.data.insert("grave_create_initialized".into(), 1.0);
+    }
+}
+
 /// Source Create for callers with the game RNG available.
 pub(crate) fn create_instance(game: &mut Game, id: u64) {
     let Some(index) = game.world.entities.iter().position(|e| e.id == id) else {
         return;
     };
     let mut e = game.world.entities[index].clone();
+    create_local(
+        &mut crate::creation::EntityCreateContext {
+            world: &game.world,
+            rng: &mut game.rng,
+        },
+        &mut e,
+    );
     if e.object == "oLeaves" {
         let cemetery = game.flags.contains("cemetery") || game.flags.contains("cemetary");
         initialize_leaves(&mut game.world, id, cemetery);
