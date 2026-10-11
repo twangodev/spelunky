@@ -631,7 +631,8 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
         if kind == HubKind::Moon {
             game.data.insert("timer".into(), 60.0);
             game.data.insert("arrows".into(), 100.0);
-            game.data.insert("hub_alarm11".into(), 101.0);
+            game.data.insert("hub_alarm11".into(), -1.0);
+            game.data.insert("hub_alarm10".into(), -1.0);
         }
     }
     // Selecting a source title spawn bypasses the purely cinematic first entrance.
@@ -643,14 +644,6 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
 }
 fn value(game: &Game, key: &str) -> f64 {
     game.data.get(key).copied().unwrap_or(0.0)
-}
-fn due(game: &mut Game, key: &str) -> bool {
-    let alarm = game.data.entry(key.into()).or_default();
-    if *alarm <= 0.0 {
-        return false;
-    }
-    *alarm -= 1.0;
-    *alarm == 0.0
 }
 fn record(game: &mut Game, key: &str, score: f64) {
     let score = score.clamp(0.0, 99.0);
@@ -1020,6 +1013,8 @@ pub(crate) fn challenge_alarm_resource(game: &Game) -> Option<i32> {
     }
     if game.flags.contains("hub_sun") {
         Some(721)
+    } else if game.flags.contains("hub_moon") {
+        Some(715)
     } else if game.flags.contains("hub_stars") {
         Some(701)
     } else {
@@ -1033,6 +1028,7 @@ pub(crate) fn challenge_alarm(game: &mut Game, index: u8) {
     };
     let key = match index {
         0 => "hub_alarm0",
+        10 if resource == 715 => "hub_alarm10",
         11 => "hub_alarm11",
         _ => return,
     };
@@ -1041,7 +1037,26 @@ pub(crate) fn challenge_alarm(game: &mut Game, index: u8) {
         return;
     }
     *timer -= 1.0;
-    if *timer != 0.0 || crate::items::player_dead(game) {
+    if *timer != 0.0 {
+        return;
+    }
+    // oMoonRoom has no dead guard in these Alarm callbacks. Alarm 0 can
+    // arm 11 later in this same alarm-number pass; 11 schedules 10 next frame.
+    if resource == 715 {
+        match index {
+            0 if value(game, "timer") == 60.0 => {
+                game.data.insert("hub_alarm11".into(), 1.0);
+            }
+            10 if value(game, "timer") < 0.0 => {
+                game.game_over.draw_status = game.game_over.draw_status.max(3);
+                game.flags.insert("source_music_stopped".into());
+            }
+            11 => moon_alarm11(game),
+            _ => {}
+        }
+        return;
+    }
+    if crate::items::player_dead(game) {
         return;
     }
     // Source tests dead, not global life: Player Step can observe fatal life
@@ -1179,6 +1194,48 @@ fn spawn_target(game: &mut Game, x: f64, y: f64) {
         e.set_sprite("sUFO");
     }
 }
+// Literal oMoonRoom Alarm 11: record/reveal, targets in creation order,
+// then entrance replacement. New instances run Create before producer writes.
+fn moon_alarm11(game: &mut Game) {
+    let timer = value(game, "timer") - 1.0;
+    game.data.insert("timer".into(), timer);
+    if timer != 0.0 {
+        game.data.insert("hub_alarm11".into(), 30.0);
+        return;
+    }
+    record(game, "mini2", value(game, "baskets"));
+    game.data.insert("timer".into(), -1.0);
+    game.game_over.draw_status = 1;
+    let mut targets: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|e| e.alive && e.object == "oBatTarget")
+        .map(|e| (e.creation_serial, e.id, e.pos))
+        .collect();
+    targets.sort_by_key(|(serial, _, _)| *serial);
+    for (_, id, pos) in targets {
+        for y_vel in [-1.0, 1.0] {
+            let poof = game.spawn("oPoof", Vec2::new(pos.x + 8.0, pos.y));
+            game.world.entity_mut(poof).unwrap().vel = Vec2::new(0.0, y_vel);
+        }
+        game.world.entity_mut(id).unwrap().alive = false;
+    }
+    let mut doors: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|e| e.alive && e.object == "oEntrance")
+        .map(|e| (e.creation_serial, e.id, e.pos))
+        .collect();
+    doors.sort_by_key(|(serial, _, _)| *serial);
+    for (_, id, pos) in doors {
+        game.spawn("oXScores", pos);
+        game.world.entity_mut(id).unwrap().alive = false;
+    }
+    game.data.insert("hub_alarm10".into(), 30.0);
+}
+
 fn moon(game: &mut Game) {
     if game.level_tick == 70 {
         for (x, y) in [(160.0, -16.0), (208.0, -64.0), (256.0, -128.0)] {
@@ -1188,41 +1245,13 @@ fn moon(game: &mut Game) {
     let died = game.player.health <= 0
         || game.player.state == PlayerState::Dead
         || game.state == RunState::Dead;
-    if !game.flags.contains("hub_challenge_finished")
-        && (died
-            || due(game, "hub_alarm11") && {
-                let timer = value(game, "timer") - 1.0;
-                game.data.insert("timer".into(), timer);
-                game.data.insert("hub_alarm11".into(), 30.0);
-                timer == 0.0
-            })
-    {
+    // Player's first fatal Step records Moon and schedules its own 30-tick
+    // reveal, but does not run the living-timeout target/entrance replacement.
+    if died && value(game, "moon_death_recorded") == 0.0 {
         record(game, "mini2", value(game, "baskets"));
         game.data.insert("timer".into(), -1.0);
-        if !died {
-            let doors: Vec<_> = game
-                .world
-                .entities
-                .iter()
-                .filter(|e| e.alive && e.object == "oEntrance")
-                .map(|e| (e.id, e.pos))
-                .collect();
-            for (id, pos) in doors {
-                game.world.entity_mut(id).unwrap().alive = false;
-                game.world.spawn("oXScores", pos);
-            }
-            let targets: Vec<_> = game
-                .world
-                .entities
-                .iter()
-                .filter(|e| e.alive && e.object == "oBatTarget")
-                .map(|e| (e.id, e.pos))
-                .collect();
-            for (id, pos) in targets {
-                game.world.entity_mut(id).unwrap().alive = false;
-                poof_pair(game, Vec2::new(pos.x + 8.0, pos.y), false);
-            }
-        }
+        game.data.insert("hub_alarm10".into(), 30.0);
+        game.data.insert("moon_death_recorded".into(), 1.0);
     }
     if game.flags.contains("hub_challenge_finished") {
         return;
@@ -2346,7 +2375,7 @@ mod tests {
         g.data.insert("hub_alarm11".into(), 1.0);
         g.data.insert("timer".into(), 1.0);
         g.data.insert("baskets".into(), 105.0);
-        tick_hub(&mut g);
+        g.step(&InputFrame::default());
         assert_eq!(g.data["mini2"], 99.0);
         assert_eq!(g.data["timer"], -1.0);
         assert!(

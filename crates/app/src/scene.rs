@@ -113,7 +113,9 @@ fn title_opening_overlay(quads: &mut Vec<DrawQuad>, atlas: &Atlas, stage: u8, da
 /// current keyboard/controller label for the source acknowledgment instruction.
 pub fn game_over_overlay(quads: &mut Vec<DrawQuad>, atlas: &Atlas, game: &Game, hint: &str) {
     let game = game.presentation();
-    if game.state != spelunky_core::RunState::Dead {
+    let living_moon_finish =
+        game.flags.contains("hub_moon") && game.data.get("timer").copied().unwrap_or(0.0) < 0.0;
+    if game.state != spelunky_core::RunState::Dead && !living_moon_finish {
         return;
     }
     let challenge = ["hub_sun", "hub_moon", "hub_stars"]

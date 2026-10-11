@@ -1401,11 +1401,11 @@ impl App {
         let ui_start = quads.len();
         match self.screen {
             Screen::Playing => {
-                if let Some(game) = self
-                    .game
-                    .as_ref()
-                    .filter(|game| game.state == RunState::Dead)
-                {
+                if let Some(game) = self.game.as_ref().filter(|game| {
+                    game.state == RunState::Dead
+                        || (game.flags.contains("hub_moon")
+                            && game.data.get("timer").copied().unwrap_or(0.0) < 0.0)
+                }) {
                     let hint = source_game_over_hint(
                         game,
                         self.editor_play,
@@ -5332,3 +5332,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "moon_timeout_host_tests.rs"]
+mod moon_timeout_host_tests;
