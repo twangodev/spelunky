@@ -673,7 +673,7 @@ pub(crate) fn item_step_impacts(game: &mut Game, item_id: u64) {
             {
                 return;
             }
-            apply_item_hit(game, e, &item, fragile);
+            let hit = apply_item_hit(game, e, &item, fragile);
             if fragile {
                 broke = true;
             }
@@ -690,6 +690,16 @@ pub(crate) fn item_step_impacts(game: &mut Game, item_id: u64) {
                 if let Some(projectile) = game.world.entities.iter_mut().find(|e| e.id == item_id) {
                     projectile.alive = false;
                 }
+            }
+            // oItem Step407-410 runs after the accepted Damsel hit, in
+            // the moving item's context (including after Arrow retirement).
+            if hit
+                && !fragile
+                && item.object != "oDice"
+                && e.object == "oDamsel"
+                && e.value("forSale") != 0.0
+            {
+                crate::economy::anger(game, item.pos, "HEY, ONLY I CAN DO THAT!");
             }
         });
     }
@@ -1137,7 +1147,7 @@ fn base_character_collision(game: &mut Game, e: &mut Entity) {
     }
 }
 
-fn apply_item_hit(game: &mut Game, e: &mut Entity, item: &Entity, fragile: bool) {
+fn apply_item_hit(game: &mut Game, e: &mut Entity, item: &Entity, fragile: bool) -> bool {
     let object = item.object.as_str();
     let velocity = item.vel;
     // Dice and fragile bodies replace oItem Step and create Blood directly.
@@ -1239,7 +1249,7 @@ fn apply_item_hit(game: &mut Game, e: &mut Entity, item: &Entity, fragile: bool)
                 e.alive = false;
                 // This source branch plays its own explosion sounds, without
                 // the ordinary item-hit sound below.
-                return;
+                return false;
             }
             "oCaveman" | "oManTrap" | "oVampire" | "oYeti" | "oHawkman" | "oShopkeeper"
             | "oShopkeeper2" | "oGiantSpider" | "oTombLord" | "oAlienBoss" => {}
@@ -1256,6 +1266,7 @@ fn apply_item_hit(game: &mut Game, e: &mut Entity, item: &Entity, fragile: bool)
         e.data.insert("assaulted".into(), 1.0);
         game.sound("sndHit", e.pos);
     }
+    hit
 }
 
 fn apply_melee(
