@@ -115,6 +115,14 @@ def inherited_rubble_line(text):
  match=re.search(r'_\s+if\s+catalog::is_a\([^,\n]+,\s*"oRubblePiece"\)',code)
  return code[:match.start()].count('\n')+1 if match else None
 
+def without_function_dispatch(text, name):
+ """Hide one metadata classifier while retaining all subsequent source offsets."""
+ body=function_body(text,name)
+ if body is None:return text
+ start,code=body
+ end=start+len(code)
+ return text[:start]+blank(text[start:end])+text[end:]
+
 # Regressions: an early helper/external test module must not hide later handlers;
 # braces inside literals/comments must not end an excluded item.
 fixture='#[cfg(test)]\nfn helper() { let s = r#"}"#; /* { */ }\n#[cfg(test)]\n#[path = "traversal.rs"]\nmod traversal;\nfn live() { match x { "oLive" => {} } }\n#[cfg(test)]\nmod tests { fn t() { match x { "oTest" => {} } } }\n'
@@ -136,6 +144,17 @@ assert registered_objects(prefix+registration_fixture,'handles')==[('oLive',8),(
 rubble_fixture='// _ if catalog::is_a(&fake, "oRubblePiece")\nfn live() { match object {\n _ if catalog::is_a(&object, "oRubblePiece") => rubble(), _ => {}\n} }\n'
 assert inherited_rubble_line(rubble_fixture)==3
 assert inherited_rubble_line(prefix+rubble_fixture.replace('&object,','&e.object,'))==6
+
+# Source type labels describe Create metadata, not direct event dispatch.
+# A later real handler for the same object must retain its exact source offset.
+label_fixture='fn source_type() { let brace = r#"}"#; /* { */ match x { "oLabelOnly" => Some("Label"), "oDual" => Some("Dual"), _ => None } }\nfn live() { match x { "oDual" => tick(), _ => {} } }\n'
+label_shadow=lexical_shadow(label_fixture,hide_literals=False)
+label_dispatch=without_function_dispatch(label_shadow,'source_type')
+assert len(label_dispatch)==len(label_shadow)
+assert label_dispatch.count('\n')==label_shadow.count('\n')
+assert '"oLabelOnly"' not in label_dispatch and label_dispatch.count('"oDual"')==1
+assert label_dispatch.index('"oDual"')==label_shadow.rindex('"oDual"')
+assert without_function_dispatch(label_shadow,'absent')==label_shadow
 
 sources={p:p.read_text() for p in sorted((root/'crates/core/src').rglob('*.rs'))}
 excluded=set()
@@ -162,7 +181,9 @@ for p,source in sources.items():
  text=lexical_shadow(text,hide_literals=False)
  # Explicit object-valued match arms are behavior dispatch evidence; arbitrary
  # mentions, spawn strings, comments and tests are intentionally excluded.
- for m in re.finditer(r'((?:"o[A-Za-z0-9]+"\s*\|\s*)*"o[A-Za-z0-9]+")\s*(?:if\s+[^\n=>]+)?\s*=>',text):
+ dispatch_text=(without_function_dispatch(text,'source_type')
+                if p==root/'crates/core/src/items/explosives.rs' else text)
+ for m in re.finditer(r'((?:"o[A-Za-z0-9]+"\s*\|\s*)*"o[A-Za-z0-9]+")\s*(?:if\s+[^\n=>]+)?\s*=>',dispatch_text):
   for name in re.findall(r'"(o[A-Za-z0-9]+)"',m.group(1)):
    handlers[name].append({'module':p.relative_to(root).as_posix(),'line':text[:m.start()].count('\n')+1,'kind':'explicit_object_match_arm'})
  # Enemy matcher is the parent dispatch registration contract. An empty tick
