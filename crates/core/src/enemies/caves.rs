@@ -547,7 +547,8 @@ fn bat(game: &mut Game, e: &mut Entity) {
         blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 3);
         super::record_death(game, e);
         e.alive = false;
-        return;
+        // Own Bat Step still evaluates HANG/ATTACK after Enemy Destroy.
+        super::destroyed(game, e);
     }
     let body_center = center(e);
     let distance = body_center.distance(game.player.pos);
