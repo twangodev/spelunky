@@ -1038,8 +1038,10 @@ fn scarab(game: &mut Game, e: &mut Entity) {
             if e.pos.distance(game.player.pos) < 64.0 {
                 steer_toward(e, game.player.pos, -4.0);
             } else {
-                let angle = game.rng.unit() * std::f64::consts::TAU;
-                e.vel = Vec2::new(angle.cos() * 4.0, angle.sin() * 4.0);
+                // oScarab Step uses inclusive integer rand(0,360), then
+                // GameMaker's upward-positive degree direction for yVel.
+                let angle = f64::from(game.rng.range(361)).to_radians();
+                e.vel = Vec2::new(angle.cos() * 4.0, -angle.sin() * 4.0);
             }
             e.timer = 10 + game.rng.range(21);
         }
