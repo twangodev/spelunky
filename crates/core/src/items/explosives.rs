@@ -1331,22 +1331,20 @@ fn projectile_motion(world: &World, entity: &mut Entity, sticky: bool) -> bool {
     };
     let contact = |pos, dx: i8, dy: i8| {
         let b = body_at(pos);
-        let rect = if dx != 0 {
-            Rect::new(
-                (if dx < 0 { b.x - 1.0 } else { b.x + b.w }).round_ties_even(),
-                b.y.round_ties_even(),
-                1.0,
-                b.h,
+        let (first, second) = if dx != 0 {
+            let x = (if dx < 0 { b.x - 1.0 } else { b.x + b.w }).round_ties_even();
+            (
+                Vec2::new(x, b.y.round_ties_even()),
+                Vec2::new(x, (b.y + b.h - 1.0).round_ties_even()),
             )
         } else {
-            Rect::new(
-                b.x.round_ties_even(),
-                (if dy < 0 { b.y - 1.0 } else { b.y + b.h }).round_ties_even(),
-                b.w,
-                1.0,
+            let y = (if dy < 0 { b.y - 1.0 } else { b.y + b.h }).round_ties_even();
+            (
+                Vec2::new(b.x.round_ties_even(), y),
+                Vec2::new((b.x + b.w - 1.0).round_ties_even(), y),
             )
         };
-        super::solid_edge(world, rect, entity.id)
+        world.solid_line_except(first, second, entity.id)
     };
     if world.solid_at_except(entity.pos.x, entity.pos.y, entity.id) {
         let (left, right, bottom, top) = (
@@ -1383,19 +1381,17 @@ fn projectile_motion(world: &World, entity: &mut Entity, sticky: bool) -> bool {
     for _ in 0..dx.unsigned_abs() {
         let next = Vec2::new(entity.pos.x + f64::from(dx.signum()), entity.pos.y);
         let bounds = body_at(entity.pos);
-        let probe = Rect::new(
-            (if dx > 0 {
-                bounds.x + bounds.w
-            } else {
-                bounds.x - 1.0
-            })
-            .round_ties_even(),
-            (bounds.y + 5.0).round_ties_even(),
-            1.0,
-            (bounds.y + bounds.h - 1.0).round_ties_even() - (bounds.y + 5.0).round_ties_even()
-                + 1.0,
-        );
-        if super::solid_edge(world, probe, entity.id) {
+        let x = (if dx > 0 {
+            bounds.x + bounds.w
+        } else {
+            bounds.x - 1.0
+        })
+        .round_ties_even();
+        if world.solid_line_except(
+            Vec2::new(x, (bounds.y + 5.0).round_ties_even()),
+            Vec2::new(x, (bounds.y + bounds.h - 1.0).round_ties_even()),
+            entity.id,
+        ) {
             break;
         }
         entity.pos = next;
@@ -1403,17 +1399,17 @@ fn projectile_motion(world: &World, entity: &mut Entity, sticky: bool) -> bool {
     for _ in 0..dy.unsigned_abs() {
         let next = Vec2::new(entity.pos.x, entity.pos.y + f64::from(dy.signum()));
         let bounds = body_at(entity.pos);
-        let probe = Rect::new(
-            bounds.x,
-            if dy > 0 {
-                bounds.y + bounds.h
-            } else {
-                bounds.y - 1.0
-            },
-            bounds.w,
-            1.0,
-        );
-        if super::solid_edge(world, probe, entity.id) {
+        let y = (if dy > 0 {
+            bounds.y + bounds.h
+        } else {
+            bounds.y - 1.0
+        })
+        .round_ties_even();
+        if world.solid_line_except(
+            Vec2::new(bounds.x.round_ties_even(), y),
+            Vec2::new((bounds.x + bounds.w - 1.0).round_ties_even(), y),
+            entity.id,
+        ) {
             break;
         }
         entity.pos = next;
@@ -1551,9 +1547,15 @@ fn tick_rope(game: &mut Game, rope: &mut Entity) {
         let count = rope.value("fall_count") + 1.0;
         rope.data.insert("fall_count".into(), count);
         if count > 16.0
-            || super::solid_edge(
-                &game.world,
-                Rect::new(rope.pos.x - 4.0, rope.pos.y + 4.0, 8.0, 1.0),
+            || game.world.solid_line_except(
+                Vec2::new(
+                    (rope.pos.x - 4.0).round_ties_even(),
+                    (rope.pos.y + 4.0).round_ties_even(),
+                ),
+                Vec2::new(
+                    (rope.pos.x + 3.0).round_ties_even(),
+                    (rope.pos.y + 4.0).round_ties_even(),
+                ),
                 rope.id,
             )
         {

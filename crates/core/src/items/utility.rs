@@ -360,13 +360,18 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
             } else {
                 // isCollisionBottom(1) is a single line at bb, not a
                 // translated body that can also hit an adjacent wall.
-                let below = Rect::new(
-                    (entity.pos.x + entity.value("bboxLeft")).round_ties_even(),
-                    (entity.pos.y + entity.value("bboxBottom")).round_ties_even(),
-                    entity.value("bboxRight") - entity.value("bboxLeft"),
-                    1.0,
-                );
-                if super::solid_edge(&game.world, below, entity.id) {
+                let y = (entity.pos.y + entity.value("bboxBottom")).round_ties_even();
+                if game.world.solid_line_except(
+                    Vec2::new(
+                        (entity.pos.x + entity.value("bboxLeft")).round_ties_even(),
+                        y,
+                    ),
+                    Vec2::new(
+                        (entity.pos.x + entity.value("bboxRight") - 1.0).round_ties_even(),
+                        y,
+                    ),
+                    entity.id,
+                ) {
                     if entity.value("rolling") != 0.0 && entity.vel.y == 0.0 {
                         if entity.value("rolled") != 0.0 {
                             crate::economy::anger(game, entity.pos, "COME BACK HERE, THIEF!");

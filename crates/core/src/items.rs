@@ -1160,19 +1160,6 @@ fn lava_at(game: &Game, rect: Rect) -> bool {
             .any(|e| e.alive && e.object == "oLava" && rect.intersects(e.bounds()))
 }
 
-/// Collision edge scripts pass precise=true to collision_line. Keep their
-/// target-mask query separate from explicit source bounding-box rectangles.
-fn solid_edge(world: &World, probe: Rect, excluded: u64) -> bool {
-    world.tiles_collide_precision(probe, "oSolid", CollisionPrecision::Precise)
-        || world.entities.iter().any(|target| {
-            target.id != excluded
-                && target.alive
-                && target.solid
-                && !target.held
-                && target.mask_intersects(probe, CollisionPrecision::Precise)
-        })
-}
-
 fn body_contact(world: &World, entity: &Entity, dx: i8, dy: i8) -> bool {
     let bounds = body_bounds(entity, entity.pos);
     let (first, second) = if dx != 0 {
@@ -1415,14 +1402,10 @@ fn advance_item_body(game: &mut Game, entity: &mut Entity) -> bool {
     }
     if fragile && entity.vel.y.abs() < 1.0 {
         let bounds = body_bounds(entity, entity.pos);
-        if solid_edge(
-            &game.world,
-            Rect::new(
-                bounds.x.round_ties_even(),
-                (bounds.y + bounds.h - 1.0).round_ties_even(),
-                bounds.w,
-                1.0,
-            ),
+        let y = (bounds.y + bounds.h - 1.0).round_ties_even();
+        if game.world.solid_line_except(
+            Vec2::new(bounds.x.round_ties_even(), y),
+            Vec2::new((bounds.x + bounds.w - 1.0).round_ties_even(), y),
             entity.id,
         ) {
             entity.pos.y -= 1.0;
@@ -1926,8 +1909,16 @@ mod tests {
             // AUTO mask rectangle, while adjacent pixel (1,0) is opaque.
             let clear = Rect::new(80.0, 80.0, 1.0, 1.0);
             assert!(game.world.collides_except(clear, 0), "{dynamic}");
-            assert!(!solid_edge(&game.world, clear, 0), "{dynamic}");
-            assert!(solid_edge(&game.world, Rect::new(81.0, 80.0, 1.0, 1.0), 0));
+            assert!(
+                !game
+                    .world
+                    .solid_line_except(Vec2::new(80.0, 80.0), Vec2::new(80.0, 80.0), 0),
+                "{dynamic}"
+            );
+            assert!(
+                game.world
+                    .solid_line_except(Vec2::new(81.0, 80.0), Vec2::new(81.0, 80.0), 0)
+            );
 
             let mut game = Game::shell(7, RulesPreset::Classic);
             if dynamic {
@@ -1938,7 +1929,11 @@ mod tests {
             // Leaves inherits oPlatform, not oSolid: an item's oSolid edge
             // query ignores both its transparent and opaque source pixels.
             for x in [80.0, 85.0] {
-                assert!(!solid_edge(&game.world, Rect::new(x, 95.0, 1.0, 1.0), 0));
+                assert!(
+                    !game
+                        .world
+                        .solid_line_except(Vec2::new(x, 95.0), Vec2::new(x, 95.0), 0)
+                );
             }
         }
     }
