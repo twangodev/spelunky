@@ -1081,7 +1081,8 @@ fn olmec(game: &mut Game, e: &mut Entity) {
             }
             if e.timer > 0 {
                 e.timer -= 1;
-            } else {
+            }
+            if e.timer == 0 {
                 e.state = 1;
             }
         }
