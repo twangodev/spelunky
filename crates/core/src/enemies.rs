@@ -702,7 +702,7 @@ pub(super) fn move_body(world: &World, e: &mut Entity, gravity: f64) -> (bool, b
     }
     fn displacement(v: f64, time: u64) -> i32 {
         let f = v.abs().fract();
-        let extra = f > 0.0 && time.is_multiple_of((1.0 / f).round().max(1.0) as u64);
+        let extra = f > 0.0 && time.is_multiple_of((1.0 / f).round_ties_even().max(1.0) as u64);
         ((v.abs().floor() as i32) + i32::from(extra)) * if v < 0.0 { -1 } else { 1 }
     }
     let time = e.value("simulation_tick") as u64;
@@ -2725,6 +2725,75 @@ mod tests {
             let target = game.world.entity(id).unwrap();
             assert!(game.world.entity(wave).unwrap().event_intersects(target));
             assert_eq!(target.health, hp);
+        }
+    }
+
+    #[test]
+    fn shared_move_body_reciprocal_rounding_uses_gml_nearest_even_vectors() {
+        // Independent binary64 vectors from moveTo.gml and the named GM8 round
+        // handler (FISTP, startup CW 0x1332). These are arithmetic probes, not
+        // claims that every velocity occurs in an authored enemy trajectory.
+        let world = World::new(40, 40, Area::Mines, 1);
+        for (velocity, tick, expected) in [
+            (0.4_f64, 2_u64, 1),
+            (0.4, 3, 0),
+            (-0.4, 2, -1),
+            (-0.4, 3, 0),
+            (2.0 / 9.0, 4, 1),
+            (2.0 / 9.0, 5, 0),
+            (-2.0 / 9.0, 4, -1),
+            (2.0 / 7.0, 4, 1),
+            (2.0 / 11.0, 6, 1),
+            (1.4, 2, 1),
+            (1.4, 3, 2),
+            (2.4, 2, 2),
+            (2.4, 3, 3),
+            (1.5, 2, 2),
+            (0.0, 2, 0),
+        ] {
+            let origin = Vec2::new(128.0, 128.0);
+            let mut actor = Entity::new(1, "oFrog", origin);
+            actor.vel = Vec2::new(velocity, velocity);
+            actor.data.insert("simulation_tick".into(), tick as f64);
+            move_body(&world, &mut actor, 0.0);
+            assert_eq!(
+                actor.pos,
+                Vec2::new(
+                    origin.x + f64::from(expected),
+                    origin.y + f64::from(expected),
+                ),
+                "velocity={velocity:?}, tick={tick}",
+            );
+        }
+    }
+
+    #[test]
+    fn naturally_falling_frog_uses_even_reciprocal_period_in_both_presets() {
+        // Source Frog Create starts at yVel=0; each falling Step calls moveTo
+        // before adding myGrav=.2. No actor state/velocity is injected here.
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = Game::shell(7, rules);
+            game.world = World::new(20, 20, Area::Jungle, 5);
+            for x in 0..20 {
+                game.world.set_tile(x, 10, "oBlock");
+            }
+            game.player.pos = Vec2::new(40.0, 152.0);
+            game.player.previous_pos = game.player.pos;
+            let id = game.spawn("oFrog", Vec2::new(160.0, 64.0));
+            let frog = game.world.entity(id).unwrap();
+            assert_eq!((frog.state, frog.timer, frog.vel), (0, 0, Vec2::default()));
+            for expected_velocity in [0.2, 0.4] {
+                game.step(&InputFrame::default());
+                let frog = game.world.entity(id).unwrap();
+                assert_eq!(frog.pos, Vec2::new(160.0, 64.0));
+                assert_eq!(frog.vel.y, expected_velocity);
+            }
+            assert_eq!(game.engine_time(), 3);
+            assert_eq!(1.0 / game.world.entity(id).unwrap().vel.y, 2.5);
+            game.step(&InputFrame::default());
+            assert_eq!(game.engine_time(), 4);
+            assert_eq!(game.world.entity(id).unwrap().pos, Vec2::new(160.0, 65.0));
+            assert_eq!(game.player.health, 4);
         }
     }
 }

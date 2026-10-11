@@ -1129,7 +1129,8 @@ fn rubble(game: &Game, e: &mut Entity) {
 // moveTo uses reciprocal/modulo displacement, rather than accumulating fractions.
 fn displacement(v: f64, tick: u64) -> i32 {
     let fraction = v.abs().fract();
-    let extra = fraction != 0.0 && tick.is_multiple_of((1.0 / fraction).round().max(1.0) as u64);
+    let extra =
+        fraction != 0.0 && tick.is_multiple_of((1.0 / fraction).round_ties_even().max(1.0) as u64);
     (v.abs().floor() as i32 + i32::from(extra)) * if v < 0.0 { -1 } else { 1 }
 }
 
@@ -2728,20 +2729,24 @@ mod tests {
     #[test]
     fn room_clock_quantizes_detritus_without_using_lifetime_tick() {
         let mut g = room();
-        g.tick = 100;
+        g.tick = 101;
         let id = g.world.spawn("oBone", Vec2::new(80.0, 80.0));
         let e = g.world.entity_mut(id).unwrap();
         e.data.insert("world_effect_initialized".into(), 1.0);
         e.data.insert("life".into(), 60.0);
         e.data.insert("gravity".into(), 0.0);
-        e.vel = Vec2::new(0.4, 0.0);
-        advance(&mut g); // source time 2, lifetime tick 101: no displacement
+        // Non-tie reciprocal 1/.3 rounds to period 3, isolating room-clock phase.
+        // The separate ties-even regressions cover .4, whose period is 2.
+        e.vel = Vec2::new(0.3, 0.0);
+        advance(&mut g); // source time 2, lifetime tick 102: no displacement
         assert_eq!(g.world.entity(id).unwrap().pos.x, 80.0);
-        advance(&mut g); // source time 3, lifetime tick 102: one pixel
+        advance(&mut g); // source time 3, lifetime tick 103: one pixel
         assert_eq!(g.world.entity(id).unwrap().pos.x, 81.0);
         g.level_tick = 0;
         advance(&mut g); // another room restarts the phase at source time 2
         assert_eq!(g.world.entity(id).unwrap().pos.x, 81.0);
+        advance(&mut g); // restarted source time 3, not unreset time 5
+        assert_eq!(g.world.entity(id).unwrap().pos.x, 82.0);
     }
     #[test]
     fn detritus_cap_preserves_oldest_instances_and_rejects_newest() {
@@ -2906,6 +2911,78 @@ mod tests {
             );
             assert_eq!(g.data["water_loop_safety"], 2.0);
             assert_eq!(g.data["water_counter"], 0.0);
+        }
+    }
+
+    #[test]
+    fn detritus_move_reciprocal_rounding_uses_gml_nearest_even_vectors() {
+        // Expected values come from independent binary64 calculations, not a
+        // call to another production movement helper.
+        for (velocity, tick, expected) in [
+            (0.4_f64, 2_u64, 1),
+            (0.4, 3, 0),
+            (-0.4, 2, -1),
+            (-0.4, 3, 0),
+            (2.0 / 9.0, 4, 1),
+            (2.0 / 9.0, 5, 0),
+            (-2.0 / 9.0, 4, -1),
+            (2.0 / 7.0, 4, 1),
+            (2.0 / 11.0, 6, 1),
+            (1.4, 2, 1),
+            (1.4, 3, 2),
+            (2.4, 2, 2),
+            (2.4, 3, 3),
+            (1.5, 2, 2),
+            (0.0, 2, 0),
+        ] {
+            assert_eq!(
+                displacement(velocity, tick),
+                expected,
+                "velocity={velocity:?}, tick={tick}",
+            );
+        }
+    }
+
+    #[test]
+    fn source_born_lava_flame_reaches_even_period_without_motion_overrides() {
+        // scrSetupWalls enables top-lava spurts. Start at a legitimate elapsed
+        // spurt timer, then let lava Step/Create and every particle Step run.
+        // Seed5 chooses Flame, grav=rand(1,6)*.1=.2 and launch=-rand(1,4)=-1.
+        // No particle velocity, gravity, timer or state is written by the test.
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = room();
+            game.rules = rules;
+            game.rng = crate::Rng::new(5);
+            let lava = configured_lava(&mut game, Vec2::new(80.0, 96.0), false);
+            game.world
+                .entity_mut(lava)
+                .unwrap()
+                .data
+                .insert("spurt_counter".into(), 0.0);
+            game.step(&InputFrame::default());
+            let flame = game
+                .world
+                .entities
+                .iter()
+                .find(|e| e.object == "oFlame")
+                .unwrap();
+            let id = flame.id;
+            assert_eq!(flame.pos, Vec2::new(88.0, 92.0));
+            assert_eq!(flame.vel.y, -1.0);
+            assert_eq!(flame.value("gravity"), 0.2);
+            assert_eq!(flame.value("life"), 60.0);
+            for y in [91.0, 90.0, 90.0, 89.0, 89.0, 89.0, 89.0] {
+                game.step(&InputFrame::default());
+                assert_eq!(game.world.entity(id).unwrap().pos.y, y);
+            }
+            let flame = game.world.entity(id).unwrap();
+            assert_eq!(flame.vel.y.to_bits(), 0x3fd9_9999_9999_9999);
+            assert_eq!(1.0 / flame.vel.y, 2.5);
+            game.step(&InputFrame::default());
+            assert_eq!(game.engine_time(), 10);
+            assert_eq!(game.world.entity(id).unwrap().pos.y, 90.0);
+            assert_eq!(game.world.entity(id).unwrap().value("life"), 52.0);
+            assert_eq!(game.player.health, 4);
         }
     }
 }

@@ -763,7 +763,7 @@ fn olmec_move(world: &World, e: &mut Entity) -> bool {
     // global simulation tick, never by accumulating fractional world positions.
     fn displacement(v: f64, time: u64) -> i32 {
         let f = v.abs().fract();
-        let extra = f > 0.0 && time.is_multiple_of((1.0 / f).round().max(1.0) as u64);
+        let extra = f > 0.0 && time.is_multiple_of((1.0 / f).round_ties_even().max(1.0) as u64);
         (v.abs().floor() as i32 + i32::from(extra)) * if v < 0.0 { -1 } else { 1 }
     }
     let mut ceiling = false;
@@ -2834,5 +2834,43 @@ mod tests {
         tick(&mut g, &mut e);
         assert_eq!(e.state, 6);
         assert_eq!(e.vel.y, 5.0);
+    }
+
+    #[test]
+    fn olmec_move_reciprocal_rounding_uses_gml_nearest_even_vectors() {
+        // Isolated moveTo arithmetic. The authored intro's grounded state does
+        // not demonstrate all these synthetic fractional velocities naturally.
+        let world = World::new(40, 40, Area::Boss, 16);
+        for (velocity, tick, expected) in [
+            (0.4_f64, 2_u64, 1),
+            (0.4, 3, 0),
+            (-0.4, 2, -1),
+            (-0.4, 3, 0),
+            (2.0 / 9.0, 4, 1),
+            (2.0 / 9.0, 5, 0),
+            (-2.0 / 9.0, 4, -1),
+            (2.0 / 7.0, 4, 1),
+            (2.0 / 11.0, 6, 1),
+            (1.4, 2, 1),
+            (1.4, 3, 2),
+            (2.4, 2, 2),
+            (2.4, 3, 3),
+            (1.5, 2, 2),
+            (0.0, 2, 0),
+        ] {
+            let origin = Vec2::new(128.0, 128.0);
+            let mut actor = Entity::new(1, "oOlmec", origin);
+            actor.vel = Vec2::new(velocity, velocity);
+            actor.data.insert("simulation_tick".into(), tick as f64);
+            assert!(!olmec_move(&world, &mut actor));
+            assert_eq!(
+                actor.pos,
+                Vec2::new(
+                    origin.x + f64::from(expected),
+                    origin.y + f64::from(expected),
+                ),
+                "velocity={velocity:?}, tick={tick}",
+            );
+        }
     }
 }
