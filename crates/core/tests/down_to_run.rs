@@ -42,7 +42,11 @@ fn warm_walk(game: &mut Game, direction: f64, fast: bool) -> f64 {
             assert_eq!(game.player.state, PlayerState::Running);
             assert!(game.player.grounded);
             assert_eq!(game.player.health, 4);
-            let steps = if direction < 0.0 { "left_steps" } else { "right_steps" };
+            let steps = if direction < 0.0 {
+                "left_steps"
+            } else {
+                "right_steps"
+            };
             assert!(game.player.data[steps] >= 3.0);
             return game.player.vel.x;
         }
@@ -51,7 +55,10 @@ fn warm_walk(game: &mut Game, direction: f64, fast: bool) -> f64 {
 }
 
 fn near(actual: f64, expected: f64) {
-    assert!((actual - expected).abs() < 1e-10, "actual={actual} expected={expected}");
+    assert!(
+        (actual - expected).abs() < 1e-10,
+        "actual={actual} expected={expected}"
+    );
 }
 
 #[test]
@@ -112,7 +119,12 @@ fn both_directions_choose_source_left_duck_run_branch_without_horizontal_acceler
         for direction in [-1.0, 1.0] {
             let mut game = room(rules, None);
             let incoming = warm_walk(&mut game, direction, true);
-            game.step(&InputFrame { left: true, right: true, down: true, ..Default::default() });
+            game.step(&InputFrame {
+                left: true,
+                right: true,
+                down: true,
+                ..Default::default()
+            });
             near(game.player.vel.x, (incoming - 0.1) * 0.98);
             assert_eq!(game.player.state, PlayerState::Ducking);
         }
@@ -127,7 +139,10 @@ fn down_with_no_horizontal_key_keeps_source_fallback_even_when_enabled() {
             let incoming = warm_walk(&mut game, direction, true);
             game.step(&movement(0.0, true, false));
             let damped = incoming * 0.8;
-            near(game.player.vel.x, if damped < 0.5 { 0.0 } else { damped * 0.2 });
+            near(
+                game.player.vel.x,
+                if damped < 0.5 { 0.0 } else { damped * 0.2 },
+            );
         }
     }
 }
@@ -139,7 +154,10 @@ fn shift_run_remains_available_with_down_run_disabled() {
             let mut game = room(rules, Some(false));
             let incoming = warm_walk(&mut game, direction, true);
             game.step(&movement(direction, true, true));
-            near(game.player.vel.x, ((incoming + direction * 0.1 + direction * 3.0) * 0.98).clamp(-6.0, 6.0));
+            near(
+                game.player.vel.x,
+                ((incoming + direction * 0.1 + direction * 3.0) * 0.98).clamp(-6.0, 6.0),
+            );
             assert!(game.player.vel.x.abs() > 3.0);
         }
     }
@@ -183,7 +201,10 @@ fn initial_fast_duck_preserves_prior_animation_rate_below_four_but_slow_arm_sets
                 game.step(&movement(direction, true, false));
                 assert_eq!(game.player.state, PlayerState::Ducking);
                 assert!(game.player.vel.x.abs() < 4.0);
-                near(game.player.image_speed(), if magnitude < 2.0 { 0.8 } else { 0.35 });
+                near(
+                    game.player.image_speed(),
+                    if magnitude < 2.0 { 0.8 } else { 0.35 },
+                );
             }
         }
     }

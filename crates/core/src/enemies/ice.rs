@@ -160,10 +160,8 @@ fn first_boss_center(game: &Game, caller: Option<&Entity>) -> Option<Vec2> {
             let boss = caller
                 .filter(|actor| actor.id == id)
                 .or_else(|| game.world.entity(id))?;
-            (boss.alive
-                && boss.engine_active
-                && crate::catalog::is_a(&boss.object, "oAlienBoss"))
-            .then_some(Vec2::new(boss.pos.x + 16.0, boss.pos.y + 16.0))
+            (boss.alive && boss.engine_active && crate::catalog::is_a(&boss.object, "oAlienBoss"))
+                .then_some(Vec2::new(boss.pos.x + 16.0, boss.pos.y + 16.0))
         })
 }
 
@@ -950,7 +948,9 @@ pub(super) fn player_hurt(game: &mut Game) {
             entity.alive
                 && entity.engine_active
                 && entity.object == object
-                && entity.collision_mask().intersects_rectangle_bbox(first, second)
+                && entity
+                    .collision_mask()
+                    .intersects_rectangle_bbox(first, second)
         }) {
             continue;
         }
@@ -977,8 +977,7 @@ pub(super) fn player_hurt(game: &mut Game) {
                     game.lifetime_stats.enemy_death(cause);
                 }
             }
-            game.player.vel =
-                Vec2::new(if pos.x < game.player.pos.x { 2.0 } else { -2.0 }, -4.0);
+            game.player.vel = Vec2::new(if pos.x < game.player.pos.x { 2.0 } else { -2.0 }, -4.0);
             crate::player::script_player_blood(game, 3);
             crate::world_events::spawn_effect(game, "oLaserExplode", pos);
             if let Some(target) = game
@@ -1002,8 +1001,7 @@ pub(super) fn player_hurt(game: &mut Game) {
                     game.lifetime_stats.enemy_death(cause);
                 }
             }
-            game.player.vel =
-                Vec2::new(if pos.x < game.player.pos.x { 2.0 } else { -2.0 }, -4.0);
+            game.player.vel = Vec2::new(if pos.x < game.player.pos.x { 2.0 } else { -2.0 }, -4.0);
             game.sound("sndHurt", game.player.pos);
             game.player.stun = stun;
             game.player.state = PlayerState::Stunned;
@@ -1578,7 +1576,10 @@ mod tests {
             effect.data.insert("create_target_x".into(), 200.0);
             effect.data.insert("create_target_y".into(), 140.0);
             crate::dispatcher::create(&mut game, supplied_id);
-            assert_eq!(game.world.entity(supplied_id).unwrap().vel, Vec2::new(2.0, 0.0));
+            assert_eq!(
+                game.world.entity(supplied_id).unwrap().vel,
+                Vec2::new(2.0, 0.0)
+            );
             assert!(
                 crate::dispatcher::descendant_instances(&game, "oPsychicCreate")
                     .contains(&crate::dispatcher::Instance::Entity(supplied_id))

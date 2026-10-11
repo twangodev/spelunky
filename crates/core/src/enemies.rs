@@ -3105,9 +3105,10 @@ mod source_motion_regressions {
     }
 
     fn boings(game: &Game) -> usize {
-        game.events.iter().filter(|event| {
-            matches!(event, GameEvent::Sound { name, .. } if name == "sndBoing")
-        }).count()
+        game.events
+            .iter()
+            .filter(|event| matches!(event, GameEvent::Sound { name, .. } if name == "sndBoing"))
+            .count()
     }
 
     #[test]
@@ -3198,7 +3199,10 @@ mod source_motion_regressions {
             // before that alarm fires on the thirteenth ordinary Step.
             let mut game = room(1, rules, 240.0);
             let spider = game.spawn("oGiantSpider", Vec2::new(96.0, 128.0));
-            assert_eq!(game.world.entity(spider).unwrap().sprite, "sGiantSpiderFlip");
+            assert_eq!(
+                game.world.entity(spider).unwrap().sprite,
+                "sGiantSpiderFlip"
+            );
             for _ in 0..12 {
                 game.step(&crate::InputFrame::default());
             }
@@ -3277,17 +3281,27 @@ mod source_motion_regressions {
                 for with_spring in [false, true] {
                     let mut game = room(seed, rules, 40.0);
                     water(&mut game, 8);
-                    let spring = with_spring.then(|| game.spawn("oSpringTrap", Vec2::new(96.0, 144.0)));
+                    let spring =
+                        with_spring.then(|| game.spawn("oSpringTrap", Vec2::new(96.0, 144.0)));
                     let fish = game.spawn("oPiranha", Vec2::new(96.0, 149.0));
                     assert_eq!(game.world.entity(fish).unwrap().vel, Vec2::default());
                     if let Some(spring) = spring {
-                        assert!(game.world.entity(fish).unwrap().event_intersects(game.world.entity(spring).unwrap()));
+                        assert!(
+                            game.world
+                                .entity(fish)
+                                .unwrap()
+                                .event_intersects(game.world.entity(spring).unwrap())
+                        );
                     }
                     game.step(&crate::InputFrame::default());
                     let actor = game.world.entity(fish).unwrap();
                     assert_eq!(actor.state, 0);
                     let expected_y = if with_spring { 133.0 } else { 149.0 };
-                    let expected_vel = if with_spring { Vec2::new(-1.0, -8.0) } else { Vec2::default() };
+                    let expected_vel = if with_spring {
+                        Vec2::new(-1.0, -8.0)
+                    } else {
+                        Vec2::default()
+                    };
                     assert_eq!(actor.pos, Vec2::new(96.0 + delta, expected_y));
                     assert_eq!(actor.vel, expected_vel);
                     assert_eq!(boings(&game), usize::from(with_spring));
@@ -3321,9 +3335,15 @@ mod source_motion_regressions {
                 saw_attack |= actor.state == 1;
                 assert_eq!(actor.vel, Vec2::default());
             }
-            assert!(saw_attack, "ordinary player water entry must trigger ATTACK");
+            assert!(
+                saw_attack,
+                "ordinary player water entry must trigger ATTACK"
+            );
             let mut saw_pause = false;
-            let input = crate::InputFrame { left: true, ..Default::default() };
+            let input = crate::InputFrame {
+                left: true,
+                ..Default::default()
+            };
             for _ in 0..24 {
                 game.step(&input);
                 let actor = game.world.entity(fish).unwrap();
@@ -3333,7 +3353,10 @@ mod source_motion_regressions {
                     break;
                 }
             }
-            assert!(saw_pause, "ordinary left input must exit water and trigger PAUSE");
+            assert!(
+                saw_pause,
+                "ordinary left input must exit water and trigger PAUSE"
+            );
         }
     }
 }

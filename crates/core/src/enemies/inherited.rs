@@ -1903,15 +1903,24 @@ mod source_spear_query_tests {
             let (mut game, actor) = delayed_spear_room(preset, true, true);
             for _ in 0..20 {
                 game.step(&InputFrame::default());
-                let enemy = game.world.entity(actor).expect("ordinary constrained ManTrap lives");
+                let enemy = game
+                    .world
+                    .entity(actor)
+                    .expect("ordinary constrained ManTrap lives");
                 assert_eq!(enemy.pos, Vec2::new(112.0, 128.0));
                 assert_eq!(enemy.health, 3);
                 assert_eq!(game.player.health, 4);
             }
             let enemy = game.world.entity(actor).unwrap();
-            let spear_at = |pos: Vec2| game.world.entities.iter().find(|entity| {
-                entity.alive && entity.object == "oSpearsLeft" && entity.pos == pos
-            }).expect("the authored trap must create its spear through ordinary Step");
+            let spear_at = |pos: Vec2| {
+                game.world
+                    .entities
+                    .iter()
+                    .find(|entity| {
+                        entity.alive && entity.object == "oSpearsLeft" && entity.pos == pos
+                    })
+                    .expect("the authored trap must create its spear through ordinary Step")
+            };
             let far = spear_at(Vec2::new(119.0, 142.0));
             let near = spear_at(Vec2::new(120.0, 132.0));
             assert_eq!(far.animation, 20.0);
@@ -1923,10 +1932,19 @@ mod source_spear_query_tests {
             assert!(near.pos.distance(enemy.pos) < far.pos.distance(enemy.pos));
             game.step(&InputFrame::default());
             let enemy = game.world.entity(actor).unwrap();
-            assert_eq!(enemy.health, 3, "the source nearest spear has not reached its hurt frames");
+            assert_eq!(
+                enemy.health, 3,
+                "the source nearest spear has not reached its hurt frames"
+            );
             assert_ne!(enemy.state, 98);
             assert!(counts_as_kill(enemy));
-            assert!(!game.world.entities.iter().any(|entity| entity.alive && entity.object == "oBlood"));
+            assert!(
+                !game
+                    .world
+                    .entities
+                    .iter()
+                    .any(|entity| entity.alive && entity.object == "oBlood")
+            );
             assert!(!game.events.iter().any(|event| {
                 matches!(event, GameEvent::Sound { name, .. } if name == "sndHit")
             }));
@@ -1942,17 +1960,27 @@ mod source_spear_query_tests {
                     game.step(&InputFrame::default());
                     assert_eq!(game.world.entity(actor).unwrap().health, 3);
                 }
-                assert_eq!(game.world.entities.iter().filter(|entity| {
-                    entity.alive && entity.object == "oSpearsLeft"
-                }).count(), 1);
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(|entity| { entity.alive && entity.object == "oSpearsLeft" })
+                        .count(),
+                    1
+                );
                 game.step(&InputFrame::default());
                 let enemy = game.world.entity(actor).unwrap();
                 assert_eq!(enemy.health, 1);
                 assert_eq!(enemy.state, 98);
                 assert!(!counts_as_kill(enemy));
-                assert_eq!(game.world.entities.iter().filter(|entity| {
-                    entity.alive && entity.object == "oBlood"
-                }).count(), 2);
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(|entity| { entity.alive && entity.object == "oBlood" })
+                        .count(),
+                    2
+                );
                 assert!(game.events.iter().any(|event| {
                     matches!(event, GameEvent::Sound { name, .. } if name == "sndHit")
                 }));

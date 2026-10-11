@@ -297,9 +297,11 @@ fn swimming_effects(game: &mut Game) {
 /// by a stun, death, ledge transition, or exit animation. Its fall injury and
 /// synchronous Create events precede the swimming/bubble branch.
 fn active_prelude(game: &mut Game) {
-    let parachute_exists = game.world.entities.iter().any(|entity| {
-        entity.alive && entity.engine_active && entity.object == "oParachute"
-    });
+    let parachute_exists = game
+        .world
+        .entities
+        .iter()
+        .any(|entity| entity.alive && entity.engine_active && entity.object == "oParachute");
     let p = &mut game.player;
     let stationary = matches!(
         p.sprite.as_str(),

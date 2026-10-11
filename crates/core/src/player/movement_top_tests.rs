@@ -122,7 +122,10 @@ fn natural_walkoff_zero_incoming_vy_keeps_full_top_for_first_side_collision() {
             live(&open);
             assert_eq!(wall.player.state, PlayerState::Falling);
             assert_eq!(wall.player.vel.y, 1.0);
-            assert_eq!(wall.player.pos.x, start.x, "CONTRACT: first fall uses top-8");
+            assert_eq!(
+                wall.player.pos.x, start.x,
+                "CONTRACT: first fall uses top-8"
+            );
             assert_eq!(wall.player.pos.y, 153.0);
             assert!(
                 (open.player.pos.x - start.x) * f64::from(direction) > 0.0,
@@ -197,14 +200,26 @@ fn natural_rising_head_collision_keeps_full_top_and_open_control_rises() {
         assert!(!edge(&ceiling.world, &ceiling.player, Side::Top, 1.0));
         // Next Step enters truly airborne with negative yVel; clipping rather
         // than a cached initial head contact supplies the physical oracle.
-        ceiling.step(&InputFrame { jump: true, ..Default::default() });
-        open.step(&InputFrame { jump: true, ..Default::default() });
+        ceiling.step(&InputFrame {
+            jump: true,
+            ..Default::default()
+        });
+        open.step(&InputFrame {
+            jump: true,
+            ..Default::default()
+        });
         live(&ceiling);
         live(&open);
         assert_eq!(ceiling.player.state, PlayerState::Jumping);
         assert!(ceiling.player.vel.y < 0.0);
-        assert_eq!(ceiling.player.pos.y, 146.0, "CONTRACT: rising full-top movement hits the ceiling");
-        assert!(open.player.pos.y < 146.0, "FIXTURE: actual open rising movement required");
+        assert_eq!(
+            ceiling.player.pos.y, 146.0,
+            "CONTRACT: rising full-top movement hits the ceiling"
+        );
+        assert!(
+            open.player.pos.y < 146.0,
+            "FIXTURE: actual open rising movement required"
+        );
     }
 }
 
@@ -230,7 +245,10 @@ fn natural_climb_grab_hanging_control_keeps_its_supported_position() {
         live(&game);
         assert!(game.player.grounded);
         assert_eq!(game.player.pos, Vec2::new(104.0, 152.0));
-        let up = InputFrame { up: true, ..Default::default() };
+        let up = InputFrame {
+            up: true,
+            ..Default::default()
+        };
         let mut climbed = false;
         for _ in 0..180 {
             live(&game);
@@ -245,7 +263,11 @@ fn natural_climb_grab_hanging_control_keeps_its_supported_position() {
         assert!(climbed, "FIXTURE: actual ladder climb required");
         game.step(&InputFrame { right: true, ..up });
         live(&game);
-        assert_eq!(game.player.state, PlayerState::Hanging, "FIXTURE: actual dynamic-Solid grip required");
+        assert_eq!(
+            game.player.state,
+            PlayerState::Hanging,
+            "FIXTURE: actual dynamic-Solid grip required"
+        );
         let hanging = game.player.pos;
         assert_eq!(hanging, Vec2::new(104.0, 104.0));
         assert_eq!(game.player.vel.y, 0.0);

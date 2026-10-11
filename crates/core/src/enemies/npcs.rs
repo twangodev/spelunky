@@ -1992,7 +1992,10 @@ mod tests {
         // Movement bounds[-4,-4..4,8] do not reach the earlier door at112.
         assert_eq!(damsel.sprite_bounds(), Rect::new(126.0, 144.0, 12.0, 16.0));
         for door in game.world.entities.iter().filter(|e| e.object == "oExit") {
-            assert_eq!(door.sprite_bounds(), Rect::new(door.pos.x, 144.0, 16.0, 16.0));
+            assert_eq!(
+                door.sprite_bounds(),
+                Rect::new(door.pos.x, 144.0, 16.0, 16.0)
+            );
             assert!(damsel.event_intersects(door), "full native masks overlap");
             assert_eq!(
                 door.mask_contains(damsel.pos, CollisionPrecision::BoundingBox),

@@ -569,10 +569,16 @@ mod tests {
         let mut settings = Settings::default();
         menu.selected = 7;
         assert_eq!(row(7, &settings), ("DOWN TO RUN".into(), "ON".into()));
-        assert_eq!(menu.key(KeyCode::ArrowRight, &mut settings), SettingsCommand::Changed);
+        assert_eq!(
+            menu.key(KeyCode::ArrowRight, &mut settings),
+            SettingsCommand::Changed
+        );
         assert!(!settings.down_to_run);
         assert_eq!(row(7, &settings), ("DOWN TO RUN".into(), "OFF".into()));
-        assert_eq!(menu.key(KeyCode::Enter, &mut settings), SettingsCommand::Changed);
+        assert_eq!(
+            menu.key(KeyCode::Enter, &mut settings),
+            SettingsCommand::Changed
+        );
         assert!(settings.down_to_run);
         assert_eq!(row(FIRST_BINDING, &settings).0, "MOVE LEFT");
         settings.down_to_run = false;

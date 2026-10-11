@@ -5217,8 +5217,11 @@ mod tests {
                 Vec2::new(1.0, 1.0),
                 0.0,
             );
-            assert_ne!(bone.sprite_bounds(), axis_aligned,
-                "source collision still uses the actual flight angle");
+            assert_ne!(
+                bone.sprite_bounds(),
+                axis_aligned,
+                "source collision still uses the actual flight angle"
+            );
             let bone_uv = atlas.sprite(&bone.sprite, bone.animation).unwrap().uv;
             let arrow_uv = atlas.sprite(&arrow.sprite, arrow.animation).unwrap().uv;
             let state = game.state_hash();
@@ -5227,10 +5230,15 @@ mod tests {
                 let quads = game_scene(&game, alpha, false, &atlas);
                 let bone_quad = quads.iter().find(|q| q.uv == bone_uv).unwrap();
                 let arrow_quad = quads.iter().find(|q| q.uv == arrow_uv).unwrap();
-                assert_eq!(bone_quad.rotation, 0.0,
-                    "oFishBone inherits the literal-zero-angle oItem Draw");
-                assert_eq!(arrow_quad.rotation, arrow.value("rotation") as f32,
-                    "oArrow's own Draw retains image_angle");
+                assert_eq!(
+                    bone_quad.rotation, 0.0,
+                    "oFishBone inherits the literal-zero-angle oItem Draw"
+                );
+                assert_eq!(
+                    arrow_quad.rotation,
+                    arrow.value("rotation") as f32,
+                    "oArrow's own Draw retains image_angle"
+                );
                 assert_eq!(game.state_hash(), state);
                 assert_eq!(game.presentation().state_hash(), draw_state);
             }

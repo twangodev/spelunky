@@ -25,7 +25,13 @@ fn authored_pistol_and_tomb(level_number: u32, rules: RulesPreset) -> (Game, u64
     // Initial level context only: custom format has no currLevel field. Test
     // both sides of the source level-thirteen guard without altering actors.
     game.world.level = level_number;
-    let lord = game.world.entities.iter().find(|e| e.object == "oTombLord").unwrap().id;
+    let lord = game
+        .world
+        .entities
+        .iter()
+        .find(|e| e.object == "oTombLord")
+        .unwrap()
+        .id;
     let actor = game.world.entity(lord).unwrap();
     assert_eq!(actor.health, 20);
     assert_eq!(actor.value("bloodless"), 1.0);
@@ -33,12 +39,21 @@ fn authored_pistol_and_tomb(level_number: u32, rules: RulesPreset) -> (Game, u64
         game.step(&InputFrame::default());
     }
     for _ in 0..4 {
-        game.step(&InputFrame { right: true, ..Default::default() });
+        game.step(&InputFrame {
+            right: true,
+            ..Default::default()
+        });
     }
     game.step(&InputFrame {
-        down: true, attack: true, attack_pressed: true, ..Default::default()
+        down: true,
+        attack: true,
+        attack_pressed: true,
+        ..Default::default()
     });
-    let pistol = game.player.held.expect("ordinary down+attack picks up authored Pistol");
+    let pistol = game
+        .player
+        .held
+        .expect("ordinary down+attack picks up authored Pistol");
     assert_eq!(game.world.entity(pistol).unwrap().object, "oPistol");
     for _ in 0..2 {
         game.step(&InputFrame::default());
@@ -52,8 +67,7 @@ fn authored_pistol_and_tomb(level_number: u32, rules: RulesPreset) -> (Game, u64
 fn source_displacement(v: f64, time: u64) -> f64 {
     let magnitude = v.abs();
     let fraction = magnitude.fract();
-    let extra = fraction > 0.0
-        && time % (1.0 / fraction).round_ties_even() as u64 == 0;
+    let extra = fraction > 0.0 && time % (1.0 / fraction).round_ties_even() as u64 == 0;
     (magnitude.floor() + f64::from(extra)) * v.signum()
 }
 
@@ -76,11 +90,14 @@ fn ordinary_pistol_shots_kill_authored_tomb_with_interleaved_bone_creates_and_la
             for tick in 0..360 {
                 let shoot = tick % 24 == 0;
                 game.step(&InputFrame {
-                    attack: shoot, attack_pressed: shoot, ..Default::default()
+                    attack: shoot,
+                    attack_pressed: shoot,
+                    ..Default::default()
                 });
                 fired |= game.world.entities.iter().any(|e| e.object == "oBullet");
-                let actor = game.world.entity(lord)
-                    .expect("observe fatal Bullet collision before following Normal Step retires Lord");
+                let actor = game.world.entity(lord).expect(
+                    "observe fatal Bullet collision before following Normal Step retires Lord",
+                );
                 if actor.health != previous_hp {
                     assert_eq!(actor.health, previous_hp - 4, "ordinary Bullet damage only");
                     previous_hp = actor.health;
@@ -91,9 +108,18 @@ fn ordinary_pistol_shots_kill_authored_tomb_with_interleaved_bone_creates_and_la
                     break;
                 }
             }
-            assert!(fired && ready_for_death_step, "authored combat must reach fatal ordinary shot");
-            assert!(game.player.health > 0, "ordinary input controller remains live");
-            assert_eq!(hits, 5, "twenty source HP requires five four-damage Bullet hits");
+            assert!(
+                fired && ready_for_death_step,
+                "authored combat must reach fatal ordinary shot"
+            );
+            assert!(
+                game.player.health > 0,
+                "ordinary input controller remains live"
+            );
+            assert_eq!(
+                hits, 5,
+                "twenty source HP requires five four-damage Bullet hits"
+            );
             let actor = game.world.entity(lord).unwrap().clone();
             assert_eq!(actor.value("death_recorded"), 0.0);
             assert_eq!(actor.value("bloodless"), 1.0);
@@ -105,8 +131,14 @@ fn ordinary_pistol_shots_kill_authored_tomb_with_interleaved_bone_creates_and_la
                 actor.pos.x + source_displacement(actor.vel.x, time),
                 actor.pos.y + source_displacement(actor.vel.y, time),
             );
-            assert!(origin.x > 192.0, "final movement is clear of the authored fly cover");
-            assert!(origin.y + 32.0 <= 128.0, "final upward Bullet recoil stays above floor");
+            assert!(
+                origin.x > 192.0,
+                "final movement is clear of the authored fly cover"
+            );
+            assert!(
+                origin.y + 32.0 <= 128.0,
+                "final upward Bullet recoil stays above floor"
+            );
             let first_serial = game.world.creation_serial;
             let kills = game.data.get("kills").copied().unwrap_or(0.0);
             let mut expected_rng = game.rng.clone();
@@ -140,63 +172,102 @@ fn ordinary_pistol_shots_kill_authored_tomb_with_interleaved_bone_creates_and_la
             };
             game.step(&InputFrame::default());
             assert!(game.world.entity(lord).is_none());
-            assert!(!game.world.entities.iter().any(|e| e.object == "oBlood"),
-                "bloodless suppresses helper births, not its caller-origin rolls");
-            let mut births: Vec<_> = game.world.entities.iter()
-                .filter(|e| e.creation_serial > first_serial
-                    && matches!(e.object.as_str(), "oBone" | "oSceptre"))
+            assert!(
+                !game.world.entities.iter().any(|e| e.object == "oBlood"),
+                "bloodless suppresses helper births, not its caller-origin rolls"
+            );
+            let mut births: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|e| {
+                    e.creation_serial > first_serial
+                        && matches!(e.object.as_str(), "oBone" | "oSceptre")
+                })
                 .collect();
             births.sort_by_key(|e| e.creation_serial);
             assert_eq!(births.len(), if level_number == 13 { 5 } else { 4 });
             for (bone, (pos, vel, gravity)) in births.iter().take(4).zip(expected) {
                 assert_eq!(bone.object, "oBone");
                 assert_eq!(bone.pos, pos, "source randomized origin, in birth order");
-                assert_eq!(bone.vel, vel, "own RNG Create finished before next origin rolls");
+                assert_eq!(
+                    bone.vel, vel,
+                    "own RNG Create finished before next origin rolls"
+                );
                 assert_eq!(bone.value("gravity"), gravity);
                 assert_eq!(bone.value("world_effect_initialized"), 1.0);
-                assert_eq!(bone.value("life"), 60.0, "Bone resource already visited before Lord birth");
+                assert_eq!(
+                    bone.value("life"),
+                    60.0,
+                    "Bone resource already visited before Lord birth"
+                );
                 assert_eq!(bone.image_speed(), 0.3);
                 assert_eq!(bone.value("collision_left"), -4.0);
                 assert_eq!(bone.value("collision_bottom"), 4.0);
             }
             if level_number == 13 {
                 let sceptre = births[4];
-                assert_eq!(sceptre.object, "oSceptre", "drop follows all four Bone Creates");
+                assert_eq!(
+                    sceptre.object, "oSceptre",
+                    "drop follows all four Bone Creates"
+                );
                 assert_eq!(sceptre.pos, Vec2::new(origin.x + 16.0, origin.y + 16.0));
             }
             let born_ids: Vec<_> = births.iter().map(|e| e.id).collect();
             let last_emission_serial = births.last().unwrap().creation_serial;
-            let tail_flies: Vec<_> = game.world.entities.iter()
+            let tail_flies: Vec<_> = game
+                .world
+                .entities
+                .iter()
                 .filter(|e| e.object == "oFly" && e.creation_serial > first_serial)
                 .collect();
             if let Some((pos, vel)) = expected_fly {
                 assert_eq!(tail_flies.len(), 1);
                 let fly = tail_flies[0];
                 assert!(fly.creation_serial > last_emission_serial);
-                assert_eq!(fly.previous_pos, pos, "source tail birth after Bones/Sceptre");
+                assert_eq!(
+                    fly.previous_pos, pos,
+                    "source tail birth after Bones/Sceptre"
+                );
                 assert_eq!(fly.vel, vel);
-                assert_eq!(fly.pos, Vec2::new(pos.x + vel.x, pos.y + vel.y),
-                    "newborn Fly resource776 follows Lord775 in the same Normal Step");
+                assert_eq!(
+                    fly.pos,
+                    Vec2::new(pos.x + vel.x, pos.y + vel.y),
+                    "newborn Fly resource776 follows Lord775 in the same Normal Step"
+                );
             } else {
                 assert!(tail_flies.is_empty());
             }
             let mut actual_rng = game.rng.clone();
             for _ in 0..8 {
-                assert_eq!(actual_rng.next_u64(), expected_rng.next_u64(),
-                    "death prefix plus optional same-Step post-destroy ATTACK Fly");
+                assert_eq!(
+                    actual_rng.next_u64(),
+                    expected_rng.next_u64(),
+                    "death prefix plus optional same-Step post-destroy ATTACK Fly"
+                );
             }
             assert_eq!(game.data.get("kills"), Some(&(kills + 1.0)));
             assert_eq!(game.data.get("tomblords"), Some(&1.0));
             game.step(&InputFrame::default());
             assert!(game.world.entity(lord).is_none());
-            assert_eq!(game.data.get("kills"), Some(&(kills + 1.0)), "death credited once");
+            assert_eq!(
+                game.data.get("kills"),
+                Some(&(kills + 1.0)),
+                "death credited once"
+            );
             assert!(born_ids.iter().all(|id| game.world.entity(*id).is_some()));
-            assert_eq!(game.world.entities.iter().filter(|e| e.object == "oSceptre").count(),
-                usize::from(level_number == 13), "no duplicate drop on following Step");
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oSceptre")
+                    .count(),
+                usize::from(level_number == 13),
+                "no duplicate drop on following Step"
+            );
         }
     }
 }
-
 
 #[test]
 fn lethal_ordinary_pistol_during_attack_still_emits_source_post_destroy_fly() {
@@ -207,15 +278,27 @@ fn lethal_ordinary_pistol_during_attack_still_emits_source_post_destroy_fly() {
         let mut hits = 0;
         let mut previous_hp = 20;
         for tick in 0..720 {
-            let target = game.world.entity(lord).expect("Lord remains until final shot");
-            let final_window = target.health == 4 && target.state == 3
-                && target.animation <= 0.5 && !fired_final;
-            let shoot = if target.health > 4 { tick % 24 == 0 } else { final_window };
+            let target = game
+                .world
+                .entity(lord)
+                .expect("Lord remains until final shot");
+            let final_window =
+                target.health == 4 && target.state == 3 && target.animation <= 0.5 && !fired_final;
+            let shoot = if target.health > 4 {
+                tick % 24 == 0
+            } else {
+                final_window
+            };
             fired_final |= final_window;
             game.step(&InputFrame {
-                attack: shoot, attack_pressed: shoot, ..Default::default()
+                attack: shoot,
+                attack_pressed: shoot,
+                ..Default::default()
             });
-            let target = game.world.entity(lord).expect("fatal collision precedes next death Step");
+            let target = game
+                .world
+                .entity(lord)
+                .expect("fatal collision precedes next death Step");
             if target.health != previous_hp {
                 assert_eq!(target.health, previous_hp - 4);
                 previous_hp = target.health;
@@ -230,8 +313,10 @@ fn lethal_ordinary_pistol_during_attack_still_emits_source_post_destroy_fly() {
         assert!(fired_final && game.player.health > 0);
         assert_eq!(hits, 5);
         assert_eq!(target.state, 3, "Bullet must preserve real ATTACK status");
-        assert!((7.0..=12.0).contains(&target.animation),
-            "input-driven projectile arrival must hit source tail-emission image window");
+        assert!(
+            (7.0..=12.0).contains(&target.animation),
+            "input-driven projectile arrival must hit source tail-emission image window"
+        );
         assert!(!target.held);
         assert_eq!(target.value("bombID"), 0.0); // ordinary authored unlinked receiver
         // Next Normal callback observes the incremented room clock.
@@ -257,28 +342,44 @@ fn lethal_ordinary_pistol_during_attack_still_emits_source_post_destroy_fly() {
         let vel = Vec2::new(vx, vy);
         game.step(&InputFrame::default());
         assert!(game.world.entity(lord).is_none());
-        let mut births: Vec<_> = game.world.entities.iter()
-            .filter(|e| e.creation_serial > first_serial
-                && matches!(e.object.as_str(), "oBone" | "oSceptre" | "oFly"))
+        let mut births: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|e| {
+                e.creation_serial > first_serial
+                    && matches!(e.object.as_str(), "oBone" | "oSceptre" | "oFly")
+            })
             .collect();
         births.sort_by_key(|e| e.creation_serial);
-        assert_eq!(births.iter().map(|e| e.object.as_str()).collect::<Vec<_>>(),
-            vec!["oBone", "oBone", "oBone", "oBone", "oSceptre", "oFly"]);
+        assert_eq!(
+            births.iter().map(|e| e.object.as_str()).collect::<Vec<_>>(),
+            vec!["oBone", "oBone", "oBone", "oBone", "oSceptre", "oFly"]
+        );
         let fly = births[5];
         assert_eq!(fly.previous_pos, pos);
-        assert_eq!(fly.vel, vel, "caller y, synchronous own Create, caller x RNG order");
+        assert_eq!(
+            fly.vel, vel,
+            "caller y, synchronous own Create, caller x RNG order"
+        );
         assert_eq!(fly.pos, Vec2::new(pos.x + vel.x, pos.y + vel.y));
         assert_eq!(game.data.get("kills"), Some(&1.0));
         assert_eq!(game.data.get("tomblords"), Some(&1.0));
         let mut actual_rng = game.rng.clone();
         for _ in 0..8 {
-            assert_eq!(actual_rng.next_u64(), expected_rng.next_u64(),
-                "26 death-prefix draws plus three post-destroy ATTACK Fly draws");
+            assert_eq!(
+                actual_rng.next_u64(),
+                expected_rng.next_u64(),
+                "26 death-prefix draws plus three post-destroy ATTACK Fly draws"
+            );
         }
         let fly_id = fly.id;
         game.step(&InputFrame::default());
         assert!(game.world.entity(lord).is_none());
         assert_eq!(game.data.get("kills"), Some(&1.0));
-        assert!(game.world.entity(fly_id).is_some(), "newborn continues as ordinary Fly");
+        assert!(
+            game.world.entity(fly_id).is_some(),
+            "newborn continues as ordinary Fly"
+        );
     }
 }

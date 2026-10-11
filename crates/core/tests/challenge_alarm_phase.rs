@@ -89,10 +89,9 @@ fn unlocked_stars_first_hazard_steps_on_its_natural_alarm_birth_frame() {
 #[test]
 fn source_valid_sun_threshold_fixture_lets_natural_counters_fire_zero_before_eleven() {
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
-        for (score, expected, forbidden) in [
-            (49.0, "oBomb", "oVampire"),
-            (79.0, "oVampire", "oGhost"),
-        ] {
+        for (score, expected, forbidden) in
+            [(49.0, "oBomb", "oVampire"), (79.0, "oVampire", "oGhost")]
+        {
             let mut game = unlocked_portal(83, rules, HubKind::Sun);
             // Bounded legal pre-callback fixture, not an earned survival score
             // or a claimed natural RNG/input trace to points49/79. From here

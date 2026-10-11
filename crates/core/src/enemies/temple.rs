@@ -2808,9 +2808,7 @@ mod tests {
                         .entities
                         .iter()
                         .find(|e| {
-                            e.alive
-                                && e.object == "oEnemySight"
-                                && e.value("owner") == actor as f64
+                            e.alive && e.object == "oEnemySight" && e.value("owner") == actor as f64
                         })
                         .expect("the real actor Step must create its sight");
                     let ray_id = ray.id;
@@ -2857,9 +2855,15 @@ mod tests {
                 .iter()
                 .find(|e| e.object == "oEnemySight" && e.value("owner") == actor as f64)
                 .expect("IDLE must cast after choosing its facing");
-            assert_eq!(ray.pos.x - ray.previous_pos.x, f64::from(hawk.facing) * 10.0);
+            assert_eq!(
+                ray.pos.x - ray.previous_pos.x,
+                f64::from(hawk.facing) * 10.0
+            );
         }
-        assert!(saw_left && saw_right, "exercise both natural facing choices");
+        assert!(
+            saw_left && saw_right,
+            "exercise both natural facing choices"
+        );
     }
 
     #[test]
@@ -2935,7 +2939,11 @@ mod tests {
                         let expected_state = if source_counter < 1 { 1 } else { 0 };
                         let mut source_rng = game.rng.clone();
                         let expected_facing = if expected_state == 1 {
-                            if source_rng.next_u64() % 2 == 0 { -1 } else { 1 }
+                            if source_rng.next_u64() % 2 == 0 {
+                                -1
+                            } else {
+                                1
+                            }
                         } else {
                             1
                         };
@@ -2949,9 +2957,7 @@ mod tests {
                             .world
                             .entities
                             .iter()
-                            .find(|e| {
-                                e.object == "oEnemySight" && e.value("owner") == actor as f64
-                            })
+                            .find(|e| e.object == "oEnemySight" && e.value("owner") == actor as f64)
                             .expect("incoming IDLE emits after its counter/facing branch");
                         assert_eq!(ray.value("hspeed"), f64::from(expected_facing) * 10.0);
                         assert_eq!(game.rng.next_u64(), source_rng.next_u64());
@@ -2991,7 +2997,10 @@ mod tests {
                 if source_jump {
                     let after = game.world.entity(actor).unwrap();
                     assert_eq!(after.vel.y, -6.0);
-                    assert_eq!(after.timer, before.timer.saturating_sub(10).saturating_sub(1));
+                    assert_eq!(
+                        after.timer,
+                        before.timer.saturating_sub(10).saturating_sub(1)
+                    );
                     let mut returned_to_walk = after.state == 1;
                     for _ in 0..240 {
                         if returned_to_walk {
@@ -3006,7 +3015,10 @@ mod tests {
                             returned_to_walk = true;
                         }
                     }
-                    assert!(returned_to_walk, "corrected counter reaches facing/WALK branch");
+                    assert!(
+                        returned_to_walk,
+                        "corrected counter reaches facing/WALK branch"
+                    );
                     exercised = true;
                     break;
                 }
@@ -3015,7 +3027,10 @@ mod tests {
                 break;
             }
         }
-        assert!(exercised, "ordinary WALK pause must reach stationary IDLE wall interaction");
+        assert!(
+            exercised,
+            "ordinary WALK pause must reach stationary IDLE wall interaction"
+        );
     }
 
     #[test]

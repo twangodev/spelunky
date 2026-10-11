@@ -4,7 +4,9 @@ fn room(rules: RulesPreset) -> Game {
     let mut g = Game::shell(7, rules);
     g.world = World::new(30, 20, Area::Mines, 1);
     g.world.name = "rLevel".into();
-    for x in 0..30 { g.world.set_tile(x, 7, "oHardBlock"); }
+    for x in 0..30 {
+        g.world.set_tile(x, 7, "oHardBlock");
+    }
     g.player.pos = Vec2::new(88.0, 88.0);
     g.player.previous_pos = g.player.pos;
     g
@@ -26,24 +28,42 @@ fn player_crush_callback_creates_blood_before_return_and_honors_nonzero_bloodles
             let mut g = room(rules);
             g.world.set_tile(5, 5, "oHardBlock");
             g.player.data.insert("bloodless".into(), bloodless);
-            for _ in 0..existing { g.spawn("oBlood", Vec2::new(240.0, 80.0)); }
+            for _ in 0..existing {
+                g.spawn("oBlood", Vec2::new(240.0, 80.0));
+            }
             let first = g.world.next_id;
-            let admitted = if bloodless != 0.0 { 0 } else { (16_usize - existing).min(3) };
+            let admitted = if bloodless != 0.0 {
+                0
+            } else {
+                (16_usize - existing).min(3)
+            };
             let mut oracle = g.rng.clone();
             let expected: Vec<_> = (0..admitted).map(|_| literal_blood(&mut oracle)).collect();
             crate::traps::player_crush(&mut g);
-            let blood: Vec<_> = g.world.entities.iter().filter(|e| e.alive && e.id >= first && e.object == "oBlood").collect();
+            let blood: Vec<_> = g
+                .world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.id >= first && e.object == "oBlood")
+                .collect();
             assert_eq!(blood.len(), admitted);
             for (particle, (velocity, gravity)) in blood.iter().zip(expected) {
                 assert_eq!(particle.pos, g.player.pos);
-                assert_eq!(particle.vel, velocity, "Create must finish before Crush returns");
+                assert_eq!(
+                    particle.vel, velocity,
+                    "Create must finish before Crush returns"
+                );
                 assert_eq!(particle.value("gravity"), gravity);
                 assert_eq!(particle.value("world_effect_initialized"), 1.0);
             }
             assert_eq!(g.rng.clone().next_u64(), oracle.next_u64());
             assert_eq!(g.player.health, -95);
             assert_eq!(g.player.data.get("hidden"), Some(&1.0));
-            assert!(g.events.iter().any(|e| matches!(e, GameEvent::Sound { name, .. } if name == "sndDie")));
+            assert!(
+                g.events
+                    .iter()
+                    .any(|e| matches!(e, GameEvent::Sound { name, .. } if name == "sndDie"))
+            );
         }
     }
 }
@@ -62,10 +82,19 @@ fn actual_default_smash_overlap_runs_crush_blood_before_smash_velocity_draw() {
         g.step(&InputFrame::default());
         assert!(g.events.contains(&GameEvent::Damage { amount: 99 }));
         assert!(g.events.contains(&GameEvent::Damage { amount: 10 }));
-        let blood: Vec<_> = g.world.entities.iter().filter(|e| e.alive && e.id >= first && e.object == "oBlood").collect();
+        let blood: Vec<_> = g
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.alive && e.id >= first && e.object == "oBlood")
+            .collect();
         assert_eq!(blood.len(), 4);
         for (particle, (_, gravity)) in blood.iter().zip(expected) {
-            assert_eq!(particle.value("gravity"), gravity, "Crush child RNG precedes Smash velocity RNG");
+            assert_eq!(
+                particle.value("gravity"),
+                gravity,
+                "Crush child RNG precedes Smash velocity RNG"
+            );
         }
         assert_eq!(g.player.vel.x, speed);
         assert_eq!(g.rng.clone().next_u64(), oracle.next_u64());
