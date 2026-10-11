@@ -270,7 +270,7 @@ impl Player {
             .data
             .get("image_xscale")
             .copied()
-            .unwrap_or(if self.facing > 0 { -1.0 } else { 1.0 });
+            .unwrap_or(1.0);
         let yscale = self.data.get("image_yscale").copied().unwrap_or(1.0);
         let angle = -self
             .data
@@ -1065,7 +1065,8 @@ mod geometry_tests {
             .data
             .get("image_xscale")
             .copied()
-            .unwrap_or(if p.facing > 0 { -1.0 } else { 1.0 });
+            // Source Create starts at +1; characterDrawEvent persists facing later.
+            .unwrap_or(1.0);
         let yscale = p.data.get("image_yscale").copied().unwrap_or(1.0);
         let angle = -p
             .data
@@ -1146,7 +1147,7 @@ mod geometry_tests {
     }
 
     #[test]
-    fn bounds_only_path_matches_original_current_frames_and_player_facing() {
+    fn bounds_only_path_matches_source_frames_and_persisted_draw_scale() {
         let atlas: serde_json::Value =
             serde_json::from_str(include_str!("../../../assets/atlas.json")).unwrap();
         let sprites = atlas["sprites"].as_object().unwrap();

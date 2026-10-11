@@ -1432,6 +1432,12 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
     sort_draw_order(game);
     game.dispatcher.phase = Phase::Draw;
     for i in game.dispatcher.active_order.clone() {
+        if i == Instance::Player
+            && game.player.data.get("hidden").copied().unwrap_or(0.0) == 0.0
+            && game.player.data.get("visible").copied().unwrap_or(1.0) != 0.0
+        {
+            crate::player::draw_event(game);
+        }
         if let Instance::Entity(id) = i {
             if let Some(e) = game.world.entities.iter().find(|e| e.id == id) {
                 let visible = e.data.get("visible").map_or_else(

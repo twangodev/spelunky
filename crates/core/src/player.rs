@@ -742,6 +742,15 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     // Source burning ticks before the separate lava branch resets it to 100.
     // Keeping lava outside this prelude would shorten its lifetime on entry.
     crate::traps::player_lava(game);
+    // Source refuels before the active/controller guard, and only an owned
+    // Jetpack. A pickup later in this Step cannot retroactively refill it.
+    let p = &mut game.player;
+    let source_grounded = grounded_state(p.state)
+        || (matches!(p.state, PlayerState::Stunned | PlayerState::Dead)
+            && value(p, "source_platform_grounded", 0.0) != 0.0);
+    if source_grounded && has(p, &["Jetpack", "jetpack"]) {
+        set(p, "jetpack_fuel", 50.0);
+    }
     pit_prelude(game);
     if game.state == RunState::Dead {
         game.player.state = PlayerState::Dead;
@@ -802,6 +811,8 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         set(p, "source_platform_climbing", 0.0);
         return;
     }
+    // characterStepEvent alone samples kDown. Skipped controllers keep it.
+    set(p, "source_k_down", f64::from(input.down));
     set(p, "bounced", 0.0);
     let mut effective = *input;
     let cant_jump = value(p, "cantJump", 0.0);
@@ -829,7 +840,6 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let in_web = object_at(w, p.pos, &["oWeb"]);
     let water_jump = precise_line(w, edge_rect(p, Side::Top, 1.0, false), "oWater");
     let water_surface = in_water && !water(w, Vec2::new(p.pos.x, p.pos.y - 9.0));
-    let was_grounded = grounded_state(p.state);
     let mut fall = value(p, "fall_timer", 0.0);
     let mut gravity = value(p, "gravity", 1.0);
     let mut intensity = value(p, "gravity_intensity", 1.0);
@@ -844,9 +854,6 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let mut limit_x = value(p, "velocity_limit_x", 16.0);
     let mut limit_y_acc: f64 = 6.0;
 
-    if was_grounded {
-        fuel = 50.0;
-    }
     if !in_water && !in_web {
         set(p, "swimming", 0.0);
     }
@@ -1459,7 +1466,8 @@ fn stunned_tick(w: &mut World, p: &mut Player, time: u64) -> bool {
     }
     p.vel.x = p.vel.x.clamp(-10.0, 10.0);
     p.vel.y = p.vel.y.clamp(-10.0, 10.0);
-    move_player(w, p, time, false);
+    let down = value(p, "source_k_down", 0.0) != 0.0;
+    move_player(w, p, time, down);
     let impact = value(p, "wall_hurt", value(p, "wallHurt", 0.0)) > 0.0
         && (edge(w, p, Side::Left, 1.0)
             || edge(w, p, Side::Right, 1.0)
@@ -1519,6 +1527,13 @@ pub fn animation_end(game: &mut Game) {
         }
         _ => {}
     }
+}
+
+/// characterDrawEvent writes image_xscale in the authoritative Draw phase,
+/// after automatic Collision. Physical presentation frames only read it.
+pub(crate) fn draw_event(game: &mut Game) {
+    let scale = if game.player.facing > 0 { -1.0 } else { 1.0 };
+    set(&mut game.player, "image_xscale", scale);
 }
 
 /// oPlayer1's separate End Step event runs after automatic Collision. It
