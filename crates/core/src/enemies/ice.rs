@@ -266,6 +266,15 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
 }
 
 fn yeti(game: &mut Game, e: &mut Entity) {
+    // moveTo stops displacement without changing stored yVel. Recovery leaves
+    // STUNNED before the source scrCheckCollisions guard, so retain that value.
+    let recovery_y = (e.vel.y
+        + if e.held {
+            0.0
+        } else {
+            super::inherited::gravity(e, 0.6)
+        })
+    .min(10.0);
     let impact_y = (e.vel.y + super::inherited::gravity(e, 0.6)).min(10.0);
     let (wall, floor) = move_body(&game.world, e, 0.6);
     if e.state != 99 && e.state != 98 && e.health < 1 {
@@ -343,9 +352,28 @@ fn yeti(game: &mut Game, e: &mut Entity) {
                 }
             }
         }
-        settle_yeti(e, wall, floor, impact_y);
-        if e.vel.x == 0.0 && e.vel.y == 0.0 && e.health < 1 {
-            e.state = 99;
+        if e.state >= 98 {
+            settle_yeti(e, wall, floor, impact_y);
+            if e.vel.x == 0.0 && e.vel.y == 0.0 && e.health < 1 {
+                e.state = 99;
+            }
+        } else {
+            // Source status now IDLE skips scrCheckCollisions, then performs
+            // only the ordinary friction and normal sprite epilogue.
+            e.vel.y = recovery_y;
+            if e.vel.x > 0.0 {
+                e.vel.x -= 0.1;
+            } else if e.vel.x < 0.0 {
+                e.vel.x += 0.1;
+            }
+            if e.vel.x.abs() < 0.5 {
+                e.vel.x = 0.0;
+            }
+            e.set_sprite(if e.vel.x == 0.0 {
+                "sYetiLeft"
+            } else {
+                "sYetiRunLeft"
+            });
         }
         if e.held {
             e.set_sprite(if e.health > 0 {
