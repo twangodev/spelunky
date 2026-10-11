@@ -902,12 +902,8 @@ fn psychic(game: &mut Game, e: &mut Entity) {
 /// Literal late oPlayer1 Step queries: first test an imprecise rectangle,
 /// then affect the nearest active instance, which need not be that overlap.
 pub(super) fn player_hurt(game: &mut Game) {
-    if game.player.is_exiting()
-        || game.player.health < -99
-        || game.player.data.get("visible").copied().unwrap_or(1.0) == 0.0
-    {
-        return;
-    }
+    // The dispatcher latches the enclosing source hurt guard before Crush;
+    // writes inside that block do not reevaluate it for Laser/PsychicWave.
     for (object, damage, stun, cause) in [
         ("oLaser", 3, 20, crate::statistics::EnemyDeath::Ufo),
         (
@@ -947,11 +943,18 @@ pub(super) fn player_hurt(game: &mut Game) {
             continue;
         };
         let (id, pos) = (target.id, target.pos);
-        hurt_player_cause(game, damage, cause);
-        game.player.vel = Vec2::new(if pos.x < game.player.pos.x { 2.0 } else { -2.0 }, -4.0);
-        game.player.stun = stun;
-        game.player.state = PlayerState::Stunned;
         if object == "oLaser" {
+            let had_life = game.player.health > 0;
+            if had_life {
+                game.player.health -= damage;
+                game.events.push(GameEvent::Damage { amount: damage });
+                if game.player.health <= 0 && crate::statistics::is_real_level(game) {
+                    game.lifetime_stats.enemy_death(cause);
+                }
+            }
+            game.player.vel =
+                Vec2::new(if pos.x < game.player.pos.x { 2.0 } else { -2.0 }, -4.0);
+            crate::player::script_player_blood(game, 3);
             crate::world_events::spawn_effect(game, "oLaserExplode", pos);
             if let Some(target) = game
                 .world
@@ -961,6 +964,16 @@ pub(super) fn player_hurt(game: &mut Game) {
             {
                 target.alive = false;
             }
+            game.sound("sndHurt", game.player.pos);
+            game.player.stun = stun;
+            game.player.state = PlayerState::Stunned;
+        } else {
+            // PsychicWave has no source blood call; retain its independent path.
+            hurt_player_cause(game, damage, cause);
+            game.player.vel =
+                Vec2::new(if pos.x < game.player.pos.x { 2.0 } else { -2.0 }, -4.0);
+            game.player.stun = stun;
+            game.player.state = PlayerState::Stunned;
         }
     }
 }
@@ -2796,3 +2809,7 @@ mod tests {
         assert_eq!(ufo.state, 1);
     }
 }
+
+#[cfg(test)]
+#[path = "player_laser_blood_contract_tests.rs"]
+mod player_laser_blood_contract_tests;
