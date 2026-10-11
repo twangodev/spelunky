@@ -159,18 +159,39 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
         e.data.insert("inherited_gravity".into(), 0.0);
         e.vel = Vec2::new(0.0, 0.1);
     }
-    let spear_area = Rect::new(e.pos.x + 2.0, e.pos.y + 2.0, 13.0, 13.0);
-    let spear = game
-        .world
-        .entities
-        .iter()
-        .filter(|other| {
-            other.alive
-                && crate::catalog::is_a(&other.object, "oSpearsLeft")
-                && other.sprite_bounds().intersects(spear_area)
+    // The source rectangle gates the branch; instance_nearest then searches
+    // the entire current active parent array, including non-overlapping spears.
+    // This enemy is detached during its Step and is not a member of that family.
+    crate::dispatcher::register_instances(game);
+    let spears: Vec<_> = crate::dispatcher::descendant_instances(game, "oSpearsLeft")
+        .into_iter()
+        .filter_map(|instance| match instance {
+            crate::dispatcher::Instance::Entity(id) => game.world.entity(id),
+            _ => None,
         })
-        .min_by(|a, b| a.pos.distance(e.pos).total_cmp(&b.pos.distance(e.pos)))
-        .map(|other| (other.pos, other.animation));
+        .filter(|other| other.engine_active)
+        .collect();
+    let spear = if spears.iter().any(|other| {
+        other.collision_mask().intersects_rectangle_bbox(
+            Vec2::new(e.pos.x + 2.0, e.pos.y + 2.0),
+            Vec2::new(e.pos.x + 14.0, e.pos.y + 14.0),
+        )
+    }) {
+        let mut nearest = None;
+        let mut distance = f64::INFINITY;
+        for other in spears {
+            let dx = other.pos.x - e.pos.x;
+            let dy = other.pos.y - e.pos.y;
+            let candidate = dx * dx + dy * dy;
+            if candidate < distance {
+                nearest = Some((other.pos, other.animation));
+                distance = candidate;
+            }
+        }
+        nearest
+    } else {
+        None
+    };
     if let Some((pos, _)) = spear.filter(|(_, frame)| *frame >= 20.0 && *frame < 24.0) {
         let stunned_body = matches!(
             e.object.as_str(),
@@ -1844,5 +1865,98 @@ mod burning_source_tests {
             }
         }
         assert!(emitted && skipped);
+    }
+}
+
+#[cfg(test)]
+mod source_spear_query_tests {
+    use super::*;
+
+    // Authored solids constrain the ordinary ManTrap walk without changing its
+    // state or velocity. The falling Rock is an ordinary birth with zero launch.
+    fn delayed_spear_room(preset: RulesPreset, near_trap: bool, falling_rock: bool) -> (Game, u64) {
+        let mut game = Game::shell(71, preset);
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        for x in 6..=9 {
+            game.world.set_tile(x, 9, "oBlock");
+        }
+        game.player.pos = Vec2::new(88.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.spawn("oBlock", Vec2::new(97.0, 128.0));
+        game.spawn("oBlock", Vec2::new(126.0, 128.0));
+        let actor = game.spawn("oManTrap", Vec2::new(112.0, 128.0));
+        game.spawn("oSpearTrapTop", Vec2::new(135.0, 142.0));
+        if near_trap {
+            game.spawn("oSpearTrapTop", Vec2::new(136.0, 132.0));
+        }
+        if falling_rock {
+            game.spawn("oRock", Vec2::new(88.0, 124.0));
+        }
+        (game, actor)
+    }
+
+    #[test]
+    fn actual_step_mantrap_spear_gate_uses_nearer_nonoverlapping_later_spear() {
+        for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let (mut game, actor) = delayed_spear_room(preset, true, true);
+            for _ in 0..20 {
+                game.step(&InputFrame::default());
+                let enemy = game.world.entity(actor).expect("ordinary constrained ManTrap lives");
+                assert_eq!(enemy.pos, Vec2::new(112.0, 128.0));
+                assert_eq!(enemy.health, 3);
+                assert_eq!(game.player.health, 4);
+            }
+            let enemy = game.world.entity(actor).unwrap();
+            let spear_at = |pos: Vec2| game.world.entities.iter().find(|entity| {
+                entity.alive && entity.object == "oSpearsLeft" && entity.pos == pos
+            }).expect("the authored trap must create its spear through ordinary Step");
+            let far = spear_at(Vec2::new(119.0, 142.0));
+            let near = spear_at(Vec2::new(120.0, 132.0));
+            assert_eq!(far.animation, 20.0);
+            assert!(near.animation < 20.0, "the Rock must delay the nearer trap");
+            let first = Vec2::new(enemy.pos.x + 2.0, enemy.pos.y + 2.0);
+            let last = Vec2::new(enemy.pos.x + 14.0, enemy.pos.y + 14.0);
+            assert!(far.collision_mask().intersects_rectangle_bbox(first, last));
+            assert!(!near.collision_mask().intersects_rectangle_bbox(first, last));
+            assert!(near.pos.distance(enemy.pos) < far.pos.distance(enemy.pos));
+            game.step(&InputFrame::default());
+            let enemy = game.world.entity(actor).unwrap();
+            assert_eq!(enemy.health, 3, "the source nearest spear has not reached its hurt frames");
+            assert_ne!(enemy.state, 98);
+            assert!(counts_as_kill(enemy));
+            assert!(!game.world.entities.iter().any(|entity| entity.alive && entity.object == "oBlood"));
+            assert!(!game.events.iter().any(|event| {
+                matches!(event, GameEvent::Sound { name, .. } if name == "sndHit")
+            }));
+        }
+    }
+
+    #[test]
+    fn actual_step_mantrap_spear_without_delayed_receiver_keeps_damage_and_blood() {
+        for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for (near_trap, falling_rock) in [(false, true), (true, false)] {
+                let (mut game, actor) = delayed_spear_room(preset, near_trap, falling_rock);
+                for _ in 0..20 {
+                    game.step(&InputFrame::default());
+                    assert_eq!(game.world.entity(actor).unwrap().health, 3);
+                }
+                assert_eq!(game.world.entities.iter().filter(|entity| {
+                    entity.alive && entity.object == "oSpearsLeft"
+                }).count(), 1);
+                game.step(&InputFrame::default());
+                let enemy = game.world.entity(actor).unwrap();
+                assert_eq!(enemy.health, 1);
+                assert_eq!(enemy.state, 98);
+                assert!(!counts_as_kill(enemy));
+                assert_eq!(game.world.entities.iter().filter(|entity| {
+                    entity.alive && entity.object == "oBlood"
+                }).count(), 2);
+                assert!(game.events.iter().any(|event| {
+                    matches!(event, GameEvent::Sound { name, .. } if name == "sndHit")
+                }));
+            }
+        }
     }
 }
