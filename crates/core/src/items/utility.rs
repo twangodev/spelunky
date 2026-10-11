@@ -306,7 +306,9 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         .world
         .entities
         .iter()
-        .position(|e| e.id == id && e.alive)
+        // Dice's own Step continues its final ground/roll block after lava
+        // instance_destroy. Retain that receiver without reviving it.
+        .position(|e| e.id == id && (e.alive || e.object == "oDice"))
     else {
         return;
     };
