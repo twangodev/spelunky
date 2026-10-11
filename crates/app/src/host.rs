@@ -2874,9 +2874,8 @@ impl ApplicationHandler<UserEvent> for App {
                 self.mouse_left = false;
                 self.mouse_right = false;
                 self.control = false;
-                if !focused && self.screen == Screen::Playing {
-                    self.screen(Screen::Pause)
-                }
+                // Source freezeOnLoseFocus suspends simulation without changing
+                // the explicit pause state. Focus return resumes the same screen.
                 self.reset_timing();
                 if !focused {
                     self.input.clear();
@@ -2886,9 +2885,6 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::Occluded(occluded) => {
                 self.occluded = occluded;
-                if occluded && self.screen == Screen::Playing {
-                    self.screen(Screen::Pause);
-                }
                 self.reset_timing();
                 if occluded {
                     self.input.clear();
@@ -2907,7 +2903,7 @@ impl ApplicationHandler<UserEvent> for App {
                 if let PhysicalKey::Code(key) = event.physical_key {
                     let pressed = event.state == ElementState::Pressed;
                     // Winit can recreate held key-downs on focus gain. The
-                    // matching focus loss already cleared input and paused;
+                    // matching focus loss already cleared input and reset timing;
                     // restoring an old Escape/Confirm must not resume play.
                     if is_synthetic && pressed {
                         return;
