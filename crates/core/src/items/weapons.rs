@@ -618,6 +618,29 @@ fn hit_player(game: &mut Game, projectile: &mut Entity, damage: i32) {
     // Bullet's automatic Collision has no held-item release in source.
 }
 
+/// Source instance_nearest walks the current active object-family array.
+/// World storage retains lifetime order even after deactivation/reactivation.
+fn nearest_active_projectile(game: &mut Game, object: &str) -> Option<Entity> {
+    crate::dispatcher::register_instances(game);
+    let origin = game.player.pos;
+    crate::dispatcher::descendant_instances(game, object)
+        .into_iter()
+        .filter_map(|instance| match instance {
+            crate::dispatcher::Instance::Entity(id) => game.world.entity(id),
+            _ => None,
+        })
+        .filter(|entity| entity.engine_active)
+        .min_by(|a, b| {
+            let distance_squared = |entity: &Entity| {
+                let dx = entity.pos.x - origin.x;
+                let dy = entity.pos.y - origin.y;
+                dx * dx + dy * dy
+            };
+            distance_squared(a).total_cmp(&distance_squared(b))
+        })
+        .cloned()
+}
+
 /// oPlayer1 Step checks rocks independently from Arrow collisions. Rocks
 /// survive impact, and the Mitt catches an unsafe fast rock only with empty
 /// hands. Contact-damage invulnerability does not guard this source branch.
@@ -625,27 +648,18 @@ fn rock_player_contact(game: &mut Game) {
     if game.player.is_exiting() || super::player_dead(game) || game.player.is_stunned() {
         return;
     }
-    let query = Rect::new(game.player.pos.x - 8.0, game.player.pos.y - 8.0, 17.0, 17.0);
-    if !game
-        .world
-        .entities
-        .iter()
-        .any(|e| e.alive && e.object == "oRock" && e.sprite_bounds().intersects(query))
-    {
+    let first = Vec2::new(game.player.pos.x - 8.0, game.player.pos.y - 8.0);
+    let second = Vec2::new(game.player.pos.x + 8.0, game.player.pos.y + 8.0);
+    if !game.world.entities.iter().any(|e| {
+        e.alive
+            && e.engine_active
+            && e.object == "oRock"
+            && e.collision_mask().intersects_rectangle_bbox(first, second)
+    }) {
         return;
     }
     // The original first tests collision_rectangle, then instance_nearest.
-    let Some(rock) = game
-        .world
-        .entities
-        .iter()
-        .filter(|e| e.alive && e.object == "oRock")
-        .min_by(|a, b| {
-            a.pos
-                .distance(game.player.pos)
-                .total_cmp(&b.pos.distance(game.player.pos))
-        })
-    else {
+    let Some(rock) = nearest_active_projectile(game, "oRock") else {
         return;
     };
     if rock.vel.x.abs() <= 4.0 || rock.value("safe") != 0.0 {
@@ -1017,20 +1031,11 @@ pub fn player_hurt_queries(game: &mut Game) {
     let second = Vec2::new(game.player.pos.x + 8.0, game.player.pos.y + 8.0);
     if game.world.entities.iter().any(|e| {
         e.alive
+            && e.engine_active
             && e.object == "oArrow"
             && e.collision_mask().intersects_rectangle_bbox(first, second)
     }) {
-        let nearest = game
-            .world
-            .entities
-            .iter()
-            .filter(|e| e.alive && e.object == "oArrow")
-            .min_by(|a, b| {
-                a.pos
-                    .distance(game.player.pos)
-                    .total_cmp(&b.pos.distance(game.player.pos))
-            })
-            .cloned();
+        let nearest = nearest_active_projectile(game, "oArrow");
         if let Some(mut arrow) = nearest {
             if arrow.vel.x.abs() > 3.0 && arrow.value("safe") == 0.0 {
                 hit_player(game, &mut arrow, 2);
@@ -3193,3 +3198,6 @@ include!("arrow_player_blood_tests.rs");
 #[cfg(test)]
 #[path = "rock_player_blood_tests.rs"]
 mod rock_player_blood_source_tests;
+
+#[cfg(test)]
+include!("projectile_query_contract.rs");
