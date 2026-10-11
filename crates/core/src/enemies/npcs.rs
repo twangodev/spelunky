@@ -1023,8 +1023,10 @@ fn keeper_drop_gun(game: &mut Game, e: &mut Entity) {
 }
 
 fn scarab(game: &mut Game, e: &mut Entity) {
-    let old = e.vel;
-    let (wall, ground) = move_body(&game.world, e, 0.0);
+    let velocity = e.vel;
+    move_body(&game.world, e, 0.0);
+    // Source moveTo changes position, retaining both velocity components.
+    e.vel = velocity;
     if game.world.solid_at(e.pos.x + 8.0, e.pos.y + 8.0) {
         e.health = 0;
     }
@@ -1041,36 +1043,54 @@ fn scarab(game: &mut Game, e: &mut Entity) {
         }
         e.alive = false;
         destroyed(game, e);
-        return;
+        // instance_destroy executes Destroy synchronously, then resumes Step.
     }
-    if wall {
-        e.vel.x = -old.x;
-    }
-    if ground && old.y > 0.0 {
-        e.vel.y = -old.y;
-    }
-    e.vel.x = (e.vel.x.abs() - 0.5).max(0.0) * e.vel.x.signum();
-    e.vel.y = (e.vel.y.abs() - 0.5).max(0.0) * e.vel.y.signum();
-    if e.vel.x.abs() < 1.0 {
-        e.vel.x = 0.0;
-    }
-    if e.vel.y.abs() < 1.0 {
-        e.vel.y = 0.0;
-    }
-    if e.vel == Vec2::default() {
-        if e.timer > 0 {
+    if e.state == 0 {
+        e.vel.x = (e.vel.x.abs() - 0.5).max(0.0) * e.vel.x.signum();
+        e.vel.y = (e.vel.y.abs() - 0.5).max(0.0) * e.vel.y.signum();
+        if e.vel.x.abs() < 1.0 {
+            e.vel.x = 0.0;
+        }
+        if e.vel.y.abs() < 1.0 {
+            e.vel.y = 0.0;
+        }
+        if e.vel == Vec2::default() && e.timer > 0 {
             e.timer -= 1;
         }
-        if e.timer == 0 {
-            if e.pos.distance(game.player.pos) < 64.0 {
-                steer_toward(e, game.player.pos, -4.0);
+        if e.timer == 0 && e.vel.x < 1.0 && e.vel.y < 1.0 {
+            let origin = Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0);
+            let angle = if origin.distance(game.player.pos) < 64.0 {
+                // GameMaker point_direction is upward-positive; the source
+                // adds 180 degrees to flee the character's origin.
+                (origin.y - game.player.pos.y).atan2(game.player.pos.x - origin.x)
+                    + std::f64::consts::PI
             } else {
-                // oScarab Step uses inclusive integer rand(0,360), then
-                // GameMaker's upward-positive degree direction for yVel.
-                let angle = f64::from(game.rng.range(361)).to_radians();
-                e.vel = Vec2::new(angle.cos() * 4.0, -angle.sin() * 4.0);
-            }
+                f64::from(game.rng.range(361)).to_radians()
+            };
+            e.vel = Vec2::new(angle.cos() * 4.0, -angle.sin() * 4.0);
             e.timer = 10 + game.rng.range(21);
+        }
+        // Source checks each edge after decay and any new launch, in this order.
+        let b = e.bounds();
+        if super::solid_mask(&game.world, Rect::new(b.x + b.w, b.y, 1.0, b.h), e.id)
+            && e.vel.x > 0.0
+        {
+            e.vel.x = -e.vel.x;
+        }
+        if super::solid_mask(&game.world, Rect::new(b.x - 1.0, b.y, 1.0, b.h), e.id)
+            && e.vel.x < 0.0
+        {
+            e.vel.x = -e.vel.x;
+        }
+        if super::solid_mask(&game.world, Rect::new(b.x, b.y - 1.0, b.w, 1.0), e.id)
+            && e.vel.y < 0.0
+        {
+            e.vel.y = -e.vel.y;
+        }
+        if super::solid_mask(&game.world, Rect::new(b.x, b.y + b.h, b.w, 1.0), e.id)
+            && e.vel.y > 0.0
+        {
+            e.vel.y = -e.vel.y;
         }
     }
 }
