@@ -307,9 +307,6 @@ fn frog(game: &mut Game, e: &mut Entity) {
 }
 
 fn monkey(game: &mut Game, e: &mut Entity) {
-    for key in ["grab_counter", "vine_counter", "throw_counter"] {
-        countdown(e, key);
-    }
     let (wall, _) = move_body(
         &game.world,
         e,
@@ -326,7 +323,9 @@ fn monkey(game: &mut Game, e: &mut Entity) {
     e.data.insert("swimming".into(), f64::from(swimming));
     if e.health <= 0 {
         die(game, e);
-        return;
+        // instance_destroy runs inherited Enemy Destroy immediately, then the
+        // current Monkey Step continues through its independent state tail.
+        super::destroyed(game, e);
     }
     if collision_offset(&game.world, e, 1.0, 0.0) {
         e.vel.x = -1.0;
@@ -335,6 +334,9 @@ fn monkey(game: &mut Game, e: &mut Entity) {
         e.vel.x = 1.0;
     }
     let grounded = ground(&game.world, e);
+    for key in ["grab_counter", "vine_counter", "throw_counter"] {
+        countdown(e, key);
+    }
     let dist = distance_to_player(game, e);
     match e.state {
         0 => {
