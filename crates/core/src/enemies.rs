@@ -79,6 +79,7 @@ pub fn init_entity(e: &mut Entity) {
         .insert("enemy".into(), f64::from(is_enemy(&e.object)));
     if is_enemy(&e.object) || e.object == "oDamsel" {
         e.data.insert("heavy".into(), 1.0);
+        e.data.entry("bomb_id".into()).or_insert(0.0);
     }
     if is_enemy(&e.object) {
         // These Creates finish facing LEFT, while the port uses `facing`
@@ -410,6 +411,7 @@ fn destroyed(game: &mut Game, e: &mut Entity) {
     if e.alive {
         return;
     }
+    crate::items::explosives::sticky_receiver_destroyed(game, e);
     npcs::destroyed(game, e);
     if is_enemy(&e.object) && e.held {
         game.player.held = None;
@@ -437,6 +439,19 @@ pub(crate) fn destroy_barrier_emitter(game: &mut Game, id: u64) {
 }
 
 pub(crate) fn finish_destroy_events(game: &mut Game) {
+    // Most actor callbacks finish Destroy through with_actor. Preserve the
+    // backlink callback for deaths written by another family before cleanup.
+    let dead: Vec<_> = game.world.entities.iter()
+        .filter(|e| !e.alive && e.value("sticky_destroyed") == 0.0
+            && (is_enemy(&e.object) || e.object == "oDamsel"))
+        .map(|e| e.id).collect();
+    for id in dead {
+        if let Some(mut receiver) = game.world.entities.iter().find(|e| e.id == id).cloned() {
+            crate::items::explosives::sticky_receiver_destroyed(game, &mut receiver);
+            if let Some(stored) = game.world.entities.iter_mut().find(|e| e.id == id) { *stored = receiver; }
+        }
+    }
+    crate::items::explosives::finish_sticky_destroy_events(game);
     npcs::finish_destroy_events(game);
     if game
         .world
