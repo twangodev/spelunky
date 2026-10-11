@@ -26,6 +26,15 @@ pub(crate) fn in_shop(game: &Game, pos: Vec2) -> bool {
             ) == room(pos)
     })
 }
+/// isInShop and scrGetRoomX/Y write the calling Player's persistent tx/ty.
+/// These are also the Teleporter's target variables; keep query side effects
+/// separate from item/enemy callers of the pure room-membership adapter.
+pub(crate) fn player_in_shop(game: &mut Game, pos: Vec2) -> bool {
+    game.player.data.insert("tx".into(), pos.x);
+    game.player.data.insert("ty".into(), pos.y);
+    in_shop(game, pos)
+}
+
 fn rect_distance(a: Rect, b: Rect) -> f64 {
     let x = (a.x - b.x - b.w + 1.).max(b.x - a.x - a.w + 1.).max(0.);
     let y = (a.y - b.y - b.h + 1.).max(b.y - a.y - a.h + 1.).max(0.);
@@ -287,7 +296,7 @@ pub(crate) fn player_held_step(game: &mut Game) {
     {
         return;
     }
-    if game.is_level() && in_shop(game, game.player.pos) {
+    if game.is_level() && player_in_shop(game, game.player.pos) {
         return;
     }
     let damsel = acquire_sale_damsel(game, id);
@@ -423,8 +432,10 @@ pub(crate) fn player_pay_step(game: &mut Game, input: &InputFrame) {
         || game.state == RunState::Dead
         || game.player.state == crate::model::PlayerState::Dead
         || game.player.is_stunned()
-        || !in_shop(game, game.player.pos)
     {
+        return;
+    }
+    if !player_in_shop(game, game.player.pos) {
         return;
     }
     // Purchases require the item in hand, matching Classic's pay button.

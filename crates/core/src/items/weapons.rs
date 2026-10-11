@@ -865,6 +865,11 @@ pub fn pre_tick(game: &mut Game) {
         game.player.data.insert("bow_bomb_armed".into(), 0.0);
         game.player.data.remove("bow_bomb_fuse");
     }
+    // oPlayer1 Step57–60 queries even on the detonation tick. The script
+    // assigns Player tx/ty before the nearest-keeper anger callback.
+    if crate::economy::player_in_shop(game, game.player.pos) {
+        crate::economy::anger(game, game.player.pos, "TERRORIST!");
+    }
 }
 
 pub fn player_step(game: &mut Game) {
