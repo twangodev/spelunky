@@ -543,8 +543,13 @@ pub(crate) fn item_step_impacts(game: &mut Game, item_id: u64) {
         2. * radius + 1.,
         2. * radius + 1.,
     );
+    let first = Vec2::new(item.pos.x - radius, item.pos.y - radius);
+    let second = Vec2::new(item.pos.x + radius, item.pos.y + radius);
     let overlaps_enemy = game.world.entities.iter().any(|e| {
-        e.alive && e.id != item_id && is_enemy(&e.object) && e.sprite_bounds().intersects(area)
+        e.alive
+            && e.id != item_id
+            && is_enemy(&e.object)
+            && e.collision_mask().intersects_rectangle_bbox(first, second)
     });
     let enemy = if overlaps_enemy {
         game.world
