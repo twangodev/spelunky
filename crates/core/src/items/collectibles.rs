@@ -535,11 +535,6 @@ pub fn interact(game: &mut Game, input: &InputFrame) -> bool {
                     .increment(crate::statistics::LifetimeCounter::TotalCrates);
                 *game.data.entry("totalCrates".into()).or_default() += 1.;
             }
-            game.world.entity_mut(id).unwrap().alive = false;
-            if game.player.held == Some(id) {
-                game.player.held = None;
-                game.player.pickup_item_type.clear();
-            }
             if object == "oFlareCrate" {
                 for _ in 0..3 {
                     let vx = game.rng.range(4) as f64 - game.rng.range(4) as f64;
@@ -551,6 +546,13 @@ pub fn interact(game: &mut Game, input: &InputFrame) -> bool {
                 spawn(game, loot, pos, Vec2::default());
             }
             game.sound("sndPickup", pos);
+            if game.player.held == Some(id) {
+                game.player.held = None;
+                game.player.pickup_item_type.clear();
+            }
+            // oPlayer1 Step686/708 creates its Poof before retiring the crate.
+            game.spawn("oPoof", pos);
+            game.world.entity_mut(id).unwrap().alive = false;
             return true;
         }
     }
