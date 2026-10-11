@@ -1351,7 +1351,14 @@ fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibili
             && metadata.value("frozen_caveman") == 0.0
             && object != "oXocBlock"
         {
-            if let Some(treasure) = metadata.text.get("treasure") {
+            // Concrete objects represent deferred terrain Create contents.
+            // Source treasure labels name own Destroy loot, whose clean guard
+            // also applies here (notably Temple's R-template Big Ruby).
+            if let Some(treasure) = metadata
+                .text
+                .get("treasure")
+                .filter(|name| outputs_enabled || name.starts_with('o'))
+            {
                 let object = match treasure.as_str() {
                     "Big Ruby" => "oRubyBig",
                     "Big Sapphire" => "oSapphireBig",
@@ -4077,6 +4084,117 @@ mod source_solid_self_destroy {
                 );
                 assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod runtime_clean_terrain_treasure {
+    use super::*;
+
+    #[test]
+    fn runtime_clean_guards_suppress_destroy_tags_but_preserve_create_contents() {
+        for clean in ["none", "cleanDeath", "global_flag", "global_data"] {
+            for treasure in ["Big Ruby", "oRubyBig", "oJetpack"] {
+                let mut game = Game::shell(7, RulesPreset::Classic);
+                game.world.set_tile(5, 5, "oTemple");
+                let id = game.world.spawn("oTerrainMetadata", Vec2::new(88.0, 88.0));
+                let metadata = game.world.entity_mut(id).unwrap();
+                metadata.data.insert("embedded_treasure".into(), 1.0);
+                metadata.text.insert("treasure".into(), treasure.into());
+                if clean == "cleanDeath" {
+                    metadata.data.insert("cleanDeath".into(), 1.0);
+                }
+                if treasure.starts_with('o') {
+                    metadata.data.insert("treasure_dx".into(), -2.0);
+                    metadata.data.insert("treasure_dy".into(), 3.0);
+                }
+                if clean == "global_flag" {
+                    game.flags.insert("cleanSolids".into());
+                } else if clean == "global_data" {
+                    game.data.insert("cleanSolids".into(), 1.0);
+                }
+                let spikes = game.world.spawn("oSpikes", Vec2::new(80.0, 64.0));
+                let mut expected = game.rng.clone();
+                if clean == "none" {
+                    // Three rubble origins, each with four source rand(0,8).
+                    for _ in 0..12 {
+                        expected.range(9);
+                    }
+                }
+                assert!(destroy_terrain_self(&mut game, 5, 5));
+                assert!(!destroy_terrain_self(&mut game, 5, 5));
+                assert!(game.world.tile(5, 5).unwrap().object.is_empty());
+                assert!(game.world.entity(id).is_none());
+                assert!(
+                    game.world.entity(spikes).is_none(),
+                    "inherited Destroy still runs"
+                );
+                assert!(game.world.fluid_dirty);
+                let output_object = if treasure == "Big Ruby" {
+                    "oRubyBig"
+                } else {
+                    treasure
+                };
+                let outputs: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.alive && e.object == output_object)
+                    .collect();
+                let should_release = clean == "none" || treasure.starts_with('o');
+                assert_eq!(
+                    outputs.len(),
+                    usize::from(should_release),
+                    "{clean}/{treasure}"
+                );
+                if treasure.starts_with('o') {
+                    assert_eq!(outputs[0].pos, Vec2::new(86.0, 91.0));
+                    assert_eq!(outputs[0].state, 1);
+                }
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(
+                            |e| e.alive && matches!(e.object.as_str(), "oRubble" | "oRubbleSmall")
+                        )
+                        .count(),
+                    if clean == "none" { 3 } else { 0 }
+                );
+                assert_eq!(
+                    game.rng.next_u64(),
+                    expected.next_u64(),
+                    "{clean}/{treasure}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn game_step_explosion_respects_clean_temple_destroy_treasure_guard() {
+        for clean in [false, true] {
+            let mut game = Game::shell(7, RulesPreset::Classic);
+            game.player.pos = Vec2::new(200.0, 200.0);
+            game.world.set_tile(5, 5, "oTemple");
+            let id = game.world.spawn("oTerrainMetadata", Vec2::new(88.0, 88.0));
+            let metadata = game.world.entity_mut(id).unwrap();
+            metadata.data.insert("embedded_treasure".into(), 1.0);
+            metadata.data.insert("cleanDeath".into(), f64::from(clean));
+            metadata.text.insert("treasure".into(), "Big Ruby".into());
+            game.spawn("oExplosion", Vec2::new(88.0, 88.0));
+            game.step(&InputFrame::default());
+            assert!(game.world.tile(5, 5).unwrap().object.is_empty());
+            assert!(game.world.entity(id).is_none());
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.alive && e.object == "oRubyBig")
+                    .count(),
+                usize::from(!clean)
+            );
+            assert_eq!(game.player.health, 4);
         }
     }
 }
