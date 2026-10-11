@@ -836,6 +836,7 @@ pub(crate) fn begin_title_exit(game: &mut Game) -> bool {
         return false;
     }
     if let Some(id) = game.player.held.take() {
+        game.player.pickup_item_type.clear();
         if let Some(item) = game.world.entity_mut(id) {
             item.held = false;
         }
@@ -882,6 +883,7 @@ fn activate_portal(game: &mut Game) {
             item.held = false;
         }
     }
+    game.player.pickup_item_type.clear();
     let portal = match portal.as_str() {
         "oXScores" => HubPortal::Scores,
         "oXTutorial" => HubPortal::Tutorial,

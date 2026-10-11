@@ -2002,6 +2002,40 @@ fn hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas) {
     hud_in_view(quads, game, camera, atlas, Viewport::canonical());
 }
 
+// Old saves can be drawn before their first migration Step. This is the same
+// read-only, whitelist-only inference as the pre-dispatch migration; reserved
+// Bomb/Rope and unsupported actor types never imply a remembered weapon.
+fn hud_inventory_type(game: &Game) -> &str {
+    if !game.player.pickup_item_type.is_empty() {
+        return &game.player.pickup_item_type;
+    }
+    let Some(held) = game.player.held.and_then(|id| game.world.entity(id)) else {
+        return "";
+    };
+    if !held.held || held.value("stashed") != 0.0 {
+        return "";
+    }
+    match held.object.as_str() {
+        "oRock" => "Rock",
+        "oJar" => "Jar",
+        "oSkull" => "Skull",
+        "oFishBone" => "Fish Bone",
+        "oArrow" => "Arrow",
+        "oMachete" => "Machete",
+        "oMattock" => "Mattock",
+        "oMattockHead" => "Mattock Head",
+        "oPistol" => "Pistol",
+        "oWebCannon" => "Web Cannon",
+        "oTeleporter" => "Teleporter",
+        "oShotgun" => "Shotgun",
+        "oBow" => "Bow",
+        "oSceptre" => "Sceptre",
+        "oFlare" => "Flare",
+        "oKey" => "Key",
+        _ => "",
+    }
+}
+
 fn hud_in_view(
     quads: &mut Vec<DrawQuad>,
     game: &Game,
@@ -2099,20 +2133,30 @@ fn hud_in_view(
         }
     }
     sprite(quads, atlas, "sHoldItemIcon", 0.0, 8.0, 24.0, false, WHITE);
-    let held = player
-        .held
-        .and_then(|id| game.world.entity(id))
-        .filter(|entity| entity.engine_active);
-    let holding_bow = held.is_some_and(|entity| entity.object == "oBow");
-    if let Some(held) = held {
-        let icon = if holding_bow {
-            Some("sBowDisp")
-        } else {
-            entity_sprite(atlas, held)
-        };
-        if let Some(name) = icon {
-            sprite(quads, atlas, name, 0.0, 16.0, 32.0, false, WHITE);
-        }
+    // Canonical scrDrawHUD reads the remembered type, including while a
+    // Bomb/Rope reservation occupies the hand. Actor frames/facing do not apply.
+    let inventory_type = hud_inventory_type(game);
+    let icon = match inventory_type {
+        "Rock" => Some("sRock"),
+        "Jar" => Some("sJar"),
+        "Skull" => Some("sSkull"),
+        "Fish Bone" => Some("sFishBone"),
+        "Arrow" => Some("sArrowRight"),
+        "Machete" => Some("sMacheteRight"),
+        "Mattock" => Some("sMattockRight"),
+        "Mattock Head" => Some("sMattockHead"),
+        "Pistol" => Some("sPistolRight"),
+        "Web Cannon" => Some("sWebCannonR"),
+        "Teleporter" => Some("sTeleporter"),
+        "Shotgun" => Some("sShotgunRight"),
+        "Bow" => Some("sBowDisp"),
+        "Sceptre" => Some("sSceptreRight"),
+        "Flare" => Some("sFlare"),
+        "Key" => Some("sKeyRight"),
+        _ => None,
+    };
+    if let Some(name) = icon {
+        sprite(quads, atlas, name, 0.0, 16.0, 32.0, false, WHITE);
     }
     let mut x = 28.0;
     for name in [
@@ -2177,7 +2221,7 @@ fn hud_in_view(
         }
     }
     // Source bow HUD displays ammunition, not the animated world bow's charge.
-    if holding_bow {
+    if inventory_type == "Bow" {
         let mut arrows = game.data.get("arrows").copied().unwrap_or(0.0);
         while arrows > 0.0 {
             sprite(quads, atlas, "sArrowIcon", 0.0, x, 24.0, false, WHITE);
@@ -2405,6 +2449,159 @@ mod tests {
     }
 
     #[test]
+    fn source_hud_saved_inventory_uses_literal_icons_independent_of_actor() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let unrelated = game.spawn("oDamsel", Vec2::new(64.0, 64.0));
+        game.player.held = Some(unrelated);
+        let actor = game.world.entity_mut(unrelated).unwrap();
+        actor.held = true;
+        actor.facing = -1;
+        actor.animation = 7.0;
+        let cases = [
+            ("Rock", "sRock"),
+            ("Jar", "sJar"),
+            ("Skull", "sSkull"),
+            ("Fish Bone", "sFishBone"),
+            ("Arrow", "sArrowRight"),
+            ("Machete", "sMacheteRight"),
+            ("Mattock", "sMattockRight"),
+            ("Mattock Head", "sMattockHead"),
+            ("Pistol", "sPistolRight"),
+            ("Web Cannon", "sWebCannonR"),
+            ("Teleporter", "sTeleporter"),
+            ("Shotgun", "sShotgunRight"),
+            ("Bow", "sBowDisp"),
+            ("Sceptre", "sSceptreRight"),
+            ("Flare", "sFlare"),
+            ("Key", "sKeyRight"),
+        ];
+        for (saved_type, sprite_name) in cases {
+            game.player.pickup_item_type = saved_type.into();
+            for actor_present in [true, false] {
+                game.player.held = actor_present.then_some(unrelated);
+                let before = game.state_hash();
+                let random = game.rng.clone().next_u64();
+                let mut quads = Vec::new();
+                hud(&mut quads, &game, Vec2::new(0.0, 0.0), &atlas);
+                let background = atlas.sprite("sHoldItemIcon", 0.0).unwrap();
+                let index = quads
+                    .iter()
+                    .position(|quad| quad.uv == background.uv)
+                    .unwrap();
+                let mut expected = Vec::new();
+                sprite(
+                    &mut expected,
+                    &atlas,
+                    sprite_name,
+                    0.0,
+                    16.0,
+                    32.0,
+                    false,
+                    WHITE,
+                );
+                assert_eq!(
+                    quad_bytes(&quads[index + 1..index + 2]),
+                    quad_bytes(&expected),
+                    "{saved_type}, actor={actor_present}"
+                );
+                assert_eq!(game.state_hash(), before);
+                assert_eq!(game.rng.clone().next_u64(), random);
+            }
+        }
+        game.player.held = Some(unrelated);
+        game.player.pickup_item_type.clear();
+        let mut empty = Vec::new();
+        hud(&mut empty, &game, Vec2::new(0.0, 0.0), &atlas);
+        for unsupported in ["Damsel", "Bomb", "Rope", "Dice", "oBow", "None"] {
+            game.player.pickup_item_type = unsupported.into();
+            let mut actual = Vec::new();
+            hud(&mut actual, &game, Vec2::new(0.0, 0.0), &atlas);
+            assert_eq!(
+                quad_bytes(&actual),
+                quad_bytes(&empty),
+                "unsupported {unsupported}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_hud_natural_bow_cycle_keeps_saved_icon_and_ammunition() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = adaptive_room();
+        let old = game.spawn("oBow", game.player.pos);
+        game.step(&spelunky_core::InputFrame {
+            down: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.held, Some(old));
+        game.step(&spelunky_core::InputFrame::default());
+        game.step(&spelunky_core::InputFrame {
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        for _ in 0..4 {
+            game.step(&spelunky_core::InputFrame {
+                attack: true,
+                ..Default::default()
+            });
+        }
+        for object in ["oBomb", "oRopeThrow", "oBow"] {
+            game.step(&spelunky_core::InputFrame {
+                cycle_pressed: true,
+                attack: true,
+                ..Default::default()
+            });
+            assert_eq!(
+                game.world.entity(game.player.held.unwrap()).unwrap().object,
+                object
+            );
+            assert_eq!(game.player.pickup_item_type, "Bow");
+            assert_eq!(game.data.get("arrows"), Some(&5.0));
+            let before = game.state_hash();
+            let random = game.rng.clone().next_u64();
+            let mut quads = Vec::new();
+            hud(&mut quads, &game, Vec2::new(0.0, 0.0), &atlas);
+            let icon = atlas.sprite("sBowDisp", 0.0).unwrap();
+            assert_eq!(quads.iter().filter(|quad| quad.uv == icon.uv).count(), 1);
+            let ammo = atlas.sprite("sArrowIcon", 0.0).unwrap();
+            assert_eq!(quads.iter().filter(|quad| quad.uv == ammo.uv).count(), 5);
+            assert_eq!(game.state_hash(), before);
+            assert_eq!(game.rng.clone().next_u64(), random);
+        }
+    }
+
+    #[test]
+    fn source_hud_legacy_held_bow_before_first_step_is_read_only() {
+        let atlas = Atlas::load().unwrap();
+        let mut original = adaptive_room();
+        let id = original.spawn("oBow", original.player.pos);
+        original.player.held = Some(id);
+        original.world.entity_mut(id).unwrap().held = true;
+        original.data.insert("arrows".into(), 3.0);
+        let mut saved = serde_json::to_value(&original).unwrap();
+        saved["player"]
+            .as_object_mut()
+            .unwrap()
+            .remove("pickup_item_type");
+        let game: Game = serde_json::from_value(saved).unwrap();
+        assert!(game.player.pickup_item_type.is_empty());
+        let before = game.state_hash();
+        let random = game.rng.clone().next_u64();
+        let mut quads = Vec::new();
+        hud(&mut quads, &game, Vec2::new(0.0, 0.0), &atlas);
+        let icon = atlas.sprite("sBowDisp", 0.0).unwrap();
+        assert_eq!(quads.iter().filter(|quad| quad.uv == icon.uv).count(), 1);
+        let ammo = atlas.sprite("sArrowIcon", 0.0).unwrap();
+        assert_eq!(quads.iter().filter(|quad| quad.uv == ammo.uv).count(), 3);
+        assert_eq!(game.state_hash(), before);
+        assert_eq!(game.rng.clone().next_u64(), random);
+    }
+
+    #[test]
     fn source_hud_real_bow_charge_and_treasure_show_ammo_and_pending_money() {
         let atlas = Atlas::load().unwrap();
         let mut game = adaptive_room();
@@ -2516,8 +2713,9 @@ mod tests {
                 .iter()
                 .any(|quad| quad.color == [1.0, 1.0, 0.0, 1.0] && quad.rect[1] == 24.0)
         );
-        // Stored arrows alone do not add ammo HUD when a bow is not held.
+        // Empty source remembered type suppresses ammunition even with stored arrows.
         game.player.held = None;
+        game.player.pickup_item_type.clear();
         game.draw_view = None;
         let mut quads = Vec::new();
         hud(&mut quads, &game, Vec2::new(0.0, 0.0), &atlas);

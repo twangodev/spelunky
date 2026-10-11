@@ -318,6 +318,7 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
                 entity.held = false;
                 if game.player.held == Some(entity.id) {
                     game.player.held = None;
+                    game.player.pickup_item_type.clear();
                 }
             }
         }

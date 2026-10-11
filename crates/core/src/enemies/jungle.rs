@@ -938,6 +938,7 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
                     e.held = false;
                     if game.player.held == Some(e.id) {
                         game.player.held = None;
+                        game.player.pickup_item_type.clear();
                     }
                 }
             }
@@ -1091,6 +1092,7 @@ fn mantrap_collision(game: &mut Game, e: &mut Entity, other: crate::dispatcher::
                     .enemy_death(crate::statistics::EnemyDeath::ManTrap);
             }
             if let Some(id) = game.player.held.take() {
+                game.player.pickup_item_type.clear();
                 if e.held {
                     e.held = false;
                 } else if let Some(item) = game.world.entity_mut(id) {
@@ -1156,6 +1158,7 @@ fn mantrap_collision(game: &mut Game, e: &mut Entity, other: crate::dispatcher::
     }
     if family == "oDamsel" && held {
         game.player.held = None;
+        game.player.pickup_item_type.clear();
     }
     true
 }
@@ -2145,12 +2148,15 @@ mod tests {
         game.rng = crate::Rng::new(trip_seed);
         game.step(&crate::InputFrame::default());
         assert_eq!(game.player.stun, 40);
-        assert_eq!(game.player.held, Some(rock));
+        let fresh = game.player.held.unwrap();
+        assert_ne!(fresh, rock);
+        assert!(game.world.entity(rock).is_none());
+        assert_eq!(game.world.entity(fresh).unwrap().object, "oRock");
         assert!(!game.player.data.contains_key("stash_id"));
         let item = game.world.entity(bomb).unwrap();
         assert!(!item.held);
         assert_eq!(item.vel, Vec2::default());
-        let item = game.world.entity(rock).unwrap();
+        let item = game.world.entity(fresh).unwrap();
         assert!(item.held);
         assert!(!item.data.contains_key("stashed"));
     }

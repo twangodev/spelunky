@@ -200,7 +200,7 @@ fn hidden_inventory_bridge_requires_the_live_stash_reference_and_marker() {
 }
 
 #[test]
-fn actual_inventory_cycle_idle_and_exit_preserve_the_hidden_weapon() {
+fn actual_inventory_cycle_idle_and_exit_recreate_the_remembered_weapon() {
     let mut game = room();
     game.player.pos = Vec2::new(85.0, 56.0);
     for x in 0..game.world.width {
@@ -208,34 +208,73 @@ fn actual_inventory_cycle_idle_and_exit_preserve_the_hidden_weapon() {
     }
     game.world.spawn("oExit", Vec2::new(80.0, 48.0));
     let weapon = game.world.spawn("oShotgun", game.player.pos);
-    game.world.entity_mut(weapon).unwrap().held = true;
+    let old_weapon = game.world.entity_mut(weapon).unwrap();
+    old_weapon.held = true;
+    old_weapon.data.insert("fixture_old_instance".into(), 17.0);
     game.player.held = Some(weapon);
     game.step(&InputFrame {
         cycle_pressed: true,
         ..Default::default()
     });
-    assert_eq!(game.player.data["stash_id"], weapon as f64);
+    // Player Step stores the source type and destroys the old instance;
+    // the reserved Bomb remains a live held actor during idle.
+    assert_eq!(game.player.pickup_item_type, "Shotgun");
+    assert!(!game.player.data.contains_key("stash_id"));
+    assert!(game.world.entity(weapon).is_none());
+    assert!(
+        !game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.id == weapon && e.alive)
+    );
+    let reserved_bomb = game.player.held.unwrap();
+    assert_ne!(reserved_bomb, weapon);
+    assert_eq!(game.player.bombs, 3);
     for _ in 0..10 {
         game.step(&InputFrame::default());
+        assert_eq!(game.player.pickup_item_type, "Shotgun");
+        assert_eq!(game.player.held, Some(reserved_bomb));
+        let bomb = game.world.entity(reserved_bomb).unwrap();
+        assert_eq!(bomb.object, "oBomb");
+        assert!(bomb.held && bomb.engine_active);
+        assert_eq!(bomb.value("armed"), 0.0);
+        assert!(!game.world.entities.iter().any(|e| {
+            e.alive && (e.id == weapon || e.object == "oShotgun" || e.value("stashed") != 0.0)
+        }));
+        assert!(!game.player.data.contains_key("stash_id"));
     }
-    let stashed = game.world.entity(weapon).unwrap();
-    assert!(stashed.held);
-    assert_eq!(stashed.pos, Vec2::new(-100_000.0, -100_000.0));
-    assert_eq!(stashed.vel, Vec2::default());
     game.step(&InputFrame {
         up: true,
         ..Default::default()
     });
     assert!(game.flags.contains("carry:oShotgun"));
     assert!(!game.player.data.contains_key("stash_id"));
+    assert!(game.player.pickup_item_type.is_empty());
+    assert!(game.player.held.is_none());
+    assert_eq!(game.player.bombs, 4);
+    assert!(
+        !game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.id == reserved_bomb && e.alive)
+    );
     complete_source_exit(&mut game);
     assert!(game.flags.contains("carry:oShotgun"));
     game.next_level();
     let weapon = game.world.entity(game.player.held.unwrap()).unwrap();
     assert_eq!(weapon.object, "oShotgun");
+    assert!(weapon.held);
     assert_eq!(weapon.value("stashed"), 0.0);
+    assert_eq!(weapon.value("cost"), 0.0);
+    assert_eq!(weapon.value("new"), 0.0);
+    // Room creation may reuse numeric IDs; fresh Create must discard the
+    // former actor's state rather than move a retained instance across rooms.
+    assert!(!weapon.data.contains_key("fixture_old_instance"));
+    assert_eq!(game.player.pickup_item_type, "Shotgun");
+    assert!(!game.flags.contains("carry:oShotgun"));
 }
-
 #[test]
 fn active_terrain_keeps_its_metadata_when_the_metadata_origin_is_offscreen() {
     let mut game = room();

@@ -65,15 +65,217 @@ pub fn arm_bomb(bomb: &mut Entity) {
     }
 }
 
+/// Literal scrHoldItem whitelist, shared by inventory and room-entry carry.
+const HOLD_TYPES: [(&str, &str); 16] = [
+    ("Rock", "oRock"),
+    ("Jar", "oJar"),
+    ("Skull", "oSkull"),
+    ("Fish Bone", "oFishBone"),
+    ("Arrow", "oArrow"),
+    ("Machete", "oMachete"),
+    ("Mattock", "oMattock"),
+    ("Mattock Head", "oMattockHead"),
+    ("Pistol", "oPistol"),
+    ("Web Cannon", "oWebCannon"),
+    ("Teleporter", "oTeleporter"),
+    ("Shotgun", "oShotgun"),
+    ("Bow", "oBow"),
+    ("Flare", "oFlare"),
+    ("Sceptre", "oSceptre"),
+    ("Key", "oKey"),
+];
+
+pub(crate) fn hold_object(item_type: &str) -> Option<&'static str> {
+    HOLD_TYPES
+        .iter()
+        .find(|(name, _)| *name == item_type)
+        .map(|(_, object)| *object)
+}
+
+pub(crate) fn object_type(object: &str) -> Option<&'static str> {
+    HOLD_TYPES
+        .iter()
+        .find(|(_, kind)| *kind == object)
+        .map(|(name, _)| *name)
+}
+
+/// Original Create type declarations for the two pickup parent families.
+/// Resolve inheritance so corpses and aliases retain their original type;
+/// unsupported scrHoldItem types are still remembered, then rejected there.
+pub(crate) fn source_type(entity: &Entity) -> String {
+    if let Some(item_type) = entity.text.get("type") {
+        return item_type.clone();
+    }
+    let mut object = entity.object.as_str();
+    while !object.is_empty() {
+        let item_type = match object {
+            "oAlien" => Some("Alien"),
+            "oAlienBoss" => Some("Alien Boss"),
+            "oAnkh" => Some("Ankh"),
+            "oArrow" => Some("Arrow"),
+            "oBall" => Some("Ball"),
+            "oBall2" => Some("Ball"),
+            "oBasketball" => Some("Basketball"),
+            "oBomb" => Some("Bomb"),
+            "oBombBag" => Some("Bomb Bag"),
+            "oBombBox" => Some("Bomb Box"),
+            "oBow" => Some("Bow"),
+            "oCapePickup" => Some("Cape"),
+            "oCaveman" => Some("Caveman"),
+            "oChest" => Some("Chest"),
+            "oCompass" => Some("Compass"),
+            "oCrate" => Some("Crate"),
+            "oCrown" => Some("Crown"),
+            "oCrystalSkull" => Some("Gold Idol"),
+            "oDamsel" => Some("Damsel"),
+            "oDice" => Some("Dice"),
+            "oEnemy" => Some("None"),
+            "oFireFrog" => Some("Fire Frog"),
+            "oFireFrogArmed" => Some("Fire Frog"),
+            "oFireFrogBomb" => Some("Fire Frog Bomb"),
+            "oFishBone" => Some("Fish Bone"),
+            "oFlare" => Some("Flare"),
+            "oFlareCrate" => Some("Flare Crate"),
+            "oFrog" => Some("Frog"),
+            "oGiantSpider" => Some("Giant Spider"),
+            "oGloves" => Some("Gloves"),
+            "oGoldIdol" => Some("Gold Idol"),
+            "oHawkman" => Some("Yeti"),
+            "oItem" => Some("None"),
+            "oJar" => Some("Jar"),
+            "oJaws" => Some("Mega Mouth"),
+            "oJetpack" => Some("Jetpack"),
+            "oJordans" => Some("Jordans"),
+            "oKapala" => Some("Kapala"),
+            "oKey" => Some("Key"),
+            "oLampItem" => Some("Lamp"),
+            "oLampRedItem" => Some("Lamp"),
+            "oLockedChest" => Some("Locked Chest"),
+            "oMachete" => Some("Machete"),
+            "oMagmaMan" => Some("Magma Man"),
+            "oManTrap" => Some("ManTrap"),
+            "oMattock" => Some("Mattock"),
+            "oMattockHead" => Some("Mattock Head"),
+            "oMitt" => Some("Mitt"),
+            "oMonkey" => Some("Monkey"),
+            "oParaPickup" => Some("Parachute"),
+            "oPaste" => Some("Paste"),
+            "oPiranha" => Some("Piranha"),
+            "oPistol" => Some("Pistol"),
+            "oRock" => Some("Rock"),
+            "oRopeBag" => Some("Bomb Bag"),
+            "oRopePile" => Some("Rope Pile"),
+            "oRopeThrow" => Some("Rope"),
+            "oSceptre" => Some("Sceptre"),
+            "oShopkeeper" => Some("Shopkeeper"),
+            "oShotgun" => Some("Shotgun"),
+            "oSkeleton" => Some("Skeleton"),
+            "oSkull" => Some("Skull"),
+            "oSnake" => Some("Snake"),
+            "oSpectacles" => Some("Spectacles"),
+            "oSpider" => Some("Spider"),
+            "oSpikeShoes" => Some("Spike Shoes"),
+            "oSpringShoes" => Some("Spring Shoes"),
+            "oTeleporter" => Some("Teleporter"),
+            "oTombLord" => Some("Tomb Lord"),
+            "oUFO" => Some("UFO"),
+            "oUdjatEye" => Some("Udjat Eye"),
+            "oVampire" => Some("Vampire"),
+            "oWebCannon" => Some("Web Cannon"),
+            "oYeti" => Some("Yeti"),
+            "oYetiKing" => Some("Yeti King"),
+            _ => None,
+        };
+        if let Some(item_type) = item_type {
+            return item_type.to_owned();
+        }
+        object = crate::catalog::object(object)
+            .map(|object| object.parent.as_str())
+            .unwrap_or("");
+    }
+    "None".into()
+}
+
+pub(crate) fn pickup_pose(game: &mut Game) {
+    game.player.data.insert("whoaTimer".into(), 30.0);
+}
+
+/// scrHoldItem runs Create synchronously and discards all former instance state.
+pub(crate) fn hold_item_type(game: &mut Game, item_type: &str) {
+    game.player.held = None;
+    game.player.pickup_item_type.clear();
+    let Some(object) = hold_object(item_type) else {
+        return;
+    };
+    let id = game.spawn(object, game.player.pos);
+    let entity = game.world.entity_mut(id).expect("fresh source held item");
+    entity.held = true;
+    entity.data.insert("cost".into(), 0.0);
+    entity.data.insert("new".into(), 0.0);
+    if object == "oBow" {
+        entity.data.insert("bow_picked_up".into(), 1.0);
+    }
+    game.player.held = Some(id);
+    game.player.pickup_item_type = item_type.to_owned();
+    pickup_pose(game);
+}
+
 pub fn restore_stashed_item(game: &mut Game) {
-    let id = game.player.data.remove("stash_id").unwrap_or(0.0) as u64;
-    if let Some(entity) = game.world.entity_mut(id) {
-        entity.held = true;
-        entity.pos = game.player.pos;
-        entity.previous_pos = entity.pos;
-        entity.vel = Vec2::default();
-        entity.data.remove("stashed");
-        game.player.held = Some(id);
+    let item_type = game.player.pickup_item_type.clone();
+    hold_item_type(game, &item_type);
+}
+
+/// Import the previous retained-ID save shape before any actor alarms run.
+/// Invalid references clear bookkeeping only; unrelated actors remain intact.
+pub(crate) fn migrate_legacy_stash(game: &mut Game) {
+    let Some(reference) = game.player.data.remove("stash_id") else {
+        // Previous saves without a reservation have only the ordinary held
+        // actor. Its validated source type supplies the missing serde field.
+        // Reserved Bomb/Rope and unmarked references never become a weapon.
+        if game.player.pickup_item_type.is_empty() {
+            if let Some(entity) = game.player.held.and_then(|id| game.world.entity(id)) {
+                if entity.held && entity.value("stashed") == 0.0 {
+                    if let Some(item_type) = object_type(&entity.object) {
+                        game.player.pickup_item_type = item_type.to_owned();
+                    }
+                }
+            }
+        }
+        return;
+    };
+    let legacy = game
+        .world
+        .entities
+        .iter()
+        .find(|entity| {
+            reference.is_finite()
+                && reference > 0.0
+                && reference == entity.id as f64
+                && entity.alive
+                && entity.held
+                && entity.value("stashed") > 0.0
+                && object_type(&entity.object).is_some_and(|kind| kind == source_type(entity))
+        })
+        .map(|entity| (entity.id, source_type(entity)));
+    let Some((id, item_type)) = legacy else {
+        return;
+    };
+    if game.player.pickup_item_type.is_empty() {
+        game.player.pickup_item_type = item_type;
+    }
+    let entity = game
+        .world
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == id)
+        .unwrap();
+    entity.data.insert("breakPieces".into(), 0.0);
+    entity.held = false;
+    entity.alive = false;
+    entity.alarms = crate::dispatcher::unset_alarms();
+    entity.data.remove("stashed");
+    if game.player.held == Some(id) {
+        game.player.held = None;
     }
 }
 
@@ -90,11 +292,15 @@ fn equip_inventory_item(game: &mut Game, kind: &str) {
         game.player.ropes -= 1;
     }
     game.player.held = Some(id);
+    pickup_pose(game);
 }
 
 /// Cycle a free light item through reserved bomb, reserved rope, and the item.
 pub fn cycle_inventory(game: &mut Game) {
-    if !can_use(game) {
+    if !game.is_level()
+        || !can_use(game)
+        || game.player.data.get("active").copied().unwrap_or(1.0) == 0.0
+    {
         return;
     }
     let held = game
@@ -102,13 +308,13 @@ pub fn cycle_inventory(game: &mut Game) {
         .held
         .and_then(|id| game.world.entity(id).cloned());
     if let Some(entity) = held {
-        if entity.object == "oBomb" && entity.value("armed") != 0.0 {
+        if entity.sprite == "sBombArmed" {
             return;
         }
-        if entity.object == "oBomb" || entity.object == "oRopeThrow" {
+        if entity.sprite == "sBomb" || entity.sprite == "sRopeEnd" {
             game.world.entity_mut(entity.id).unwrap().alive = false;
             game.player.held = None;
-            if entity.object == "oBomb" {
+            if entity.sprite == "sBomb" {
                 game.player.bombs += 1;
                 if game.player.ropes > 0 {
                     equip_inventory_item(game, "oRopeThrow");
@@ -122,20 +328,23 @@ pub fn cycle_inventory(game: &mut Game) {
             return;
         }
         if entity.value("heavy") != 0.0
-            || entity.object == "oDamsel"
-            || entity.value("cost") > 0.0
+            || entity.value("cost") != 0.0
             || (game.player.bombs <= 0 && game.player.ropes <= 0)
         {
             return;
         }
-        game.player.data.insert("stash_id".into(), entity.id as f64);
-        let stashed = game.world.entity_mut(entity.id).unwrap();
-        stashed.data.insert("stashed".into(), 1.0);
-        stashed.pos = Vec2::new(-100_000.0, -100_000.0);
-        stashed.previous_pos = stashed.pos;
-        stashed.vel = Vec2::default();
-        stashed.held = true;
-        game.player.held = None;
+        game.player.pickup_item_type = source_type(&entity);
+        // Player Step1040: fire while the original Bow is still held, before
+        // destruction and before this frame's later bow charging branch.
+        if entity.object == "oBow" {
+            super::weapons::fire_bow_on_drop(game);
+        }
+        game.world
+            .entity_mut(entity.id)
+            .unwrap()
+            .data
+            .insert("breakPieces".into(), 0.0);
+        super::break_item(game, entity.id);
     }
     if game.player.bombs > 0 {
         equip_inventory_item(game, "oBomb");
@@ -492,6 +701,7 @@ pub(crate) fn collision(game: &mut Game, self_id: u64, other: crate::dispatcher:
                 if entity.held {
                     entity.held = false;
                     game.player.held = None;
+                    game.player.pickup_item_type.clear();
                 }
             }
             let fragile = !entity.alive && matches!(entity.object.as_str(), "oJar" | "oSkull");
@@ -1280,6 +1490,7 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
             entity.held = false;
             if game.player.held == Some(entity.id) {
                 game.player.held = None;
+                game.player.pickup_item_type.clear();
             }
         }
     }
@@ -2494,7 +2705,7 @@ mod tests {
     }
 
     #[test]
-    fn inventory_cycle_refunds_reservations_and_restores_original_item() {
+    fn inventory_cycle_refunds_reservations_and_recreates_original_type() {
         let mut g = game();
         let original = g.world.spawn("oRock", g.player.pos);
         g.world.entity_mut(original).unwrap().held = true;
@@ -2505,7 +2716,8 @@ mod tests {
             g.world.entity(g.player.held.unwrap()).unwrap().object,
             "oBomb"
         );
-        assert_eq!(g.world.entity(original).unwrap().value("stashed"), 1.0);
+        assert!(g.world.entity(original).is_none());
+        assert_eq!(g.player.pickup_item_type, "Rock");
         cycle_inventory(&mut g);
         assert_eq!((g.player.bombs, g.player.ropes), (4, 3));
         assert_eq!(
@@ -2514,8 +2726,10 @@ mod tests {
         );
         cycle_inventory(&mut g);
         assert_eq!((g.player.bombs, g.player.ropes), (4, 4));
-        assert_eq!(g.player.held, Some(original));
-        assert_eq!(g.world.entity(original).unwrap().pos, g.player.pos);
+        let fresh = g.player.held.unwrap();
+        assert_ne!(fresh, original);
+        assert_eq!(g.world.entity(fresh).unwrap().object, "oRock");
+        assert_eq!(g.world.entity(fresh).unwrap().pos, g.player.pos);
     }
 
     #[test]

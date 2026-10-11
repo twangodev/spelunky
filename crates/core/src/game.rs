@@ -122,6 +122,7 @@ impl Game {
         self.player.state = PlayerState::Falling;
         self.player.grounded = false;
         self.player.held = None;
+        self.player.pickup_item_type.clear();
         self.player.stun = 0;
         self.player.attack_timer = 0;
         self.player.jump_time = 0;
@@ -207,6 +208,7 @@ impl Game {
         }
         self.events.clear();
         self.flags.remove("render_discontinuity");
+        items::explosives::migrate_legacy_stash(self);
         dispatcher::step(self, input);
         self.update_camera();
         // Draw freezes actors before Animation callbacks. Keep camera following
@@ -343,37 +345,8 @@ impl Game {
     }
 
     fn restore_transition_carry(&mut self, carry: Option<String>) {
-        if let Some(object) = carry.filter(|object| {
-            matches!(
-                object.as_str(),
-                "oRock"
-                    | "oJar"
-                    | "oSkull"
-                    | "oFishBone"
-                    | "oArrow"
-                    | "oMachete"
-                    | "oMattock"
-                    | "oMattockHead"
-                    | "oPistol"
-                    | "oWebCannon"
-                    | "oTeleporter"
-                    | "oShotgun"
-                    | "oBow"
-                    | "oFlare"
-                    | "oSceptre"
-                    | "oKey"
-            )
-        }) {
-            let id = self.world.spawn(object, self.player.pos);
-            let item = self.world.entity_mut(id).expect("fresh carried item");
-            // scrHoldItem recreates the type, then clears purchase/new flags.
-            // Bow ammunition belongs to the surviving global run data.
-            items::init_entity(item);
-            item.held = true;
-            item.data.insert("cost".into(), 0.);
-            item.data.insert("forSale".into(), 0.);
-            item.data.insert("new".into(), 0.);
-            self.player.held = Some(id);
+        if let Some(item_type) = carry.as_deref().and_then(items::explosives::object_type) {
+            items::explosives::hold_item_type(self, item_type);
         }
     }
 

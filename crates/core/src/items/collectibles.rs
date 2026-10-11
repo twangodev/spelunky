@@ -458,6 +458,7 @@ pub(crate) fn collision(game: &mut Game, id: u64, other: crate::dispatcher::Inst
         key.held = false;
         key.alive = false;
         game.player.held = None;
+        game.player.pickup_item_type.clear();
         let chest = game.world.entity_mut(id).unwrap();
         chest.set_sprite("sLockedChestOpen");
         game.sound("sndChestOpen", pos);
@@ -518,6 +519,7 @@ pub fn interact(game: &mut Game, input: &InputFrame) -> bool {
             game.world.entity_mut(id).unwrap().alive = false;
             if game.player.held == Some(id) {
                 game.player.held = None;
+                game.player.pickup_item_type.clear();
             }
             if object == "oFlareCrate" {
                 for _ in 0..3 {

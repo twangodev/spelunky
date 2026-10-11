@@ -639,6 +639,7 @@ fn rock_player_contact(game: &mut Game) {
     let (id, vx) = (rock.id, rock.vel.x);
     if game.player.has("Mitt") && game.player.held.is_none() {
         game.player.held = Some(id);
+        game.player.pickup_item_type = "Rock".into();
         game.world.entity_mut(id).unwrap().held = true;
     } else {
         let damaged = game.player.health > 0;
@@ -720,6 +721,8 @@ fn mattock_dig(game: &mut Game, e: &Entity) {
             }
             if game.player.held == Some(held) {
                 game.player.held = None;
+                game.player.pickup_item_type.clear();
+                game.flags.retain(|flag| !flag.starts_with("carry:"));
             }
             let id = game.spawn("oMattockHead", e.pos);
             let head = game.world.entity_mut(id).unwrap();
@@ -1034,6 +1037,7 @@ pub fn step_instance(game: &mut Game, id: u64) {
                 e.alive = false;
                 if game.player.held == Some(id) {
                     game.player.held = None;
+                    game.player.pickup_item_type.clear();
                 }
                 game.spawn("oSplash", e.pos);
                 game.sound("sndSplash", e.pos);

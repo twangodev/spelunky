@@ -234,6 +234,7 @@ pub(super) fn collision(
                     let gun = game.world.entity_mut(id).unwrap();
                     if gun.held {
                         game.player.held = game.player.held.filter(|held| *held != id);
+                        game.player.pickup_item_type.clear();
                         gun.held = false;
                     }
                     gun.alive = false;
@@ -591,6 +592,7 @@ fn damsel(game: &mut Game, e: &mut Entity) {
             if e.held {
                 e.held = false;
                 game.player.held = game.player.held.filter(|id| *id != e.id);
+                game.player.pickup_item_type.clear();
             }
             game.sound("sndHit", e.pos);
         }
@@ -832,6 +834,7 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
                     if e.held {
                         e.held = false;
                         game.player.held = game.player.held.filter(|id| *id != e.id);
+                        game.player.pickup_item_type.clear();
                     }
                 }
             }

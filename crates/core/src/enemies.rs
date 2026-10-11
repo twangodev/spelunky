@@ -967,6 +967,11 @@ fn apply_item_hit(game: &mut Game, e: &mut Entity, item: &Entity, fragile: bool)
             if e.held {
                 e.held = false;
                 game.player.held = game.player.held.filter(|id| *id != e.id);
+                // Ordinary Item and Dice clear the remembered type; the
+                // Jar/Skull replacement Steps intentionally retain it.
+                if !fragile {
+                    game.player.pickup_item_type.clear();
+                }
             }
             e.health -= 1;
             e.state = 2;

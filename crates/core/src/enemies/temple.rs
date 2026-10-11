@@ -530,6 +530,7 @@ fn hawk(game: &mut Game, e: &mut Entity) {
                 if e.held {
                     e.held = false;
                     game.player.held = None;
+                    game.player.pickup_item_type.clear();
                 }
             }
         }

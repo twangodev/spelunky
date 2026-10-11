@@ -830,6 +830,7 @@ fn caveman(game: &mut Game, e: &mut Entity) {
                     e.held = false;
                     if game.player.held == Some(e.id) {
                         game.player.held = None;
+                        game.player.pickup_item_type.clear();
                     }
                 }
             }

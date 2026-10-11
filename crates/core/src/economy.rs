@@ -440,6 +440,7 @@ pub(crate) fn player_pay_step(game: &mut Game, input: &InputFrame) {
                 item.held = false;
             }
             game.player.held = None;
+            game.player.pickup_item_type.clear();
             say(game, "YOU HAVEN'T GOT ENOUGH MONEY!", "", 80);
             return;
         }

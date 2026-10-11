@@ -356,6 +356,7 @@ pub(crate) fn gold_door_collision(game: &mut Game) {
                         item.held = false;
                     }
                     game.player.held = None;
+                    game.player.pickup_item_type.clear();
                     game.world.spawn("oXGold", door_pos);
                     game.sound("sndChestOpen", door_pos);
                 } else {
@@ -659,6 +660,8 @@ fn complete(game: &mut Game, door_id: u64) {
         game.flags.retain(|f| !f.starts_with("custom_level:"));
         game.flags.insert(format!("custom_level:{leads_to}"));
     }
+    let mut reserved_carry = false;
+    let had_held = game.player.held.is_some();
     if let Some(id) = game.player.held {
         let carried = game.world.entity(id).map(|e| {
             (
@@ -685,6 +688,7 @@ fn complete(game: &mut Game, door_id: u64) {
                     item.held = false;
                 }
             } else if object == "oBomb" {
+                reserved_carry = true;
                 if !armed {
                     game.player.bombs += 1;
                     if let Some(item) = game.world.entity_mut(id) {
@@ -695,6 +699,7 @@ fn complete(game: &mut Game, door_id: u64) {
                     item.held = false;
                 }
             } else if matches!(object.as_str(), "oRopeThrow" | "oRope") {
+                reserved_carry = true;
                 game.player.ropes += 1;
                 if let Some(item) = game.world.entity_mut(id) {
                     item.alive = false;
@@ -714,18 +719,14 @@ fn complete(game: &mut Game, door_id: u64) {
         }
         game.player.held = None;
     }
-    // Inventory selection temporarily hides the prior light item. Classic
-    // carries pickupItemType through a bomb/rope exit, rather than its instance id.
-    if let Some(stash) = game.player.data.remove("stash_id") {
-        let stash = stash as u64;
-        if let Some(item) = game.world.entity_mut(stash) {
-            item.data.remove("stashed");
-            item.held = false;
-            item.data.insert("breakPieces".into(), 0.);
-            item.alive = false;
-            game.flags.retain(|flag| !flag.starts_with("carry:"));
-            game.flags.insert(format!("carry:{}", item.object));
+    if reserved_carry {
+        game.flags.retain(|flag| !flag.starts_with("carry:"));
+        if let Some(object) = crate::items::explosives::hold_object(&game.player.pickup_item_type) {
+            game.flags.insert(format!("carry:{object}"));
         }
+    }
+    if ending || had_held {
+        game.player.pickup_item_type.clear();
     }
     game.player.pos = door_center;
     game.player.previous_pos = door_center;
@@ -1486,13 +1487,14 @@ mod tests {
         assert_eq!(g.player.health, 5);
     }
     #[test]
-    fn actual_step_inventory_bomb_exit_restores_stashed_weapon_without_stale_id() {
+    fn actual_step_inventory_bomb_exit_recreates_remembered_weapon_type() {
         let (mut g, id) = carried_exit("oShotgun");
         g.step(&InputFrame {
             cycle_pressed: true,
             ..Default::default()
         });
-        assert_eq!(g.player.data["stash_id"], id as f64);
+        assert_eq!(g.player.pickup_item_type, "Shotgun");
+        assert!(g.world.entity(id).is_none());
         assert_eq!(g.player.bombs, 3);
         let bomb = g.player.held.unwrap();
         assert_eq!(g.world.entity(bomb).unwrap().object, "oBomb");

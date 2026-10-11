@@ -50,6 +50,10 @@ pub fn is_item(name: &str) -> bool {
 }
 
 pub fn init_entity(entity: &mut Entity) {
+    if entity.object == "oBow" && !entity.data.contains_key("new") {
+        let new = f64::from(entity.value("bow_picked_up") == 0.0);
+        entity.data.insert("new".into(), new);
+    }
     if entity.value("items_initialized") != 0.0 {
         return;
     }
@@ -322,8 +326,9 @@ fn jar_collision(game: &mut Game, id: u64, other: crate::dispatcher::Instance) -
         }
         spawn_jar_loot(game, jar.pos, false, false);
         if jar.held {
-            // Classic's holdItem/pickupItemType are represented by this link.
+            // Source Jar/Whip explicitly clears both held references.
             game.player.held = None;
+            game.player.pickup_item_type.clear();
         }
         break_item(game, id);
         true
@@ -404,8 +409,18 @@ fn player_actions(game: &mut Game, input: &InputFrame) {
         cancel_attack(game);
         weapons::fire_bow_on_drop(game);
         if let Some(id) = game.player.held.take() {
+            let released_type = game
+                .world
+                .entity(id)
+                .map(explosives::source_type)
+                .unwrap_or_default();
             if let Some(entity) = game.world.entity_mut(id) {
                 entity.held = false;
+            }
+            if released_type != game.player.pickup_item_type {
+                explosives::restore_stashed_item(game);
+            } else {
+                game.player.pickup_item_type.clear();
             }
         }
     } else {
@@ -556,11 +571,20 @@ pub(super) fn release_held_after_hit(game: &mut Game) {
 pub fn drop_held_with_velocity(game: &mut Game, velocity: Vec2) -> Option<u64> {
     weapons::fire_bow_on_drop(game);
     let id = game.player.held.take()?;
+    let dropped_type = game
+        .world
+        .entity(id)
+        .map(explosives::source_type)
+        .unwrap_or_default();
     if let Some(entity) = game.world.entity_mut(id) {
         entity.held = false;
         entity.vel = velocity;
     }
-    explosives::restore_stashed_item(game);
+    if dropped_type != game.player.pickup_item_type {
+        explosives::restore_stashed_item(game);
+    } else {
+        game.player.pickup_item_type.clear();
+    }
     Some(id)
 }
 
@@ -625,6 +649,9 @@ fn pick_up(game: &mut Game) {
             if let Some(id) = nearest {
                 game.world.entity_mut(id).unwrap().held = true;
                 game.player.held = Some(id);
+                game.player.pickup_item_type =
+                    explosives::source_type(game.world.entity(id).unwrap());
+                explosives::pickup_pose(game);
             }
         }
         return;
@@ -651,11 +678,19 @@ fn pick_up(game: &mut Game) {
     if let Some(id) = nearest {
         let entity = game.world.entity_mut(id).unwrap();
         entity.held = true;
-        if entity.object == "oBow" && entity.value("bow_picked_up") == 0.0 {
+        let new_bow = entity
+            .data
+            .get("new")
+            .copied()
+            .unwrap_or_else(|| f64::from(entity.value("bow_picked_up") == 0.0));
+        if entity.object == "oBow" && new_bow != 0.0 {
+            entity.data.insert("new".into(), 0.0);
             entity.data.insert("bow_picked_up".into(), 1.0);
             *game.data.entry("arrows".into()).or_default() += 6.0;
         }
+        game.player.pickup_item_type = explosives::source_type(entity);
         game.player.held = Some(id);
+        explosives::pickup_pose(game);
         utility::on_pickup(game, id);
         crate::traps::altar::idol_pickup(game, id);
         // Source scrStealItem consumes equipment only after this single
@@ -746,6 +781,8 @@ fn throw_item(game: &mut Game, id: u64, input: &InputFrame) {
     game.player.held = None;
     if throwing_bomb {
         explosives::restore_stashed_item(game);
+    } else {
+        game.player.pickup_item_type.clear();
     }
     game.sound("sndThrow", pos);
 }
@@ -2473,10 +2510,17 @@ mod tests {
         let bomb = game.player.held.unwrap();
         explosives::arm_bomb(game.world.entity_mut(bomb).unwrap());
         throw_item(&mut game, bomb, &InputFrame::default());
-        assert_eq!(game.player.held, Some(rock));
+        let restored = game.player.held.unwrap();
+        assert_ne!(restored, rock, "scrHoldItem creates a fresh instance");
+        assert!(game.world.entity(rock).is_none());
+        let fresh = game.world.entity(restored).unwrap();
+        assert_eq!(fresh.object, "oRock");
+        assert_eq!(fresh.value("cost"), 0.0);
+        assert_eq!(fresh.value("new"), 0.0);
+        assert_eq!(game.player.pickup_item_type, "Rock");
         assert!(!game.world.entity(bomb).unwrap().held);
         assert_eq!(game.player.bombs, 3);
-        assert_eq!(game.world.entity(rock).unwrap().value("stashed"), 0.0);
+        assert_eq!(fresh.value("stashed"), 0.0);
     }
 
     #[test]

@@ -348,6 +348,7 @@ fn pit_prelude(game: &mut Game) {
     set(&mut game.player, "my_gravity", 0.0);
     set(&mut game.player, "bounced", 1.0);
     if let Some(id) = game.player.held.take() {
+        game.player.pickup_item_type.clear();
         if let Some(held) = game.world.entity_mut(id) {
             held.data.insert("visible".into(), 1.0);
             held.held = false;

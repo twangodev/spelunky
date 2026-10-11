@@ -164,6 +164,9 @@ pub struct Player {
     pub money: u32,
     pub equipment: BTreeSet<String>,
     pub held: Option<u64>,
+    /// Source pickupItemType: inventory cycling stores a type, never an actor.
+    #[serde(default)]
+    pub pickup_item_type: String,
     pub invincible: u32,
     pub stun: u32,
     pub animation: f64,
@@ -193,6 +196,7 @@ impl Default for Player {
             money: 0,
             equipment: BTreeSet::new(),
             held: None,
+            pickup_item_type: String::new(),
             invincible: 0,
             stun: 0,
             animation: 0.0,

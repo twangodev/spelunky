@@ -292,11 +292,18 @@ fn yeti(game: &mut Game, e: &mut Entity) {
                 "sYetiDieLR"
             });
         }
-        if floor && e.vel.x == 0.0 && e.health > 0 {
+        // Source recovery runs while carried or supported, including a
+        // carried Yeti in midair; horizontal settling is independent below.
+        if e.held || floor {
             if e.timer > 0 {
                 e.timer -= 1;
-            } else {
+            } else if e.health > 0 {
                 enter(e, 0);
+                if e.held {
+                    e.held = false;
+                    game.player.held = None;
+                    game.player.pickup_item_type.clear();
+                }
             }
         }
         settle_yeti(e, wall, floor, impact_y);
