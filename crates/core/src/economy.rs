@@ -291,6 +291,9 @@ pub(crate) fn player_held_step(game: &mut Game) {
         return;
     }
     let damsel = acquire_sale_damsel(game, id);
+    if !damsel {
+        crate::items::collectibles::grant(game, id);
+    }
     clear_sale(game, id);
     if game.is_level()
         && game
@@ -300,9 +303,6 @@ pub(crate) fn player_held_step(game: &mut Game) {
             .any(|keeper| keeper.alive && crate::catalog::is_a(&keeper.object, "oShopkeeper"))
     {
         anger(game, game.player.pos, "COME BACK HERE, THIEF!");
-    }
-    if !damsel {
-        crate::items::collectibles::grant(game, id);
     }
 }
 
@@ -447,11 +447,11 @@ pub(crate) fn player_pay_step(game: &mut Game, input: &InputFrame) {
         if price > 0 {
             let damsel = acquire_sale_damsel(game, id);
             game.player.money -= price;
-            clear_sale(game, id);
             count(game, "itemsBought", LifetimeCounter::ItemsBought);
             if !damsel {
                 crate::items::collectibles::grant(game, id);
             }
+            clear_sale(game, id);
             game.data.insert("message_timer".into(), 80.);
             return;
         }

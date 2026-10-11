@@ -224,6 +224,30 @@ pub fn grant(game: &mut Game, id: u64) -> bool {
     };
     let object = entity.object.clone();
     let pos = entity.pos;
+    // scrStealItem retains paid weapons in hand; only positive prices select
+    // these acquisition branches, and Bow ammo is granted by pickup, not here.
+    let weapon_message = if entity.value("cost") > 0.0 {
+        match object.as_str() {
+            "oMachete" => Some(("YOU GOT A MACHETE!", "")),
+            "oMattock" => Some(("YOU GOT A MATTOCK!", "IT SEEMS A BIT RUSTY.")),
+            "oPistol" => Some(("YOU GOT A PISTOL!", "")),
+            "oWebCannon" => Some(("YOU GOT A WEB CANNON!", "")),
+            "oTeleporter" => Some(("YOU GOT A TELEPORTER!", "")),
+            "oShotgun" => Some(("YOU GOT A SHOTGUN!", "")),
+            "oBow" => Some(("YOU GOT THE BOW AND ARROWS!", "")),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    if let Some((first, second)) = weapon_message {
+        let entity = game.world.entity_mut(id).unwrap();
+        entity.data.insert("cost".into(), 0.0);
+        entity.data.insert("forSale".into(), 0.0);
+        game.sound("sndPickup", game.player.pos);
+        crate::enemies::shop_dialogue::say(game, first, second, 120);
+        return true;
+    }
     let message = match object.as_str() {
         "oBombBag" => {
             game.player.bombs += 3;
