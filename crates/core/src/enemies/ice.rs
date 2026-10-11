@@ -763,7 +763,9 @@ fn ufo(game: &mut Game, e: &mut Entity) {
         game.spawn("oUFOCrash", e.pos);
         super::record_death(game, e);
         e.alive = false;
-        return;
+        // Enemy Destroy completes before the remaining alert and independent
+        // flight-state branch on this retired own-Step receiver.
+        super::destroyed(game, e);
     }
 
     if e.pos.distance(game.player.pos) < 160.0 && e.value("alerted") == 0.0 {
