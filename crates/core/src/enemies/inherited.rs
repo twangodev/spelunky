@@ -104,7 +104,8 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
             frog.state = e.state;
         }
         e.alive = false;
-        return;
+        // Source instance_destroy keeps executing this inherited event,
+        // including its burning roll on the receiver being transformed.
     }
     let normal = if matches!(
         e.object.as_str(),
@@ -122,6 +123,17 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
         );
     }
     if e.value("burning") > 0.0 {
+        if game.rng.chance(1, 5) {
+            // Source sprite_width/height are the current image canvas, not
+            // collision bounds, and rand's upper endpoints are inclusive.
+            let (width, height) = crate::catalog::sprite_dimensions(&e.sprite)
+                .map_or(dimensions, |(w, h)| (f64::from(w), f64::from(h)));
+            let pos = Vec2::new(
+                e.pos.x + f64::from(game.rng.range(width as u32 + 1)),
+                e.pos.y + f64::from(game.rng.range(height as u32 + 1)),
+            );
+            game.spawn("oBurn", pos);
+        }
         e.data.insert("burning".into(), e.value("burning") - 1.0);
     }
     if point(&game.world, Vec2::new(center.x, e.pos.y - 1.0), "oLava") {
@@ -1410,5 +1422,421 @@ mod tests {
         assert!(e.pos.x >= g.camera.x + VIEW_WIDTH);
         assert_eq!(e.state, 1);
         assert_eq!(e.facing, -1);
+    }
+}
+
+#[cfg(test)]
+mod burning_source_tests {
+    use super::*;
+
+    // Literal rand statements, independent of production chance/range helpers.
+    fn literal_burn(rng: &mut Rng, denominator: u64, bounds: (u64, u64)) -> Option<Vec2> {
+        if 1 + rng.next_u64() % denominator != 1 {
+            return None;
+        }
+        Some(Vec2::new(
+            (rng.next_u64() % (bounds.0 + 1)) as f64,
+            (rng.next_u64() % (bounds.1 + 1)) as f64,
+        ))
+    }
+
+    fn scene(seed: u64) -> Game {
+        let mut game = Game::shell(seed, RulesPreset::Classic);
+        game.world = World::new(40, 30, Area::Temple, 13);
+        game.player.pos = Vec2::new(240.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        for x in 0..40 {
+            game.world.set_tile(x, 10, "oTemple");
+        }
+        game
+    }
+
+    #[test]
+    fn inherited_burning_literal_canvas_endpoints_and_next_rng() {
+        let mut emitted = false;
+        let mut skipped = false;
+        for seed in 0..128 {
+            for object in ["oCaveman", "oYetiKing", "oVampire"] {
+                let mut game = scene(seed);
+                let id = game.spawn(object, Vec2::new(80.0, 80.0));
+                let mut actor = game.world.entity(id).unwrap().clone();
+                // A source-local event oracle, not the natural ignition fixture.
+                actor.data.insert("burning".into(), 1.0);
+                let (w, h) = crate::catalog::sprite_dimensions(&actor.sprite).unwrap();
+                let mut expected = game.rng.clone();
+                let offset = literal_burn(&mut expected, 5, (w as u64, h as u64));
+                tick(&mut game, &mut actor);
+                let burns: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oBurn")
+                    .collect();
+                assert_eq!(
+                    burns.len(),
+                    usize::from(offset.is_some()),
+                    "{object} seed {seed}"
+                );
+                if let Some(offset) = offset {
+                    emitted = true;
+                    assert_eq!(burns[0].pos, Vec2::new(80.0 + offset.x, 80.0 + offset.y));
+                    assert_eq!(burns[0].vel.y, -0.1);
+                    assert_eq!(burns[0].image_speed(), 0.4);
+                } else {
+                    skipped = true;
+                }
+                assert_eq!(actor.value("burning"), 0.0);
+                assert_eq!(
+                    game.rng.next_u64(),
+                    expected.next_u64(),
+                    "{object} seed {seed}"
+                );
+            }
+        }
+        assert!(emitted && skipped);
+    }
+
+    #[test]
+    fn actual_explosion_ignites_enemy_and_damsel_then_emits_finite_burns() {
+        for object in ["oCaveman", "oDamsel"] {
+            let mut observed_ignition = false;
+            let mut observed_burn = false;
+            for seed in 0..16 {
+                let mut game = scene(seed);
+                let pos = if object == "oDamsel" {
+                    Vec2::new(104.0, 120.0)
+                } else {
+                    Vec2::new(96.0, 112.0)
+                };
+                let id = game.spawn(object, pos);
+                // Real source collision owns HP, launch, and burning=50.
+                // Only initial authored scene geometry is supplied here.
+                game.spawn("oExplosion", Vec2::new(104.0, 120.0));
+                let mut ignited = false;
+                let mut produced = false;
+                for _ in 0..50 {
+                    game.step(&InputFrame::default());
+                    ignited |= game
+                        .world
+                        .entity(id)
+                        .is_some_and(|e| e.value("burning") > 0.0);
+                    produced |= game.world.entities.iter().any(|e| e.object == "oBurn");
+                }
+                assert!(
+                    ignited,
+                    "source Explosion collision must ignite {object}, seed {seed}"
+                );
+                observed_ignition |= ignited;
+                observed_burn |= produced;
+                for _ in 0..100 {
+                    game.step(&InputFrame::default());
+                }
+                assert!(
+                    !game.world.entities.iter().any(|e| e.object == "oBurn"),
+                    "finite burn animation, {object} seed {seed}"
+                );
+            }
+            assert!(
+                observed_ignition && observed_burn,
+                "{object} must produce actual burning feedback"
+            );
+        }
+    }
+
+    #[test]
+    fn actual_authored_alien_eject_burns_only_during_ejection_with_literal_rng() {
+        let mut emitted = false;
+        for seed in 0..32 {
+            let mut game = scene(seed);
+            let id = game.spawn("oAlienEject", Vec2::new(96.0, 112.0));
+            let mut expected = game.rng.clone();
+            let mut y = 112.0;
+            let mut vy = -6.0;
+            let mut expected_births = Vec::new();
+            for _ in 0..12 {
+                y += vy;
+                vy += 0.5;
+                let emits = 1 + expected.next_u64() % 5 == 1;
+                if emits {
+                    let x =
+                        96.0 + (expected.next_u64() % 4) as f64 - (expected.next_u64() % 4) as f64;
+                    let py =
+                        y + (expected.next_u64() % 4) as f64 - (expected.next_u64() % 4) as f64;
+                    expected_births.push(Vec2::new(x, py));
+                }
+                let prior_id = game.world.entities.iter().map(|e| e.id).max().unwrap_or(0) + 1;
+                game.step(&InputFrame::default());
+                let newborns: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oBurn" && e.id >= prior_id)
+                    .collect();
+                assert_eq!(newborns.len(), usize::from(emits), "seed {seed}");
+                // Birth coordinates precede the automatic clock. Burn's Step
+                // resource precedes AlienEject, so it has not moved this frame.
+                for burn in newborns {
+                    assert_eq!(Some(&burn.pos), expected_births.last());
+                    emitted = true;
+                }
+                assert_eq!(
+                    game.rng.clone().next_u64(),
+                    expected.clone().next_u64(),
+                    "seed {seed}"
+                );
+            }
+            assert_eq!(game.world.entity(id).unwrap().state, 2);
+            let before = game.rng.clone().next_u64();
+            game.step(&InputFrame::default());
+            assert_eq!(
+                game.rng.clone().next_u64(),
+                before,
+                "FLOAT makes no burn roll"
+            );
+        }
+        assert!(emitted);
+    }
+    #[test]
+    fn damsel_burning_literal_invincibility_gate_and_next_rng() {
+        for invincible in [false, true] {
+            for seed in 0..64 {
+                let mut game = scene(seed);
+                let id = game.spawn("oDamsel", Vec2::new(96.0, 112.0));
+                let mut actor = game.world.entity(id).unwrap().clone();
+                actor.data.insert("burning".into(), 1.0);
+                actor
+                    .data
+                    .insert("invincible".into(), f64::from(invincible));
+                let mut expected = game.rng.clone();
+                let offset = if invincible {
+                    None
+                } else {
+                    literal_burn(&mut expected, 5, (8, 8))
+                };
+                super::super::npcs::tick(&mut game, &mut actor);
+                let burns: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oBurn")
+                    .collect();
+                assert_eq!(burns.len(), usize::from(offset.is_some()));
+                if let Some(offset) = offset {
+                    assert_eq!(
+                        burns[0].pos,
+                        Vec2::new(actor.pos.x + 4.0 + offset.x, actor.pos.y + 4.0 + offset.y)
+                    );
+                }
+                assert_eq!(actor.value("burning"), f64::from(invincible));
+                assert_eq!(game.rng.next_u64(), expected.next_u64());
+            }
+        }
+    }
+
+    #[test]
+    fn actual_magma_man_burn_roll_and_unsupported_destroy_continuation_rng() {
+        let mut emitted = false;
+        for unsupported in [false, true] {
+            for seed in 0..64 {
+                let mut game = scene(seed);
+                let y = if unsupported { 80.0 } else { 144.0 };
+                let id = game.spawn("oMagmaMan", Vec2::new(96.0, y));
+                // Initial source-reachable IDLE counter distinguishes the
+                // unsupported continuation from the grounded transition.
+                game.world.entity_mut(id).unwrap().timer = 1;
+                let mut expected = game.rng.clone();
+                if unsupported {
+                    // oMagma's own Create draws x twice, y, and acceleration
+                    // after inherited Detritus defaults, before the burn roll.
+                    for _ in 0..4 {
+                        expected.next_u64();
+                    }
+                }
+                let offset = literal_burn(&mut expected, 20, (8, 8));
+                if !unsupported {
+                    expected.next_u64(); // counter1 -> 0: facing rand(0,1)
+                    let transform = 1 + expected.next_u64() % 6 == 1;
+                    if transform {
+                        for _ in 0..4 {
+                            expected.next_u64();
+                        }
+                    }
+                }
+                game.step(&InputFrame::default());
+                let burns: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oBurn")
+                    .collect();
+                assert_eq!(
+                    burns.len(),
+                    usize::from(offset.is_some()),
+                    "unsupported={unsupported}, seed={seed}"
+                );
+                if let Some(offset) = offset {
+                    emitted = true;
+                    assert_eq!(
+                        burns[0].pos,
+                        Vec2::new(100.0 + offset.x, y + 4.0 + offset.y)
+                    );
+                }
+                if unsupported {
+                    assert!(game.world.entity(id).is_none());
+                    assert_eq!(
+                        game.world
+                            .entities
+                            .iter()
+                            .filter(|e| e.object == "oMagma")
+                            .count(),
+                        1
+                    );
+                }
+                assert_eq!(
+                    game.rng.next_u64(),
+                    expected.next_u64(),
+                    "unsupported={unsupported}, seed={seed}"
+                );
+            }
+        }
+        assert!(emitted);
+    }
+    #[test]
+    fn inherited_fire_frog_water_transform_continues_burning_after_destroy() {
+        let mut emitted = false;
+        let mut skipped = false;
+        for burning in [0.0, 1.0] {
+            for seed in 0..64 {
+                let mut game = scene(seed);
+                game.world.set_tile(6, 7, "oWaterSwim");
+                let id = game.spawn("oFireFrog", Vec2::new(96.0, 112.0));
+                let index = game.world.entities.iter().position(|e| e.id == id).unwrap();
+                // Match the enemy event adapter's detached receiver. Initial
+                // burning is a source-local control, not a natural ignition.
+                let mut actor = game.world.entities.remove(index);
+                actor.data.insert("burning".into(), burning);
+                let (width, height) = crate::catalog::sprite_dimensions(&actor.sprite).unwrap();
+                let mut expected = game.rng.clone();
+                let expected_facing = if expected.next_u64() % 2 == 0 { -1 } else { 1 };
+                let offset = if burning > 0.0 {
+                    literal_burn(&mut expected, 5, (width as u64, height as u64))
+                } else {
+                    None
+                };
+
+                // The actual oEnemy parent event, which FireFrog Step inherits.
+                tick(&mut game, &mut actor);
+
+                assert!(!actor.alive, "water transforms the original FireFrog");
+                assert_eq!(actor.value("burning"), 0.0);
+                assert!(game.world.entity(id).is_none());
+                let frogs: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oFrog")
+                    .collect();
+                assert_eq!(frogs.len(), 1);
+                assert_eq!(frogs[0].pos, Vec2::new(96.0, 112.0));
+                assert_eq!(frogs[0].state, actor.state);
+                assert_eq!(frogs[0].facing, expected_facing);
+                let burns: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oBurn")
+                    .collect();
+                assert_eq!(burns.len(), usize::from(offset.is_some()));
+                if let Some(offset) = offset {
+                    emitted = true;
+                    assert!(
+                        frogs[0].id < burns[0].id,
+                        "Frog Create precedes burn emission"
+                    );
+                    assert_eq!(burns[0].pos, Vec2::new(96.0 + offset.x, 112.0 + offset.y));
+                } else if burning > 0.0 {
+                    skipped = true;
+                }
+                assert_eq!(
+                    game.rng.next_u64(),
+                    expected.next_u64(),
+                    "burning={burning}, seed={seed}"
+                );
+            }
+        }
+        assert!(emitted && skipped);
+    }
+
+    #[test]
+    fn damsel_crush_preserves_receiver_hp_and_continues_burning_after_destroy() {
+        let mut emitted = false;
+        let mut skipped = false;
+        for burning in [0.0, 1.0] {
+            for seed in 0..64 {
+                let mut game = scene(seed);
+                game.world.set_tile(6, 7, "oTemple");
+                let id = game.spawn("oDamsel", Vec2::new(104.0, 120.0));
+                let index = game.world.entities.iter().position(|e| e.id == id).unwrap();
+                let mut actor = game.world.entities.remove(index);
+                actor.data.insert("burning".into(), burning);
+                let hp = actor.health;
+                let mut expected = game.rng.clone();
+                // scrCreateBlood's three fresh Blood instances each execute
+                // their four own Create draws before instance_destroy resumes.
+                for _ in 0..12 {
+                    expected.next_u64();
+                }
+                let offset = if burning > 0.0 {
+                    literal_burn(&mut expected, 5, (8, 8))
+                } else {
+                    None
+                };
+
+                // Actual Damsel Step includes its inherited oItem body first.
+                super::super::npcs::tick(&mut game, &mut actor);
+
+                assert!(!actor.alive, "the authored solid crush must destroy Damsel");
+                assert!(game.world.solid_at(actor.pos.x, actor.pos.y));
+                assert_eq!(
+                    actor.health, hp,
+                    "instance_destroy does not assign receiver hp=0"
+                );
+                assert_eq!(actor.value("burning"), 0.0);
+                let blood: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oBlood")
+                    .collect();
+                assert_eq!(blood.len(), 3);
+                assert!(blood.iter().all(|e| e.pos == actor.pos));
+                let burns: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oBurn")
+                    .collect();
+                assert_eq!(burns.len(), usize::from(offset.is_some()));
+                if let Some(offset) = offset {
+                    emitted = true;
+                    assert!(
+                        blood.iter().all(|e| e.id < burns[0].id),
+                        "all Blood Creates precede burn roll"
+                    );
+                    assert_eq!(
+                        burns[0].pos,
+                        Vec2::new(actor.pos.x + 4.0 + offset.x, actor.pos.y + 4.0 + offset.y)
+                    );
+                } else if burning > 0.0 {
+                    skipped = true;
+                }
+                assert_eq!(
+                    game.rng.next_u64(),
+                    expected.next_u64(),
+                    "burning={burning}, seed={seed}"
+                );
+            }
+        }
+        assert!(emitted && skipped);
     }
 }

@@ -1221,15 +1221,27 @@ fn magma_man(game: &mut Game, e: &mut Entity) {
         e.state = 99;
         e.vel = Vec2::default();
         e.set_sprite("sMagmaManDie");
-        return;
     }
-    if !ground(&game.world, e) {
+    let grounded = ground(&game.world, e);
+    if !grounded {
         // Unlike the voluntary IDLE transformation below, the source falling
         // branch creates a fresh 200-hp magma projectile without copying hp.
-        spawn(game, "oMagma", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
+        crate::world_events::spawn_detritus(
+            game,
+            "oMagma",
+            Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0),
+        );
         e.alive = false;
-        return;
+        // instance_destroy continues the source event, including its burn roll.
     }
+    if game.rng.chance(1, 20) {
+        let pos = Vec2::new(
+            e.pos.x + f64::from(4 + game.rng.range(9)),
+            e.pos.y + f64::from(4 + game.rng.range(9)),
+        );
+        game.spawn("oBurn", pos);
+    }
+    e.data.insert("burning".into(), e.value("burning") - 1.0);
     let b = e.bounds();
     let wall = super::solid_mask(
         &game.world,
@@ -1243,18 +1255,22 @@ fn magma_man(game: &mut Game, e: &mut Entity) {
     );
     e.vel.y = 0.0;
     if e.state == 0 {
-        if e.timer > 0 {
+        if grounded && e.timer > 0 {
             e.timer -= 1;
-        } else {
+        }
+        if e.timer == 0 {
             e.facing = if game.rng.chance(1, 2) { -1 } else { 1 };
             e.state = 1;
             if game.rng.chance(1, 6) {
-                let id = spawn(game, "oMagma", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
+                let id = crate::world_events::spawn_detritus(
+                    game,
+                    "oMagma",
+                    Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0),
+                );
                 if let Some(m) = game.world.entity_mut(id) {
                     m.health = e.health;
                 }
                 e.alive = false;
-                return;
             }
         }
     } else if e.state == 1 {
@@ -1278,11 +1294,13 @@ fn magma_man(game: &mut Game, e: &mut Entity) {
         }
     }
     move_body(&game.world, e, 0.0);
-    e.set_sprite(if e.vel.x == 0.0 {
-        "sMagmaManLeft"
-    } else {
-        "sMagmaManWalkL"
-    });
+    if e.state < 98 && e.state != 3 {
+        e.set_sprite(if e.vel.x == 0.0 {
+            "sMagmaManLeft"
+        } else {
+            "sMagmaManWalkL"
+        });
+    }
 }
 fn magma(game: &mut Game, e: &mut Entity) {
     if e.value("started") == 0.0 {
@@ -1316,7 +1334,14 @@ mod tests {
     // Literal WALK statements from oHawkman Step.xml 106-139 and
     // oMagmaMan Step.xml 66-99. Each rand(a,b) consumes one draw. This oracle
     // intentionally does not call production range/chance or WALK helpers.
-    // It covers this state segment, not MagmaMan's separate burn-emission RNG.
+    // MagmaMan controls separately include the preceding literal burn prefix.
+    fn literal_magma_burn_prefix(rng: &mut crate::model::Rng) {
+        if 1 + rng.next_u64() % 20 == 1 {
+            rng.next_u64(); // rand(4,12), x
+            rng.next_u64(); // rand(4,12), y
+        }
+    }
+
     fn literal_temple_walk(
         rng: &mut crate::model::Rng,
         ledge: bool,
@@ -1371,9 +1396,14 @@ mod tests {
                 let (mut game, id) = temple_walk_fixture(object, facing, ledge);
                 game.rng = crate::model::Rng::new(seed);
                 let mut expected_rng = game.rng.clone();
+                if object == "oMagmaMan" {
+                    literal_magma_burn_prefix(&mut expected_rng);
+                }
                 let (state, counter, mut x_vel, actual_idle) =
                     literal_temple_walk(&mut expected_rng, ledge, facing);
-                assert_eq!(actual_idle, idle_success);
+                if object == "oHawkman" {
+                    assert_eq!(actual_idle, idle_success);
+                }
                 if object == "oHawkman" {
                     x_vel = (x_vel.abs() - 0.1).max(0.0) * x_vel.signum();
                 }
@@ -1435,9 +1465,14 @@ mod tests {
                 actor.vel.x = 2.5 * f64::from(facing);
                 game.rng = crate::model::Rng::new(0);
                 let mut expected_rng = game.rng.clone();
+                if object == "oMagmaMan" {
+                    literal_magma_burn_prefix(&mut expected_rng);
+                }
                 let (state, counter, mut x_vel, idle_success) =
                     literal_temple_walk(&mut expected_rng, false, -facing);
-                assert!(!idle_success);
+                if object == "oHawkman" {
+                    assert!(!idle_success);
+                }
                 if object == "oHawkman" {
                     x_vel = (x_vel.abs() - 0.1).max(0.0) * x_vel.signum();
                 }
@@ -1460,10 +1495,13 @@ mod tests {
             let actor = game.world.entity_mut(id).unwrap();
             actor.state = 0;
             actor.timer = 0;
-            // Seed 1's second draw is not MagmaMan's voluntary 1-in-6
-            // transformation. A newly selected WALK waits until the next Step.
-            game.rng = crate::model::Rng::new(1);
+            // A newly selected WALK waits until the next Step. MagmaMan's
+            // seed also accounts for its separate preceding burn roll.
+            game.rng = crate::model::Rng::new(if object == "oMagmaMan" { 2 } else { 1 });
             let mut expected_rng = game.rng.clone();
+            if object == "oMagmaMan" {
+                literal_magma_burn_prefix(&mut expected_rng);
+            }
             let facing = if expected_rng.next_u64() % 2 == 0 {
                 -1
             } else {
@@ -2017,9 +2055,124 @@ mod tests {
             }
         }
     }
+    // Test-only additions for enemies/temple.rs::tests. This oracle does not call
+    // production chance/range, MagmaMan Step, or any movement helper.
+    //
+    // Source: Objects/Enemies/oMagmaMan.events/Create.xml:32-56 (hp200,
+    // IDLE0/counter0/facingRIGHT), Step.xml:16 (hp decay), 42-43 (burn first),
+    // 52-61 (grounded IDLE decrement + facing/transform), 94-99 (WALK idle roll).
+    //
+    // Fixture preconditions: one initially default MagmaMan at (160,144), continuous
+    // solid row10, and vertical walls at columns4/16 over rows0..9. Its body stays
+    // supported and outside those walls. Left/right wall turns only reverse facing
+    // and consume no RNG. Both forward feet probes stay over the continuous floor,
+    // so the separate ledge rand(20,50) branch is ineligible. No interacting actors,
+    // player burning, lava spurts, or other random producers occur during this
+    // isolated patrol. Burn Create/Step/AnimationEnd consume no RNG and have no cap.
+    // This oracle proves the RNG eligibility precondition; the existing Game.step
+    // test still proves actual support, survival, aging, contact, and animation.
+    #[derive(Debug)]
+    struct FlatFloorMagmaOracle {
+        health: i32,
+        state: i32,
+        counter: u32,
+        initial_facing: i8,
+        // Wall reflections are intentionally outside this RNG-only oracle.
+        last_random_facing: i8,
+        transform_step: Option<u32>,
+        burns: u32,
+        random_idle_entries: u32,
+        draws: u32,
+    }
+
+    fn literal_flatfloor_magma_199(rng: &mut crate::model::Rng) -> FlatFloorMagmaOracle {
+        fn rand(rng: &mut crate::model::Rng, draws: &mut u32, low: u64, high: u64) -> u64 {
+            *draws += 1;
+            low + rng.next_u64() % (high - low + 1)
+        }
+        let mut result = FlatFloorMagmaOracle {
+            health: 200,
+            state: 0, // IDLE
+            counter: 0,
+            initial_facing: 1, // RIGHT; Create has no own random draw.
+            last_random_facing: 1,
+            transform_step: None,
+            burns: 0,
+            random_idle_entries: 0,
+            draws: 0,
+        };
+        for step in 1..=199 {
+            result.health -= 1;
+            // Source's unconditional emission roll precedes BOTH state branches.
+            if rand(rng, &mut result.draws, 1, 20) == 1 {
+                rand(rng, &mut result.draws, 4, 12); // x offset
+                rand(rng, &mut result.draws, 4, 12); // y offset
+                result.burns += 1;
+            }
+            if result.state == 0 {
+                // The whole authored floor supports the source feet probe.
+                if result.counter > 0 {
+                    result.counter -= 1;
+                }
+                // This is a second `if`, not `else`: counter1 transitions now.
+                if result.counter == 0 {
+                    result.last_random_facing = if rand(rng, &mut result.draws, 0, 1) == 0 {
+                        -1
+                    } else {
+                        1
+                    };
+                    result.state = 1; // WALK
+                    if rand(rng, &mut result.draws, 1, 6) == 1 {
+                        result.transform_step = Some(step);
+                        // Stop at the fixture-disqualifying branch. Source then
+                        // creates Magma (four Create draws), copies HP, destroys
+                        // this receiver, and continues. This eligibility oracle
+                        // deliberately makes no post-transform RNG/state claim.
+                        break;
+                    }
+                }
+            } else {
+                assert_eq!(result.state, 1);
+                // Source wall turns consume zero draws, and the forward floor
+                // point is supported; only the independent WALK idle roll remains.
+                if rand(rng, &mut result.draws, 1, 100) == 1 {
+                    result.state = 0;
+                    result.counter = rand(rng, &mut result.draws, 20, 50) as u32;
+                    result.random_idle_entries += 1;
+                }
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn literal_flatfloor_magma_seed_proves_natural_lifetime_fixture_precondition() {
+        let mut source_rng = crate::model::Rng::new(0);
+        let source = literal_flatfloor_magma_199(&mut source_rng);
+        assert_eq!(source.initial_facing, 1);
+        assert_eq!(source.transform_step, None);
+        assert_eq!((source.health, source.state, source.counter), (1, 1, 0));
+        assert_eq!(
+            (source.burns, source.random_idle_entries, source.draws),
+            (9, 1, 373)
+        );
+        assert_eq!(source_rng.next_u64(), 9_593_559_228_881_912_482);
+
+        // Negative control: seed1 is no longer a legal 198-step same-instance
+        // lifetime fixture after restoring the source burn roll before IDLE.
+        let mut source_rng = crate::model::Rng::new(1);
+        let source = literal_flatfloor_magma_199(&mut source_rng);
+        assert_eq!(source.initial_facing, 1);
+        assert_eq!(source.last_random_facing, 1);
+        assert_eq!(source.transform_step, Some(1));
+        assert_eq!((source.health, source.burns, source.draws), (199, 0, 3));
+    }
+
     #[test]
     fn actual_step_naturally_aged_magma_man_hurts_until_die_animation_finishes() {
-        let mut game = Game::shell(1, RulesPreset::Classic);
+        // The literal flat-floor oracle below proves seed 0 avoids voluntary
+        // transformation through tick 199, including the source burn RNG prefix.
+        let mut game = Game::shell(0, RulesPreset::Classic);
         game.world = World::new(40, 30, Area::Mines, 1);
         game.flags.insert("custom".into());
         game.player.pos = Vec2::new(32.0, 152.0);

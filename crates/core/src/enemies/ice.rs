@@ -822,6 +822,14 @@ fn eject(game: &mut Game, e: &mut Entity) {
             e.vel.y = 0.0;
             e.set_sprite("sAlienDeploy");
         }
+        // Still executes on the EJECT-to-FLOAT transition frame.
+        if game.rng.chance(1, 5) {
+            let pos = Vec2::new(
+                e.pos.x + f64::from(game.rng.range(4)) - f64::from(game.rng.range(4)),
+                e.pos.y + f64::from(game.rng.range(4)) - f64::from(game.rng.range(4)),
+            );
+            game.spawn("oBurn", pos);
+        }
     } else {
         e.vel.x = 0.0;
         e.vel.y = 2.0;

@@ -1947,6 +1947,15 @@ mod tests {
                 continue;
             }
             let expected_facing = if expected_rng.range(2) == 0 { -1 } else { 1 };
+            // The later-resource newborn Eject moves to (88,82), then always
+            // rolls rand(1,5); a successful roll draws four coordinate offsets.
+            let expected_burn = if expected_rng.range(5) == 0 {
+                let x = 88.0 + f64::from(expected_rng.range(4)) - f64::from(expected_rng.range(4));
+                let y = 82.0 + f64::from(expected_rng.range(4)) - f64::from(expected_rng.range(4));
+                Some(Vec2::new(x, y))
+            } else {
+                None
+            };
 
             game.step(&InputFrame::default());
 
@@ -1972,6 +1981,17 @@ mod tests {
                 Vec2::new(88., 82.),
                 "later resource runs its newborn Step"
             );
+            let burns: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oBurn")
+                .collect();
+            assert_eq!(burns.len(), usize::from(expected_burn.is_some()));
+            if let Some(pos) = expected_burn {
+                assert_eq!(burns[0].pos, pos);
+                assert_eq!(burns[0].age, 0, "earlier Burn resource has no newborn Step");
+            }
             assert_eq!(game.rng.range(10000), expected_rng.range(10000));
             let sounds: Vec<_> = game
                 .events

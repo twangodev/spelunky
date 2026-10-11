@@ -496,11 +496,21 @@ fn damsel(game: &mut Game, e: &mut Entity) {
         }
         create_blood(game, e, e.pos, 3);
         game.sound("sndDamsel", e.pos);
-        e.health = 0;
         e.alive = false;
-        return;
+        // Source instance_destroy preserves receiver HP and does not stop
+        // the following burning, lava, and spike statements.
     }
     if e.value("invincible") == 0.0 {
+        if e.value("burning") > 0.0 {
+            if game.rng.chance(1, 5) {
+                let pos = Vec2::new(
+                    e.pos.x + f64::from(4 + game.rng.range(9)),
+                    e.pos.y + f64::from(4 + game.rng.range(9)),
+                );
+                game.spawn("oBurn", pos);
+            }
+            e.data.insert("burning".into(), e.value("burning") - 1.0);
+        }
         if super::inherited::point(&game.world, Vec2::new(e.pos.x, e.pos.y + 6.0), "oLava") {
             if e.health > 0 {
                 super::record_damsel_death(game, e, false);
