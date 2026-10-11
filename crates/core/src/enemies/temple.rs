@@ -325,12 +325,13 @@ pub(super) fn collision(game: &mut Game, e: &mut Entity, other: Instance) -> boo
             if object != "oTombLord" {
                 if let Instance::Entity(id) = other {
                     let target = game.world.entity_mut(id).unwrap();
-                    target.health -= 2;
                     target.vel = Vec2::new(e.vel.x, -4.0);
-                    target.state = 98;
-                    target.timer = 20;
+                    target.health -= 2;
                     let pos = target.pos;
                     fly_blood(game, id);
+                    let target = game.world.entity_mut(id).unwrap();
+                    target.state = 98;
+                    target.timer = 20;
                     game.sound("sndHit", pos);
                     e.alive = false;
                 }
@@ -399,23 +400,17 @@ pub(super) fn collision(game: &mut Game, e: &mut Entity, other: Instance) -> boo
 
 fn fly_blood(game: &mut Game, id: u64) {
     let target = game.world.entity_mut(id).unwrap();
-    let bloodless = target.value("bloodless") != 0.0;
     let blood_left = target.data.entry("blood_left".into()).or_insert(4.0);
-    let blood = *blood_left > 0.0 && !bloodless;
-    if *blood_left > 0.0 && target.health < 0 {
-        *blood_left -= 1.0;
-    }
-    let (half_width, half_height) = match target.object.as_str() {
-        "oJaws" => (24.0, 16.0),
-        "oGiantSpider" | "oGiantSpiderHang" | "oYetiKing" | "oTombLord" | "oAlienBoss" => {
-            (16.0, 16.0)
-        }
-        _ => (8.0, 8.0),
-    };
-    let pos = Vec2::new(target.pos.x + half_width, target.pos.y + half_height);
+    let blood = *blood_left > 0.0;
+    let decrement = blood && target.health < 0;
+    let pos = super::sprite_blood_center(target);
     if blood {
         let source = target.clone();
         super::create_blood(game, &source, pos, 1);
+    }
+    if decrement {
+        let target = game.world.entity_mut(id).unwrap();
+        *target.data.get_mut("blood_left").unwrap() -= 1.0;
     }
 }
 

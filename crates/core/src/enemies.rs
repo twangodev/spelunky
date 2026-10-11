@@ -501,7 +501,7 @@ pub(crate) fn finish_destroy_events(game: &mut Game) {
     npcs::finish_destroy_events(game);
 }
 
-fn bullet_blood_center(target: &Entity) -> Vec2 {
+fn sprite_blood_center(target: &Entity) -> Vec2 {
     let (width, height) = crate::catalog::sprite_dimensions(&target.sprite).unwrap_or((0, 0));
     let xscale = target.data.get("image_xscale").copied().unwrap_or(1.0);
     let yscale = target.data.get("image_yscale").copied().unwrap_or(1.0);
@@ -552,7 +552,7 @@ pub(crate) fn projectile_collision(game: &mut Game, projectile_id: u64, target_i
             })
         {
             if damsel && target.value("blood_left") > 0. {
-                create_blood(game, target, bullet_blood_center(target), 1);
+                create_blood(game, target, sprite_blood_center(target), 1);
                 if target.health < 0 {
                     target
                         .data
@@ -582,7 +582,7 @@ pub(crate) fn projectile_collision(game: &mut Game, projectile_id: u64, target_i
                 game.player.held = game.player.held.filter(|id| *id != target.id);
             }
             if !damsel && target.value("blood_left") > 0. {
-                create_blood(game, target, bullet_blood_center(target), 1);
+                create_blood(game, target, sprite_blood_center(target), 1);
                 if target.health < 0 {
                     target
                         .data
