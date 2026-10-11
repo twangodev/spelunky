@@ -2794,6 +2794,11 @@ mod tests {
     fn blocked_rope_placement_does_not_spend_inventory() {
         let mut g = game();
         g.world.set_tile(10, 10, "oBlock");
+        let attempt_id = g.world.next_id;
+        let creation_serial = g.world.creation_serial;
+        let entity_count = g.world.entities.len();
+        let events = g.events.clone();
+        let mut expected_rng = g.rng.clone();
         use_rope(
             &mut g,
             &InputFrame {
@@ -2803,7 +2808,33 @@ mod tests {
             },
         );
         assert_eq!(g.player.ropes, 4);
-        assert!(g.world.entities.is_empty());
+        // Source creates before probing, then destroys the failed attempt.
+        // Direct helper calls precede the dispatcher's dead-instance cleanup.
+        assert_eq!(g.world.entities.len(), entity_count + 1);
+        assert_eq!(g.world.next_id, attempt_id + 1);
+        assert_eq!(g.world.creation_serial, creation_serial + 1);
+        let attempt = &g.world.entities[entity_count];
+        assert_eq!(attempt.id, attempt_id);
+        assert_eq!(attempt.creation_serial, creation_serial + 1);
+        assert_eq!(attempt.object, "oRopeThrow");
+        assert_eq!(attempt.sprite, "sRopeEnd");
+        assert_eq!(attempt.pos, Vec2::new(176.0, 160.0));
+        assert_eq!(attempt.data.get("t"), Some(&0.0));
+        assert!(!attempt.alive);
+        assert!(!attempt.held);
+        assert_eq!(attempt.value("armed"), 0.0);
+        assert_eq!(attempt.value("falling"), 0.0);
+        assert_eq!(attempt.vel, Vec2::default());
+        assert!(g.world.entity(attempt_id).is_none());
+        assert!(!g.world.entities.iter().any(|entity| entity.alive));
+        assert_eq!(g.player.held, None);
+        assert_eq!(g.events, events);
+        assert!(
+            !g.events
+                .iter()
+                .any(|event| matches!(event, GameEvent::Sound { name, .. } if name == "sndThrow"))
+        );
+        assert_eq!(g.rng.clone().next_u64(), expected_rng.next_u64());
     }
 
     #[test]
