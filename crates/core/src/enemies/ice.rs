@@ -1108,7 +1108,7 @@ pub(super) fn collision(
                 true
             }
             "oAlienBoss" => {
-                giant_player_collision(game, e);
+                alien_boss_player_collision(game, e);
                 true
             }
             "oAlienEject" => {
@@ -1475,61 +1475,6 @@ fn alien_boss_player_collision(game: &mut Game, e: &mut Entity) {
             6.0
         };
         hurt_player_cause(game, 1, crate::statistics::EnemyDeath::AlienBoss);
-    }
-}
-
-fn giant_player_collision(game: &mut Game, e: &mut Entity) {
-    let king = e.object == "oYetiKing";
-    if king && (game.player.pos.x - (e.pos.x + 16.0)).abs() > 16.0 {
-        return;
-    }
-    if e.object == "oAlienBoss" {
-        alien_boss_player_collision(game, e);
-        return;
-    }
-    if super::player_alive(game)
-        && matches!(
-            game.player.state,
-            PlayerState::Jumping | PlayerState::Falling
-        )
-        && game.player.pos.y < e.pos.y + 8.0
-        && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
-    {
-        let fall = game.player.data.get("fall_timer").copied().unwrap_or(0.0) / 16.0;
-        let damage = if king {
-            fall.ceil()
-        } else {
-            fall.floor() + 1.0
-        } as i32;
-        e.health -= damage * if game.player.has("spike_shoes") { 3 } else { 1 };
-        super::set_counts_as_kill(e, true);
-        game.player.vel.y = -6.0 - 0.2 * game.player.vel.y;
-        game.player.data.insert("fall_timer".into(), 0.0);
-        game.sound("sndHit", e.pos);
-    } else if game.player.invincible == 0 && (king || e.state != 99) {
-        game.player.invincible = 30;
-        game.player.data.insert("blink".into(), 30.0);
-        if game.player.pos.y < e.pos.y {
-            game.player.vel.y = -6.0;
-        }
-        game.player.vel.x = if game.player.pos.x < e.pos.x {
-            -6.0
-        } else {
-            6.0
-        };
-        if !king || crate::statistics::is_real_level(game) {
-            hurt_player_cause(
-                game,
-                if king { 2 } else { 1 },
-                if king {
-                    crate::statistics::EnemyDeath::YetiKing
-                } else {
-                    crate::statistics::EnemyDeath::AlienBoss
-                },
-            );
-        } else {
-            game.sound("sndHurt", game.player.pos);
-        }
     }
 }
 
