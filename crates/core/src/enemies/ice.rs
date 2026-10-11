@@ -514,9 +514,6 @@ fn settle_yeti(e: &mut Entity, wall: bool, floor: bool, impact_y: f64) {
 fn alien(game: &mut Game, e: &mut Entity) {
     let next_y = e.vel.y + 0.6;
     let (wall, floor) = move_body(&game.world, e, 0.6);
-    // Alien Step does not apply the inherited yVelLimit and moveTo itself
-    // does not clear velocity when it resolves a ceiling collision.
-    e.vel.y = if floor && e.state != 98 { 0.0 } else { next_y };
     if game
         .world
         .solid_point_except(Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), e.id)
@@ -524,10 +521,16 @@ fn alien(game: &mut Game, e: &mut Entity) {
         e.health = 0;
     }
     if e.health < 1 {
+        super::create_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 3);
         super::record_death(game, e);
         e.alive = false;
-        return;
+        // instance_destroy runs Enemy Destroy synchronously, then the current
+        // Alien Step continues through gravity and its independent AI branch.
+        super::destroyed(game, e);
     }
+    // Alien Step does not apply the inherited yVelLimit and moveTo itself
+    // does not clear velocity when it resolves a ceiling collision.
+    e.vel.y = if floor && e.state != 98 { 0.0 } else { next_y };
     if e.state == 98 {
         if floor {
             e.timer = e.timer.saturating_sub(1);
