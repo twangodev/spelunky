@@ -98,6 +98,94 @@ fn big_jump(game: &Game) -> bool {
         .iter()
         .any(|event| matches!(event, GameEvent::Sound { name, .. } if name == "sndBigJump"))
 }
+// Literal oOlmec controller geometry from Create/Platform Engine, independent
+// of the displayed sprite and the historical penetrating-floor fixture.
+fn source_bottom(game: &Game, actor: &Entity) -> bool {
+    game.world.solid_line_except(
+        Vec2::new(actor.pos.x + 2.0, actor.pos.y + 64.0),
+        Vec2::new(actor.pos.x + 61.0, actor.pos.y + 64.0),
+        actor.id,
+    )
+}
+fn source_body_overlap(game: &Game, actor: &Entity) -> bool {
+    game.world.rectangle_family_except(
+        Vec2::new(actor.pos.x + 2.0, actor.pos.y),
+        Vec2::new(actor.pos.x + 61.0, actor.pos.y + 63.0),
+        "oSolid",
+        Some(actor.id),
+        CollisionPrecision::Precise,
+    )
+}
+fn qualify_ascending_path_and_support(game: &Game, actor: &Entity) {
+    assert_eq!(actor.vel, Vec2::default());
+    assert!(
+        !game.world.rectangle_family_except(
+            Vec2::new(actor.pos.x + 2.0, actor.pos.y - 16.0),
+            Vec2::new(actor.pos.x + 61.0, actor.pos.y + 63.0),
+            "oSolid",
+            Some(actor.id),
+            CollisionPrecision::Precise,
+        ),
+        "SOURCE_SETTLED_BODY_AND_SIXTEEN_PIXEL_ASCENT_CLEAR"
+    );
+    assert!(source_bottom(game, actor), "SOURCE_SETTLED_FLOOR_CONTACT");
+    let first = Vec2::new(actor.pos.x + 2.0, actor.pos.y + 64.0);
+    let last = Vec2::new(actor.pos.x + 61.0, actor.pos.y + 64.0);
+    let support = game
+        .world
+        .tiles
+        .iter()
+        .enumerate()
+        .filter_map(|(i, tile)| {
+            let x = (i % game.world.width) as i32;
+            let y = (i / game.world.width) as i32;
+            (tile.engine_active
+                && tile.object == "oTemple"
+                && game.world.tile_collision_mask(x, y).intersects_axis_line(
+                    first,
+                    last,
+                    CollisionPrecision::Precise,
+                ))
+            .then_some(i)
+        })
+        .collect::<Vec<_>>();
+    assert!(!support.is_empty(), "SOURCE_ACTIVE_AUTHORED_TEMPLE_SUPPORT");
+    assert!(
+        support
+            .iter()
+            .all(|i| matches!(i / game.world.width, 35 | 36))
+    );
+    // The first natural Slam removes its five original surface cells. Keep
+    // that source consequence while observing the actual remaining support.
+    for x in 17..=21 {
+        assert!(
+            game.world.tile(x, 35).unwrap().object.is_empty(),
+            "SOURCE_INTRO_SLAM_REMOVED_ORIGINAL_SURFACE"
+        );
+    }
+    eprintln!(
+        "QUALIFIED_POST_SLAM_IDLE source_support={support:?} origin={:?}",
+        actor.pos
+    );
+}
+fn qualify_player_guard_phase(game: &Game) {
+    assert_eq!(game.state, RunState::Playing);
+    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.stun, 0);
+    assert!(
+        !game.player.is_stunned(),
+        "SOURCE_NO_LATE_STUNNED_STATE_WRITE"
+    );
+    assert_eq!(game.player.attack_timer, 0);
+    assert_eq!(game.player.data.get("active"), Some(&1.0));
+    assert!(
+        !matches!(
+            game.player.sprite.as_str(),
+            "sDuckToHangL" | "sDamselDtHL" | "sTunnelDtHL"
+        ),
+        "SOURCE_RECOVER_PLAYER_PHASE_NO_DUCK_TO_HANG"
+    );
+}
 #[test]
 fn natural_alarm5_positive_countdown_remains_idle_until_one() {
     for (rules, algorithm) in modes() {
@@ -117,7 +205,13 @@ fn natural_alarm5_idle_one_to_zero_selects_bounce_same_step() {
     for (rules, algorithm) in modes() {
         let (mut game, boss) = natural_intro(rules, algorithm);
         natural_countdown_to_one(&mut game, boss);
-        let origin = game.world.entity(boss).unwrap().pos;
+        let settled = game.world.entity(boss).unwrap();
+        let origin = settled.pos;
+        // The restored invisible Slam has removed the original upper floor.
+        // Qualify the remaining live support and complete ascent sweep rather
+        // than retaining either historical penetration or a baked floor Y.
+        qualify_ascending_path_and_support(&game, settled);
+        qualify_player_guard_phase(&game);
         game.step(&right());
         let actor = game.world.entity(boss).unwrap();
         assert_eq!(actor.timer, 0);
@@ -144,27 +238,49 @@ fn natural_alarm5_idle_one_to_zero_selects_bounce_same_step() {
         assert!(!big_jump(&game));
         game.step(&right());
         let actor = game.world.entity(boss).unwrap();
-        // The untouched intro slam stops with bottom570 inside the authored
-        // Temple floor560..575. The first dual -4 move leaves bottom562, so
-        // source isCollisionBottom(1) still selects grounded BOUNCE.
-        assert_eq!(
-            (actor.state, actor.timer),
-            (1, 0),
-            "first dual movement still has the source floor contact"
-        );
-        assert_eq!(actor.pos, Vec2::new(origin.x, origin.y - 8.0));
-        assert_eq!(actor.vel, Vec2::new(0.0, -4.0));
-        assert!(!big_jump(&game));
-        game.step(&right());
-        let actor = game.world.entity(boss).unwrap();
+        // Global and own moveTo each move -4 from the qualified clear,
+        // supported origin, leaving the actual remaining floor behind.
+        // Gravity is applied before the airborne BOUNCE branch, which does not
+        // overwrite yVel; this same Step selects RECOVER and emits BigJump.
         assert_eq!(
             (actor.state, actor.timer),
             (2, 10),
-            "next airborne BOUNCE enters RECOVER with source counter10"
+            "first dual movement leaves source floor contact and enters RECOVER"
         );
-        // Source global and own moves now total -16; bottom554 is clear of
-        // the same floor, so the source airborne branch emits BigJump.
-        assert_eq!(actor.pos, Vec2::new(origin.x, origin.y - 16.0));
+        assert_eq!(actor.pos, Vec2::new(origin.x, origin.y - 8.0));
+        assert_eq!(actor.vel, Vec2::new(0.0, -4.0 + 0.2));
+        assert!(!source_bottom(&game, actor));
+        assert!(!source_body_overlap(&game, actor));
         assert!(big_jump(&game));
+        assert_eq!(game.player.health, 4);
+        let source_recover_x_vel = actor.vel.x;
+        assert_eq!(source_recover_x_vel, 0.0);
+        qualify_player_guard_phase(&game);
+        game.step(&right());
+        let actor = game.world.entity(boss).unwrap();
+        // Keep the following ordinary Step, now executing source RECOVER.
+        // moveTo(-3.8) samples -4 on every clock tick (round(1/.8) == 1),
+        // so the two movement passes add another -8. The counter decrements
+        // independently before the literal Player-under-boss PREPARE guard.
+        assert_eq!(actor.pos, Vec2::new(origin.x, origin.y - 16.0));
+        assert!(!source_bottom(&game, actor));
+        assert!(!source_body_overlap(&game, actor));
+        qualify_player_guard_phase(&game);
+        let after_gravity = -4.0 + 0.2 + 0.2;
+        let prepare = (game.player.data.get("active") == Some(&0.0) && after_gravity >= 0.0)
+            || (game.player.pos.y > actor.pos.y
+                && (game.player.pos.x - (actor.pos.x + 32.0)).abs() < 32.0
+                && source_recover_x_vel > -1.0);
+        let expected = if prepare {
+            (5, 20, Vec2::default())
+        } else {
+            (2, 9, Vec2::new(0.0, after_gravity))
+        };
+        assert_eq!(
+            (actor.state, actor.timer, actor.vel),
+            expected,
+            "SOURCE_RECOVER_COUNTER_THEN_LITERAL_PREPARE_GUARD"
+        );
+        assert!(!big_jump(&game));
     }
 }

@@ -58,7 +58,7 @@ pub fn init(e: &mut Entity) {
         }
         "oOlmecSlam" => {
             e.alarms[0] = 1;
-            e.set_sprite("");
+            e.set_sprite("sOlmecSlam");
         }
         "oMagmaMan" | "oMagma" => {
             e.health = 200;
@@ -287,6 +287,13 @@ fn character_collision(game: &mut Game, e: &mut Entity) {
     }
 }
 
+/// oOlmecSlam Create keeps its invisible collision sprite and emits once.
+pub(super) fn create(game: &mut Game, e: &mut Entity) {
+    if e.object == "oOlmecSlam" {
+        game.sound("sndSlam", e.pos);
+    }
+}
+
 pub(super) fn collision(game: &mut Game, e: &mut Entity, other: Instance) -> bool {
     let object = other.object(game).to_owned();
     if other == Instance::Player
@@ -303,12 +310,21 @@ pub(super) fn collision(game: &mut Game, e: &mut Entity, other: Instance) -> boo
             Instance::Entity(id) => {
                 if let Some(target) = game.world.entity_mut(id) {
                     target.data.insert("cleanDeath".into(), 0.0);
-                    target.alive = false;
                 }
+                crate::items::explosives::destroy_solid_self(game, id);
             }
             Instance::Terrain(index) => {
-                game.world
-                    .set_tile(index % game.world.width, index / game.world.width, "")
+                let x = index % game.world.width;
+                let y = index / game.world.width;
+                let center = Vec2::new(x as f64 * 16.0 + 8.0, y as f64 * 16.0 + 8.0);
+                if let Some(metadata) = game.world.entities.iter_mut().find(|metadata| {
+                    metadata.alive
+                        && metadata.object == "oTerrainMetadata"
+                        && metadata.pos == center
+                }) {
+                    metadata.data.insert("cleanDeath".into(), 0.0);
+                }
+                crate::items::explosives::destroy_terrain_self(game, x, y);
             }
             _ => {}
         }
@@ -450,6 +466,10 @@ fn side(e: &Entity) -> &'static str {
     if e.facing < 0 { "L" } else { "R" }
 }
 fn spawn(game: &mut Game, object: &str, pos: Vec2) -> u64 {
+    if object == "oOlmecSlam" {
+        // Complete Create synchronously, including the sound, exactly once.
+        return game.spawn(object, pos);
+    }
     let id = game.world.spawn(object, pos);
     if let Some(e) = game.world.entity_mut(id) {
         super::init_entity(e);
@@ -462,9 +482,6 @@ fn spawn(game: &mut Game, object: &str, pos: Vec2) -> u64 {
         } else if object == "oFly" {
             e.vel.y = 0.5 - 3.0 * game.rng.unit();
         }
-    }
-    if object == "oOlmecSlam" {
-        game.sound("sndSlam", pos);
     }
     id
 }

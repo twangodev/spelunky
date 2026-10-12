@@ -1,4 +1,5 @@
-//! Natural SLAM creates a new contact after the ordinary jump head rebound.
+//! Natural SLAM creates a new contact after a late ordinary jump.
+//! Restored Slam floor destruction leaves this jump below the boss at entry.
 //! Ordinary Right approaches, a neutral PREPARE pause, and a late held jump
 //! follow the initial public level setup; no actor or Player state is injected.
 use spelunky_core::*;
@@ -76,7 +77,7 @@ fn boss_head_hit(boss: &Entity, player: &Player) -> bool {
     .intersects_axis_line(first, last, CollisionPrecision::Precise)
 }
 
-fn natural_active_slam_entry_after_head_rebound(
+fn natural_active_slam_entry_after_late_jump(
     rules: RulesPreset,
     algorithm: RngAlgorithm,
 ) -> (Game, u64) {
@@ -103,7 +104,6 @@ fn natural_active_slam_entry_after_head_rebound(
     let mut active_bounce = false;
     let mut active_prepare = false;
     let mut late_jump_observed = false;
-    let mut rebound_tick = None;
     for tick in 1..=1200 {
         let before = game.world.entity(boss).unwrap().clone();
         let before_player = game.player.clone();
@@ -146,44 +146,12 @@ fn natural_active_slam_entry_after_head_rebound(
             late_jump_observed = true;
         }
         let after = game.world.entity(boss).unwrap();
-        if released
-            && before.state == 5
-            && before_player.state == PlayerState::Jumping
-            && before_player.vel.y < 0.0
-            && game.player.state == PlayerState::Falling
-            && game.player.vel.y > 0.0
-            && game.player.data.get("colTop") == Some(&1.0)
-        {
-            assert_eq!(
-                before.timer, 1,
-                "source rebound precedes PREPARE completion"
-            );
-            assert_eq!((after.state, after.timer), (5, 0));
-            assert!(input.jump && !input.jump_pressed);
-            assert_eq!(
-                before.vel,
-                Vec2::default(),
-                "PREPARE leaves the boss stationary"
-            );
-            assert_eq!(after.pos, before.pos);
-            assert_eq!(before_player.data.get("collision_top"), Some(&-8.0));
+        if released && before.state == 5 && input.jump {
             assert!(
-                boss_head_hit(&before, &before_player),
-                "literal source Top1 line hits Olmec"
+                !boss_head_hit(&before, &before_player),
+                "restored arena floor leaves the unchanged late jump below Olmec"
             );
-            assert!(
-                rebound_tick.replace(game.tick).is_none(),
-                "one ordinary head rebound"
-            );
-            eprintln!(
-                "SOURCE_HEAD_REBOUND {rules:?}/{algorithm:?} tick={} inputProbe={:?} beforePlayer={:?}/{:?} afterPlayer={:?}/{:?}",
-                game.tick,
-                head_probe(&before_player),
-                before_player.pos,
-                before_player.vel,
-                game.player.pos,
-                game.player.vel
-            );
+            assert_eq!(game.player.data.get("colTop"), Some(&0.0));
         }
         if after.state != before.state
             || after.value("carryPlayer") != before.value("carryPlayer")
@@ -232,39 +200,18 @@ fn natural_active_slam_entry_after_head_rebound(
                 assert_eq!(before.timer, 0);
                 assert_eq!(after.vel.y, 5.0);
                 assert_eq!(after.value("slammed"), 0.0);
-                // The source PREPARE else-if selects SLAM after the real jump
-                // has rebounded. The following own SLAM movement creates a
-                // new contact; its unconditional carry clear is the oracle.
-                assert_eq!(
-                    after.value("carryPlayer"),
-                    0.0,
-                    "NATURAL_PREPARE_ENTRY_HEAD_REBOUND_SEPARATION"
-                );
-                assert_eq!(
-                    rebound_tick.map(|tick| tick + 1),
-                    Some(game.tick),
-                    "the observed source head rebound is the immediately preceding Step"
-                );
-                assert_eq!(before_player.state, PlayerState::Falling);
-                assert!(before_player.vel.y > 0.0);
+                // PREPARE selects SLAM without running its body. The restored
+                // floor leaves this late jump ascending below the boss; the
+                // following own SLAM movement creates the new contact.
+                assert_eq!(after.value("carryPlayer"), 0.0);
+                assert_eq!(before_player.state, PlayerState::Jumping);
+                assert!(before_player.vel.y < 0.0);
                 assert_eq!(before_player.data.get("collision_top"), Some(&-8.0));
-                assert!(
-                    !boss_head_hit(&before, &before_player),
-                    "fresh source Top1 line is below Olmec after the rebound"
-                );
-                assert_eq!(
-                    game.player.data.get("colTop"),
-                    Some(&0.0),
-                    "source resets and recomputes head contact on the following Step"
-                );
-                eprintln!(
-                    "SOURCE_HEAD_SEPARATED_ENTRY {rules:?}/{algorithm:?} tick={} inputProbe={:?} player={:?}/{:?}",
-                    game.tick,
-                    head_probe(&before_player),
-                    game.player.pos,
-                    game.player.vel
-                );
-                assert!(game.player.vel.y > 0.0);
+                assert!(!boss_head_hit(&before, &before_player));
+                assert_eq!(game.player.data.get("colTop"), Some(&0.0));
+                assert_eq!(game.player.state, PlayerState::Jumping);
+                assert_eq!(game.player.vel.y, -2.5);
+                assert_eq!(game.player.data.get("gravity_intensity"), Some(&0.6));
                 assert!(
                     !Rect::new(after.pos.x, after.pos.y - 2.0, 65.0, 67.0)
                         .intersects(game.player.sprite_bounds()),
@@ -279,7 +226,7 @@ fn natural_active_slam_entry_after_head_rebound(
 #[test]
 fn natural_own_slam_clears_new_post_movement_contact_with_player_alive() {
     for (rules, algorithm) in modes() {
-        let (mut game, boss) = natural_active_slam_entry_after_head_rebound(rules, algorithm);
+        let (mut game, boss) = natural_active_slam_entry_after_late_jump(rules, algorithm);
         let before = game.world.entity(boss).unwrap().clone();
         assert_eq!(
             before.state, 6,

@@ -272,6 +272,7 @@ pub(crate) fn create_instance(game: &mut Game, id: u64) {
         caves::create(game, e);
         jungle::create(game, e);
         ice::create(game, e);
+        temple::create(game, e);
         npcs::create(game, e);
         undead::create(game, e);
     });
