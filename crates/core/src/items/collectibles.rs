@@ -224,6 +224,7 @@ pub fn grant(game: &mut Game, id: u64) -> bool {
     };
     let object = entity.object.clone();
     let pos = entity.pos;
+    let equipment_key = equipment(&object);
     // scrStealItem retains paid weapons in hand; only positive prices select
     // these acquisition branches, and Bow ammo is granted by pickup, not here.
     let weapon_message = if entity.value("cost") > 0.0 {
@@ -255,11 +256,6 @@ pub fn grant(game: &mut Game, id: u64) -> bool {
         }
         "oRopeBag" => {
             game.player.bombs += 3;
-            let display = game.spawn("oItemsGet", Vec2::new(pos.x, pos.y - 14.0));
-            game.world
-                .entity_mut(display)
-                .unwrap()
-                .set_sprite("sBombsGet");
             "YOU GOT 3 MORE BOMBS!"
         }
         "oBombBox" => {
@@ -275,20 +271,6 @@ pub fn grant(game: &mut Game, id: u64) -> bool {
                 return false;
             };
             game.player.equipment.insert(key.into());
-            match key {
-                "Cape" if game.player.equipment.remove("Jetpack") => {
-                    spawn(game, "oJetpack", game.player.pos, Vec2::new(0., -1.));
-                }
-                "Jetpack" if game.player.equipment.remove("Cape") => {
-                    spawn(game, "oCapePickup", game.player.pos, Vec2::new(0., -1.));
-                    for e in &mut game.world.entities {
-                        if e.object == "oCape" {
-                            e.alive = false;
-                        }
-                    }
-                }
-                _ => {}
-            }
             match key {
                 "Parachute" => "YOU GOT A PARACHUTE!",
                 "Cape" => "YOU GOT A CAPE!",
@@ -309,6 +291,15 @@ pub fn grant(game: &mut Game, id: u64) -> bool {
             }
         }
     };
+    let (offset, sprite) = match object.as_str() {
+        "oBombBag" | "oBombBox" | "oRopeBag" => (14.0, Some("sBombsGet")),
+        "oRopePile" => (15.0, Some("sRopeGet")),
+        _ => (14.0, None),
+    };
+    let display = game.spawn("oItemsGet", Vec2::new(pos.x, pos.y - offset));
+    if let Some(sprite) = sprite {
+        game.world.entity_mut(display).unwrap().set_sprite(sprite);
+    }
     if let Some(entity) = game.world.entity_mut(id) {
         entity.alive = false;
         entity.held = false;
@@ -330,6 +321,23 @@ pub fn grant(game: &mut Game, id: u64) -> bool {
     game.sound("sndPickup", pos);
     game.events.push(GameEvent::Collected { object, value: 0 });
     crate::enemies::shop_dialogue::say(game, message, second, 120);
+    // Back-slot replacement follows consumed-item destruction and messages.
+    match equipment_key {
+        Some("Cape") if game.player.equipment.contains("Jetpack") => {
+            spawn(game, "oJetpack", game.player.pos, Vec2::new(0., -1.));
+            game.player.equipment.remove("Jetpack");
+        }
+        Some("Jetpack") if game.player.equipment.contains("Cape") => {
+            spawn(game, "oCapePickup", game.player.pos, Vec2::new(0., -1.));
+            game.player.equipment.remove("Cape");
+            for e in &mut game.world.entities {
+                if e.object == "oCape" {
+                    e.alive = false;
+                }
+            }
+        }
+        _ => {}
+    }
     true
 }
 
