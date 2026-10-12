@@ -54,6 +54,7 @@ pub fn init(e: &mut Entity) {
     }
     match e.object.as_str() {
         "oAlienBoss" => {
+            e.vel.x = 2.5;
             e.facing = -1;
             e.data.insert("psychic_recover".into(), 100.0);
         }
