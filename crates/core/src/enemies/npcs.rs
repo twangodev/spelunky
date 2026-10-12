@@ -243,6 +243,18 @@ pub(super) fn collision(
             true
         }
         ("oShopkeeper" | "oShopkeeper2", Instance::Entity(id)) => {
+            if let Some(weapon) = game
+                .world
+                .entity(id)
+                .filter(|weapon| {
+                    crate::catalog::is_a(&weapon.object, "oWhip")
+                        || crate::catalog::is_a(&weapon.object, "oWhipPre")
+                })
+                .cloned()
+            {
+                keeper_melee(game, e, &weapon);
+                return true;
+            }
             if game
                 .world
                 .entity(id)
@@ -1273,6 +1285,47 @@ fn barrier(game: &mut Game, e: &mut Entity) {
     }
 }
 
+fn keeper_melee(game: &mut Game, e: &mut Entity, weapon: &Entity) {
+    if e.value("whipped") != 0.0 {
+        return;
+    }
+    let machete = weapon.text.get("type").map_or_else(
+        || {
+            crate::catalog::is_a(&weapon.object, "oSlash")
+                || crate::catalog::is_a(&weapon.object, "oMachetePre")
+        },
+        |kind| kind == "Machete",
+    );
+    if machete {
+        let damage = weapon.data.get("damage").copied().unwrap_or_else(|| {
+            if crate::catalog::is_a(&weapon.object, "oSlash")
+                || crate::catalog::is_a(&weapon.object, "oMachetePre")
+                || crate::catalog::is_a(&weapon.object, "oMattockHit")
+                || crate::catalog::is_a(&weapon.object, "oMattockPre")
+            {
+                2.0
+            } else {
+                1.0
+            }
+        });
+        e.health -= damage as i32;
+        if e.value("blood_left") > 0.0 {
+            super::create_blood(game, e, super::sprite_blood_center(e), 1);
+            if e.health < 0 {
+                e.data
+                    .insert("blood_left".into(), e.value("blood_left") - 1.0);
+            }
+        }
+    }
+    e.vel.y = -2.0;
+    e.vel.x = if weapon.pos.x < e.pos.x { 1.0 } else { -1.0 };
+    game.sound("sndHit", e.pos);
+    e.data.insert("whipped".into(), 1.0);
+    e.data.insert("hit_cooldown".into(), 10.0);
+    e.alarms[0] = 10;
+    e.state = 2;
+}
+
 fn keeper_player_collision(game: &mut Game, e: &mut Entity) {
     if matches!(e.state, 0 | 5 | 98 | 99)
         || e.health < 1
@@ -1382,6 +1435,26 @@ fn barrier_item_collision(game: &mut Game, id: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keeper_own_melee_owner_matrix_includes_inherited_keeper_and_all_stock_blades() {
+        for keeper in ["oShopkeeper", "oShopkeeper2"] {
+            for weapon in [
+                "oWhip",
+                "oWhipPre",
+                "oSlash",
+                "oMachetePre",
+                "oMattockHit",
+                "oMattockPre",
+            ] {
+                assert_eq!(
+                    crate::dispatcher::collision_owner(keeper, weapon),
+                    Some("oShopkeeper")
+                );
+                assert_eq!(crate::dispatcher::collision_owner(weapon, keeper), None);
+            }
+        }
+    }
 
     #[test]
     fn generated_scarab_create_consumes_its_draw_before_caller_and_not_at_bootstrap() {
