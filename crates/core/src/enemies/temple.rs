@@ -1024,7 +1024,11 @@ fn olmec(game: &mut Game, e: &mut Entity) {
     // oGame moving-solid pass. This deliberately differs from moveTo's integer
     // displacement, and includes the source's persistent carryPlayer flag.
     if e.value("carryPlayer") != 0.0
-        || Rect::new(e.pos.x - 1.0, e.pos.y, 68.0, 63.0).intersects(game.player.sprite_bounds())
+        || (game.player.engine_active
+            && game.player.collision_mask().intersects_rectangle_bbox(
+                Vec2::new(e.pos.x - 1.0, e.pos.y),
+                Vec2::new(e.pos.x + 66.0, e.pos.y + 62.0),
+            ))
     {
         game.player.pos.x += e.vel.x;
         game.player.pos.y += e.vel.y;
@@ -1040,7 +1044,11 @@ fn olmec(game: &mut Game, e: &mut Entity) {
     e.data.insert(
         "carryPlayer".into(),
         f64::from(
-            Rect::new(e.pos.x, e.pos.y - 2.0, 65.0, 67.0).intersects(game.player.sprite_bounds()),
+            game.player.engine_active
+                && game.player.collision_mask().intersects_rectangle_bbox(
+                    Vec2::new(e.pos.x, e.pos.y - 2.0),
+                    Vec2::new(e.pos.x + 64.0, e.pos.y + 64.0),
+                ),
         ),
     );
     // Classic tests the left edge at the feet/head. Authored arenas store
@@ -3360,6 +3368,132 @@ mod tests {
                     matches!(event, GameEvent::Sound { name, .. } if name == "sndFlame")
                 }));
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod configured_olmec_raw_carry {
+    use super::*;
+    use crate::{CollisionPrecision, PlayerState, RulesPreset};
+
+    // Configured own-code callback tests, not Game::step or natural play.
+    // Every fixture write precedes the first callback. The held simulation
+    // clock 3 is a callback context, not a claim of two complete source frames.
+    // No global moving-solid, Player controller, Draw or Animation pass runs.
+    fn fixture(boss_y: f64, player_y: f64, velocity: f64, carry: f64) -> (Game, Entity) {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.world = World::new(42, 55, crate::Area::Boss, 16);
+        game.player.pos = Vec2::new(278.0, player_y);
+        game.player.previous_pos = game.player.pos;
+        game.player.vel = Vec2::new(0.0, 2.0);
+        game.player.state = PlayerState::Falling;
+        game.player.grounded = false;
+        game.player.engine_active = true;
+        game.player.set_sprite("sRunLeft");
+        game.player.animation = 2.228;
+        game.player.data.insert("active".into(), 1.0);
+        game.player.data.insert("image_xscale".into(), -1.0);
+        let mut boss = Entity::new(900, "oOlmec", Vec2::new(280.0, boss_y));
+        init(&mut boss);
+        boss.state = 2;
+        boss.timer = 10;
+        boss.vel = Vec2::new(0.0, velocity);
+        boss.data.insert("carryPlayer".into(), carry);
+        boss.data.insert("simulation_tick".into(), 3.0);
+        (game, boss)
+    }
+
+    #[test]
+    fn before_boundary_uses_active_cached_box() {
+        let (mut game, mut boss) = fixture(474.0, 543.6, -1.0, 0.0);
+        // sRunLeft aggregate top0/origin8 gives cached top RTE(535.6)=536;
+        // frame2 has top2, so its selected smooth top537.6 misses maxY536.
+        let boundary = Vec2::new(280.0, 536.0);
+        assert!(
+            game.player
+                .mask_contains(boundary, CollisionPrecision::BoundingBox)
+        );
+        assert!(!Rect::new(279.0, 474.0, 68.0, 63.0).intersects(game.player.sprite_bounds()));
+        let incoming_player = game.player.pos;
+        let incoming_velocity = boss.vel;
+        olmec(&mut game, &mut boss);
+        assert_eq!(
+            game.player.pos.y,
+            incoming_player.y + incoming_velocity.y,
+            "CONFIGURED_RAW_BEFORE_BOUNDARY_APPLIES_VELOCITY"
+        );
+        assert_eq!(game.player.vel, Vec2::new(0.0, 2.0));
+        assert_eq!(boss.pos.y, 473.0);
+    }
+
+    #[test]
+    fn post_boundary_retains_flag_for_next_negative_carry() {
+        let (mut game, mut boss) = fixture(476.0, 547.0, -3.4, 1.0);
+        let incoming_player = game.player.pos;
+        let incoming_velocity = boss.vel;
+        // Both instantaneous before predicates miss. The configured retained
+        // flag alone admits the first carry; its post query must keep that flag.
+        assert!(
+            !game
+                .player
+                .mask_contains(Vec2::new(280.0, 538.0), CollisionPrecision::BoundingBox)
+        );
+        assert!(!Rect::new(279.0, 476.0, 68.0, 63.0).intersects(game.player.sprite_bounds()));
+        olmec(&mut game, &mut boss);
+        assert_eq!(game.player.pos.y, incoming_player.y + incoming_velocity.y);
+        assert_eq!(
+            boss.pos.y, 472.0,
+            "clock3 schedules the -3.4 displacement as -4"
+        );
+        assert!(
+            game.player
+                .mask_contains(Vec2::new(280.0, 536.0), CollisionPrecision::BoundingBox)
+        );
+        assert!(!Rect::new(280.0, 470.0, 65.0, 67.0).intersects(game.player.sprite_bounds()));
+        assert_eq!(
+            boss.value("carryPlayer"),
+            1.0,
+            "CONFIGURED_RAW_POST_BOUNDARY_RETAINS_FLAG"
+        );
+        assert_eq!(boss.state, 2);
+        assert_eq!(boss.timer, 9);
+        let carried_player = game.player.pos;
+        let next_velocity = boss.vel;
+        assert!(next_velocity.y < 0.0);
+        assert!(
+            !game
+                .player
+                .mask_contains(Vec2::new(280.0, 534.0), CollisionPrecision::BoundingBox)
+        );
+        assert!(!Rect::new(279.0, 472.0, 68.0, 63.0).intersects(game.player.sprite_bounds()));
+        // No fixture fields, positions, counters or clock are written between
+        // these two direct invocations of the actual own-code callback.
+        olmec(&mut game, &mut boss);
+        assert_eq!(
+            game.player.pos.y,
+            carried_player.y + next_velocity.y,
+            "CONFIGURED_RETAINED_FLAG_ALONE_APPLIES_NEXT_NEGATIVE_VELOCITY"
+        );
+        assert!(game.player.pos.y < carried_player.y);
+        assert_eq!(game.player.vel, Vec2::new(0.0, 2.0));
+        assert_eq!(boss.pos.y, 469.0);
+    }
+
+    #[test]
+    fn opaque_and_disjoint_query_controls() {
+        for (player_y, expected_carry, expected_player_y) in
+            [(542.0, 1.0, 541.0), (600.0, 0.0, 600.0)]
+        {
+            let (mut game, mut boss) = fixture(474.0, player_y, -1.0, 0.0);
+            // The opaque control selects frame0, whose geometry also overlaps
+            // in the previous smooth adapter. The distant control misses both.
+            game.player.animation = 0.0;
+            olmec(&mut game, &mut boss);
+            assert_eq!(game.player.pos.y, expected_player_y);
+            assert_eq!(boss.value("carryPlayer"), expected_carry);
+            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.vel, Vec2::new(0.0, 2.0));
         }
     }
 }
