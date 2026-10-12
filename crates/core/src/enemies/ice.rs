@@ -941,7 +941,7 @@ fn boss(game: &mut Game, e: &mut Entity) {
     if super::solid_mask(&game.world, feet, e.id) && e.state != 98 {
         e.vel.y = 0.0;
     }
-    move_body(&game.world, e, 0.0);
+    super::move_body_preserving_velocity(&game.world, e, 0.0);
     if super::body_overlaps_solid(&game.world, e) {
         e.pos.y -= 2.0;
     }
