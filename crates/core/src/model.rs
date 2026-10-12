@@ -1206,6 +1206,9 @@ pub struct Game {
     pub ending: Option<crate::ending::EndingState>,
     pub camera: Vec2,
     pub previous_camera: Vec2,
+    /// Original is omitted so historical snapshots and hashes remain unchanged.
+    #[serde(default, skip_serializing_if = "crate::SimulationView::is_original")]
+    pub simulation_view: crate::SimulationView,
     pub flags: BTreeSet<String>,
     pub data: BTreeMap<String, f64>,
     #[serde(default)]
@@ -1220,6 +1223,27 @@ pub struct Game {
     pub game_over: crate::progression::GameOverState,
 }
 impl Game {
+    pub fn set_simulation_view_extent(
+        &mut self,
+        width: f64,
+        height: f64,
+    ) -> Result<(), crate::SimulationViewError> {
+        self.simulation_view = crate::SimulationView::from_extent(width, height)?;
+        Ok(())
+    }
+    /// Evaluate at each source callback; do not cache the interpolated Draw camera.
+    pub fn simulation_view_rect(&self) -> Rect {
+        let policy = if !self.is_level() || self.opening.is_some() || self.ending.is_some() {
+            crate::SimulationView::Original
+        } else {
+            self.simulation_view
+        };
+        policy.rect(
+            self.camera,
+            self.world.width as f64 * 16.0,
+            self.world.height as f64 * 16.0,
+        )
+    }
     pub fn presentation(&self) -> &Game {
         self.draw_view.as_deref().unwrap_or(self)
     }
@@ -1342,6 +1366,7 @@ impl Game {
             alarms: crate::dispatcher::unset_alarms(),
             camera: Vec2::default(),
             previous_camera: Vec2::default(),
+            simulation_view: crate::SimulationView::Original,
             flags: BTreeSet::new(),
             data: BTreeMap::new(),
         }

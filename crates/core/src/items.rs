@@ -1149,10 +1149,11 @@ fn ordinary_body(name: &str) -> bool {
 }
 
 pub(crate) fn item_body_active(game: &Game, entity: &Entity) -> bool {
-    entity.pos.x > game.camera.x - 16.0
-        && entity.pos.x < game.camera.x + VIEW_WIDTH + 16.0
-        && entity.pos.y > game.camera.y - 16.0
-        && entity.pos.y < game.camera.y + VIEW_HEIGHT + 16.0
+    let view = game.simulation_view_rect();
+    entity.pos.x > view.x - 16.0
+        && entity.pos.x < view.x + view.w + 16.0
+        && entity.pos.y > view.y - 16.0
+        && entity.pos.y < view.y + view.h + 16.0
 }
 
 fn body_bounds(entity: &Entity, pos: Vec2) -> Rect {
@@ -1515,13 +1516,14 @@ fn tick_bodies(game: &mut Game) {
 }
 
 fn advance_treasure_body(game: &mut Game, entity: &mut Entity) {
+    let view = game.simulation_view_rect();
     if !entity.alive
         || collectibles::treasure_value(&entity.object).is_none()
         || entity.state != 1
-        || entity.pos.x <= game.camera.x - 16.0
-        || entity.pos.x >= game.camera.x + VIEW_WIDTH + 16.0
-        || entity.pos.y <= game.camera.y - 16.0
-        || entity.pos.y >= game.camera.y + VIEW_HEIGHT + 16.0
+        || entity.pos.x <= view.x - 16.0
+        || entity.pos.x >= view.x + view.w + 16.0
+        || entity.pos.y <= view.y - 16.0
+        || entity.pos.y >= view.y + view.h + 16.0
     {
         return;
     }

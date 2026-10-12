@@ -252,10 +252,11 @@ pub(crate) fn keeper_step(game: &mut Game, keeper: &Entity) {
 
 /// oItem's inherited Step checks its pre-attachment position and camera gate.
 pub(crate) fn item_step(game: &mut Game, item: &mut Entity) {
-    if !(item.pos.x > game.camera.x - 16.
-        && item.pos.x < game.camera.x + 336.
-        && item.pos.y > game.camera.y - 16.
-        && item.pos.y < game.camera.y + 256.)
+    let view = game.simulation_view_rect();
+    if !(item.pos.x > view.x - 16.
+        && item.pos.x < view.x + (view.w + 16.)
+        && item.pos.y > view.y - 16.
+        && item.pos.y < view.y + (view.h + 16.))
         && item.object != "oRope"
         && item.object != "oRopeThrow"
     {

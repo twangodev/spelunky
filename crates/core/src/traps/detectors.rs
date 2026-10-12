@@ -257,10 +257,11 @@ pub(super) fn step_instance(game: &mut Game, instance: Instance) {
                     game.data.insert(key, 50.0);
                 }
             }
-            let active = h.pos.x > game.camera.x - 8.0
-                && h.pos.x < game.camera.x + 328.0
-                && h.pos.y > game.camera.y - 8.0
-                && h.pos.y < game.camera.y + 248.0;
+            let view = game.simulation_view_rect();
+            let active = h.pos.x > view.x - 8.0
+                && h.pos.x < view.x + (view.w + 8.0)
+                && h.pos.y > view.y - 8.0
+                && h.pos.y < view.y + (view.h + 8.0);
             if active && !game.world.solid_at(h.pos.x, h.pos.y + 16.0) {
                 remove_hazard(game, &h);
             }

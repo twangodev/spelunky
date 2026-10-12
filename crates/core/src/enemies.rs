@@ -817,10 +817,11 @@ fn source_active(game: &Game, e: &Entity) -> bool {
         "oAlienEject" => (20.0, 4.0, 16.0),
         _ => (20.0, 4.0, 4.0),
     };
-    e.pos.x > game.camera.x - before
-        && e.pos.x < game.camera.x + VIEW_WIDTH + after_x
-        && e.pos.y > game.camera.y - before
-        && e.pos.y < game.camera.y + VIEW_HEIGHT + after_y
+    let view = game.simulation_view_rect();
+    e.pos.x > view.x - before
+        && e.pos.x < view.x + view.w + after_x
+        && e.pos.y > view.y - before
+        && e.pos.y < view.y + view.h + after_y
 }
 
 pub(super) fn center(e: &Entity) -> Vec2 {

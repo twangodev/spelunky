@@ -69,11 +69,12 @@ fn altars(game: &mut Game) {
         }
     }
     // Like the source's viewport guard, missing support destroys visible altars.
+    let view = game.simulation_view_rect();
     for (id, pos) in &surfaces {
-        let visible = pos.x > game.camera.x - 20.0
-            && pos.x < game.camera.x + 324.0
-            && pos.y > game.camera.y - 20.0
-            && pos.y < game.camera.y + 244.0;
+        let visible = pos.x > view.x - 20.0
+            && pos.x < view.x + (view.w + 4.0)
+            && pos.y > view.y - 20.0
+            && pos.y < view.y + (view.h + 4.0);
         if visible && !game.world.solid_at(pos.x, pos.y + 16.0) {
             if let Some(id) = id {
                 if let Some(entity) = game.world.entity_mut(*id) {
@@ -171,10 +172,11 @@ fn altars(game: &mut Game) {
 /// donor's inherited enemy/Damsel Step, never a global altar scan.
 pub(super) fn step_instance(game: &mut Game, instance: crate::dispatcher::Instance) {
     let pos = instance.position(game);
-    if pos.x > game.camera.x - 20.
-        && pos.x < game.camera.x + 324.
-        && pos.y > game.camera.y - 20.
-        && pos.y < game.camera.y + 244.
+    let view = game.simulation_view_rect();
+    if pos.x > view.x - 20.
+        && pos.x < view.x + (view.w + 4.)
+        && pos.y > view.y - 20.
+        && pos.y < view.y + (view.h + 4.)
         && !game.world.solid_at(pos.x, pos.y + 16.)
     {
         match instance {
@@ -532,13 +534,14 @@ fn ghost_exists(game: &Game) -> bool {
 }
 
 fn spawn_ghost(game: &mut Game) {
+    let view = game.simulation_view_rect();
     if !ghost_exists(game) {
         let x = if game.player.pos.x > game.world.width as f64 * 8.0 {
-            game.camera.x + 328.0
+            view.x + (view.w + 8.0)
         } else {
-            game.camera.x - 32.0
+            view.x - 32.0
         };
-        game.spawn("oGhost", Vec2::new(x, game.camera.y + 120.0));
+        game.spawn("oGhost", Vec2::new(x, view.y + (view.h / 2.0).floor()));
         game.flags.insert("ghost_exists".into());
     }
 }
@@ -661,14 +664,15 @@ pub(crate) fn idol_pickup(game: &mut Game, id: u64) {
 /// GoldIdol Step follows the inherited item body. Shop redemption and the
 /// unsupported trigger share the narrower viewport, without an isRealLevel gate.
 pub(crate) fn idol_step(game: &mut Game, id: u64) {
+    let view = game.simulation_view_rect();
     let Some(entity) = game.world.entity(id) else {
         return;
     };
     let pos = entity.pos;
-    if pos.x <= game.camera.x - 8.
-        || pos.x >= game.camera.x + 328.
-        || pos.y <= game.camera.y - 8.
-        || pos.y >= game.camera.y + 248.
+    if pos.x <= view.x - 8.
+        || pos.x >= view.x + (view.w + 8.)
+        || pos.y <= view.y - 8.
+        || pos.y >= view.y + (view.h + 8.)
     {
         return;
     }
