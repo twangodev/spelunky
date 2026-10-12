@@ -171,7 +171,7 @@ fn pay_remains_independent_of_noop_inventory_selection() {
         .unwrap()
         .text
         .insert("style".into(), "Craps".into());
-    let id = held(&mut g, "oRock");
+    let id = held(&mut g, "oMattock");
     let e = g.world.entity_mut(id).unwrap();
     e.data.insert("cost".into(), 15000.);
     e.data.insert("forSale".into(), 1.);
@@ -179,7 +179,8 @@ fn pay_remains_independent_of_noop_inventory_selection() {
         pay_pressed: true,
         ..input(true, false, false, false)
     });
-    assert_eq!(g.player.money, 85000);
+    assert_eq!(g.player.money, 83500);
+    assert_eq!(g.player.data["bet"], 1500.);
     assert_eq!(g.player.held, Some(id));
     assert_eq!(g.world.entity(id).unwrap().value("cost"), 0.);
 }
