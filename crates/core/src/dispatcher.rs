@@ -833,6 +833,8 @@ fn player_step(game: &mut Game, input: &InputFrame) {
     game.player.ropes = game.player.ropes.min(99);
     crate::items::pre_player_tick(game);
     crate::world_events::sample_light_distances(game);
+    crate::items::player_balance_step(game);
+    crate::items::weapons::firing_tick(game);
     crate::hub::begin_title_exit(game);
     crate::player::tick(game, input);
     crate::hub::player_portal_actions(game, input);

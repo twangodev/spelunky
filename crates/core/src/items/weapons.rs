@@ -372,6 +372,20 @@ pub fn fire_bow_on_drop(game: &mut Game) {
     }
 }
 
+/// WHOA uses the held receiver's source type and GameMaker's boolean threshold.
+/// Other drop paths retain their existing guards independently.
+pub(crate) fn fire_bow_on_balance(game: &mut Game) {
+    if game.player.data.get("bow_armed").copied().unwrap_or(0.0) >= 0.5
+        && game
+            .player
+            .held
+            .and_then(|id| game.world.entity(id))
+            .is_some_and(|item| super::explosives::source_type(item) == "Bow")
+    {
+        fire_bow(game);
+    }
+}
+
 fn fire_bow(game: &mut Game) {
     let strength = game.player.data.get("bow_strength").copied().unwrap_or(0.0);
     let bomb_arrow = game
@@ -891,7 +905,19 @@ pub fn pre_tick(game: &mut Game) {
     }
 }
 
+/// Source oPlayer1 Step decrements FIRING before controller and item actions.
+pub(crate) fn firing_tick(game: &mut Game) {
+    if let Some(firing) = game.player.data.get_mut("weapon_cooldown") {
+        if *firing > 0.0 {
+            *firing -= 1.0;
+        }
+    }
+}
+
+/// Isolated legacy driver owns its one early decrement; live dispatch calls
+/// firing_tick separately and only calls the late release helper below.
 pub fn player_step(game: &mut Game) {
+    firing_tick(game);
     player_step_with_release(game, false);
 }
 
@@ -925,9 +951,6 @@ pub(crate) fn player_step_with_release(game: &mut Game, attack_released: bool) {
             )
         };
         item.set_sprite(&sprite);
-    }
-    if let Some(cooldown) = game.player.data.get_mut("weapon_cooldown") {
-        *cooldown = (*cooldown - 1.0).max(0.0);
     }
     if game.player.data.get("bow_armed").copied().unwrap_or(0.0) != 0.0 {
         let holding_bow = game

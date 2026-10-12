@@ -220,7 +220,13 @@ pub(crate) fn source_type(entity: &Entity) -> String {
 }
 
 pub(crate) fn pickup_pose(game: &mut Game) {
-    game.player.data.insert("whoaTimer".into(), 30.0);
+    let maximum = game
+        .player
+        .data
+        .get("whoaTimerMax")
+        .copied()
+        .unwrap_or(30.0);
+    game.player.data.insert("whoaTimer".into(), maximum);
 }
 
 /// scrHoldItem runs Create synchronously and discards all former instance state.

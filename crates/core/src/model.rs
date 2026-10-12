@@ -214,7 +214,7 @@ impl Default for Player {
             coyote_ticks: 0,
             buffered_jump_ticks: 0,
             selected: 0,
-            data: BTreeMap::new(),
+            data: BTreeMap::from([("whoaTimer".into(), 0.0), ("whoaTimerMax".into(), 30.0)]),
         }
     }
 }
