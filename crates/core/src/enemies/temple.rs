@@ -610,6 +610,9 @@ fn hawk(game: &mut Game, e: &mut Entity) {
                 e.vel.x = e.facing as f64;
                 e.timer = e.timer.saturating_sub(10);
             }
+            if e.vel.y < 0.0 && contacts.top {
+                e.vel.y = 0.0;
+            }
             if grounded && e.timer > 0 {
                 e.timer -= 1;
             }
