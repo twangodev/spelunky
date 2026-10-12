@@ -1179,6 +1179,11 @@ pub(super) fn collision(
                 return false;
             };
             let object = target.object.clone();
+            if e.object == "oYetiKing" && crate::catalog::is_a(&object, "oWhip") {
+                let attack = target.clone();
+                king_whip_collision(game, e, &attack);
+                return true;
+            }
             let solid = crate::catalog::is_a(&object, "oSolid");
             let enemy = crate::catalog::is_a(&object, "oEnemy");
             match e.object.as_str() {
@@ -1409,6 +1414,22 @@ fn yeti_player_collision(game: &mut Game, e: &mut Entity) {
             return;
         }
     }
+}
+
+// King owns the forward Whip family only. Rear WhipPre descendants retain
+// Enemy's callback, with its independent damage/Blood and no height guard.
+fn king_whip_collision(game: &mut Game, e: &mut Entity, attack: &Entity) {
+    if e.value("hit_cooldown") != 0.0 || attack.pos.y >= e.pos.y + 12.0 {
+        return;
+    }
+    if attack.value("puncture") != 0.0 {
+        e.health -= attack.value("damage") as i32;
+        super::set_counts_as_kill(e, true);
+        let pos = super::sprite_blood_center(e);
+        super::create_blood(game, e, pos, 1);
+    }
+    game.sound("sndHit", e.pos);
+    e.data.insert("hit_cooldown".into(), 10.0);
 }
 
 // oYetiKing replaces Enemy's Character collision. Its two direct Blood
