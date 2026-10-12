@@ -909,17 +909,21 @@ fn throw_item(game: &mut Game, id: u64, input: &InputFrame) {
     let mitt = game.player.has("Mitt");
     let ducking = player_is_ducking(&game.player);
     let throwing_bomb = game.world.entity(id).is_some_and(|e| e.object == "oBomb");
+    let throwing_damsel = game.world.entity(id).is_some_and(|e| e.object == "oDamsel");
     let overhead = game
         .world
         .solid_at_except(pos.x + facing * 8.0, pos.y - 10.0, id);
     let wall = game.world.solid_at_except(pos.x + facing * 8.0, pos.y, id);
-    if let Some(entity) = game.world.entity_mut(id) {
-        let heavy = entity.value("heavy") != 0.0 || entity.object == "oDamsel";
-        if entity.object == "oDamsel" {
+    if throwing_damsel {
+        if let Some(entity) = game.world.entity_mut(id) {
             entity.state = 2;
             entity.timer = 120;
             entity.pos.y -= 4.0;
         }
+        game.sound("sndDamsel", pos);
+    }
+    if let Some(entity) = game.world.entity_mut(id) {
+        let heavy = entity.value("heavy") != 0.0 || entity.object == "oDamsel";
         entity.held = false;
         entity.vel.x = facing * if heavy { 4.0 } else { 8.0 } + velocity.x;
         entity.vel.y = if input.up {
