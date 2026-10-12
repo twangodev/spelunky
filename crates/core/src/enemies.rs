@@ -1284,6 +1284,10 @@ fn apply_item_hit(game: &mut Game, e: &mut Entity, item: &Entity, fragile: bool)
             "oCaveman" | "oManTrap" | "oVampire" | "oYeti" | "oHawkman" if e.state != 98 => {
                 if ordinary && e.object != "oManTrap" {
                     create_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 1);
+                } else if ordinary {
+                    let x = e.pos.x + f64::from(game.rng.range(17));
+                    let y = e.pos.y - 8.0 + f64::from(game.rng.range(17));
+                    game.spawn("oLeaf", Vec2::new(x, y));
                 }
                 e.health -= 1;
                 e.state = 98;
