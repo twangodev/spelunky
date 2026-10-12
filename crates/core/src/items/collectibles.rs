@@ -428,7 +428,7 @@ pub fn player_step(game: &mut Game) {
             .entities
             .iter()
             .find(|e| e.alive && e.object == object && contact.intersects(bounds(e)))
-            .filter(|e| !e.held && e.value("forSale") <= 0. && !origin_is_solid(game, e))
+            .filter(|e| !e.held && e.value("cost") == 0. && !origin_is_solid(game, e))
             .map(|e| e.id);
         if let Some(id) = id {
             grant(game, id);
@@ -820,6 +820,12 @@ mod tests {
             .unwrap()
             .data
             .insert("forSale".into(), 0.);
+        // Free stock has zero cost as well as a cleared sale marker.
+        g.world
+            .entity_mut(stock)
+            .unwrap()
+            .data
+            .insert("cost".into(), 0.);
         g.world.set_tile(2, 2, "oBlock");
         tick(&mut g);
         assert_eq!(g.player.bombs, 4);
