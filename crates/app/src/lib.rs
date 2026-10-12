@@ -1,4 +1,6 @@
 //! Native and WebGL hosts share the same Rust application and fixed simulation.
+#[cfg(test)]
+mod adaptive_gameplay_tests;
 mod atlas;
 mod audio;
 mod controller;
@@ -50,6 +52,22 @@ pub fn replay_with_algorithm(
         .map_err(|error| wasm_bindgen::JsValue::from_str(&error))
 }
 
+/// Evaluate a native replay-file recording, including version-2 logical view
+/// changes and exact recorded input edges. Validation lives in the shared core.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn replay_recording(recording: &str) -> Result<String, wasm_bindgen::JsValue> {
+    diagnostic_recording(recording).map_err(|error| wasm_bindgen::JsValue::from_str(&error))
+}
+
+#[cfg(any(target_arch = "wasm32", test))]
+fn diagnostic_recording(recording: &str) -> Result<String, String> {
+    let result = spelunky_core::replay::from_recording_json(recording)?;
+    // Match replay-file's JSON field ordering as well as its evaluated result.
+    serde_json::to_string(&serde_json::to_value(result).map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())
+}
+
 #[cfg(any(target_arch = "wasm32", test))]
 fn diagnostic_replay(
     seed: &str,
@@ -77,7 +95,99 @@ fn diagnostic_replay(
 
 #[cfg(test)]
 mod replay_tests {
-    use super::diagnostic_replay;
+    use super::{diagnostic_recording, diagnostic_replay};
+
+    fn adaptive_recording() -> serde_json::Value {
+        serde_json::json!({"version":2,"simulation_version":spelunky_core::SIMULATION_VERSION,
+            "algorithm":"gm8_lcg32_v1","seed":"7","rules":"classic",
+            "adaptive_view":{"policy":"gameplay_logical_extent_v1",
+                "initial":{"width":426.6666564941406_f64,"height":240.0},
+                "changes":[{"before_frame":2,"extent":{"width":320.0,"height":640.0}}]},
+            "frames":[{}, {"right":true}, {"jump":true,"jump_pressed":true}, {"jump_released":true}]})
+    }
+
+    #[test]
+    fn recording_wrapper_matches_native_recorded_frames_and_resize_timeline() {
+        let recording = adaptive_recording().to_string();
+        let result = spelunky_core::replay::from_recording_json(&recording).unwrap();
+        assert_eq!(
+            diagnostic_recording(&recording).unwrap(),
+            serde_json::to_string(&serde_json::to_value(&result).unwrap()).unwrap()
+        );
+        let parsed = spelunky_core::replay::parse_recording_json(&recording).unwrap();
+        let view = parsed.adaptive_view.unwrap();
+        let mut manual = spelunky_core::Game::new(7, spelunky_core::RulesPreset::Classic);
+        for (index, input) in parsed.frames.iter().enumerate() {
+            let [width, height] = if index < 2 {
+                view.initial.dimensions()
+            } else {
+                view.changes[0].extent.dimensions()
+            };
+            manual.set_simulation_view_extent(width, height).unwrap();
+            manual.step(input);
+        }
+        assert_eq!(result.hash, format!("{:016x}", manual.state_hash()));
+        assert_eq!(result.ticks, manual.tick);
+        assert_eq!(result.version, 2);
+        assert_eq!(result.adaptive_view, Some(view));
+        let old =
+            diagnostic_recording(r#"{"seed":18446744073709551615,"rules":"classic","frames":[]}"#)
+                .unwrap();
+        let old: serde_json::Value = serde_json::from_str(&old).unwrap();
+        assert_eq!(old["version"], 1);
+        assert_eq!(old["seed"], "18446744073709551615");
+        assert!(old.get("adaptive_view").is_none());
+    }
+
+    #[test]
+    fn recording_wrapper_rejects_malformed_seed_algorithm_inputs_and_view_timeline() {
+        let recording = adaptive_recording();
+        for seed in [
+            "",
+            "+1",
+            "-1",
+            "1.0",
+            " 1",
+            "4294967296",
+            "18446744073709551616",
+        ] {
+            let mut invalid = recording.clone();
+            invalid["seed"] = seed.into();
+            assert!(diagnostic_recording(&invalid.to_string()).is_err());
+        }
+        let mut invalid = recording.clone();
+        invalid["algorithm"] = "unknown".into();
+        assert!(diagnostic_recording(&invalid.to_string()).is_err());
+        invalid = recording.clone();
+        invalid["frames"] = serde_json::json!([{"jump_pressed":1}]);
+        assert!(diagnostic_recording(&invalid.to_string()).is_err());
+        for frame in [0, 4] {
+            invalid = recording.clone();
+            invalid["adaptive_view"]["changes"][0]["before_frame"] = frame.into();
+            assert!(diagnostic_recording(&invalid.to_string()).is_err());
+        }
+        invalid = recording.clone();
+        invalid["adaptive_view"]["initial"]["width"] = 319.into();
+        assert!(diagnostic_recording(&invalid.to_string()).is_err());
+        invalid = recording.clone();
+        invalid["frames"] =
+            serde_json::Value::Array(vec![
+                serde_json::json!({});
+                spelunky_core::replay::MAX_REPLAY_TICKS as usize + 1
+            ]);
+        assert!(
+            diagnostic_recording(&invalid.to_string())
+                .unwrap_err()
+                .contains("tick limit")
+        );
+        // Rejected by the shared byte bound before parsing or level generation.
+        let oversized = " ".repeat(spelunky_core::replay::MAX_RECORDING_BYTES + 1);
+        assert!(
+            diagnostic_recording(&oversized)
+                .unwrap_err()
+                .contains("byte limit")
+        );
+    }
 
     #[test]
     fn diagnostic_seed_strings_keep_legacy_precision_and_check_new_seeds() {
