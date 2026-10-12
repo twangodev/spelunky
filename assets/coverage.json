@@ -3897,7 +3897,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 138,
+          "line": 134,
           "module": "crates/core/src/enemies/jungle.rs"
         },
         {
@@ -4342,12 +4342,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 138,
+          "line": 134,
           "module": "crates/core/src/enemies/jungle.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 177,
+          "line": 173,
           "module": "crates/core/src/enemies/jungle.rs"
         },
         {
@@ -5631,7 +5631,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 141,
+          "line": 137,
           "module": "crates/core/src/enemies/jungle.rs"
         },
         {
@@ -6998,12 +6998,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 142,
+          "line": 138,
           "module": "crates/core/src/enemies/jungle.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1041,
+          "line": 1037,
           "module": "crates/core/src/enemies/jungle.rs"
         },
         {
@@ -7594,17 +7594,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 139,
+          "line": 135,
           "module": "crates/core/src/enemies/jungle.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 177,
+          "line": 173,
           "module": "crates/core/src/enemies/jungle.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1042,
+          "line": 1038,
           "module": "crates/core/src/enemies/jungle.rs"
         },
         {
@@ -8420,12 +8420,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 140,
+          "line": 136,
           "module": "crates/core/src/enemies/jungle.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 178,
+          "line": 174,
           "module": "crates/core/src/enemies/jungle.rs"
         },
         {
