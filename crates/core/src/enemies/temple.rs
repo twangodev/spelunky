@@ -332,6 +332,9 @@ pub(super) fn collision(game: &mut Game, e: &mut Entity, other: Instance) -> boo
                     let target = game.world.entity_mut(id).unwrap();
                     target.state = 98;
                     target.timer = 20;
+                    if target.object == "oYetiKing" {
+                        target.data.insert("counter".into(), 20.0);
+                    }
                     game.sound("sndHit", pos);
                     e.alive = false;
                 }
