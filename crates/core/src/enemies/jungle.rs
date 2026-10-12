@@ -1043,6 +1043,39 @@ pub(super) fn collision(
     }
 }
 
+// Both local Whip events replace Enemy's handler, including its invincibility
+// guard. Machete's two canonical children finish Create with type="Machete".
+fn mantrap_whip_collision(game: &mut Game, e: &mut Entity, attack: &Entity) {
+    if e.state == 98 {
+        return;
+    }
+    let machete = attack.text.get("type").map_or_else(
+        || {
+            crate::catalog::is_a(&attack.object, "oSlash")
+                || crate::catalog::is_a(&attack.object, "oMachetePre")
+        },
+        |kind| kind == "Machete",
+    );
+    let damage = attack.value("damage") as i32;
+    e.health -= damage * if machete { 2 } else { 1 };
+    super::set_counts_as_kill(e, true);
+    e.state = 98;
+    e.timer = e.value("stun_time") as u32;
+    e.vel.y = -3.0;
+    e.vel.x = if attack.pos.x < e.pos.x + 8.0 {
+        2.0
+    } else {
+        -2.0
+    };
+    e.set_image_speed(0.5);
+    let pos = Vec2::new(
+        e.pos.x + f64::from(game.rng.range(17)),
+        e.pos.y - 8.0 + f64::from(game.rng.range(17)),
+    );
+    game.spawn("oLeaf", pos);
+    game.sound("sndHit", e.pos);
+}
+
 fn mantrap_collision(game: &mut Game, e: &mut Entity, other: crate::dispatcher::Instance) -> bool {
     use crate::dispatcher::Instance;
     if other == Instance::Player {
@@ -1124,6 +1157,13 @@ fn mantrap_collision(game: &mut Game, e: &mut Entity, other: crate::dispatcher::
     let Some(victim) = game.world.entity(id) else {
         return false;
     };
+    if crate::catalog::is_a(&victim.object, "oWhip")
+        || crate::catalog::is_a(&victim.object, "oWhipPre")
+    {
+        let attack = victim.clone();
+        mantrap_whip_collision(game, e, &attack);
+        return true;
+    }
     let (family, sprite) = if crate::catalog::is_a(&victim.object, "oCaveman") {
         ("oCaveman", "sManTrapEatCavemanL")
     } else if crate::catalog::is_a(&victim.object, "oDamsel") {
