@@ -1173,7 +1173,10 @@ pub fn step_instance(game: &mut Game, id: u64) {
             inherited_item_step(game, &mut e);
             e.data.insert(
                 "dist_to_player".into(),
-                crate::world_events::mask_distance(e.sprite_bounds(), game.player.sprite_bounds()),
+                crate::world_events::mask_distance(
+                    e.collision_mask().point_bounds(),
+                    game.player.collision_mask().point_bounds(),
+                ),
             );
             if game
                 .world
@@ -2629,8 +2632,12 @@ mod tests {
         // Draw changes its persisted image_xscale from Create's +1 to -1.
         let player_before_draw = game.player.clone();
         let before = crate::world_events::mask_distance(
-            game.world.entity(id).unwrap().sprite_bounds(),
-            player_before_draw.sprite_bounds(),
+            game.world
+                .entity(id)
+                .unwrap()
+                .collision_mask()
+                .point_bounds(),
+            player_before_draw.collision_mask().point_bounds(),
         );
         game.step(&InputFrame::default());
         assert_eq!(game.player.pos, player_before_draw.pos);
@@ -2645,13 +2652,16 @@ mod tests {
         assert_eq!(
             sampled,
             crate::world_events::mask_distance(
-                flare.sprite_bounds(),
-                player_before_draw.sprite_bounds()
+                flare.collision_mask().point_bounds(),
+                player_before_draw.collision_mask().point_bounds()
             )
         );
         assert_ne!(
             sampled,
-            crate::world_events::mask_distance(flare.sprite_bounds(), game.player.sprite_bounds()),
+            crate::world_events::mask_distance(
+                flare.collision_mask().point_bounds(),
+                game.player.collision_mask().point_bounds()
+            ),
             "the later Player Draw changes the mask after Flare Step sampled it"
         );
     }
