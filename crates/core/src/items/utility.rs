@@ -306,9 +306,11 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         .world
         .entities
         .iter()
-        // Dice's own Step continues its final ground/roll block after lava
-        // instance_destroy. Retain that receiver without reviving it.
-        .position(|e| e.id == id && (e.alive || e.object == "oDice"))
+        // Dice and FlareCrate continue their own Step after inherited lava
+        // instance_destroy. Retain those receivers without reviving them.
+        .position(|e| {
+            e.id == id && (e.alive || matches!(e.object.as_str(), "oDice" | "oFlareCrate"))
+        })
     else {
         return;
     };
@@ -333,14 +335,17 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
                 });
             if water {
                 game.spawn("oSplash", entity.pos);
-                game.spawn("oPoof", entity.pos);
                 game.sound("sndSplash", entity.pos);
-                entity.alive = false;
-                entity.held = false;
-                if game.player.held == Some(entity.id) {
+                if entity.held {
                     game.player.held = None;
                     game.player.pickup_item_type.clear();
+                    entity.held = false;
+                    // Source clears the held receiver before synchronous Poof
+                    // Create; preserve prior retirement in the published slot.
+                    game.world.entities[index] = entity.clone();
                 }
+                game.spawn("oPoof", entity.pos);
+                entity.alive = false;
             }
         }
         "oDice" => {
