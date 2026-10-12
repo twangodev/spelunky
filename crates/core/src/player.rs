@@ -64,7 +64,13 @@ fn collision_rect(w: &World, r: Rect, group: &str) -> bool {
 }
 
 fn precise_rect(w: &World, r: Rect, group: &str) -> bool {
-    collision_rect_precision(w, r, group, CollisionPrecision::Precise)
+    w.rectangle_family_except(
+        Vec2::new(r.x, r.y),
+        Vec2::new(r.x + r.w - 1.0, r.y + r.h - 1.0),
+        group,
+        None,
+        CollisionPrecision::Precise,
+    )
 }
 
 fn precise_line(w: &World, r: Rect, group: &str) -> bool {
@@ -243,37 +249,9 @@ fn cached_ladder_collision(w: &World, p: &Player) -> bool {
     let bounds = bounds_at(p, p.pos);
     let first = Vec2::new(bounds.x + 8.0, bounds.y + 8.0);
     let last = Vec2::new(bounds.x + bounds.w - 8.0, bounds.y + bounds.h - 8.0);
-    let hits = |mask: crate::catalog::CollisionMask| {
-        if !mask.intersects_rectangle_bbox(first, last) {
-            return false;
-        }
-        let left = gm_round(first.x.min(last.x));
-        let right = gm_round(first.x.max(last.x));
-        let top = gm_round(first.y.min(last.y)) as i64;
-        let bottom = gm_round(first.y.max(last.y)) as i64;
-        (top..=bottom).any(|y| {
-            mask.intersects_axis_line(
-                Vec2::new(left, y as f64),
-                Vec2::new(right, y as f64),
-                CollisionPrecision::Precise,
-            )
-        })
-    };
-    for family in ["oLadderTop", "oLadder"] {
-        if w.tiles.iter().enumerate().any(|(index, tile)| {
-            tile.engine_active
-                && crate::catalog::is_a(&tile.object, family)
-                && hits(w.tile_collision_mask((index % w.width) as i32, (index / w.width) as i32))
-        }) || w.entities.iter().any(|entity| {
-            entity.alive
-                && entity.engine_active
-                && crate::catalog::is_a(&entity.object, family)
-                && hits(entity.collision_mask())
-        }) {
-            return true;
-        }
-    }
-    false
+    ["oLadderTop", "oLadder"].into_iter().any(|family| {
+        w.rectangle_family_except(first, last, family, None, CollisionPrecision::Precise)
+    })
 }
 
 fn ladder_at(w: &World, pos: Vec2) -> Option<Vec2> {

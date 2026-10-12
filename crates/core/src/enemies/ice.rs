@@ -724,7 +724,7 @@ fn king(game: &mut Game, e: &mut Entity) {
         }
         _ => {}
     }
-    if super::solid_mask(&game.world, e.bounds(), e.id) {
+    if super::body_overlaps_solid(&game.world, e) {
         e.pos.y -= 2.0;
     }
     let sprite = match (e.state, e.facing < 0) {
@@ -940,7 +940,7 @@ fn boss(game: &mut Game, e: &mut Entity) {
         e.vel.y = 0.0;
     }
     move_body(&game.world, e, 0.0);
-    if super::solid_mask(&game.world, e.bounds(), e.id) {
+    if super::body_overlaps_solid(&game.world, e) {
         e.pos.y -= 2.0;
     }
     if e.sprite != "sAlienBossHurt" {
