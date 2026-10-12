@@ -372,6 +372,19 @@ pub fn fire_bow_on_drop(game: &mut Game) {
     }
 }
 
+/// Player Step1795–1797 calls scrFireBow without a bowArmed guard after hurt.
+/// Its live held reference and source type remain available until inventory release.
+pub(crate) fn fire_bow_on_late_hurt(game: &mut Game) {
+    if game
+        .player
+        .held
+        .and_then(|id| game.world.entity(id))
+        .is_some_and(|item| super::explosives::source_type(item) == "Bow")
+    {
+        fire_bow(game);
+    }
+}
+
 /// WHOA uses the held receiver's source type and GameMaker's boolean threshold.
 /// Other drop paths retain their existing guards independently.
 pub(crate) fn fire_bow_on_balance(game: &mut Game) {
@@ -435,7 +448,8 @@ fn fire_bow(game: &mut Game) {
         game.player.data.remove("bow_bomb_fuse");
     }
     if let Some(ammo) = game.data.get_mut("arrows") {
-        *ammo = (*ammo - 1.0).max(0.0);
+        // scrFireBow decrements even a zero resource balance on late hurt.
+        *ammo -= 1.0;
     }
     game.player.data.insert("weapon_cooldown".into(), 10.0);
     game.player.data.insert("bow_armed".into(), 0.0);

@@ -750,15 +750,33 @@ pub(crate) fn release_held_before_stunned_motion(game: &mut Game) {
 /// The late oPlayer1 Step release after a projectile hit differs from its
 /// early already-stunned release: the newly dropped item inherits knockback.
 pub(super) fn release_held_after_hit(game: &mut Game) {
-    let velocity = Vec2::new(game.player.vel.x, -6.0);
-    let Some(id) = drop_held_with_velocity(game, velocity) else {
+    let Some(id) = game.player.held else {
         return;
     };
+    let Some(item_type) = game.world.entity(id).map(explosives::source_type) else {
+        return;
+    };
+    // Player Step1784–1805 is separate from scrDropItem: write the live
+    // receiver's release fields before its type branch and inventory tail.
+    let velocity = Vec2::new(game.player.vel.x, -6.0);
     if let Some(entity) = game.world.entity_mut(id) {
+        entity.held = false;
+        entity.vel = velocity;
         entity.data.insert("armed".into(), 1.0);
-        if entity.object == "oDamsel" {
+        if item_type == "Damsel" {
             entity.state = 2;
         }
+    }
+    // This late branch fires a Bow even when bowArmed is false. Keep the
+    // held reference live while scrFireBow checks the receiver's source type.
+    if item_type == "Bow" {
+        weapons::fire_bow_on_late_hurt(game);
+    }
+    if item_type == game.player.pickup_item_type {
+        game.player.held = None;
+        game.player.pickup_item_type.clear();
+    } else {
+        explosives::restore_stashed_item(game);
     }
 }
 
