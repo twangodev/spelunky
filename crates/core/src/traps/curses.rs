@@ -1,6 +1,6 @@
 //! Kali's iron ball and presentation-room chain variants. Source: oBall/2,
 //! oChain/2 and the inherited oItem Step. Player tether limits run in player.rs.
-use crate::model::{Entity, Game, Rect, Vec2};
+use crate::model::{Entity, Game, Vec2};
 
 pub(super) fn handles(object: &str) -> bool {
     matches!(object, "oBall" | "oBall2" | "oChain" | "oChain2")
@@ -62,9 +62,9 @@ pub(super) fn step_instance(game: &mut Game, instance: crate::dispatcher::Instan
                     .iter()
                     .find(|e| e.alive && e.object == "oPDummy")
                 {
-                    if bounds_distance(
-                        sprite_edges(&entity.sprite, entity.pos, entity.bounds()),
-                        sprite_edges(&dummy.sprite, dummy.pos, dummy.bounds()),
+                    if crate::world_events::mask_distance(
+                        entity.collision_mask().point_bounds(),
+                        dummy.collision_mask().point_bounds(),
                     ) >= 24.0
                     {
                         entity.pos.x = dummy.pos.x - 24.0;
@@ -136,26 +136,10 @@ fn spawn_chain(game: &mut Game, pos: Vec2, presentation: bool) {
     }
 }
 
-pub(super) fn bounds_distance(a: Rect, b: Rect) -> f64 {
-    let dx = (a.x - (b.x + b.w)).max(b.x - (a.x + a.w)).max(0.0);
-    let dy = (a.y - (b.y + b.h)).max(b.y - (a.y + a.h)).max(0.0);
-    dx.hypot(dy)
-}
-fn sprite_edges(sprite: &str, pos: Vec2, fallback: Rect) -> Rect {
-    let Some(s) = crate::catalog::sprite_def(sprite) else {
-        return fallback;
-    };
-    Rect::new(
-        pos.x + f64::from(s.bounds[0] - s.origin[0]),
-        pos.y + f64::from(s.bounds[1] - s.origin[1]),
-        f64::from(s.bounds[2] - s.bounds[0]),
-        f64::from(s.bounds[3] - s.bounds[1]),
-    )
-}
 fn follow_player(game: &Game, ball: &mut Entity) {
-    if bounds_distance(
-        sprite_edges(&ball.sprite, ball.pos, ball.bounds()),
-        sprite_edges(&game.player.sprite, game.player.pos, game.player.bounds()),
+    if crate::world_events::mask_distance(
+        ball.collision_mask().point_bounds(),
+        game.player.collision_mask().point_bounds(),
     ) >= 24.0
     {
         let dx = game.player.pos.x - ball.pos.x;
@@ -656,5 +640,34 @@ mod tests {
                 .count(),
             1
         );
+    }
+}
+
+#[cfg(test)]
+mod native_distance_boundary_tests {
+    use super::*;
+    #[test]
+    fn ball_follow_uses_previous_draw_mirror_and_inclusive_gap_24() {
+        for (scale, player_x, expected) in [
+            (1., 114., 0.),
+            (1., 115., 2.),
+            (-1., 114., 0.),
+            (-1., 115., 0.),
+            (-1., 116., 2.),
+        ] {
+            let mut g = Game::shell(29, crate::RulesPreset::Classic);
+            g.player.pos = Vec2::new(player_x, 104.);
+            g.player.set_sprite("sRunLeft");
+            g.player.data.insert("image_xscale".into(), scale);
+            g.player.vel.x = 2.;
+            let mut ball = Entity::new(1, "oBall", Vec2::new(80., 104.));
+            init(&mut ball);
+            ball.data.insert("colBot".into(), 1.);
+            follow_player(&g, &mut ball);
+            assert_eq!(
+                ball.vel.x, expected,
+                "SOURCE_INCLUSIVE_GAP24 scale={scale} player_x={player_x}"
+            );
+        }
     }
 }
