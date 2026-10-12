@@ -296,15 +296,26 @@ impl CollisionMask {
         self.bounds
     }
 
-    /// Precise rasterization is verified for the source's unrotated unit-scale
-    /// masks and their horizontal/vertical mirrors. Other transforms retain
-    /// the existing bounding-box behavior pending GM8 rasterization evidence.
+    /// Whether the legacy smooth-Rect adapter can index an unrotated unit mask.
+    /// Source-specific point, raw-corner rectangle and axis-line queries use
+    /// their separately verified fractional-placement sampler below.
     pub fn supports_precise_pixels(&self) -> bool {
         self.angle == 0.0
             && self.scale.x.abs() == 1.0
             && self.scale.y.abs() == 1.0
             && self.pos.x.fract() == 0.0
             && self.pos.y.fract() == 0.0
+    }
+
+    fn supports_source_query_pixels(&self) -> bool {
+        self.frame.is_some()
+            && self.event_bounds.is_some()
+            && (self.precise || self.rectangle)
+            && self.angle == 0.0
+            && self.scale.x.abs() == 1.0
+            && self.scale.y.abs() == 1.0
+            && self.pos.x.is_finite()
+            && self.pos.y.is_finite()
     }
 
     fn pixel(&self, x: i32, y: i32) -> bool {
@@ -360,15 +371,16 @@ impl CollisionMask {
         if !self.point_bounds().contains(point) {
             return false;
         }
-        if precision == CollisionPrecision::BoundingBox
-            || !self.precise
-            || !self.supports_precise_pixels()
-        {
+        if precision == CollisionPrecision::BoundingBox || !self.supports_source_query_pixels() {
             return true;
         }
+        // 0x4AC7D2..802 rounds the query and instance origins separately.
+        // Unlike the rectangle kernel, point sampling does not clamp the
+        // rounded query to the cached bbox a second time. RECTANGLE masks
+        // are selected boolean pixels too, not a precise-query shortcut.
         self.pixel(
-            (point.x - self.pos.x).floor() as i32,
-            (point.y - self.pos.y).floor() as i32,
+            (point.x.round_ties_even() - self.pos.x.round_ties_even()) as i32,
+            (point.y.round_ties_even() - self.pos.y.round_ties_even()) as i32,
         )
     }
 
@@ -394,11 +406,65 @@ impl CollisionMask {
             && bounds.y <= first.y.max(second.y)
     }
 
+    /// Source `collision_rectangle` with raw inclusive corners. Unlike the
+    /// legacy smooth-Rect adapter, zero-area and reversed source arguments
+    /// remain queries, and precise RECTANGLE masks sample selected pixels.
+    /// Unsupported transforms retain the legacy Rect adapter for precision.
+    pub fn intersects_rectangle(
+        &self,
+        first: Vec2,
+        second: Vec2,
+        precision: CollisionPrecision,
+    ) -> bool {
+        if !first.x.is_finite()
+            || !first.y.is_finite()
+            || !second.x.is_finite()
+            || !second.y.is_finite()
+        {
+            return false;
+        }
+        if precision == CollisionPrecision::BoundingBox {
+            return self.intersects_rectangle_bbox(first, second);
+        }
+        if !self.supports_source_query_pixels() {
+            return self.intersects(
+                Rect::new(
+                    first.x.min(second.x),
+                    first.y.min(second.y),
+                    (first.x - second.x).abs() + 1.0,
+                    (first.y - second.y).abs() + 1.0,
+                ),
+                precision,
+            );
+        }
+        // 0x4AC834 performs the raw bbox gate before any endpoint conversion.
+        if !self.intersects_rectangle_bbox(first, second) {
+            return false;
+        }
+        let Some((bounds, origin)) = self.event_geometry() else {
+            return false;
+        };
+        // 0x4AC9C6..4ACA35 independently rounds sorted query corners and the
+        // instance origin; 0x48AB50 clips the resulting inclusive pixel box.
+        let left = first.x.min(second.x).round_ties_even() as i32;
+        let right = first.x.max(second.x).round_ties_even() as i32;
+        let top = first.y.min(second.y).round_ties_even() as i32;
+        let bottom = first.y.max(second.y).round_ties_even() as i32;
+        for y in top.max(bounds.y as i32)..=bottom.min((bounds.y + bounds.h - 1.0) as i32) {
+            for x in left.max(bounds.x as i32)..=right.min((bounds.x + bounds.w - 1.0) as i32) {
+                if self.pixel(x - origin.x as i32, y - origin.y as i32) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Source axis-aligned `collision_line`: raw endpoints first meet the
     /// cached integer aggregate bbox, then clipped endpoints and instance
     /// origins round independently before selected-mask pixel sampling.
-    /// Fractional positive unit-scale placement is verified against original
-    /// GM8 instructions. Other transforms retain the previous Rect adapter.
+    /// Fractional unit-scale placement and both unit mirrors are verified
+    /// against original GM8 instructions. Other transforms retain the Rect adapter.
     pub fn intersects_axis_line(
         &self,
         first: Vec2,
@@ -419,11 +485,7 @@ impl CollisionMask {
             (first.x - second.x).abs() + 1.0,
             (first.y - second.y).abs() + 1.0,
         );
-        if self.frame.is_none()
-            || !(self.precise || self.rectangle)
-            || self.scale != Vec2::new(1.0, 1.0)
-            || self.angle != 0.0
-        {
+        if !self.supports_source_query_pixels() {
             return self.intersects(query, precision);
         }
         let Some((bounds, origin)) = self.event_geometry() else {
@@ -458,10 +520,7 @@ impl CollisionMask {
             for x in left.max(bounds.x as i32)..=right.min((bounds.x + bounds.w - 1.0) as i32) {
                 // Rectangle source masks are materialized boolean pixels too:
                 // an aggregate bbox hit alone can include an empty half-tie row.
-                if self.image_pixel(
-                    x - origin.x as i32 + self.origin[0],
-                    y - origin.y as i32 + self.origin[1],
-                ) {
+                if self.pixel(x - origin.x as i32, y - origin.y as i32) {
                     return true;
                 }
             }
@@ -1481,6 +1540,608 @@ mod tests {
             );
             assert!(mask.event_geometry().is_none());
         }
+    }
+
+    #[test]
+    fn source_precise_point_unit_fractional_and_mirror_controls() {
+        // Native point raw gate then independent RTE; no second bbox clamp.
+        // Controlled API inputs, not an ordinary source collision_point caller.
+        for (object, sprite, frame, x, y, sx, sy, qx, qy, bbox, precise) in [
+            (
+                "oBlock", "sBlock", 0.0, 16.0, 80.0, 1.0, 1.0, 24.0, 88.0, true, true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.0, 80.0, 1.0, 1.0, 31.75, 88.0, true, false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.0, 80.0, 1.0, 1.0, 15.75, 88.0, false, false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.25, 80.0, 1.0, 1.0, 16.1, 88.0, true, true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.5, 80.0, 1.0, 1.0, 31.75, 88.0, true, false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 17.5, 80.0, 1.0, 1.0, 32.75, 88.0, true, true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.25, 80.0, -1.0, 1.0, -0.75, 88.0, true, false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.25, 80.0, -1.0, 1.0, 0.75, 88.0, true, true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.75, 80.0, -1.0, 1.0, 1.0, 88.0, true, false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.75, 80.0, -1.0, 1.0, 17.0, 88.0, true, true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.0, 80.5, 1.0, -1.0, 24.0, 64.5, true, false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.0, 80.5, 1.0, -1.0, 24.0, 64.75, true, true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, -16.25, -80.5, -1.0, -1.0, -32.0, -96.0, true, false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, -16.25, -80.5, -1.0, -1.0, -31.0, -95.0, true, true,
+            ),
+            (
+                "oPlayer1",
+                "sStandLeft",
+                0.0,
+                41.5,
+                40.0,
+                1.0,
+                1.0,
+                46.75,
+                40.0,
+                true,
+                true,
+            ),
+            (
+                "oPlayer1",
+                "sStandLeft",
+                0.0,
+                40.5,
+                40.0,
+                -1.0,
+                1.0,
+                34.49,
+                40.0,
+                true,
+                false,
+            ),
+            (
+                "oPlayer1",
+                "sStandLeft",
+                0.0,
+                40.5,
+                40.0,
+                -1.0,
+                1.0,
+                34.51,
+                40.0,
+                true,
+                true,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.0, 80.0, 1.0, 1.0, 76.75, 75.0, true, true,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.25, 1.0, 1.0, 75.0, 75.0, true, false,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.25, 1.0, 1.0, 77.0, 75.0, true, true,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.25, -1.0, 1.0, 85.0, 75.0, true, false,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.25, -1.0, 1.0, 83.0, 75.0, true, true,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.75, -1.0, -1.0, 85.0, 86.0, true, false,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.75, -1.0, -1.0, 83.0, 86.0, true, true,
+            ),
+            (
+                "oDamsel",
+                "sDamselYellL",
+                0.0,
+                104.0,
+                104.0,
+                1.0,
+                1.0,
+                97.0,
+                104.0,
+                true,
+                false,
+            ),
+            (
+                "oDamsel",
+                "sDamselYellL",
+                4.0,
+                104.0,
+                104.0,
+                1.0,
+                1.0,
+                97.0,
+                104.0,
+                true,
+                true,
+            ),
+            (
+                "oDamsel",
+                "sDamselYellL",
+                0.0,
+                104.25,
+                104.5,
+                -1.0,
+                1.0,
+                111.0,
+                104.0,
+                true,
+                false,
+            ),
+            (
+                "oDamsel",
+                "sDamselYellL",
+                4.0,
+                104.25,
+                104.5,
+                -1.0,
+                1.0,
+                111.0,
+                104.0,
+                true,
+                true,
+            ),
+        ] {
+            let mask = instance_mask(
+                object,
+                sprite,
+                Vec2::new(x, y),
+                frame,
+                Vec2::new(sx, sy),
+                0.0,
+            );
+            assert_eq!(
+                mask.contains(Vec2::new(qx, qy), CollisionPrecision::BoundingBox),
+                bbox
+            );
+            assert_eq!(
+                mask.contains(Vec2::new(qx, qy), CollisionPrecision::Precise),
+                precise,
+                "SOURCE_PRECISE_POINT {sprite}/{frame}/{x}/{y}/{sx}/{sy}/{qx}/{qy}"
+            );
+        }
+    }
+
+    #[test]
+    fn source_precise_axis_unit_mirror_and_selected_frame_controls() {
+        // Native raw gate, endpoint RTE, aggregate pixel-box clip, boolean byte.
+        for (object, sprite, frame, x, y, sx, sy, ax, ay, bx, by, bbox, precise) in [
+            (
+                "oBlock", "sBlock", 0.0, 16.0, 80.0, 1.0, 1.0, 16.0, 88.0, 31.0, 88.0, true, true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.0, 80.5, 1.0, 1.0, 16.0, 96.0, 31.0, 96.0, true, false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 17.5, 80.0, 1.0, 1.0, 32.75, 88.0, 32.75, 88.0, true,
+                false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.75, 80.0, -1.0, 1.0, 1.0, 80.0, 1.0, 95.0, true, false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.0, 80.0, -1.0, 1.0, 0.0, 80.0, 0.0, 95.0, true, false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.75, 80.0, -1.0, 1.0, 17.0, 80.0, 17.0, 95.0, true, true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.25, 80.0, -1.0, 1.0, 0.0, 88.0, 0.0, 88.0, true, false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.25, 80.0, -1.0, 1.0, 0.75, 88.0, 0.75, 88.0, true, true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.0, 80.75, 1.0, -1.0, 16.0, 65.0, 31.0, 65.0, true,
+                false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.0, 80.75, 1.0, -1.0, 16.0, 81.0, 31.0, 81.0, true, true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.75, 80.75, -1.0, -1.0, 17.0, 65.0, 17.0, 81.0, true,
+                true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.75, 80.75, -1.0, -1.0, 1.0, 65.0, 1.0, 81.0, true,
+                false,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.25, 1.0, 1.0, 75.0, 75.0, 77.0, 75.0, true,
+                true,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.25, 1.0, 1.0, 75.0, 75.0, 76.0, 75.0, true,
+                false,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.25, -1.0, 1.0, 83.0, 75.0, 85.0, 75.0, true,
+                true,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.25, -1.0, 1.0, 84.0, 75.0, 85.0, 75.0, true,
+                false,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.75, -1.0, -1.0, 83.0, 86.0, 85.0, 86.0,
+                true, true,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.75, -1.0, -1.0, 84.0, 86.0, 85.0, 86.0,
+                true, false,
+            ),
+            (
+                "oDamsel",
+                "sDamselYellL",
+                0.0,
+                104.0,
+                104.0,
+                1.0,
+                1.0,
+                97.0,
+                96.0,
+                97.0,
+                111.0,
+                true,
+                false,
+            ),
+            (
+                "oDamsel",
+                "sDamselYellL",
+                4.0,
+                104.0,
+                104.0,
+                1.0,
+                1.0,
+                97.0,
+                96.0,
+                97.0,
+                111.0,
+                true,
+                true,
+            ),
+            (
+                "oDamsel",
+                "sDamselYellL",
+                0.0,
+                104.25,
+                104.5,
+                -1.0,
+                1.0,
+                111.0,
+                96.0,
+                111.0,
+                111.0,
+                true,
+                false,
+            ),
+            (
+                "oDamsel",
+                "sDamselYellL",
+                4.0,
+                104.25,
+                104.5,
+                -1.0,
+                1.0,
+                111.0,
+                96.0,
+                111.0,
+                111.0,
+                true,
+                true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.75, 80.0, -1.0, 1.0, -0.25, 88.0, -0.25, 88.0, false,
+                false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.0, 80.0, 1.0, 1.0, 15.75, 80.0, 15.75, 95.0, false,
+                false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, -16.25, -80.5, -1.0, -1.0, -31.0, -95.0, -16.0, -95.0,
+                true, true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, -16.25, -80.5, -1.0, -1.0, -31.0, -96.0, -16.0, -96.0,
+                true, false,
+            ),
+        ] {
+            let mask = instance_mask(
+                object,
+                sprite,
+                Vec2::new(x, y),
+                frame,
+                Vec2::new(sx, sy),
+                0.0,
+            );
+            let first = Vec2::new(ax, ay);
+            let second = Vec2::new(bx, by);
+            assert_eq!(
+                mask.intersects_axis_line(first, second, CollisionPrecision::BoundingBox),
+                bbox
+            );
+            assert_eq!(
+                mask.intersects_axis_line(first, second, CollisionPrecision::Precise),
+                precise,
+                "SOURCE_PRECISE_AXIS {sprite}/{frame}/{x}/{y}/{sx}/{sy}/{ax}/{ay}/{bx}/{by}"
+            );
+            assert_eq!(
+                mask.intersects_axis_line(second, first, CollisionPrecision::Precise),
+                precise
+            );
+        }
+    }
+
+    #[test]
+    fn source_raw_precise_rectangle_after_only_controls() {
+        // New raw-corner API: after-only oracle, not a missing-API old failure.
+        for (object, sprite, frame, x, y, sx, sy, ax, ay, bx, by, bbox, precise) in [
+            (
+                "oBlock", "sBlock", 0.0, 16.0, 80.0, 1.0, 1.0, 16.0, 88.0, 31.0, 88.0, true, true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.0, 80.5, 1.0, 1.0, 16.0, 96.0, 31.0, 96.0, true, false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 17.5, 80.0, 1.0, 1.0, 32.75, 88.0, 32.75, 88.0, true,
+                false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.0, 80.0, -1.0, 1.0, 0.0, 80.0, 0.0, 95.0, true, false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.75, 80.0, -1.0, 1.0, 1.0, 80.0, 1.0, 95.0, true, false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.75, 80.0, -1.0, 1.0, 17.0, 80.0, 17.0, 95.0, true, true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.25, 80.0, -1.0, 1.0, 0.0, 88.0, 0.0, 88.0, true, false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.25, 80.0, -1.0, 1.0, 0.75, 88.0, 0.75, 88.0, true, true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.0, 80.75, 1.0, -1.0, 16.0, 65.0, 31.0, 65.0, true,
+                false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.0, 80.75, 1.0, -1.0, 16.0, 81.0, 31.0, 81.0, true, true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.75, 80.75, -1.0, -1.0, 17.0, 65.0, 17.0, 81.0, true,
+                true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.75, 80.75, -1.0, -1.0, 1.0, 65.0, 1.0, 81.0, true,
+                false,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.25, 1.0, 1.0, 75.0, 75.0, 77.0, 75.0, true,
+                true,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.25, 1.0, 1.0, 75.0, 75.0, 76.0, 75.0, true,
+                false,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.25, -1.0, 1.0, 83.0, 75.0, 85.0, 75.0, true,
+                true,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.25, -1.0, 1.0, 84.0, 75.0, 85.0, 75.0, true,
+                false,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.75, -1.0, -1.0, 83.0, 86.0, 85.0, 86.0,
+                true, true,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.75, -1.0, -1.0, 84.0, 86.0, 85.0, 86.0,
+                true, false,
+            ),
+            (
+                "oDamsel",
+                "sDamselYellL",
+                0.0,
+                104.0,
+                104.0,
+                1.0,
+                1.0,
+                97.0,
+                96.0,
+                97.0,
+                111.0,
+                true,
+                false,
+            ),
+            (
+                "oDamsel",
+                "sDamselYellL",
+                4.0,
+                104.0,
+                104.0,
+                1.0,
+                1.0,
+                97.0,
+                96.0,
+                97.0,
+                111.0,
+                true,
+                true,
+            ),
+            (
+                "oDamsel",
+                "sDamselYellL",
+                0.0,
+                104.25,
+                104.5,
+                -1.0,
+                1.0,
+                111.0,
+                96.0,
+                111.0,
+                111.0,
+                true,
+                false,
+            ),
+            (
+                "oDamsel",
+                "sDamselYellL",
+                4.0,
+                104.25,
+                104.5,
+                -1.0,
+                1.0,
+                111.0,
+                96.0,
+                111.0,
+                111.0,
+                true,
+                true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.75, 80.0, -1.0, 1.0, -0.25, 88.0, -0.25, 88.0, false,
+                false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, 16.0, 80.0, 1.0, 1.0, 15.75, 80.0, 15.75, 95.0, false,
+                false,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, -16.25, -80.5, -1.0, -1.0, -31.0, -95.0, -16.0, -95.0,
+                true, true,
+            ),
+            (
+                "oBlock", "sBlock", 0.0, -16.25, -80.5, -1.0, -1.0, -31.0, -96.0, -16.0, -96.0,
+                true, false,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.25, 1.0, 1.0, 75.0, 75.0, 76.0, 76.0, true,
+                true,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.25, 1.0, 1.0, 75.0, 75.0, 75.0, 76.0, true,
+                false,
+            ),
+            (
+                "oWebBall", "sWebBall", 0.0, 80.25, 80.25, -1.0, 1.0, 85.0, 75.0, 84.0, 76.0, true,
+                true,
+            ),
+        ] {
+            let mask = instance_mask(
+                object,
+                sprite,
+                Vec2::new(x, y),
+                frame,
+                Vec2::new(sx, sy),
+                0.0,
+            );
+            let first = Vec2::new(ax, ay);
+            let second = Vec2::new(bx, by);
+            assert_eq!(
+                mask.intersects_rectangle(first, second, CollisionPrecision::BoundingBox),
+                bbox
+            );
+            assert_eq!(
+                mask.intersects_rectangle(first, second, CollisionPrecision::Precise),
+                precise,
+                "SOURCE_RAW_RECTANGLE {sprite}/{frame}/{x}/{y}/{sx}/{sy}/{ax}/{ay}/{bx}/{by}"
+            );
+            assert_eq!(
+                mask.intersects_rectangle(second, first, CollisionPrecision::Precise),
+                precise
+            );
+        }
+        let mask = instance_mask(
+            "oPlayer1",
+            "sStandLeft",
+            Vec2::new(41.5, 40.0),
+            0.0,
+            Vec2::new(1.0, 1.0),
+            0.0,
+        );
+        let q = Vec2::new(46.75, 40.0);
+        assert!(mask.contains(q, CollisionPrecision::Precise));
+        assert!(!mask.intersects_rectangle(q, q, CollisionPrecision::Precise));
+        assert!(!mask.intersects_axis_line(q, q, CollisionPrecision::Precise));
+        // This is a native route distinction, not a rounding approximation:
+        // point samples pixel47 beyond cached R46; rectangle/line clips it out.
+    }
+
+    #[test]
+    fn source_query_extension_preserves_legacy_and_unsupported_adapters() {
+        let mask = instance_mask(
+            "oBlock",
+            "sBlock",
+            Vec2::new(16.0, 80.0),
+            0.0,
+            Vec2::new(1.0, 1.0),
+            0.0,
+        );
+        let q = Vec2::new(31.75, 88.0);
+        assert!(mask.intersects(Rect::new(q.x, q.y, 0.1, 0.1), CollisionPrecision::Precise));
+        assert!(!mask.intersects_rectangle(q, q, CollisionPrecision::Precise));
+        for (scale, angle) in [
+            (Vec2::new(-1.0, 1.0), 0.2),
+            (Vec2::new(1.0, -1.0), 0.2),
+            (Vec2::new(2.0, 1.0), 0.0),
+            (Vec2::new(1.0, 2.0), 0.0),
+            (Vec2::new(-2.0, 1.0), 0.0),
+            (Vec2::new(1.0, 1.0), 0.2),
+        ] {
+            let mask = instance_mask(
+                "oWebBall",
+                "sWebBall",
+                Vec2::new(80.25, 80.25),
+                0.0,
+                scale,
+                angle,
+            );
+            assert!(!mask.supports_source_query_pixels());
+            let first = Vec2::new(75.0, 75.0);
+            let second = Vec2::new(77.0, 77.0);
+            assert_eq!(
+                mask.intersects_rectangle(first, second, CollisionPrecision::Precise),
+                mask.intersects(Rect::new(75.0, 75.0, 3.0, 3.0), CollisionPrecision::Precise)
+            );
+            let p = Vec2::new(80.0, 80.0);
+            assert_eq!(
+                mask.contains(p, CollisionPrecision::Precise),
+                mask.contains(p, CollisionPrecision::BoundingBox)
+            );
+        }
+        let fractional = instance_mask(
+            "oWebBall",
+            "sWebBall",
+            Vec2::new(80.25, 80.25),
+            0.0,
+            Vec2::new(-1.0, 1.0),
+            0.0,
+        );
+        assert!(!fractional.supports_precise_pixels()); // Legacy smooth-Rect capability unchanged.
+        assert!(fractional.supports_source_query_pixels());
     }
 
     #[test]
