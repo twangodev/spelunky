@@ -118,15 +118,11 @@ fn collision_offset(world: &World, e: &Entity, dx: f64, dy: f64) -> bool {
 }
 
 fn distance_to_player(game: &Game, e: &Entity) -> f64 {
-    let a = e.sprite_bounds();
-    let b = game.player.sprite_bounds();
-    let dx = (a.x - (b.x + b.w - 1.0))
-        .max(b.x - (a.x + a.w - 1.0))
-        .max(0.0);
-    let dy = (a.y - (b.y + b.h - 1.0))
-        .max(b.y - (a.y + a.h - 1.0))
-        .max(0.0);
-    dx.hypot(dy)
+    // Native distance_to_object reads inclusive cached aggregate integer bounds.
+    crate::world_events::mask_distance(
+        e.collision_mask().point_bounds(),
+        game.player.collision_mask().point_bounds(),
+    )
 }
 
 fn ground(world: &World, e: &Entity) -> bool {
