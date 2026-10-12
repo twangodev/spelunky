@@ -632,6 +632,18 @@ pub(super) fn collision(
         vampire_character_collision(game, e);
         return true;
     }
+    if let crate::dispatcher::Instance::Entity(id) = other {
+        let weapon = game.world.entity(id).filter(|weapon| {
+            (crate::catalog::is_a(&weapon.object, "oWhip")
+                || crate::catalog::is_a(&weapon.object, "oWhipPre"))
+                && crate::dispatcher::collision_owner(&e.object, &weapon.object) == Some("oVampire")
+        });
+        if let Some(weapon) = weapon.cloned() {
+            vampire_melee_collision(game, e, &weapon);
+            // The selected own event overrides the parent even when ignored.
+            return true;
+        }
+    }
     if other.object(game) != "oBlood" {
         return false;
     }
@@ -645,6 +657,47 @@ pub(super) fn collision(
         }
     }
     true
+}
+
+/// Vampire's front and rear events have the same literal body. The Machete
+/// type allows another hit while stunned; puncture and invincibility are absent.
+fn vampire_melee_collision(game: &mut Game, e: &mut Entity, weapon: &Entity) {
+    let machete = weapon.text.get("type").map_or_else(
+        || {
+            crate::catalog::is_a(&weapon.object, "oSlash")
+                || crate::catalog::is_a(&weapon.object, "oMachetePre")
+        },
+        |kind| kind == "Machete",
+    );
+    if e.state >= 98 && !machete {
+        return;
+    }
+    let default_damage = if crate::catalog::is_a(&weapon.object, "oSlash")
+        || crate::catalog::is_a(&weapon.object, "oMachetePre")
+        || crate::catalog::is_a(&weapon.object, "oMattockHit")
+        || crate::catalog::is_a(&weapon.object, "oMattockPre")
+    {
+        2.0
+    } else {
+        1.0
+    };
+    e.health -= weapon.data.get("damage").copied().unwrap_or(default_damage) as i32;
+    // This script call is unconditional: source bloodless/cap guards belong to
+    // scrCreateBlood, and neither event reads or decrements bloodLeft.
+    super::create_blood(game, e, super::sprite_blood_center(e), 1);
+    super::set_counts_as_kill(e, true);
+    e.state = 98;
+    e.timer = e.value("stun_time") as u32;
+    e.vel = Vec2::new(
+        if weapon.pos.x < e.pos.x + 8.0 {
+            2.0
+        } else {
+            -2.0
+        },
+        -3.0,
+    );
+    e.set_image_speed(0.5);
+    game.sound("sndHit", e.pos);
 }
 
 fn vampire_character_collision(game: &mut Game, e: &mut Entity) {
