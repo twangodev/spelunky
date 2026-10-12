@@ -438,12 +438,12 @@ pub(crate) fn player_pay_step(game: &mut Game, input: &InputFrame) {
     if !player_in_shop(game, game.player.pos) {
         return;
     }
-    // Purchases require the item in hand, matching Classic's pay button.
+    // Purchase failure sets source n=1, but both shop-service blocks continue.
+    let mut purchase_failed = false;
     if let Some(id) = game.player.held {
         let price = game
             .world
             .entity(id)
-            .filter(|e| e.value("forSale") > 0.)
             .map(|e| e.value("cost").max(0.) as u32)
             .unwrap_or(0);
         if price > game.player.money {
@@ -453,9 +453,8 @@ pub(crate) fn player_pay_step(game: &mut Game, input: &InputFrame) {
             game.player.held = None;
             game.player.pickup_item_type.clear();
             say(game, "YOU HAVEN'T GOT ENOUGH MONEY!", "", 80);
-            return;
-        }
-        if price > 0 {
+            purchase_failed = true;
+        } else if price > 0 {
             let damsel = acquire_sale_damsel(game, id);
             game.player.money -= price;
             count(game, "itemsBought", LifetimeCounter::ItemsBought);
@@ -464,7 +463,6 @@ pub(crate) fn player_pay_step(game: &mut Game, input: &InputFrame) {
             }
             clear_sale(game, id);
             game.data.insert("message_timer".into(), 80.);
-            return;
         }
     }
     if craps_keeper(game) {
@@ -483,7 +481,6 @@ pub(crate) fn player_pay_step(game: &mut Game, input: &InputFrame) {
         } else {
             say(game, format!("YOU NEED ${cost} TO BET!"), "", 200);
         }
-        return;
     }
     if !game.world.entities.iter().any(|keeper| {
         keeper.alive
@@ -518,7 +515,7 @@ pub(crate) fn player_pay_step(game: &mut Game, input: &InputFrame) {
             return;
         }
         let cost = 5000_u32.saturating_mul(game.world.level);
-        if game.player.money >= cost {
+        if !purchase_failed && game.player.money >= cost {
             game.player.money -= cost;
             game.player.health += 1;
             count(game, "kissesBought", LifetimeCounter::KissesBought);
@@ -544,9 +541,18 @@ pub(crate) fn player_pay_step(game: &mut Game, input: &InputFrame) {
                 200,
             );
         } else {
+            let needed = if purchase_failed {
+                game.world
+                    .entity(id)
+                    .expect("kiss target")
+                    .value("cost")
+                    .max(0.) as u32
+            } else {
+                cost
+            };
             say(
                 game,
-                format!("YOU NEED ${cost}!"),
+                format!("YOU NEED ${needed}!"),
                 "GET OUTTA HERE, DEADBEAT!",
                 200,
             );

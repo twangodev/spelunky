@@ -80,7 +80,10 @@ fn resolve(game: &Game, source: SourceRef) -> LightSource {
                 })
                 .map_or(0., |entity| entity.animation);
             LightSource {
-                mask: game.world.tile_bounds(x as i32, y as i32),
+                mask: game
+                    .world
+                    .tile_collision_mask(x as i32, y as i32)
+                    .point_bounds(),
                 animation,
                 flare_distance: 0.,
             }
@@ -88,7 +91,7 @@ fn resolve(game: &Game, source: SourceRef) -> LightSource {
         SourceRef::Entity(index) => {
             let entity = &game.world.entities[index];
             LightSource {
-                mask: entity.sprite_bounds(),
+                mask: entity.collision_mask().point_bounds(),
                 animation: entity.animation,
                 flare_distance: entity.data.get("dist_to_player").copied().unwrap_or(0.),
             }
@@ -168,7 +171,7 @@ fn nearest_sources(game: &Game, requested: u16) -> [Option<LightSource>; 13] {
 
 /// oPlayer1 samples all twelve source families before character movement.
 pub(crate) fn sample_light_distances(game: &mut Game) {
-    let player = game.player.sprite_bounds();
+    let player = game.player.collision_mask().point_bounds();
     let sources = nearest_sources(game, BEFORE_PLAYER);
     let mut distance = 999.0_f64;
     if let Some(source) = sources[0] {
@@ -253,7 +256,10 @@ mod tests {
                     (
                         Vec2::new(x as f64 * 16., y as f64 * 16.),
                         LightSource {
-                            mask: game.world.tile_bounds(x as i32, y as i32),
+                            mask: game
+                                .world
+                                .tile_collision_mask(x as i32, y as i32)
+                                .point_bounds(),
                             animation,
                             flare_distance: 0.,
                         },
@@ -266,7 +272,7 @@ mod tests {
                     (
                         entity.pos,
                         LightSource {
-                            mask: entity.sprite_bounds(),
+                            mask: entity.collision_mask().point_bounds(),
                             animation: entity.animation,
                             flare_distance: entity
                                 .data
@@ -346,7 +352,9 @@ mod tests {
         assert_sources(&mut game);
         let source = nearest_sources(&game, BEFORE_PLAYER)[0].unwrap();
         assert_eq!(source.animation, 2.25);
-        assert_eq!(source.mask, game.world.tile_bounds(5, 5));
+        // Source aggregate sExplosion [0,2,47,45], origin24 at(80,80):
+        // inclusive bounds [56,58,103,101], independent of mask subimage.
+        assert_eq!(source.mask, Rect::new(56., 58., 48., 44.));
         game.world.entity_mut(metadata).unwrap().alive = false;
         assert_sources(&mut game);
         assert_eq!(
@@ -382,9 +390,19 @@ mod tests {
         let near = game.world.spawn("oLamp", Vec2::new(100., 80.));
         let far = game.world.spawn("oLampRed", Vec2::new(112., 80.));
         game.world.entity_mut(far).unwrap().sprite = "sExplosion".into();
-        let player = game.player.sprite_bounds();
-        let near_mask = game.world.entity(near).unwrap().sprite_bounds();
-        let far_mask = game.world.entity(far).unwrap().sprite_bounds();
+        let player = game.player.collision_mask().point_bounds();
+        let near_mask = game
+            .world
+            .entity(near)
+            .unwrap()
+            .collision_mask()
+            .point_bounds();
+        let far_mask = game
+            .world
+            .entity(far)
+            .unwrap()
+            .collision_mask()
+            .point_bounds();
         assert!(mask_distance(player, far_mask) < mask_distance(player, near_mask));
         assert_sources(&mut game);
         assert_eq!(
@@ -414,7 +432,7 @@ mod tests {
                     hash,
                     "queries changed authoritative state"
                 );
-                let player = game.player.sprite_bounds();
+                let player = game.player.collision_mask().point_bounds();
                 let source = original_nearest(&game, "oExplosion").unwrap();
                 let mut expected = mask_distance(player, source.mask);
                 if source.animation <= 3. {
@@ -550,7 +568,9 @@ mod tests {
             // Source Player319 samples nearest origin before this movement;
             // Level553 consumes its cache later. The right Lamp wins the tie.
             assert_eq!(game.player.pos, Vec2::new(394., 152.));
-            assert_eq!(game.player.data["dist_to_nearest_light_source"], 147.);
+            // Before this move, sRunLeft's aggregate right edge is
+            // 397+14-8=403; right sLamp's aggregate left is547+1=548.
+            assert_eq!(game.player.data["dist_to_nearest_light_source"], 145.);
             assert_eq!(game.data["darkness"], 0.9);
             outcomes.push((
                 game.player.data["dist_to_nearest_light_source"],

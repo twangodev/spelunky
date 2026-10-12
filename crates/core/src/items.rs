@@ -149,6 +149,52 @@ pub(crate) fn pre_player_tick(game: &mut Game) {
     weapons::pre_tick(game);
 }
 
+/// oPlayer1 Step165–186 runs against the previous sprite, before FIRING
+/// and the character controller. Balance releases preserve the item's yVel.
+pub(crate) fn player_balance_step(game: &mut Game) {
+    let maximum = game
+        .player
+        .data
+        .get("whoaTimerMax")
+        .copied()
+        .unwrap_or(30.0);
+    if !matches!(
+        game.player.sprite.as_str(),
+        "sWhoaLeft" | "sDamselWhoaL" | "sTunnelWhoaL"
+    ) {
+        game.player.data.insert("whoaTimer".into(), maximum);
+        return;
+    }
+    let timer = game.player.data.get("whoaTimer").copied().unwrap_or(0.0);
+    if timer > 0.0 {
+        game.player.data.insert("whoaTimer".into(), timer - 1.0);
+        return;
+    }
+    let Some(id) = game.player.held else {
+        return;
+    };
+    let Some(item) = game.world.entity_mut(id) else {
+        return;
+    };
+    let item_type = explosives::source_type(item);
+    item.held = false;
+    item.vel.x = if game.player.facing < 0 { -2.0 } else { 2.0 };
+    if item_type == "Damsel" {
+        game.sound("sndDamsel", game.player.pos);
+    }
+    // The held reference remains live while scrFireBow runs, even though the
+    // receiver's held flag has already been cleared.
+    if item_type == "Bow" {
+        weapons::fire_bow_on_balance(game);
+    }
+    if item_type == game.player.pickup_item_type {
+        game.player.held = None;
+        game.player.pickup_item_type.clear();
+    } else {
+        explosives::restore_stashed_item(game);
+    }
+}
+
 pub(crate) fn handles(object: &str) -> bool {
     (is_item(object) && !matches!(object, "oBall" | "oBall2"))
         || weapons::handles(object)
@@ -468,6 +514,8 @@ pub(crate) fn end_instance(game: &mut Game, id: u64) {
 /// Compatibility entry point for subsystem fixtures; the live game dispatches
 /// each source event separately in resource order.
 pub fn tick(game: &mut Game, input: &InputFrame) {
+    player_balance_step(game);
+    weapons::firing_tick(game);
     player_step(game, input);
     let ids: Vec<_> = game
         .world
@@ -3163,3 +3211,79 @@ mod skull_bullet_source_tests {
 
 #[cfg(test)]
 mod embedded_contact_tests;
+
+#[cfg(test)]
+mod source_balance_tests {
+    use super::*;
+    fn callback_scene(object: &str, item_type: &str, facing: i8) -> (Game, u64) {
+        let mut game = Game::shell(11, RulesPreset::Classic);
+        game.player.set_sprite("sWhoaLeft");
+        game.player.facing = facing;
+        let id = game.spawn(object, Vec2::new(100.0, 100.0));
+        let item = game.world.entity_mut(id).unwrap();
+        item.held = true;
+        item.vel = Vec2::new(6.0, -3.0);
+        game.player.held = Some(id);
+        game.player.pickup_item_type = item_type.into();
+        (game, id)
+    }
+    #[test]
+    fn controlled_balance_callback_preserves_y_velocity_and_matching_actor_identity() {
+        for facing in [-1, 1] {
+            let (mut game, id) = callback_scene("oRock", "Rock", facing);
+            let first = game.world.next_id;
+            player_balance_step(&mut game);
+            assert_eq!(
+                game.world.entity(id).unwrap().vel,
+                Vec2::new(f64::from(facing) * 2.0, -3.0)
+            );
+            assert!(!game.world.entity(id).unwrap().held);
+            assert!(game.player.held.is_none());
+            assert!(game.player.pickup_item_type.is_empty());
+            assert_eq!(game.world.next_id, first);
+        }
+    }
+    #[test]
+    fn controlled_positive_balance_timer_decrements_without_clamping_or_releasing() {
+        let (mut game, id) = callback_scene("oRock", "Rock", 1);
+        game.player.data.insert("whoaTimer".into(), 0.5);
+        player_balance_step(&mut game);
+        assert_eq!(game.player.data["whoaTimer"], -0.5);
+        assert_eq!(game.player.held, Some(id));
+        assert!(game.world.entity(id).unwrap().held);
+        player_balance_step(&mut game);
+        assert!(game.player.held.is_none());
+        assert_eq!(game.world.entity(id).unwrap().vel.y, -3.0);
+    }
+    #[test]
+    fn controlled_old_save_missing_timer_and_maximum_use_source_zero_and_thirty() {
+        let (mut game, id) = callback_scene("oRock", "Rock", 1);
+        game.player.data.remove("whoaTimer");
+        game.player.data.remove("whoaTimerMax");
+        player_balance_step(&mut game);
+        assert!(
+            game.player.held.is_none(),
+            "missing timer behaves as source Create zero"
+        );
+        assert!(!game.world.entity(id).unwrap().held);
+        let mut floor = Game::shell(11, RulesPreset::Classic);
+        floor.player.data.remove("whoaTimer");
+        floor.player.data.remove("whoaTimerMax");
+        player_balance_step(&mut floor);
+        assert_eq!(floor.player.data["whoaTimer"], 30.0);
+    }
+    #[test]
+    fn controlled_explicit_balance_maximum_is_retained_by_reset_and_pickup() {
+        for maximum in [7.0, 0.0] {
+            let mut game = Game::shell(11, RulesPreset::Classic);
+            game.player.data.insert("whoaTimerMax".into(), maximum);
+            player_balance_step(&mut game);
+            assert_eq!(game.player.data["whoaTimer"], maximum);
+            explosives::pickup_pose(&mut game);
+            assert_eq!(
+                game.player.data["whoaTimer"], maximum,
+                "an explicitly authored zero maximum is not missing"
+            );
+        }
+    }
+}
