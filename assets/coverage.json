@@ -287,7 +287,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 86,
+          "line": 88,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -307,7 +307,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 86,
+          "line": 88,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -5113,7 +5113,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 86,
+          "line": 88,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -5975,7 +5975,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 86,
+          "line": 88,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -5992,7 +5992,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 86,
+          "line": 88,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -6356,7 +6356,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 86,
+          "line": 88,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -7527,7 +7527,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 86,
+          "line": 88,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -7546,7 +7546,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 86,
+          "line": 88,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -11456,7 +11456,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 86,
+          "line": 88,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -12006,7 +12006,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 86,
+          "line": 88,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -12336,7 +12336,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 86,
+          "line": 88,
           "module": "crates/core/src/catalog.rs"
         }
       ],
@@ -12353,7 +12353,7 @@
       "handlers": [
         {
           "kind": "source_hierarchy_terrain_adapter",
-          "line": 86,
+          "line": 88,
           "module": "crates/core/src/catalog.rs"
         }
       ],

@@ -3,6 +3,8 @@
 //! Positions use the original instance origin. Sprite bounds are inclusive in
 //! the source; [`bounds`] converts them to the core's half-open rectangles.
 
+mod source_real;
+
 use crate::{CollisionPrecision, Rect, Vec2};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -312,10 +314,125 @@ impl CollisionMask {
             && self.event_bounds.is_some()
             && (self.precise || self.rectangle)
             && self.angle == 0.0
-            && self.scale.x.abs() == 1.0
-            && self.scale.y.abs() == 1.0
+            && self.scale.x.is_finite()
+            && self.scale.y.is_finite()
+            && self.scale.x != 0.0
+            && self.scale.y != 0.0
             && self.pos.x.is_finite()
             && self.pos.y.is_finite()
+            && self.source_query_geometry().is_some()
+    }
+
+    // Original 4AA958 unrotated cache and 48A9F4/48AB50 inverse sampling
+    // use PC64 intermediates, independently rounded coordinates and both scales.
+    // Integer unit placements with bounded metadata retain the exact cheap
+    // path. Fractional/large placements use the original PC64 cache arithmetic.
+    fn source_query_geometry(&self) -> Option<(Rect, Vec2)> {
+        if self.angle != 0.0 {
+            return self.event_geometry(); // Existing rotated cache/fallback scope.
+        }
+        if self.scale.x.abs() == 1.0
+            && self.scale.y.abs() == 1.0
+            && self.pos.x.fract() == 0.0
+            && self.pos.y.fract() == 0.0
+            && self.pos.x.abs() <= 1073741824.0
+            && self.pos.y.abs() <= 1073741824.0
+            && self.origin.iter().all(|v| i64::from(*v).abs() <= 1048576)
+            && self
+                .event_bounds
+                .is_some_and(|bounds| bounds.iter().all(|v| i64::from(*v).abs() <= 1048576))
+        {
+            return self.event_geometry();
+        }
+        if self.angle != 0.0 || self.scale.x == 0.0 || self.scale.y == 0.0 {
+            return None;
+        }
+        let [left, top, right, bottom] = self.event_bounds?;
+        let px = source_real::Real::from_f64(self.pos.x)?;
+        let py = source_real::Real::from_f64(self.pos.y)?;
+        let sx = source_real::Real::from_f64(self.scale.x)?;
+        let sy = source_real::Real::from_f64(self.scale.y)?;
+        let one = source_real::Real::from_i32(1);
+        let x0 = px
+            .add(source_real::Real::from_i32(left.wrapping_sub(self.origin[0])).mul(sx))
+            .round_i32()?;
+        let x1 = px
+            .add(
+                source_real::Real::from_i32(right.wrapping_sub(self.origin[0]).wrapping_add(1))
+                    .mul(sx),
+            )
+            .sub(one)
+            .round_i32()?;
+        let y0 = py
+            .add(source_real::Real::from_i32(top.wrapping_sub(self.origin[1])).mul(sy))
+            .round_i32()?;
+        let y1 = py
+            .add(
+                source_real::Real::from_i32(bottom.wrapping_sub(self.origin[1]).wrapping_add(1))
+                    .mul(sy),
+            )
+            .sub(one)
+            .round_i32()?;
+        Some((
+            Rect::new(
+                f64::from(x0.min(x1)),
+                f64::from(y0.min(y1)),
+                f64::from(x0.max(x1)) - f64::from(x0.min(x1)) + 1.0,
+                f64::from(y0.max(y1)) - f64::from(y0.min(y1)) + 1.0,
+            ),
+            Vec2::new(f64::from(px.round_i32()?), f64::from(py.round_i32()?)),
+        ))
+    }
+
+    fn source_query_round(value: f64) -> Option<i32> {
+        // Original 403498 returns the LOW word of a signed64 FISTP result.
+        source_real::Real::from_f64(value)?.round_i32()
+    }
+
+    fn source_query_exclusive_edges(&self, bounds: Rect) -> (f64, f64) {
+        if self.angle == 0.0 && self.frame.is_some() && self.source_query_geometry().is_some() {
+            // Original 4AC745/4AD063 INC the signed32 cached R/B before FILD.
+            let right = ((bounds.x + bounds.w - 1.0) as i32).wrapping_add(1);
+            let bottom = ((bounds.y + bounds.h - 1.0) as i32).wrapping_add(1);
+            (f64::from(right), f64::from(bottom))
+        } else {
+            (bounds.x + bounds.w, bounds.y + bounds.h)
+        }
+    }
+
+    fn source_query_pixel(&self, x: i32, y: i32) -> bool {
+        if self.scale.x.abs() == 1.0 && self.scale.y.abs() == 1.0 {
+            let ix = self.origin[0].wrapping_add(if self.scale.x > 0.0 {
+                x
+            } else {
+                x.wrapping_neg()
+            });
+            let iy = self.origin[1].wrapping_add(if self.scale.y > 0.0 {
+                y
+            } else {
+                y.wrapping_neg()
+            });
+            return self.image_pixel(ix, iy);
+        }
+        let Some(sx) = source_real::Real::from_f64(self.scale.x) else {
+            return false;
+        };
+        let Some(sy) = source_real::Real::from_f64(self.scale.y) else {
+            return false;
+        };
+        let Some(ix) = source_real::Real::from_i32(x).div(sx).and_then(|n| {
+            n.add(source_real::Real::from_i32(self.origin[0]))
+                .floor_i32()
+        }) else {
+            return false;
+        };
+        let Some(iy) = source_real::Real::from_i32(y).div(sy).and_then(|n| {
+            n.add(source_real::Real::from_i32(self.origin[1]))
+                .floor_i32()
+        }) else {
+            return false;
+        };
+        self.image_pixel(ix, iy)
     }
 
     fn pixel(&self, x: i32, y: i32) -> bool {
@@ -361,14 +478,23 @@ impl CollisionMask {
         if self.frame.is_none() {
             return self.bounds;
         }
-        self.event_geometry()
+        self.source_query_geometry()
             .map_or(self.bounds, |(bounds, _)| bounds)
     }
 
     pub fn contains(&self, point: Vec2, precision: CollisionPrecision) -> bool {
         // Canonical 0x4AC73F compares the ORIGINAL doubles to integer bbox
         // edges. Rounding the query first would admit points just outside it.
-        if !self.point_bounds().contains(point) {
+        let bounds = self.point_bounds();
+        let (right, bottom) = self.source_query_exclusive_edges(bounds);
+        if !bounds.is_valid()
+            || point.x < bounds.x
+            || point.y < bounds.y
+            || point.x >= right
+            || point.y >= bottom
+            || !point.x.is_finite()
+            || !point.y.is_finite()
+        {
             return false;
         }
         if precision == CollisionPrecision::BoundingBox || !self.supports_source_query_pixels() {
@@ -378,10 +504,15 @@ impl CollisionMask {
         // Unlike the rectangle kernel, point sampling does not clamp the
         // rounded query to the cached bbox a second time. RECTANGLE masks
         // are selected boolean pixels too, not a precise-query shortcut.
-        self.pixel(
-            (point.x.round_ties_even() - self.pos.x.round_ties_even()) as i32,
-            (point.y.round_ties_even() - self.pos.y.round_ties_even()) as i32,
-        )
+        let (Some(qx), Some(qy), Some(px), Some(py)) = (
+            Self::source_query_round(point.x),
+            Self::source_query_round(point.y),
+            Self::source_query_round(self.pos.x),
+            Self::source_query_round(self.pos.y),
+        ) else {
+            return true;
+        }; // Unsupported native FISTP exception domain retains bbox fallback.
+        self.source_query_pixel(qx.wrapping_sub(px), qy.wrapping_sub(py))
     }
 
     /// The source `collision_rectangle(..., 0, ...)` predicate. Query corners
@@ -397,12 +528,13 @@ impl CollisionMask {
             return false;
         }
         let bounds = self.point_bounds();
+        let (right, bottom) = self.source_query_exclusive_edges(bounds);
         // Canonical 0x4AC834..0x4AC923 compares the raw endpoints against
         // inclusive cached edges. In particular, do not add one to query max.
         bounds.is_valid()
-            && bounds.x + bounds.w > first.x.min(second.x)
+            && right > first.x.min(second.x)
             && bounds.x <= first.x.max(second.x)
-            && bounds.y + bounds.h > first.y.min(second.y)
+            && bottom > first.y.min(second.y)
             && bounds.y <= first.y.max(second.y)
     }
 
@@ -441,18 +573,34 @@ impl CollisionMask {
         if !self.intersects_rectangle_bbox(first, second) {
             return false;
         }
-        let Some((bounds, origin)) = self.event_geometry() else {
+        let Some((bounds, origin)) = self.source_query_geometry() else {
             return false;
         };
         // 0x4AC9C6..4ACA35 independently rounds sorted query corners and the
         // instance origin; 0x48AB50 clips the resulting inclusive pixel box.
-        let left = first.x.min(second.x).round_ties_even() as i32;
-        let right = first.x.max(second.x).round_ties_even() as i32;
-        let top = first.y.min(second.y).round_ties_even() as i32;
-        let bottom = first.y.max(second.y).round_ties_even() as i32;
+        let (Some(left), Some(right), Some(top), Some(bottom)) = (
+            Self::source_query_round(first.x.min(second.x)),
+            Self::source_query_round(first.x.max(second.x)),
+            Self::source_query_round(first.y.min(second.y)),
+            Self::source_query_round(first.y.max(second.y)),
+        ) else {
+            return self.intersects(
+                Rect::new(
+                    first.x.min(second.x),
+                    first.y.min(second.y),
+                    (first.x - second.x).abs() + 1.0,
+                    (first.y - second.y).abs() + 1.0,
+                ),
+                precision,
+            );
+        };
+        // 419E08/407CD4 do not re-sort signed endpoints after low32 conversion.
         for y in top.max(bounds.y as i32)..=bottom.min((bounds.y + bounds.h - 1.0) as i32) {
             for x in left.max(bounds.x as i32)..=right.min((bounds.x + bounds.w - 1.0) as i32) {
-                if self.pixel(x - origin.x as i32, y - origin.y as i32) {
+                if self.source_query_pixel(
+                    x.wrapping_sub(origin.x as i32),
+                    y.wrapping_sub(origin.y as i32),
+                ) {
                     return true;
                 }
             }
@@ -464,7 +612,7 @@ impl CollisionMask {
     /// cached integer aggregate bbox, then clipped endpoints and instance
     /// origins round independently before selected-mask pixel sampling.
     /// Fractional unit-scale placement and both unit mirrors are verified
-    /// against original GM8 instructions. Other transforms retain the Rect adapter.
+    /// against original GM8 instructions. Rotations retain the Rect adapter; nonzero finite unrotated scales use the native inverse sampler.
     pub fn intersects_axis_line(
         &self,
         first: Vec2,
@@ -488,15 +636,16 @@ impl CollisionMask {
         if !self.supports_source_query_pixels() {
             return self.intersects(query, precision);
         }
-        let Some((bounds, origin)) = self.event_geometry() else {
+        let Some((bounds, origin)) = self.source_query_geometry() else {
             return self.intersects(query, precision);
         };
+        let (right_exclusive, bottom_exclusive) = self.source_query_exclusive_edges(bounds);
         // 0x4ACEEC rejects raw endpoints before any RTE conversion, using
         // inclusive cached edges. A query just outside must stay outside.
         if !bounds.is_valid()
-            || bounds.x + bounds.w <= first.x.min(second.x)
+            || right_exclusive <= first.x.min(second.x)
             || bounds.x > first.x.max(second.x)
-            || bounds.y + bounds.h <= first.y.min(second.y)
+            || bottom_exclusive <= first.y.min(second.y)
             || bounds.y > first.y.max(second.y)
         {
             return false;
@@ -506,21 +655,28 @@ impl CollisionMask {
         if precision == CollisionPrecision::BoundingBox {
             return true;
         }
-        let left = first.x.min(second.x).max(bounds.x).round_ties_even() as i32;
-        let right = first
-            .x
-            .max(second.x)
-            .min(bounds.x + bounds.w)
-            .round_ties_even() as i32;
-        let top = first.y.min(second.y).round_ties_even() as i32;
-        let bottom = first.y.max(second.y).round_ties_even() as i32;
+        let (Some(left), Some(right), Some(y0), Some(y1)) = (
+            Self::source_query_round(first.x.min(second.x).max(bounds.x)),
+            Self::source_query_round(first.x.max(second.x).min(right_exclusive)),
+            Self::source_query_round(first.y),
+            Self::source_query_round(second.y),
+        ) else {
+            return self.intersects(query, precision);
+        };
+        // 48B100 sorts ONLY converted signed Y. X remains the wrapper's
+        // raw preordered/clipped pair, even if low32 conversion reverses it.
+        let top = y0.min(y1);
+        let bottom = y0.max(y1);
         // 0x48B0D4 delegates an axis line/point to the inclusive rectangle
         // pixel kernel0x48AB50, which clamps to the aggregate cached bounds.
         for y in top.max(bounds.y as i32)..=bottom.min((bounds.y + bounds.h - 1.0) as i32) {
             for x in left.max(bounds.x as i32)..=right.min((bounds.x + bounds.w - 1.0) as i32) {
                 // Rectangle source masks are materialized boolean pixels too:
                 // an aggregate bbox hit alone can include an empty half-tie row.
-                if self.pixel(x - origin.x as i32, y - origin.y as i32) {
+                if self.source_query_pixel(
+                    x.wrapping_sub(origin.x as i32),
+                    y.wrapping_sub(origin.y as i32),
+                ) {
                     return true;
                 }
             }
@@ -2119,7 +2275,10 @@ mod tests {
                 scale,
                 angle,
             );
-            assert!(!mask.supports_source_query_pixels());
+            assert_eq!(mask.supports_source_query_pixels(), angle == 0.0);
+            // The three unrotated scales now use source pixels. Their selected
+            // WebBall center and this rectangle are opaque; legacy comparisons
+            // stay asserted, while genuine rotated fallbacks remain unsupported.
             let first = Vec2::new(75.0, 75.0);
             let second = Vec2::new(77.0, 77.0);
             assert_eq!(
@@ -2330,5 +2489,266 @@ mod tests {
             (precise_sprites, precise_frames, data.len()),
             (373, 1039, 117054)
         );
+    }
+
+    #[test]
+    fn nonunit_source_point_queries_use_native_cache_and_selected_arrow_pixels() {
+        // Controlled source API vectors: exact native25 probe rows0..11,
+        // not ordinary campaign transform producers. First opaque control
+        // precedes the scale2 transparent pixel; no guessed trig values.
+        for (sx, sy, x, y, edges, precise, bbox) in [
+            (2.0, 1.0, 72.0, 79.0, [72.0, 79.0, 87.0, 83.0], true, true),
+            (2.0, 1.0, 76.0, 79.0, [72.0, 79.0, 87.0, 83.0], false, true),
+            (0.5, 1.0, 78.0, 79.0, [78.0, 79.0, 81.0, 83.0], true, true),
+            (0.5, 1.0, 79.0, 79.0, [78.0, 79.0, 81.0, 83.0], false, true),
+            (-2.0, 1.0, 88.0, 79.0, [71.0, 79.0, 88.0, 83.0], true, true),
+            (-2.0, 1.0, 84.0, 79.0, [71.0, 79.0, 88.0, 83.0], false, true),
+            (1.0, 2.0, 76.0, 78.0, [76.0, 78.0, 83.0, 87.0], true, true),
+            (1.0, 2.0, 78.0, 78.0, [76.0, 78.0, 83.0, 87.0], false, true),
+            (1.0, -0.5, 76.0, 80.5, [76.0, 77.0, 83.0, 80.0], true, true),
+            (1.0, -0.5, 78.0, 80.5, [76.0, 77.0, 83.0, 80.0], true, true),
+            (2.0, 0.5, 72.0, 79.5, [72.0, 80.0, 87.0, 81.0], false, false),
+            (2.0, 0.5, 76.0, 79.5, [72.0, 80.0, 87.0, 81.0], false, false),
+        ] {
+            let mask = instance_mask(
+                "oArrow",
+                "sArrowRight",
+                Vec2::new(80.0, 80.0),
+                0.0,
+                Vec2::new(sx, sy),
+                0.0,
+            );
+            assert_eq!(
+                mask.contains(Vec2::new(x, y), CollisionPrecision::BoundingBox),
+                bbox,
+                "SOURCE_NATIVE_NONUNIT_RAW_CACHE {sx}/{sy}/{x}/{y}"
+            );
+            assert_eq!(
+                mask.contains(Vec2::new(x, y), CollisionPrecision::Precise),
+                precise,
+                "SOURCE_NATIVE_NONUNIT_POINT_PIXEL {sx}/{sy}/{x}/{y}"
+            );
+            assert_eq!(
+                mask.point_bounds(),
+                Rect::new(
+                    edges[0],
+                    edges[1],
+                    edges[2] - edges[0] + 1.0,
+                    edges[3] - edges[1] + 1.0
+                ),
+                "SOURCE_NATIVE_NONUNIT_CACHE_EDGES {sx}/{sy}"
+            );
+        }
+    }
+
+    #[test]
+    fn nonunit_source_rectangle_and_axis_queries_use_native_arrow_pixels() {
+        // Original raw inclusive equal-corner rectangle and equal-axis paths
+        // have actual native results matching these twelve source vectors.
+        for (sx, sy, x, y, _edges, precise, bbox) in [
+            (2.0, 1.0, 72.0, 79.0, [72.0, 79.0, 87.0, 83.0], true, true),
+            (2.0, 1.0, 76.0, 79.0, [72.0, 79.0, 87.0, 83.0], false, true),
+            (0.5, 1.0, 78.0, 79.0, [78.0, 79.0, 81.0, 83.0], true, true),
+            (0.5, 1.0, 79.0, 79.0, [78.0, 79.0, 81.0, 83.0], false, true),
+            (-2.0, 1.0, 88.0, 79.0, [71.0, 79.0, 88.0, 83.0], true, true),
+            (-2.0, 1.0, 84.0, 79.0, [71.0, 79.0, 88.0, 83.0], false, true),
+            (1.0, 2.0, 76.0, 78.0, [76.0, 78.0, 83.0, 87.0], true, true),
+            (1.0, 2.0, 78.0, 78.0, [76.0, 78.0, 83.0, 87.0], false, true),
+            (1.0, -0.5, 76.0, 80.5, [76.0, 77.0, 83.0, 80.0], true, true),
+            (1.0, -0.5, 78.0, 80.5, [76.0, 77.0, 83.0, 80.0], true, true),
+            (2.0, 0.5, 72.0, 79.5, [72.0, 80.0, 87.0, 81.0], false, false),
+            (2.0, 0.5, 76.0, 79.5, [72.0, 80.0, 87.0, 81.0], false, false),
+        ] {
+            let mask = instance_mask(
+                "oArrow",
+                "sArrowRight",
+                Vec2::new(80.0, 80.0),
+                0.0,
+                Vec2::new(sx, sy),
+                0.0,
+            );
+            let point = Vec2::new(x, y);
+            assert_eq!(
+                mask.intersects_rectangle(point, point, CollisionPrecision::BoundingBox),
+                bbox
+            );
+            assert_eq!(
+                mask.intersects_rectangle(point, point, CollisionPrecision::Precise),
+                precise,
+                "SOURCE_NATIVE_NONUNIT_RECTANGLE_PIXEL {sx}/{sy}/{x}/{y}"
+            );
+            assert_eq!(
+                mask.intersects_axis_line(point, point, CollisionPrecision::BoundingBox),
+                bbox
+            );
+            assert_eq!(
+                mask.intersects_axis_line(point, point, CollisionPrecision::Precise),
+                precise,
+                "SOURCE_NATIVE_NONUNIT_AXIS_PIXEL {sx}/{sy}/{x}/{y}"
+            );
+        }
+    }
+
+    #[test]
+    fn nonunit_rectangle_masks_sample_pixels_after_independent_half_rounding() {
+        // Original sBlock RECTANGLE origin0/aggregate[0,0,15,15]. At x16.5,
+        // scale2 cache is[16,48], originRTE16; x47 samples15, x48 samples16.
+        // This is controlled nonunit geometry, not a mirrored Solid producer.
+        let right = instance_mask(
+            "oBlock",
+            "sBlock",
+            Vec2::new(16.5, 80.0),
+            0.0,
+            Vec2::new(2.0, 1.0),
+            0.0,
+        );
+        for (x, expected) in [(47.0, true), (48.0, false), (47.5, false), (47.49, true)] {
+            let q = Vec2::new(x, 80.0);
+            assert!(right.contains(q, CollisionPrecision::BoundingBox));
+            assert_eq!(
+                right.contains(q, CollisionPrecision::Precise),
+                expected,
+                "SOURCE_NATIVE_NONUNIT_RECTANGLE_MASK_POINT {x}"
+            );
+            assert_eq!(
+                right.intersects_rectangle(q, q, CollisionPrecision::Precise),
+                expected
+            );
+            assert_eq!(
+                right.intersects_axis_line(q, q, CollisionPrecision::Precise),
+                expected
+            );
+        }
+        // Negative scale reverses AFTER rounding cache endpoints; origin16
+        // and query16.5 both round16, selecting opaque imagecolumn0.
+        let left = instance_mask(
+            "oBlock",
+            "sBlock",
+            Vec2::new(16.5, 80.0),
+            0.0,
+            Vec2::new(-2.0, 1.0),
+            0.0,
+        );
+        for (x, expected) in [(16.5, true), (-16.0, false)] {
+            let q = Vec2::new(x, 80.0);
+            assert!(left.contains(q, CollisionPrecision::BoundingBox));
+            assert_eq!(
+                left.contains(q, CollisionPrecision::Precise),
+                expected,
+                "SOURCE_NATIVE_NEGATIVE_NONUNIT_RECTANGLE_MASK_POINT {x}"
+            );
+            assert_eq!(
+                left.intersects_rectangle(q, q, CollisionPrecision::Precise),
+                expected
+            );
+            assert_eq!(
+                left.intersects_axis_line(q, q, CollisionPrecision::Precise),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn source_query_word_boundaries_preserve_native_conversion_and_raw_gate_order() {
+        // Controlled API positions/scales, not campaign reachability claims.
+        // Native FISTP64 returns low32 BEFORE independent signed32 subtraction.
+        let block = instance_mask(
+            "oBlock",
+            "sBlock",
+            Vec2::new(2147483648.0, 80.0),
+            0.0,
+            Vec2::new(2.0, 1.0),
+            0.0,
+        );
+        let q = Vec2::new(-2147483648.0, 80.0);
+        assert_eq!(
+            block.contains(q, CollisionPrecision::BoundingBox),
+            true,
+            "SOURCE_FISTP64_LOW_WORD_CACHE_GATE"
+        );
+        assert!(
+            block.contains(q, CollisionPrecision::Precise),
+            "SOURCE_FISTP64_LOW_WORD_ORIGIN"
+        );
+        assert!(block.intersects_rectangle(q, q, CollisionPrecision::Precise));
+        assert!(block.intersects_axis_line(q, q, CollisionPrecision::Precise));
+        let arrow = instance_mask(
+            "oArrow",
+            "sArrowRight",
+            Vec2::new(4294967376.0, 80.0),
+            0.0,
+            Vec2::new(2.0, 1.0),
+            0.0,
+        );
+        assert!(arrow.contains(Vec2::new(80.0, 80.0), CollisionPrecision::Precise));
+        let arrow = instance_mask(
+            "oArrow",
+            "sArrowRight",
+            Vec2::new(80.0, 80.0),
+            0.0,
+            Vec2::new(536870912.0, 1.0),
+            0.0,
+        );
+        let q = Vec2::new(-2147483569.0, 79.0);
+        assert!(arrow.contains(q, CollisionPrecision::BoundingBox));
+        assert!(
+            !arrow.contains(q, CollisionPrecision::Precise),
+            "SOURCE_WRAPPING_OFFSET_SELECTS_EMPTY_PIXEL_7_3"
+        );
+        assert!(!arrow.intersects_rectangle(q, q, CollisionPrecision::Precise));
+        assert!(!arrow.intersects_axis_line(q, q, CollisionPrecision::Precise));
+        // R==MAX makes signed32 R+1==MIN before native raw-double comparisons.
+        let arrow = instance_mask(
+            "oArrow",
+            "sArrowRight",
+            Vec2::new(0.0, 80.0),
+            0.0,
+            Vec2::new(536870912.0, 1.0),
+            0.0,
+        );
+        let q = Vec2::new(0.0, 80.0);
+        for precision in [CollisionPrecision::BoundingBox, CollisionPrecision::Precise] {
+            assert!(
+                !arrow.contains(q, precision),
+                "SOURCE_SIGNED_CACHE_SUCCESSOR_RAW_GATE"
+            );
+            assert!(!arrow.intersects_rectangle(q, q, precision));
+            assert!(!arrow.intersects_axis_line(q, q, precision));
+        }
+        // SUB/JL compares signed original endpoints (SF != OF), rather than
+        // the sign bit of the wrapped difference. The native full-width count
+        // is zero after INC, representing 2^32 DEC/JNZ iterations. Its FIRST
+        // selected pixel is opaque, so this control does not run a giant loop.
+        assert!(
+            arrow.intersects_rectangle(
+                Vec2::new(-6442450944.0, 80.0),
+                Vec2::new(2147483647.0, 80.0),
+                CollisionPrecision::Precise
+            ),
+            "SOURCE_SIGNED_JL_FULL_WIDTH_FIRST_PIXEL"
+        );
+        // These raw ordered inputs convert to signed MAX/MIN. The constructor
+        // does not resort them; SUB has overflow, and JL rejects R < L.
+        assert!(
+            !arrow.intersects_rectangle(
+                Vec2::new(-2147483649.0, 80.0),
+                Vec2::new(2147483648.0, 80.0),
+                CollisionPrecision::Precise
+            ),
+            "SOURCE_SIGNED_JL_REVERSED_LOW_WORDS"
+        );
+        // Source PC64 preserves the input epsilon through the bbox expression.
+        let unit = instance_mask(
+            "oBlock",
+            "sBlock",
+            Vec2::new(255.50000000000003, 80.0),
+            0.0,
+            Vec2::new(1.0, 1.0),
+            0.0,
+        );
+        assert_eq!(unit.point_bounds(), Rect::new(256.0, 80.0, 16.0, 16.0));
+        let q = Vec2::new(270.75, 80.0);
+        assert!(unit.intersects_rectangle(q, q, CollisionPrecision::Precise));
+        assert!(unit.intersects_axis_line(q, q, CollisionPrecision::Precise));
     }
 }
