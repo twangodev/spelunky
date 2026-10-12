@@ -36,7 +36,7 @@
 >{fullscreenActive ? 'Exit fullscreen' : 'Fullscreen'}</button>
 <p bind:this={fullscreenStatus} id="fullscreen-status" role="status" hidden></p>
 <p bind:this={status} id="status" role="status">Loading Spelunky Classic…</p>
-<p id="attribution">Unofficial modified port · Derek Yu / Mossmouth · <a href="assets/COPYING.txt" data-sveltekit-reload>License</a></p>
+<p id="attribution">Unofficial modified port · Derek Yu / Mossmouth · <a href="assets/LICENSE" data-sveltekit-reload>License</a></p>
 
 <style>
   :global(:root) { color-scheme: dark; font-family: system-ui, sans-serif; }

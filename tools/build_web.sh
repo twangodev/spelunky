@@ -42,7 +42,7 @@ destination = Path("web/public/assets")
 if destination.exists():
     shutil.rmtree(destination)
 destination.mkdir(parents=True)
-for name in ("COPYING.txt", "ORIGINAL_README.txt"):
+for name in ("LICENSE", "ORIGINAL_README.txt"):
     shutil.copy2(Path("assets") / name, destination / name)
 PY
 bun install --cwd web --frozen-lockfile

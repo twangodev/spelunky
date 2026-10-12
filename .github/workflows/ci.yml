@@ -45,7 +45,7 @@ jobs:
           path: |
             target/release/spelunky
             assets
-            COPYING.txt
+            LICENSE
           if-no-files-found: error
 
   web:

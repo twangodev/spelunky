@@ -1893,7 +1893,7 @@ impl App {
                     "UNOFFICIAL MODIFIED RUST PORT",
                     "CLASSIC 1.1 REFERENCE",
                     "FREE DISTRIBUTION - DO NOT SELL",
-                    "LICENSE: ASSETS/COPYING.TXT",
+                    "LICENSE: ASSETS/LICENSE",
                     "",
                     "30 HZ AUTHORITATIVE SIMULATION",
                     "SMOOTH DISPLAY-REFRESH PRESENTATION",

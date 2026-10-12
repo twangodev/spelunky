@@ -325,10 +325,10 @@ def export(source, original, output, atlas_width):
             shutil.copyfile(path, output / relative)
             audio[path.stem] = {"path": relative, "bytes": path.stat().st_size, "sha256": sha256(path)}
     write_json(output / "audio.json", {"version": 1, "sounds": audio})
-    shutil.copyfile(original / "source/COPYING.txt", output / "COPYING.txt")
+    shutil.copyfile(original / "source/COPYING.txt", output / "LICENSE")
     shutil.copyfile(original / "source/readme.txt", output / "ORIGINAL_README.txt")
     archives = {p.name: sha256(p) for p in sorted(original.glob("*.zip"))}
-    generated_paths = ["atlas.png", "atlas.json", "collision.bin", "audio.json", "COPYING.txt", "ORIGINAL_README.txt"] + [record["path"] for record in audio.values()]
+    generated_paths = ["atlas.png", "atlas.json", "collision.bin", "audio.json", "LICENSE", "ORIGINAL_README.txt"] + [record["path"] for record in audio.values()]
     generated = {relative: sha256(output / relative) for relative in sorted(generated_paths)}
     write_json(output / "manifest.json", {"version": 1, "source_archives": archives, "source_files": source_hashes, "generated_files": generated, "counts": {"sprites": len(sprites), "sprite_frames": sum(len(s["frames"]) for s in sprites.values()), "backgrounds": len(backgrounds), "audio": len(audio), "collision_bytes": len(collision), "precise_masks": sum(len(s["frames"]) if s["mask"]["separate"] else 1 for s in sprites.values() if s["mask"]["shape"] == "PRECISE")}})
     print(f"Exported {len(sprites)} sprites, {len(frames)} images, {len(collision)} precise collision bytes, {len(audio)} sounds; atlas {atlas_width}x{atlas_height}")

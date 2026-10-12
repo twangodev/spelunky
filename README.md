@@ -1,6 +1,6 @@
 # Spelunky Classic in Rust
 
-An **unofficial, modified port of Spelunky Classic 1.1**. Original game copyright (c) 2008, 2009 Derek Yu and Mossmouth, LLC. Distributed under the [Spelunky User License](COPYING.txt); covered works may not be sold.
+An **unofficial, modified port of Spelunky Classic 1.1**. Original game copyright (c) 2008, 2009 Derek Yu and Mossmouth, LLC. Distributed under the [Spelunky User License](LICENSE); covered works may not be sold.
 
 The same Rust gameplay core runs natively on Linux and in browsers through WebAssembly and WebGL 2. The runtime uses the original sprites and audio, without GameMaker or the original executable.
 

@@ -4,7 +4,7 @@
 //! combines generated upper/underground rooms with this authored arena, floor,
 //! worshippers, and lava basin. No room-generation randomness is consumed here.
 //! Copyright (c) 2008, 2009 Derek Yu and Mossmouth, LLC.
-//! Source-derived layout is covered by the Spelunky User License; see COPYING.txt.
+//! Source-derived layout is covered by the Spelunky User License; see LICENSE.
 
 use crate::model::{Area, Rng, Vec2, World};
 use std::collections::BTreeSet;

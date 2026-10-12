@@ -214,7 +214,7 @@ try {
       result.openingRoute = await ready(page);
       assert.match(await page.title(), /Spelunky Classic/);
       assert.match(await page.locator('#attribution').textContent(), /Derek Yu \/ Mossmouth/);
-      const license = await page.request.get(new URL('assets/COPYING.txt', base).href);
+      const license = await page.request.get(new URL('assets/LICENSE', base).href);
       assert.equal(license.status(), 200);
       assert.match(await license.text(), /Spelunky/);
       result.graphics = await page.evaluate(() => window.__smoke);
