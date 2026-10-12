@@ -342,7 +342,7 @@ impl CollisionMask {
                 .event_bounds
                 .is_some_and(|bounds| bounds.iter().all(|v| i64::from(*v).abs() <= 1048576))
         {
-            return self.event_geometry();
+            return self.unrotated_unit_event_geometry();
         }
         if self.angle != 0.0 || self.scale.x == 0.0 || self.scale.y == 0.0 {
             return None;
@@ -711,8 +711,11 @@ impl CollisionMask {
     }
 
     fn event_geometry(&self) -> Option<(Rect, Vec2)> {
-        // The only source nonunit collision transform is oArrowTrapTest's
-        // positive integral X stretch. Its Y scale and angle remain 1 and 0.
+        if self.angle == 0.0 {
+            return self.source_query_geometry();
+        }
+        // Unrotated finite scales use the shared source PC64 cache above.
+        // The existing rotated adapter's narrower transform scope stays here.
         let horizontal_stretch = self.angle == 0.0
             && self.scale.x >= 1.0
             && self.scale.x.fract() == 0.0
@@ -749,6 +752,11 @@ impl CollisionMask {
                 Vec2::new(self.pos.x.round_ties_even(), self.pos.y.round_ties_even()),
             ));
         }
+        None
+    }
+
+    fn unrotated_unit_event_geometry(&self) -> Option<(Rect, Vec2)> {
+        let [left, top, right, bottom] = self.event_bounds?;
         // Canonical GM8 rounds each translated inclusive bbox edge before
         // broad-phase rejection, and rounds the instance origin independently
         // for pixel indexing. Rounding the origin alone differs at .5 ties.
@@ -769,9 +777,10 @@ impl CollisionMask {
     /// Collision-event overlap of the two loaded source masks, including
     /// rectangle/precise pairs. Explicit shape-query precision is unchanged.
     /// Positive unit-scale rotations use canonical inverse pixel sampling.
-    /// Source detectors' unrotated positive integral X stretches use the
-    /// canonical inverse scale sampler. Other nonunit scales and rotated mirrors retain their bbox fallback.
-    /// Unrotated unit mirrors also use canonical fractional origin placement.
+    /// Unrotated finite nonzero scales use the native PC64 cache and both-axis
+    /// inverse sampler, including fractional placements and signed32 offsets.
+    /// The existing rotated adapter and unsupported rotated mirrors retain
+    /// their separate approximation/fallback scope.
     pub fn intersects_mask(&self, other: &Self) -> bool {
         if !(self.precise || self.rectangle) || !(other.precise || other.rectangle) {
             return self.bounds.intersects(other.bounds);
@@ -781,6 +790,9 @@ impl CollisionMask {
         else {
             return self.bounds.intersects(other.bounds);
         };
+        if self.angle == 0.0 && other.angle == 0.0 {
+            return self.intersects_unrotated_mask(other, bounds, pos, other_bounds, other_pos);
+        }
         if !bounds.intersects(other_bounds) {
             return false;
         }
@@ -815,18 +827,54 @@ impl CollisionMask {
         false
     }
 
+    fn intersects_unrotated_mask(
+        &self,
+        other: &Self,
+        bounds: Rect,
+        pos: Vec2,
+        other_bounds: Rect,
+        other_pos: Vec2,
+    ) -> bool {
+        // 4AD1AD..4AD1F3 compares the signed cached R/B successors; INC
+        // wraps before the double gate. 48A51F..48A583 then clips inclusive
+        // signed cache edges. Both origins were independently FISTP-rounded.
+        let right = (bounds.x + bounds.w - 1.0) as i32;
+        let bottom = (bounds.y + bounds.h - 1.0) as i32;
+        let other_right = (other_bounds.x + other_bounds.w - 1.0) as i32;
+        let other_bottom = (other_bounds.y + other_bounds.h - 1.0) as i32;
+        if bounds.x >= f64::from(other_right.wrapping_add(1))
+            || other_bounds.x >= f64::from(right.wrapping_add(1))
+            || bounds.y >= f64::from(other_bottom.wrapping_add(1))
+            || other_bounds.y >= f64::from(bottom.wrapping_add(1))
+        {
+            return false;
+        }
+        let left = (bounds.x as i32).max(other_bounds.x as i32);
+        let top = (bounds.y as i32).max(other_bounds.y as i32);
+        let right = right.min(other_right);
+        let bottom = bottom.min(other_bottom);
+        // Native SUB/JL uses SF xor OF (signed operand ordering), followed
+        // by wrapping count/INC. The inclusive integer ranges visit the same
+        // finite pixels; the selected mask checks have no gameplay callbacks.
+        for x in left..=right {
+            for y in top..=bottom {
+                if self
+                    .source_query_pixel(x.wrapping_sub(pos.x as i32), y.wrapping_sub(pos.y as i32))
+                    && other.source_query_pixel(
+                        x.wrapping_sub(other_pos.x as i32),
+                        y.wrapping_sub(other_pos.y as i32),
+                    )
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     fn event_pixel(&self, x: i32, y: i32, sin: f64, cos: f64) -> bool {
         if self.angle == 0.0 {
-            if self.scale.x > 1.0 {
-                // Canonical 0x48A6E6..0x48A78D divides the integer world
-                // offset from the independently rounded instance origin,
-                // adds the sprite origin, then floors before both mask tests.
-                let image_x =
-                    (f64::from(x) / self.scale.x + f64::from(self.origin[0])).floor() as i32;
-                let image_y = y + self.origin[1];
-                return self.image_pixel(image_x, image_y);
-            }
-            return self.pixel(x, y);
+            return self.source_query_pixel(x, y);
         }
         // Canonical 0x48A88A..0x48A987 samples each world pixel inversely,
         // flooring after rotation and sprite-origin addition. This branch is
@@ -1694,7 +1742,7 @@ mod tests {
                 scale,
                 angle,
             );
-            assert!(mask.event_geometry().is_none());
+            assert_eq!(mask.event_geometry().is_some(), angle == 0.0);
         }
     }
 
@@ -2750,5 +2798,95 @@ mod tests {
         let q = Vec2::new(270.75, 80.0);
         assert!(unit.intersects_rectangle(q, q, CollisionPrecision::Precise));
         assert!(unit.intersects_axis_line(q, q, CollisionPrecision::Precise));
+    }
+    #[test]
+    fn unrotated_event_nonunit_cache_and_mask_controls_from_original_bytes() {
+        // Controlled native primitive inputs, not ordinary stock transform producers.
+        // Positive source case15 first; empty .3-scale case20 exposes old bbox fallback.
+        for (case, x, y, sx, sy, left, top, right, bottom, hit) in [
+            (15, 80.0, 80.0, 3.0, 1.0, 68.0, 79.0, 91.0, 83.0, true),
+            (20, 80.0, 80.0, 0.3, 1.0, 79.0, 79.0, 80.0, 83.0, false),
+            (21, 80.0, 80.0, 1.0, 0.3, 76.0, 80.0, 83.0, 80.0, false),
+            (16, 80.0, 80.0, 1.0, 3.0, 76.0, 77.0, 83.0, 91.0, true),
+            (17, 80.0, 80.0, -3.0, 1.0, 67.0, 79.0, 92.0, 83.0, true),
+            (18, 80.0, 80.0, 1.0, -3.0, 76.0, 67.0, 83.0, 83.0, true),
+            (19, 80.0, 80.0, 3.0, 3.0, 68.0, 77.0, 91.0, 91.0, true),
+            (22, 80.5, 80.5, 1.5, -2.5, 74.0, 70.0, 86.0, 83.0, true),
+            (23, 80.25, 80.75, -0.3, 1.5, 78.0, 79.0, 81.0, 86.0, false),
+            (24, 80.5, 80.5, 3.0, 3.0, 68.0, 78.0, 92.0, 92.0, true),
+        ] {
+            let arrow = instance_mask(
+                "oArrow",
+                "sArrowRight",
+                Vec2::new(x, y),
+                0.0,
+                Vec2::new(sx, sy),
+                0.0,
+            );
+            let web = instance_mask(
+                "oWeb",
+                "sWeb",
+                Vec2::new(68.0, 64.0),
+                0.0,
+                Vec2::new(1.0, 1.0),
+                0.0,
+            );
+            let expected_bounds = Rect::new(left, top, right - left + 1.0, bottom - top + 1.0);
+            assert_eq!(
+                arrow.point_bounds(),
+                expected_bounds,
+                "already proved query cache, case {case}"
+            );
+            assert_eq!(
+                arrow.intersects_mask(&web),
+                hit,
+                "NATIVE_UNROTATED_EVENT_PAIR case {case}"
+            );
+            assert_eq!(
+                web.intersects_mask(&arrow),
+                hit,
+                "NATIVE_UNROTATED_REVERSE_EVENT_PAIR case {case}"
+            );
+            assert_eq!(arrow.event_geometry().unwrap().0, expected_bounds);
+        }
+    }
+
+    #[test]
+    fn unrotated_event_native_lowword_offsets_and_cached_successor_controls() {
+        // Source-law API controls with valid signed64 conversions, not campaign positions.
+        let unit = Vec2::new(1.0, 1.0);
+        let large = instance_mask(
+            "oArrow",
+            "sArrowRight",
+            Vec2::new(4294967376.0, 80.0),
+            0.0,
+            Vec2::new(2.0, 1.0),
+            0.0,
+        );
+        let web = instance_mask("oWeb", "sWeb", Vec2::new(68.0, 64.0), 0.0, unit, 0.0);
+        assert_eq!(large.point_bounds(), Rect::new(72.0, 79.0, 16.0, 5.0));
+        assert!(
+            large.intersects_mask(&web),
+            "NATIVE_EVENT_INDEPENDENT_LOWWORD_ORIGIN"
+        );
+        assert!(web.intersects_mask(&large));
+        let edge = instance_mask(
+            "oArrow",
+            "sArrowRight",
+            Vec2::new(0.0, 80.0),
+            0.0,
+            Vec2::new(536870912.0, 1.0),
+            0.0,
+        );
+        let web = instance_mask("oWeb", "sWeb", Vec2::new(0.0, 76.0), 0.0, unit, 0.0);
+        assert_eq!(
+            edge.point_bounds(),
+            Rect::new(-2147483648.0, 79.0, 4294967296.0, 5.0)
+        );
+        assert!(
+            !edge.intersects_mask(&web),
+            "NATIVE_EVENT_SIGNED_CACHED_RIGHT_SUCCESSOR"
+        );
+        assert!(!web.intersects_mask(&edge));
     }
 }
