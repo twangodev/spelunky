@@ -760,6 +760,55 @@ pub(super) fn continuation_sight_owner(game: &mut Game, e: &Entity) -> f64 {
         .unwrap_or(-4.0) // GameMaker noone
 }
 
+// Source IDLE uses raw top collision_point(-1,-1), while WALK/ATTACK
+// consume the earlier captured full-height side flags. Native GM8 converts
+// each finite -1 flag to false, so these points use the cached bbox.
+fn caveman_idle_wall(game: &Game, e: &Entity) -> bool {
+    let points = [
+        Vec2::new(e.pos.x - 1.0, e.pos.y),
+        Vec2::new(e.pos.x + 16.0, e.pos.y),
+    ];
+    // A false-only coarse query avoids resolving every terrain mask for an
+    // empty pair of points; registered source receivers remain authoritative.
+    let world = &game.world;
+    if !points.iter().any(|point| {
+        world.tiles_point(*point, "oSolid")
+            || world.entities.iter().any(|other| {
+                other.alive
+                    && other.engine_active
+                    && crate::catalog::is_a(&other.object, "oSolid")
+                    && other.mask_contains(*point, crate::CollisionPrecision::BoundingBox)
+            })
+    }) {
+        return false;
+    }
+    crate::dispatcher::descendant_instances(game, "oSolid")
+        .into_iter()
+        .any(|instance| match instance {
+            crate::dispatcher::Instance::Player => false,
+            crate::dispatcher::Instance::Terrain(index) => {
+                world
+                    .tiles
+                    .get(index)
+                    .is_some_and(|tile| tile.engine_active)
+                    && points.iter().any(|point| {
+                        world
+                            .tile_collision_mask(
+                                (index % world.width) as i32,
+                                (index / world.width) as i32,
+                            )
+                            .contains(*point, crate::CollisionPrecision::BoundingBox)
+                    })
+            }
+            crate::dispatcher::Instance::Entity(id) => world.entity(id).is_some_and(|other| {
+                other.engine_active
+                    && points.iter().any(|point| {
+                        other.mask_contains(*point, crate::CollisionPrecision::BoundingBox)
+                    })
+            }),
+        })
+}
+
 fn caveman(game: &mut Game, e: &mut Entity) {
     let mut impact_y = (e.vel.y
         + if e.held {
@@ -768,7 +817,7 @@ fn caveman(game: &mut Game, e: &mut Entity) {
             super::inherited::gravity(e, 0.6)
         })
     .min(10.0);
-    let (_, grounded) = move_body(&game.world, e, if e.held { 0.0 } else { 0.6 });
+    move_body(&game.world, e, if e.held { 0.0 } else { 0.6 });
     let contacts = super::body_contacts(&game.world, e);
     // The source moveTo resolves displacement without clearing stored yVel.
     e.vel.y = impact_y;
@@ -780,8 +829,8 @@ fn caveman(game: &mut Game, e: &mut Entity) {
         // instance_destroy completes Enemy Destroy, then this Step continues.
         super::destroyed(game, e);
     }
-    let grounded = grounded || bottom(&game.world, e);
-    let hit_side = side(&game.world, e, -1) || side(&game.world, e, 1);
+    let grounded = contacts.bottom;
+    let hit_side = contacts.left || contacts.right;
     if e.health < 1 && e.state < 98 {
         e.state = 99;
     }
@@ -793,10 +842,13 @@ fn caveman(game: &mut Game, e: &mut Entity) {
     match e.state {
         0 => {
             e.data.insert("bounced".into(), 0.0);
-            if grounded && hit_side {
+            if grounded && caveman_idle_wall(game, e) {
                 e.vel.y = -6.0;
                 e.vel.x = f64::from(e.facing);
                 e.timer = e.timer.saturating_sub(10);
+            }
+            if e.vel.y < 0.0 && contacts.top {
+                e.vel.y = 0.0;
             }
             if grounded {
                 e.timer = e.timer.saturating_sub(1);

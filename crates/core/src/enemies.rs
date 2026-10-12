@@ -889,7 +889,16 @@ pub(super) fn solid_mask(world: &World, r: Rect, excluded: u64) -> bool {
 /// Source canPushMoveableSolids/canLandOnPlatforms exclude enemy bodies.
 pub(super) fn move_body(world: &World, e: &mut Entity, gravity: f64) -> (bool, bool) {
     fn collides(world: &World, e: &Entity, r: Rect) -> bool {
-        solid_mask(world, r, e.id)
+        // moveTo uses precise axis lines, with each complete endpoint rounded.
+        // Keep the horizontal getId strip's tb+5 distinct from full contacts.
+        world.solid_line_except(
+            Vec2::new(r.x.round_ties_even(), r.y.round_ties_even()),
+            Vec2::new(
+                (r.x + r.w - 1.0).round_ties_even(),
+                (r.y + r.h - 1.0).round_ties_even(),
+            ),
+            e.id,
+        )
     }
     fn displacement(v: f64, time: u64) -> i32 {
         let f = v.abs().fract();
