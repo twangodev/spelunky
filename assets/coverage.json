@@ -2031,7 +2031,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 942,
+          "line": 931,
           "module": "crates/core/src/player.rs"
         }
       ],
@@ -8582,7 +8582,7 @@
       "handlers": [
         {
           "kind": "player_tick_replacement",
-          "line": 936,
+          "line": 925,
           "module": "crates/core/src/player.rs"
         },
         {

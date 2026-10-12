@@ -882,24 +882,13 @@ fn apply_ball_tether(w: &World, p: &mut Player, input: &InputFrame, fall: &mut f
     let Some(ball) = w.entities.iter().find(|e| e.alive && e.object == "oBall") else {
         return;
     };
-    let a = crate::catalog::sprite_def(&p.sprite)
-        .map(|s| {
-            Rect::new(
-                p.pos.x + f64::from(s.bounds[0] - s.origin[0]),
-                p.pos.y + f64::from(s.bounds[1] - s.origin[1]),
-                f64::from(s.bounds[2] - s.bounds[0] + 1),
-                f64::from(s.bounds[3] - s.bounds[1] + 1),
-            )
-        })
-        .unwrap_or_else(|| bounds_at(p, p.pos));
-    let b = ball.bounds();
-    let dx = (a.x - (b.x + b.w - 1.0))
-        .max(b.x - (a.x + a.w - 1.0))
-        .max(0.0);
-    let dy = (a.y - (b.y + b.h - 1.0))
-        .max(b.y - (a.y + a.h - 1.0))
-        .max(0.0);
-    if dx.hypot(dy) < 24.0 {
+    // Source distance_to_object uses integer aggregate sprite envelopes,
+    // including the previous Draw transform, independently of movement bounds.
+    if crate::world_events::mask_distance(
+        p.collision_mask().point_bounds(),
+        ball.collision_mask().point_bounds(),
+    ) < 24.0
+    {
         return;
     }
     if (p.vel.x > 0.0 && ball.pos.x < p.pos.x && (ball.pos.x - p.pos.x).abs() > 24.0)
@@ -4300,3 +4289,48 @@ mod ledge_tests;
 #[cfg(test)]
 #[path = "player/movement_top_tests.rs"]
 mod movement_top_tests;
+
+#[cfg(test)]
+mod native_ball_tether_boundary_tests {
+    use super::*;
+    #[test]
+    fn player_tether_uses_previous_draw_mirror_before_motion() {
+        for (scale, x, expected) in [
+            (1., 114., 3.),
+            (1., 115., 0.),
+            (-1., 115., 3.),
+            (-1., 116., 0.),
+        ] {
+            let mut g = Game::shell(29, crate::RulesPreset::Classic);
+            g.world.spawn("oBall", Vec2::new(80., 104.));
+            g.player.pos = Vec2::new(x, 104.);
+            g.player.set_sprite("sRunLeft");
+            g.player.data.insert("image_xscale".into(), scale);
+            g.player.vel.x = 3.;
+            let mut fall = 0.;
+            apply_ball_tether(&g.world, &mut g.player, &InputFrame::default(), &mut fall);
+            assert_eq!(
+                g.player.vel.x, expected,
+                "SOURCE_INCLUSIVE_GAP24 scale={scale} x={x}"
+            );
+        }
+    }
+    #[test]
+    fn jumping_tether_uses_ball_sprite_top_not_movement_top() {
+        for (y, expected) in [(70., -3.), (68., 0.), (69., 0.)] {
+            let mut g = Game::shell(29, crate::RulesPreset::Classic);
+            g.world.spawn("oBall", Vec2::new(80., 104.));
+            g.player.pos = Vec2::new(80., y);
+            g.player.set_sprite("sStandLeft");
+            g.player.vel.y = -3.;
+            let mut fall = 0.;
+            apply_ball_tether(&g.world, &mut g.player, &InputFrame::default(), &mut fall);
+            assert_eq!(
+                g.player.vel.y,
+                expected,
+                "SOURCE_BALL_SPRITE_TOP100 PLAYER_BOTTOM={} y={y}",
+                y + 7.
+            );
+        }
+    }
+}
