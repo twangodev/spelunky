@@ -546,6 +546,46 @@ fn spawn_ghost(game: &mut Game) {
     }
 }
 
+// Stock B producers store TrapBlock as live entities. Raw terrain TrapBlock
+// needs its own state/Step adapter and remains outside this callback adapter.
+fn idol_trap_receivers(game: &mut Game) -> Vec<u64> {
+    crate::dispatcher::register_instances(game);
+    crate::dispatcher::descendant_instances(game, "oTrapBlock")
+        .into_iter()
+        .filter_map(|instance| match instance {
+            crate::dispatcher::Instance::Entity(id) => game
+                .world
+                .entity(id)
+                .filter(|entity| entity.engine_active)
+                .map(|entity| entity.id),
+            _ => None,
+        })
+        .collect()
+}
+
+fn idol_trap_distance_to_character(game: &mut Game, id: u64) -> f64 {
+    use crate::dispatcher::Instance;
+    crate::dispatcher::register_instances(game);
+    let Some(receiver) = game.world.entity(id) else {
+        return 1_000_000.0;
+    };
+    let receiver = receiver.collision_mask().point_bounds();
+    crate::dispatcher::descendant_instances(game, "oCharacter")
+        .into_iter()
+        .filter(|instance| crate::dispatcher::is_active(game, *instance))
+        .filter_map(|instance| match instance {
+            Instance::Player => Some(game.player.collision_mask().point_bounds()),
+            Instance::Entity(target) if target != id => game
+                .world
+                .entity(target)
+                .map(|entity| entity.collision_mask().point_bounds()),
+            _ => None,
+        })
+        .fold(1_000_000.0_f64, |distance, mask| {
+            distance.min(crate::world_events::mask_distance(receiver, mask))
+        })
+}
+
 /// oPlayer1 Step 1264-1323: invoked once by a successful pickup.
 /// Jungle and Ice deliberately retain their trigger, permitting another pickup.
 pub(crate) fn idol_pickup(game: &mut Game, id: u64) {
@@ -558,24 +598,9 @@ pub(crate) fn idol_pickup(game: &mut Game, id: u64) {
     {
         return;
     }
-    let pos = entity.pos;
     *game.data.entry("idols_grabbed".into()).or_default() += 1.;
     game.lifetime_stats
         .increment(crate::statistics::LifetimeCounter::IdolsGrabbed);
-    let character_masks: Vec<_> = std::iter::once(game.player.sprite_bounds())
-        .chain(
-            game.world
-                .entities
-                .iter()
-                .filter(|e| e.alive && crate::catalog::is_a(&e.object, "oCharacter"))
-                .map(crate::Entity::sprite_bounds),
-        )
-        .collect();
-    let near_character = |entity: &crate::Entity| {
-        character_masks
-            .iter()
-            .any(|mask| crate::world_events::mask_distance(entity.sprite_bounds(), *mask) < 90.)
-    };
     match game.world.area {
         Area::Mines => {
             if let Some(entity) = game
@@ -600,9 +625,13 @@ pub(crate) fn idol_pickup(game: &mut Game, id: u64) {
             if game.flags.contains("cemetery") || game.flags.contains("cemetary") {
                 spawn_ghost(game);
             }
-            for entity in &mut game.world.entities {
-                if entity.alive && entity.object == "oTrapBlock" && near_character(entity) {
-                    entity.data.insert("dying".into(), 1.0);
+            for id in idol_trap_receivers(game) {
+                let dist = idol_trap_distance_to_character(game, id);
+                if let Some(entity) = game.world.entity_mut(id) {
+                    entity.data.insert("dist".into(), dist);
+                    if dist < 90.0 {
+                        entity.data.insert("dying".into(), 1.0);
+                    }
                 }
             }
         }
@@ -636,20 +665,19 @@ pub(crate) fn idol_pickup(game: &mut Game, id: u64) {
                 }
                 crate::camera_shake::request(game, 20.0);
             } else {
-                let ids: Vec<_> = game
-                    .world
-                    .entities
-                    .iter()
-                    .filter(|entity| {
-                        entity.alive && entity.object == "oTrapBlock" && near_character(entity)
-                    })
-                    .map(|entity| entity.id)
-                    .collect();
-                for id in ids {
-                    crate::items::explosives::destroy_solid_self(game, id);
+                for id in idol_trap_receivers(game) {
+                    let dist = idol_trap_distance_to_character(game, id);
+                    let Some(entity) = game.world.entity_mut(id) else {
+                        continue;
+                    };
+                    let origin = entity.pos;
+                    entity.data.insert("dist".into(), dist);
+                    if dist < 90.0 {
+                        crate::items::explosives::destroy_solid_self(game, id);
+                    }
+                    game.sound("sndThump", origin);
+                    crate::camera_shake::request(game, 10.0);
                 }
-                game.sound("sndThump", pos);
-                crate::camera_shake::request(game, 10.0);
             }
         }
         Area::Ice => {}
@@ -1913,7 +1941,7 @@ mod tests {
                     down: true,
                     ..Default::default()
                 });
-                let player_mask = game.player.sprite_bounds();
+                let player_mask = game.player.collision_mask().point_bounds();
                 let right_edge = player_mask.x + player_mask.w - 1.;
                 let block = game.spawn("oTrapBlock", Vec2::new(p.x + 32., p.y - 8.));
                 game.world
@@ -2078,3 +2106,7 @@ mod tests {
         assert_eq!(game.data["favor"], -14.0);
     }
 }
+
+#[cfg(test)]
+#[path = "idol_trap_character_query_tests.rs"]
+mod idol_trap_character_query_tests;
