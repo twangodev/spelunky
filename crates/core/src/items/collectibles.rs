@@ -655,9 +655,9 @@ fn open_chest(game: &mut Game, id: u64, pos: Vec2) {
         let vx = game.rng.range(4) as f64 - game.rng.range(4) as f64;
         let bomb = spawn(game, "oBomb", pos, Vec2::new(vx, -2.));
         let e = game.world.entity_mut(bomb).unwrap();
-        // Chest traps bypass ordinary arming: no Alarm0 delay or slow flash.
+        // Player Step613–623 overrides art and Alarm1, retaining Item Create
+        // armed=false. Ordinary arming would also enable shopkeeper warnings.
         super::explosives::init_entity(e);
-        e.data.insert("armed".into(), 1.);
         e.set_sprite("sBombArmed");
         e.set_image_speed(1.);
         e.alarms[1] = 40;
@@ -989,7 +989,7 @@ mod tests {
             .find(|e| e.alive && e.object == "oBomb")
             .unwrap();
         let bomb_id = bomb.id;
-        assert_eq!(bomb.value("armed"), 1.);
+        assert_eq!(bomb.value("armed"), 0.);
         assert_eq!(bomb.timer, 40);
         assert_eq!(bomb.alarms[0], -1);
         assert_eq!(bomb.alarms[1], 40);
