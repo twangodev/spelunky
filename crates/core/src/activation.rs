@@ -2,7 +2,7 @@
 //!
 //! Deactivated instances do not participate in alarms, steps, or collision
 //! queries. Temporarily removing them enforces that rule across every system.
-use crate::{Area, Entity, Game, Rect, Tile, VIEW_HEIGHT, VIEW_WIDTH, Vec2, catalog};
+use crate::{Area, Entity, Game, Rect, Tile, Vec2, catalog};
 use std::collections::BTreeMap;
 
 const ALWAYS_ACTIVE: &[&str] = &[
@@ -32,11 +32,12 @@ pub struct Regions {
 
 impl Regions {
     pub fn for_game(game: &Game) -> Self {
+        let view = game.simulation_view_rect();
         let mut rectangles = vec![Rect::new(
-            game.camera.x - 96.0,
-            game.camera.y - 96.0,
-            VIEW_WIDTH + 192.0,
-            VIEW_HEIGHT + 192.0,
+            view.x - 96.0,
+            view.y - 96.0,
+            view.w + 192.0,
+            view.h + 192.0,
         )];
         // These last two arguments really are x+16 and y+16 in the source,
         // rather than 32 and 32. Preserve the original behavior.

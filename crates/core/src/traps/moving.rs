@@ -40,10 +40,11 @@ pub(super) fn pre_tick(game: &mut Game) {
                 move_solid(game, &mut entity, velocity, &mut carried_horizontally);
             } else {
                 // Source oMoveableSolid is a separate global gravity pass.
-                let active = entity.pos.x > game.camera.x - 16.0
-                    && entity.pos.x < game.camera.x + 320.0
-                    && entity.pos.y > game.camera.y - 16.0
-                    && entity.pos.y < game.camera.y + 240.0;
+                let view = game.simulation_view_rect();
+                let active = entity.pos.x > view.x - 16.0
+                    && entity.pos.x < view.x + view.w
+                    && entity.pos.y > view.y - 16.0
+                    && entity.pos.y < view.y + view.h;
                 if active {
                     let gravity = entity.data.get("push_gravity").copied().unwrap_or(0.6);
                     entity.vel.y = (entity.vel.y + gravity).min(8.0);
@@ -583,10 +584,11 @@ fn touches_lava(game: &Game, rect: Rect) -> bool {
 }
 
 fn smash(game: &mut Game, entity: &mut Entity) {
-    let active = entity.pos.x > game.camera.x - 16.0
-        && entity.pos.x < game.camera.x + 336.0
-        && entity.pos.y > game.camera.y - 16.0
-        && entity.pos.y < game.camera.y + 256.0;
+    let view = game.simulation_view_rect();
+    let active = entity.pos.x > view.x - 16.0
+        && entity.pos.x < view.x + (view.w + 16.0)
+        && entity.pos.y > view.y - 16.0
+        && entity.pos.y < view.y + (view.h + 16.0);
     if entity.state == 99 && active {
         entity.data.insert("xv".into(), 0.0);
         entity.data.insert("yv".into(), 0.0);
@@ -1135,10 +1137,11 @@ fn dark_fall(game: &mut Game, entity: &mut Entity) {
 }
 
 fn spring(game: &mut Game, entity: &mut Entity) {
-    let active = entity.pos.x > game.camera.x - 16.0
-        && entity.pos.x < game.camera.x + 320.0
-        && entity.pos.y > game.camera.y - 16.0
-        && entity.pos.y < game.camera.y + 240.0;
+    let view = game.simulation_view_rect();
+    let active = entity.pos.x > view.x - 16.0
+        && entity.pos.x < view.x + view.w
+        && entity.pos.y > view.y - 16.0
+        && entity.pos.y < view.y + view.h;
     if active {
         entity.timer = entity.timer.saturating_sub(1);
     }

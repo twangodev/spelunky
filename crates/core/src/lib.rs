@@ -19,6 +19,9 @@ pub mod progression;
 pub mod traps;
 pub use model::*;
 
+pub mod simulation_view;
+pub use simulation_view::{SimulationView, SimulationViewError, SimulationViewExtent};
+
 pub mod replay;
 
 pub mod world_events;

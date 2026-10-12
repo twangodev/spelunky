@@ -39,11 +39,12 @@ pub(super) fn gravity(e: &Entity, fallback: f64) -> f64 {
 }
 
 pub(super) fn tick(game: &mut Game, e: &mut Entity) {
+    let view = game.simulation_view_rect();
     if !calls_parent(&e.object)
-        || e.pos.x <= game.camera.x - 20.0
-        || e.pos.x >= game.camera.x + VIEW_WIDTH + 4.0
-        || e.pos.y <= game.camera.y - 20.0
-        || e.pos.y >= game.camera.y + VIEW_HEIGHT + 4.0
+        || e.pos.x <= view.x - 20.0
+        || e.pos.x >= view.x + view.w + 4.0
+        || e.pos.y <= view.y - 20.0
+        || e.pos.y >= view.y + view.h + 4.0
     {
         return;
     }

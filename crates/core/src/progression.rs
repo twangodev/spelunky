@@ -413,13 +413,14 @@ fn ghost(game: &mut Game) {
         );
     }
     if elapsed > 150000. && !game.flags.contains("ghost_exists") {
+        let view = game.simulation_view_rect();
         let x = if game.player.pos.x > game.world.width as f64 * 8. {
-            game.camera.x + VIEW_WIDTH + 8.
+            view.x + view.w + 8.
         } else {
-            game.camera.x - 32.
+            view.x - 32.
         };
         game.world
-            .spawn("oGhost", Vec2::new(x, game.camera.y + VIEW_HEIGHT / 2.));
+            .spawn("oGhost", Vec2::new(x, view.y + (view.h / 2.).floor()));
         game.flags.insert("ghost_exists".into());
     }
 }

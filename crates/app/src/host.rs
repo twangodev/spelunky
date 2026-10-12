@@ -1354,14 +1354,20 @@ impl App {
                 }
             }
         }
-        if self.screen == Screen::Playing && self.focused && !self.occluded {
+        if self.screen == Screen::Playing
+            && render_clock_running(self.screen, self.focused, self.occluded, self.game.as_ref())
+        {
             let frame = self.timing.advance(host_frame);
+            let gameplay_view = self.viewport();
             for _ in 0..frame.ticks {
                 let mut input = self.input.take_tick();
                 apply_cinematic_start(&mut input, &mut self.cinematic_action);
                 if let Some(game) = &mut self.game {
                     let begin_message = self.source_message.clone();
                     game.down_to_run = self.store.data.settings.down_to_run;
+                    gameplay_view
+                        .apply_gameplay_extent(game)
+                        .expect("renderer logical viewport is a valid gameplay extent");
                     consume_source_music(&mut self.audio, &mut self.source_music, game);
                     game.step(&input);
                     consume_source_music(&mut self.audio, &mut self.source_music, game);
@@ -1433,17 +1439,16 @@ impl App {
             }
         }
         if self.screen == Screen::Finished
-            && self.focused
-            && !self.occluded
-            && self
-                .game
-                .as_ref()
-                .is_some_and(|game| game.state == RunState::Dead)
+            && render_clock_running(self.screen, self.focused, self.occluded, self.game.as_ref())
         {
             let frame = self.timing.advance(host_frame);
+            let gameplay_view = self.viewport();
             for _ in 0..frame.ticks {
                 if let Some(game) = &mut self.game {
                     game.down_to_run = self.store.data.settings.down_to_run;
+                    gameplay_view
+                        .apply_gameplay_extent(game)
+                        .expect("renderer logical viewport is a valid gameplay extent");
                     let input = self.input.take_tick();
                     consume_source_music(&mut self.audio, &mut self.source_music, game);
                     game.step(&spelunky_core::InputFrame {
@@ -5751,6 +5756,200 @@ mod tests {
             hash,
             "viewport diagnostics changed simulation"
         );
+    }
+    // Exercise the actual host admission predicate, clock, physical edge queue
+    // and viewport setter without creating a window, GPU or hardware provider.
+    // This fixture covers the tick boundary; it does not call App::update.
+    fn adaptive_tick_boundary(
+        timing: &mut HostTiming,
+        input: &mut InputState,
+        game: &mut Game,
+        screen: Screen,
+        focused: bool,
+        occluded: bool,
+        now: f64,
+        view: Viewport,
+    ) -> Vec<spelunky_core::InputFrame> {
+        let frame = timing.begin_frame(now);
+        let mut admitted = Vec::new();
+        if render_clock_running(screen, focused, occluded, Some(game)) {
+            for _ in 0..timing.advance(frame).ticks {
+                view.apply_gameplay_extent(game).unwrap();
+                let input = input.take_tick();
+                let input = if screen == Screen::Finished {
+                    spelunky_core::InputFrame {
+                        music_pressed: input.music_pressed,
+                        ..Default::default()
+                    }
+                } else {
+                    input
+                };
+                game.step(&input);
+                admitted.push(input);
+            }
+        }
+        admitted
+    }
+
+    #[test]
+    fn adaptive_resize_is_admitted_only_at_tick_and_retains_short_keyboard_edges() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        game.load_custom(&spelunky_core::level::Level::default(), "resize", "");
+        let mut expected = game.clone();
+        let initial = serde_json::to_vec(&game).unwrap();
+        let mut input = InputState::default();
+        let mut timing = HostTiming::default();
+        timing.reset(0.0);
+        input.key(KeyCode::KeyZ, true, false);
+        input.key(KeyCode::KeyZ, false, false);
+        let view = Viewport::from_surface(1920, 1080);
+        for (now, resized) in [
+            (0.001, Viewport::from_surface(600, 1200)),
+            (0.002, view),
+            (0.003, Viewport::from_surface(3840, 2160)),
+        ] {
+            assert!(
+                adaptive_tick_boundary(
+                    &mut timing,
+                    &mut input,
+                    &mut game,
+                    Screen::Playing,
+                    true,
+                    false,
+                    now,
+                    resized
+                )
+                .is_empty()
+            );
+            assert_eq!(
+                serde_json::to_vec(&game).unwrap(),
+                initial,
+                "resize or a presentation-only callback advanced or mutated the game"
+            );
+        }
+        let admitted = adaptive_tick_boundary(
+            &mut timing,
+            &mut input,
+            &mut game,
+            Screen::Playing,
+            true,
+            false,
+            0.04,
+            view,
+        );
+        assert_eq!(admitted.len(), 1);
+        assert!(admitted[0].jump_pressed && admitted[0].jump_released && !admitted[0].jump);
+        expected
+            .set_simulation_view_extent(f64::from(view.width), f64::from(view.height))
+            .unwrap();
+        expected.step(&admitted[0]);
+        assert_eq!(game.state_hash(), expected.state_hash());
+        assert_eq!(game.tick, 1);
+        let following = adaptive_tick_boundary(
+            &mut timing,
+            &mut input,
+            &mut game,
+            Screen::Playing,
+            true,
+            false,
+            0.08,
+            view,
+        );
+        assert_eq!(following.len(), 1);
+        assert!(!following[0].jump_pressed && !following[0].jump_released);
+        expected.step(&following[0]);
+        assert_eq!(game.state_hash(), expected.state_hash());
+        assert_eq!(game.rng.clone().next_u64(), expected.rng.clone().next_u64());
+        assert_eq!(
+            serde_json::to_vec(&game.events).unwrap(),
+            serde_json::to_vec(&expected.events).unwrap()
+        );
+    }
+
+    #[test]
+    fn adaptive_resize_during_pause_focus_or_occlusion_waits_for_resume_and_dead_tick() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        game.load_custom(&spelunky_core::level::Level::default(), "resize-paused", "");
+        let mut input = InputState::default();
+        let mut timing = HostTiming::default();
+        timing.reset(0.0);
+        let view = Viewport::from_surface(600, 1200);
+        let before = serde_json::to_vec(&game).unwrap();
+        for (screen, focused, occluded, now) in [
+            (Screen::Pause, true, false, 1.0),
+            (Screen::Playing, false, false, 2.0),
+            (Screen::Playing, true, true, 3.0),
+        ] {
+            assert!(
+                adaptive_tick_boundary(
+                    &mut timing,
+                    &mut input,
+                    &mut game,
+                    screen,
+                    focused,
+                    occluded,
+                    now,
+                    view
+                )
+                .is_empty()
+            );
+            assert_eq!(serde_json::to_vec(&game).unwrap(), before);
+        }
+        // Existing focus-loss/reset policy deliberately retires old input.
+        input.key(KeyCode::KeyX, true, false);
+        input.clear();
+        timing.reset(3.0);
+        assert!(
+            adaptive_tick_boundary(
+                &mut timing,
+                &mut input,
+                &mut game,
+                Screen::Playing,
+                true,
+                false,
+                3.001,
+                view
+            )
+            .is_empty()
+        );
+        assert_eq!(serde_json::to_vec(&game).unwrap(), before);
+        input.key(KeyCode::KeyZ, true, false);
+        let admitted = adaptive_tick_boundary(
+            &mut timing,
+            &mut input,
+            &mut game,
+            Screen::Playing,
+            true,
+            false,
+            3.04,
+            view,
+        );
+        assert_eq!(admitted.len(), 1);
+        assert!(admitted[0].jump_pressed && !admitted[0].attack_pressed);
+        assert_eq!(game.simulation_view_rect().h, f64::from(view.height));
+        assert_eq!(game.tick, 1);
+        // The existing Finished branch still advances only the Dead world and
+        // deliberately masks gameplay actions; its extent matches Playing.
+        game.state = RunState::Dead;
+        game.player.health = 0;
+        let mut expected = game.clone();
+        input.key(KeyCode::KeyB, true, false);
+        let admitted = adaptive_tick_boundary(
+            &mut timing,
+            &mut input,
+            &mut game,
+            Screen::Finished,
+            true,
+            false,
+            3.08,
+            view,
+        );
+        assert_eq!(admitted.len(), 1);
+        assert_eq!(admitted[0], spelunky_core::InputFrame::default());
+        expected.step(&spelunky_core::InputFrame::default());
+        assert_eq!(game.state_hash(), expected.state_hash());
+        assert_eq!(game.tick, 2);
+        assert_eq!(game.simulation_view_rect().h, f64::from(view.height));
     }
     #[test]
     fn canonical_viewport_keeps_small_room_authored_camera_in_diagnostics_and_scene() {

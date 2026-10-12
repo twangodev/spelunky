@@ -1,5 +1,7 @@
 use serde_json::{Value, json};
-use spelunky_core::{InputFrame, Rng, RngAlgorithm, RulesPreset, World, generation, level, replay};
+#[cfg(test)]
+use spelunky_core::InputFrame;
+use spelunky_core::{Rng, RngAlgorithm, RulesPreset, World, generation, level, replay};
 use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
@@ -7,8 +9,8 @@ use std::{
     process::ExitCode,
 };
 
-const HELP: &str = "Usage: spelunky-tools inventory\n       spelunky-tools generate <seed:u32> <level:1..16> [special]\n       spelunky-tools replay <seed:u32> <ticks:0..100000> [classic|assisted]\n       spelunky-tools replay-legacy <seed:u64> <ticks:0..100000> [classic|assisted]\n       spelunky-tools validate-level <path>\n       spelunky-tools replay-file <path>";
-const MAX_REPLAY_BYTES: u64 = 64 * 1024 * 1024;
+const HELP: &str = "Usage: spelunky-tools inventory\n       spelunky-tools generate <seed:u32> <level:1..16> [special]\n       spelunky-tools replay <seed:u32> <ticks:0..100000> [classic|assisted]\n       spelunky-tools replay-legacy <seed:u64> <ticks:0..100000> [classic|assisted]\n       spelunky-tools replay-adaptive <seed:u32> <ticks:0..100000> <logical-width> <logical-height> [classic|assisted]\n       spelunky-tools validate-level <path>\n       spelunky-tools replay-file <path>";
+const MAX_REPLAY_BYTES: u64 = replay::MAX_RECORDING_BYTES as u64;
 
 fn main() -> ExitCode {
     match execute(env::args().skip(1).collect()) {
@@ -90,16 +92,29 @@ fn execute(args: Vec<String>) -> Result<String, String> {
                 json!({"valid":true,"rows":level::LEVEL_HEIGHT,"columns":level::LEVEL_WIDTH,"author":custom.author,"music":custom.music,"life":custom.starting_life,"bombs":custom.starting_bombs,"ropes":custom.starting_ropes,"next_level":custom.next_level,"exit_targets":custom.exit_targets.len(),"signs":custom.signs.len(),"entities":entity_counts(&world)}),
             )
         }
+        Some("replay-adaptive") if (5..=6).contains(&args.len()) => {
+            let seed = number::<u32>(&args[1], "canonical seed (0..4294967295)")?;
+            let ticks = number::<u32>(&args[2], "ticks")?;
+            let width = args[3]
+                .parse::<f64>()
+                .map_err(|_| "Invalid logical width")?;
+            let height = args[4]
+                .parse::<f64>()
+                .map_err(|_| "Invalid logical height")?;
+            let view = replay::ReplayViewTimeline::fixed(width, height)?;
+            let rules = parse_rules(args.get(5).map(String::as_str).unwrap_or("classic"))?;
+            let result = replay::try_scripted_with_view_timeline(
+                u64::from(seed),
+                ticks,
+                rules,
+                RngAlgorithm::Gm8Lcg32V1,
+                &view,
+            )?;
+            print_json(serde_json::to_value(result).map_err(|e| e.to_string())?)
+        }
         Some("replay-file") if args.len() == 2 => {
             let text = read_text(Path::new(&args[1]), MAX_REPLAY_BYTES)?;
-            let parsed = parse_replay(&text)?;
-            let result = replay::from_frames_with_simulation_version(
-                parsed.seed,
-                parsed.rules,
-                &parsed.frames,
-                parsed.algorithm,
-                parsed.simulation_version,
-            )?;
+            let result = replay::from_recording_json(&text)?;
             print_json(serde_json::to_value(result).map_err(|e| e.to_string())?)
         }
         Some("--help" | "-h" | "help") if args.len() == 1 => Ok(HELP.into()),
@@ -189,117 +204,136 @@ fn ascii(world: &World) -> String {
         .join("\n")
 }
 
-#[derive(Debug)]
-struct ParsedReplay {
-    simulation_version: u32,
-    seed: u64,
-    rules: RulesPreset,
-    algorithm: RngAlgorithm,
-    frames: Vec<InputFrame>,
-}
-
-fn parse_replay(text: &str) -> Result<ParsedReplay, String> {
-    let value: Value =
-        serde_json::from_str(text).map_err(|e| format!("Invalid replay JSON: {e}"))?;
-    let object = value.as_object().ok_or("Replay must be an object")?;
-    if object.keys().any(|k| {
-        !matches!(
-            k.as_str(),
-            "seed" | "rules" | "frames" | "version" | "algorithm" | "simulation_version"
-        )
-    }) {
-        return Err("Unknown replay property; expected seed, rules, frames, version, algorithm, and simulation_version".into());
-    }
-    let (algorithm, seed, simulation_version) = match (
-        object.get("version"),
-        object.get("algorithm"),
-        object.get("simulation_version"),
-    ) {
-        (None, None, None) => {
-            // Old replay JSON was numeric-u64 and used SplitMix before generation.
-            let seed = object
-                .get("seed")
-                .and_then(Value::as_u64)
-                .ok_or("Historical replay seed must be an unsigned integer")?;
-            (
-                RngAlgorithm::LegacySplitMix64V1,
-                seed,
-                spelunky_core::HISTORICAL_SIMULATION_VERSION,
-            )
-        }
-        (Some(version), Some(algorithm), Some(simulation_version)) => {
-            if version.as_u64() != Some(u64::from(replay::REPLAY_VERSION)) {
-                return Err("Unsupported replay version; expected version 1".into());
-            }
-            let algorithm: RngAlgorithm = serde_json::from_value(algorithm.clone())
-                .map_err(|error| format!("Invalid replay algorithm: {error}"))?;
-            let simulation_version = simulation_version
-                .as_u64()
-                .and_then(|version| u32::try_from(version).ok())
-                .ok_or("Replay simulation version must be an unsigned 32-bit integer")?;
-            replay::validate_simulation_version(algorithm, simulation_version)?;
-            let seed_text = object
-                .get("seed")
-                .and_then(Value::as_str)
-                .ok_or("Versioned replay seed must be a decimal string")?;
-            if seed_text.is_empty() || !seed_text.bytes().all(|b| b.is_ascii_digit()) {
-                return Err("Versioned replay seed must be an unsigned decimal string".into());
-            }
-            let seed = number::<u64>(seed_text, "replay seed")?;
-            if algorithm == RngAlgorithm::Gm8Lcg32V1 {
-                Rng::try_canonical(seed).map_err(|error| error.to_string())?;
-            }
-            (algorithm, seed, simulation_version)
-        }
-        _ => {
-            return Err(
-                "Versioned replays require version, algorithm, and simulation_version".into(),
-            );
-        }
-    };
-    let rules = parse_rules(
-        object
-            .get("rules")
-            .and_then(Value::as_str)
-            .ok_or("Replay rules must be a string")?,
-    )?;
-    let frames = object
-        .get("frames")
-        .and_then(Value::as_array)
-        .ok_or("Replay frames must be an array")?;
-    if frames.len() > replay::MAX_REPLAY_TICKS as usize {
-        return Err("Replay exceeds the 100000 tick limit".into());
-    }
-    let defaults = serde_json::to_value(InputFrame::default()).map_err(|e| e.to_string())?;
-    let mut parsed = Vec::with_capacity(frames.len());
-    for (i, frame) in frames.iter().enumerate() {
-        let mut merged = defaults.clone();
-        let fields = frame
-            .as_object()
-            .ok_or_else(|| format!("Frame {i} must be an object"))?;
-        for (key, value) in fields {
-            if merged.get(key).is_none() {
-                return Err(format!("Frame {i} has unknown input {key}"));
-            }
-            if !value.is_boolean() {
-                return Err(format!("Frame {i} input {key} must be boolean"));
-            }
-            merged[key] = value.clone();
-        }
-        parsed.push(serde_json::from_value(merged).map_err(|e| format!("Invalid frame {i}: {e}"))?);
-    }
-    Ok(ParsedReplay {
-        simulation_version,
-        seed,
-        rules,
-        algorithm,
-        frames: parsed,
-    })
+#[cfg(test)]
+fn parse_replay(text: &str) -> Result<replay::ReplayRecording, String> {
+    replay::parse_recording_json(text)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn adaptive_recording() -> Value {
+        json!({"version":2,"simulation_version":spelunky_core::SIMULATION_VERSION,
+            "algorithm":"gm8_lcg32_v1","seed":"7","rules":"classic",
+            "adaptive_view":{"policy":"gameplay_logical_extent_v1",
+                "initial":{"width":480,"height":240},
+                "changes":[{"before_frame":2,"extent":{"width":320,"height":640}}]},
+            "frames":[{}, {"right":true}, {"jump_pressed":true,"jump":true}]})
+    }
+
+    #[test]
+    fn adaptive_recording_round_trip_and_cli_preserve_explicit_resize_identity() {
+        let recording = adaptive_recording();
+        let text = serde_json::to_string(&recording).unwrap();
+        let parsed = parse_replay(&text).unwrap();
+        let view = parsed.adaptive_view.as_ref().unwrap();
+        assert_eq!(view.initial.dimensions(), [480.0, 240.0]);
+        assert_eq!(view.changes[0].before_frame, 2);
+        assert_eq!(view.changes[0].extent.dimensions(), [320.0, 640.0]);
+        assert_eq!(parsed.frames.len(), 3);
+        let result = replay::from_frames_with_view_timeline(
+            parsed.seed,
+            parsed.rules,
+            &parsed.frames,
+            parsed.algorithm,
+            parsed.simulation_version,
+            view,
+        )
+        .unwrap();
+        let mut manual = spelunky_core::Game::new(7, RulesPreset::Classic);
+        for (index, input) in parsed.frames.iter().enumerate() {
+            let (width, height) = if index < 2 {
+                (480.0, 240.0)
+            } else {
+                (320.0, 640.0)
+            };
+            manual.set_simulation_view_extent(width, height).unwrap();
+            manual.step(input);
+        }
+        assert_eq!(result.hash, format!("{:016x}", manual.state_hash()));
+        assert_eq!(
+            serde_json::to_value(&result).unwrap()["adaptive_view"],
+            serde_json::to_value(view).unwrap()
+        );
+        let output = execute(
+            vec!["replay-adaptive", "7", "0", "480", "240"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        )
+        .unwrap();
+        let output: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(output["version"], 2);
+        assert_eq!(
+            output["adaptive_view"]["initial"],
+            json!({"width":480.0,"height":240.0})
+        );
+        let original = execute(
+            vec!["replay", "7", "0"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        )
+        .unwrap();
+        let original: Value = serde_json::from_str(&original).unwrap();
+        assert_eq!(original["version"], 1);
+        assert!(original.get("adaptive_view").is_none());
+    }
+
+    #[test]
+    fn adaptive_recording_requires_version_two_valid_geometry_and_ordered_changes() {
+        let record = adaptive_recording();
+        for version in [json!(1), json!(3), Value::Null] {
+            let mut invalid = record.clone();
+            invalid["version"] = version;
+            assert!(parse_replay(&invalid.to_string()).is_err());
+        }
+        let mut missing = record.clone();
+        missing.as_object_mut().unwrap().remove("adaptive_view");
+        assert!(parse_replay(&missing.to_string()).is_err());
+        for view in [
+            Value::Null,
+            json!({}),
+            json!({"policy":"other","initial":{"width":480,"height":240}}),
+            json!({"policy":"gameplay_logical_extent_v1","initial":{"width":319,"height":240}}),
+            json!({"policy":"gameplay_logical_extent_v1","initial":{"width":480,"height":240},"extra":true}),
+        ] {
+            let mut invalid = record.clone();
+            invalid["adaptive_view"] = view;
+            assert!(parse_replay(&invalid.to_string()).is_err());
+        }
+        for changes in [vec![0], vec![3], vec![1, 1], vec![2, 1]] {
+            let mut invalid = record.clone();
+            invalid["adaptive_view"]["changes"] = Value::Array(
+                changes
+                    .into_iter()
+                    .map(|frame| json!({"before_frame":frame,"extent":{"width":480,"height":240}}))
+                    .collect(),
+            );
+            assert!(parse_replay(&invalid.to_string()).is_err());
+        }
+        assert!(
+            parse_replay(r#"{"seed":7,"rules":"classic","frames":[],"adaptive_view":null}"#)
+                .is_err()
+        );
+        for dimensions in [
+            ("NaN", "240"),
+            ("480", "inf"),
+            ("319", "240"),
+            ("480", "239"),
+        ] {
+            assert!(
+                execute(
+                    vec!["replay-adaptive", "7", "0", dimensions.0, dimensions.1]
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect()
+                )
+                .is_err()
+            );
+        }
+    }
+
     #[test]
     fn replay_file_defaults_only_missing_input_fields() {
         let parsed = parse_replay(

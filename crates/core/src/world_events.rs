@@ -1,6 +1,8 @@
 //! Source world objects and visual effects that have no item/enemy/trap owner.
 //! All animation rates below are frames per original 30 Hz simulation tick.
-use crate::{Entity, Game, GameEvent, InputFrame, Rect, VIEW_HEIGHT, VIEW_WIDTH, Vec2, catalog};
+use crate::{Entity, Game, GameEvent, InputFrame, Rect, Vec2, catalog};
+#[cfg(test)]
+use crate::{VIEW_HEIGHT, VIEW_WIDTH};
 
 /// GameMaker's distance_to_object measures between inclusive bounding boxes.
 pub(crate) fn mask_distance(a: Rect, b: Rect) -> f64 {
@@ -573,12 +575,13 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         }
         "oTempleFake" => temple::fake_step(game, &mut e),
         "oGrave" => {
+            let view = game.simulation_view_rect();
             // oGrave owns Step: no inherited Solid Step or clean-death gate.
             // Its source query uses the origin, not the sprite center.
-            if e.pos.x > game.camera.x - 20.0
-                && e.pos.x < game.camera.x + VIEW_WIDTH + 4.0
-                && e.pos.y > game.camera.y - 20.0
-                && e.pos.y < game.camera.y + VIEW_HEIGHT + 4.0
+            if e.pos.x > view.x - 20.0
+                && e.pos.x < view.x + view.w + 4.0
+                && e.pos.y > view.y - 20.0
+                && e.pos.y < view.y + view.h + 4.0
                 && !point_family(game, Vec2::new(e.pos.x, e.pos.y + 16.0), "oSolid")
             {
                 crate::items::explosives::destroy_solid_self(game, id);
@@ -884,15 +887,16 @@ pub(crate) fn initialize_tree(world: &mut crate::World, x: usize, y: usize) -> u
 }
 
 fn tree(game: &mut Game, e: &mut Entity, metadata: bool) {
+    let view = game.simulation_view_rect();
     let pos = if metadata {
         Vec2::new(e.pos.x - 8.0, e.pos.y - 8.0)
     } else {
         e.pos
     };
-    if pos.x <= game.camera.x - 16.0
-        || pos.x >= game.camera.x + VIEW_WIDTH + 16.0
-        || pos.y <= game.camera.y - 16.0
-        || pos.y >= game.camera.y + VIEW_HEIGHT + 16.0
+    if pos.x <= view.x - 16.0
+        || pos.x >= view.x + view.w + 16.0
+        || pos.y <= view.y - 16.0
+        || pos.y >= view.y + view.h + 16.0
         || point_family(game, Vec2::new(pos.x, pos.y + 16.0), "oSolid")
     {
         return;
@@ -939,6 +943,7 @@ pub(crate) fn initialize_leaves(world: &mut crate::World, id: u64, cemetery: boo
 }
 
 fn canopy(game: &mut Game, e: &mut Entity) {
+    let view = game.simulation_view_rect();
     let branch = e.object == "oTreeBranch";
     let support = |x| {
         let point = Vec2::new(x, e.pos.y);
@@ -950,10 +955,10 @@ fn canopy(game: &mut Game, e: &mut Entity) {
     if !branch && e.value("sprite_set") == 0.0 && left && right {
         e.set_sprite("sLeavesTop");
     }
-    let inside_view = e.pos.x > game.camera.x - 16.0
-        && e.pos.x < game.camera.x + VIEW_WIDTH + 16.0
-        && e.pos.y > game.camera.y - 16.0
-        && e.pos.y < game.camera.y + VIEW_HEIGHT + 16.0;
+    let inside_view = e.pos.x > view.x - 16.0
+        && e.pos.x < view.x + view.w + 16.0
+        && e.pos.y > view.y - 16.0
+        && e.pos.y < view.y + view.h + 16.0;
     if !inside_view {
         return;
     }
@@ -1364,10 +1369,11 @@ fn destroy_detritus(game: &mut Game, e: &mut Entity) {
 }
 
 fn outside(game: &Game, p: Vec2, margin: f64) -> bool {
-    p.x < game.camera.x - margin
-        || p.x > game.camera.x + VIEW_WIDTH + margin
-        || p.y < game.camera.y - margin
-        || p.y > game.camera.y + VIEW_HEIGHT + margin
+    let view = game.simulation_view_rect();
+    p.x < view.x - margin
+        || p.x > view.x + view.w + margin
+        || p.y < view.y - margin
+        || p.y > view.y + view.h + margin
 }
 
 /// The source's two dark-debris Outside Room events contain action_kill_object.
@@ -1626,11 +1632,12 @@ pub(crate) fn detritus(game: &mut Game, e: &mut Entity) {
 }
 
 fn fallen_decoration(game: &mut Game, e: &mut Entity) {
+    let view = game.simulation_view_rect();
     if e.object == "oFakeBones"
-        && !(e.pos.x > game.camera.x - 16.0
-            && e.pos.x < game.camera.x + VIEW_WIDTH
-            && e.pos.y > game.camera.y - 16.0
-            && e.pos.y < game.camera.y + VIEW_HEIGHT)
+        && !(e.pos.x > view.x - 16.0
+            && e.pos.x < view.x + view.w
+            && e.pos.y > view.y - 16.0
+            && e.pos.y < view.y + view.h)
     {
         return;
     }

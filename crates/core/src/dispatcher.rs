@@ -748,12 +748,8 @@ pub fn descendant_instances(game: &Game, parent: &str) -> Vec<Instance> {
 fn level_step(game: &mut Game) {
     crate::progression::level_music_step(game);
     crate::camera_shake::level_step(game);
-    let region = Rect::new(
-        game.camera.x - 96.0,
-        game.camera.y - 96.0,
-        crate::VIEW_WIDTH + 192.0,
-        crate::VIEW_HEIGHT + 192.0,
-    );
+    let view = game.simulation_view_rect();
+    let region = Rect::new(view.x - 96.0, view.y - 96.0, view.w + 192.0, view.h + 192.0);
     region_change(game, region, false, true);
     activate_region(game, region);
     for object in [
