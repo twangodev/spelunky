@@ -152,11 +152,6 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 410,
-          "module": "crates/core/src/enemies/temple.rs"
-        },
-        {
-          "kind": "explicit_object_match_arm",
           "line": 154,
           "module": "crates/core/src/enemies.rs"
         },
@@ -907,7 +902,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 294,
+          "line": 365,
           "module": "crates/core/src/enemies/npcs.rs"
         },
         {
@@ -2824,7 +2819,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1206,
+          "line": 1211,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {
@@ -4559,11 +4554,6 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 410,
-          "module": "crates/core/src/enemies/temple.rs"
-        },
-        {
-          "kind": "explicit_object_match_arm",
           "line": 143,
           "module": "crates/core/src/enemies.rs"
         },
@@ -4636,11 +4626,6 @@
           "kind": "enemy_dispatch_registration",
           "line": 26,
           "module": "crates/core/src/enemies/caves.rs"
-        },
-        {
-          "kind": "explicit_object_match_arm",
-          "line": 410,
-          "module": "crates/core/src/enemies/temple.rs"
         },
         {
           "kind": "explicit_object_match_arm",
@@ -5646,11 +5631,6 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 409,
-          "module": "crates/core/src/enemies/temple.rs"
-        },
-        {
-          "kind": "explicit_object_match_arm",
           "line": 147,
           "module": "crates/core/src/enemies.rs"
         },
@@ -6185,12 +6165,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1194,
+          "line": 1199,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1565,
+          "line": 1586,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {
@@ -9698,7 +9678,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 313,
+          "line": 384,
           "module": "crates/core/src/enemies/npcs.rs"
         },
         {
@@ -11747,11 +11727,6 @@
           "module": "crates/core/src/enemies/temple.rs"
         },
         {
-          "kind": "explicit_object_match_arm",
-          "line": 410,
-          "module": "crates/core/src/enemies/temple.rs"
-        },
-        {
           "kind": "enemy_dispatch_registration",
           "line": 12,
           "module": "crates/core/src/enemies/temple.rs"
@@ -12166,12 +12141,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1190,
+          "line": 1195,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1552,
+          "line": 1573,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {
@@ -12487,7 +12462,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1185,
+          "line": 1190,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {
@@ -13130,7 +13105,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1548,
+          "line": 1569,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {
@@ -13242,11 +13217,6 @@
           "kind": "enemy_dispatch_registration",
           "line": 17,
           "module": "crates/core/src/enemies/ice.rs"
-        },
-        {
-          "kind": "explicit_object_match_arm",
-          "line": 410,
-          "module": "crates/core/src/enemies/temple.rs"
         },
         {
           "kind": "explicit_object_match_arm",
