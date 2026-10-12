@@ -137,7 +137,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1159,
+          "line": 1165,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {
@@ -243,7 +243,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1163,
+          "line": 1169,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {
@@ -2829,7 +2829,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1234,
+          "line": 1240,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {
@@ -6170,17 +6170,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1183,
+          "line": 1189,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1222,
+          "line": 1228,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1609,
+          "line": 1615,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {
@@ -12156,17 +12156,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1179,
+          "line": 1185,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1218,
+          "line": 1224,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1596,
+          "line": 1602,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {
@@ -12482,7 +12482,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1213,
+          "line": 1219,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {
@@ -13120,12 +13120,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1151,
+          "line": 1157,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1592,
+          "line": 1598,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {
@@ -13230,7 +13230,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1155,
+          "line": 1161,
           "module": "crates/core/src/enemies/ice.rs"
         },
         {

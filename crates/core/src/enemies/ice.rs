@@ -906,6 +906,7 @@ fn boss(game: &mut Game, e: &mut Entity) {
     if e.health < 1 && e.state != 99 {
         enter(e, 99);
         e.set_sprite("sAlienBossDie");
+        e.data.insert("depth".into(), 101.0);
         for _ in 0..4 {
             let name = match game.rng.range(3) {
                 0 => "oEmeraldBig",
@@ -944,16 +945,15 @@ fn boss(game: &mut Game, e: &mut Entity) {
     if super::body_overlaps_solid(&game.world, e) {
         e.pos.y -= 2.0;
     }
-    if e.sprite != "sAlienBossHurt" {
-        e.set_image_speed(0.25);
-    }
-    if e.state == 99 {
-        return;
-    }
-    let recovered = e.value("psychic_recover") == 0.0;
-    counter(e, "psychic_recover");
-    if recovered
-        && distance_to_player(game, e) < 96.0
+    // Source computes this scratch distance after movement, even while DEAD.
+    let distance = distance_to_player(game, e);
+    e.data.insert("dist".into(), distance);
+    let recovering = e.value("psychic_recover") > 0.0;
+    if recovering {
+        e.data
+            .insert("psychic_recover".into(), e.value("psychic_recover") - 1.0);
+    } else if distance < 96.0
+        && e.state != 99
         && super::player_alive(game)
         && game.player.stun == 0
         && game.player.state != PlayerState::Stunned
@@ -969,6 +969,12 @@ fn boss(game: &mut Game, e: &mut Entity) {
         game.spawn("oPsychicWave", Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0));
         e.data.insert("psychic_recover".into(), 100.0);
         game.sound("sndPsychic", e.pos);
+    }
+    if e.sprite != "sAlienBossHurt" {
+        e.set_image_speed(0.25);
+    }
+    if e.state != 99 && e.sprite != "sAlienBossHurt" && matches!(e.facing, -1 | 1) {
+        e.set_sprite("sAlienBoss");
     }
 }
 
