@@ -14,6 +14,8 @@ def blank(text):
 def lexical_shadow(text, hide_literals=True):
  """Keep Rust punctuation/offsets while hiding comments and literal contents."""
  chars=list(text);i=0
+ raw_pattern=re.compile(r'(?:br|r)(#*)"')
+ character_pattern=re.compile(r"'(?:\\.|[^'\\\n])'")
  while i<len(text):
   start=i
   if text.startswith('//',i):
@@ -26,7 +28,7 @@ def lexical_shadow(text, hide_literals=True):
     else:i+=1
    assert depth==0, 'Unterminated Rust comment'
   else:
-   raw=re.match(r'(?:br|r)(#*)"',text[i:])
+   raw=raw_pattern.match(text,i)
    if raw:
     end=text.find('"'+raw.group(1),i+len(raw.group()))
     assert end>=0, 'Unterminated Rust raw string'
@@ -37,7 +39,7 @@ def lexical_shadow(text, hide_literals=True):
      if text[i]=='\\':i+=2
      elif text[i]=='"':i+=1;break
      else:i+=1
-   elif text[i]=="'" and (literal:=re.match(r"'(?:\\.|[^'\\\n])'",text[i:])):
+   elif text[i]=="'" and (literal:=character_pattern.match(text,i)):
     i+=len(literal.group())
    else:i+=1;continue
   if hide_literals or text.startswith(('//','/*'),start):
@@ -78,7 +80,7 @@ def function_line(text, name):
  production,_=production_text(text)
  shadow=lexical_shadow(production)
  definitions=list(re.finditer(
-  r'(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?fn\s+'+re.escape(name)+r'\s*\(',
+  r'(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?fn\s+'+re.escape(name)+r'\s*(?:<[^;{]*?>\s*)?\(',
   shadow,
  ))
  assert len(definitions)==1, f'Expected one production definition of {name}'
@@ -89,7 +91,7 @@ def function_body(text, name):
  production,_=production_text(text)
  shadow=lexical_shadow(production)
  definitions=list(re.finditer(
-  r'(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?fn\s+'+re.escape(name)+r'\s*\(',shadow,
+  r'(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?fn\s+'+re.escape(name)+r'\s*(?:<[^;{]*?>\s*)?\(',shadow,
  ))
  if not definitions:return None
  assert len(definitions)==1, f'Expected one production definition of {name}'
@@ -103,11 +105,81 @@ def function_body(text, name):
  return start,lexical_shadow(production[start:end],hide_literals=False)
 
 def registered_objects(text, name):
+ """Positive matches! eligibility patterns, never exclusion/body strings."""
  body=function_body(text,name)
  if body is None:return []
  start,code=body
- return [(m.group(1),text[:start+m.start()].count('\n')+1)
-         for m in re.finditer(r'"(o[A-Za-z0-9]+)"',code)]
+ shadow=lexical_shadow(code);result=[];guard_ranges=[]
+ for match in re.finditer(r'\bmatches\s*!\s*\(',shadow):
+  if any(first<=match.start()<last for first,last in guard_ranges):continue
+  # Conservatively reject negation, including !(matches!(...)). An excluded
+  # family is not positive registration evidence even inside a larger OR.
+  prefix=re.search(r'[!\s(]*$',shadow[:match.start()]).group()
+  negated='!' in prefix
+  opening=match.end()-1;depth=1;end=opening+1;comma=None
+  while end<len(shadow) and depth:
+   char=shadow[end]
+   if char in '([{':depth+=1
+   elif char in ')]}':depth-=1
+   elif char==',' and depth==1 and comma is None:comma=end
+   end+=1
+  if depth or comma is None:continue
+  guard=re.search(r'\bif\b',shadow[comma+1:end-1])
+  pattern_end=comma+1+guard.start() if guard else end-1
+  if guard:guard_ranges.append((pattern_end,end-1))
+  if negated:continue
+  pattern=code[comma+1:pattern_end]
+  if not re.fullmatch(r'\s*"o[A-Za-z0-9]+"(?:\s*\|\s*"o[A-Za-z0-9]+")*\s*,?\s*',pattern):continue
+  for literal in re.finditer(r'"(o[A-Za-z0-9]+)"',pattern):
+   offset=start+comma+1+literal.start()
+   result.append((literal.group(1),text[:offset].count('\n')+1))
+ return result
+
+def object_match_arms(text):
+ """Extract only string-alternative arm patterns from Rust match blocks.
+
+ Guards and body expressions may contain object literals, nested matches,
+ equality signs or blocks. Keep their syntax separate from the arm pattern.
+ This deliberately supports only simple object-string patterns; it does not
+ classify a function as behavior or resolve an arbitrary Rust expression.
+ """
+ production,_=production_text(text)
+ code=lexical_shadow(production,hide_literals=False)
+ shadow=lexical_shadow(production);result=[];guard_ranges=[]
+ for match in re.finditer(r'\bmatch\b',shadow):
+  if any(start<=match.start()<end for start,end in guard_ranges):continue
+  opening=shadow.find('{',match.end())
+  if opening<0:continue
+  # No match body can begin after a statement boundary.
+  if ';' in shadow[match.end():opening]:continue
+  braces=1;parens=brackets=angles=0;i=opening+1;start=i;after_arrow=False
+  while i<len(shadow) and braces:
+   char=shadow[i]
+   if braces==1 and parens==0 and brackets==0 and angles==0 and shadow.startswith('=>',i):
+    candidate=code[start:i]
+    candidate_shadow=shadow[start:i]
+    guard=re.search(r'\bif\b',candidate_shadow)
+    if guard:guard_ranges.append((start+guard.start(),i))
+    pattern=candidate[:guard.start()] if guard else candidate
+    if re.fullmatch(r'\s*"o[A-Za-z0-9]+"(?:\s*\|\s*"o[A-Za-z0-9]+")*\s*',pattern):
+     for literal in re.finditer(r'"(o[A-Za-z0-9]+)"',pattern):
+      result.append((literal.group(1),text[:start+literal.start()].count('\n')+1))
+    after_arrow=True;i+=2;continue
+   if char=='{':braces+=1
+   elif char=='}':
+    braces-=1
+    if braces==1 and after_arrow and parens==0 and brackets==0:
+     start=i+1;after_arrow=False
+   elif char=='(':parens+=1
+   elif char==')':parens-=1
+   elif char=='[':brackets+=1
+   elif char==']':brackets-=1
+   elif char=='<' and (angles or shadow[max(opening,i-2):i]=='::'):angles+=1
+   elif char=='>' and angles:angles-=1
+   elif char==',' and braces==1 and parens==0 and brackets==0 and angles==0:
+    start=i+1;after_arrow=False
+   i+=1
+ return sorted(set(result),key=lambda item:(item[1],item[0]))
 
 def inherited_rubble_line(text):
  production,_=production_text(text)
@@ -183,9 +255,8 @@ for p,source in sources.items():
  # mentions, spawn strings, comments and tests are intentionally excluded.
  dispatch_text=(without_function_dispatch(text,'source_type')
                 if p==root/'crates/core/src/items/explosives.rs' else text)
- for m in re.finditer(r'((?:"o[A-Za-z0-9]+"\s*\|\s*)*"o[A-Za-z0-9]+")\s*(?:if\s+[^\n=>]+)?\s*=>',dispatch_text):
-  for name in re.findall(r'"(o[A-Za-z0-9]+)"',m.group(1)):
-   handlers[name].append({'module':p.relative_to(root).as_posix(),'line':text[:m.start()].count('\n')+1,'kind':'explicit_object_match_arm'})
+ for name,line in object_match_arms(dispatch_text):
+  handlers[name].append({'module':p.relative_to(root).as_posix(),'line':line,'kind':'explicit_object_match_arm'})
  # Enemy matcher is the parent dispatch registration contract. An empty tick
  # arm remains partial, never parity verified.
  registrations=[]
@@ -214,9 +285,27 @@ equivalents = {
  'crates/core/src/items/weapons.rs': ['oShotgunBlastLeft','oShotgunBlastRight'],
  'crates/core/src/player.rs': ['oPlayer1','oParachute','oParaUsed','oCape','oTreeBranchTile'],
 }
+# These audited adapters are anchored to bodies, not the earlier handles
+# eligibility declarations or a portal producer's spawn-only expression.
+reviewed_functions={
+ ('crates/core/src/items.rs','oWhip'):('step_instance_with_motion','step_instance'),
+ ('crates/core/src/traps.rs','oGiantTikiHead'):'alarm',
+ ('crates/core/src/traps/curses.rs','oBall'):('step_instance_with_motion','step_instance'),
+ ('crates/core/src/traps/curses.rs','oBall2'):('step_instance_with_motion','step_instance'),
+ ('crates/core/src/traps/curses.rs','oChain'):'chain_step',
+ ('crates/core/src/traps/curses.rs','oChain2'):'chain_step',
+ ('crates/core/src/progression.rs','oXGold'):'complete',
+}
 for module,names in equivalents.items():
  text,_=production_text((root/module).read_text())
  for name in names:
+  if (module,name) in reviewed_functions:
+   functions=reviewed_functions[(module,name)]
+   if isinstance(functions,str):functions=(functions,)
+   present=[function for function in functions if function_body(text,function) is not None]
+   assert present, f'No reviewed behavior function in {module}: {functions}'
+   handlers[name].append({'module':module,'line':function_line(text,present[0]),'kind':'manually_reviewed_shared_behavior'})
+   continue
   token={'oGold':'gold_chunks','oGoldBig':'gold_nuggets','oFrozenCaveman':'frozen_caveman','oCape':'Cape','oParachute':'Parachute','oParaUsed':'Parachute','oTreeBranchTile':'oPlatform','oFinalBoss':'boss_exit'}.get(name,name)
   match=re.search(r'"'+token+r'"',text)
   if match:handlers[name].append({'module':module,'line':text[:match.start()].count('\n')+1,'kind':'manually_reviewed_shared_behavior'})
