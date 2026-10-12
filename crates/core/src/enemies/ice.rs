@@ -193,11 +193,11 @@ fn enter(e: &mut Entity, state: i32) {
 }
 
 fn distance_to_player(game: &Game, e: &Entity) -> f64 {
-    let a = e.sprite_bounds();
-    let b = game.player.sprite_bounds();
-    let dx = (b.x - a.x - a.w).max(a.x - b.x - b.w).max(0.0);
-    let dy = (b.y - a.y - a.h).max(a.y - b.y - b.h).max(0.0);
-    dx.hypot(dy)
+    // Native distance_to_object uses inclusive cached aggregate integer bounds.
+    crate::world_events::mask_distance(
+        e.collision_mask().point_bounds(),
+        game.player.collision_mask().point_bounds(),
+    )
 }
 
 pub(super) fn animation_end(game: &mut Game, e: &mut Entity, ended_sprite: &str) {
