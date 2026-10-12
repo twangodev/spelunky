@@ -506,9 +506,7 @@ impl CollisionMask {
             || (!horizontal_stretch && (self.scale.x.abs() != 1.0 || self.scale.y.abs() != 1.0))
             || !self.pos.x.is_finite()
             || !self.pos.y.is_finite()
-            || ((self.angle != 0.0 || self.pos.x.fract() != 0.0 || self.pos.y.fract() != 0.0)
-                && self.scale != Vec2::new(1.0, 1.0)
-                && !horizontal_stretch)
+            || (self.angle != 0.0 && self.scale != Vec2::new(1.0, 1.0) && !horizontal_stretch)
         {
             return None;
         }
@@ -557,8 +555,8 @@ impl CollisionMask {
     /// rectangle/precise pairs. Explicit shape-query precision is unchanged.
     /// Positive unit-scale rotations use canonical inverse pixel sampling.
     /// Source detectors' unrotated positive integral X stretches use the
-    /// canonical inverse scale sampler. Other nonunit scales, rotated mirrors
-    /// and fractional mirrors retain their bbox fallback.
+    /// canonical inverse scale sampler. Other nonunit scales and rotated mirrors retain their bbox fallback.
+    /// Unrotated unit mirrors also use canonical fractional origin placement.
     pub fn intersects_mask(&self, other: &Self) -> bool {
         if !(self.precise || self.rectangle) || !(other.precise || other.rectangle) {
             return self.bounds.intersects(other.bounds);
@@ -1359,8 +1357,130 @@ mod tests {
             Vec2::new(-1.0, 1.0),
             0.0,
         );
-        assert!(fractional_mirror.event_geometry().is_none());
+        assert_eq!(
+            fractional_mirror.event_geometry(),
+            Some((Rect::new(75.0, 75.0, 11.0, 9.0), Vec2::new(80.0, 80.0)))
+        );
+        assert!(!fractional_mirror.supports_precise_pixels());
         assert!(web.intersects(corner.bounds(), CollisionPrecision::BoundingBox));
+    }
+
+    #[test]
+    fn fractional_unit_mirror_native_bbox_origin_and_rectangle_samples() {
+        // Native PE4AA958/4AD1A0/48A4F0 proof963bfed2: independently rounded
+        // mirrored cached edges include the low-side pad; origin rounds alone.
+        for (x, left, right, origin, first_opaque, last_opaque) in [
+            (40.0, 33.0, 46.0, 40.0, 35, 46),
+            (40.25, 33.0, 46.0, 40.0, 35, 46),
+            (40.5, 34.0, 46.0, 40.0, 35, 46),
+            (40.75, 34.0, 47.0, 41.0, 36, 47),
+            (-40.0, -47.0, -34.0, -40.0, -45, -34),
+            (-40.25, -47.0, -34.0, -40.0, -45, -34),
+            (-40.5, -48.0, -34.0, -40.0, -45, -34),
+            (-40.75, -48.0, -35.0, -41.0, -46, -35),
+        ] {
+            let mask = instance_mask(
+                "oPlayer1",
+                "sStandLeft",
+                Vec2::new(x, 40.0),
+                0.0,
+                Vec2::new(-1.0, 1.0),
+                0.0,
+            );
+            assert!(
+                mask.event_geometry().is_some(),
+                "SOURCE_FRACTIONAL_MIRROR_BBOX {x}"
+            );
+            let (bounds, rounded_origin) = mask.event_geometry().unwrap();
+            assert_eq!(bounds, Rect::new(left, 32.0, right - left + 1.0, 16.0));
+            assert_eq!(rounded_origin, Vec2::new(origin, 40.0));
+            assert!(mask.contains(Vec2::new(left, 40.0), CollisionPrecision::BoundingBox));
+            assert!(!mask.contains(
+                Vec2::new(right + 1.0, 40.0),
+                CollisionPrecision::BoundingBox
+            ));
+            for world_x in (left as i32 - 1)..=(right as i32 + 1) {
+                assert_eq!(
+                    mask.event_pixel(world_x - origin as i32, 0, 0.0, 1.0),
+                    (first_opaque..=last_opaque).contains(&world_x),
+                    "{x}/{world_x}"
+                );
+            }
+        }
+        let both = instance_mask(
+            "oPlayer1",
+            "sStandLeft",
+            Vec2::new(40.5, -40.5),
+            0.0,
+            Vec2::new(-1.0, -1.0),
+            0.0,
+        );
+        assert_eq!(
+            both.event_geometry(),
+            Some((Rect::new(34.0, -50.0, 13.0, 19.0), Vec2::new(40.0, -40.0)))
+        );
+        assert!(!both.event_pixel(-6, -10, 0.0, 1.0));
+        assert!(both.event_pixel(-5, -7, 0.0, 1.0));
+    }
+
+    #[test]
+    fn controlled_fractional_mirrored_damsel_rejects_empty_web_corner() {
+        // Controlled exact values, not an ordinary-input timing witness.
+        // Source sDamselDieLR RECTANGLE frame0 occupies x99..111/y88..103.
+        // Web116,85 shares only(111,88): its source image(3,11) is transparent.
+        // Web114,85 reaches image(5,11), an opaque positive control.
+        for y in [96.05, 96.25, 96.5] {
+            let damsel = instance_mask(
+                "oDamsel",
+                "sDamselDieLR",
+                Vec2::new(104.0, y),
+                0.0,
+                Vec2::new(-1.0, 1.0),
+                0.0,
+            );
+            let empty = instance_mask(
+                "oWebBall",
+                "sWebBall",
+                Vec2::new(116.0, 85.0),
+                0.0,
+                Vec2::new(1.0, 1.0),
+                0.0,
+            );
+            let opaque = instance_mask(
+                "oWebBall",
+                "sWebBall",
+                Vec2::new(114.0, 85.0),
+                0.0,
+                Vec2::new(1.0, 1.0),
+                0.0,
+            );
+            assert!(damsel.bounds().intersects(empty.bounds()));
+            assert!(damsel.intersects_mask(&opaque));
+            assert!(!damsel.intersects_mask(&empty));
+            assert!(!empty.intersects_mask(&damsel));
+            // Explicit precise shape-query sampler remains its old adapter.
+            assert!(damsel.intersects(empty.bounds(), CollisionPrecision::Precise));
+        }
+    }
+
+    #[test]
+    fn fractional_mirror_extension_keeps_rotated_and_scaled_fallbacks() {
+        for (scale, angle) in [
+            (Vec2::new(-1.0, 1.0), 0.2),
+            (Vec2::new(1.0, -1.0), 0.2),
+            (Vec2::new(-2.0, 1.0), 0.0),
+            (Vec2::new(1.0, 2.0), 0.0),
+        ] {
+            let mask = instance_mask(
+                "oDamsel",
+                "sDamselDieLR",
+                Vec2::new(104.25, 96.25),
+                0.0,
+                scale,
+                angle,
+            );
+            assert!(mask.event_geometry().is_none());
+        }
     }
 
     #[test]
