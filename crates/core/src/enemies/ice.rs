@@ -606,7 +606,7 @@ fn alien(game: &mut Game, e: &mut Entity) {
 
 fn king(game: &mut Game, e: &mut Entity) {
     let next_y = (e.vel.y + super::inherited::gravity(e, 0.6)).min(10.0);
-    let (wall, floor) = move_body(&game.world, e, 0.6);
+    let (_, floor) = move_body(&game.world, e, 0.6);
     e.vel.y = if floor && e.state != 98 { 0.0 } else { next_y };
     if game
         .world
@@ -655,15 +655,17 @@ fn king(game: &mut Game, e: &mut Entity) {
         // still executes its following state/yell/ThinIce statements.
         super::destroyed(game, e);
     }
-    counter(e, "hit_cooldown");
-    counter(e, "attack_timer");
-    if matches!(e.state, 0 | 1) {
-        counter(e, "counter");
+    for key in ["attack_timer", "hit_cooldown"] {
+        if e.value(key) > 0.0 {
+            e.data.insert(key.into(), e.value(key) - 1.0);
+        }
+    }
+    if matches!(e.state, 0 | 1) && e.value("counter") > 0.0 {
+        e.data.insert("counter".into(), e.value("counter") - 1.0);
     }
     match e.state {
         0 => {
-            e.vel.x = 0.0;
-            if e.value("counter") == 0.0 {
+            if e.value("counter") <= 0.0 {
                 enter(e, 1);
             }
         }
@@ -671,15 +673,36 @@ fn king(game: &mut Game, e: &mut Entity) {
             let dx = game.player.pos.x - (e.pos.x + 16.0);
             let dy = (game.player.pos.y - (e.pos.y + 16.0)).abs();
             let turn_dy = (game.player.pos.y - (e.pos.y + 32.0)).abs();
+            let bounds = e.bounds();
+            let side = if e.facing < 0 {
+                bounds.x - 1.0
+            } else {
+                bounds.x + bounds.w
+            }
+            .round_ties_even();
+            let wall = game.world.solid_line_except(
+                Vec2::new(side, bounds.y.round_ties_even()),
+                Vec2::new(side, (bounds.y + bounds.h - 1.0).round_ties_even()),
+                e.id,
+            );
             if wall
                 || (dx * f64::from(e.facing) < 0.0 && turn_dy < 16.0 && e.value("counter") == 0.0)
             {
+                e.set_sprite(if e.facing < 0 {
+                    "sYetiKingTurnR"
+                } else {
+                    "sYetiKingTurnL"
+                });
                 enter(e, 2);
-                e.vel.x = 0.0;
                 e.data.insert("counter".into(), 30.0);
             } else if dx * f64::from(e.facing) > 0.0 && dy < 32.0 && e.value("attack_timer") == 0.0
             {
                 enter(e, 3);
+                e.set_sprite(if e.facing < 0 {
+                    "sYetiKingYellL"
+                } else {
+                    "sYetiKingYellR"
+                });
                 e.animation = 0.0;
                 e.vel.x = 0.0;
             } else {
@@ -691,8 +714,8 @@ fn king(game: &mut Game, e: &mut Entity) {
         }
         3 => {
             e.vel.x = 0.0;
-            e.data.insert("attack_timer".into(), 100.0);
             e.set_image_speed(0.5);
+            e.data.insert("attack_timer".into(), 100.0);
             let frame = e.animation;
             if (7.0..=12.0).contains(&frame) {
                 game.sound_if_idle("sndYetiYell", e.pos);
@@ -701,19 +724,18 @@ fn king(game: &mut Game, e: &mut Entity) {
         }
         _ => {}
     }
-    let sprite = match (e.state, e.facing < 0) {
-        (2, true) => "sYetiKingTurnR",
-        (2, false) => "sYetiKingTurnL",
-        (3, true) => "sYetiKingYellL",
-        (3, false) => "sYetiKingYellR",
-        (1, true) => "sYetiKingWalkL",
-        (1, false) => "sYetiKingWalkR",
-        (_, true) => "sYetiKingLeft",
-        _ => "sYetiKingRight",
-    };
-    e.set_sprite(sprite);
     if super::solid_mask(&game.world, e.bounds(), e.id) {
         e.pos.y -= 2.0;
+    }
+    let sprite = match (e.state, e.facing < 0) {
+        (1, true) => Some("sYetiKingWalkL"),
+        (1, false) => Some("sYetiKingWalkR"),
+        (0, true) => Some("sYetiKingLeft"),
+        (0, false) => Some("sYetiKingRight"),
+        _ => None,
+    };
+    if let Some(sprite) = sprite {
+        e.set_sprite(sprite);
     }
 }
 
@@ -2913,7 +2935,7 @@ mod tests {
         }
         let king = g.world.entity(id).unwrap();
         assert_eq!(g.camera.y, 184.0);
-        assert_eq!(king.pos, Vec2::new(131.0, 128.0));
+        assert_eq!(king.pos, Vec2::new(136.0, 128.0));
         assert_eq!(king.state, 1);
         assert_eq!(king.facing, -1);
         // Animation End changes facing/state even when Step is skipped. Its
@@ -2944,7 +2966,7 @@ mod tests {
         }
         let king = g.world.entity(id).unwrap();
         assert_eq!(g.camera.y, 184.0);
-        assert_eq!(king.pos, Vec2::new(19.0, 128.0));
+        assert_eq!(king.pos, Vec2::new(21.0, 128.0));
         assert_eq!(king.state, 0);
         assert_eq!(king.value("counter"), 30.0);
         assert_eq!(king.value("attack_timer"), 100.0);
