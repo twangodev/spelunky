@@ -2064,6 +2064,46 @@ impl App {
     }
 }
 #[cfg(any(test, target_arch = "wasm32"))]
+fn adaptive_actor_snapshot(game: &Game) -> (Vec<serde_json::Value>, usize) {
+    // Explicit fixture families only; include parked source instances as well
+    // as published world instances. This reads state and never schedules work.
+    let mut selected: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .map(|entity| (entity, false))
+        .chain(
+            game.dispatcher
+                .hidden_entities()
+                .iter()
+                .map(|entity| (entity, true)),
+        )
+        .filter(|(entity, _)| {
+            matches!(
+                entity.object.as_str(),
+                "oSnake" | "oShopkeeper" | "oSpringTrap"
+            )
+        })
+        .collect();
+    selected.sort_by_key(|(entity, _)| entity.id);
+    let total = selected.len();
+    let records = selected
+        .into_iter()
+        .take(64)
+        .map(|(entity, hidden)| {
+            serde_json::json!({
+                "id": entity.id.to_string(), "object": entity.object, "hidden": hidden,
+                "alive": entity.alive, "engineActive": entity.engine_active,
+                "x": entity.pos.x, "y": entity.pos.y,
+                "previousX": entity.previous_pos.x, "previousY": entity.previous_pos.y,
+                "sprite": entity.sprite, "frame": entity.animation,
+            })
+        })
+        .collect();
+    (records, total)
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
 fn test_snapshot(
     screen: Screen,
     game: Option<&Game>,
@@ -2101,6 +2141,9 @@ fn test_snapshot(
     } else {
         screen_pos.y
     };
+    let view = game.simulation_view_rect();
+    let (actors, actor_count) = adaptive_actor_snapshot(game);
+    let (draw_actors, draw_actor_count) = adaptive_actor_snapshot(presentation);
     let flares: Vec<_> = game
         .world
         .entities
@@ -2113,7 +2156,7 @@ fn test_snapshot(
             })
         })
         .collect();
-    serde_json::json!({
+    let mut snapshot = serde_json::json!({
         "screen": format!("{screen:?}"), "state": format!("{:?}", game.state),
         "tick": game.tick, "levelTick": game.level_tick, "alpha": alpha,
         "seed": game.seed.to_string(),
@@ -2174,7 +2217,19 @@ fn test_snapshot(
             "renderedX": camera.x, "renderedY": camera.y,
             "authoritativeX": game.camera.x, "authoritativeY": game.camera.y,
         },
-    })
+    });
+    // Keep the existing large macro unchanged; add diagnostics separately so
+    // both native cfg(test) and Wasm stay within the crate's recursion limit.
+    snapshot["simulationView"] = serde_json::to_value(game.simulation_view)
+        .expect("validated simulation view has finite serializable dimensions");
+    snapshot["simulationViewRect"] =
+        serde_json::json!({"x": view.x, "y": view.y, "w": view.w, "h": view.h});
+    snapshot["actorSnapshotLimit"] = 64.into();
+    snapshot["actorCounts"] =
+        serde_json::json!({"authoritative": actor_count, "draw": draw_actor_count});
+    snapshot["actors"] = serde_json::Value::Array(actors);
+    snapshot["drawActors"] = serde_json::Value::Array(draw_actors);
+    snapshot
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SourceHostControl {
@@ -4589,6 +4644,94 @@ mod tests {
         );
         assert_eq!(game.state, RunState::Ending);
     }
+    #[test]
+    fn adaptive_snapshot_projects_live_and_frozen_hidden_actors_without_mutation() {
+        let level = spelunky_core::level::Level::parse(include_str!(
+            "../tests/fixtures/adaptive-gameplay/ultrawide-snake.LVL"
+        ))
+        .unwrap();
+        for (width, height) in [(320., 240.), (f64::from(573.3333_f32), 240.)] {
+            let mut game = Game::shell(5, spelunky_core::RulesPreset::Classic);
+            game.load_custom(&level, "observer", "");
+            game.set_simulation_view_extent(width, height).unwrap();
+            for _ in 0..3 {
+                game.step(&spelunky_core::InputFrame::default());
+            }
+            let before = serde_json::to_vec(&game).unwrap();
+            let drawn_before = serde_json::to_vec(game.presentation()).unwrap();
+            let source_actors: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .chain(game.dispatcher.hidden_entities())
+                .filter(|entity| entity.object == "oSnake")
+                .collect();
+            assert_eq!(source_actors.len(), 1);
+            let source = source_actors[0];
+            assert_eq!(source.engine_active, width != 320.);
+            // Animation completion restores authoritative storage; Draw retains
+            // the parked inactive instance from its earlier capture.
+            assert!(game.dispatcher.hidden_entities().is_empty());
+            assert_eq!(
+                game.presentation()
+                    .dispatcher
+                    .hidden_entities()
+                    .iter()
+                    .any(|entity| entity.id == source.id),
+                width == 320.,
+                "natural far Snake must be parked in canonical frozen Draw"
+            );
+            for alpha in [0., 0.5, 1.] {
+                let value = test_snapshot(Screen::Playing, Some(&game), alpha, false);
+                assert_eq!(
+                    value["simulationView"],
+                    serde_json::to_value(game.simulation_view).unwrap()
+                );
+                let rect = game.simulation_view_rect();
+                assert_eq!(
+                    value["simulationViewRect"],
+                    serde_json::json!({"x":rect.x,"y":rect.y,"w":rect.w,"h":rect.h})
+                );
+                assert_eq!(value["actorCounts"]["authoritative"], 1);
+                assert_eq!(value["actors"][0]["id"], source.id.to_string());
+                assert_eq!(value["actors"][0]["x"], source.pos.x);
+                assert_eq!(value["actors"][0]["previousX"], source.previous_pos.x);
+                assert_eq!(value["actors"][0]["alive"], source.alive);
+                assert_eq!(value["actors"][0]["engineActive"], source.engine_active);
+                assert_eq!(
+                    value["actors"][0]["hidden"],
+                    game.dispatcher
+                        .hidden_entities()
+                        .iter()
+                        .any(|entity| entity.id == source.id)
+                );
+                let draw = game.presentation();
+                let frozen = draw
+                    .world
+                    .entities
+                    .iter()
+                    .chain(draw.dispatcher.hidden_entities())
+                    .find(|entity| entity.id == source.id)
+                    .unwrap();
+                assert_eq!(value["drawActors"][0]["x"], frozen.pos.x);
+                assert_eq!(value["drawActors"][0]["previousX"], frozen.previous_pos.x);
+                assert_eq!(value["drawActors"][0]["frame"], frozen.animation);
+                assert_eq!(
+                    value["drawActors"][0]["hidden"],
+                    draw.dispatcher
+                        .hidden_entities()
+                        .iter()
+                        .any(|entity| entity.id == source.id)
+                );
+                assert_eq!(serde_json::to_vec(&game).unwrap(), before);
+                assert_eq!(
+                    serde_json::to_vec(game.presentation()).unwrap(),
+                    drawn_before
+                );
+            }
+        }
+    }
+
     #[test]
     fn browser_snapshot_is_read_only_and_tracks_effective_presentation() {
         let mut game = Game::tutorial(42, spelunky_core::RulesPreset::Classic);
