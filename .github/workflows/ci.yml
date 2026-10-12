@@ -19,20 +19,22 @@ jobs:
         with:
           toolchain: 1.98.0
           components: rustfmt
-      - uses: actions/setup-python@v5
+      - uses: oven-sh/setup-bun@v2
         with:
-          python-version: '3.13'
+          bun-version: 1.4.0
       - name: Install Linux development libraries
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev
       - name: Verify original assets
         run: |
-          python3 tools/export_assets.py --verify
-          python3 tools/export_catalog.py --check
-          python3 tools/export_collision_events.py --check
-          python3 tools/export_hub.py --check
-          python3 tools/export_cinematics.py --check
-          python3 tools/extract_templates.py --check
-          python3 tools/audit_coverage.py --check
+          bun tools/export_assets.ts --verify
+          bun tools/export_catalog.ts --check
+          bun tools/export_collision_events.ts --check
+          bun tools/export_hub.ts --check
+          bun tools/export_cinematics.ts --check
+          bun tools/extract_templates.ts --check
+          bun tools/audit_coverage.ts --check
+      - name: Test build tools
+        run: bun test tools
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Test workspace
@@ -56,9 +58,6 @@ jobs:
         with:
           toolchain: 1.98.0
           targets: wasm32-unknown-unknown
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
