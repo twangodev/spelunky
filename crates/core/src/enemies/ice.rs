@@ -938,7 +938,7 @@ fn boss(game: &mut Game, e: &mut Entity) {
     e.vel.y = (e.vel.y + 0.6).min(10.0);
     let b = e.bounds();
     let feet = Rect::new(b.x, b.y + b.h, b.w, 1.0);
-    if super::solid_mask(&game.world, feet, e.id) {
+    if super::solid_mask(&game.world, feet, e.id) && e.state != 98 {
         e.vel.y = 0.0;
     }
     move_body(&game.world, e, 0.0);
