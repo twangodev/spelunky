@@ -996,20 +996,6 @@ fn poof_pair(game: &mut Game, pos: Vec2, horizontal: bool) {
         };
     }
 }
-fn blood(game: &mut Game, pos: Vec2, count: usize) {
-    for _ in 0..count {
-        if game
-            .world
-            .entities
-            .iter()
-            .filter(|e| e.alive && e.engine_active && crate::catalog::is_a(&e.object, "oDetritus"))
-            .count()
-            < 16
-        {
-            game.world.spawn("oBlood", pos);
-        }
-    }
-}
 /// Source controller resources keep their persisted alarms in Game::data.
 /// The dispatcher visits them in its existing alarm-number/resource passes.
 pub(crate) fn challenge_alarm_resource(game: &Game) -> Option<i32> {
@@ -1201,13 +1187,15 @@ fn spawn_target(game: &mut Game, x: f64, y: f64) {
         1.0
     };
     let ufo = value(game, "timer") <= 20.0;
-    let id = game.world.spawn("oBatTarget", Vec2::new(x, y));
+    let id = game.spawn("oBatTarget", Vec2::new(x, y));
     let e = game.world.entity_mut(id).unwrap();
     e.data.insert(
         "difficulty".into(),
         difficulty + if ufo { 2.0 } else { 0.0 },
     );
+    e.data.insert("bloodless".into(), 0.0);
     e.data.insert("xMid".into(), x);
+    e.data.insert("xDiff".into(), 0.0);
     e.data.insert("dir".into(), 1.0);
     if ufo {
         e.set_sprite("sUFO");
@@ -1272,9 +1260,8 @@ fn moon(game: &mut Game) {
         game.data.insert("hub_alarm10".into(), 30.0);
         game.data.insert("moon_death_recorded".into(), 1.0);
     }
-    if game.flags.contains("hub_challenge_finished") {
-        return;
-    }
+    // Score/reveal bookkeeping does not disable the targets' independent
+    // Step and collision callbacks. Timeout Alarm 11 destroys them explicitly.
     let ids: Vec<_> = game
         .world
         .entities
@@ -1291,7 +1278,7 @@ fn moon(game: &mut Game) {
             if e.pos.y <= 64.0 {
                 e.data.insert("dir".into(), 1.0);
             }
-        } else {
+        } else if e.value("dir") == 1.0 {
             e.pos.y += speed;
             if e.pos.y >= 160.0 {
                 e.data.insert("dir".into(), 0.0);
@@ -1317,54 +1304,74 @@ fn moon(game: &mut Game) {
             .intersects(target.sprite_bounds())
             && aligned;
         let stomp = touching
+            && game.player.state != PlayerState::Dead
+            && game.state != RunState::Dead
             && matches!(
                 game.player.state,
                 PlayerState::Jumping | PlayerState::Falling
             )
             && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
             && game.player.pos.y < target.pos.y + 8.0;
-        if arrow.is_some() || stomp {
-            if let Some(arrow) = arrow {
-                game.world.entity_mut(arrow).unwrap().alive = false;
-            }
-            if stomp {
-                game.player.vel.y = -6.0 - 0.2 * game.player.vel.y;
-            }
-            *game.data.entry("baskets".into()).or_default() += speed;
-            game.world.entity_mut(id).unwrap().alive = false;
-            spawn_target(
-                game,
-                if stomp {
-                    target.pos.x
-                } else {
-                    target.value("xMid")
-                },
-                -64.0,
-            );
-            if !stomp && target.sprite == "sUFO" {
-                game.world.spawn("oUFOCrash", target.pos);
-            } else {
-                blood(game, Vec2::new(target.pos.x + 8.0, target.pos.y + 8.0), 3);
-            }
+        if let Some(arrow) = arrow {
+            // oBatTarget Arrow collision: sounds, credit, other Destroy,
+            // replacement Create, crash/blood, then this target's Destroy.
             game.sound("sndHit", target.pos);
             game.sound("sndCoin", target.pos);
-        } else if touching
-            && game.player.invincible == 0
-            && game.player.state != PlayerState::Dead
-            && game.state != RunState::Dead
-        {
-            // oBatTarget contact sets blink/invulnerability, not stunned.
-            game.player.health -= 1;
-            game.events.push(GameEvent::Damage { amount: 1 });
-            game.sound("sndHurt", game.player.pos);
-            blood(game, Vec2::new(target.pos.x + 4.0, target.pos.y + 4.0), 1);
-            game.player.invincible = 30;
+            *game.data.entry("baskets".into()).or_default() += speed;
+            if game.world.entity(arrow).unwrap().held {
+                // Arrow inherits oItem Destroy; the held flag alone controls
+                // its synchronous write, independently of the hand backlink.
+                game.player.held = None;
+            }
+            game.world.entity_mut(arrow).unwrap().alive = false;
+            spawn_target(game, target.value("xMid"), -64.0);
+            if target.sprite == "sUFO" {
+                game.spawn("oUFOCrash", target.pos);
+            } else {
+                crate::enemies::create_blood(
+                    game,
+                    &target,
+                    Vec2::new(target.pos.x + 8.0, target.pos.y + 8.0),
+                    3,
+                );
+            }
+            game.world.entity_mut(id).unwrap().alive = false;
+        } else if stomp {
+            // The Character stomp has its own source ordering and uses the
+            // target's current X, including its timer-driven oscillation.
+            game.player.vel.y = -6.0 - 0.2 * game.player.vel.y;
+            game.sound("sndHit", target.pos);
+            game.sound("sndCoin", target.pos);
+            *game.data.entry("baskets".into()).or_default() += speed;
+            spawn_target(game, target.pos.x, -64.0);
+            crate::enemies::create_blood(
+                game,
+                &target,
+                Vec2::new(target.pos.x + 8.0, target.pos.y + 8.0),
+                3,
+            );
+            game.world.entity_mut(id).unwrap().alive = false;
+        } else if touching && game.player.invincible == 0 {
+            // Source's final Character branch tests invincibility alone;
+            // dead characters retain this callback, with life clamped at zero.
             game.player.data.insert("blink".into(), 30.);
+            game.player.invincible = 30;
             game.player.vel.x = if game.player.pos.x < target.pos.x {
                 -6.0
             } else {
                 6.0
             };
+            if game.player.health > 0 {
+                game.player.health -= 1;
+                game.events.push(GameEvent::Damage { amount: 1 });
+            }
+            crate::enemies::create_blood(
+                game,
+                &target,
+                Vec2::new(target.pos.x + 4.0, target.pos.y + 4.0),
+                1,
+            );
+            game.sound("sndHurt", game.player.pos);
         }
     }
 }
