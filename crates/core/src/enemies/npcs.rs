@@ -497,6 +497,12 @@ fn ghost_player_collision(game: &mut Game, e: &mut Entity) {
     e.data.insert("animation_speed".into(), 0.2);
 }
 
+fn damsel_death_anger(game: &mut Game, damsel: &Entity) {
+    if damsel.value("cost") > 0.0 && damsel.health <= 0 {
+        crate::economy::anger(game, damsel.pos, "HEY, ONLY I CAN DO THAT!");
+    }
+}
+
 fn damsel(game: &mut Game, e: &mut Entity) {
     if e.state == 4 {
         if e.value("hit_cooldown") > 0.0 {
@@ -505,6 +511,7 @@ fn damsel(game: &mut Game, e: &mut Entity) {
         }
         e.data.insert("depth".into(), 1000.0);
         e.data.insert("invincible".into(), 1.0);
+        damsel_death_anger(game, e);
         return;
     }
     // The inherited oItem Step owns held attachment, movement, bouncing,
@@ -592,6 +599,7 @@ fn damsel(game: &mut Game, e: &mut Entity) {
     e.data.insert("swimming".into(), f64::from(swimming));
     e.data
         .insert("gravity".into(), if swimming { 0.2 } else { 0.6 });
+    damsel_death_anger(game, e);
     if e.value("invincible") == 0.0 && !e.held && game.world.solid_at(e.pos.x, e.pos.y) {
         if e.health > 0 {
             super::record_damsel_death(game, e, true);
@@ -696,11 +704,6 @@ fn damsel(game: &mut Game, e: &mut Entity) {
                 game.player.pickup_item_type.clear();
             }
             game.sound("sndHit", e.pos);
-        }
-    }
-    if e.health <= 0 {
-        if e.value("cost") > 0.0 || e.value("for_sale") > 0.0 {
-            game.flags.insert("shopkeepers_angry".into());
         }
     }
     if !e.held && e.vel.y > 2.0 && e.state != 2 {
