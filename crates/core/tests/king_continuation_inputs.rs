@@ -2,7 +2,8 @@
 //! no receiver or RNG writes after the first Game.step. Independent death-prefix
 //! oracle protects the existing blood/bone/loot sequence before the final yell.
 use spelunky_core::{
-    Game, GameEvent, InputFrame, Rng, RngAlgorithm, RulesPreset, Vec2, catalog, level::Level,
+    Entity, Game, GameEvent, InputFrame, PlayerState, Rng, RngAlgorithm, RulesPreset, Vec2,
+    catalog, level::Level,
 };
 
 fn arena(seed: u32, rules: RulesPreset) -> (Game, u64) {
@@ -11,9 +12,9 @@ fn arena(seed: u32, rules: RulesPreset) -> (Game, u64) {
         starting_life: 99, // ordinary authored level metadata, no mid-combat healing
         ..Default::default()
     };
-    level.set_tile(6, 7, '@').unwrap();
+    level.set_tile(9, 7, '@').unwrap();
     level.set_tile(34, 7, 'X').unwrap();
-    level.set_tile(7, 7, '-').unwrap(); // ordinary source custom-level Pistol
+    level.set_tile(10, 7, '-').unwrap(); // ordinary source custom-level Pistol
     for x in 0..spelunky_core::level::LEVEL_WIDTH {
         level.set_tile(x, 8, '1').unwrap();
     }
@@ -22,6 +23,9 @@ fn arena(seed: u32, rules: RulesPreset) -> (Game, u64) {
     // This initial upper Brick stops its custom left bound at x208, hence
     // origin>=202, while the ordinary Pistol muzzle (y132..134) passes below.
     level.set_tile(11, 6, '1').unwrap();
+    // A second initial upper Brick confines the incoming positive recoil
+    // below the strict right viewport edge without blocking muzzle y132..134.
+    level.set_tile(17, 6, '1').unwrap();
     let mut game = Game::shell(seed, rules);
     game.load_custom(&level, "king-ordinary-pistol-debris", "");
     assert_eq!(
@@ -81,11 +85,92 @@ fn arena(seed: u32, rules: RulesPreset) -> (Game, u64) {
     (game, king)
 }
 
-fn shoot_until(game: &mut Game, king: u64, fatal: bool) -> usize {
+// Predict only the original steady supported ATTACK and its first IDLE frame.
+// This uses local snapshots and canonical precise masks, not Game::step on a
+// second world, and never changes a live receiver, input cache, or RNG stream.
+fn final_contact_matches_source_phase(
+    game: &Game,
+    king: u64,
+    bullet_template: &Entity,
+    yelling: bool,
+) -> bool {
+    let actor = game.world.entity(king).unwrap();
+    if actor.state != 3
+        || actor.vel != Vec2::default()
+        || game.player.vel != Vec2::default()
+        || game.player.state != PlayerState::Standing
+    {
+        return false;
+    }
+    assert_eq!(catalog::sprite_frame_count(&actor.sprite), 13);
+    let mut probe_rng = game.rng.clone();
+    let speed = (6.0 + f64::from(rand(&mut probe_rng, 3)) + game.player.vel.x).max(6.0);
+    let mut bullet = bullet_template.clone();
+    bullet.pos = Vec2::new(game.player.pos.x + 8.0, game.player.pos.y - 2.0);
+    let mut target = actor.clone();
+    let mut attack = true;
+    for _ in 0..40 {
+        if !attack {
+            target.set_sprite(if target.facing < 0 {
+                "sYetiKingLeft"
+            } else {
+                "sYetiKingRight"
+            });
+        }
+        // Source Bullet669 moves before King877; both automatic masks are
+        // queried before Draw/Animation advances the receiver's image index.
+        bullet.pos.x += speed;
+        let contact = bullet.event_intersects(&target);
+        let mut frame = target.animation + if attack { 0.5 } else { 0.25 };
+        if attack && frame >= 13.0 {
+            frame -= 13.0;
+            attack = false;
+        }
+        if contact {
+            return attack == yelling && frame == if yelling { 11.25 } else { 0.5 };
+        }
+        target.animation = frame;
+        // Beyond the first requested IDLE frame, this deliberately stops
+        // rather than guessing subsequent WALK movement or another attack.
+        if !attack && frame >= 0.5 {
+            return false;
+        }
+    }
+    false
+}
+
+fn shoot_until(game: &mut Game, king: u64, fatal: bool, yelling: bool) -> usize {
     let mut previous_hp = 30;
     let mut hits = 0;
-    for tick in 0..480 {
-        let fire = tick % 24 == 0;
+    let mut bullet_template = None;
+    let mut attacks = usize::from(game.world.entity(king).unwrap().state == 3);
+    for _ in 0..480 {
+        let before_state = game.world.entity(king).unwrap().state;
+        let pending = game
+            .world
+            .entities
+            .iter()
+            .any(|e| e.alive && e.object == "oBullet");
+        let ready = game
+            .player
+            .data
+            .get("weapon_cooldown")
+            .copied()
+            .unwrap_or(0.0)
+            <= 1.0;
+        let fire = !pending
+            && ready
+            && (hits < 7
+                || !fatal
+                || (attacks == 2
+                    && final_contact_matches_source_phase(
+                        game,
+                        king,
+                        bullet_template
+                            .as_ref()
+                            .expect("native first Bullet template"),
+                        yelling,
+                    )));
         if fire {
             assert!(
                 game.player.pos.y - 2.0 >= 128.0,
@@ -97,10 +182,25 @@ fn shoot_until(game: &mut Game, king: u64, fatal: bool) -> usize {
             attack_pressed: fire,
             ..Default::default()
         });
+        if bullet_template.is_none() {
+            bullet_template = game
+                .world
+                .entities
+                .iter()
+                .find(|e| e.alive && e.object == "oBullet")
+                .cloned();
+        }
         let actor = game
             .world
             .entity(king)
             .expect("fatal Bullet Collision precedes the following King Normal Step");
+        if actor.state == 3 && before_state != 3 {
+            attacks += 1;
+        }
+        assert!(
+            actor.pos.x < game.camera.x + 320.0,
+            "SOURCE_KING_STEP_REMAINS_ACTIVE"
+        );
         if actor.health != previous_hp {
             assert_eq!(
                 actor.health,
@@ -178,7 +278,7 @@ fn ordinary_fatal_pistol_hit_keeps_king_final_yell_and_thin_ice_after_complete_d
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         for seed in [17, 42] {
             let (mut game, king) = arena(seed, rules);
-            assert_eq!(shoot_until(&mut game, king, true), 8);
+            assert_eq!(shoot_until(&mut game, king, true, seed == 42), 8);
             let actor = game.world.entity(king).unwrap();
             assert_eq!(actor.health, -2);
             let yelling = seed == 42;
