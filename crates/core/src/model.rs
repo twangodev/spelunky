@@ -612,6 +612,36 @@ impl World {
         self.tiles_match(r, group, None, None, precision, false)
     }
 
+    /// Explicit source collision_rectangle over active stored family members.
+    /// Corners remain raw inclusive arguments; held targets stay eligible.
+    /// The optional exclusion denotes a dynamic caller, never a numeric sentinel.
+    /// This is a geometric hit predicate; signed native handle truth is separate.
+    pub fn rectangle_family_except(
+        &self,
+        first: Vec2,
+        second: Vec2,
+        family: &str,
+        excluded: Option<u64>,
+        precision: CollisionPrecision,
+    ) -> bool {
+        self.tiles.iter().enumerate().any(|(index, tile)| {
+            tile.engine_active
+                && self.width > 0
+                && crate::catalog::is_a(&tile.object, family)
+                && self
+                    .tile_collision_mask((index % self.width) as i32, (index / self.width) as i32)
+                    .intersects_rectangle(first, second, precision)
+        }) || self.entities.iter().any(|entity| {
+            Some(entity.id) != excluded
+                && entity.alive
+                && entity.engine_active
+                && crate::catalog::is_a(&entity.object, family)
+                && entity
+                    .collision_mask()
+                    .intersects_rectangle(first, second, precision)
+        })
+    }
+
     /// Explicit source axis-aligned collision_line query over tile instances.
     pub fn tiles_line_precision(
         &self,

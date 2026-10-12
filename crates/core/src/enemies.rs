@@ -875,6 +875,36 @@ pub(super) fn can_stomp(game: &Game, e: &Entity) -> bool {
 
 /// Source isCollision*/getIdCollision* helpers explicitly request precise masks.
 /// Direct collision_point(..., 0, ...) calls intentionally keep bbox queries.
+/// isCollisionSolid: use the complete raw controller bounds, not a smooth
+/// sprite rectangle. calculateCollisionBounds precedes the native query.
+pub(super) fn body_overlaps_solid(world: &World, e: &Entity) -> bool {
+    let bounds = e.bounds();
+    world.rectangle_family_except(
+        Vec2::new(bounds.x, bounds.y),
+        Vec2::new(bounds.x + bounds.w - 1.0, bounds.y + bounds.h - 1.0),
+        "oSolid",
+        Some(e.id),
+        crate::CollisionPrecision::Precise,
+    )
+}
+
+/// isCollisionLadder retains the reversed/equal cached inset arguments and
+/// tests LadderTop before Ladder. The caller's whole sprite mask is not used.
+pub(super) fn body_overlaps_ladder(world: &World, e: &Entity) -> bool {
+    let bounds = e.bounds();
+    let first = Vec2::new(bounds.x + 8.0, bounds.y + 8.0);
+    let second = Vec2::new(bounds.x + bounds.w - 8.0, bounds.y + bounds.h - 8.0);
+    ["oLadderTop", "oLadder"].into_iter().any(|family| {
+        world.rectangle_family_except(
+            first,
+            second,
+            family,
+            Some(e.id),
+            crate::CollisionPrecision::Precise,
+        )
+    })
+}
+
 pub(super) fn solid_mask(world: &World, r: Rect, excluded: u64) -> bool {
     world.tiles_collide_precision(r, "oSolid", crate::CollisionPrecision::Precise)
         || world.entities.iter().any(|other| {

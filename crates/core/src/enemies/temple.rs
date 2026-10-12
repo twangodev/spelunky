@@ -782,7 +782,7 @@ fn tomb_lord(game: &mut Game, e: &mut Entity) {
         _ => {}
     }
     // The source's post-state correction also executes after destruction.
-    if super::solid_mask(&game.world, e.bounds(), e.id) {
+    if super::body_overlaps_solid(&game.world, e) {
         e.pos.y -= 2.0;
     }
     if e.state == 1 {
@@ -1192,6 +1192,9 @@ fn olmec(game: &mut Game, e: &mut Entity) {
         }
         _ => {}
     }
+    if super::body_overlaps_solid(&game.world, e) {
+        e.pos.y -= 2.0;
+    }
 }
 
 fn slam(_game: &mut Game, _e: &mut Entity) {}
@@ -1360,6 +1363,9 @@ fn magma_man(game: &mut Game, e: &mut Entity) {
         }
     }
     move_body(&game.world, e, 0.0);
+    if super::body_overlaps_solid(&game.world, e) {
+        e.pos.y -= 2.0;
+    }
     if e.state < 98 && e.state != 3 {
         e.set_sprite(if e.vel.x == 0.0 {
             "sMagmaManLeft"

@@ -366,7 +366,8 @@ fn monkey(game: &mut Game, e: &mut Entity) {
                 e.state = 0;
                 e.vel = Vec2::default();
                 e.timer = 10 + game.rng.range(31);
-            } else if vine(&game.world, center(e)) && e.value("vine_counter") == 0.0 {
+            } else if super::body_overlaps_ladder(&game.world, e) && e.value("vine_counter") == 0.0
+            {
                 e.state = 5;
                 e.vel = Vec2::default();
                 e.timer = 10 + game.rng.range(31);
@@ -998,7 +999,7 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
             e.vel.x *= 0.3;
         }
     }
-    if super::solid_mask(&game.world, e.bounds(), e.id) {
+    if super::body_overlaps_solid(&game.world, e) {
         e.pos.y -= 2.0;
     }
     if e.state == 97 && e.animation == 8.0 {

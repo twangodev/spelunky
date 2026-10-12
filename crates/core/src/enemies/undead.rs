@@ -233,7 +233,7 @@ fn skeleton(game: &mut Game, e: &mut Entity) {
         }
         e.vel.x = f64::from(e.facing);
     }
-    if super::solid_mask(&game.world, bounds(e), e.id) {
+    if super::body_overlaps_solid(&game.world, e) {
         e.pos.y -= 2.0;
     }
     if e.state != 98 {

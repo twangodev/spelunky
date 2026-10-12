@@ -523,7 +523,7 @@ fn snake(game: &mut Game, e: &mut Entity) {
         }
     }
     set_sprite(e, "sSnakeWalkL");
-    if super::solid_mask(&game.world, e.bounds(), e.id) {
+    if super::body_overlaps_solid(&game.world, e) {
         e.pos.y -= 2.0;
     }
     e.data.insert(
