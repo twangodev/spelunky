@@ -2278,11 +2278,11 @@ mod tests {
         let mut g = dark_room();
         g.world.spawn("oLampRed", Vec2::new(80.0, 32.0));
         g.step(&InputFrame::default());
-        // StandLeft ends at x45; lamp frame zero starts at x82.
-        assert_eq!(g.data["darkness"], 37.0 / 160.0);
+        // Aggregate StandLeft ends at x45; LampRed aggregate starts at x81.
+        assert_eq!(g.data["darkness"], 36.0 / 160.0);
         g.player.pos.x = 60.0;
         g.step(&InputFrame::default());
-        assert_eq!(g.data["darkness"], 17.0 / 160.0);
+        assert_eq!(g.data["darkness"], 16.0 / 160.0);
     }
     #[test]
     fn canonical_darkness_clamps_unlit_rooms_and_honors_crown_during_dead_simulation() {
