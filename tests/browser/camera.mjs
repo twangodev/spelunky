@@ -16,6 +16,17 @@ function close(actual, expected, message) {
     `${message}: actual=${actual}, expected=${expected}`);
 }
 
+// This authored corridor follows the default Player with source Hborder128,
+// canonical width320 and no room clamp. Native follow rounds each finite
+// actor endpoint nearest-even before applying that border. These positions
+// stay within signed32, so the native low32 conversion cannot wrap here.
+function sourceNearestEven(value) {
+  assert.ok(Number.isFinite(value), 'Finite source follow endpoint');
+  const lower = Math.floor(value), fraction = value - lower;
+  return fraction < .5 ? lower : fraction > .5 ? lower + 1
+    : lower % 2 === 0 ? lower : lower + 1;
+}
+
 export async function runCameraAcceptance({ page, result, screenshot }) {
   const entry = result.cameraFollow = { status: 'failed',
     scope: 'Actual redraw telemetry shares production presentation endpoints. Ordinary imported corridor and Right input; independent interpolation/anchor/endpoint continuity checks, preserving frozen source Draw sprite/frame. Observed software-browser alpha samples do not certify physical240Hz.' };
@@ -58,7 +69,14 @@ export async function runCameraAcceptance({ page, result, screenshot }) {
     close(rendered.y, rendered.previousY + (rendered.currentY - rendered.previousY) * alpha, 'Frozen Draw vertical player interpolation');
     close(rendered.screenX, rendered.x - camera.renderedX, 'Actual presentation screen anchor');
     close(rendered.screenY, rendered.y - camera.renderedY, 'Actual vertical presentation anchor');
-    close(rendered.screenX, 192, 'Camera following must keep the walking hero at the source viewport border');
+    const previousFollowX = sourceNearestEven(rendered.previousX) - 192;
+    const currentFollowX = sourceNearestEven(rendered.currentX) - 192;
+    close(camera.previousX, previousFollowX, 'Previous source integer follow endpoint');
+    close(camera.x, currentFollowX, 'Current source integer follow endpoint');
+    close(rendered.screenX,
+      192 + (rendered.previousX - sourceNearestEven(rendered.previousX)) * (1 - alpha)
+        + (rendered.currentX - sourceNearestEven(rendered.currentX)) * alpha,
+      'Source nearest-even camera border interpolates both endpoint errors');
     assert.ok(typeof rendered.sprite === 'string' && Number.isFinite(rendered.frame));
     if (alpha > .001 && alpha < .999) {
       entry.fractionalSamples++;
