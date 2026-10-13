@@ -3731,3 +3731,7 @@ mod message_callback_gate_tests {
         assert_eq!(game.data["message_timer"], 18.);
     }
 }
+
+#[cfg(test)]
+#[path = "world_events/bubble_raw_point_tests.rs"]
+mod bubble_raw_point_tests;
