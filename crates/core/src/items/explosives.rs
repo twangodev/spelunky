@@ -1703,7 +1703,8 @@ pub(crate) fn player_explosion_hurt(game: &mut Game) {
         return;
     }
     let pos = game.player.pos;
-    let probe = Rect::new(pos.x - 8.0, pos.y - 8.0, 17.0, 17.0);
+    let first = Vec2::new(pos.x - 8.0, pos.y - 8.0);
+    let second = Vec2::new(pos.x + 8.0, pos.y + 8.0);
     let explosions = || {
         game.world.entities.iter().filter(|entity| {
             entity.alive
@@ -1711,7 +1712,12 @@ pub(crate) fn player_explosion_hurt(game: &mut Game) {
                 && crate::catalog::is_a(&entity.object, "oExplosion")
         })
     };
-    if !explosions().any(|entity| entity.mask_intersects(probe, CollisionPrecision::BoundingBox)) {
+    // Precision zero uses the aggregate integer cache, not the selected frame.
+    if !explosions().any(|entity| {
+        entity
+            .collision_mask()
+            .intersects_rectangle_bbox(first, second)
+    }) {
         return;
     }
     let nearest = explosions()
@@ -5168,31 +5174,52 @@ mod source_player_explosion_step {
         let mut game = Game::shell(7, RulesPreset::Classic);
         game.player.health = 30;
         game.player.pos = Vec2::new(160.0, 160.0);
-        // Late frame has a narrower bbox: this nearer instance does not overlap.
-        let near = game.world.spawn("oExplosion", Vec2::new(181.0, 160.0));
+        // Initial controlled frames are intentionally different. The source
+        // aggregate cache is frame independent: nearer misses vertically,
+        // farther overlaps diagonally but loses the independent nearest query.
+        let near = game.world.spawn("oExplosion", Vec2::new(160.0, 191.0));
         game.world.entity_mut(near).unwrap().animation = 9.0;
-        // Earlier frame is broad enough to overlap from a more distant origin.
-        let far = game.world.spawn("oExplosion", Vec2::new(136.0, 160.0));
+        let far = game.world.spawn("oExplosion", Vec2::new(136.0, 136.0));
         game.world.entity_mut(far).unwrap().animation = 3.0;
-        let probe = Rect::new(152.0, 152.0, 17.0, 17.0);
+        let first = Vec2::new(152.0, 152.0);
+        let second = Vec2::new(168.0, 168.0);
+        assert_eq!(
+            game.world
+                .entity(near)
+                .unwrap()
+                .collision_mask()
+                .point_bounds(),
+            Rect::new(136.0, 169.0, 48.0, 44.0)
+        );
+        assert_eq!(
+            game.world
+                .entity(far)
+                .unwrap()
+                .collision_mask()
+                .point_bounds(),
+            Rect::new(112.0, 114.0, 48.0, 44.0)
+        );
         assert!(
             !game
                 .world
                 .entity(near)
                 .unwrap()
-                .mask_intersects(probe, CollisionPrecision::BoundingBox)
+                .collision_mask()
+                .intersects_rectangle_bbox(first, second)
         );
         assert!(
             game.world
                 .entity(far)
                 .unwrap()
-                .mask_intersects(probe, CollisionPrecision::BoundingBox)
+                .collision_mask()
+                .intersects_rectangle_bbox(first, second)
         );
+        assert!(31.0 < 24.0_f64.hypot(24.0));
         player_explosion_hurt(&mut game);
         assert_eq!(game.player.health, 20);
         assert!(
             game.player.vel.x < 0.0,
-            "nearest query includes the nonoverlapping explosion to the right"
+            "nearest query includes the nonoverlapping explosion at equal x"
         );
     }
 }
