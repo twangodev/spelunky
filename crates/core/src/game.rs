@@ -208,6 +208,8 @@ impl Game {
         self.player.pos = self.world.entrance;
         self.player.previous_pos = self.player.pos;
         self.player.vel = Vec2::default();
+        // Each room creates a nonpersistent Player; later hub overrides still run.
+        self.player.facing = 1;
         self.player.state = PlayerState::Falling;
         self.player.grounded = false;
         self.player.held = None;

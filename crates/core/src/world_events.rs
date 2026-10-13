@@ -1313,12 +1313,29 @@ fn effect(game: &mut Game, e: &mut Entity) {
         "oBloodSpark" | "oBubble" | "oBurn" | "oFlareSpark" => e.pos.y += e.vel.y,
         _ => {}
     }
-    if (e.object == "oBubble" && !point_family(game, e.pos, "oWater"))
+    if (e.object == "oBubble" && !bubble_water_point(&game.world, e.pos))
         || (matches!(e.object.as_str(), "oBurn" | "oFlareSpark")
             && point_family(game, e.pos, "oSolid"))
     {
         e.alive = false;
     }
+}
+
+/// Bubble Step uses collision_point(..., oWater, 0, 0): active cached
+/// bounding boxes, including fractional origins rounded by the engine.
+fn bubble_water_point(world: &crate::World, point: Vec2) -> bool {
+    world.tiles.iter().enumerate().any(|(index, tile)| {
+        tile.engine_active
+            && catalog::is_a(&tile.object, "oWater")
+            && world
+                .tile_collision_mask((index % world.width) as i32, (index / world.width) as i32)
+                .contains(point, crate::CollisionPrecision::BoundingBox)
+    }) || world.entities.iter().any(|entity| {
+        entity.alive
+            && entity.engine_active
+            && catalog::is_a(&entity.object, "oWater")
+            && entity.mask_contains(point, crate::CollisionPrecision::BoundingBox)
+    })
 }
 
 fn collect_effect(e: &mut Entity) {

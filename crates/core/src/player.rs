@@ -330,13 +330,12 @@ fn ladder_match(w: &World, pos: Vec2, include_top: bool) -> Option<Vec2> {
         .map(|e| Vec2::new(e.pos.x + 8.0, e.pos.y))
 }
 fn water(w: &World, pos: Vec2) -> bool {
-    collision_rect(w, Rect::new(pos.x, pos.y, 0.001, 0.001), "oWater")
-        || object_at(w, pos, &["oWater", "oWaterTop"])
+    // Source's finite -1 precise/notme arguments both convert to false.
+    ledge_point(w, pos, "oWater")
 }
 
 fn swimming_without_lava(w: &World, p: &Player) -> bool {
-    value(p, "swimming", 0.0) > 0.0
-        && !collision_rect(w, Rect::new(p.pos.x, p.pos.y, 0.001, 0.001), "oLava")
+    value(p, "swimming", 0.0) > 0.0 && !ledge_point(w, p.pos, "oLava")
 }
 
 /// oPlayer1 runs these effects before entering its dead/stunned controller.
@@ -367,12 +366,7 @@ fn environmental_prelude(game: &mut Game) {
         set(&mut game.player, "bounced", 1.0);
     }
     let pos = game.player.pos;
-    if collision_rect(
-        &game.world,
-        Rect::new(pos.x, pos.y, 0.001, 0.001),
-        "oWaterSwim",
-    ) && value(&game.player, "swimming", 0.0) == 0.0
-    {
+    if ledge_point(&game.world, pos, "oWaterSwim") && value(&game.player, "swimming", 0.0) == 0.0 {
         set(&mut game.player, "swimming", 1.0);
         game.world.spawn("oSplash", Vec2::new(pos.x, pos.y - 8.0));
         game.sound("sndSplash", pos);
@@ -4379,3 +4373,7 @@ mod native_ball_tether_boundary_tests {
 #[cfg(test)]
 #[path = "player/source_animation_callback_tests.rs"]
 mod source_animation_callback_tests;
+
+#[cfg(test)]
+#[path = "player/swimming_raw_point_tests.rs"]
+mod swimming_raw_point_tests;
