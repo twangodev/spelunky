@@ -2029,6 +2029,10 @@ mod tests {
     #[test]
     fn actual_olmec_create_effect_keeps_its_creation_heading_and_expires() {
         let mut g = room();
+        // Olmec Create writes canonical Y400 before the first Level activation.
+        // Exact320x240 selects Original; one extra row keeps this configured
+        // whole-room effect eligible without changing its heading/lifetime.
+        g.set_simulation_view_extent(320.0, 256.0).unwrap();
         let olmec = g.world.spawn("oOlmec", Vec2::new(200.0, 80.0));
         let id = spawn_psychic_create_2(&mut g, Vec2::new(100.0, 96.0), Vec2::new(232.0, 96.0));
         assert_eq!(g.world.entity(id).unwrap().vel, Vec2::new(2.0, 0.0));
