@@ -333,6 +333,12 @@ fn configured_create(canonical: bool, rules: RulesPreset, mode: u8) {
     } else {
         head_contact(canonical, rules)
     };
+    if mode != 2 {
+        // Configured own-Step controls need all their effects eligible during
+        // Level activation, including after the view target retires. This
+        // initial host extent preserves canonical source camera coordinates.
+        g.set_simulation_view_extent(480.0, 384.0).unwrap();
+    }
     g.world.entity_mut(boss).unwrap().state = 7;
     // Keep the surviving boss clear of the controller: an overlapping solid
     // independently damages the player and consumes Blood RNG before this Step.

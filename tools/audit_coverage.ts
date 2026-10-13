@@ -169,6 +169,7 @@ for (const [p, source] of sources) {
 }
 const equivalents: Record<string, string[]> = {
  'crates/core/src/game.rs': ['oEntrance'],
+ 'crates/core/src/enemies/temple.rs': ['oOlmec'],
  'crates/core/src/progression.rs': ['oExit','oXMarket','oXGold','oGoldDoor','oTunnelMan','oMoaiInside','oFinalBoss'],
  'crates/core/src/items.rs': ['oWhip','oWhipPre'],
  'crates/app/src/scene.rs': ['oMsgSign','oLamp','oLampRed','oTikiTorch','oHintHand'],
@@ -182,6 +183,7 @@ const equivalents: Record<string, string[]> = {
 const tokens: Record<string, string> = {oGold:'gold_chunks',oGoldBig:'gold_nuggets',oFrozenCaveman:'frozen_caveman',oCape:'Cape',oParachute:'Parachute',oParaUsed:'Parachute',oTreeBranchTile:'oPlatform',oFinalBoss:'boss_exit'};
 const reviewedFunctions: Record<string,Record<string,string[]>> = {
  'crates/core/src/items.rs': {oWhip:['step_instance_with_motion','step_instance']},
+ 'crates/core/src/enemies/temple.rs': {oOlmec:['create']},
  'crates/core/src/traps.rs': {oGiantTikiHead:['alarm']},
  'crates/core/src/traps/curses.rs': {oBall:['step_instance_with_motion','step_instance'],oBall2:['step_instance_with_motion','step_instance'],oChain:['chain_step'],oChain2:['chain_step']},
  'crates/core/src/progression.rs': {oXGold:['complete']},

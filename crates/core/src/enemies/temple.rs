@@ -290,7 +290,14 @@ fn character_collision(game: &mut Game, e: &mut Entity) {
 
 /// oOlmecSlam Create keeps its invisible collision sprite and emits once.
 pub(super) fn create(game: &mut Game, e: &mut Entity) {
-    if e.object == "oOlmecSlam" {
+    if e.object == "oOlmec" {
+        // Literal final Create writes. Automatic follow occurs pre-Draw,
+        // after the first Level Step has observed this canonical Y400.
+        game.data.insert("camera_hborder".into(), 0.0);
+        game.data.insert("camera_vborder".into(), 0.0);
+        game.camera.y = 400.0;
+        game.view_target = crate::ViewTarget::Object("oOlmec".into());
+    } else if e.object == "oOlmecSlam" {
         game.sound("sndSlam", e.pos);
     }
 }
@@ -1059,8 +1066,11 @@ fn olmec_alarm(game: &mut Game, boss: &mut Entity, index: u8) {
             }
         }
         5 => {
-            game.player.data.insert("active".into(), 1.0);
+            game.data.insert("camera_hborder".into(), 128.0);
+            game.data.insert("camera_vborder".into(), 64.0);
             game.camera.x = 0.0;
+            game.view_target = crate::ViewTarget::Player;
+            game.player.data.insert("active".into(), 1.0);
             boss.state = 0;
             boss.timer = 100;
             crate::music::play(game, "musBoss", true);
@@ -3400,6 +3410,42 @@ mod tests {
         let mut boss = game.world.entities.remove(index);
         boss.data.insert("simulation_tick".into(), 3.0);
         (game, boss)
+    }
+
+    #[test]
+    fn configured_olmec_alarm_five_restores_player_view_and_literal_borders() {
+        let mut game = Game::shell(42, crate::RulesPreset::Classic);
+        let id = game.spawn("oOlmec", Vec2::new(304.0, 496.0));
+        let mut boss = game.world.entities.remove(
+            game.world
+                .entities
+                .iter()
+                .position(|actor| actor.id == id)
+                .unwrap(),
+        );
+        // Configured own-Alarm callback, with the exact incoming view slots.
+        // This is not a full normal frame (Level later rewrites Vborder).
+        game.camera = Vec2::new(17.0, 400.0);
+        game.data.insert("camera_hborder".into(), 0.0);
+        game.data.insert("camera_vborder".into(), 0.0);
+        game.player.data.insert("active".into(), 0.0);
+        olmec_alarm(&mut game, &mut boss, 5);
+        assert_eq!(
+            game.data.get("camera_hborder"),
+            Some(&128.0),
+            "ALARM_FIVE_SOURCE_HBORDER"
+        );
+        assert_eq!(game.data.get("camera_vborder"), Some(&64.0));
+        assert_eq!(game.camera, Vec2::new(0.0, 400.0));
+        assert_eq!(game.player.data.get("active"), Some(&1.0));
+        assert_eq!((boss.state, boss.timer), (0, 100));
+        assert!(
+            serde_json::to_value(&game)
+                .unwrap()
+                .get("view_target")
+                .is_none(),
+            "ALARM_FIVE_RESTORES_DEFAULT_PLAYER_TARGET"
+        );
     }
 
     // Configured own-callback controls for the literal RECOVER statements in

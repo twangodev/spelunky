@@ -196,6 +196,9 @@ fn missing(c: bool, r: RulesPreset) {
 }
 fn configured_dir_override(c: bool, r: RulesPreset) {
     let mut g = shell(c, r, 42);
+    // Keep the configured effect eligible for its own Step after real Create
+    // writes canonical Y400. This is an initial adaptive host context.
+    g.set_simulation_view_extent(640.0, 384.0).unwrap();
     g.spawn("oOlmec", Vec2::new(80.0, 96.0));
     let id = g.spawn("oPsychicCreate2", Vec2::new(220.0, 60.0));
     g.world
@@ -246,8 +249,27 @@ fn shop_wall(c: bool, r: RulesPreset) {
         "OLMEC_OWN_CREATE_EXPLICIT_FALSE_SHOP_WALL"
     );
 }
+fn failed_natural_context(g: &Game, c: bool, r: RulesPreset, frame: i32, reason: &str) {
+    eprintln!(
+        "FAILED_NATURAL_CONTEXT {}",
+        serde_json::json!({
+            "canonical": c, "rules": r, "frame": frame, "reason": reason,
+            "tick": g.tick, "level_tick": g.level_tick, "camera": g.camera,
+            "player": &g.player, "events": &g.events,
+            "bosses": g.world.entities.iter().filter(|e| e.object == "oOlmec").collect::<Vec<_>>(),
+            "terrain": g.world.tiles.iter().enumerate().filter(|(index, _)| [10, 14, 22].contains(&(index / g.world.width))).collect::<Vec<_>>()
+        })
+    );
+}
 fn natural(c: bool, r: RulesPreset) {
+    natural_supported(c, r, true)
+}
+fn natural_supported(c: bool, r: RulesPreset, support: bool) {
     let mut g = shell(c, r, if c { 42 } else { 1 });
+    // Authored rLevel context: original Player Create defaults active=true;
+    // its late false assignment is conditional only on native rOlmec.
+    // The shared helper's inactive-player controls do not apply here.
+    g.player.data.insert("active".into(), 1.0);
     for x in 0..40 {
         g.world.set_tile(x, 22, "oHardBlock");
     }
@@ -255,13 +277,30 @@ fn natural(c: bool, r: RulesPreset) {
         g.world.set_tile(0, y, "oHardBlock");
         g.world.set_tile(39, y, "oHardBlock");
     }
-    for x in (5..9).chain(18..23) {
+    for x in (1..6).chain(34..39) {
         g.world.set_tile(x, 10, "oBlock");
     }
-    g.player.pos = Vec2::new(112., 216.);
+    // This authored platform catches the short player drop without stopping
+    // Olmec or entering its Solid-only Slam recipient family.
+    if support {
+        for x in 1..39 {
+            g.world.set_tile(x, 18, "oLadderTop");
+        }
+    }
+    // Original HardBlock partition separates the two moving solids; all
+    // source movement, Slam-family collision and damage remain enabled.
+    for y in 0..24 {
+        g.world.set_tile(25, y, "oHardBlock");
+    }
+    // Distinct authored wide view keeps both separated bosses' support active.
+    // Full authored-room activation also retains the lower support when the
+    // source camera follows the first boss high above the second boss.
+    // Native follow itself still uses its canonical 320x240 extent.
+    g.set_simulation_view_extent(640., 384.).unwrap();
+    g.player.pos = Vec2::new(128., 344.);
     g.player.previous_pos = g.player.pos;
-    let first = g.spawn("oOlmec", Vec2::new(300., 96.));
-    let second = g.spawn("oOlmec", Vec2::new(80., 96.));
+    let first = g.spawn("oOlmec", Vec2::new(550., 96.));
+    let second = g.spawn("oOlmec", Vec2::new(16., 96.));
     for id in [first, second] {
         assert_eq!(g.world.entity(id).unwrap().state, -1);
         assert_eq!(g.world.entity(id).unwrap().vel, Vec2::default());
@@ -269,7 +308,26 @@ fn natural(c: bool, r: RulesPreset) {
     let mut flee = 0;
     let mut dir = 0;
     let mut preparing = false;
+    eprintln!(
+        "SEPARATED_ROUTE_START {}",
+        serde_json::json!({
+            "canonical": c, "rules": r, "first": first, "second": second,
+            "tick": g.tick, "level_tick": g.level_tick, "player": &g.player, "camera": &g.camera
+        })
+    );
     for frame in 0..1600 {
+        if g.world.entity(first).is_none() || g.world.entity(second).is_none() {
+            eprintln!(
+                "SEPARATED_ROUTE_MISSING {}",
+                serde_json::json!({
+                    "canonical": c, "rules": r, "frame": frame,
+                    "first": first, "second": second, "tick": g.tick,
+                    "level_tick": g.level_tick, "player": &g.player, "camera": &g.camera,
+                    "events": &g.events, "entities": &g.world.entities,
+                    "hidden_entities": g.dispatcher.hidden_entities()
+                })
+            );
+        }
         let a = g.world.entity(first).unwrap();
         let b = g.world.entity(second).unwrap();
         let danger = if b.state == 5 {
@@ -281,7 +339,7 @@ fn natural(c: bool, r: RulesPreset) {
         };
         if let Some(center) = danger {
             if !preparing {
-                flee = 40;
+                flee = 20;
                 dir = if g.player.pos.x < 70. {
                     1
                 } else if g.player.pos.x > 570. {
@@ -296,15 +354,43 @@ fn natural(c: bool, r: RulesPreset) {
         preparing = danger.is_some();
         let create = b.state == 7;
         let serial = g.world.creation_serial;
+        // In this upright scene, y-10 conservatively bounds the aggregate
+        // Player top for standing/running/whoa; Olmec has bottom y+63. Extra
+        // two pixels conservatively cover rounding and its next +1 top nudge.
+        // Escape keeps priority; this guard does not eliminate released coast.
+        let approach = flee == 0
+            && matches!(b.state, 1 | 2)
+            && b.vel.y < 0.
+            && b.data.get("carryPlayer").copied().unwrap_or(0.) == 0.
+            && g.player.grounded
+            && g.player.vel.y == 0.
+            && matches!(g.player.state, PlayerState::Standing | PlayerState::Running)
+            && matches!(
+                g.player.sprite.as_str(),
+                "sStandLeft" | "sRunLeft" | "sWhoaLeft"
+            )
+            && b.pos.y + 65. < g.player.pos.y - 10.;
+        let approach_center = b.pos.x + 32.;
         let input = InputFrame {
-            left: flee > 0 && dir < 0,
-            right: flee > 0 && dir > 0,
+            left: if flee > 0 {
+                dir < 0
+            } else {
+                approach && g.player.pos.x > approach_center
+            },
+            right: if flee > 0 {
+                dir > 0
+            } else {
+                approach && g.player.pos.x < approach_center
+            },
             ..InputFrame::default()
         };
         if flee > 0 {
             flee -= 1;
         }
         g.step(&input);
+        if g.player.health != 4 {
+            failed_natural_context(&g, c, r, frame, "first_step_health_change");
+        }
         assert_eq!(
             g.player.health, 4,
             "ORDINARY_CONTROLLER_SURVIVES_NO_HP_OR_STATE_INJECTION"
@@ -329,6 +415,7 @@ fn natural(c: bool, r: RulesPreset) {
             return;
         }
     }
+    failed_natural_context(&g, c, r, 1600, "later_create_not_reached");
     panic!("FRESH_TWO_BOSS_ORDINARY_ROUTE_MUST_REACH_LATER_CREATE");
 }
 macro_rules! cases {

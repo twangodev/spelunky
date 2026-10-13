@@ -3729,7 +3729,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 114,
+          "line": 144,
           "module": "crates/core/src/game.rs"
         }
       ],
@@ -6653,7 +6653,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 542,
+          "line": 580,
           "module": "crates/core/src/game.rs"
         },
         {
@@ -7528,7 +7528,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 545,
+          "line": 583,
           "module": "crates/core/src/game.rs"
         }
       ],
@@ -7917,6 +7917,11 @@
           "kind": "explicit_object_match_arm",
           "line": 1606,
           "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "manually_reviewed_shared_behavior",
+          "line": 292,
+          "module": "crates/core/src/enemies/temple.rs"
         }
       ],
       "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
@@ -12826,7 +12831,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 548,
+          "line": 586,
           "module": "crates/core/src/game.rs"
         },
         {

@@ -1210,6 +1210,20 @@ fn classic_down_to_run() -> bool {
     true
 }
 
+/// Source view_object[0], independent of the followed actor's controller state.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ViewTarget {
+    #[default]
+    Player,
+    Object(String),
+    None,
+}
+impl ViewTarget {
+    fn is_player(&self) -> bool {
+        *self == Self::Player
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Game {
     /// Persistent source globals plus an outbox that survives event clearing.
@@ -1234,6 +1248,8 @@ pub struct Game {
     pub state: RunState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ending: Option<crate::ending::EndingState>,
+    #[serde(default, skip_serializing_if = "ViewTarget::is_player")]
+    pub view_target: ViewTarget,
     pub camera: Vec2,
     pub previous_camera: Vec2,
     /// Original is omitted so historical snapshots and hashes remain unchanged.
@@ -1394,6 +1410,7 @@ impl Game {
             lifetime_stats: Default::default(),
             dispatcher: Default::default(),
             alarms: crate::dispatcher::unset_alarms(),
+            view_target: ViewTarget::Player,
             camera: Vec2::default(),
             previous_camera: Vec2::default(),
             simulation_view: crate::SimulationView::Original,

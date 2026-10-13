@@ -67,7 +67,8 @@ mod tests {
         ] {
             let mut game = Game::shell(7, RulesPreset::Classic);
             game.world = World::new(42, 55, Area::Boss, 16);
-            game.world.spawn("oOlmec", Vec2::new(304.5, target_y));
+            // Actual Create supplies the view target independently of active.
+            game.spawn("oOlmec", Vec2::new(304.5, target_y));
             game.player.data.insert("active".into(), 0.0);
             game.camera = Vec2::new(0.0, 400.0);
             if let Some(border) = border {

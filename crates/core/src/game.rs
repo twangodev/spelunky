@@ -1,5 +1,35 @@
 use crate::*;
 
+// Native 4BECA4: convert target origin with FISTP (nearest-even), apply
+// border branches, then sequential room limits. Source room follow speeds
+// are -1 (unlimited); this helper does not implement arbitrary speed settings.
+// Inputs are the native finite valid signed64 conversion domain; keep the
+// low32 word after rounding, as 403498 does (not a saturating f64-to-i32 cast).
+fn source_follow_axis(old: f64, actor: f64, border: f64, extent: f64, room: f64) -> f64 {
+    let (old, actor, border, extent, room) = (
+        old.round_ties_even() as i64 as i32,
+        actor.round_ties_even() as i64 as i32,
+        border.round_ties_even() as i64 as i32,
+        extent.round_ties_even() as i64 as i32,
+        room.round_ties_even() as i64 as i32,
+    );
+    let mut desired = old;
+    if border.wrapping_mul(2) >= extent {
+        desired = actor.wrapping_sub(extent / 2);
+    } else if actor.wrapping_sub(border) < old {
+        desired = actor.wrapping_sub(border);
+    } else if actor.wrapping_add(border) > old.wrapping_add(extent) {
+        desired = actor.wrapping_add(border).wrapping_sub(extent);
+    }
+    if desired < 0 {
+        desired = 0;
+    }
+    if room < desired.wrapping_add(extent) {
+        desired = room.wrapping_sub(extent);
+    }
+    f64::from(desired)
+}
+
 impl Game {
     pub fn new(seed: u32, rules: RulesPreset) -> Self {
         Self::generate_first_room(Self::shell(seed, rules))
@@ -170,6 +200,10 @@ impl Game {
         self.data.insert("xtime".into(), 0.);
         // oLevel Create clears duration, but not global.shakeToggle.
         self.data.insert("shake".into(), 0.);
+        // Authored room defaults; runtime Create can select another target
+        // before the first Level Step. Do not infer it from Player.active.
+        self.view_target = ViewTarget::Player;
+        self.data.remove("camera_hborder");
         self.data.remove("camera_vborder");
         self.player.pos = self.world.entrance;
         self.player.previous_pos = self.player.pos;
@@ -229,7 +263,11 @@ impl Game {
         self.flags.remove("source_game_inactive");
         music::room_create(self);
         player::initialize_level_alarms(self);
-        self.update_camera();
+        // The deferred Olmec Create must receive the initial room view unchanged.
+        // Ordinary rooms retain the host's startup entrance projection.
+        if self.world.area != Area::Boss || self.flags.contains("custom") {
+            self.update_camera();
+        }
         self.previous_camera = self.camera;
     }
 
@@ -612,62 +650,58 @@ impl Game {
             self.camera = Vec2::default();
             return;
         }
-        let boss_room = self.world.area == Area::Boss && !self.flags.contains("custom");
-        if boss_room && self.player.data.get("active") == Some(&0.0) {
-            // Olmec Create initially sets zero borders. Each later oLevel
-            // Step supplies the current vertical border, including shake.
-            if let Some(boss) = self
-                .world
-                .entities
-                .iter()
-                .find(|e| e.alive && e.object == "oOlmec")
-            {
-                // The original pre-Draw follow converts the target origin
-                // to integers before applying borders, then clamps to room.
-                let target = Vec2::new(boss.pos.x.round_ties_even(), boss.pos.y.round_ties_even());
-                let border = self.data.get("camera_vborder").copied().unwrap_or(0.0);
-                self.camera.x = self.camera.x.clamp(target.x - VIEW_WIDTH, target.x);
-                self.camera.y = self
-                    .camera
-                    .y
-                    .clamp(target.y - VIEW_HEIGHT + border, target.y - border);
-                self.camera.x = self
-                    .camera
-                    .x
-                    .clamp(0.0, (self.world.width as f64 * 16.0 - VIEW_WIDTH).max(0.0));
-                self.camera.y = self.camera.y.clamp(
-                    0.0,
-                    (self.world.height as f64 * 16.0 - VIEW_HEIGHT).max(0.0),
-                );
-            }
+        // Native pre-Draw follow selects the first unmarked current active
+        // descendant. This lookup must not register or create any instances.
+        let target = match &self.view_target {
+            // The physical Game adapter has one implicit Player (except the
+            // guarded opening above). This also retains its pre-frame entrance
+            // projection; normal level frames activate that Player explicitly.
+            ViewTarget::Player => Some(self.player.pos),
+            ViewTarget::Object(object) => dispatcher::descendant_instances(self, object)
+                .into_iter()
+                .find(|instance| match instance {
+                    dispatcher::Instance::Player => true,
+                    dispatcher::Instance::Entity(id) => self
+                        .world
+                        .entities
+                        .iter()
+                        .chain(self.dispatcher.hidden_entities().iter())
+                        .any(|entity| entity.id == *id && entity.alive),
+                    dispatcher::Instance::Terrain(index) => self
+                        .world
+                        .tiles
+                        .get(*index)
+                        .is_some_and(|tile| !tile.object.is_empty()),
+                })
+                .map(|instance| instance.position(self)),
+            ViewTarget::None => None,
+        };
+        let Some(target) = target else {
+            // No active receiver means no coordinate writes, including clamps.
             return;
-        }
-        let vertical_border = self
+        };
+        let boss_room = self.world.area == Area::Boss && !self.flags.contains("custom");
+        let hborder = self.data.get("camera_hborder").copied().unwrap_or(128.0);
+        let vborder = self
             .data
             .get("camera_vborder")
             .copied()
             .unwrap_or(if boss_room { 64.0 } else { 96.0 });
-        let relative = Vec2::new(
-            self.player.pos.x - self.camera.x,
-            self.player.pos.y - self.camera.y,
-        );
-        if relative.x < 128.0 {
-            self.camera.x = self.player.pos.x - 128.0;
-        } else if relative.x > VIEW_WIDTH - 128.0 {
-            self.camera.x = self.player.pos.x - (VIEW_WIDTH - 128.0);
-        }
-        if relative.y < vertical_border {
-            self.camera.y = self.player.pos.y - vertical_border;
-        } else if relative.y > VIEW_HEIGHT - vertical_border {
-            self.camera.y = self.player.pos.y - (VIEW_HEIGHT - vertical_border);
-        }
-        self.camera.x = self
-            .camera
-            .x
-            .clamp(0.0, (self.world.width as f64 * 16.0 - VIEW_WIDTH).max(0.0));
-        self.camera.y = self.camera.y.clamp(
-            0.0,
-            (self.world.height as f64 * 16.0 - VIEW_HEIGHT).max(0.0),
+        self.camera = Vec2::new(
+            source_follow_axis(
+                self.camera.x,
+                target.x,
+                hborder,
+                VIEW_WIDTH,
+                self.world.width as f64 * 16.0,
+            ),
+            source_follow_axis(
+                self.camera.y,
+                target.y,
+                vborder,
+                VIEW_HEIGHT,
+                self.world.height as f64 * 16.0,
+            ),
         );
     }
 
