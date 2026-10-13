@@ -254,10 +254,14 @@ fn blood_center(e: &Entity, fallback: (f64, f64)) -> Vec2 {
 }
 
 fn stain_spike(game: &mut Game, e: &Entity) {
+    stain_spike_at(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 14.0));
+}
+
+pub(super) fn stain_spike_at(game: &mut Game, e: &Entity, origin: Vec2) {
     // instance_place translates the receiver to the requested origin. The
     // preceding feet point only gates this separate first-instance query.
     let mut probe = e.clone();
-    probe.pos = Vec2::new(e.pos.x + 8.0, e.pos.y + 14.0);
+    probe.pos = origin;
     crate::dispatcher::register_instances(game);
     let spike = crate::dispatcher::descendant_instances(game, "oSpikes")
         .into_iter()
@@ -312,83 +316,118 @@ fn stain_spike(game: &mut Game, e: &Entity) {
 
 fn body_projectile(game: &mut Game, e: &Entity) {
     let area = Rect::new(e.pos.x, e.pos.y, 17.0, 17.0);
-    let Some(index) = game.world.entities.iter().position(|other| {
-        other.alive
-            && other.id != e.id
-            && is_enemy(&other.object)
-            && area.intersects(other.sprite_bounds())
-    }) else {
+    // Preserve this query's existing representation; target effect callbacks
+    // below follow the literal `with obj` branch after selection.
+    let Some(id) = game
+        .world
+        .entities
+        .iter()
+        .find(|other| {
+            other.alive
+                && other.id != e.id
+                && is_enemy(&other.object)
+                && area.intersects(other.sprite_bounds())
+        })
+        .map(|other| other.id)
+    else {
         return;
     };
-    let mut hit = false;
-    let mut explosion = None;
-    let target = &mut game.world.entities[index];
-    if target.value("invincible") > 0.0 || target.object == "oMagmaMan" {
-        return;
-    }
-    if target.state < 98 {
-        target.vel.x = e.vel.x;
-    }
-    match target.object.as_str() {
-        "oCaveman" | "oManTrap" | "oVampire" | "oYeti" | "oHawkman" if target.state < 98 => {
-            target.health -= 1;
-            target.state = 98;
-            target.timer = target.value("stun_time") as u32;
-            target.vel.y = -6.0;
-            hit = true;
+    super::with_actor(game, id, |game, target| {
+        if target.value("invincible") != 0.0 || target.object == "oMagmaMan" {
+            return;
         }
-        "oShopkeeper" | "oShopkeeper2" if target.state < 98 => {
-            target.health -= 1;
-            target.state = 2;
-            target.vel.y = -6.0;
-            hit = true;
+        if target.state < 98 {
+            target.vel.x = e.vel.x;
         }
-        "oGiantSpider" | "oTombLord" if target.value("hit_cooldown") == 0.0 => {
-            target.health -= 1;
-            target.data.insert(
-                "hit_cooldown".into(),
-                if target.object == "oTombLord" {
-                    20.0
-                } else {
-                    10.0
-                },
-            );
-            hit = true;
+        let blood_pos = match target.object.as_str() {
+            "oCaveman" | "oVampire" | "oYeti" | "oHawkman" if target.state < 98 => {
+                Some(Vec2::new(target.pos.x + 8.0, target.pos.y + 8.0))
+            }
+            "oShopkeeper" | "oShopkeeper2" if target.state < 98 => Some(target.pos),
+            "oGiantSpider" if target.value("hit_cooldown") == 0.0 => {
+                Some(Vec2::new(target.pos.x + 16.0, target.pos.y + 24.0))
+            }
+            "oTombLord" if target.value("hit_cooldown") == 0.0 => {
+                Some(Vec2::new(target.pos.x + 16.0, target.pos.y + 16.0))
+            }
+            "oAlienBoss" if target.state != 99 && target.sprite != "sAlienBossHurt" => {
+                Some(Vec2::new(target.pos.x + 8.0, target.pos.y + 8.0))
+            }
+            "oManTrap" | "oCaveman" | "oVampire" | "oYeti" | "oHawkman" | "oShopkeeper"
+            | "oShopkeeper2" | "oGiantSpider" | "oTombLord" | "oAlienBoss" | "oUFO" => None,
+            _ => Some(Vec2::new(target.pos.x + 8.0, target.pos.y + 8.0)),
+        };
+        if let Some(pos) = blood_pos {
+            create_blood(game, target, pos, 1);
         }
-        "oAlienBoss" if target.state != 99 && target.sprite != "sAlienBossHurt" => {
-            target.health -= 1;
-            target.set_sprite("sAlienBossHurt");
-            target.data.insert("animation_speed".into(), 0.8);
-            hit = true;
+        let hit = match target.object.as_str() {
+            "oCaveman" | "oManTrap" | "oVampire" | "oYeti" | "oHawkman" if target.state < 98 => {
+                if target.object == "oManTrap" {
+                    let pos = Vec2::new(
+                        target.pos.x + f64::from(game.rng.range(17)),
+                        target.pos.y - 8.0 + f64::from(game.rng.range(17)),
+                    );
+                    game.spawn("oLeaf", pos);
+                }
+                target.health -= 1;
+                target.state = 98;
+                target.timer = target.value("stun_time") as u32;
+                target.vel.y = -6.0;
+                true
+            }
+            "oShopkeeper" | "oShopkeeper2" if target.state < 98 => {
+                target.health -= 1;
+                target.state = 2;
+                target.vel.y = -6.0;
+                true
+            }
+            "oGiantSpider" | "oTombLord" if target.value("hit_cooldown") == 0.0 => {
+                target.health -= 1;
+                target.data.insert(
+                    "hit_cooldown".into(),
+                    if target.object == "oTombLord" {
+                        20.0
+                    } else {
+                        10.0
+                    },
+                );
+                true
+            }
+            "oAlienBoss" if target.state != 99 && target.sprite != "sAlienBossHurt" => {
+                target.health -= 1;
+                target.set_sprite("sAlienBossHurt");
+                target.set_image_speed(0.8);
+                true
+            }
+            "oUFO" => {
+                let pos = Vec2::new(target.pos.x + 8.0, target.pos.y + 8.0);
+                game.spawn("oExplosion", pos);
+                game.sound("sndExplosion", target.pos);
+                if game.rng.range(3) == 0 {
+                    game.spawn("oAlienEject", pos);
+                }
+                // Unlike the oItem branch, source credits run totals only and
+                // does not write receiver hp or add the common hit sound.
+                target.data.insert("death_recorded".into(), 1.0);
+                *game.data.entry("ufos".into()).or_default() += 1.0;
+                *game.data.entry("kills".into()).or_default() += 1.0;
+                target.alive = false;
+                super::destroyed(game, target);
+                false
+            }
+            "oCaveman" | "oManTrap" | "oVampire" | "oYeti" | "oHawkman" | "oShopkeeper"
+            | "oShopkeeper2" | "oGiantSpider" | "oTombLord" | "oAlienBoss" => false,
+            _ => {
+                target.health -= 1;
+                target.data.insert("origX".into(), target.pos.x);
+                target.data.insert("origY".into(), target.pos.y);
+                true
+            }
+        };
+        if hit {
+            game.sound("sndHit", target.pos);
         }
-        "oUFO" => {
-            explosion = Some(Vec2::new(target.pos.x + 8.0, target.pos.y + 8.0));
-            target.alive = false;
-            target.health = 0;
-            // This source oEnemy Step branch updates run totals only;
-            // unlike oItem's UFO branch it has no enemyKills[16] write.
-            target.data.insert("death_recorded".into(), 1.);
-            *game.data.entry("ufos".into()).or_default() += 1.;
-            *game.data.entry("kills".into()).or_default() += 1.;
-            hit = true;
-        }
-        "oCaveman" | "oManTrap" | "oVampire" | "oYeti" | "oHawkman" | "oShopkeeper"
-        | "oShopkeeper2" | "oGiantSpider" | "oTombLord" | "oAlienBoss" => {}
-        _ => {
-            target.health -= 1;
-            hit = true;
-        }
-    }
-    if let Some(pos) = explosion {
-        game.spawn("oExplosion", pos);
-        if game.rng.range(3) == 0 {
-            game.spawn("oAlienEject", pos);
-        }
-        game.sound("sndExplosion", pos);
-    }
-    if hit {
-        game.sound("sndHit", e.pos);
-    }
+    });
 }
 
 #[cfg(test)]
@@ -2010,3 +2049,7 @@ mod source_spear_query_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "inherited_projectile_followup_tests.rs"]
+mod inherited_projectile_followup_tests;
