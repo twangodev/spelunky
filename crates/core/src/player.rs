@@ -1053,6 +1053,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let col_solid_bot = edge(w, p, Side::Bottom, 1.0);
     let col_bot = col_solid_bot || platform(w, p, p.pos, 1.0);
     let col_platform_bot = precise_line(w, edge_rect(p, Side::Bottom, 1.0, false), "oPlatform");
+    let col_platform = precise_rect(w, bounds_at(p, p.pos), "oPlatform");
     let col_left = edge(w, p, Side::Left, 1.0);
     let col_right = edge(w, p, Side::Right, 1.0);
     let col_top = edge(w, p, Side::Top, 1.0);
@@ -1223,7 +1224,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         ay = 0.0;
         p.state = PlayerState::Running;
     }
-    if col_bot {
+    // characterStepEvent256: overlapping a Platform excludes this stop even
+    // when a Solid also supports the body. Keep the pre-controller snapshot.
+    if col_bot && !col_platform {
         p.vel.y = 0.0;
     }
     if !col_bot && grounded_state(p.state) {
