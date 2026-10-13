@@ -888,16 +888,7 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
         || game.flags.contains("thief")
         || game.data.get("thiefLevel").copied().unwrap_or(0.0) > 0.0
         || game.data.get("thief_level").copied().unwrap_or(0.0) > 0.0;
-    let player_bounds = game.player.sprite_bounds();
-    let own_bounds = e.sprite_bounds();
-    let distance = ((player_bounds.x - own_bounds.x - own_bounds.w + 1.0)
-        .max(own_bounds.x - player_bounds.x - player_bounds.w + 1.0)
-        .max(0.0))
-    .hypot(
-        (player_bounds.y - own_bounds.y - own_bounds.h + 1.0)
-            .max(own_bounds.y - player_bounds.y - player_bounds.h + 1.0)
-            .max(0.0),
-    );
+    let distance = keeper_player_distance(game, e);
     if matches!(e.state, 1 | 4)
         && ((super::player_alive(game)
             && distance < 64.0
@@ -964,10 +955,7 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
         if e.vel.x == 0.0 && e.vel.y == 0.0 && e.health <= 0 {
             e.state = 99;
         }
-        e.vel.x -= e.vel.x.signum() * 0.1;
-        if e.vel.x.abs() < 0.5 {
-            e.vel.x = 0.0;
-        }
+        keeper_friction(e);
         if e.held {
             e.set_sprite(if e.health > 0 {
                 "sShopHeldL"
@@ -978,8 +966,20 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
         return;
     }
     if e.state == 0 {
-        e.vel.x = 0.0;
-        e.facing = if game.player.pos.x < center(e).x {
+        e.data.insert("bounced".into(), 0.0);
+        if contacts.left {
+            e.pos.x += 1.0;
+        }
+        if contacts.right {
+            e.pos.x -= 1.0;
+        }
+        if contacts.left && contacts.right {
+            e.state = 2;
+        }
+        if contacts.top && e.vel.y < 0.0 {
+            e.vel.y = 0.0;
+        }
+        e.facing = if game.player.pos.x < e.pos.x + 8.0 {
             -1
         } else {
             1
@@ -987,21 +987,26 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
         e.set_sprite("sShopLeft");
         if angry {
             e.state = 4;
-            return;
-        }
-        crate::economy::keeper_step(game, e);
-        if super::shop_dialogue::can_follow(game, e) {
-            e.state = 5;
+        } else {
+            crate::economy::keeper_step(game, e);
+            if super::shop_dialogue::can_follow(game, e) {
+                e.state = 5;
+            }
         }
     } else if e.state == 5 {
         e.data.insert("animation_speed".into(), 0.5);
-        let d = center(e).distance(game.player.pos);
-        e.facing = if game.player.pos.x < center(e).x {
-            -1
-        } else {
-            1
-        };
-        e.vel.x = if d < 12.0 {
+        let d = distance;
+        if contacts.left || contacts.right {
+            e.facing *= -1;
+        }
+        if e.value("turn_timer") > 0.0 {
+            e.data
+                .insert("turn_timer".into(), e.value("turn_timer") - 1.0);
+        } else if (game.player.pos.y - (e.pos.y + 8.0)).abs() < 8.0 && grounded && d > 16.0 {
+            e.facing = if game.player.pos.x < e.pos.x { -1 } else { 1 };
+            e.data.insert("turn_timer".into(), 10.0);
+        }
+        e.vel.x = if d < 12.0 || game.player.pos.y < e.pos.y {
             0.0
         } else {
             f64::from(e.facing) * (d / 16.0 * 1.5).min(3.0)
@@ -1015,6 +1020,10 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
             e.state = 0;
         }
     } else if e.state == 4 {
+        e.data.insert("bounced".into(), 0.0);
+        if contacts.top && e.vel.y < 0.0 {
+            e.vel.y = 0.0;
+        }
         if grounded && e.timer > 0 {
             e.timer -= 1;
         }
@@ -1024,10 +1033,23 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
         }
     } else if e.state == 1 {
         e.data.insert("animation_speed".into(), 0.5);
-        if wall {
+        if contacts.left || contacts.right {
             e.facing *= -1;
         }
+        let edge = Vec2::new(e.pos.x + if e.facing < 0 { -1.0 } else { 16.0 }, e.pos.y);
+        // Native collision_point flags test >=0.5; source -1 means bbox/notme=false.
+        if !keeper_solid_point(game, edge, CollisionPrecision::BoundingBox) {
+            e.state = 4;
+            e.timer = 20 + game.rng.range(31);
+            e.vel.x = 0.0;
+        }
+        // Source overwrites the edge branch's zero before its independent pause roll.
         e.vel.x = f64::from(e.facing) * 1.5;
+        if game.rng.range(100) == 0 {
+            e.state = 4;
+            e.timer = 20 + game.rng.range(31);
+            e.vel.x = 0.0;
+        }
     } else if e.state == 3 {
     } else if e.state == 2 {
         e.data.insert("animation_speed".into(), 1.0);
@@ -1035,10 +1057,7 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
         if e.value("turn_timer") > 0.0 {
             e.data
                 .insert("turn_timer".into(), e.value("turn_timer") - 1.0);
-        } else if grounded
-            && (game.player.pos.y - center(e).y).abs() < 8.0
-            && center(e).distance(game.player.pos) > 16.0
-        {
+        } else if grounded && (game.player.pos.y - center(e).y).abs() < 8.0 && distance > 16.0 {
             e.facing = if game.player.pos.x < center(e).x {
                 -1
             } else {
@@ -1055,12 +1074,21 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
             e.data.insert("firing".into(), cooldown - 1.0);
         } else if e.value("has_gun") > 0.0
             && (game.player.pos.y - center(e).y).abs() < 32.0
-            && center(e).distance(game.player.pos) < 96.0
+            && distance < 96.0
             && (game.player.pos.x - center(e).x) * f64::from(e.facing) > 0.0
         {
+            game.spawn(
+                if e.facing < 0 {
+                    "oShotgunBlastLeft"
+                } else {
+                    "oShotgunBlastRight"
+                },
+                Vec2::new(
+                    e.pos.x + if e.facing < 0 { 0.0 } else { 16.0 },
+                    e.pos.y + 9.0,
+                ),
+            );
             for _ in 0..6 {
-                let speed = f64::from(6 + game.rng.range(3));
-                let spread = game.rng.unit() - game.rng.unit();
                 let id = game.spawn(
                     "oBullet",
                     Vec2::new(
@@ -1068,11 +1096,19 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
                         e.pos.y + 8.0,
                     ),
                 );
+                let speed = f64::from(6 + game.rng.range(3));
+                let spread = game.rng.unit() - game.rng.unit();
                 if let Some(b) = game.world.entity_mut(id) {
                     b.vel = Vec2::new(f64::from(e.facing) * (speed + 3.0), spread);
                     b.data.insert("safe".into(), 1.0);
                     b.data.insert("owner_player".into(), 0.0);
                     b.data.insert("damage".into(), 4.0);
+                }
+                let origin = game.world.entity(id).unwrap().pos;
+                if keeper_solid_point(game, origin, CollisionPrecision::BoundingBox) {
+                    // Bullet has no Destroy event or parent. This source
+                    // instance_destroy is not its later Solid collision callback.
+                    game.world.entity_mut(id).unwrap().alive = false;
                 }
             }
             e.vel.y -= 1.0;
@@ -1101,6 +1137,70 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
         if !super::player_alive(game) {
             e.state = 1;
         }
+    }
+    keeper_friction(e);
+    // Final own-Step art also supplies the following Collision phase's mask.
+    if e.state < 98 && e.state != 3 {
+        e.set_sprite(if e.vel.x.abs() > 0.0 {
+            "sShopRunLeft"
+        } else {
+            "sShopLeft"
+        });
+    }
+    if e.held {
+        e.set_sprite(if e.health > 0 {
+            "sShopHeldL"
+        } else {
+            "sShopDHeldL"
+        });
+    }
+}
+
+/// The native distance_to_object(oPlayer1) kernel reads cached inclusive
+/// integer envelopes, independent of the selected Collision mask frame.
+fn keeper_player_distance(game: &Game, e: &Entity) -> f64 {
+    if !game.player.engine_active {
+        return 1_000_000.0;
+    }
+    crate::world_events::mask_distance(
+        e.collision_mask().point_bounds(),
+        game.player.collision_mask().point_bounds(),
+    )
+    .min(1_000_000.0)
+}
+
+/// Literal keeper collision_point queries use active oSolid descendants,
+/// including held ones, independently of the engine solid flag.
+fn keeper_solid_point(game: &Game, point: Vec2, precision: CollisionPrecision) -> bool {
+    game.world.width > 0
+        && game.world.tiles.iter().enumerate().any(|(index, tile)| {
+            tile.engine_active
+                && crate::catalog::is_a(&tile.object, "oSolid")
+                && game
+                    .world
+                    .tile_collision_mask(
+                        (index % game.world.width) as i32,
+                        (index / game.world.width) as i32,
+                    )
+                    .contains(point, precision)
+        })
+        || game.world.entities.iter().any(|solid| {
+            solid.alive
+                && solid.engine_active
+                && crate::catalog::is_a(&solid.object, "oSolid")
+                && solid.mask_contains(point, precision)
+        })
+}
+
+fn keeper_friction(e: &mut Entity) {
+    if e.vel.x > 0.0 {
+        e.vel.x -= 0.1;
+    }
+    if e.vel.x < 0.0 {
+        e.vel.x += 0.1;
+    }
+    if e.vel.x.abs() < 0.5 {
+        e.vel.x = 0.0;
     }
 }
 
@@ -3097,3 +3197,11 @@ mod deadfish_isolated_membership_tests {
         inactive_membership_case(true);
     }
 }
+
+#[cfg(test)]
+#[path = "shopkeeper_patrol_burst_source_tests.rs"]
+mod shopkeeper_patrol_burst_source_tests;
+
+#[cfg(test)]
+#[path = "shopkeeper_cached_distance_tests.rs"]
+mod shopkeeper_cached_distance_tests;
