@@ -442,10 +442,30 @@ fn exposed_generated_market_ankh_moai_and_gold_door_form_a_reachable_state_chain
         .find(|e| e.object == "oGoldDoor")
         .unwrap();
     let door_id = door.id;
-    let door_pos = door.pos;
-    // GoldDoor is solid. Approach with the held sceptre instead of placing
-    // the player inside it: Player Step crush precedes automatic Collision.
-    position_player(&mut game, Vec2::new(door_pos.x - 8.0, door_pos.y + 8.0));
+    // GoldDoor is nonsolid; generation guarantees clearance above its support,
+    // not on its left. Center the controller on the actual door mask and align
+    // its bottom with the mask's bottom, then qualify the full interaction pose.
+    let door_bounds = door.sprite_bounds();
+    let player_bounds = game.player.bounds();
+    let staging = Vec2::new(
+        door_bounds.x + door_bounds.w / 2.0
+            - (player_bounds.x + player_bounds.w / 2.0 - game.player.pos.x),
+        door_bounds.y + door_bounds.h - (player_bounds.y + player_bounds.h - game.player.pos.y),
+    );
+    let staging_bounds = Rect::new(
+        staging.x + player_bounds.x - game.player.pos.x,
+        staging.y + player_bounds.y - game.player.pos.y,
+        player_bounds.w,
+        player_bounds.h,
+    );
+    assert!(door_bounds.intersects(staging_bounds));
+    assert!(!game.world.tiles_collide(staging_bounds, "oSolid"));
+    assert!(!game.world.entities.iter().any(|entity| {
+        entity.alive
+            && spelunky_core::catalog::is_a(&entity.object, "oSolid")
+            && entity.sprite_bounds().intersects(staging_bounds)
+    }));
+    position_player(&mut game, staging);
     assert!(!game.world.solid_at(game.player.pos.x, game.player.pos.y));
     for _ in 0..8 {
         game.step(&InputFrame {
