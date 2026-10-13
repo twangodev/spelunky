@@ -1720,8 +1720,23 @@ pub(crate) fn player_explosion_hurt(game: &mut Game) {
     }) {
         return;
     }
+    // Current active-family rank controls exact-distance ties. Pending raw
+    // World births retain visibility and append in source creation order;
+    // unlike registration, this snapshot cannot execute Create callbacks.
+    let family = crate::dispatcher::descendant_instances(game, "oExplosion");
+    let rank = |entity: &Entity| {
+        family
+            .iter()
+            .position(|instance| *instance == crate::dispatcher::Instance::Entity(entity.id))
+            .map_or((1_u8, entity.creation_serial), |index| (0, index as u64))
+    };
     let nearest = explosions()
-        .min_by(|a, b| a.pos.distance(pos).total_cmp(&b.pos.distance(pos)))
+        .min_by(|a, b| {
+            a.pos
+                .distance(pos)
+                .total_cmp(&b.pos.distance(pos))
+                .then_with(|| rank(a).cmp(&rank(b)))
+        })
         .unwrap()
         .pos;
     // This source block bypasses ordinary contact invincibility.
@@ -5839,3 +5854,7 @@ mod rope_own_termination_state_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "player_nearest_family_tests.rs"]
+mod player_nearest_family_tests;

@@ -1107,6 +1107,15 @@ pub(super) fn player_hurt(game: &mut Game) {
         }) {
             continue;
         }
+        // Keep the existing visible candidate set, including pending raw
+        // World births; family rank breaks ties without impure registration.
+        let family = crate::dispatcher::descendant_instances(game, object);
+        let rank = |entity: &Entity| {
+            family
+                .iter()
+                .position(|instance| *instance == crate::dispatcher::Instance::Entity(entity.id))
+                .map_or((1_u8, entity.creation_serial), |index| (0, index as u64))
+        };
         let Some(target) = game
             .world
             .entities
@@ -1116,6 +1125,7 @@ pub(super) fn player_hurt(game: &mut Game) {
                 a.pos
                     .distance(game.player.pos)
                     .total_cmp(&b.pos.distance(game.player.pos))
+                    .then_with(|| rank(a).cmp(&rank(b)))
             })
         else {
             continue;
