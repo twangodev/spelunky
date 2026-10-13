@@ -306,11 +306,17 @@ pub(super) fn collision(game: &mut Game, e: &mut Entity, other: Instance) -> boo
         return true;
     }
     if e.object == "oOlmecSlam" && crate::catalog::is_a(&object, "oSolid") {
+        let origin = other.position(game);
         match other {
             Instance::Entity(id) => {
                 if let Some(target) = game.world.entity_mut(id) {
                     target.data.insert("cleanDeath".into(), 0.0);
                 }
+                game.dispatcher.remove_decoration_at(
+                    &mut game.world.entities,
+                    3.0,
+                    Vec2::new(origin.x, origin.y - 16.0),
+                );
                 crate::items::explosives::destroy_solid_self(game, id);
             }
             Instance::Terrain(index) => {
@@ -324,6 +330,11 @@ pub(super) fn collision(game: &mut Game, e: &mut Entity, other: Instance) -> boo
                 }) {
                     metadata.data.insert("cleanDeath".into(), 0.0);
                 }
+                game.dispatcher.remove_decoration_at(
+                    &mut game.world.entities,
+                    3.0,
+                    Vec2::new(origin.x, origin.y - 16.0),
+                );
                 crate::items::explosives::destroy_terrain_self(game, x, y);
             }
             _ => {}
