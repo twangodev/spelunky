@@ -1,6 +1,6 @@
 //! NPC/ghost behavior from oGhost, oDamsel, oShopkeeper and oScarab events.
 //! Shop purchase UI/dice/kissing-parlor economics belong to the economy system.
-use super::{can_stomp, center, in_stars, move_body};
+use super::{center, in_stars, move_body};
 use crate::statistics::LifetimeCounter;
 use crate::*;
 
@@ -207,12 +207,8 @@ pub(super) fn collision(
             true
         }
         ("oShopkeeper" | "oShopkeeper2", Instance::Player) => {
-            if !matches!(e.state, 0 | 5 | 98 | 99) && can_stomp(game, e) {
-                false
-            } else {
-                keeper_player_collision(game, e);
-                true
-            }
+            keeper_player_collision(game, e);
+            true
         }
         ("oDamsel", Instance::Entity(id)) => {
             let Some(attack) = game.world.entity(id).cloned() else {
@@ -1336,8 +1332,44 @@ fn keeper_player_collision(game: &mut Game, e: &mut Entity) {
         || game.player.stun > 0
         || game.player.state == PlayerState::Stunned
         || (game.player.pos.x - (e.pos.x + 8.0)).abs() > 8.0
-        || game.player.invincible != 0
     {
+        return;
+    }
+    if matches!(
+        game.player.state,
+        PlayerState::Jumping | PlayerState::Falling
+    ) && game.player.pos.y < e.pos.y + 5.0
+        && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
+    {
+        if e.state < 98 {
+            game.player.vel.y = -6.0 - 0.2 * game.player.vel.y;
+            let damage =
+                (game.player.data.get("fall_timer").copied().unwrap_or(0.0) / 16.0).ceil() as i32;
+            if game.player.has("SpikeShoes") {
+                e.health -= 3 * damage;
+                // This own event bypasses scrCreateBlood's 16-detritus gate.
+                game.spawn(
+                    "oBlood",
+                    Vec2::new(game.player.pos.x, game.player.pos.y + 8.0),
+                );
+            } else {
+                e.health -= damage;
+            }
+            game.player.data.insert("fall_timer".into(), 0.0);
+            e.state = 98;
+            e.timer = e.value("stun_time") as u32;
+            e.vel.y = -6.0;
+            e.vel.x += if game.player.pos.x < e.pos.x + 8.0 {
+                1.0
+            } else {
+                -1.0
+            };
+            e.data.insert("animation_speed".into(), 0.5);
+            game.sound("sndHit", e.pos);
+        }
+        return;
+    }
+    if game.player.invincible != 0 || e.state >= 98 {
         return;
     }
     if game.world.solid_at(e.pos.x + 8.0, e.pos.y - 4.0) {
