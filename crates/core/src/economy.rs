@@ -1,7 +1,7 @@
 //! Shop policy from scrShopkeeperAnger, oItem Step and oPlayer1 Step.
 //! Original shop membership is a 160×128 room, not distance to the keeper.
 use crate::enemies::shop_dialogue::say;
-use crate::model::{Entity, Game, InputFrame, Rect, RunState, Vec2};
+use crate::model::{Entity, Game, InputFrame, RunState, Vec2};
 use crate::statistics::{LifetimeCounter, is_real_level};
 
 fn room(pos: Vec2) -> (i32, i32) {
@@ -35,11 +35,6 @@ pub(crate) fn player_in_shop(game: &mut Game, pos: Vec2) -> bool {
     in_shop(game, pos)
 }
 
-fn rect_distance(a: Rect, b: Rect) -> f64 {
-    let x = (a.x - b.x - b.w + 1.).max(b.x - a.x - a.w + 1.).max(0.);
-    let y = (a.y - b.y - b.h + 1.).max(b.y - a.y - a.h + 1.).max(0.);
-    x.hypot(y)
-}
 fn count(game: &mut Game, key: &str, counter: LifetimeCounter) {
     if is_real_level(game) {
         *game.data.entry(key.into()).or_default() += 1.;
@@ -195,18 +190,34 @@ fn settle_dice(game: &mut Game) {
             .map(|e| (e.id, e.pos))
             .collect();
         for (id, pos) in prizes {
-            clear_sale(game, id);
-            if let Some(prize) = game.world.entity_mut(id) {
-                prize.data.insert("inDiceHouse".into(), 0.);
-                prize.pos.x += if game.player.pos.x < pos.x { -32. } else { 32. };
+            // oShopkeeper Step creates the first pair before replacement Create,
+            // then the second pair at the awarded item's shifted position.
+            for (dx, velocity) in [(-4., -0.4), (4., 0.4)] {
+                let poof = game.spawn("oPoof", Vec2::new(pos.x + dx, pos.y + 6.));
+                game.world.entity_mut(poof).unwrap().vel.x = velocity;
             }
             let object = high_end_prize(game);
-            let replacement = game.world.spawn(object, pos);
+            let replacement = game.spawn(object, pos);
             game.world
                 .entity_mut(replacement)
                 .unwrap()
                 .data
                 .insert("inDiceHouse".into(), 1.);
+            let awarded = Vec2::new(
+                pos.x + if game.player.pos.x < pos.x { -32. } else { 32. },
+                pos.y,
+            );
+            if let Some(prize) = game.world.entity_mut(id) {
+                prize.pos = awarded;
+            }
+            for (dx, velocity) in [(-4., -0.4), (4., 0.4)] {
+                let poof = game.spawn("oPoof", Vec2::new(awarded.x + dx, awarded.y + 6.));
+                game.world.entity_mut(poof).unwrap().vel.x = velocity;
+            }
+            clear_sale(game, id);
+            if let Some(prize) = game.world.entity_mut(id) {
+                prize.data.insert("inDiceHouse".into(), 0.);
+            }
         }
         say(game, "YOU ROLLED A SEVEN!", "YOU WIN A PRIZE!", 200);
     } else if total > 7 {
@@ -498,25 +509,44 @@ pub(crate) fn player_pay_step(game: &mut Game, input: &InputFrame) {
     }) {
         return;
     }
-    let kiss = game
-        .world
-        .entities
-        .iter()
-        .find(|e| {
-            e.alive
-                && e.health > 0
-                && e.object == "oDamsel"
-                && e.value("forSale") > 0.
-                && !e.held
-                && rect_distance(e.sprite_bounds(), game.player.sprite_bounds()) < 16.
-        })
-        .map(|e| e.id);
+    // distance_to_object reads cached inclusive integer sprite envelopes, while
+    // instance_nearest selects by origin before forSale/held eligibility.
+    crate::dispatcher::register_instances(game);
+    let mut in_range = false;
+    let mut kiss = None;
+    let mut nearest_distance = f64::INFINITY;
+    for instance in crate::dispatcher::descendant_instances(game, "oDamsel") {
+        if !crate::dispatcher::is_active(game, instance) {
+            continue;
+        }
+        let crate::dispatcher::Instance::Entity(id) = instance else {
+            continue;
+        };
+        let Some(damsel) = game.world.entity(id) else {
+            continue;
+        };
+        in_range |= crate::world_events::mask_distance(
+            damsel.collision_mask().point_bounds(),
+            game.player.collision_mask().point_bounds(),
+        ) < 16.;
+        let distance = damsel.pos.distance(game.player.pos);
+        if distance < nearest_distance {
+            nearest_distance = distance;
+            kiss = Some(id);
+        }
+    }
+    if !in_range {
+        return;
+    }
     if let Some(id) = kiss {
-        if wanted {
+        if wanted || game.world.entity(id).unwrap().value("forSale") == 0. {
             return;
         }
         let cost = 5000_u32.saturating_mul(game.world.level);
         if !purchase_failed && game.player.money >= cost {
+            if game.world.entity(id).unwrap().held {
+                return;
+            }
             game.player.money -= cost;
             game.player.health += 1;
             count(game, "kissesBought", LifetimeCounter::KissesBought);
@@ -1189,3 +1219,7 @@ mod tests {
         assert_eq!(g.world.entity(id).unwrap().value("forSale"), 1.);
     }
 }
+
+#[cfg(test)]
+#[path = "economy_damsel_cached_distance_tests.rs"]
+mod damsel_cached_distance_tests;
