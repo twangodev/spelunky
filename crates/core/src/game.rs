@@ -1029,7 +1029,7 @@ mod tests {
     }
 
     #[test]
-    fn completed_exit_recreates_a_moving_player_in_linked_and_campaign_rooms() {
+    fn completed_exit_recreates_source_controller_and_moves_in_linked_room() {
         use characters::Character;
         for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
             for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
@@ -1040,10 +1040,9 @@ mod tests {
                     for x in 0..level::LEVEL_WIDTH {
                         first.set_tile(x, 8, '1').unwrap();
                     }
-                    // Canonical seed 8 was selected by a bounded, static
-                    // entrance-geometry search before any continued player
-                    // input. Its six campaign variants all have the same
-                    // clear jump corridor and supporting floor, checked below.
+                    // Keep the exact original seed. Generated campaign rooms
+                    // need a fresh character controller, but do not promise
+                    // the authored linked room's broad movement corridor.
                     let mut game = Game::shell(8, rules);
                     characters::apply(&mut game, character);
                     game.load_custom(&first, "first", "");
@@ -1076,6 +1075,13 @@ mod tests {
                         game.ending.as_ref().unwrap().stage,
                         ending::EndingStage::Complete
                     );
+                    let inventory = (
+                        game.player.health,
+                        game.player.bombs,
+                        game.player.ropes,
+                        game.player.money,
+                        game.player.equipment.clone(),
+                    );
                     if custom {
                         let mut next = first.clone();
                         next.set_tile(6, 7, '0').unwrap();
@@ -1085,6 +1091,60 @@ mod tests {
                         game.continue_custom(&next, "second", "first");
                     } else {
                         game.next_level();
+                    }
+                    // Literal characterCreateEvent + oPlayer1 Create/reset
+                    // contract, independent of collision-scene headroom.
+                    assert_eq!(game.state, RunState::Playing);
+                    assert!(game.ending.is_none());
+                    assert_eq!(game.level_tick, 0);
+                    assert_eq!(game.player.pos, game.world.entrance);
+                    assert_eq!(game.player.previous_pos, game.world.entrance);
+                    assert_eq!(game.player.vel, Vec2::default());
+                    assert_eq!(game.player.state, crate::PlayerState::Falling);
+                    assert_eq!(game.player.facing, 1);
+                    assert!(!game.player.grounded);
+                    assert!(game.player.engine_active);
+                    assert_eq!(game.player.data.get("active"), Some(&1.));
+                    assert!(!game.player.is_exiting());
+                    assert!(!game.player.is_stunned());
+                    assert_eq!(game.player.stun, 0);
+                    assert_eq!(game.player.attack_timer, 0);
+                    assert_eq!(game.player.invincible, 0);
+                    assert_eq!(game.player.animation, 0.);
+                    assert!(game.player.held.is_none());
+                    assert!(game.player.pickup_item_type.is_empty());
+                    assert_eq!(
+                        game.player.sprite,
+                        match character {
+                            Character::Explorer => "sStandLeft",
+                            Character::Damsel => "sDamselLeft",
+                            Character::TunnelMan => "sTunnelLeft",
+                        }
+                    );
+                    assert_eq!(
+                        game.player.bounds(),
+                        Rect::new(
+                            game.world.entrance.x - 5.,
+                            game.world.entrance.y - 8.,
+                            10.,
+                            16.
+                        )
+                    );
+                    assert_eq!(
+                        (
+                            game.player.health,
+                            game.player.bombs,
+                            game.player.ropes,
+                            game.player.money,
+                            game.player.equipment.clone()
+                        ),
+                        inventory
+                    );
+                    if !custom {
+                        // Current campaign construction/traversal has its own
+                        // proof. Do not choose a passing seed/alter geometry to
+                        // force this controller-reset test's old corridor.
+                        continue;
                     }
                     // characterCreateEvent sets the upright platform mask to
                     // (-5,-8,5,8). This corridor covers its six-tick held-jump

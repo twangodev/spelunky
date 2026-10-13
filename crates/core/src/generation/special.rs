@@ -163,9 +163,14 @@ fn tutorial_sign(x: i32, y: i32) -> (u32, &'static str, &'static str) {
 }
 
 /// Overlay source-authored placements after the procedural room templates.
-pub(super) fn apply(world: &mut World, _rng: &mut Rng, flags: &BTreeSet<String>) {
+pub(super) fn apply(
+    world: &mut World,
+    rng: &mut Rng,
+    flags: &BTreeSet<String>,
+    revision: crate::GenerationRevision,
+) {
     if world.area == Area::Boss {
-        boss_arena(world);
+        boss_arena(world, rng, revision);
     }
     if flags.contains("city_of_gold") {
         // Tile identities remain oTemple; rendering chooses the golden temple
@@ -187,7 +192,7 @@ pub(super) fn apply(world: &mut World, _rng: &mut Rng, flags: &BTreeSet<String>)
     }
 }
 
-fn boss_arena(world: &mut World) {
+fn boss_arena(world: &mut World, rng: &mut Rng, revision: crate::GenerationRevision) {
     world.name = "Olmec's Lair".into();
     world.entrance = Vec2::new(24.0, 552.0);
     world.exit = Vec2::new(648.0, 552.0);
@@ -241,7 +246,13 @@ fn boss_arena(world: &mut World) {
         ("oCavemanWorship", 232.0, 544.0, "sCavemanWorshipR"),
         ("oHawkmanWorship", 280.0, 544.0, "sHawkLeft"),
     ] {
-        let id = world.spawn(object, Vec2::new(x, y));
+        let id = if object == "oOlmec" && revision == crate::GenerationRevision::SourceClassicV2 {
+            // Complete its local Create at this authored birth, before the
+            // following worshippers, and preserve producer sprite overrides.
+            crate::creation::spawn_generated_entity(world, rng, object, Vec2::new(x, y))
+        } else {
+            world.spawn(object, Vec2::new(x, y))
+        };
         let entity = world.entity_mut(id).expect("new authored boss entity");
         entity.sprite = sprite.into();
         if object == "oEntrance" && x == 640.0 {
@@ -313,7 +324,11 @@ mod tests {
     #[test]
     fn boss_uses_deep_authored_arena_and_a_sealed_victory_door() {
         let mut world = World::new(42, 55, Area::Boss, 16);
-        boss_arena(&mut world);
+        boss_arena(
+            &mut world,
+            &mut Rng::new(0),
+            crate::GenerationRevision::SourceClassicV2,
+        );
         assert_eq!(world.entrance, Vec2::new(24.0, 552.0));
         assert_eq!(
             world
@@ -360,5 +375,48 @@ mod tests {
                 .iter()
                 .any(|entity| entity.value("boss_exit") == 1.0)
         );
+    }
+    #[test]
+    fn authored_olmec_completes_one_facing_draw_before_following_births() {
+        for seed in 0..16 {
+            for revision in [
+                crate::GenerationRevision::SourceClassicV2,
+                crate::GenerationRevision::HistoricalV1,
+            ] {
+                let mut world = World::new(42, 55, Area::Boss, 16);
+                let mut actual = Rng::new(seed);
+                let mut expected = actual.clone();
+                let facing = if revision == crate::GenerationRevision::SourceClassicV2 {
+                    if expected.range(2) == 0 { -1 } else { 1 }
+                } else {
+                    1
+                };
+                boss_arena(&mut world, &mut actual, revision);
+                let boss = world
+                    .entities
+                    .iter()
+                    .find(|e| e.object == "oOlmec")
+                    .unwrap();
+                assert_eq!(boss.pos, Vec2::new(304., 496.));
+                assert_eq!(boss.sprite, "sOlmecStart1");
+                assert_eq!(boss.facing, facing);
+                assert_eq!(
+                    boss.value("olmec_facing_created"),
+                    if revision == crate::GenerationRevision::SourceClassicV2 {
+                        1.
+                    } else {
+                        0.
+                    }
+                );
+                let worship = world
+                    .entities
+                    .iter()
+                    .find(|e| e.object == "oCavemanWorship")
+                    .unwrap();
+                assert!(boss.creation_serial < worship.creation_serial);
+                assert_eq!(actual.state_bits(), expected.state_bits());
+                assert_eq!(actual.next_u64(), expected.next_u64());
+            }
+        }
     }
 }

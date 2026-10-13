@@ -80,7 +80,13 @@ struct Path {
     start: usize,
     end: usize,
 }
-fn room_path(rng: &mut Rng, area: Area, level: u32, flags: &mut BTreeSet<String>) -> Path {
+fn room_path(
+    rng: &mut Rng,
+    area: Area,
+    level: u32,
+    flags: &mut BTreeSet<String>,
+    source_classic: bool,
+) -> Path {
     let start = rng.range(4) as usize;
     // scrLevelGen draws this candidate even outside Temple and before the
     // Black Market early return; a successful sacrifice pit reuses it.
@@ -107,7 +113,17 @@ fn room_path(rng: &mut Rng, area: Area, level: u32, flags: &mut BTreeSet<String>
     let mut y = 0;
     path.rooms[y][x] = 1;
     // The source creates a sacrifice shaft before constructing the main path.
-    if area == Area::Temple && (has(flags, "sacrifice_pit") || rng.chance(1, 8)) {
+    // The source condition is eager even outside Temple, but the Market
+    // early return above never reaches it. HistoricalV1 retains its old tape.
+    let sacrifice_roll = source_classic && rng.chance(1, 8);
+    if area == Area::Temple
+        && (has(flags, "sacrifice_pit")
+            || if source_classic {
+                sacrifice_roll
+            } else {
+                rng.chance(1, 8)
+            })
+    {
         while pit == start {
             pit = rng.range(4) as usize;
         }
@@ -156,8 +172,16 @@ fn room_path(rng: &mut Rng, area: Area, level: u32, flags: &mut BTreeSet<String>
     if area == Area::Mines {
         'pit: for row in 0..2 {
             for col in 0..4 {
+                // Every visited source condition evaluates rand, including
+                // cells whose occupied room guards prevent a pit.
+                let snake_roll = source_classic && rng.chance(1, 8);
                 if (row..row + 3).all(|r| path.rooms[r][col] == 0)
-                    && (has(flags, "snake_pit") || rng.chance(1, 8))
+                    && (has(flags, "snake_pit")
+                        || if source_classic {
+                            snake_roll
+                        } else {
+                            rng.chance(1, 8)
+                        })
                 {
                     path.rooms[row][col] = 7;
                     path.rooms[row + 1][col] = 8;
@@ -182,27 +206,52 @@ fn room_path(rng: &mut Rng, area: Area, level: u32, flags: &mut BTreeSet<String>
         }
         path.rooms[4][jaws] = 9;
     }
-    if area == Area::Ice {
-        let forced_other = has(flags, "alien_ship") || has(flags, "yeti_lair");
-        // Explicit destination flags are port overrides. Ordinarily the
-        // entire Moai eligibility block excludes the alien/yeti else-if chain,
-        // including when this level's Moai chance fails.
-        if has(flags, "moai") || (!forced_other && !has(flags, "made_moai")) {
-            let moai = has(flags, "moai")
-                || match level {
+    let forced_other = has(flags, "alien_ship") || has(flags, "yeti_lair");
+    let moai_eligible =
+        area == Area::Ice && (has(flags, "moai") || (!forced_other && !has(flags, "made_moai")));
+    // Entering the outer Moai body excludes both else-if statements, even
+    // when this level's placement chance fails.
+    if moai_eligible {
+        let moai = has(flags, "moai")
+            || if source_classic {
+                let nine = rng.chance(1, 4);
+                if level == 9 && nine {
+                    true
+                } else {
+                    let ten = rng.chance(1, 3);
+                    if level == 10 && ten {
+                        true
+                    } else {
+                        let eleven = rng.chance(1, 2);
+                        (level == 11 && eleven) || level == 12
+                    }
+                }
+            } else {
+                match level {
                     9 => rng.chance(1, 4),
                     10 => rng.chance(1, 3),
                     11 => rng.chance(1, 2),
                     12 => true,
                     _ => false,
-                };
-            if moai {
-                let col = rng.range(4) as usize;
-                let row = rand(rng, 1, 2) as usize;
-                path.rooms[row][col] = 6;
-                flags.insert("moai".into());
-            }
-        } else if has(flags, "alien_ship") || (!has(flags, "yeti_lair") && rng.chance(1, 10)) {
+                }
+            };
+        if moai {
+            let col = rng.range(4) as usize;
+            let row = rand(rng, 1, 2) as usize;
+            path.rooms[row][col] = 6;
+            flags.insert("moai".into());
+        }
+    } else {
+        let alien_roll = source_classic && rng.chance(1, 10);
+        if area == Area::Ice
+            && (has(flags, "alien_ship")
+                || (!has(flags, "yeti_lair")
+                    && if source_classic {
+                        alien_roll
+                    } else {
+                        rng.chance(1, 10)
+                    }))
+        {
             let col = rng.range(3) as usize;
             let row = rand(rng, 1, 2) as usize;
             for x in col..4 {
@@ -215,8 +264,18 @@ fn room_path(rng: &mut Rng, area: Area, level: u32, flags: &mut BTreeSet<String>
                 };
             }
             flags.insert("alien_ship".into());
-        } else if has(flags, "yeti_lair") || rng.chance(1, 6) {
-            flags.insert("yeti_lair".into());
+        } else {
+            let yeti_roll = source_classic && rng.chance(1, 6);
+            if area == Area::Ice
+                && (has(flags, "yeti_lair")
+                    || if source_classic {
+                        yeti_roll
+                    } else {
+                        rng.chance(1, 6)
+                    })
+            {
+                flags.insert("yeti_lair".into());
+            }
         }
     }
     // The port also uses this path builder for synthetic tutorial level 0;
@@ -646,6 +705,19 @@ fn select_dark_level(
     (visible, selected)
 }
 
+fn select_cemetery(rng: &mut Rng, area: Area, forced: bool, source_classic: bool) -> bool {
+    // scrInitLevel149 reaches this rand for every area. Explicit fixture flags
+    // do not suppress that source call; HistoricalV1 retains its old tape.
+    let roll = source_classic && rng.chance(1, 10);
+    area == Area::Jungle
+        && !forced
+        && if source_classic {
+            roll
+        } else {
+            rng.chance(1, 10)
+        }
+}
+
 /// Generate a seeded Classic level with fresh-run Create context.
 /// Flags select unlocked special destinations.
 pub fn generate(rng: &mut Rng, level: u32, flags: &BTreeSet<String>) -> World {
@@ -712,10 +784,7 @@ pub(crate) fn generate_campaign_result(
             dark_roll_selected: false,
         };
     }
-    let path = room_path(rng, area, level, &mut selected);
-    if area == Area::Jungle && !has(&selected, "cemetery") && rng.chance(1, 10) {
-        selected.insert("cemetery".into());
-    }
+    let source_classic = state.revision == crate::GenerationRevision::SourceClassicV2;
     let height = if area == Area::Boss {
         55
     } else if area == Area::Ice {
@@ -728,7 +797,27 @@ pub(crate) fn generate_campaign_result(
     } else {
         34
     };
-    world = World::new(42, height, area, level);
+    if source_classic {
+        world = World::new(42, height, area, level);
+        // scrInitLevel completes real boundary Create calls and producer
+        // overrides before scrLevelGen, including out-of-storage instances.
+        source_boundaries(
+            &mut world,
+            rng,
+            has(&selected, "lake"),
+            has(&selected, "city_of_gold"),
+        );
+        #[cfg(test)]
+        source_boundary_tests::observe_before_path(&world, rng);
+    }
+    let path = room_path(rng, area, level, &mut selected, source_classic);
+    if select_cemetery(rng, area, has(&selected, "cemetery"), source_classic) {
+        selected.insert("cemetery".into());
+    }
+    if !source_classic {
+        // Explicit HistoricalV1 retains its old construction order and draws.
+        world = World::new(42, height, area, level);
+    }
     world.name = if has(&selected, "black_market") {
         "Black Market"
     } else if has(&selected, "city_of_gold") {
@@ -755,36 +844,38 @@ pub(crate) fn generate_campaign_result(
         }
     }
     .into();
-    // scrInitLevel creates concrete, invincible terrain, never the sprite-less
-    // oSolid parent. The controller queries the source sprite mask, so a bare
-    // oSolid cell is not a substitute for these authored wall instances.
-    let boundary_object = match area {
-        Area::Mines => "oBrick",
-        Area::Jungle => "oLush",
-        Area::Ice => "oDark",
-        Area::Temple | Area::Boss => "oTemple",
-    };
-    for y in 0..height {
-        boundary_tile(&mut world, 0, y, boundary_object);
-        boundary_tile(&mut world, 41, y, boundary_object);
-    }
-    for x in 1..41 {
-        boundary_tile(&mut world, x, 0, boundary_object);
-        if area != Area::Ice {
-            boundary_tile(&mut world, x, height - 1, boundary_object);
+    if !source_classic {
+        // scrInitLevel creates concrete, invincible terrain, never the sprite-less
+        // oSolid parent. The controller queries the source sprite mask, so a bare
+        // oSolid cell is not a substitute for these authored wall instances.
+        let boundary_object = match area {
+            Area::Mines => "oBrick",
+            Area::Jungle => "oLush",
+            Area::Ice => "oDark",
+            Area::Temple | Area::Boss => "oTemple",
+        };
+        for y in 0..height {
+            boundary_tile(&mut world, 0, y, boundary_object);
+            boundary_tile(&mut world, 41, y, boundary_object);
         }
-    }
-    if area == Area::Ice {
-        // Source j<=38 also authors the two side-wall instances at y=608,
-        // beyond rLevel2's storage height. Keep that last wall segment without
-        // creating a floor across the open abyss or moving its death threshold.
-        for x in [0.0, 656.0] {
-            let id = world.spawn("oDark", Vec2::new(x, 608.0));
-            world
-                .entity_mut(id)
-                .unwrap()
-                .data
-                .insert("invincible".into(), 1.0);
+        for x in 1..41 {
+            boundary_tile(&mut world, x, 0, boundary_object);
+            if area != Area::Ice {
+                boundary_tile(&mut world, x, height - 1, boundary_object);
+            }
+        }
+        if area == Area::Ice {
+            // Source j<=38 also authors the two side-wall instances at y=608,
+            // beyond rLevel2's storage height. Keep that last wall segment without
+            // creating a floor across the open abyss or moving its death threshold.
+            for x in [0.0, 656.0] {
+                let id = world.spawn("oDark", Vec2::new(x, 608.0));
+                world
+                    .entity_mut(id)
+                    .unwrap()
+                    .data
+                    .insert("invincible".into(), 1.0);
+            }
         }
     }
     let script_name = match area {
@@ -878,7 +969,7 @@ pub(crate) fn generate_campaign_result(
                     && rng.chance(1, 12)));
         false
     };
-    special::apply(&mut world, rng, &selected);
+    special::apply(&mut world, rng, &selected, state.revision);
     apply_wanted_posters(&mut world, &selected);
     let graphics_high = !has(&selected, "low_graphics");
     terrain::create_generated_with_context(&mut world, rng, context);
@@ -894,9 +985,13 @@ pub(crate) fn generate_campaign_result(
         has(&selected, "cemetery"),
     );
     if graphics_high {
-        background_extras(&mut world, rng);
+        background_extras(&mut world, rng, source_classic);
     }
+    #[cfg(test)]
+    terrain::observe_init_cleanup(&world, false);
     init_cleanup::cleanup(&mut world, state.revision);
+    #[cfg(test)]
+    terrain::observe_init_cleanup(&world, true);
     terrain::finalize_generated(&mut world);
     GeneratedLevel {
         world,
@@ -937,14 +1032,34 @@ pub(crate) fn initialize_hub_canopy(world: &mut World, revision: crate::Generati
     }
 }
 
-fn background_extras(world: &mut World, rng: &mut Rng) {
+fn background_extras(world: &mut World, rng: &mut Rng, source_classic: bool) {
     // scrInitLevel:228–240, after SetupWalls and before entity generation.
     for _ in 0..20 {
-        let background = match world.area {
-            Area::Jungle if rng.range(3) < 2 => "bgExtrasLush",
-            Area::Ice if rng.range(3) < 2 => "bgExtrasIce",
-            Area::Temple if rng.range(3) < 2 => "bgExtrasTemple",
-            _ => "bgExtras",
+        let background = if source_classic {
+            // Boolean operands are eager; else-if statement reach is not.
+            let lush = rng.range(3) < 2;
+            if world.area == Area::Jungle && lush {
+                "bgExtrasLush"
+            } else {
+                let ice = rng.range(3) < 2;
+                if world.area == Area::Ice && ice {
+                    "bgExtrasIce"
+                } else {
+                    let temple = rng.range(3) < 2;
+                    if world.area == Area::Temple && temple {
+                        "bgExtrasTemple"
+                    } else {
+                        "bgExtras"
+                    }
+                }
+            }
+        } else {
+            match world.area {
+                Area::Jungle if rng.range(3) < 2 => "bgExtrasLush",
+                Area::Ice if rng.range(3) < 2 => "bgExtrasIce",
+                Area::Temple if rng.range(3) < 2 => "bgExtrasTemple",
+                _ => "bgExtras",
+            }
         };
         let source_x = f64::from(rng.range(2) * 32);
         let origin = Vec2::new(
@@ -986,6 +1101,50 @@ fn apply_wanted_posters(world: &mut World, flags: &BTreeSet<String>) {
     world.entities.retain(|entity| entity.alive);
 }
 
+// scrInitLevel:75-140. The loop is column-major, includes x=672, and
+// creates its Ice floor below (not instead of) rLevel2's falling threshold.
+fn source_boundaries(world: &mut World, rng: &mut Rng, lake: bool, city: bool) {
+    let k = if world.area == Area::Boss {
+        54
+    } else if world.area == Area::Ice {
+        38
+    } else if lake {
+        41
+    } else {
+        33
+    };
+    let object = match world.area {
+        Area::Ice => "oDark",
+        Area::Boss => "oTemple",
+        _ if lake => "oLush",
+        Area::Mines => "oBrick",
+        Area::Jungle => "oLush",
+        Area::Temple => "oTemple",
+    };
+    for i in 0..=42 {
+        for j in 0..=k {
+            let side_or_top = i == 0 || i == 41 || j == 0;
+            let floor = match world.area {
+                Area::Ice | Area::Boss => false,
+                _ if lake => j >= 41,
+                _ => j >= 33,
+            };
+            if side_or_top || floor {
+                terrain::create_source_boundary(world, rng, i, j, object, city, true);
+            }
+        }
+    }
+    if world.area == Area::Ice {
+        for i in 0..=42 {
+            terrain::create_source_boundary(world, rng, i, 40, "oDark", city, false);
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "generation/source_boundary_tests.rs"]
+mod source_boundary_tests;
+
 fn boundary_tile(world: &mut World, x: usize, y: usize, object: &str) {
     world.set_tile(x, y, object);
     let id = world.spawn(
@@ -1018,6 +1177,170 @@ mod tests {
     // Independent column-major transcription of scrLevelGen.gml. This uses
     // only the RNG primitive, not room_path/rand/has or its candidate builder.
     fn source_room_path(
+        rng: &mut Rng,
+        area: Area,
+        level: u32,
+        made_moai: bool,
+        made_market: bool,
+    ) -> (Path, BTreeSet<String>) {
+        let mut rooms = [[0_u8; 5]; 4];
+        let start = rng.range(4) as usize;
+        let mut n = rng.range(4) as usize;
+        let (mut x, mut y) = (start, 0_usize);
+        let mut end = start;
+        let mut selected = BTreeSet::new();
+        if made_moai {
+            selected.insert("made_moai".into());
+        }
+        if made_market {
+            selected.insert("made_black_market".into());
+        }
+        rooms[x][y] = 1;
+        let sacrifice = 1 + rng.range(8);
+        if area == Area::Temple && sacrifice == 1 {
+            while n == x {
+                n = rng.range(4) as usize;
+            }
+            rooms[n] = [7, 8, 8, 9, 0];
+            selected.insert("sacrifice_pit".into());
+        }
+        while y < 4 {
+            let draw = match x {
+                0 => 3 + rng.range(3),
+                3 => 5 + rng.range(3),
+                _ => 1 + rng.range(5),
+            };
+            let (previous_x, previous_y) = (x, y);
+            if draw < 3 || draw > 5 {
+                if x > 0 && rooms[x - 1][y] == 0 {
+                    x -= 1;
+                }
+            } else if draw == 3 || draw == 4 {
+                if x < 3 && rooms[x + 1][y] == 0 {
+                    x += 1;
+                }
+            }
+            if draw == 5 {
+                y += 1;
+                if y < 4 {
+                    rooms[previous_x][previous_y] = 2;
+                    rooms[x][y] = 3;
+                } else {
+                    end = x;
+                }
+            } else {
+                rooms[x][y] = 1;
+            }
+        }
+        if area == Area::Mines {
+            'snake: for row in 0..2 {
+                for col in 0..4 {
+                    let snake = 1 + rng.range(8);
+                    if rooms[col][row] == 0
+                        && rooms[col][row + 1] == 0
+                        && rooms[col][row + 2] == 0
+                        && snake == 1
+                    {
+                        rooms[col][row] = 7;
+                        rooms[col][row + 1] = 8;
+                        if row == 0 && rooms[col][3] == 0 {
+                            rooms[col][2] = 8;
+                            rooms[col][3] = 9;
+                        } else {
+                            rooms[col][row + 2] = 9;
+                        }
+                        selected.insert("snake_pit".into());
+                        break 'snake;
+                    }
+                }
+            }
+        }
+        if !made_moai && area == Area::Ice {
+            let nine = 1 + rng.range(4);
+            let placed = if level == 9 && nine == 1 {
+                true
+            } else {
+                let ten = 1 + rng.range(3);
+                if level == 10 && ten == 1 {
+                    true
+                } else {
+                    let eleven = 1 + rng.range(2);
+                    (level == 11 && eleven == 1) || level == 12
+                }
+            };
+            if placed {
+                let col = rng.range(4) as usize;
+                let row = 1 + rng.range(2) as usize;
+                rooms[col][row] = 6;
+                selected.insert("moai".into());
+            }
+        } else {
+            let alien = 1 + rng.range(10);
+            if area == Area::Ice && alien == 1 {
+                let col = rng.range(3) as usize;
+                let row = 1 + rng.range(2) as usize;
+                for i in col..4 {
+                    rooms[i][row] = if i == col {
+                        7
+                    } else if i == 3 {
+                        9
+                    } else {
+                        8
+                    };
+                }
+                selected.insert("alien_ship".into());
+            } else {
+                let yeti = 1 + rng.range(6);
+                if area == Area::Ice && yeti == 1 {
+                    selected.insert("yeti_lair".into());
+                }
+            }
+        }
+        let shop_draw = 1 + rng.range(level);
+        if shop_draw <= 2 && level > 1 && !made_market {
+            let mut possibilities = [[0_u8; 4]; 4];
+            let mut count = 0;
+            for row in 0..4 {
+                for col in 0..4 {
+                    if rooms[col][row] == 0 {
+                        if col < 3 {
+                            if rooms[col + 1][row] == 1 || rooms[col + 1][row] == 2 {
+                                possibilities[col][row] = 4;
+                                count += 1;
+                            }
+                        } else if rooms[col - 1][row] == 1 || rooms[col - 1][row] == 2 {
+                            possibilities[col][row] = 5;
+                            count += 1;
+                        }
+                    }
+                }
+            }
+            if count > 0 {
+                let mut choice = rng.range(count);
+                'shop: for row in 0..4 {
+                    for col in 0..4 {
+                        if possibilities[col][row] != 0 {
+                            if choice == 0 {
+                                rooms[col][row] = possibilities[col][row];
+                                break 'shop;
+                            }
+                            choice -= 1;
+                        }
+                    }
+                }
+            }
+        }
+        (
+            Path {
+                rooms: std::array::from_fn(|row| std::array::from_fn(|col| rooms[col][row])),
+                start,
+                end,
+            },
+            selected,
+        )
+    }
+
+    fn historical_room_path_oracle(
         rng: &mut Rng,
         area: Area,
         level: u32,
@@ -1195,6 +1518,7 @@ mod tests {
                             Area::for_level(level),
                             level,
                             &mut selected,
+                            true,
                         );
                         assert_eq!(
                             actual.rooms, expected.rooms,
@@ -1221,7 +1545,7 @@ mod tests {
             expected.range(4); // n, before the Black Market return
             let mut actual = Rng::new(seed);
             let mut flags = BTreeSet::from(["black_market".into()]);
-            let path = room_path(&mut actual, Area::Jungle, 5, &mut flags);
+            let path = room_path(&mut actual, Area::Jungle, 5, &mut flags, true);
             assert_eq!((path.start, path.end), (0, 3));
             assert_eq!(actual.next_u64(), expected.next_u64(), "seed{seed}");
         }
@@ -1234,7 +1558,7 @@ mod tests {
             let mut absent = false;
             for seed in 0..128 {
                 let mut selected = BTreeSet::new();
-                room_path(&mut Rng::new(seed), Area::Ice, level, &mut selected);
+                room_path(&mut Rng::new(seed), Area::Ice, level, &mut selected, true);
                 placed |= selected.contains("moai");
                 absent |= !selected.contains("moai");
                 assert!(!selected.contains("alien_ship") && !selected.contains("yeti_lair"));
@@ -1256,8 +1580,23 @@ mod tests {
         ] {
             let seed = (0..128)
                 .find(|seed| {
+                    // Literal scrInitLevel boundary prefix before scrLevelGen:
+                    // Ice:119 side/top Dark +43 ordinary y640 Dark births;
+                    // Temple:150 boundary Temple births. All own Creates draw
+                    // once; strict source interior child bounds exclude them.
+                    // Independent finite GM8 LCG, not generated-world outcome
+                    // selection or a call to the production boundary helper.
+                    let calls = match level {
+                        9 | 12 => 162,
+                        13 => 150,
+                        _ => unreachable!("six fixed Ice/Temple branch cases"),
+                    };
+                    let mut boundary_state: u32 = *seed;
+                    for _ in 0..calls {
+                        boundary_state = boundary_state.wrapping_mul(0x0808_8405).wrapping_add(1);
+                    }
                     let (_, selected) = source_room_path(
-                        &mut Rng::new(*seed),
+                        &mut Rng::new(boundary_state),
                         Area::for_level(level),
                         level,
                         made,
@@ -1296,7 +1635,13 @@ mod tests {
 
     #[test]
     fn synthetic_level_zero_and_authored_tutorial_remain_valid() {
-        let path = room_path(&mut Rng::new(0), Area::Mines, 0, &mut BTreeSet::new());
+        let path = room_path(
+            &mut Rng::new(0),
+            Area::Mines,
+            0,
+            &mut BTreeSet::new(),
+            false,
+        );
         assert!(path.start < 4 && path.end < 4);
         let world = tutorial();
         assert_eq!((world.width, world.height), (42, 19));
@@ -1353,7 +1698,13 @@ mod tests {
     #[test]
     fn room_path_has_one_continuous_descent() {
         for seed in 0..512 {
-            let path = room_path(&mut Rng::new(seed), Area::Mines, 1, &mut BTreeSet::new());
+            let path = room_path(
+                &mut Rng::new(seed),
+                Area::Mines,
+                1,
+                &mut BTreeSet::new(),
+                true,
+            );
             let mut x = path.start;
             for y in 0..3 {
                 let down = (0..4).find(|&c| path.rooms[y][c] == 2).expect("down room");
@@ -1564,6 +1915,146 @@ mod tests {
         );
         assert_eq!(game.player.health, initial_health);
         assert_eq!(game.state, RunState::Ending);
+    }
+    #[test]
+    fn historical_room_path_keeps_its_prior_tape_for_both_rng_algorithms() {
+        for seed in 0..64 {
+            for level in [1, 2, 5, 9, 10, 11, 12, 13, 14, 16] {
+                for made_moai in [false, true] {
+                    for made_market in [false, true] {
+                        for canonical_rng in [false, true] {
+                            let mut actual = if canonical_rng {
+                                Rng::new(seed)
+                            } else {
+                                Rng::legacy(u64::from(seed))
+                            };
+                            let mut expected = actual.clone();
+                            let mut flags = BTreeSet::new();
+                            if made_moai {
+                                flags.insert("made_moai".into());
+                            }
+                            if made_market {
+                                flags.insert("made_black_market".into());
+                            }
+                            let (oracle, oracle_flags) = historical_room_path_oracle(
+                                &mut expected,
+                                Area::for_level(level),
+                                level,
+                                made_moai,
+                                made_market,
+                            );
+                            let path = room_path(
+                                &mut actual,
+                                Area::for_level(level),
+                                level,
+                                &mut flags,
+                                false,
+                            );
+                            assert_eq!(path.rooms, oracle.rooms);
+                            assert_eq!((path.start, path.end), (oracle.start, oracle.end));
+                            assert_eq!(flags, oracle_flags);
+                            assert_eq!(actual.state_bits(), expected.state_bits());
+                            assert_eq!(actual.next_u64(), expected.next_u64());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cemetery_predicate_draws_on_wrong_areas_but_historical_tape_stays_conditional() {
+        for seed in 0..64 {
+            for area in [
+                Area::Mines,
+                Area::Jungle,
+                Area::Ice,
+                Area::Temple,
+                Area::Boss,
+            ] {
+                for forced in [false, true] {
+                    let mut actual = Rng::new(seed);
+                    let mut source = actual.clone();
+                    let chance = 1 + source.range(10);
+                    assert_eq!(
+                        select_cemetery(&mut actual, area, forced, true),
+                        area == Area::Jungle && !forced && chance == 1
+                    );
+                    assert_eq!(actual.next_u64(), source.next_u64());
+                    let mut old = Rng::new(seed);
+                    let mut old_oracle = old.clone();
+                    let expected = area == Area::Jungle && !forced && old_oracle.chance(1, 10);
+                    assert_eq!(select_cemetery(&mut old, area, forced, false), expected);
+                    assert_eq!(old.next_u64(), old_oracle.next_u64());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn background_extras_match_each_reached_source_predicate_and_three_tile_draws() {
+        for seed in 0..32 {
+            for area in [
+                Area::Mines,
+                Area::Jungle,
+                Area::Ice,
+                Area::Temple,
+                Area::Boss,
+            ] {
+                for source_classic in [false, true] {
+                    let mut world = World::new(42, 34, area, 1);
+                    let mut actual = Rng::new(seed);
+                    let mut expected = actual.clone();
+                    let mut decorations = Vec::new();
+                    for _ in 0..20 {
+                        let sprite = if source_classic {
+                            let lush_roll = 1 + expected.range(3);
+                            if area == Area::Jungle && lush_roll < 3 {
+                                "bgExtrasLush"
+                            } else {
+                                let ice_roll = 1 + expected.range(3);
+                                if area == Area::Ice && ice_roll < 3 {
+                                    "bgExtrasIce"
+                                } else {
+                                    let temple_roll = 1 + expected.range(3);
+                                    if area == Area::Temple && temple_roll < 3 {
+                                        "bgExtrasTemple"
+                                    } else {
+                                        "bgExtras"
+                                    }
+                                }
+                            }
+                        } else {
+                            match area {
+                                Area::Jungle if expected.range(3) < 2 => "bgExtrasLush",
+                                Area::Ice if expected.range(3) < 2 => "bgExtrasIce",
+                                Area::Temple if expected.range(3) < 2 => "bgExtrasTemple",
+                                _ => "bgExtras",
+                            }
+                        };
+                        let source_x = f64::from(expected.range(2) * 32);
+                        let pos = Vec2::new(
+                            f64::from((1 + expected.range(42)) * 16),
+                            f64::from((1 + expected.range(33)) * 16),
+                        );
+                        decorations.push((sprite, pos, source_x));
+                    }
+                    background_extras(&mut world, &mut actual, source_classic);
+                    assert_eq!(world.entities.len(), 20);
+                    for (entity, (sprite, pos, source_x)) in world.entities.iter().zip(decorations)
+                    {
+                        assert_eq!(entity.object, "oGenerationDecoration");
+                        assert_eq!(entity.sprite, sprite);
+                        assert_eq!(entity.pos, pos);
+                        assert_eq!(entity.value("source_x"), source_x);
+                        assert_eq!(entity.value("source_w"), 32.);
+                        assert_eq!(entity.value("depth"), 10002.);
+                    }
+                    assert_eq!(actual.state_bits(), expected.state_bits());
+                    assert_eq!(actual.next_u64(), expected.next_u64());
+                }
+            }
+        }
     }
 }
 

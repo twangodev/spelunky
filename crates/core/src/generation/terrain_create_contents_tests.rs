@@ -98,6 +98,16 @@ pub(super) struct CreateTrace {
     first_child_id: u64,
     children: Vec<Entity>,
     metadata: Entity,
+    cleanup: Vec<SourceCleanupPrediction>,
+}
+
+#[derive(Clone, Debug)]
+struct SourceCleanupPrediction {
+    child_id: u64,
+    destroys: bool,
+    point_gate: bool,
+    first_precise: Option<(u64, String, bool)>,
+    alive_after_cleanup: Option<bool>,
 }
 thread_local! {
     static TRACES: RefCell<Option<Vec<CreateTrace>>> = const { RefCell::new(None) };
@@ -132,6 +142,7 @@ pub(super) fn observe_before(
         first_child_id: world.next_id,
         children: Vec::new(),
         metadata: parent,
+        cleanup: Vec::new(),
     })
 }
 
@@ -147,6 +158,110 @@ pub(super) fn observe_after(world: &World, rng: &Rng, trace: Option<CreateTrace>
         trace.metadata = world.entity(trace.metadata.id).unwrap().clone();
         TRACES.with(|traces| traces.borrow_mut().as_mut().unwrap().push(trace));
     }
+}
+
+// Independent literal scrInitLevel259–267 oracle. The generated room has
+// never executed Level deactivation: source family entries are active and
+// retain creation order across the tile/entity storage adapter. These probes
+// use the shared source mask primitives, never init_cleanup::cleanup or its
+// output as the expected decision.
+pub(super) fn observe_init_cleanup(world: &World, after: bool) {
+    TRACES.with(|traces| {
+        let mut slot = traces.borrow_mut();
+        let Some(traces) = slot.as_mut() else {
+            return;
+        };
+        for trace in traces {
+            if after {
+                for predicted in &mut trace.cleanup {
+                    let child = world
+                        .entities
+                        .iter()
+                        .find(|e| e.id == predicted.child_id)
+                        .expect("cleanup retains source identity as a live/dead record");
+                    predicted.alive_after_cleanup = Some(child.alive);
+                    assert_eq!(
+                        child.alive, !predicted.destroys,
+                        "literal cleanup phase decision: {predicted:?}"
+                    );
+                }
+                continue;
+            }
+            assert!(
+                trace.cleanup.is_empty(),
+                "one pre-cleanup observation per room"
+            );
+            for birth in &trace.children {
+                let child = world
+                    .entity(birth.id)
+                    .expect("source Create child must still be alive before final cleanup");
+                assert_eq!(child.creation_serial, birth.creation_serial);
+                assert_eq!(child.object, birth.object);
+                let mut source_family = Vec::new();
+                for (index, tile) in world.tiles.iter().enumerate() {
+                    if !crate::catalog::is_a(&tile.object, "oSolid") {
+                        continue;
+                    }
+                    assert!(
+                        tile.engine_active,
+                        "no source Level deactivation before cleanup"
+                    );
+                    let x = (index % world.width) as i32;
+                    let y = (index / world.width) as i32;
+                    let invincible = world.entities.iter().any(|e| {
+                        e.alive
+                            && e.object == "oTerrainMetadata"
+                            && (e.pos.x / 16.).floor() as i32 == x
+                            && (e.pos.y / 16.).floor() as i32 == y
+                            && e.value("invincible") != 0.
+                    });
+                    source_family.push((
+                        tile.creation_serial,
+                        format!("tile:{index}:{}", tile.object),
+                        invincible,
+                        world.tile_collision_mask(x, y),
+                    ));
+                }
+                for solid in world
+                    .entities
+                    .iter()
+                    .filter(|e| e.alive && crate::catalog::is_a(&e.object, "oSolid"))
+                {
+                    assert!(
+                        solid.engine_active,
+                        "no source Level deactivation before cleanup"
+                    );
+                    source_family.push((
+                        solid.creation_serial,
+                        format!("entity:{}:{}", solid.id, solid.object),
+                        solid.value("invincible") != 0.,
+                        solid.collision_mask(),
+                    ));
+                }
+                source_family.sort_by_key(|receiver| receiver.0);
+                let point_gate = source_family.iter().any(|receiver| {
+                    receiver
+                        .3
+                        .contains(child.pos, CollisionPrecision::BoundingBox)
+                });
+                let child_mask = child.collision_mask();
+                let first_precise = source_family
+                    .iter()
+                    .find(|receiver| child_mask.intersects_mask(&receiver.3))
+                    .map(|receiver| (receiver.0, receiver.1.clone(), receiver.2));
+                let destroys = crate::catalog::is_a(&child.object, "oTreasure")
+                    && point_gate
+                    && first_precise.as_ref().is_some_and(|receiver| receiver.2);
+                trace.cleanup.push(SourceCleanupPrediction {
+                    child_id: child.id,
+                    destroys,
+                    point_gate,
+                    first_precise,
+                    alive_after_cleanup: None,
+                });
+            }
+        }
+    });
 }
 
 #[test]
@@ -474,10 +589,26 @@ fn live_terrain_create_actual_next_level_births_follow_literal_parent_oracle_and
                         assert_eq!(child.alarms[0], 20);
                         kinds.insert("gem");
                     }
-                    assert!(
-                        game.world.entity(child.id).is_some(),
-                        "source child survives completed population"
+                    let cleanup = trace
+                        .cleanup
+                        .iter()
+                        .find(|prediction| prediction.child_id == child.id)
+                        .expect("selected child has an independent pre-cleanup source prediction");
+                    assert_eq!(
+                        cleanup.alive_after_cleanup,
+                        Some(!cleanup.destroys),
+                        "source cleanup phase must be observed: {cleanup:?}"
                     );
+                    assert_eq!(
+                        game.world.entity(child.id).is_some(),
+                        !cleanup.destroys,
+                        "completed initialization preserves the literal cleanup outcome: {cleanup:?}"
+                    );
+                    if let Some(survivor) = game.world.entity(child.id) {
+                        assert_eq!(survivor.creation_serial, child.creation_serial);
+                        assert_eq!(survivor.object, child.object);
+                        assert_eq!(survivor.pos, child.pos);
+                    }
                     observed.insert(object.to_owned());
                 } else {
                     assert!(trace.children.is_empty());

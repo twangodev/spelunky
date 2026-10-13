@@ -50,6 +50,104 @@ pub(super) fn metadata(world: &mut World, x: usize, y: usize) -> u64 {
     id
 }
 
+/// Complete the closed scrInitLevel boundary constructor at its actual birth.
+/// Tile storage remains the port's ordinary Solid representation; exterior
+/// source instances remain concrete entities, without changing room bounds.
+/// Interior terrain Create/stamp interleaving is a separate source-order debt.
+pub(super) fn create_source_boundary(
+    world: &mut World,
+    rng: &mut Rng,
+    x: usize,
+    y: usize,
+    object: &str,
+    city: bool,
+    invincible_override: bool,
+) {
+    let origin = Vec2::new(x as f64 * 16.0, y as f64 * 16.0);
+    // The source condition is strict and uses room dimensions, not storage
+    // existence. Every boundary and y=640 floor origin fails it. Refuse to
+    // use this closed constructor for an interior parent that can birth loot.
+    assert!(
+        !(origin.x > 1.0
+            && origin.x < (world.width - 1) as f64 * 16.0
+            && origin.y > 1.0
+            && origin.y < (world.height - 1) as f64 * 16.0)
+    );
+    let stored = x < world.width && y < world.height;
+    let id = if stored {
+        assert!(world.tile(x as i32, y as i32).unwrap().object.is_empty());
+        world.set_tile(x, y, object);
+        metadata(world, x, y)
+    } else {
+        world.spawn(object, origin)
+    };
+    let entity = world.entity_mut(id).unwrap();
+    // oDrawnSprite Create, then oSolid Create, before own Create.
+    entity.data.insert("blinkToggle".into(), 0.0);
+    entity.data.insert("invincible".into(), 0.0);
+    entity.data.insert("shopWall".into(), 0.0);
+    entity.data.insert("cleanDeath".into(), 0.0);
+    entity.text.insert("type".into(), "None".into());
+    entity.text.insert("treasure".into(), String::new());
+    #[cfg(test)]
+    let rng_before = rng.state_bits();
+    let mut sprite = format!("s{}", &object[1..]);
+    if object == "oBrick" && rng.range(10) == 0 {
+        sprite = "sBrick2".into();
+    }
+    // Even City of Gold Temple Create draws before selecting sGTemple.
+    let roll = 1 + rng.range(100);
+    if object == "oTemple" && city {
+        sprite = "sGTemple".into();
+    } else if roll < 20 {
+        sprite = format!("s{}Gold", &object[1..]);
+    } else if roll < 30 {
+        sprite = format!("s{}GoldBig", &object[1..]);
+    }
+    #[cfg(test)]
+    super::source_boundary_tests::observe_create(
+        id,
+        origin,
+        object,
+        &sprite,
+        rng_before,
+        rng.state_bits(),
+    );
+    // Caller assignments occur after own Create. The ordinary Ice floor has
+    // neither assignment and retains its real constructor variant.
+    if invincible_override && !(object == "oTemple" && city) {
+        sprite = format!("s{}", &object[1..]);
+    }
+    let entity = world.entity_mut(id).unwrap();
+    entity.data.insert("n".into(), f64::from(roll));
+    entity.data.insert("terrain_initialized".into(), 1.0);
+    entity.data.insert("source_boundary_birth".into(), 1.0);
+    if invincible_override {
+        entity.data.insert("invincible".into(), 1.0);
+        entity.data.insert("source_boundary".into(), 1.0);
+    }
+    // Destroy reads the final sprite, not the overwritten Create variant.
+    entity.data.remove("gold_chunks");
+    entity.data.remove("gold_nuggets");
+    if sprite.ends_with("Gold") || sprite.ends_with("GoldBig") || sprite == "sGTemple" {
+        entity.data.insert("gold_chunks".into(), 3.0);
+        entity.data.insert(
+            "gold_nuggets".into(),
+            if sprite.ends_with("GoldBig") || sprite == "sGTemple" {
+                1.0
+            } else {
+                0.0
+            },
+        );
+    }
+    if stored {
+        entity.sprite.clear();
+        entity.text.insert("terrain_sprite".into(), sprite);
+    } else {
+        entity.sprite = sprite;
+    }
+}
+
 fn neighbors(world: &World, x: usize, y: usize, object: &str) -> (bool, bool, bool, bool) {
     let connected = |dx: i32, dy: i32| {
         let point = Vec2::new(
@@ -1192,3 +1290,8 @@ mod tests {
 #[cfg(test)]
 #[path = "terrain_create_contents_tests.rs"]
 mod create_contents_tests;
+
+#[cfg(test)]
+pub(super) fn observe_init_cleanup(world: &World, after: bool) {
+    create_contents_tests::observe_init_cleanup(world, after);
+}

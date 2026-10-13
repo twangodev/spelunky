@@ -153,6 +153,12 @@ fn traverse_canonical_recording(
             || catalog::is_a(&entity.object, "oWater")
             || entity.object == "oExit"
     });
+    traverse_loaded_collision_recording(game, actions);
+}
+
+fn traverse_loaded_collision_recording(mut game: Game, actions: &[u8]) {
+    let seed = game.seed;
+    let level = game.world.level;
     game.player.pos = game.world.entrance;
     game.player.previous_pos = game.player.pos;
     let spawn = game.player.pos;
@@ -221,6 +227,37 @@ fn traverse_canonical_recording(
     );
 }
 
+// Exact historical port9a7ab011 worlds, captured by Root from the sealed
+// pre-eager core5014582c with the original seed0/default context and actor
+// filter. These are collision-scene/controller regressions, NOT current
+// SourceClassicV2 generated-world traversal or Original-runtime captures.
+fn traverse_historical_port_9a_collision_scene(level: u32, actions: &[u8]) {
+    let raw = match level {
+        1 => include_str!("fixtures/port_9a7ab011_seed0_level1.json"),
+        9 => include_str!("fixtures/port_9a7ab011_seed0_level9.json"),
+        _ => unreachable!("only the two exact historical recordings"),
+    };
+    let mut game = Game::shell(0, RulesPreset::Classic);
+    game.world = serde_json::from_str(raw).expect("sealed historical port collision world");
+    assert_eq!(game.world.level, level);
+    assert_eq!(
+        game.rng.state_bits(),
+        0,
+        "original untouched gameplay RNG seed"
+    );
+    assert!(
+        game.world.entities.iter().all(|entity| {
+            entity.solid
+                || catalog::is_a(&entity.object, "oLadder")
+                || catalog::is_a(&entity.object, "oPlatform")
+                || catalog::is_a(&entity.object, "oWater")
+                || entity.object == "oExit"
+        }),
+        "captured actor filter must already be exact, never repaired at load"
+    );
+    traverse_loaded_collision_recording(game, actions);
+}
+
 #[test]
 fn canonical_seed_zero_mines_is_traversed_from_the_generated_entrance() {
     // Preserve the original canonical-RNG recording under its historical selector contract.
@@ -238,14 +275,11 @@ fn canonical_seed_zero_mines_is_traversed_from_the_generated_entrance() {
 }
 
 #[test]
-fn source_classic_seed_zero_mines_is_traversed_from_the_generated_entrance() {
-    // Actual SourceClassicV2 seed-zero geometry, with the original tape followed
-    // by two left jumps and a right correction onto the newly selected exit ledge.
-    // Full Game.step, physical key edges, actor filter and assertions are shared.
-    traverse_canonical_recording(
-        0,
+fn historical_port_9a_seed_zero_mines_collision_scene_retains_original_recording() {
+    // The old recorded tape is unchanged; its exact earlier port geometry is
+    // now explicit data, independently of current source generation.
+    traverse_historical_port_9a_collision_scene(
         1,
-        crate::GenerationRevision::SourceClassicV2,
         &[
             4, 2, 1, 1, 3, 0, 2, 2, 2, 4, 2, 2, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 4, 2, 2, 4, 0, 2, 4,
             2, 0, 4, 4, 2, 4, 2, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 3, 3, 1, 1, 1,
@@ -269,14 +303,11 @@ fn canonical_seed_zero_ice_is_traversed_without_an_artificial_bottom_floor() {
 }
 
 #[test]
-fn source_classic_seed_zero_ice_is_traversed_without_an_artificial_bottom_floor() {
-    // Recorded with full Game.step on SourceClassicV2 seed zero. Ordinary
-    // falls, recovery waits and jumps reach the unchanged supported exit.
-    // The original historical seed-zero tape above remains independent.
-    traverse_canonical_recording(
-        0,
+fn historical_port_9a_seed_zero_ice_collision_scene_retains_original_recording() {
+    // The original recording and every shared controller/assertion remain;
+    // this test identifies the historical port collision scene honestly.
+    traverse_historical_port_9a_collision_scene(
         9,
-        crate::GenerationRevision::SourceClassicV2,
         &[
             4, 4, 4, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 4, 4, 0, 0, 2, 1, 0,
