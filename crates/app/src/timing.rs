@@ -24,12 +24,28 @@ impl FixedClock {
     /// `elapsed` is seconds since the previous presentation frame. Excess time
     /// during a stall is discarded instead of causing an unbounded tick burst.
     pub fn advance(&mut self, elapsed: f64) -> FrameStep {
+        self.advance_with_presentation_cap(elapsed, None)
+    }
+
+    /// A deliberate low presentation cap needs its ordinary interval PLUS the
+    /// existing stall allowance. Caps whose interval fits within eight ticks
+    /// retain the original bound. Valid caps1..3 raise it only to38/23/18 ticks,
+    /// never to the duration of an arbitrary stall. No cap or a defensive zero
+    /// retains the original eight-tick policy.
+    pub fn advance_with_presentation_cap(&mut self, elapsed: f64, cap: Option<u32>) -> FrameStep {
+        let expected = cap
+            .filter(|cap| *cap > 0)
+            .map_or(0, |cap| TICK_RATE.div_ceil(cap));
+        let maximum = if expected > MAX_CATCH_UP_TICKS {
+            expected + MAX_CATCH_UP_TICKS
+        } else {
+            MAX_CATCH_UP_TICKS
+        };
         let step = 1.0 / f64::from(TICK_RATE);
         if elapsed.is_finite() && elapsed > 0.0 {
-            self.accumulator += elapsed.min(step * f64::from(MAX_CATCH_UP_TICKS));
+            self.accumulator += elapsed.min(step * f64::from(maximum));
         }
-        let ticks =
-            ((self.accumulator / step + ROUNDING_TOLERANCE).floor() as u32).min(MAX_CATCH_UP_TICKS);
+        let ticks = ((self.accumulator / step + ROUNDING_TOLERANCE).floor() as u32).min(maximum);
         self.accumulator = (self.accumulator - f64::from(ticks) * step).max(0.0);
         FrameStep {
             ticks,
@@ -177,5 +193,121 @@ mod tests {
         clock.advance(0.01);
         clock.reset();
         assert_eq!(clock.advance(0.0).alpha, 0.0);
+    }
+
+    #[test]
+    fn all_valid_saved_caps_preserve_ten_seconds_of_240hz_cadence() {
+        for cap in 1..=1000 {
+            let mut cadence = PresentationCadence::default();
+            let mut clock = FixedClock::new();
+            let mut last_frame = 0.;
+            let mut ticks = 0;
+            for callback in 0..=2400 {
+                let now = f64::from(callback) / 240.;
+                if cadence.ready(now, Some(cap)) {
+                    let frame = clock.advance_with_presentation_cap(now - last_frame, Some(cap));
+                    ticks += frame.ticks;
+                    assert!((0.0..1.0).contains(&frame.alpha));
+                    last_frame = now;
+                }
+            }
+            assert_eq!(last_frame, 10.);
+            assert_eq!(ticks, TICK_RATE * 10, "saved cap {cap}");
+        }
+    }
+    #[test]
+    fn deliberate_low_native_intervals_retain_ordinary_wakeup_jitter() {
+        for cap in [1, 2, 3] {
+            let mut clock = FixedClock::new();
+            let interval = 1. / f64::from(cap);
+            let mut ticks = 0;
+            for _ in 0..10 {
+                // Earlier/later wakes sum to the exact deliberate duration.
+                for elapsed in [interval - 0.001, interval + 0.001] {
+                    ticks += clock
+                        .advance_with_presentation_cap(elapsed, Some(cap))
+                        .ticks;
+                }
+            }
+            assert_eq!(ticks, 20 * TICK_RATE / cap, "native cap {cap} with jitter");
+        }
+    }
+    #[test]
+    fn low_cap_stalls_remain_bounded_and_cap_changes_restore_original_budget() {
+        for (cap, maximum) in [
+            (1, 38),
+            (2, 23),
+            (3, 18),
+            (4, 8),
+            (60, 8),
+            (240, 8),
+            (1000, 8),
+        ] {
+            let mut clock = FixedClock::new();
+            clock.advance_with_presentation_cap(1. / 60., Some(cap));
+            let stalled = clock.advance_with_presentation_cap(120., Some(cap));
+            assert_eq!(stalled.ticks, maximum, "cap {cap}");
+            assert!((0.0..1.0).contains(&stalled.alpha));
+            assert_eq!(clock.advance_with_presentation_cap(0., Some(cap)).ticks, 0);
+            assert_eq!(clock.advance_with_presentation_cap(120., None).ticks, 8);
+            assert_eq!(
+                clock.advance_with_presentation_cap(120., Some(240)).ticks,
+                8
+            );
+            clock.reset();
+            assert_eq!(clock.advance_with_presentation_cap(0., Some(cap)).alpha, 0.);
+            for elapsed in [f64::NAN, f64::INFINITY, -1.] {
+                assert_eq!(
+                    clock
+                        .advance_with_presentation_cap(elapsed, Some(cap))
+                        .ticks,
+                    0
+                );
+            }
+        }
+        assert_eq!(
+            FixedClock::new()
+                .advance_with_presentation_cap(120., Some(0))
+                .ticks,
+            8
+        );
+    }
+    #[test]
+    fn ordinary_presentation_caps_match_the_original_clock_for_every_frame() {
+        for cap in [
+            None,
+            Some(4),
+            Some(30),
+            Some(60),
+            Some(120),
+            Some(144),
+            Some(240),
+            Some(1000),
+        ] {
+            let mut original = FixedClock::new();
+            let mut capped = FixedClock::new();
+            for _ in 0..20 {
+                for elapsed in [
+                    0.,
+                    1. / 240.,
+                    1. / 144.,
+                    1. / 60.,
+                    0.019,
+                    0.250,
+                    120.,
+                    f64::NAN,
+                    -1.,
+                ] {
+                    let a = original.advance(elapsed);
+                    let b = capped.advance_with_presentation_cap(elapsed, cap);
+                    assert_eq!(a.ticks, b.ticks, "cap {cap:?} elapsed {elapsed}");
+                    assert_eq!(
+                        a.alpha.to_bits(),
+                        b.alpha.to_bits(),
+                        "cap {cap:?} elapsed {elapsed}"
+                    );
+                }
+            }
+        }
     }
 }

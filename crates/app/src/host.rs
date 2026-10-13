@@ -93,13 +93,21 @@ impl HostTiming {
         self.last_frame = now;
         frame
     }
+    #[cfg(test)]
     fn advance(&mut self, frame: HostFrame) -> crate::timing::FrameStep {
+        self.advance_with_presentation_cap(frame, None)
+    }
+    fn advance_with_presentation_cap(
+        &mut self,
+        frame: HostFrame,
+        cap: Option<u32>,
+    ) -> crate::timing::FrameStep {
         let elapsed = if frame.generation == self.generation {
             frame.elapsed
         } else {
             0.
         };
-        let step = self.clock.advance(elapsed);
+        let step = self.clock.advance_with_presentation_cap(elapsed, cap);
         self.alpha = step.alpha;
         self.alpha_sample = (frame.generation == self.generation && frame.sampled_at.is_finite())
             .then_some(frame.sampled_at);
@@ -1325,7 +1333,9 @@ impl App {
             }
         }
         if self.screen == Screen::Editor && self.focused && !self.occluded {
-            let frame = self.timing.advance(host_frame);
+            let frame = self
+                .timing
+                .advance_with_presentation_cap(host_frame, self.store.data.settings.frame_cap);
             for _ in 0..frame.ticks {
                 let command = self.editor.source_tick();
                 self.editor_command(command);
@@ -1335,7 +1345,9 @@ impl App {
             }
         }
         if self.screen == Screen::Donation && self.focused && !self.occluded {
-            let frame = self.timing.advance(host_frame);
+            let frame = self
+                .timing
+                .advance_with_presentation_cap(host_frame, self.store.data.settings.frame_cap);
             for _ in 0..frame.ticks {
                 let mut input = self.input.take_tick();
                 input.pay_pressed |= self.donation_confirm;
@@ -1357,7 +1369,9 @@ impl App {
         if self.screen == Screen::Playing
             && render_clock_running(self.screen, self.focused, self.occluded, self.game.as_ref())
         {
-            let frame = self.timing.advance(host_frame);
+            let frame = self
+                .timing
+                .advance_with_presentation_cap(host_frame, self.store.data.settings.frame_cap);
             let gameplay_view = self.viewport();
             for _ in 0..frame.ticks {
                 let mut input = self.input.take_tick();
@@ -1441,7 +1455,9 @@ impl App {
         if self.screen == Screen::Finished
             && render_clock_running(self.screen, self.focused, self.occluded, self.game.as_ref())
         {
-            let frame = self.timing.advance(host_frame);
+            let frame = self
+                .timing
+                .advance_with_presentation_cap(host_frame, self.store.data.settings.frame_cap);
             let gameplay_view = self.viewport();
             for _ in 0..frame.ticks {
                 if let Some(game) = &mut self.game {
@@ -4988,6 +5004,36 @@ mod tests {
         timing.history_ready = true;
         assert!(timing.alpha() < 0.001);
     }
+    #[test]
+    fn low_saved_cap_host_clock_admits_native_interval_and_discards_pre_resume_sample() {
+        for cap in [1, 2, 3] {
+            let mut timing = HostTiming::default();
+            timing.reset(10.);
+            let interval = 1. / f64::from(cap);
+            let sampled = timing.begin_frame(10. + interval);
+            assert_eq!(
+                timing
+                    .advance_with_presentation_cap(sampled, Some(cap))
+                    .ticks,
+                spelunky_core::TICK_RATE / cap
+            );
+            let before_resume = timing.begin_frame(120.);
+            timing.reset(120.);
+            assert_eq!(
+                timing
+                    .advance_with_presentation_cap(before_resume, Some(cap))
+                    .ticks,
+                0
+            );
+            assert_eq!(timing.alpha(), 1.);
+            let next = timing.begin_frame(120. + 1. / 240.);
+            assert_eq!(
+                timing.advance_with_presentation_cap(next, Some(cap)).ticks,
+                0
+            );
+        }
+    }
+
     #[test]
     fn resuming_during_gamepad_poll_discards_pre_resume_elapsed() {
         for pause in [0.25, 5., 120.] {
