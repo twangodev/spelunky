@@ -655,7 +655,7 @@ impl App {
                 if self
                     .game
                     .as_ref()
-                    .is_some_and(|game| game.state == RunState::Ending)
+                    .is_some_and(ending_uses_cinematic_controls)
                 {
                     self.cinematic_action |= source_start_key(key, true);
                     return;
@@ -1281,7 +1281,7 @@ impl App {
                 && self
                     .game
                     .as_ref()
-                    .is_some_and(|game| game.state == RunState::Ending)
+                    .is_some_and(ending_uses_cinematic_controls)
             {
                 self.cinematic_action |= matches!(
                     button,
@@ -2276,6 +2276,19 @@ fn clear_control_on_focus_loss(control: &mut bool, focused: bool) {
     if !focused {
         *control = false;
     }
+}
+
+// oScreen Begin Step permits Start to pause a living, active Player even
+// while its exit sprite is animating. Only Animation End removes that Player
+// and enters the later cinematic room; active=false is its gameplay variable.
+fn ending_uses_cinematic_controls(game: &Game) -> bool {
+    let living_exit = game.ending.as_ref().is_some_and(|ending| {
+        ending.stage == spelunky_core::ending::EndingStage::Exit
+            && game.player.engine_active
+            && game.player.state != spelunky_core::PlayerState::Dead
+            && game.player.is_exiting()
+    });
+    game.state == RunState::Ending && !living_exit
 }
 
 fn configured_pause_key(
@@ -6829,3 +6842,7 @@ mod message_compass_phase_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "host_living_exit_pause_tests.rs"]
+mod living_exit_pause_tests;
