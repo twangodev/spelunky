@@ -243,8 +243,57 @@ fn ordinary_pistol_hit_reaches_shopkeeper_right_die_lr_draw() {
                 "AUTHORED_FREE_PISTOL"
             );
             assert_eq!(game.world.entity(gun).unwrap().value("forSale"), 0.0);
-            for _ in 0..4 {
+            // Independent literal source patrol clock for this quiet authored row.
+            // Shopkeeper Create counter0; ! overrides status to PATROL4.
+            let initial = game.world.entity(id).unwrap();
+            assert_eq!((initial.state, initial.timer, initial.facing), (4, 0, -1));
+            assert_eq!(
+                game.rng.algorithm(),
+                spelunky_core::RngAlgorithm::Gm8Lcg32V1
+            );
+            let mut expected_rng = game.rng.state_bits() as u32;
+            let mut expected_state = 4;
+            let mut expected_counter = 0;
+            let mut expected_facing = -1;
+            let mut source_neutral_step = |game: &mut Game| {
+                let mut rand = |count: u32| {
+                    expected_rng = expected_rng.wrapping_mul(0x08088405).wrapping_add(1);
+                    ((u64::from(expected_rng) * u64::from(count)) >> 32) as u32
+                };
+                if expected_state == 4 {
+                    if expected_counter > 0 {
+                        expected_counter -= 1;
+                    }
+                    if expected_counter == 0 {
+                        expected_facing = if rand(2) == 0 { -1 } else { 1 };
+                        expected_state = 1;
+                    }
+                } else {
+                    assert_eq!(expected_state, 1);
+                    // WALK point y160 is in empty authored row9, not floorrow10.
+                    // Source edge branch draws timer, overwrites velocity, then rolls pause.
+                    expected_counter = 20 + rand(31);
+                    expected_state = 4;
+                    if rand(100) == 0 {
+                        expected_counter = 20 + rand(31);
+                    }
+                }
                 game.step(&InputFrame::default());
+                let actual = game.world.entity(id).unwrap();
+                assert_eq!(actual.pos.y, 160.0, "SOURCE_QUIET_PATROL_ROW");
+                assert_eq!(
+                    (actual.health, actual.state, actual.timer, actual.facing),
+                    (20, expected_state, expected_counter, expected_facing),
+                    "LITERAL_SOURCE_NEUTRAL_PATROL_CLOCK"
+                );
+                assert_eq!(
+                    game.rng.state_bits(),
+                    u64::from(expected_rng),
+                    "LITERAL_SOURCE_NEUTRAL_PATROL_RNG"
+                );
+            };
+            for _ in 0..4 {
+                source_neutral_step(&mut game);
             }
             // The authored free gun falls one row before the ordinary pickup.
             let pickup_area =
@@ -258,8 +307,9 @@ fn ordinary_pistol_hit_reaches_shopkeeper_right_die_lr_draw() {
                 {
                     break;
                 }
-                game.step(&InputFrame::default());
+                source_neutral_step(&mut game);
             }
+            drop(source_neutral_step);
             assert!(
                 game.world
                     .entity(gun)
@@ -273,7 +323,7 @@ fn ordinary_pistol_hit_reaches_shopkeeper_right_die_lr_draw() {
             }
             assert_eq!(
                 (keeper.health, keeper.state),
-                (20, 1),
+                (20, expected_state),
                 "NATURAL_PATROL_PRECONDITION"
             );
             game.step(&InputFrame {
