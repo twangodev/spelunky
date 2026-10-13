@@ -1,6 +1,8 @@
 //! Ordinary inputs exercise recovery against a generated Mines perimeter.
 //! Retains the complete generated Mines geometry and actors. The hit case
 //! adds one ordinary trap before the first Step; it is an augmented room.
+//! Seed66 also retains its source-generated, initially stationary Skull.
+//! The exact Skull premise is allowed below; every route/health check remains.
 use spelunky_core::{Game, InputFrame, Rect, RulesPreset, RunState, Vec2, catalog};
 
 fn eligible(g: &Game) -> bool {
@@ -25,6 +27,24 @@ fn eligible(g: &Game) -> bool {
     !g.world.entities.iter().any(|e| {
         e.alive
             && e.sprite_bounds().intersects(region)
+            // Source scrTreasureGen86–87 at receiver(96,128) creates Bones
+            // and Skull(108,124). The eager InitLevel Dark draw changed this
+            // population outcome, not the perimeter geometry. Retain this
+            // exact unheld/non-solid default Skull; reject every other Item.
+            // This does not certify later noninterference: all existing hit,
+            // health, wall, recovery, running and jump assertions still run.
+            && !(e.object == "oSkull"
+                && e.pos == Vec2::new(108.0, 124.0)
+                && e.vel == Vec2::default()
+                && e.sprite == "sSkull"
+                && e.animation == 0.0
+                && e.health == 1
+                && e.state == 0
+                && e.timer == 0
+                && e.age == 0
+                && e.engine_active
+                && !e.solid
+                && !e.held)
             && (["oEnemy", "oItem", "oMoveableSolid", "oBoulder", "oTreasure"]
                 .iter()
                 .any(|family| catalog::is_a(&e.object, family))
