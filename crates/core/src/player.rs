@@ -33,6 +33,14 @@ fn grounded_state(s: PlayerState) -> bool {
             | PlayerState::LookingUp
     )
 }
+/// Source ON_GROUND is a platform state, independently of geometric support.
+pub(crate) fn source_grounded(p: &Player) -> bool {
+    if matches!(p.state, PlayerState::Stunned | PlayerState::Dead) {
+        value(p, "source_platform_grounded", 0.0) != 0.0
+    } else {
+        grounded_state(p.state) && value(p, "duck_to_hang", 0.0) == 0.0
+    }
+}
 fn airborne(s: PlayerState) -> bool {
     matches!(s, PlayerState::Jumping | PlayerState::Falling)
 }
@@ -416,8 +424,13 @@ fn active_prelude(game: &mut Game) {
         p.set_image_speed(0.4);
         p.stun -= 1;
     }
-    if p.stun == 0 && stationary && p.state == PlayerState::Stunned {
-        p.state = PlayerState::Standing;
+    if p.stun == 0 && stationary {
+        // Source clears its independent stunned flag only on the stationary
+        // stun sprite, including a zero-timer throw completed during Animation End.
+        p.data.remove("source_stunned");
+        if p.state == PlayerState::Stunned {
+            p.state = PlayerState::Standing;
+        }
     }
     let mut fall = value(p, "fall_timer", 0.0);
     // This is a derived controller cache, not the source existence predicate.
@@ -1729,6 +1742,13 @@ fn duck_to_hang_end(game: &mut Game) {
     let point = Vec2::new(game.player.pos.x + f64::from(game.player.facing) * 8.0, y);
     let ladder = duck_to_hang_ladder(game, point);
     let p = &mut game.player;
+    // Animation End writes the platform state without clearing the independent
+    // stunned flag. Preserve a zero-timer automatic throw before replacing its enum.
+    let stunned = p.is_stunned();
+    p.vel = Vec2::default();
+    set(p, "xAcc", 0.0);
+    set(p, "yAcc", 0.0);
+    set(p, "source_stunned", f64::from(stunned));
     p.pos.y = y;
     if let Some(ladder) = ladder {
         p.pos.x = ladder.x;
@@ -1791,7 +1811,7 @@ fn stunned_tick(
     p.grounded = below(w, p);
     p.state = if dead {
         PlayerState::Dead
-    } else if p.stun > 0 || p.state == PlayerState::Stunned {
+    } else if p.is_stunned() {
         PlayerState::Stunned
     } else {
         PlayerState::Falling
@@ -2094,13 +2114,16 @@ fn animate(p: &mut Player, input: &InputFrame, w: &World) {
             speed = p.vel.x.abs() * 0.1 + 0.1;
             if p.vel.x == 0.0 {
                 "sLookLeft"
+            } else if value(p, "character_tunnelman", 0.0) > 0.0 {
+                // Tunnel Man's LOOKING_UP branch differs from RUNNING with Up.
+                "sRunLeft"
             } else {
                 "sLookRunL"
             }
         }
         PlayerState::Jumping => "sJumpLeft",
         PlayerState::Falling => {
-            let count = value(p, "fall_state_ticks", 0.0);
+            let count = value(p, "fall_state_ticks", 2.0);
             if count >= 2.0 {
                 "sFallLeft"
             } else if crate::catalog::sprite_def(&p.sprite).is_none() {
@@ -2151,9 +2174,11 @@ fn animate(p: &mut Player, input: &InputFrame, w: &World) {
 /// Equivalent to the source's statePrev/statePrevPrev for its three-FALLING
 /// sprite gate. Only completed character controllers record this history;
 /// dead, stunned, inactive, exiting and already-DUCKTOHANG Steps leave it alone.
+/// A fresh character initializes both previous states to FALLING, hence two
+/// completed FALLING states when the cache is absent after Create/reset.
 fn remember_controller_history(p: &mut Player) {
     let fall_count = if p.state == PlayerState::Falling {
-        value(p, "fall_state_ticks", 0.0) + 1.0
+        value(p, "fall_state_ticks", 2.0) + 1.0
     } else {
         0.0
     };
@@ -4350,3 +4375,7 @@ mod native_ball_tether_boundary_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "player/source_animation_callback_tests.rs"]
+mod source_animation_callback_tests;

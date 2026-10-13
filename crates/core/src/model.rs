@@ -240,7 +240,9 @@ impl Player {
     /// Classic stores the stunned flag independently from its countdown.
     /// Throws can remain stunned in flight after the countdown reaches zero.
     pub fn is_stunned(&self) -> bool {
-        self.stun > 0 || self.state == PlayerState::Stunned
+        self.stun > 0
+            || self.state == PlayerState::Stunned
+            || self.data.get("source_stunned").copied().unwrap_or(0.0) != 0.0
     }
     /// Current source sprite mask for collision events, separate from the
     /// platform engine's custom rectangle returned by `bounds()`.
