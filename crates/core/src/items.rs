@@ -817,7 +817,8 @@ fn is_usable_weapon(name: &str) -> bool {
 }
 
 fn pick_up(game: &mut Game) {
-    let area = Rect::new(game.player.pos.x - 8.0, game.player.pos.y, 17.0, 9.0);
+    let first = Vec2::new(game.player.pos.x - 8.0, game.player.pos.y);
+    let second = Vec2::new(game.player.pos.x + 8.0, game.player.pos.y + 8.0);
     crate::dispatcher::register_instances(game);
     let items: Vec<_> = crate::dispatcher::descendant_instances(game, "oItem")
         .into_iter()
@@ -829,10 +830,11 @@ fn pick_up(game: &mut Game) {
         .collect();
     // The rectangle gates the attempt; instance_nearest then searches the
     // complete active parent array before eligibility checks its one result.
-    if !items
-        .iter()
-        .any(|entity| entity.mask_intersects(area, CollisionPrecision::BoundingBox))
-    {
+    if !items.iter().any(|entity| {
+        entity
+            .collision_mask()
+            .intersects_rectangle(first, second, CollisionPrecision::BoundingBox)
+    }) {
         // Source's Enemy query is an else-if: any overlapping Item prevents
         // this fallback, even when that branch's nearest Item is ineligible.
         let enemies: Vec<_> = crate::dispatcher::descendant_instances(game, "oEnemy")
@@ -843,10 +845,13 @@ fn pick_up(game: &mut Game) {
             })
             .filter(|entity| entity.engine_active)
             .collect();
-        if enemies
-            .iter()
-            .any(|entity| entity.mask_intersects(area, CollisionPrecision::BoundingBox))
-        {
+        if enemies.iter().any(|entity| {
+            entity.collision_mask().intersects_rectangle(
+                first,
+                second,
+                CollisionPrecision::BoundingBox,
+            )
+        }) {
             let nearest = enemies
                 .into_iter()
                 .fold(None, |nearest: Option<&Entity>, entity| {
