@@ -925,7 +925,19 @@ pub(crate) fn generate_campaign_result(
                 state.revision == crate::GenerationRevision::SourceClassicV2,
             );
             let expanded = expand(script, rng, template);
-            if area == Area::Boss && row == 3 {
+            if area == Area::Boss && row == 3 && source_classic {
+                tiles::stamp_at_source(
+                    &mut world,
+                    rng,
+                    &expanded,
+                    1 + col * 10,
+                    37,
+                    false,
+                    false,
+                    shop,
+                    features.damsel,
+                );
+            } else if area == Area::Boss && row == 3 {
                 tiles::stamp_at(
                     &mut world,
                     rng,

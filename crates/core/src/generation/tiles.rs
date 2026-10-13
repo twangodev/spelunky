@@ -64,6 +64,32 @@ pub(super) fn stamp_at(
     );
 }
 
+/// SourceClassicV2 Boss and direct-source callers select the same explicit
+/// source decoder mode; historical stamp_at retains its old symbol tape.
+pub(super) fn stamp_at_source(
+    world: &mut World,
+    rng: &mut Rng,
+    template: &str,
+    origin_x: usize,
+    origin_y: usize,
+    is_start: bool,
+    is_end: bool,
+    shop_type: &str,
+    damsel: bool,
+) {
+    stamp_at_with_damsel(
+        world,
+        rng,
+        template,
+        origin_x,
+        origin_y,
+        is_start,
+        is_end,
+        shop_type,
+        Some(damsel),
+    );
+}
+
 fn stamp_at_with_damsel(
     world: &mut World,
     rng: &mut Rng,
@@ -86,210 +112,366 @@ fn stamp_at_with_damsel(
         }
         // Positions are source instance origins; render/collision applies each sprite's origin.
         let p = Vec2::new(tx as f64 * 16.0, ty as f64 * 16.0);
-        let occupied = solid_point(world, p);
-        match symbol {
-            b'1' | b'2' => {
-                if symbol == b'2' && !rng.chance(1, 2) {
-                    continue;
-                }
-                if !occupied {
-                    let object = ground(world.area, yeti, symbol == b'1', rng);
-                    world.set_tile(tx, ty, object);
-                }
+        if source_damsel.is_some() {
+            stamp_source_tile(
+                world,
+                rng,
+                symbol,
+                tx,
+                ty,
+                p,
+                is_start,
+                shop_type,
+                source_damsel.unwrap(),
+                yeti,
+                market,
+            );
+        } else {
+            let occupied = solid_point(world, p);
+            stamp_tile_body(
+                world, rng, symbol, tx, ty, p, is_start, shop_type, None, yeti, market, occupied,
+                false,
+            );
+        }
+    }
+}
+
+fn stamp_tile_body(
+    world: &mut World,
+    rng: &mut Rng,
+    symbol: u8,
+    tx: usize,
+    ty: usize,
+    p: Vec2,
+    is_start: bool,
+    shop_type: &str,
+    source_damsel: Option<bool>,
+    yeti: bool,
+    market: bool,
+    occupied: bool,
+    predicates_prechecked: bool,
+) {
+    match symbol {
+        b'1' | b'2' => {
+            if symbol == b'2' && !predicates_prechecked && !rng.chance(1, 2) {
+                return;
             }
-            b'9' => {
-                let floor = match world.area {
-                    Area::Mines => "oBrick",
+            if !occupied {
+                let object = ground(world.area, yeti, symbol == b'1', rng);
+                world.set_tile(tx, ty, object);
+            }
+        }
+        b'9' => {
+            let floor = match world.area {
+                Area::Mines => "oBrick",
+                Area::Jungle => "oLush",
+                Area::Ice => "oDark",
+                _ => "oTemple",
+            };
+            world.set_tile(tx, ty + 1, floor);
+            let id = spawn(world, rng, if is_start { "oEntrance" } else { "oExit" }, p);
+            if is_start {
+                world.entrance = offset(p, 8.0, 8.0);
+            } else {
+                world.exit = offset(p, 8.0, 8.0);
+            }
+            world
+                .entity_mut(id)
+                .unwrap()
+                .data
+                .insert("level_exit".into(), if is_start { 0.0 } else { 1.0 });
+            if !is_start || world.area == Area::Boss {
+                terrain_property(world, tx, ty + 1, "invincible", 1.0);
+            }
+        }
+        b'L' | b'P' => {
+            let object = match (world.area, yeti, symbol) {
+                (Area::Jungle, _, b'L') | (Area::Ice, false, _) | (Area::Boss, _, b'L') => "oVine",
+                (Area::Jungle, _, _) | (Area::Boss, _, _) => "oVineTop",
+                (_, _, b'L') => "oLadderOrange",
+                _ => "oLadderTop",
+            };
+            climbable(world, rng, tx, ty, object, p);
+        }
+        b'7' => {
+            if predicates_prechecked || (world.area == Area::Ice && !yeti) || rng.chance(1, 3) {
+                spawn(world, rng, "oSpikes", p);
+            }
+        }
+        b'4' => {
+            if predicates_prechecked || world.area == Area::Jungle || rng.chance(1, 4) {
+                spawn(world, rng, "oPushBlock", p);
+            }
+        }
+        b'x' if world.area != Area::Boss => altar(world, rng, p, true),
+        b'I' => {
+            let dy = if world.area == Area::Boss {
+                rng.range(1);
+                0.0
+            } else if yeti || market {
+                8.0
+            } else {
+                12.0
+            };
+            spawn(world, rng, "oGoldIdol", offset(p, 16.0, dy));
+        }
+        b'.' if world.area != Area::Boss => {
+            if !occupied {
+                let object = match world.area {
+                    Area::Mines => {
+                        if rng.chance(1, 10) {
+                            "oBlock"
+                        } else {
+                            "oBrick"
+                        }
+                    }
                     Area::Jungle => "oLush",
                     Area::Ice => "oDark",
                     _ => "oTemple",
                 };
-                world.set_tile(tx, ty + 1, floor);
-                let id = spawn(world, rng, if is_start { "oEntrance" } else { "oExit" }, p);
-                if is_start {
-                    world.entrance = offset(p, 8.0, 8.0);
+                world.set_tile(tx, ty, object);
+                terrain_property(world, tx, ty, "shopWall", 1.0);
+            }
+        }
+        b'+' if world.area != Area::Boss => {
+            world.set_tile(tx, ty, "oSolid");
+            let id = terrain_property(world, tx, ty, "shopWall", 1.0);
+            world
+                .entity_mut(id)
+                .unwrap()
+                .text
+                .insert("terrain_sprite".into(), "sIceBlock".into());
+        }
+        b'K' if world.area != Area::Boss => {
+            let id = spawn(world, rng, "oShopkeeper", p);
+            world
+                .entity_mut(id)
+                .unwrap()
+                .text
+                .insert("style".into(), shop_type.into());
+        }
+        b'k' if world.area != Area::Boss => {
+            let id = spawn(world, rng, "oSign", p);
+            world.entity_mut(id).unwrap().sprite = format!("sSign{shop_type}");
+        }
+        b'l' if world.area != Area::Boss => {
+            spawn(
+                world,
+                rng,
+                if source_damsel.unwrap_or(shop_type == "Kissing")
+                    && world.area != Area::Temple
+                    && !market
+                {
+                    "oLampRed"
                 } else {
-                    world.exit = offset(p, 8.0, 8.0);
-                }
-                world
-                    .entity_mut(id)
-                    .unwrap()
-                    .data
-                    .insert("level_exit".into(), if is_start { 0.0 } else { 1.0 });
-                if !is_start || world.area == Area::Boss {
-                    terrain_property(world, tx, ty + 1, "invincible", 1.0);
-                }
-            }
-            b'L' | b'P' => {
-                let object = match (world.area, yeti, symbol) {
-                    (Area::Jungle, _, b'L') | (Area::Ice, false, _) | (Area::Boss, _, b'L') => {
-                        "oVine"
-                    }
-                    (Area::Jungle, _, _) | (Area::Boss, _, _) => "oVineTop",
-                    (_, _, b'L') => "oLadderOrange",
-                    _ => "oLadderTop",
-                };
-                climbable(world, rng, tx, ty, object, p);
-            }
-            b'7' => {
-                if (world.area == Area::Ice && !yeti) || rng.chance(1, 3) {
-                    spawn(world, rng, "oSpikes", p);
-                }
-            }
-            b'4' => {
-                if world.area == Area::Jungle || rng.chance(1, 4) {
-                    spawn(world, rng, "oPushBlock", p);
-                }
-            }
-            b'x' if world.area != Area::Boss => altar(world, rng, p, true),
-            b'I' => {
-                let dy = if world.area == Area::Boss {
-                    rng.range(1);
-                    0.0
-                } else if yeti || market {
-                    8.0
-                } else {
-                    12.0
-                };
-                spawn(world, rng, "oGoldIdol", offset(p, 16.0, dy));
-            }
-            b'.' if world.area != Area::Boss => {
-                if !occupied {
-                    let object = match world.area {
-                        Area::Mines => {
-                            if rng.chance(1, 10) {
-                                "oBlock"
-                            } else {
-                                "oBrick"
-                            }
-                        }
-                        Area::Jungle => "oLush",
-                        Area::Ice => "oDark",
-                        _ => "oTemple",
-                    };
-                    world.set_tile(tx, ty, object);
-                    terrain_property(world, tx, ty, "shopWall", 1.0);
-                }
-            }
-            b'+' if world.area != Area::Boss => {
-                world.set_tile(tx, ty, "oSolid");
-                let id = terrain_property(world, tx, ty, "shopWall", 1.0);
-                world
-                    .entity_mut(id)
-                    .unwrap()
-                    .text
-                    .insert("terrain_sprite".into(), "sIceBlock".into());
-            }
-            b'K' if world.area != Area::Boss => {
-                let id = spawn(world, rng, "oShopkeeper", p);
-                world
-                    .entity_mut(id)
-                    .unwrap()
-                    .text
-                    .insert("style".into(), shop_type.into());
-            }
-            b'k' if world.area != Area::Boss => {
-                let id = spawn(world, rng, "oSign", p);
-                world.entity_mut(id).unwrap().sprite = format!("sSign{shop_type}");
-            }
-            b'l' if world.area != Area::Boss => {
-                spawn(
+                    "oLamp"
+                },
+                p,
+            );
+        }
+        b'Q' if shop_type == "Craps" && world.area != Area::Boss => {
+            decoration(world, rng, "bgDiceSign", p);
+        }
+        // The coordinator applies run crime/character globals after room
+        // stamping, retaining this exact template-authored position.
+        b'W' => {
+            let id = decoration(world, rng, "bgWanted", p);
+            world
+                .entity_mut(id)
+                .unwrap()
+                .data
+                .insert("wanted_marker".into(), 1.0);
+        }
+        b'q' if world.area != Area::Boss => {
+            rng.range(6); // Source's unused dice roll still consumes a draw.
+            let object = high_end(rng);
+            let id = spawn(world, rng, object, offset(p, 8.0, 8.0));
+            world
+                .entity_mut(id)
+                .unwrap()
+                .data
+                .insert("inDiceHouse".into(), 1.0);
+        }
+        b'i' if world.area != Area::Ice && world.area != Area::Boss => {
+            shop_item(world, rng, p, shop_type)
+        }
+        b'$' if world.area == Area::Ice => shop_item(world, rng, p, shop_type),
+        b'd' if world.area == Area::Mines || yeti => {
+            let id = spawn(world, rng, "oDice", offset(p, 8.0, 8.0));
+            crate::items::initialize_dice(rng, world.entity_mut(id).unwrap());
+        }
+        b'u' if !yeti && matches!(world.area, Area::Jungle | Area::Ice | Area::Temple) => {
+            let id = spawn(world, rng, "oDice", offset(p, 8.0, 8.0));
+            crate::items::initialize_dice(rng, world.entity_mut(id).unwrap());
+        }
+        b'z' if market => {
+            let id = spawn(world, rng, "oDice", offset(p, 8.0, 8.0));
+            crate::items::initialize_dice(rng, world.entity_mut(id).unwrap());
+        }
+        b'D' if world.area == Area::Mines || yeti || world.area == Area::Jungle && !market => {
+            sale_damsel(world, rng, p)
+        }
+        b'!' if world.area == Area::Ice && !yeti => sale_damsel(world, rng, p),
+        b'A' if world.area == Area::Temple => sale_damsel(world, rng, p),
+        b'b' if world.area != Area::Boss && (world.area != Area::Ice || yeti) => {
+            let tile = if world.area == Area::Temple {
+                "oTemple"
+            } else {
+                "oBrickSmooth"
+            };
+            world.set_tile(tx, ty, tile);
+            let id = terrain_property(world, tx, ty, "shopWall", 1.0);
+            let sprite = match world.area {
+                Area::Jungle => "sLushSmooth",
+                Area::Ice => "sDarkSmooth",
+                Area::Temple => "sTemple",
+                _ => "sCaveSmooth",
+            };
+            world
+                .entity_mut(id)
+                .unwrap()
+                .text
+                .insert("terrain_sprite".into(), sprite.into());
+        }
+        b':' if world.area == Area::Ice && !yeti => {
+            world.set_tile(tx, ty, "oBrickSmooth");
+            let id = terrain_property(world, tx, ty, "shopWall", 1.0);
+            world
+                .entity_mut(id)
+                .unwrap()
+                .text
+                .insert("terrain_sprite".into(), "sDarkSmooth".into());
+        }
+        _ => match world.area {
+            Area::Mines => mines(world, rng, symbol, tx, ty, p),
+            Area::Jungle => jungle(world, rng, symbol, tx, ty, p, market, occupied),
+            Area::Ice => ice(
+                world,
+                rng,
+                symbol,
+                tx,
+                ty,
+                p,
+                yeti,
+                occupied,
+                predicates_prechecked,
+            ),
+            Area::Temple => temple(world, rng, symbol, tx, ty, p, occupied),
+            Area::Boss => boss(world, rng, symbol, tx, ty, p),
+        },
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TileDialect {
+    Mines,
+    Jungle,
+    Ice,
+    Temple,
+    Boss,
+    Market,
+    Yeti,
+}
+fn tile_dialect(area: Area, yeti: bool, market: bool) -> TileDialect {
+    match area {
+        Area::Mines => TileDialect::Mines,
+        Area::Jungle if market => TileDialect::Market,
+        Area::Jungle => TileDialect::Jungle,
+        Area::Ice if yeti => TileDialect::Yeti,
+        Area::Ice => TileDialect::Ice,
+        Area::Temple => TileDialect::Temple,
+        Area::Boss => TileDialect::Boss,
+    }
+}
+fn source_statement_groups(dialect: TileDialect) -> &'static [&'static [u8]] {
+    match dialect {
+        TileDialect::Mines => &[b"12LP749AxaIBQq+W.blKkidDsSTM"],
+        TileDialect::Jungle => &[b"12", b"t", b"r3LP7s49cdwv,JIC.Qq+WblKkiuDBxpT"],
+        TileDialect::Ice => &[b"12LP749aI.Qq+W:lKk$u!YABbCDEGXxTtcMmijfw"],
+        TileDialect::Temple => &[b"123RLP749actxXI;BCDA?.Qq+WblpKkiwudeT"],
+        TileDialect::Boss => &[b"12LP749aTtICDw"],
+        TileDialect::Market => &[b"12", b"t3LPGH7s49cdwI.+qQWblKkiAzBpT"],
+        TileDialect::Yeti => &[b"1", b"2", b"tLP749AaIB.Qq+WblKk$dDsSTijYy"],
+    }
+}
+fn source_random_predicate(dialect: TileDialect, symbol: u8) -> Option<u32> {
+    match symbol {
+        b'2' => Some(2),
+        b'7' if dialect != TileDialect::Ice => Some(3),
+        b'4' if !matches!(dialect, TileDialect::Jungle | TileDialect::Market) => Some(4),
+        b'j' if matches!(dialect, TileDialect::Ice | TileDialect::Yeti) => Some(2),
+        _ => None,
+    }
+}
+fn source_clear_predicate(dialect: TileDialect, symbol: u8) -> bool {
+    match symbol {
+        b'1' | b'2' | b'.' => true,
+        b't' => matches!(
+            dialect,
+            TileDialect::Jungle | TileDialect::Market | TileDialect::Yeti
+        ),
+        b'r' => dialect == TileDialect::Jungle,
+        b'3' => matches!(
+            dialect,
+            TileDialect::Jungle | TileDialect::Market | TileDialect::Temple
+        ),
+        b'R' => dialect == TileDialect::Temple,
+        b'M' | b'm' => dialect == TileDialect::Ice,
+        _ => false,
+    }
+}
+
+// Each reached Boolean predicate evaluates its random operand before deciding
+// whether the symbol/clearance guards pass. Successful branches end only their
+// own elseif chain; independent later if statements still execute. Do not move
+// all draws ahead of bodies: Yeti's first body draws before the separate 2 test.
+fn stamp_source_tile(
+    world: &mut World,
+    rng: &mut Rng,
+    symbol: u8,
+    tx: usize,
+    ty: usize,
+    p: Vec2,
+    is_start: bool,
+    shop_type: &str,
+    damsel: bool,
+    yeti: bool,
+    market: bool,
+) {
+    let dialect = tile_dialect(world.area, yeti, market);
+    for group in source_statement_groups(dialect) {
+        for &candidate in *group {
+            let random_pass = source_random_predicate(dialect, candidate)
+                .is_none_or(|width| rng.range(width) == 0);
+            // Evaluate each reached source collision operand, even when the
+            // random/symbol operand failed; plain clauses have no such query.
+            let clear_pass = !source_clear_predicate(dialect, candidate) || !solid_point(world, p);
+            if candidate == symbol && random_pass && clear_pass {
+                let occupied = solid_point(world, p);
+                stamp_tile_body(
                     world,
                     rng,
-                    if source_damsel.unwrap_or(shop_type == "Kissing")
-                        && world.area != Area::Temple
-                        && !market
-                    {
-                        "oLampRed"
-                    } else {
-                        "oLamp"
-                    },
+                    symbol,
+                    tx,
+                    ty,
                     p,
+                    is_start,
+                    shop_type,
+                    Some(damsel),
+                    yeti,
+                    market,
+                    occupied,
+                    true,
                 );
+                break;
             }
-            b'Q' if shop_type == "Craps" && world.area != Area::Boss => {
-                decoration(world, rng, "bgDiceSign", p);
-            }
-            // The coordinator applies run crime/character globals after room
-            // stamping, retaining this exact template-authored position.
-            b'W' => {
-                let id = decoration(world, rng, "bgWanted", p);
-                world
-                    .entity_mut(id)
-                    .unwrap()
-                    .data
-                    .insert("wanted_marker".into(), 1.0);
-            }
-            b'q' if world.area != Area::Boss => {
-                rng.range(6); // Source's unused dice roll still consumes a draw.
-                let object = high_end(rng);
-                let id = spawn(world, rng, object, offset(p, 8.0, 8.0));
-                world
-                    .entity_mut(id)
-                    .unwrap()
-                    .data
-                    .insert("inDiceHouse".into(), 1.0);
-            }
-            b'i' if world.area != Area::Ice && world.area != Area::Boss => {
-                shop_item(world, rng, p, shop_type)
-            }
-            b'$' if world.area == Area::Ice => shop_item(world, rng, p, shop_type),
-            b'd' if world.area == Area::Mines || yeti => {
-                let id = spawn(world, rng, "oDice", offset(p, 8.0, 8.0));
-                crate::items::initialize_dice(rng, world.entity_mut(id).unwrap());
-            }
-            b'u' if !yeti && matches!(world.area, Area::Jungle | Area::Ice | Area::Temple) => {
-                let id = spawn(world, rng, "oDice", offset(p, 8.0, 8.0));
-                crate::items::initialize_dice(rng, world.entity_mut(id).unwrap());
-            }
-            b'z' if market => {
-                let id = spawn(world, rng, "oDice", offset(p, 8.0, 8.0));
-                crate::items::initialize_dice(rng, world.entity_mut(id).unwrap());
-            }
-            b'D' if world.area == Area::Mines || yeti || world.area == Area::Jungle && !market => {
-                sale_damsel(world, rng, p)
-            }
-            b'!' if world.area == Area::Ice && !yeti => sale_damsel(world, rng, p),
-            b'A' if world.area == Area::Temple => sale_damsel(world, rng, p),
-            b'b' if world.area != Area::Boss && (world.area != Area::Ice || yeti) => {
-                let tile = if world.area == Area::Temple {
-                    "oTemple"
-                } else {
-                    "oBrickSmooth"
-                };
-                world.set_tile(tx, ty, tile);
-                let id = terrain_property(world, tx, ty, "shopWall", 1.0);
-                let sprite = match world.area {
-                    Area::Jungle => "sLushSmooth",
-                    Area::Ice => "sDarkSmooth",
-                    Area::Temple => "sTemple",
-                    _ => "sCaveSmooth",
-                };
-                world
-                    .entity_mut(id)
-                    .unwrap()
-                    .text
-                    .insert("terrain_sprite".into(), sprite.into());
-            }
-            b':' if world.area == Area::Ice && !yeti => {
-                world.set_tile(tx, ty, "oBrickSmooth");
-                let id = terrain_property(world, tx, ty, "shopWall", 1.0);
-                world
-                    .entity_mut(id)
-                    .unwrap()
-                    .text
-                    .insert("terrain_sprite".into(), "sDarkSmooth".into());
-            }
-            _ => match world.area {
-                Area::Mines => mines(world, rng, symbol, tx, ty, p),
-                Area::Jungle => jungle(world, rng, symbol, tx, ty, p, market, occupied),
-                Area::Ice => ice(world, rng, symbol, tx, ty, p, yeti, occupied),
-                Area::Temple => temple(world, rng, symbol, tx, ty, p, occupied),
-                Area::Boss => boss(world, rng, symbol, tx, ty, p),
-            },
         }
     }
 }
+
+#[cfg(test)]
+#[path = "source_tile_predicate_tests.rs"]
+mod source_tile_predicate_tests;
 
 fn ground(area: Area, yeti: bool, certain: bool, rng: &mut Rng) -> &'static str {
     match area {
@@ -461,7 +643,17 @@ fn jungle(
     }
 }
 
-fn ice(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2, yeti: bool, occupied: bool) {
+fn ice(
+    w: &mut World,
+    r: &mut Rng,
+    c: u8,
+    x: usize,
+    y: usize,
+    p: Vec2,
+    yeti: bool,
+    occupied: bool,
+    predicates_prechecked: bool,
+) {
     if yeti {
         match c {
             b't' if !occupied => {
@@ -484,7 +676,7 @@ fn ice(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2, yeti: boo
                 spawn(w, r, "oRubyBig", offset(p, 8.0, 8.0));
             }
             b'i' => w.set_tile(x, y, "oIce"),
-            b'j' if r.chance(1, 2) => w.set_tile(x, y, "oIce"),
+            b'j' if predicates_prechecked || r.chance(1, 2) => w.set_tile(x, y, "oIce"),
             b'Y' => {
                 spawn(w, r, "oYetiKing", p);
             }
@@ -569,7 +761,7 @@ fn ice(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2, yeti: boo
             terrain_property(w, x, y, "invincible", 1.0);
         }
         b'i' => w.set_tile(x, y, "oIce"),
-        b'j' if r.chance(1, 2) => w.set_tile(x, y, "oIce"),
+        b'j' if predicates_prechecked || r.chance(1, 2) => w.set_tile(x, y, "oIce"),
         b'f' => {
             spawn(w, r, "oDarkFall", p);
         }
