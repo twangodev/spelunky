@@ -2270,6 +2270,14 @@ enum SourcePausedControl {
     Resume,
 }
 
+// Focus return must not discard a fresh ModifiersChanged event. Winit's web
+// focus callback does not resend modifiers; blur clears them separately.
+fn clear_control_on_focus_loss(control: &mut bool, focused: bool) {
+    if !focused {
+        *control = false;
+    }
+}
+
 fn configured_pause_key(
     bindings: &std::collections::BTreeMap<String, String>,
     key: KeyCode,
@@ -3002,7 +3010,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.focused = focused;
                 self.mouse_left = false;
                 self.mouse_right = false;
-                self.control = false;
+                clear_control_on_focus_loss(&mut self.control, focused);
                 // Source freezeOnLoseFocus suspends simulation without changing
                 // the explicit pause state. Focus return resumes the same screen.
                 self.reset_timing();
@@ -3315,6 +3323,57 @@ fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn editor_import_keeps_fresh_control_when_focus_returns() {
+        let mut editor = EditorUi::new();
+        let mut control = true;
+        // Exercise a focus loss/reset followed by a fresh modifier update
+        // before focus gain. Use the actual editor shortcut route; this
+        // component ordering does not prove a particular browser trace.
+        clear_control_on_focus_loss(&mut control, false);
+        assert!(!control);
+        assert!(matches!(
+            editor.key(KeyCode::KeyI, None, control),
+            EditorCommand::None
+        ));
+        control = true; // ModifiersChanged(Control)
+        clear_control_on_focus_loss(&mut control, true);
+        assert!(matches!(
+            editor.key(KeyCode::KeyI, None, control),
+            EditorCommand::Import
+        ));
+        assert!(matches!(
+            editor.key(KeyCode::KeyO, None, control),
+            EditorCommand::Import
+        ));
+        // The next release is authoritative, and a plain I must not import.
+        control = false; // ModifiersChanged(empty)
+        clear_control_on_focus_loss(&mut control, true);
+        assert!(matches!(
+            editor.key(KeyCode::KeyI, None, control),
+            EditorCommand::None
+        ));
+    }
+
+    #[test]
+    fn editor_focus_loss_still_clears_stale_control_without_modifier_event() {
+        let mut editor = EditorUi::new();
+        let mut control = true;
+        clear_control_on_focus_loss(&mut control, false);
+        clear_control_on_focus_loss(&mut control, true);
+        assert!(!control);
+        assert!(matches!(
+            editor.key(KeyCode::KeyI, None, control),
+            EditorCommand::None
+        ));
+        // A newly pressed Control permits a new import after returning.
+        control = true;
+        assert!(matches!(
+            editor.key(KeyCode::KeyI, None, control),
+            EditorCommand::Import
+        ));
+    }
+
     #[test]
     fn host_input_audit_finished_action_matches_loaded_validated_prompt_and_binding() {
         for (binding, key, label) in [
