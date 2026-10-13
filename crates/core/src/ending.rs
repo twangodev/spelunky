@@ -2147,16 +2147,45 @@ fn actor_step(game: &mut Game, s: &mut EndingState, e: &mut Entity, input: &Inpu
         "oBigTreasure" => treasure_step(game, s, e),
         "oBall2" => {
             crate::items::tick_single_item_body(game, e);
-            if let Some(dummy) = game.world.entities.iter().find(|a| a.object == "oPDummy") {
-                let ball = e.sprite_bounds();
-                let target = dummy.sprite_bounds();
-                let dx = (ball.x - target.x - target.w + 1.)
-                    .max(target.x - ball.x - ball.w + 1.)
-                    .max(0.);
-                let dy = (ball.y - target.y - target.h + 1.)
-                    .max(target.y - ball.y - ball.h + 1.)
-                    .max(0.);
-                if dx.hypot(dy) >= 24. {
+            let family = crate::dispatcher::descendant_instances(game, "oPDummy");
+            let mut targets: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .enumerate()
+                .filter(|(_, target)| {
+                    target.alive
+                        && target.engine_active
+                        && crate::catalog::is_a(&target.object, "oPDummy")
+                })
+                .collect();
+            // Match the first current-family qualified getter. Raw pending
+            // births follow registered entries by creation serial; the query
+            // never registers or reactivates instances. Storage only breaks
+            // synthetic equal-serial ties, as in moai_revival_anchor.
+            targets.sort_by_key(|(storage, target)| {
+                family
+                    .iter()
+                    .position(|instance| {
+                        *instance == crate::dispatcher::Instance::Entity(target.id)
+                    })
+                    .map_or((1_u8, target.creation_serial, *storage), |rank| {
+                        (0, rank as u64, *storage)
+                    })
+            });
+            if let Some((_, dummy)) = targets.first() {
+                let source = e.collision_mask().point_bounds();
+                let distance = targets
+                    .iter()
+                    .fold(1_000_000.0_f64, |distance, (_, target)| {
+                        distance.min(crate::world_events::mask_distance(
+                            source,
+                            target.collision_mask().point_bounds(),
+                        ))
+                    });
+                if distance >= 24. {
+                    // Qualified x uses the first active dummy, independently
+                    // of which family member minimized the bounding-box gap.
                     e.pos.x = dummy.pos.x - 24.;
                 }
             }
@@ -3014,4 +3043,167 @@ fn tunnel_step(game: &mut Game, s: &mut EndingState, e: &mut Entity, input: &Inp
         "donate".into(),
         donate.max(0.).min(remaining).min(game.player.money as f64),
     );
+}
+
+#[cfg(test)]
+mod ball2_cached_distance_tests {
+    use super::*;
+    use crate::RulesPreset;
+
+    fn fixture(rules: RulesPreset) -> (Game, EndingState, Entity) {
+        let game = Game::shell(42, rules);
+        let state = EndingState::new(&game, EndingKind::Transition, EndingStage::Transition);
+        let mut ball = Entity::new(900, "oBall2", Vec2::new(80.0, 104.0));
+        crate::items::init_entity(&mut ball);
+        for (key, value) in [
+            ("bboxLeft", -5.0),
+            ("bboxTop", -5.0),
+            ("bboxRight", 5.0),
+            ("bboxBottom", 5.0),
+            ("heavy", 1.0),
+            ("gravity", 1.0),
+        ] {
+            ball.data.insert(key.into(), value);
+        }
+        assert_eq!(
+            ball.collision_mask().point_bounds(),
+            Rect::new(75.0, 100.0, 10.0, 10.0)
+        );
+        (game, state, ball)
+    }
+
+    fn dummy(game: &mut Game, x: f64, scale: f64, active: bool) -> u64 {
+        let id = game.world.spawn("oPDummy", Vec2::new(x, 104.0));
+        let target = game.world.entity_mut(id).unwrap();
+        target.set_sprite("sRunLeft");
+        target.animation = 2.0;
+        target.data.insert("image_xscale".into(), scale);
+        target.engine_active = active;
+        id
+    }
+
+    #[test]
+    fn configured_ball2_uses_aggregate_and_previous_draw_mirror_at_gap24() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for (x, scale, expected) in [
+                (115.0, 1.0, 91.0),
+                (114.0, 1.0, 80.0),
+                (115.0, -1.0, 80.0),
+                (116.0, -1.0, 92.0),
+            ] {
+                let (mut game, mut state, mut ball) = fixture(rules);
+                dummy(&mut game, x, scale, true);
+                actor_step(&mut game, &mut state, &mut ball, &InputFrame::default());
+                assert_eq!(
+                    ball.pos.x, expected,
+                    "BALL2_NATIVE_AGGREGATE_GAP24 x={x} scale={scale}"
+                );
+                assert_eq!(
+                    ball.pos.y, 104.0,
+                    "zero incoming velocity keeps first inherited displacement still"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn configured_ball2_skips_inactive_and_retired_dummy_targets() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for retired in [false, true] {
+                let (mut game, mut state, mut ball) = fixture(rules);
+                let id = dummy(&mut game, 160.0, 1.0, retired);
+                if retired {
+                    game.world.entity_mut(id).unwrap().alive = false;
+                }
+                actor_step(&mut game, &mut state, &mut ball, &InputFrame::default());
+                assert_eq!(
+                    ball.pos.x, 80.0,
+                    "instance_exists must not admit this target"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn configured_ball2_family_distance_and_qualified_x_are_independent() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for (second_x, expected) in [(110.0, 80.0), (115.0, 136.0)] {
+                let (mut game, mut state, mut ball) = fixture(rules);
+                // Pending births retain their creation-serial family order.
+                // First far dummy supplies qualified x, but the second can
+                // make the minimum distance smaller than24 and skip the write.
+                dummy(&mut game, 160.0, 1.0, true);
+                dummy(&mut game, second_x, 1.0, true);
+                actor_step(&mut game, &mut state, &mut ball, &InputFrame::default());
+                assert_eq!(ball.pos.x, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn configured_ball2_qualified_x_uses_registered_family_then_pending_serial_order() {
+        use crate::dispatcher::{self, Instance};
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let (mut game, mut state, mut ball) = fixture(rules);
+            let c = dummy(&mut game, 320.0, 1.0, true);
+            let b = dummy(&mut game, 192.0, 1.0, true);
+            let a = dummy(&mut game, 160.0, 1.0, true);
+            dispatcher::register_instances(&mut game);
+            // Actual activation APIs establish C,A,B family order while
+            // entity storage remains C,B,A. Retiring C leaves A first.
+            game.world.entity_mut(a).unwrap().engine_active = false;
+            dispatcher::activate_region(&mut game, Rect::new(316.0, 100.0, 24.0, 24.0));
+            game.world.entity_mut(b).unwrap().engine_active = false;
+            dispatcher::activate_region(&mut game, Rect::new(316.0, 100.0, 24.0, 24.0));
+            dispatcher::activate_object(&mut game, "oPDummy");
+            assert_eq!(
+                dispatcher::descendant_instances(&game, "oPDummy"),
+                vec![
+                    Instance::Entity(c),
+                    Instance::Entity(a),
+                    Instance::Entity(b)
+                ]
+            );
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oPDummy")
+                    .map(|e| e.id)
+                    .collect::<Vec<_>>(),
+                vec![c, b, a]
+            );
+            game.world.entity_mut(c).unwrap().alive = false;
+            let ledger = game.dispatcher.registration_order.clone();
+            actor_step(&mut game, &mut state, &mut ball, &InputFrame::default());
+            assert_eq!(
+                ball.pos.x, 136.0,
+                "first live family A supplies x, not storage B"
+            );
+            assert_eq!(
+                game.dispatcher.registration_order, ledger,
+                "query leaves the family ledger unchanged"
+            );
+
+            let (mut game, mut state, mut ball) = fixture(rules);
+            let a = dummy(&mut game, 160.0, 1.0, true);
+            let b = dummy(&mut game, 192.0, 1.0, true);
+            game.world.entities.reverse();
+            assert_eq!(
+                game.world.entities.iter().map(|e| e.id).collect::<Vec<_>>(),
+                vec![b, a]
+            );
+            assert!(dispatcher::descendant_instances(&game, "oPDummy").is_empty());
+            let ledger = game.dispatcher.registration_order.clone();
+            actor_step(&mut game, &mut state, &mut ball, &InputFrame::default());
+            assert_eq!(
+                ball.pos.x, 136.0,
+                "unregistered pending births follow creation serial"
+            );
+            assert_eq!(
+                game.dispatcher.registration_order, ledger,
+                "query does not register pending births"
+            );
+        }
+    }
 }
