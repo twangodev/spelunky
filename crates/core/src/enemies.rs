@@ -351,19 +351,9 @@ pub(crate) fn collision(game: &mut Game, id: u64, other: Instance) {
                     e.health -= projectile.data.get("damage").copied().unwrap_or(1.) as i32;
                     set_counts_as_kill(e, true);
                     if e.value("blood_left") > 0. {
-                        // Source sprite_width/height refer to the complete
-                        // current image, independently of mask, origin, or scale.
-                        let (width, height) =
-                            crate::catalog::sprite_dimensions(&e.sprite).unwrap_or((0, 0));
-                        create_blood(
-                            game,
-                            e,
-                            Vec2::new(
-                                e.pos.x + f64::from(width) / 2.0,
-                                e.pos.y + f64::from(height) / 2.0,
-                            ),
-                            1,
-                        );
+                        // Native sprite_width/height include signed instance
+                        // scale; sprite origin and collision bounds do not.
+                        create_blood(game, e, sprite_blood_center(e), 1);
                         if e.health < 0 {
                             e.data
                                 .insert("blood_left".into(), e.value("blood_left") - 1.);

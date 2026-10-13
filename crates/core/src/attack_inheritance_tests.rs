@@ -220,3 +220,80 @@ fn selected_specific_front_override_keeps_its_direct_blood_and_single_damage() {
         assert_eq!(game.rng.state_bits(), tape.state);
     }
 }
+
+#[test]
+fn inherited_whip_blood_uses_signed_instance_sprite_dimensions() {
+    // Configured Collision-event receivers, not a stock gameplay scale route.
+    // Native sprite_width/height multiply resource dimensions by signed scales.
+    for legacy in [false, true] {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for object in ["oBat", "oPiranha"] {
+                for weapon in ["oWhip", "oWhipPre", "oSlash", "oMattockHit"] {
+                    for (xs, ys) in [(1.0, 1.0), (-1.0, 1.0), (0.5, 2.0), (2.0, -0.5)] {
+                        for (cap, bloodless) in [(0, 0.0), (15, 0.0), (16, 0.0), (0, 2.0)] {
+                            let mut game = scene(legacy, rules);
+                            let target = game.spawn(object, Vec2::new(80.0, 80.0));
+                            let attack = game.spawn(weapon, Vec2::new(96.0, 80.0));
+                            game.world
+                                .entity_mut(attack)
+                                .unwrap()
+                                .data
+                                .insert("damage".into(), 2.0);
+                            let receiver = game.world.entity_mut(target).unwrap();
+                            receiver.health = 1;
+                            receiver.data.insert("blood_left".into(), 3.0);
+                            receiver.data.insert("bloodless".into(), bloodless);
+                            receiver.data.insert("image_xscale".into(), xs);
+                            receiver.data.insert("image_yscale".into(), ys);
+                            let before = receiver.clone();
+                            let (width, height) =
+                                crate::catalog::sprite_dimensions(&before.sprite).unwrap();
+                            // Literal native metric getters, independent of the production helper.
+                            let expected_pos = Vec2::new(
+                                80.0 + f64::from(width) * xs / 2.0,
+                                80.0 + f64::from(height) * ys / 2.0,
+                            );
+                            for _ in 0..cap {
+                                game.spawn("oBone", Vec2::new(272.0, 64.0));
+                            }
+                            assert_eq!(
+                                crate::dispatcher::collision_owner(object, weapon),
+                                Some("oEnemy")
+                            );
+                            let mut tape = Tape::at(&game);
+                            let admitted = cap < 16 && bloodless == 0.0;
+                            let expected_blood = admitted.then(|| tape.blood());
+                            collision(&mut game, target, Instance::Entity(attack));
+                            let drops: Vec<_> = game
+                                .world
+                                .entities
+                                .iter()
+                                .filter(|e| e.object == "oBlood")
+                                .collect();
+                            assert_eq!(drops.len(), usize::from(admitted));
+                            if let Some((velocity, gravity)) = expected_blood {
+                                assert_eq!(
+                                    drops[0].pos, expected_pos,
+                                    "SIGNED_INSTANCE_METRIC_BLOOD_ORIGIN {object}/{weapon} scale={xs},{ys}"
+                                );
+                                assert_eq!(drops[0].vel, velocity);
+                                assert_eq!(drops[0].value("gravity"), gravity);
+                                assert_eq!(drops[0].alarms[..3], [1, 1, 5]);
+                            }
+                            assert_eq!(game.rng.state_bits(), tape.state);
+                            let receiver = game.world.entity(target).unwrap();
+                            assert_eq!(receiver.health, -1);
+                            assert_eq!(receiver.value("blood_left"), 2.0);
+                            assert_eq!(receiver.state, before.state);
+                            assert_eq!(receiver.vel, before.vel);
+                            assert_eq!(receiver.timer, before.timer);
+                            assert!(counts_as_kill(receiver));
+                            assert!(game.world.entity(attack).is_some());
+                            assert_eq!(game.events.iter().filter(|event| matches!(event, GameEvent::Sound { name, .. } if name == "sndHit")).count(), 1);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
