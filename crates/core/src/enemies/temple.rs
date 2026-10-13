@@ -1036,7 +1036,7 @@ fn olmec_alarm(game: &mut Game, boss: &mut Entity, index: u8) {
             } else {
                 boss.state = 1;
                 boss.timer = 0;
-                boss.data.insert("toggle".into(), 0.0);
+                boss.data.insert("toggle".into(), 1.0);
                 boss.alarms[6] = 20;
                 game.sound("sndBigJump", boss.pos);
                 game.sound("sndAlert", boss.pos);
@@ -1167,7 +1167,7 @@ fn olmec(game: &mut Game, e: &mut Entity) {
             }
         }
         0 => {
-            e.data.insert("toggle".into(), 0.0);
+            e.data.insert("toggle".into(), 1.0);
             if grounded {
                 e.vel.y = 0.0;
             }
@@ -1206,15 +1206,21 @@ fn olmec(game: &mut Game, e: &mut Entity) {
                     };
                     e.timer = 0;
                 } else {
-                    let a = if e.value("toggle") == 0.0 {
-                        0.25
-                    } else {
-                        -0.25
-                    };
-                    e.vel.x += a * e.vel.x.signum();
-                    if e.vel.x.abs() >= 2.0 {
-                        e.data
-                            .insert("toggle".into(), if a > 0.0 { 1.0 } else { 0.0 });
+                    let toggle = e.value("toggle") != 0.0;
+                    if e.vel.x < 0.0 && toggle {
+                        e.vel.x -= 0.25;
+                    } else if e.vel.x < 0.0 && !toggle {
+                        e.vel.x += 0.25;
+                    }
+                    // These source tests are sequential: the first block may
+                    // cross zero before the positive block reads xVel again.
+                    if e.vel.x > 0.0 && toggle {
+                        e.vel.x += 0.25;
+                    } else if e.vel.x > 0.0 && !toggle {
+                        e.vel.x -= 0.25;
+                    }
+                    if e.vel.x <= -2.0 || e.vel.x >= 2.0 {
+                        e.data.insert("toggle".into(), f64::from(!toggle));
                     }
                 }
                 let inactive = game.player.data.get("active") == Some(&0.0);
@@ -3394,6 +3400,115 @@ mod tests {
         let mut boss = game.world.entities.remove(index);
         boss.data.insert("simulation_tick".into(), 3.0);
         (game, boss)
+    }
+
+    // Configured own-callback controls for the literal RECOVER statements in
+    // oOlmec Step.xml 139-146. No full frame, global moving-solid pass, Draw,
+    // or ordinary campaign reachability is implied. All fields are initialized
+    // before the first callback; the counter-one control then runs two callbacks
+    // without intervening writes, using the same configured source clock.
+    fn configured_olmec_toggle_recovery(x_vel: f64, toggle: bool) -> (Game, Entity) {
+        let (mut game, mut boss) = configured_first_olmec_callback();
+        game.player.pos = Vec2::new(112.0, 40.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.data.insert("active".into(), 1.0);
+        boss.state = 2;
+        boss.timer = 0;
+        boss.vel = Vec2::new(x_vel, 0.0);
+        boss.data.insert("my_gravity".into(), 0.0);
+        boss.data.insert("toggle".into(), f64::from(toggle));
+        (game, boss)
+    }
+
+    #[test]
+    fn configured_olmec_toggle_signed_zero_has_no_acceleration() {
+        for incoming in [0.0_f64, -0.0_f64] {
+            for toggle in [false, true] {
+                let (mut game, mut boss) = configured_olmec_toggle_recovery(incoming, toggle);
+                olmec(&mut game, &mut boss);
+                assert_eq!(boss.state, 2);
+                assert_eq!(
+                    boss.vel.x.to_bits(),
+                    incoming.to_bits(),
+                    "RECOVER_ZERO_NO_ACCELERATION"
+                );
+                assert_eq!(boss.value("toggle"), f64::from(toggle));
+            }
+        }
+    }
+
+    #[test]
+    fn configured_olmec_toggle_counter_one_produces_stationary_recovery() {
+        let (mut game, mut boss) = configured_olmec_toggle_recovery(0.0, true);
+        boss.timer = 1;
+        olmec(&mut game, &mut boss);
+        assert_eq!((boss.state, boss.timer, boss.vel.x), (2, 0, 0.0));
+        let position = boss.pos;
+        olmec(&mut game, &mut boss);
+        assert_eq!(boss.state, 2);
+        assert_eq!(
+            boss.vel.x, 0.0,
+            "RECOVER_COUNTER_ONE_ZERO_REMAINS_STATIONARY"
+        );
+        assert_eq!(boss.pos, position);
+    }
+
+    #[test]
+    fn configured_olmec_toggle_sign_blocks_read_the_updated_velocity() {
+        for (incoming, toggle, expected) in [
+            (-0.25, true, -0.5),
+            (0.25, true, 0.5),
+            (-0.25, false, 0.0),
+            (0.25, false, 0.0),
+            (-0.1, true, -0.35),
+            (0.1, true, 0.35),
+            (-0.1, false, -0.1),
+            (0.1, false, -0.15),
+            (-0.125, false, -0.125),
+        ] {
+            let (mut game, mut boss) = configured_olmec_toggle_recovery(incoming, toggle);
+            olmec(&mut game, &mut boss);
+            assert_eq!(boss.state, 2);
+            assert!(
+                (boss.vel.x - expected).abs() < 1e-12,
+                "RECOVER_SEQUENTIAL_SIGN_BLOCKS: {incoming}/{toggle}: {} != {expected}",
+                boss.vel.x
+            );
+            assert_eq!(boss.value("toggle"), f64::from(toggle));
+        }
+    }
+
+    #[test]
+    fn configured_olmec_toggle_flips_after_the_inclusive_speed_threshold() {
+        for (incoming, toggle, expected, next_toggle) in [
+            (-1.75, true, -2.0, false),
+            (1.75, true, 2.0, false),
+            (-1.5, true, -1.75, true),
+            (1.5, true, 1.75, true),
+            (-2.25, false, -2.0, true),
+            (2.25, false, 2.0, true),
+        ] {
+            let (mut game, mut boss) = configured_olmec_toggle_recovery(incoming, toggle);
+            olmec(&mut game, &mut boss);
+            assert_eq!(boss.state, 2);
+            assert_eq!(boss.vel.x, expected, "RECOVER_INCLUSIVE_THRESHOLD");
+            assert_eq!(boss.value("toggle"), f64::from(next_toggle));
+        }
+    }
+
+    #[test]
+    fn configured_olmec_toggle_idle_and_alarm_four_write_source_true() {
+        let (mut game, mut idle) = configured_olmec_toggle_recovery(0.0, false);
+        idle.state = 0;
+        idle.timer = 2;
+        olmec(&mut game, &mut idle);
+        assert_eq!((idle.state, idle.timer), (0, 1));
+        assert_eq!(idle.value("toggle"), 1.0, "IDLE_SOURCE_TOGGLE_TRUE");
+
+        let (mut game, mut alarm) = configured_olmec_toggle_recovery(0.0, false);
+        olmec_alarm(&mut game, &mut alarm, 4);
+        assert_eq!(alarm.value("toggle"), 1.0, "ALARM_FOUR_SOURCE_TOGGLE_TRUE");
+        assert_eq!((alarm.state, alarm.alarms[6]), (1, 20));
     }
 
     #[test]
