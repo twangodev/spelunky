@@ -525,13 +525,20 @@ impl Game {
             made_market_entrance: self.flags.contains("made_market_entrance")
                 || self.flags.contains("madeMarketEntrance"),
         };
-        self.world = generation::generate_with_campaign(
+        if !historical {
+            generation::reset_dark_history(&mut self.flags, level);
+        }
+        let generated = generation::generate_campaign_result(
             &mut self.rng,
             level,
             &self.flags,
             context,
             &mut state,
         );
+        if generated.dark_roll_selected {
+            self.flags.insert("had_dark_level".into());
+        }
+        self.world = generated.world;
         if !historical {
             self.data
                 .insert("marketChance".into(), f64::from(state.market_chance));

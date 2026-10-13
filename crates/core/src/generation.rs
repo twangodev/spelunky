@@ -611,6 +611,41 @@ impl GenerationState {
     }
 }
 
+/// scrInitLevel resets dark history at each area entry, before selection.
+pub(crate) fn reset_dark_history(flags: &mut BTreeSet<String>, level: u32) {
+    if level <= 1 || matches!(level, 5 | 9 | 13) {
+        flags.remove("had_dark_level");
+    }
+}
+
+/// Source history is separate from visible darkness: Market clears only the latter.
+pub(crate) struct GeneratedLevel {
+    pub world: World,
+    pub dark_roll_selected: bool,
+}
+
+fn select_dark_level(
+    rng: &mut Rng,
+    level: u32,
+    area: Area,
+    flags: &BTreeSet<String>,
+) -> (bool, bool) {
+    // scrInitLevel170: GM8 evaluates every Boolean operand, including this
+    // rand when any earlier eligibility guard is false. Stock probability is12.
+    let roll_won = rand(rng, 1, 12) == 1;
+    let selected = !has(flags, "had_dark_level")
+        && !has(flags, "no_dark_level")
+        && level != 0
+        && level != 1
+        && area != Area::Ice
+        && level != 16
+        && roll_won;
+    // Source177 clears darkLevel, retaining hadDarkLevel from a winning roll.
+    // Explicit dark is a standalone fixture option, applied after the draw.
+    let visible = !has(flags, "black_market") && (has(flags, "dark") || selected);
+    (visible, selected)
+}
+
 /// Generate a seeded Classic level with fresh-run Create context.
 /// Flags select unlocked special destinations.
 pub fn generate(rng: &mut Rng, level: u32, flags: &BTreeSet<String>) -> World {
@@ -634,6 +669,16 @@ pub(crate) fn generate_with_campaign(
     context: GenerationContext,
     state: &mut GenerationState,
 ) -> World {
+    generate_campaign_result(rng, level, flags, context, state).world
+}
+
+pub(crate) fn generate_campaign_result(
+    rng: &mut Rng,
+    level: u32,
+    flags: &BTreeSet<String>,
+    context: GenerationContext,
+    state: &mut GenerationState,
+) -> GeneratedLevel {
     // Validate before room construction, callbacks, or RNG draws. Historical
     // serialized state remains historical even if its RNG is canonical.
     if state.revision == crate::GenerationRevision::SourceClassicV2 {
@@ -649,6 +694,9 @@ pub(crate) fn generate_with_campaign(
     }
     let area = Area::for_level(level);
     let mut selected = flags.clone();
+    if state.revision == crate::GenerationRevision::SourceClassicV2 {
+        reset_dark_history(&mut selected, level);
+    }
     if area == Area::Jungle
         && !has(&selected, "black_market")
         && !has(&selected, "lake")
@@ -659,7 +707,10 @@ pub(crate) fn generate_with_campaign(
     let mut world = World::new(42, 34, area, level);
     if special::generate_special(&mut world, rng, flags) {
         world.fluid_dirty = false;
-        return world;
+        return GeneratedLevel {
+            world,
+            dark_roll_selected: false,
+        };
     }
     let path = room_path(rng, area, level, &mut selected);
     if area == Area::Jungle && !has(&selected, "cemetery") && rng.chance(1, 10) {
@@ -811,14 +862,22 @@ pub(crate) fn generate_with_campaign(
             }
         }
     }
-    world.dark = !has(&selected, "black_market")
-        && (has(&selected, "dark")
-            || (!has(&selected, "had_dark_level")
-                && !has(&selected, "no_dark_level")
-                && level > 1
-                && area != Area::Ice
-                && area != Area::Boss
-                && rng.chance(1, 12)));
+    let dark_roll_selected = if state.revision == crate::GenerationRevision::SourceClassicV2 {
+        let (visible, selected_roll) = select_dark_level(rng, level, area, &selected);
+        world.dark = visible;
+        selected_roll
+    } else {
+        // Preserve explicitly historical generation/replay streams.
+        world.dark = !has(&selected, "black_market")
+            && (has(&selected, "dark")
+                || (!has(&selected, "had_dark_level")
+                    && !has(&selected, "no_dark_level")
+                    && level > 1
+                    && area != Area::Ice
+                    && area != Area::Boss
+                    && rng.chance(1, 12)));
+        false
+    };
     special::apply(&mut world, rng, &selected);
     apply_wanted_posters(&mut world, &selected);
     let graphics_high = !has(&selected, "low_graphics");
@@ -839,7 +898,10 @@ pub(crate) fn generate_with_campaign(
     }
     init_cleanup::cleanup(&mut world, state.revision);
     terrain::finalize_generated(&mut world);
-    world
+    GeneratedLevel {
+        world,
+        dark_roll_selected,
+    }
 }
 
 /// oBricks Create calls scrSetupWalls(224) after authored hub construction.
@@ -1504,3 +1566,7 @@ mod tests {
         assert_eq!(game.state, RunState::Ending);
     }
 }
+
+#[cfg(test)]
+#[path = "generation/darkness_tests.rs"]
+mod darkness_tests;
