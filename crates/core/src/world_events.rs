@@ -1042,7 +1042,7 @@ pub(crate) fn qualified_olmec_target(game: &mut Game, receiver: Option<&Entity>)
     first.map(|(_, pos)| Vec2::new(pos.x + 32.0, pos.y + 16.0))
 }
 
-fn psychic_direction(pos: Vec2, target: Vec2) -> f64 {
+pub(crate) fn psychic_direction(pos: Vec2, target: Vec2) -> f64 {
     let dx = target.x - pos.x;
     let dy = target.y - pos.y;
     if dx == 0.0 {

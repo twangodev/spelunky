@@ -1047,13 +1047,31 @@ fn laser(_game: &mut Game, e: &mut Entity) {
 }
 
 fn psychic(game: &mut Game, e: &mut Entity) {
-    let dx = game.player.pos.x - e.pos.x;
-    let dy = game.player.pos.y - e.pos.y;
-    let distance = dx.hypot(dy);
-    if distance > 0.0 {
-        e.pos.x += dx / distance * 2.0;
-        e.pos.y += dy / distance * 2.0;
-    }
+    use crate::dispatcher::Instance;
+
+    // Qualified oCharacter.x/y read the first active, unretired family member.
+    // The Step receiver is detached by with_actor; do not rebuild its arrays.
+    let target = crate::dispatcher::descendant_instances(game, "oCharacter")
+        .into_iter()
+        .filter(|instance| crate::dispatcher::is_active(game, *instance))
+        .find_map(|instance| match instance {
+            Instance::Player => Some(game.player.pos),
+            Instance::Entity(id) => game.world.entity(id).map(|target| target.pos),
+            Instance::Terrain(_) => Some(instance.position(game)),
+        });
+    let Some(target) = target else {
+        // The native getter fails without writing a value. Its expression and
+        // modal/error policy remains unresolved; this infallible adapter cannot
+        // represent that failure. Leaving motion unchanged is a representation
+        // limit, not a certified source-equivalent abort or invented fallback.
+        return;
+    };
+    let dir = crate::world_events::psychic_direction(e.pos, target);
+    e.data.insert("dir".into(), dir);
+    let radians = dir.to_radians();
+    // Source executes both coordinate assignments even when dir is zero.
+    e.pos.x += 2.0 * radians.cos();
+    e.pos.y += -2.0 * radians.sin();
 }
 
 /// Literal late oPlayer1 Step queries: first test an imprecise rectangle,
@@ -3363,3 +3381,7 @@ mod player_laser_blood_contract_tests;
 #[cfg(test)]
 #[path = "yeti_stun_source_tests.rs"]
 mod yeti_stun_source_tests;
+
+#[cfg(test)]
+#[path = "psychic_wave_step_contract_tests.rs"]
+mod psychic_wave_step_contract_tests;
