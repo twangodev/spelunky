@@ -16,7 +16,7 @@ For the browser, install the `wasm32-unknown-unknown` target and `wasm-pack`, th
 
 ```sh
 ./tools/build_web.sh
-python3 tools/serve_web.py
+bun tools/serve_web.ts
 ```
 
 Open `http://127.0.0.1:8000/`. The generated `web/` bundle can be served by a static HTTP server. WebGL 2 is required; WebGPU is not required.
@@ -42,7 +42,7 @@ Actual 240 Hz pacing depends on hardware and has not been measured in this headl
 The workspace separates `spelunky-core`, the native/browser application, and `spelunky-tools`. Original source, provenance, and checksums are archived in [references](references/README.md). The asset exporter verifies every packed sprite pixel against the original data.
 
 ```sh
-python3 tools/export_assets.py --verify
+bun tools/export_assets.ts --verify
 cargo test --workspace --locked
 cargo fmt --all -- --check
 cargo run -p spelunky-tools -- replay 42 600 classic
