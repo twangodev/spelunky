@@ -7,6 +7,16 @@ use winit::keyboard::KeyCode;
 
 const DEAD_ZONE: f32 = 0.25;
 
+// Classic's trigger mappings use joystick_zpos beyond +/-0.1 for both
+// configuration and gameplay, independently of the provider's digital flag.
+fn source_trigger_pressed(button: ControllerButton, pressed: bool, value: f32) -> bool {
+    pressed
+        || (matches!(
+            button,
+            ControllerButton::LeftTrigger | ControllerButton::RightTrigger
+        ) && value > 0.1)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiButton {
     Up,
@@ -482,7 +492,11 @@ impl InputState {
             let mut held = 0;
             for button in controller::ALL {
                 let native = native_controller_button(button);
-                if pad.is_pressed(native) {
+                if source_trigger_pressed(
+                    button,
+                    pad.is_pressed(native),
+                    pad.button_data(native).map_or(0.0, |data| data.value()),
+                ) {
                     held |= button.mask();
                 }
                 let capturing = if matches!(
@@ -531,7 +545,18 @@ impl InputState {
                     buttons
                         .get(index)
                         .dyn_into::<web_sys::GamepadButton>()
-                        .is_ok_and(|button| button.pressed() || button.value() > 0.5)
+                        .is_ok_and(|button| {
+                            let physical = controller::ALL[index as usize];
+                            let threshold = if matches!(
+                                physical,
+                                ControllerButton::LeftTrigger | ControllerButton::RightTrigger
+                            ) {
+                                0.1
+                            } else {
+                                0.5
+                            };
+                            button.pressed() || button.value() > threshold
+                        })
                 };
                 let axes = pad.axes();
                 let x = axes.get(0).as_f64().unwrap_or(0.0) as f32;
@@ -703,6 +728,71 @@ fn parse_key(name: &str) -> Option<KeyCode> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn host_input_audit_partial_triggers_preserve_mapped_edges_and_neutral_capture() {
+        for trigger in [
+            ControllerButton::LeftTrigger,
+            ControllerButton::RightTrigger,
+        ] {
+            let saved = crate::storage::SaveData::from_json(&format!(
+                r#"{{"settings":{{"controller_bindings":{{"jump":"{}","start":"{}"}}}}}}"#,
+                trigger.name(),
+                trigger.name()
+            ))
+            .unwrap();
+            let mut input = InputState::default();
+            input.set_controller_bindings(&saved.settings.controller_bindings);
+            for (value, down, pressed, released) in [
+                (0.0, false, false, false),
+                (0.1, false, false, false),
+                (0.2, true, true, false),
+                (0.2, true, false, false),
+                (0.1, false, false, true),
+                (0.2, true, true, false),
+            ] {
+                let held = if source_trigger_pressed(trigger, false, value) {
+                    trigger.mask()
+                } else {
+                    0
+                };
+                input.accept_controller_capture(held);
+                let (actions, ui) = input.portable_controller(held, [false; 4]);
+                input.accept_gamepads(actions, ui);
+                let frame = input.take_tick();
+                assert_eq!(frame.jump, down, "{trigger:?} at {value}");
+                assert_eq!(frame.jump_pressed, pressed);
+                assert_eq!(frame.jump_released, released);
+                assert_eq!(input.ui_pressed().contains(&UiButton::Pause), pressed);
+                assert_eq!(
+                    input.controller_pressed(),
+                    if pressed { vec![trigger] } else { vec![] }
+                );
+                assert!(!input.take_tick().jump_pressed);
+            }
+        }
+    }
+
+    #[test]
+    fn host_input_audit_trigger_threshold_keeps_digital_controls_independent() {
+        for trigger in [
+            ControllerButton::LeftTrigger,
+            ControllerButton::RightTrigger,
+        ] {
+            assert!(!source_trigger_pressed(trigger, false, 0.1));
+            assert!(source_trigger_pressed(trigger, false, 0.2));
+            assert!(source_trigger_pressed(trigger, true, 0.0));
+        }
+        for button in controller::ALL {
+            if !matches!(
+                button,
+                ControllerButton::LeftTrigger | ControllerButton::RightTrigger
+            ) {
+                assert!(!source_trigger_pressed(button, false, 1.0));
+                assert!(source_trigger_pressed(button, true, 0.0));
+            }
+        }
+    }
+
     #[test]
     fn physical_music_key_ignores_bindings_repeat_and_synthetic_replays() {
         let mut input = InputState::default();

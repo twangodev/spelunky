@@ -631,7 +631,7 @@ impl App {
                 }
             }
             Screen::Pause => {
-                self.pause_start_requested |= key == KeyCode::Escape;
+                self.pause_start_requested |= self.pause_key(key);
                 // Source BeginStep resolves all queued independent edges together.
                 // A rebound menu key must not also select a modern pause item.
                 if self.pause_start_requested
@@ -686,25 +686,10 @@ impl App {
         }
     }
     fn pause_key(&self, key: KeyCode) -> bool {
-        key == KeyCode::Escape || self.action_key("pause", key)
-    }
-    fn action_key(&self, action: &str, key: KeyCode) -> bool {
-        self.store
-            .data
-            .settings
-            .bindings
-            .get(action)
-            .is_some_and(|keys| {
-                keys.split(',')
-                    .any(|name| name.trim() == format!("{key:?}"))
-            })
+        configured_pause_key(&self.store.data.settings.bindings, key)
     }
     fn menu_key(&mut self, key: KeyCode) {
-        let key = if self.screen == Screen::Finished && self.action_key("attack", key) {
-            KeyCode::Enter
-        } else {
-            key
-        };
+        let key = finished_menu_key(self.screen, &self.input, key);
         if key == KeyCode::Escape {
             if self.screen == Screen::Custom {
                 self.return_from_custom_selector();
@@ -2284,6 +2269,25 @@ enum SourcePausedControl {
     Quit,
     Resume,
 }
+
+fn configured_pause_key(
+    bindings: &std::collections::BTreeMap<String, String>,
+    key: KeyCode,
+) -> bool {
+    key == KeyCode::Escape
+        || bindings.get("pause").is_some_and(|keys| {
+            keys.split(',')
+                .any(|name| name.trim() == format!("{key:?}"))
+        })
+}
+
+fn finished_menu_key(screen: Screen, input: &InputState, key: KeyCode) -> KeyCode {
+    if screen == Screen::Finished && input.action_key("attack", key) {
+        KeyCode::Enter
+    } else {
+        key
+    }
+}
 fn source_paused_control(
     game: Option<&Game>,
     input: &spelunky_core::InputFrame,
@@ -3311,6 +3315,90 @@ fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn host_input_audit_finished_action_matches_loaded_validated_prompt_and_binding() {
+        for (binding, key, label) in [
+            ("unsupported", KeyCode::KeyX, "X"),
+            ("unsupported, KeyJ", KeyCode::KeyJ, "J"),
+            ("", KeyCode::KeyX, "UNBOUND"),
+        ] {
+            let mut saved = crate::storage::SaveData::default();
+            saved
+                .settings
+                .bindings
+                .insert("attack".into(), binding.into());
+            let loaded = crate::storage::SaveData::from_json(&saved.to_json().unwrap()).unwrap();
+            let mut input = InputState::default();
+            input.set_bindings(&loaded.settings.bindings);
+            assert_eq!(input.action_label("attack"), label);
+            input.key(key, true, false);
+            let active = binding != "";
+            assert_eq!(input.take_tick().attack_pressed, active);
+            assert_eq!(
+                finished_menu_key(Screen::Finished, &input, key),
+                if active { KeyCode::Enter } else { key }
+            );
+            assert_eq!(finished_menu_key(Screen::Title, &input, key), key);
+        }
+    }
+
+    #[test]
+    fn host_input_audit_saved_pause_binding_resumes_and_preserves_source_priority() {
+        let mut saved = crate::storage::SaveData::default();
+        let mut ui = SettingsUi::new();
+        for _ in 0..CONFIGURE_CONTROLLER - 1 {
+            assert_eq!(
+                ui.key(KeyCode::ArrowDown, &mut saved.settings),
+                SettingsCommand::None
+            );
+        }
+        assert_eq!(
+            ui.key(KeyCode::Enter, &mut saved.settings),
+            SettingsCommand::None
+        );
+        assert_eq!(
+            ui.key(KeyCode::KeyQ, &mut saved.settings),
+            SettingsCommand::Changed
+        );
+        let loaded = crate::storage::SaveData::from_json(&saved.to_json().unwrap()).unwrap();
+        assert_eq!(loaded.settings.bindings["pause"], "KeyQ");
+        let game = Game::legacy_shell(7, spelunky_core::RulesPreset::Classic);
+        for key in [KeyCode::KeyQ, KeyCode::Escape] {
+            let start = configured_pause_key(&loaded.settings.bindings, key);
+            assert!(start, "the key that pauses must remain a resume key");
+            assert_eq!(
+                source_paused_control(Some(&game), &Default::default(), start),
+                Some(SourcePausedControl::Resume)
+            );
+        }
+        assert!(!configured_pause_key(
+            &loaded.settings.bindings,
+            KeyCode::KeyW
+        ));
+        for (action, expected) in [
+            ("bomb", SourcePausedControl::Suicide),
+            ("rope", SourcePausedControl::Quit),
+        ] {
+            let mut bindings = loaded.settings.bindings.clone();
+            bindings.insert(action.into(), "KeyQ".into());
+            let mut input = InputState::default();
+            input.set_bindings(&bindings);
+            input.key(KeyCode::KeyQ, true, false);
+            assert_eq!(
+                source_paused_control(
+                    Some(&game),
+                    &input.take_tick(),
+                    configured_pause_key(&bindings, KeyCode::KeyQ)
+                ),
+                Some(expected)
+            );
+        }
+        let mut unbound = loaded.settings.bindings.clone();
+        unbound.insert("pause".into(), String::new());
+        assert!(configured_pause_key(&unbound, KeyCode::Escape));
+        assert!(!configured_pause_key(&unbound, KeyCode::KeyQ));
+    }
+
     #[test]
     fn custom_constructor_starts_only_selected_lush_and_preserves_canonical_rng() {
         let rules = spelunky_core::RulesPreset::Classic;
