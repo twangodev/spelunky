@@ -60,17 +60,25 @@ pub(crate) fn game_step(game: &mut Game, _input: &InputFrame) {
         .world
         .entities
         .iter()
-        .filter(|e| e.alive && e.object == "oXMarket")
-        .map(|e| sprite_gap(e.sprite_bounds(), game.player.sprite_bounds()))
+        .filter(|e| e.alive && e.engine_active && crate::catalog::is_a(&e.object, "oXMarket"))
+        .map(|e| {
+            // oGame executes this query inside with oPlayer1. The receiver
+            // is Player's cached envelope, not Game's origin or mask.
+            crate::world_events::mask_distance(
+                game.player.collision_mask().point_bounds(),
+                e.collision_mask().point_bounds(),
+            )
+            .min(1_000_000.0)
+        })
         .min_by(f64::total_cmp);
-    if let Some(distance) = market {
+    if let Some(distance) = market.filter(|_| game.player.engine_active) {
         // The canonical alarm setter converts its real value using x87's
         // default nearest-even integer mode, rather than truncating it.
         let distance = distance.max(4.).round_ties_even() as i32;
         if game.alarms[2] < 1 || distance < game.alarms[2] {
             game.alarms[2] = distance;
         }
-    } else {
+    } else if market.is_none() {
         game.flags.remove("udjat_blink");
     }
     if game.state == RunState::Dead {
@@ -141,11 +149,6 @@ pub fn acknowledge_game_over(game: &mut Game, input: &InputFrame) -> bool {
     true
 }
 
-fn sprite_gap(a: Rect, b: Rect) -> f64 {
-    let x = (a.x - b.x - b.w + 1.).max(b.x - a.x - a.w + 1.).max(0.);
-    let y = (a.y - b.y - b.h + 1.).max(b.y - a.y - a.h + 1.).max(0.);
-    x.hypot(y)
-}
 fn count(game: &mut Game, key: &str) {
     *game.data.entry(key.into()).or_default() += 1.;
 }
@@ -250,6 +253,30 @@ pub(crate) fn final_boss_step(game: &mut Game) {
     game.sound("sndThump", position);
 }
 
+fn moai_revival_anchor(game: &Game) -> Option<Vec2> {
+    // Implicit oMoai.x/y selects the first current active family member.
+    // Raw World births remain visible to direct public adapters, appended
+    // after registered entries by creation serial. No query runs Create or
+    // mutates family registration; storage only breaks synthetic serial ties.
+    let family = crate::dispatcher::descendant_instances(game, "oMoai");
+    game.world
+        .entities
+        .iter()
+        .enumerate()
+        .filter(|(_, entity)| {
+            entity.alive && entity.engine_active && crate::catalog::is_a(&entity.object, "oMoai")
+        })
+        .min_by_key(|(storage, entity)| {
+            family
+                .iter()
+                .position(|instance| *instance == crate::dispatcher::Instance::Entity(entity.id))
+                .map_or((1_u8, entity.creation_serial, *storage), |rank| {
+                    (0, rank as u64, *storage)
+                })
+        })
+        .map(|(_, entity)| Vec2::new(entity.pos.x + 24., entity.pos.y + 24.))
+}
+
 fn revive(game: &mut Game) {
     if game.state == RunState::Dead
         || game.player.health > 0
@@ -257,12 +284,7 @@ fn revive(game: &mut Game) {
     {
         return;
     }
-    let moai = game
-        .world
-        .entities
-        .iter()
-        .find(|e| e.alive && e.object == "oMoai")
-        .map(|e| Vec2::new(e.pos.x + 24., e.pos.y + 24.));
+    let moai = moai_revival_anchor(game);
     let destination = moai.unwrap_or_else(|| {
         if game.world.area == Area::Boss {
             Vec2::new(24., 552.)
@@ -625,6 +647,12 @@ fn redeem_held_idol(game: &mut Game, id: u64, immediate: bool) {
             .increment(crate::statistics::LifetimeCounter::IdolsConverted);
     }
     count(game, if crystal { "skulls" } else { "idols" });
+    // Both source exit branches birth the collection flash before Destroy,
+    // at the Player origin even when the idol itself has another offset.
+    game.spawn(
+        "oBigCollect",
+        Vec2::new(game.player.pos.x, game.player.pos.y - 8.),
+    );
     if let Some(idol) = game.world.entity_mut(id) {
         idol.alive = false;
         idol.held = false;
@@ -2210,11 +2238,33 @@ mod tests {
                         .count(),
                     1
                 );
-                for _ in 0..12 {
+                for frame in 1..=12 {
                     g.step(&InputFrame::default());
+                    if kind == HubKind::Sun {
+                        // Sun's interior entrance floor is destructible. The
+                        // unchanged late blast removes it; revival preserves
+                        // stun, so the same neutral tape reaches contained Lava
+                        // on frame 9. Source Lava damage ignores invincibility.
+                        if frame < 9 {
+                            assert_eq!(g.state, RunState::Playing);
+                            assert_eq!(g.player.health, 4);
+                        } else {
+                            assert_eq!(g.state, RunState::Dead);
+                        }
+                        if frame == 9 {
+                            assert!(g.player.invincible > 0);
+                            assert!(g.events.contains(&GameEvent::Damage { amount: 99 }));
+                            assert!(g.events.contains(&GameEvent::Died));
+                            assert_eq!(g.player.health, 0);
+                        }
+                    }
                 }
-                assert_eq!(g.state, RunState::Playing);
-                assert_eq!(g.player.health, 4);
+                if kind == HubKind::Sun {
+                    assert_eq!(g.state, RunState::Dead);
+                } else {
+                    assert_eq!(g.state, RunState::Playing);
+                    assert_eq!(g.player.health, 4);
+                }
                 assert!(!g.player.has("Ankh"));
             } else {
                 assert_eq!(g.state, RunState::Playing, "{kind:?}");
@@ -2263,4 +2313,106 @@ mod tests {
         assert_eq!(g.state, RunState::Dead);
         assert!(!g.events.contains(&GameEvent::LevelComplete));
     }
+    #[test]
+    fn ankh_moai_getter_keeps_current_family_order_and_pending_birth_visibility() {
+        for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut g = Game::shell(7, preset);
+            let a = g.world.spawn("oMoai", Vec2::new(64., 64.));
+            let b = g.world.spawn("oMoai", Vec2::new(192., 64.));
+            let c = g.world.spawn("oMoai", Vec2::new(320., 64.));
+            crate::dispatcher::register_instances(&mut g);
+            // A bounded current-family getter fixture: C,A,B in native array,
+            // C,B,A in independent storage, then retirement of C.
+            g.dispatcher.registration_order = vec![
+                crate::dispatcher::Instance::Entity(c),
+                crate::dispatcher::Instance::Entity(a),
+                crate::dispatcher::Instance::Entity(b),
+            ];
+            g.world.entities.sort_by_key(|e| {
+                if e.id == c {
+                    0
+                } else if e.id == b {
+                    1
+                } else {
+                    2
+                }
+            });
+            g.world.entity_mut(c).unwrap().alive = false;
+            let before = g.dispatcher.registration_order.clone();
+            assert_eq!(moai_revival_anchor(&g), Some(Vec2::new(88., 88.)));
+            g.world.entity_mut(a).unwrap().engine_active = false;
+            assert_eq!(moai_revival_anchor(&g), Some(Vec2::new(216., 88.)));
+            g.world.entity_mut(b).unwrap().engine_active = false;
+            assert_eq!(moai_revival_anchor(&g), None);
+            let pending = g.world.spawn("oMoai", Vec2::new(448., 64.));
+            assert!(!before.contains(&crate::dispatcher::Instance::Entity(pending)));
+            assert_eq!(moai_revival_anchor(&g), Some(Vec2::new(472., 88.)));
+            assert_eq!(g.dispatcher.registration_order, before);
+            g.player.health = 0;
+            g.player.equipment.insert("Ankh".into());
+            revive(&mut g);
+            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.pos, Vec2::new(472., 88.));
+            assert!(!g.player.has("Ankh"));
+            assert_eq!(g.dispatcher.registration_order, before);
+        }
+    }
+
+    #[test]
+    fn idol_exit_redemption_births_source_collection_effect_before_retirement() {
+        for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for immediate in [false, true] {
+                for object in ["oGoldIdol", "oCrystalSkull"] {
+                    let mut g = Game::shell(3, preset);
+                    g.world.area = Area::Jungle;
+                    g.world.level = 5;
+                    g.player.pos = Vec2::new(100.25, 120.5);
+                    let id = g.spawn(object, Vec2::new(110.25, 108.5));
+                    let idol = g.world.entity_mut(id).unwrap();
+                    idol.data.insert("value".into(), 5000.);
+                    idol.held = true;
+                    g.player.held = Some(id);
+                    let first = g
+                        .world
+                        .entities
+                        .iter()
+                        .map(|e| e.creation_serial)
+                        .max()
+                        .unwrap();
+                    redeem_held_idol(&mut g, id, immediate);
+                    let effects: Vec<_> = g
+                        .world
+                        .entities
+                        .iter()
+                        .filter(|e| e.alive && e.object == "oBigCollect")
+                        .collect();
+                    assert_eq!(effects.len(), 1);
+                    assert_eq!(effects[0].pos, Vec2::new(100.25, 112.5));
+                    assert!(effects[0].creation_serial > first);
+                    assert_eq!(effects[0].alarms[0], 30);
+                    assert!(g.world.entity(id).is_none());
+                    assert!(g.player.held.is_none());
+                    assert_eq!(g.data["idolsConverted"], 1.);
+                    if immediate {
+                        assert_eq!(g.player.money, 10000);
+                    } else {
+                        assert_eq!(g.data["collect"], 10000.);
+                        assert_eq!(g.data["collectCounter"], 20.);
+                    }
+                    assert_eq!(
+                        g.data[if object == "oCrystalSkull" {
+                            "skulls"
+                        } else {
+                            "idols"
+                        }],
+                        1.
+                    );
+                }
+            }
+        }
+    }
 }
+
+#[cfg(test)]
+#[path = "udjat_cached_distance_tests.rs"]
+mod udjat_cached_distance_tests;
