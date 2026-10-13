@@ -1253,9 +1253,12 @@ fn point_family(game: &Game, point: Vec2, family: &str) -> bool {
 }
 
 fn world_point_family(world: &crate::World, point: Vec2, family: &str) -> bool {
-    world.tiles_point(point, family)
+    world.tiles_point_active(point, family)
         || world.entities.iter().any(|e| {
-            e.alive && catalog::is_a(&e.object, family) && e.sprite_bounds().contains(point)
+            e.alive
+                && e.engine_active
+                && catalog::is_a(&e.object, family)
+                && e.mask_contains(point, crate::CollisionPrecision::BoundingBox)
         })
 }
 
@@ -1324,18 +1327,7 @@ fn effect(game: &mut Game, e: &mut Entity) {
 /// Bubble Step uses collision_point(..., oWater, 0, 0): active cached
 /// bounding boxes, including fractional origins rounded by the engine.
 fn bubble_water_point(world: &crate::World, point: Vec2) -> bool {
-    world.tiles.iter().enumerate().any(|(index, tile)| {
-        tile.engine_active
-            && catalog::is_a(&tile.object, "oWater")
-            && world
-                .tile_collision_mask((index % world.width) as i32, (index / world.width) as i32)
-                .contains(point, crate::CollisionPrecision::BoundingBox)
-    }) || world.entities.iter().any(|entity| {
-        entity.alive
-            && entity.engine_active
-            && catalog::is_a(&entity.object, "oWater")
-            && entity.mask_contains(point, crate::CollisionPrecision::BoundingBox)
-    })
+    world_point_family(world, point, "oWater")
 }
 
 fn collect_effect(e: &mut Entity) {
@@ -3735,3 +3727,7 @@ mod message_callback_gate_tests {
 #[cfg(test)]
 #[path = "world_events/bubble_raw_point_tests.rs"]
 mod bubble_raw_point_tests;
+
+#[cfg(test)]
+#[path = "world_events/world_point_source_tests.rs"]
+mod world_point_source_tests;
