@@ -259,7 +259,7 @@ fn web_collision(game: &mut Game, this: Instance, other: Instance) {
     };
     let object = other.object(game).to_owned();
     if crate::catalog::is_a(&object, "oWater")
-        || matches!(object.as_str(), "oLava" | "oLaser" | "oSlash" | "oMagmaMan")
+        || matches!(object.as_str(), "oLava" | "oLaser" | "oSlash")
     {
         if let Some(entity) = game.world.entity_mut(web) {
             entity.alive = false;
@@ -274,18 +274,24 @@ fn web_collision(game: &mut Game, this: Instance, other: Instance) {
     let enemy = crate::catalog::is_a(&object, "oEnemy");
     let item = crate::catalog::is_a(&object, "oItem");
     let rubble = crate::catalog::is_a(&object, "oRubblePiece");
-    if enemy && !matches!(object.as_str(), "oSpider" | "oGiantSpider")
-        || item && !entity.held && !crate::catalog::is_a(&object, "oRope")
+    let source_type = crate::items::explosives::source_type(entity);
+    if enemy && !matches!(source_type.as_str(), "Spider" | "Giant Spider")
+        || item && !entity.held && source_type != "Rope"
         || rubble
         || crate::catalog::is_a(&object, "oTreasure")
     {
         entity.vel = Vec2::default();
     }
-    if enemy && crate::catalog::is_a(&object, "oShopkeeper") && entity.health > 0 {
+    if enemy && source_type == "Shopkeeper" && entity.health > 0 {
         entity.state = 2;
     }
     if rubble {
         entity.data.insert("animation_speed".into(), 0.);
+    }
+    if enemy && source_type == "Magma Man" {
+        if let Some(entity) = game.world.entity_mut(web) {
+            entity.alive = false;
+        }
     }
 }
 
@@ -410,9 +416,24 @@ pub(crate) fn player_hurt_enabled(game: &Game) -> bool {
 /// oPlayer1 Step 210: before active/controller and outside the exit hurt guard.
 pub(crate) fn player_lava(game: &mut Game) {
     let pos = game.player.pos;
-    if hazards(game).iter().any(|h| {
-        h.object == "oLava" && current_rect(game, h).contains(Vec2::new(pos.x, pos.y + 6.))
-    }) {
+    let foot = Vec2::new(pos.x, pos.y + 6.0);
+    let in_lava = crate::dispatcher::descendant_instances(game, "oLava")
+        .into_iter()
+        .filter(|instance| crate::dispatcher::is_active(game, *instance))
+        .any(|instance| match instance {
+            Instance::Entity(id) => game.world.entity(id).is_some_and(|entity| {
+                entity.mask_contains(foot, crate::CollisionPrecision::BoundingBox)
+            }),
+            Instance::Terrain(index) => game
+                .world
+                .tile_collision_mask(
+                    (index % game.world.width) as i32,
+                    (index / game.world.width) as i32,
+                )
+                .contains(foot, crate::CollisionPrecision::BoundingBox),
+            Instance::Player => false,
+        });
+    if in_lava {
         if game.state != crate::RunState::Dead {
             if crate::statistics::is_real_level(game) {
                 game.lifetime_stats
@@ -1134,6 +1155,7 @@ mod tests {
     fn lava_bypasses_damage_immunity() {
         let mut g = room();
         g.world.spawn("oLava", Vec2::new(32.0, 32.0));
+        crate::dispatcher::register_instances(&mut g);
         g.player.invincible = 60;
         tick(&mut g);
         assert!(g.player.health <= 0);
@@ -1300,8 +1322,11 @@ mod tests {
                 let player_pos = game.player.pos;
                 let spear_pos = Vec2::new(player_pos.x - 8.0, player_pos.y - 8.0);
                 let trap = game.spawn("oSpearTrapTop", Vec2::new(spear_pos.x + 16.0, spear_pos.y));
-                game.data
-                    .insert(format!("hazard_entity:{trap}:cooldown"), 50.0);
+                game.world
+                    .entity_mut(trap)
+                    .unwrap()
+                    .data
+                    .insert("fired".into(), 50.0);
                 let spear = game.spawn("oSpearsLeft", spear_pos);
                 game.world.entity_mut(spear).unwrap().animation = 20.0;
                 game.step(&crate::InputFrame::default());

@@ -288,14 +288,11 @@ pub(super) fn collision(game: &mut Game, this: Instance, other: Instance) {
                     // This cleanup belongs to Boulder Collision, even when
                     // the target overrides oSolid's inherited Destroy event.
                     let decoration_point = Vec2::new(other_pos.x, other_pos.y - 16.0);
-                    if let Some(decoration) = game.world.entities.iter_mut().find(|e| {
-                        e.alive
-                            && e.object == "oGenerationDecoration"
-                            && e.value("depth") == 3.0
-                            && e.sprite_bounds().contains(decoration_point)
-                    }) {
-                        decoration.alive = false;
-                    }
+                    game.dispatcher.remove_decoration_at(
+                        &mut game.world.entities,
+                        3.0,
+                        decoration_point,
+                    );
                     let spike_point = Vec2::new(other_pos.x + 8.0, other_pos.y - 1.0);
                     if let Some(spikes) = game.world.entities.iter_mut().find(|e| {
                         e.alive && e.object == "oSpikes" && e.sprite_bounds().contains(spike_point)

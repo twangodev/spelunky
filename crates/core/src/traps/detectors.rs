@@ -69,8 +69,18 @@ pub(super) fn init_entity(entity: &mut Entity) {
         "oArrowTrapLeft" | "oArrowTrapRight" | "oArrowTrapLeftLit" | "oArrowTrapRightLit" => {
             entity.alarms[1] = 1;
         }
-        "oSpearTrapTop" | "oSpearTrapLit" => {
-            entity.data.insert("animation_speed".into(), 0.5);
+        "oSpearTrapTop" | "oSpearTrapBottom" | "oSpearTrapLit" => {
+            for (field, value) in [
+                ("fired", 0.0),
+                ("firedMax", 50.0),
+                ("prox", 4.0),
+                ("invincible", 0.0),
+            ] {
+                entity.data.insert(field.into(), value);
+            }
+            if entity.object != "oSpearTrapBottom" {
+                entity.data.insert("animation_speed".into(), 0.5);
+            }
         }
         _ => {}
     }
@@ -256,35 +266,18 @@ pub(super) fn step_instance(game: &mut Game, instance: Instance) {
             }
         }
         "oSpearTrapTop" | "oSpearTrapBottom" | "oSpearTrapLit" => {
-            let key = format!("{}:cooldown", h.data_key);
-            let cooldown = game.data.get(&key).copied().unwrap_or(0.0);
-            let cooldown = (cooldown - 1.0).max(0.0);
-            game.data.insert(key.clone(), cooldown);
-            if cooldown == 0.0 {
-                if let Some(faces_right) = spear_target(game, &h) {
-                    let id = game.spawn(
-                        "oSpearsLeft",
-                        Vec2::new(h.pos.x + if faces_right { 16.0 } else { -16.0 }, h.pos.y),
-                    );
-                    let e = game.world.entity_mut(id).unwrap();
-                    if faces_right {
-                        e.sprite = "sSpearsRight".into();
-                    }
-                    e.facing = if faces_right { 1 } else { -1 };
-                    game.data.insert(key, 50.0);
-                }
-            }
+            spear_step(game, &h);
             let view = game.simulation_view_rect();
             let active = h.pos.x > view.x - 8.0
                 && h.pos.x < view.x + (view.w + 8.0)
                 && h.pos.y > view.y - 8.0
                 && h.pos.y < view.y + (view.h + 8.0);
-            if active && !game.world.solid_at(h.pos.x, h.pos.y + 16.0) {
+            if active && !spear_support(game, Vec2::new(h.pos.x, h.pos.y + 16.0), "oSolid") {
                 remove_hazard(game, &h);
             }
             if h.object == "oSpearTrapBottom" {
                 if let Some(id) = h.id {
-                    if let Some(e) = game.world.entity_mut(id) {
+                    if let Some(e) = crate::dispatcher::stored_entity_mut(game, id) {
                         e.pos.x = e.pos.x.ceil();
                         e.pos.y = e.pos.y.ceil();
                     }
@@ -300,18 +293,8 @@ pub(super) fn step_instance(game: &mut Game, instance: Instance) {
             };
             let faces_right = e.sprite == "sSpearsRight";
             let anchor = Vec2::new(h.pos.x + if faces_right { -16.0 } else { 16.0 }, h.pos.y);
-            let supported = game
-                .world
-                .tiles_collide(Rect::new(anchor.x, anchor.y, 1.0, 1.0), "oSpearTrapTop")
-                || game
-                    .world
-                    .tiles_collide(Rect::new(anchor.x, anchor.y, 1.0, 1.0), "oSpearTrapBottom")
-                || game.world.entities.iter().any(|trap| {
-                    trap.alive
-                        && (crate::catalog::is_a(&trap.object, "oSpearTrapTop")
-                            || crate::catalog::is_a(&trap.object, "oSpearTrapBottom"))
-                        && trap.sprite_bounds().contains(anchor)
-                });
+            let supported = spear_support(game, anchor, "oSpearTrapTop")
+                || spear_support(game, anchor, "oSpearTrapBottom");
             if let Some(e) = game.world.entity_mut(id) {
                 e.data.insert("depth".into(), 995.0);
                 if !supported {
@@ -432,45 +415,117 @@ pub(super) fn player_hurt(game: &mut Game) {
     }
 }
 
-fn spear_target(game: &Game, trap: &Hazard) -> Option<bool> {
-    let center = Vec2::new(trap.pos.x + 8.0, trap.pos.y + 8.0);
-    let nearest = |family: &str| {
+fn spear_support(game: &Game, point: Vec2, family: &str) -> bool {
+    crate::dispatcher::descendant_instances(game, family)
+        .into_iter()
+        .filter(|instance| crate::dispatcher::is_active(game, *instance))
+        .any(|instance| match instance {
+            Instance::Entity(id) => game.world.entity(id).is_some_and(|entity| {
+                entity.mask_contains(point, crate::CollisionPrecision::BoundingBox)
+            }),
+            Instance::Terrain(index) => game
+                .world
+                .tile_collision_mask(
+                    (index % game.world.width) as i32,
+                    (index / game.world.width) as i32,
+                )
+                .contains(point, crate::CollisionPrecision::BoundingBox),
+            Instance::Player => false,
+        })
+}
+
+fn spear_value(game: &Game, h: &Hazard, field: &str, fallback: f64) -> f64 {
+    h.id.and_then(|id| game.world.entity(id))
+        .and_then(|entity| entity.data.get(field).copied())
+        .unwrap_or(fallback)
+}
+
+fn spear_set_fired(game: &mut Game, h: &Hazard, fired: f64) {
+    if let Some(id) = h.id {
         game.world
-            .entities
-            .iter()
-            .filter(|e| e.alive && crate::catalog::is_a(&e.object, family))
-            .min_by(|a, b| {
-                a.pos
-                    .distance(trap.pos)
-                    .total_cmp(&b.pos.distance(trap.pos))
-            })
-    };
+            .entity_mut(id)
+            .unwrap()
+            .data
+            .insert("fired".into(), fired);
+    }
+    // Preserve the terrain adapter's state and existing inspection alias.
+    game.data.insert(format!("{}:cooldown", h.data_key), fired);
+}
+
+fn spear_emit(game: &mut Game, h: &Hazard, right: bool, maximum: f64) {
+    let id = game.spawn(
+        "oSpearsLeft",
+        Vec2::new(h.pos.x + if right { 16.0 } else { -16.0 }, h.pos.y),
+    );
+    if right {
+        game.world.entity_mut(id).unwrap().sprite = "sSpearsRight".into();
+        if let Some(receiver) = h.id.and_then(|id| game.world.entity_mut(id)) {
+            receiver.data.insert("spears".into(), id as f64);
+        }
+    }
+    spear_set_fired(game, h, maximum);
+}
+
+fn spear_step(game: &mut Game, h: &Hazard) {
+    let key = format!("{}:cooldown", h.data_key);
+    let mut fired = spear_value(
+        game,
+        h,
+        "fired",
+        game.data.get(&key).copied().unwrap_or(0.0),
+    );
+    if fired > 0.0 {
+        fired -= 1.0;
+    }
+    spear_set_fired(game, h, fired);
+    let prox = spear_value(game, h, "prox", 4.0);
+    let maximum = spear_value(game, h, "firedMax", 50.0);
+    if let Some(receiver) = h.id.and_then(|id| game.world.entity_mut(id)) {
+        receiver.data.insert("range".into(), 64.0);
+    }
+    let center = Vec2::new(h.pos.x + 8.0, h.pos.y + 8.0);
+    // Each source side performs Player, Enemy, MoveableSolid, Item in order.
+    // Nearest scratch writes still occur after firing; a configured zero maximum
+    // can legitimately admit subsequent branches in the same Step.
     for right in [false, true] {
-        let on_side = |x: f64, boundary: f64| if right { x > boundary } else { x < boundary };
-        if (game.player.pos.y - center.y).abs() < 4.0
-            && game.player.pos.distance(center) < 64.0
-            && on_side(game.player.pos.x, if right { center.x } else { trap.pos.x })
+        let side = |x: f64, boundary: f64| if right { x > boundary } else { x < boundary };
+        if crate::dispatcher::is_active(game, Instance::Player)
+            && fired == 0.0
+            && (game.player.pos.y - center.y).abs() < prox
+            && side(game.player.pos.x, if right { center.x } else { h.pos.x })
+            && center.distance(game.player.pos) < 64.0
         {
-            return Some(right);
+            spear_emit(game, h, right, maximum);
+            fired = maximum;
         }
         for family in ["oEnemy", "oMoveableSolid", "oItem"] {
-            if let Some(entity) = nearest(family) {
-                let origin = if family == "oItem" { center } else { trap.pos };
-                let boundary = if family == "oItem" {
-                    center.x
-                } else {
-                    trap.pos.x
-                };
-                if (entity.pos.y - origin.y).abs() < 4.0
-                    && entity.pos.distance(origin) < 64.0
-                    && on_side(entity.pos.x, boundary)
+            let target = temp_nearest(game, h.pos, family);
+            if let Some(receiver) = h.id.and_then(|id| game.world.entity_mut(id)) {
+                match target {
+                    Some(Instance::Entity(id)) => {
+                        receiver.data.insert("obj".into(), id as f64);
+                    }
+                    None => {
+                        receiver.data.insert("obj".into(), -4.0);
+                    }
+                    _ => {} // The terrain adapter has no native numeric instance ID.
+                }
+            }
+            if let Some(target) = target {
+                let pos = target.position(game);
+                let origin = if family == "oItem" { center } else { h.pos };
+                let boundary = if family == "oItem" { center.x } else { h.pos.x };
+                if fired == 0.0
+                    && (pos.y - origin.y).abs() < prox
+                    && side(pos.x, boundary)
+                    && origin.distance(pos) < 64.0
                 {
-                    return Some(right);
+                    spear_emit(game, h, right, maximum);
+                    fired = maximum;
                 }
             }
         }
     }
-    None
 }
 
 #[cfg(test)]
@@ -747,3 +802,7 @@ fn temp_set_fired(game: &mut Game, h: &Hazard, fired: f64) {
 #[cfg(test)]
 #[path = "temp_contract_tests.rs"]
 mod temp_contract_tests;
+
+#[cfg(test)]
+#[path = "spear_nearest_contract_tests.rs"]
+mod spear_nearest_contract_tests;
