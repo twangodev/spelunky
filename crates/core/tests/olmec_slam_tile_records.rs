@@ -139,6 +139,13 @@ fn real_slam_deletes_one_layer3_point_record_and_preserves_overlap_depth_edge_an
     for (rules, algorithm) in modes() {
         for terrain in [false, true] {
             let mut game = Game::shell_with_algorithm(42, rules, algorithm).unwrap();
+            // This configured impact keeps its actor control in a whole-room
+            // view even when source Olmec Create sets camera Y to 400.
+            game.set_simulation_view_extent(
+                game.world.width as f64 * 16.0,
+                game.world.height as f64 * 16.0,
+            )
+            .unwrap();
             for x in 1..=3 {
                 game.world.set_tile(x, 3, "oHardBlock");
             }
