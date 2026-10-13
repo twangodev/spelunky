@@ -6,7 +6,8 @@ use crate::dispatcher::Instance;
 pub(super) fn handles(object: &str) -> bool {
     matches!(
         object,
-        "oArrowTrapLeft"
+        "oTemp"
+            | "oArrowTrapLeft"
             | "oArrowTrapRight"
             | "oArrowTrapLeftLit"
             | "oArrowTrapRightLit"
@@ -51,6 +52,20 @@ fn right(object: &str) -> bool {
 /// Fixed Create defaults run in World::spawn before caller overrides.
 pub(super) fn init_entity(entity: &mut Entity) {
     match entity.object.as_str() {
+        "oTemp" => {
+            // Inherited DrawnSprite/Solid Create precedes the own trap fields.
+            for key in [
+                "blinkToggle",
+                "invincible",
+                "shopWall",
+                "cleanDeath",
+                "fired",
+            ] {
+                entity.data.insert(key.into(), 0.0);
+            }
+            entity.text.insert("treasure".into(), String::new());
+            entity.text.insert("type".into(), "Arrow Trap".into());
+        }
         "oArrowTrapLeft" | "oArrowTrapRight" | "oArrowTrapLeftLit" | "oArrowTrapRightLit" => {
             entity.alarms[1] = 1;
         }
@@ -184,6 +199,7 @@ pub(super) fn alarm(game: &mut Game, instance: Instance, index: u8) {
         return;
     };
     match (h.object.as_str(), index) {
+        ("oTemp", 0) => temp_emit(game, &h, -5.0),
         ("oArrowTrapLeft" | "oArrowTrapRight" | "oArrowTrapLeftLit" | "oArrowTrapRightLit", 1) => {
             if game.flags.contains("level_editor") {
                 return;
@@ -219,6 +235,7 @@ pub(super) fn step_instance(game: &mut Game, instance: Instance) {
         return;
     };
     match h.object.as_str() {
+        "oTemp" => temp_step(game, &h),
         "oArrowRepeaterL" | "oArrowRepeaterR" => {
             let key = format!("{}:fired", h.data_key);
             let fired = game.data.get(&key).copied().unwrap_or(0.0);
@@ -592,3 +609,141 @@ mod tests {
         }
     }
 }
+
+// oTemp is an older movement-triggered trap, not the stretched detector family.
+fn temp_emit(game: &mut Game, h: &Hazard, speed: f64) {
+    let arrow = game.spawn("oArrow", Vec2::new(h.pos.x - 16.0, h.pos.y + 4.0));
+    game.world.entity_mut(arrow).unwrap().vel.x = speed;
+    if let Some(id) = h.id {
+        game.world
+            .entity_mut(id)
+            .unwrap()
+            .data
+            .insert("arrow".into(), arrow as f64);
+    }
+}
+
+fn temp_nearest(game: &Game, origin: Vec2, family: &str) -> Option<Instance> {
+    crate::dispatcher::descendant_instances(game, family)
+        .into_iter()
+        .filter(|instance| {
+            crate::dispatcher::is_active(game, *instance)
+                && match instance {
+                    Instance::Entity(id) => game.world.entity(*id).is_some(),
+                    _ => true,
+                }
+        })
+        .min_by(|a, b| {
+            a.position(game)
+                .distance(origin)
+                .total_cmp(&b.position(game).distance(origin))
+        })
+}
+
+fn temp_moving(game: &Game, target: Instance) -> bool {
+    match target {
+        Instance::Player => game.player.vel.x.abs() > 0.0 || game.player.vel.y.abs() > 0.0,
+        Instance::Entity(id) => game
+            .world
+            .entity(id)
+            .is_some_and(|e| e.vel.x.abs() > 0.0 || e.vel.y.abs() > 0.0),
+        Instance::Terrain(_) => false,
+    }
+}
+
+fn temp_step(game: &mut Game, h: &Hazard) {
+    let key = format!("{}:fired", h.data_key);
+    let mut fired = h.id.and_then(|id| game.world.entity(id)).map_or_else(
+        || game.data.get(&key).copied().unwrap_or(0.0),
+        |e| e.value("fired"),
+    );
+    let center = Vec2::new(h.pos.x + 8.0, h.pos.y + 8.0);
+    // Missing qualified Player reads are outside the infallible adapter's error
+    // model; this branch is qualified only when the source Player is active.
+    if crate::dispatcher::is_active(game, Instance::Player)
+        && fired == 0.0
+        && (game.player.pos.y - h.pos.y - 8.0).abs() < 8.0
+        && game.player.pos.x < h.pos.x + 8.0
+        && center.distance(game.player.pos) < 128.0
+        && temp_moving(game, Instance::Player)
+    {
+        temp_emit(game, h, -8.0);
+        fired += 1.0;
+        temp_set_fired(game, h, fired);
+        game.sound("sndArrowTrap", h.pos);
+    }
+    // Every nearest lookup still occurs after an earlier branch fired. Source
+    // ordering lets the final Item lookup observe the newly created Arrow.
+    for (family, origin, distance_origin, x_limit, requires_motion) in [
+        ("oEnemy", h.pos, h.pos, h.pos.x, true),
+        ("oMoveableSolid", h.pos, h.pos, h.pos.x, false),
+        (
+            "oItem",
+            Vec2::new(h.pos.x - 16.0, h.pos.y),
+            center,
+            h.pos.x + 8.0,
+            true,
+        ),
+    ] {
+        let target = temp_nearest(game, origin, family);
+        if let Some(id) = h.id {
+            match target {
+                Some(Instance::Entity(target_id)) => {
+                    game.world
+                        .entity_mut(id)
+                        .unwrap()
+                        .data
+                        .insert("obj".into(), target_id as f64);
+                }
+                None => {
+                    game.world
+                        .entity_mut(id)
+                        .unwrap()
+                        .data
+                        .insert("obj".into(), -4.0);
+                }
+                // Terrain has no numeric instance ID in the typed adapter;
+                // selection/coordinates still use its actual family member.
+                _ => {}
+            }
+        }
+        if let Some(target) = target {
+            let pos = target.position(game);
+            if fired == 0.0
+                && (pos.y - h.pos.y - 8.0).abs() < 8.0
+                && pos.x < x_limit
+                && distance_origin.distance(pos) < 128.0
+                && (!requires_motion || temp_moving(game, target))
+            {
+                temp_emit(game, h, -8.0);
+                fired += 1.0;
+                temp_set_fired(game, h, fired);
+                game.sound("sndArrowTrap", h.pos);
+            }
+        }
+    }
+    if let Some(id) = h.id {
+        let receiver = game.world.entity_mut(id).unwrap();
+        receiver.data.insert("fired".into(), fired);
+        receiver.pos.x = receiver.pos.x.ceil();
+        receiver.pos.y = receiver.pos.y.ceil();
+    } else {
+        game.data.insert(key, fired);
+    }
+}
+
+fn temp_set_fired(game: &mut Game, h: &Hazard, fired: f64) {
+    if let Some(id) = h.id {
+        game.world
+            .entity_mut(id)
+            .unwrap()
+            .data
+            .insert("fired".into(), fired);
+    } else {
+        game.data.insert(format!("{}:fired", h.data_key), fired);
+    }
+}
+
+#[cfg(test)]
+#[path = "temp_contract_tests.rs"]
+mod temp_contract_tests;
