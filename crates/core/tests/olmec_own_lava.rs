@@ -138,10 +138,18 @@ fn authored_first_hit_attachment(canonical: bool, rules: RulesPreset, family: &s
         // grave alive after the boss retires, isolating the Destroy query.
         g.world.set_tile(5, 6, "oBlock");
         g.world.set_tile(6, 6, "oBlock");
+        g.world.set_tile(5, 7, "oBlock");
     }
     let first = g.spawn(family, Vec2::new(96.0, 95.0));
-    let gate_target = g.spawn(family, Vec2::new(82.0, 80.0));
-    let gate = Vec2::new(88.0, 95.0);
+    // Grave is itself oSolid: first supplies Top(1), then the initial
+    // support supplies Left(1), so Olmec reaches (81,97) before Destroy.
+    // The grave-only gate target survives the emitted Slam at (80,80).
+    let (gate_origin, gate) = if family == "oGrave" {
+        (Vec2::new(82.0, 96.0), Vec2::new(89.0, 96.0))
+    } else {
+        (Vec2::new(82.0, 80.0), Vec2::new(88.0, 95.0))
+    };
+    let gate_target = g.spawn(family, gate_origin);
     assert!(
         !g.world
             .entity(first)

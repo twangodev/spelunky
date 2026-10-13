@@ -20,6 +20,10 @@ fn initial_phase(rules: RulesPreset, state: i32, timer: u32, supported: bool) ->
     boss.set_sprite("sOlmec");
     boss.state = state;
     boss.timer = timer;
+    if state == 5 {
+        // Source RECOVER -> PREPARE sets myGrav = 0 alongside this phase.
+        boss.data.insert("my_gravity".into(), 0.0);
+    }
     if supported {
         assert_eq!(state, 6);
         boss.data.insert("slammed".into(), 1.0);

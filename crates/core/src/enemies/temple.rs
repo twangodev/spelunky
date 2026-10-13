@@ -52,6 +52,7 @@ pub fn init(e: &mut Entity) {
             e.set_sprite("sOlmecStart1");
             e.data.insert("intro_stage".into(), 0.0);
             e.data.insert("shopWall".into(), 0.0);
+            e.data.insert("my_gravity".into(), 0.2);
             e.data.insert("invincible".into(), 1.0);
             e.data.insert("no_stomp".into(), 1.0);
             e.data.insert("no_whip".into(), 1.0);
@@ -840,12 +841,44 @@ fn fly(_game: &mut Game, e: &mut Entity) {
 fn olmec_rect(e: &Entity) -> Rect {
     Rect::new(e.pos.x + 2.0, e.pos.y, 60.0, 64.0)
 }
-fn olmec_ground(world: &World, e: &Entity) -> bool {
-    super::solid_mask(
-        world,
-        Rect::new(e.pos.x + 2.0, e.pos.y + 64.0, 60.0, 1.0),
+#[derive(Clone, Copy)]
+enum OlmecEdge {
+    Top,
+    Left,
+    Right,
+    Bottom,
+}
+fn olmec_line(world: &World, e: &Entity, first: Vec2, last: Vec2) -> bool {
+    world.solid_line_except(
+        Vec2::new(first.x.round_ties_even(), first.y.round_ties_even()),
+        Vec2::new(last.x.round_ties_even(), last.y.round_ties_even()),
         e.id,
     )
+}
+fn olmec_contact(world: &World, e: &Entity, edge: OlmecEdge) -> bool {
+    let (left, top, right, bottom) = (e.pos.x + 2.0, e.pos.y, e.pos.x + 62.0, e.pos.y + 64.0);
+    let (first, last) = match edge {
+        OlmecEdge::Top => (
+            Vec2::new(left, top - 1.0),
+            Vec2::new(right - 1.0, top - 1.0),
+        ),
+        OlmecEdge::Left => (
+            Vec2::new(left - 1.0, top),
+            Vec2::new(left - 1.0, bottom - 1.0),
+        ),
+        OlmecEdge::Right => (
+            Vec2::new(right + 1.0 - 1.0, top),
+            Vec2::new(right + 1.0 - 1.0, bottom - 1.0),
+        ),
+        OlmecEdge::Bottom => (
+            Vec2::new(left, bottom + 1.0 - 1.0),
+            Vec2::new(right - 1.0, bottom + 1.0 - 1.0),
+        ),
+    };
+    olmec_line(world, e, first, last)
+}
+fn olmec_ground(world: &World, e: &Entity) -> bool {
+    olmec_contact(world, e, OlmecEdge::Bottom)
 }
 fn olmec_move(world: &World, e: &mut Entity) -> bool {
     // Platform Engine/moveTo.gml samples fractional displacement against the
@@ -871,10 +904,13 @@ fn olmec_move(world: &World, e: &mut Entity) -> bool {
             } else {
                 Rect::new(b.x, if n < 0 { b.y - 1.0 } else { b.y + b.h }, b.w, 1.0)
             };
-            if super::solid_mask(world, edge, e.id) {
-                if horizontal {
-                    e.vel.x = 0.0;
-                } else if v < 0.0 {
+            if olmec_line(
+                world,
+                e,
+                Vec2::new(edge.x, edge.y),
+                Vec2::new(edge.x + edge.w - 1.0, edge.y + edge.h - 1.0),
+            ) {
+                if !horizontal && v < 0.0 {
                     ceiling = true;
                 }
                 break;
@@ -1047,24 +1083,27 @@ fn olmec(game: &mut Game, e: &mut Entity) {
         game.player.pos.x += e.vel.x;
         game.player.pos.y += e.vel.y;
     }
-    let ceiling = olmec_move(&game.world, e);
-    if ceiling {
+    olmec_move(&game.world, e);
+    // Source myGrav is stateful, and its increment precedes the fresh full
+    // contact probes. The literal comparison permits an overshoot above six.
+    if e.vel.y < 6.0 {
+        e.vel.y += e.data.get("my_gravity").copied().unwrap_or(0.2);
+    }
+    if olmec_contact(&game.world, e, OlmecEdge::Top) {
         spawn(game, "oOlmecSlam", Vec2::new(e.pos.x, e.pos.y - 16.0));
+        e.pos.y += 1.0;
         if e.vel.y < 0.0 {
             e.vel.y = -e.vel.y * 0.8;
         }
     }
-    let grounded = olmec_ground(&game.world, e);
-    e.data.insert(
-        "carryPlayer".into(),
-        f64::from(
-            game.player.engine_active
-                && game.player.collision_mask().intersects_rectangle_bbox(
-                    Vec2::new(e.pos.x, e.pos.y - 2.0),
-                    Vec2::new(e.pos.x + 64.0, e.pos.y + 64.0),
-                ),
-        ),
-    );
+    if olmec_contact(&game.world, e, OlmecEdge::Left) {
+        e.pos.x += 1.0;
+        e.vel.x = 0.0;
+    }
+    if olmec_contact(&game.world, e, OlmecEdge::Right) {
+        e.pos.x -= 1.0;
+        e.vel.x = 0.0;
+    }
     // Classic tests the left edge at the feet/head. Authored arenas store
     // lava as water-family entities, while custom levels can also use tiles.
     let lava = |world: &World, point: Vec2| {
@@ -1089,9 +1128,27 @@ fn olmec(game: &mut Game, e: &mut Entity) {
         crate::items::explosives::destroy_detached_olmec(game, e);
         // instance_destroy does not abort the following state chain.
     }
-    if e.state != 5 && e.state != 4 {
-        e.vel.y = (e.vel.y + 0.2).min(6.0);
-    }
+    // Physical level callbacks retain a live engine Player. Like the other
+    // enemy distance helpers, use inclusive cached sprite bounds, not smooth
+    // selected-frame or controller rectangles.
+    e.data.insert(
+        "dist".into(),
+        crate::world_events::mask_distance(
+            e.collision_mask().point_bounds(),
+            game.player.collision_mask().point_bounds(),
+        ) + 32.0,
+    );
+    e.data.insert(
+        "carryPlayer".into(),
+        f64::from(
+            game.player.engine_active
+                && game.player.collision_mask().intersects_rectangle_bbox(
+                    Vec2::new(e.pos.x, e.pos.y - 2.0),
+                    Vec2::new(e.pos.x + 64.0, e.pos.y + 64.0),
+                ),
+        ),
+    );
+    let grounded = olmec_ground(&game.world, e);
     match e.state {
         -1 => {
             if game.camera.x < 176.0 {
@@ -1169,11 +1226,13 @@ fn olmec(game: &mut Game, e: &mut Entity) {
                     e.state = 5;
                     e.timer = 20;
                     e.vel = Vec2::default();
+                    e.data.insert("my_gravity".into(), 0.0);
                 }
             }
         }
         4 => {
             e.vel = Vec2::new(0.0, 0.1);
+            e.data.insert("my_gravity".into(), 0.0);
             crate::camera_shake::request(game, 10.0);
             game.sound_if_idle("sndFlame", e.pos);
         }
@@ -1183,6 +1242,7 @@ fn olmec(game: &mut Game, e: &mut Entity) {
             } else {
                 e.state = 6;
                 e.vel.y = 5.0;
+                e.data.insert("my_gravity".into(), 0.2);
                 e.data.insert("slammed".into(), 0.0);
             }
         }
@@ -1230,6 +1290,14 @@ fn olmec(game: &mut Game, e: &mut Entity) {
             e.state = 0;
         }
         _ => {}
+    }
+    if olmec_contact(&game.world, e, OlmecEdge::Top) {
+        e.vel.y = 1.0;
+    }
+    if olmec_contact(&game.world, e, OlmecEdge::Left)
+        || olmec_contact(&game.world, e, OlmecEdge::Right)
+    {
+        e.vel.x = -e.vel.x;
     }
     if super::body_overlaps_solid(&game.world, e) {
         e.pos.y -= 2.0;
@@ -3311,6 +3379,89 @@ mod tests {
         tick(&mut g, &mut e);
         assert_eq!(e.state, 6);
         assert_eq!(e.vel.y, 5.0);
+    }
+
+    // Configured first-own-callback numerical controls: no global moving-solid
+    // pass, Player Step, Draw, or subsequent full-frame timing is simulated.
+    fn configured_first_olmec_callback() -> (Game, Entity) {
+        let mut game = Game::shell(42, crate::RulesPreset::Classic);
+        game.world = World::new(40, 24, crate::Area::Boss, 16);
+        game.world.name = "rLevel".into();
+        game.player.pos = Vec2::new(500.0, 216.0);
+        game.player.previous_pos = game.player.pos;
+        let id = game.spawn("oOlmec", Vec2::new(80.0, 96.0));
+        let index = game.world.entities.iter().position(|e| e.id == id).unwrap();
+        let mut boss = game.world.entities.remove(index);
+        boss.data.insert("simulation_tick".into(), 3.0);
+        (game, boss)
+    }
+
+    #[test]
+    fn configured_olmec_gravity_precedes_ceiling_rebound_and_spawn_nudge() {
+        for incoming in [-1.0, -0.25] {
+            let (mut game, mut boss) = configured_first_olmec_callback();
+            for x in 5..9 {
+                game.world.set_tile(x, 5, "oBlock");
+            }
+            boss.vel.y = incoming;
+            olmec(&mut game, &mut boss);
+            assert!((boss.vel.y - (incoming + 0.2) * -0.8).abs() < 1e-12);
+            assert_eq!(boss.pos, Vec2::new(80.0, 97.0));
+            let slam = game
+                .world
+                .entities
+                .iter()
+                .find(|e| e.object == "oOlmecSlam")
+                .unwrap();
+            assert_eq!(slam.pos, Vec2::new(80.0, 80.0));
+        }
+    }
+
+    #[test]
+    fn configured_olmec_gravity_can_overshoot_six_but_does_not_increment_six() {
+        for (incoming, expected) in [(5.9, 6.1), (6.0, 6.0)] {
+            let (mut game, mut boss) = configured_first_olmec_callback();
+            boss.vel.y = incoming;
+            olmec(&mut game, &mut boss);
+            assert!((boss.vel.y - expected).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn configured_olmec_carry_cache_uses_position_after_ceiling_correction() {
+        let (mut game, mut boss) = configured_first_olmec_callback();
+        for x in 5..9 {
+            game.world.set_tile(x, 5, "oBlock");
+        }
+        game.player.pos = Vec2::new(88.0, 169.0);
+        game.player.previous_pos = game.player.pos;
+        boss.vel.y = -1.0;
+        let player_before = game.player.pos;
+        olmec(&mut game, &mut boss);
+        assert_eq!(
+            game.player.pos, player_before,
+            "incoming carry query misses"
+        );
+        assert_eq!(
+            boss.value("carryPlayer"),
+            1.0,
+            "corrected raw maxY161 reaches cached Player top161"
+        );
+        assert_eq!(boss.pos.y, 97.0);
+    }
+
+    #[test]
+    fn configured_olmec_stores_inclusive_cached_sprite_distance_plus_thirty_two() {
+        let (mut game, mut boss) = configured_first_olmec_callback();
+        game.player.pos = Vec2::new(200.0, 180.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.data.insert("image_xscale".into(), 1.0);
+        assert!(game.player.engine_active);
+        olmec(&mut game, &mut boss);
+        // Boss [80..143,96..159], standing Player [194..205,172..187].
+        // The inclusive edge gaps are 51 horizontally and 13 vertically.
+        let expected = (51.0_f64 * 51.0 + 13.0 * 13.0).sqrt() + 32.0;
+        assert!((boss.value("dist") - expected).abs() < 1e-12);
     }
 
     #[test]

@@ -4274,12 +4274,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 84,
+          "line": 85,
           "module": "crates/core/src/enemies/temple.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 98,
+          "line": 99,
           "module": "crates/core/src/enemies/temple.rs"
         },
         {
@@ -5147,7 +5147,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 95,
+          "line": 96,
           "module": "crates/core/src/enemies/temple.rs"
         },
         {
@@ -5244,7 +5244,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 96,
+          "line": 97,
           "module": "crates/core/src/enemies/temple.rs"
         },
         {
@@ -6852,12 +6852,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 63,
+          "line": 64,
           "module": "crates/core/src/enemies/temple.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 104,
+          "line": 105,
           "module": "crates/core/src/enemies/temple.rs"
         },
         {
@@ -6907,12 +6907,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 63,
+          "line": 64,
           "module": "crates/core/src/enemies/temple.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 103,
+          "line": 104,
           "module": "crates/core/src/enemies/temple.rs"
         },
         {
@@ -6963,12 +6963,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 83,
+          "line": 84,
           "module": "crates/core/src/enemies/temple.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 105,
+          "line": 106,
           "module": "crates/core/src/enemies/temple.rs"
         },
         {
@@ -7895,7 +7895,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 99,
+          "line": 100,
           "module": "crates/core/src/enemies/temple.rs"
         },
         {
@@ -7946,7 +7946,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 101,
+          "line": 102,
           "module": "crates/core/src/enemies/temple.rs"
         },
         {
@@ -7976,12 +7976,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 59,
+          "line": 60,
           "module": "crates/core/src/enemies/temple.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 100,
+          "line": 101,
           "module": "crates/core/src/enemies/temple.rs"
         },
         {
@@ -11768,7 +11768,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 97,
+          "line": 98,
           "module": "crates/core/src/enemies/temple.rs"
         },
         {
@@ -13071,12 +13071,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 85,
+          "line": 86,
           "module": "crates/core/src/enemies/temple.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 102,
+          "line": 103,
           "module": "crates/core/src/enemies/temple.rs"
         },
         {
