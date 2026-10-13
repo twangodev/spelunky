@@ -40,7 +40,7 @@ fn remember_platform_traits(p: &mut Player) {
     set(
         p,
         "source_platform_grounded",
-        f64::from(grounded_state(p.state)),
+        f64::from(grounded_state(p.state) && value(p, "duck_to_hang", 0.0) == 0.0),
     );
     set(
         p,
@@ -1589,6 +1589,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     {
         set(p, "duck_to_hang", 1.0);
         p.vel = Vec2::default();
+        ax = 0.0;
+        ay = 0.0;
+        gravity = 0.0;
         let sprite = character_sprite(p, "sDuckToHangL");
         p.set_sprite(sprite);
         p.animation = 0.0;
@@ -1620,11 +1623,11 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
                 monkey.data.insert("grab_counter".into(), 60.0);
             }
         }
-        // This is still a completed characterStepEvent: DUCKTOHANG resets
-        // the source's two prior platform states even though its motion stops.
-        remember_controller_history(&mut game.player);
-        return;
+        // Entry still completes characterStepEvent's motion and state tail.
+        // Subsequent DUCKTOHANG Steps are excluded by oPlayer1's controller gate.
     }
+    let p = &mut game.player;
+    let w = &mut game.world;
     if cape || parachute {
         yf = 0.5;
     }
@@ -1648,7 +1651,10 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         &solid_order,
         &mut game.events,
     );
-    p.grounded = below(w, p) && p.vel.y >= 0.0 && p.state != PlayerState::Climbing;
+    p.grounded = below(w, p)
+        && p.vel.y >= 0.0
+        && p.state != PlayerState::Climbing
+        && value(p, "duck_to_hang", 0.0) == 0.0;
     if game.rules == RulesPreset::Assisted {
         if !col_bot {
             p.coyote_ticks = p.coyote_ticks.saturating_sub(1);
@@ -2042,6 +2048,13 @@ fn animate(p: &mut Player, input: &InputFrame, w: &World) {
             5.0
         },
     );
+    if value(p, "duck_to_hang", 0.0) > 0.0 {
+        p.set_sprite(character_sprite(p, "sDuckToHangL"));
+        p.animation = 0.0;
+        p.set_image_speed(0.8);
+        remember_controller_history(p);
+        return;
+    }
     if p.attack_timer > 0 {
         // characterStepEvent restores this on every whipping Step. The attack
         // start later in that Step overrides it to 0.6 for its first frame.
