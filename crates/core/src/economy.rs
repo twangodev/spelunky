@@ -638,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn actual_step_natural_keeper_corpse_blocks_farther_keeper_anger_selection() {
+    fn original_keeper_spacing_makes_seed123_shot_nonlethal_source_control() {
         for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
             let mut game = Game::shell(123, preset);
             for x in 0..game.world.width {
@@ -657,6 +657,99 @@ mod tests {
             game.player.previous_pos = game.player.pos;
             let gun = game.spawn("oShotgun", game.player.pos);
             let corpse = game.spawn("oShopkeeper", Vec2::new(80., 80.));
+            let farther = game.spawn("oShopkeeper", Vec2::new(400., 16.));
+            let die = game.spawn("oDice", Vec2::new(164., 88.));
+            let action = InputFrame {
+                down: true,
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            };
+            game.step(&action);
+            assert_eq!(game.player.held, Some(gun), "natural shotgun pickup");
+            game.step(&InputFrame::default());
+            let mut raw = game.rng.state_bits() as u32;
+            assert_eq!(
+                raw, 346212361,
+                "unchanged seed and source Create/welcome prefix"
+            );
+            let mut speeds = Vec::new();
+            for _ in 0..6 {
+                raw = raw.wrapping_mul(0x08088405).wrapping_add(1);
+                speeds.push(6 + ((u64::from(raw) * 3) >> 32) as u32);
+                // Source spread consumes two independent unit draws.
+                raw = raw.wrapping_mul(0x08088405).wrapping_add(1);
+                raw = raw.wrapping_mul(0x08088405).wrapping_add(1);
+            }
+            assert_eq!(speeds, [8, 6, 8, 8, 8, 7]);
+            // Four speed8 contacts, each synchronous Blood Create consumes4 draws.
+            for _ in 0..16 {
+                raw = raw.wrapping_mul(0x08088405).wrapping_add(1);
+            }
+            game.step(&InputFrame {
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            let wounded = game.world.entity(corpse).unwrap();
+            assert_eq!(
+                (wounded.pos, wounded.health, wounded.state),
+                (Vec2::new(79., 80.), 4, 98),
+                "exact original four-pellet source contact"
+            );
+            assert_eq!(wounded.sprite, "sShopLeft");
+            assert_eq!(wounded.value("dead"), 0.);
+            assert_eq!(
+                game.rng.state_bits(),
+                u64::from(raw),
+                "source launch and four Blood Create tapes"
+            );
+            for _ in 0..200 {
+                if game
+                    .world
+                    .entity(corpse)
+                    .is_some_and(|keeper| keeper.value("dead") != 0.)
+                {
+                    break;
+                }
+                game.step(&InputFrame::default());
+            }
+            let survivor = game.world.entity(corpse).unwrap();
+            assert_eq!(
+                survivor.health, 4,
+                "the original recorded neutral sequence never formed a corpse"
+            );
+            assert_eq!(survivor.value("dead"), 0.);
+            assert!(survivor.alive);
+            assert!(game.world.entity(farther).unwrap().health > 0);
+            assert_eq!(game.world.entity(farther).unwrap().value("angered"), 0.);
+            assert_eq!(game.data.get("thiefLevel").copied().unwrap_or(0.), 0.);
+            assert!(game.world.entity(die).is_some());
+        }
+    }
+
+    #[test]
+    fn actual_step_natural_keeper_corpse_blocks_farther_keeper_anger_selection() {
+        for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = Game::shell(123, preset);
+            for x in 0..game.world.width {
+                game.world.set_tile(x, 6, "oBlock");
+            }
+            // A separate raised shop keeps the second keeper active and out
+            // of the shotgun trajectory and player attack range throughout.
+            for x in 24..=26 {
+                game.world.set_tile(x, 2, "oBlock");
+            }
+            for y in 0..2 {
+                game.world.set_tile(24, y, "oBlock");
+                game.world.set_tile(26, y, "oBlock");
+            }
+            game.player.pos = Vec2::new(64., 88.);
+            game.player.previous_pos = game.player.pos;
+            let gun = game.spawn("oShotgun", game.player.pos);
+            // Initial two-pixel spacing makes the source Left-mask edge x80,
+            // so the same seed123 speed7 pellet contacts it; no runtime mutation.
+            let corpse = game.spawn("oShopkeeper", Vec2::new(78., 80.));
             let farther = game.spawn("oShopkeeper", Vec2::new(400., 16.));
             let die = game.spawn("oDice", Vec2::new(164., 88.));
             let action = InputFrame {
