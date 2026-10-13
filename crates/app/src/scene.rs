@@ -907,6 +907,7 @@ pub fn game_scene_in_view(
     }
     let player = &game.player;
     if cinematic.is_none()
+        && player.data.get("visible") != Some(&0.0)
         && player.data.get("hidden") != Some(&1.0)
         && player.data.get("blink_toggle") != Some(&1.0)
     {
@@ -5660,3 +5661,7 @@ mod tests {
 #[cfg(test)]
 #[path = "inherited_enemy_draw_tests.rs"]
 mod inherited_enemy_draw_tests;
+
+#[cfg(test)]
+#[path = "ghost_player_visibility_draw_tests.rs"]
+mod ghost_player_visibility_draw_tests;
