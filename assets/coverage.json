@@ -507,7 +507,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 249,
+          "line": 260,
           "module": "crates/core/src/traps/detectors.rs"
         },
         {
@@ -550,7 +550,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 249,
+          "line": 260,
           "module": "crates/core/src/traps/detectors.rs"
         },
         {
@@ -10812,12 +10812,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 144,
+          "line": 155,
           "module": "crates/core/src/traps/detectors.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 268,
+          "line": 279,
           "module": "crates/core/src/traps/detectors.rs"
         },
         {
@@ -10854,12 +10854,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 144,
+          "line": 155,
           "module": "crates/core/src/traps/detectors.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 268,
+          "line": 279,
           "module": "crates/core/src/traps/detectors.rs"
         },
         {
@@ -10930,12 +10930,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 144,
+          "line": 155,
           "module": "crates/core/src/traps/detectors.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 268,
+          "line": 279,
           "module": "crates/core/src/traps/detectors.rs"
         },
         {
@@ -10967,7 +10967,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 287,
+          "line": 298,
           "module": "crates/core/src/traps/detectors.rs"
         },
         {
@@ -11606,7 +11606,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 248,
+          "line": 259,
           "module": "crates/core/src/traps/detectors.rs"
         },
         {

@@ -138,7 +138,18 @@ pub(super) fn create(game: &mut Game, instance: Instance) {
             }
         }
         "oArrowRepeaterL" | "oArrowRepeaterR" => {
-            let delay = 100.0 + f64::from(game.rng.range(100));
+            // Source rand(100) supplies argument0=100 and omitted argument1=0.
+            // Its signed width is -99; historical replay keeps its old mapping.
+            let delay = match game.rng.algorithm() {
+                crate::RngAlgorithm::Gm8Lcg32V1 => {
+                    100.0
+                        + game
+                            .rng
+                            .source_rand(100, 0)
+                            .expect("fixed source rand width") as f64
+                }
+                crate::RngAlgorithm::LegacySplitMix64V1 => 100.0 + f64::from(game.rng.range(100)),
+            };
             game.data.insert(format!("{}:fired", h.data_key), delay);
         }
         "oSpearTrapTop" | "oSpearTrapBottom" | "oSpearTrapLit" => {
