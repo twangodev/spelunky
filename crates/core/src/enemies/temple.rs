@@ -545,8 +545,9 @@ fn hawk(game: &mut Game, e: &mut Entity) {
         super::inherited::gravity(e, 0.6)
     };
     let mut impact_y = (e.vel.y + gravity).min(10.0);
-    let (wall, landed) = move_body(&game.world, e, gravity);
+    let (_, landed) = move_body(&game.world, e, gravity);
     let contacts = super::body_contacts(&game.world, e);
+    let wall = contacts.left || contacts.right;
     // The source moveTo resolves displacement without clearing stored yVel.
     e.vel.y = impact_y;
     let grounded = landed || ground(&game.world, e);
