@@ -18,6 +18,7 @@ pub(crate) fn mask_distance(a: Rect, b: Rect) -> f64 {
     dx.hypot(dy)
 }
 
+mod direct_terrain_create;
 mod light;
 mod temple;
 pub(crate) use light::{lighting_tick, sample_light_distances};
@@ -486,6 +487,9 @@ pub(crate) fn create_local(
 
 /// Source Create for callers with the game RNG available.
 pub(crate) fn create_instance(game: &mut Game, id: u64) {
+    if direct_terrain_create::create(game, id) {
+        return;
+    }
     let Some(index) = game.world.entities.iter().position(|e| e.id == id) else {
         return;
     };
