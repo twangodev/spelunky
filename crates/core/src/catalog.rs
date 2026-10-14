@@ -309,7 +309,7 @@ impl CollisionMask {
             && self.pos.y.fract() == 0.0
     }
 
-    fn supports_source_query_pixels(&self) -> bool {
+    pub(crate) fn supports_source_query_pixels(&self) -> bool {
         self.frame.is_some()
             && self.event_bounds.is_some()
             && (self.precise || self.rectangle)

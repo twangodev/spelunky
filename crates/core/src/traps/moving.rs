@@ -466,10 +466,21 @@ pub(super) fn player_hurt(game: &mut Game) {
     let pos = game.player.pos;
     let smash_probe = Rect::new(pos.x - 6.0, pos.y - 6.0, 13.0, 14.0);
     if game.world.entities.iter().any(|e| {
-        e.alive
-            && e.engine_active
-            && e.object == "oSmashTrap"
-            && e.sprite_bounds().intersects(smash_probe)
+        e.alive && e.engine_active && e.object == "oSmashTrap" && {
+            let mask = e.collision_mask();
+            if game.generation_revision == crate::GenerationRevision::SourceClassicV2
+                && mask.supports_source_query_pixels()
+            {
+                // Literal prec0 raw inclusive endpoints against the cached bbox.
+                mask.intersects_rectangle_bbox(
+                    Vec2::new(pos.x - 6.0, pos.y - 6.0),
+                    Vec2::new(pos.x + 6.0, pos.y + 7.0),
+                )
+            } else {
+                // Preserve historical and unadmitted transform fallbacks.
+                e.sprite_bounds().intersects(smash_probe)
+            }
+        }
     }) {
         // instance_nearest is independent of which instance intersects the query.
         let nearest = nearest_active_smash(game, pos).unwrap();
@@ -571,7 +582,19 @@ fn edge_blocked(game: &Game, entity: &Entity, direction: u8, distance: f64) -> b
             1.0,
         ),
     };
-    precise_collides_except(game, line, entity.id)
+    if game.generation_revision == crate::GenerationRevision::SourceClassicV2
+        && entity.object == "oSmashTrap"
+    {
+        // These custom-bounds endpoints were rounded as complete expressions.
+        // Use the explicit active oSolid/notme1 axis-line query for this family.
+        game.world.solid_line_except(
+            Vec2::new(line.x, line.y),
+            Vec2::new(line.x + line.w - 1.0, line.y + line.h - 1.0),
+            entity.id,
+        )
+    } else {
+        precise_collides_except(game, line, entity.id)
+    }
 }
 
 /// Explicit `prec=1` source edge probes. Keep implicit event/placement and
