@@ -100,6 +100,10 @@ pub(super) fn create_local(ctx: &mut crate::creation::EntityCreateContext<'_>, e
     if e.object == "oOlmec" && e.value("olmec_facing_created") == 0.0 {
         e.facing = if ctx.rng.range(2) == 0 { -1 } else { 1 };
         e.data.insert("olmec_facing_created".into(), 1.0);
+    } else if e.object == "oOlmecDebris" {
+        // Complete the same idempotent Create before any runtime/generator
+        // caller overrides; the natural Olmec wrapper already uses it.
+        initialize_debris(ctx.rng, e);
     }
 }
 
@@ -1342,10 +1346,14 @@ fn slam(_game: &mut Game, _e: &mut Entity) {}
 
 fn initialize_debris(rng: &mut crate::Rng, e: &mut Entity) {
     if e.value("started") == 0.0 {
+        // Inherited oDrawnSprite Create precedes the own random launch.
+        e.text.insert("type".into(), String::new());
+        e.data.insert("blinkToggle".into(), 0.0);
         e.vel = Vec2::new(rng.unit() * 4.0 - rng.unit() * 4.0, -1.0 - rng.unit() * 2.0);
         e.data.insert("started".into(), 1.0);
         e.data.insert("gravity".into(), 0.6);
         e.data.insert("invincible".into(), 1.0);
+        e.data.insert("bounce".into(), 1.0);
         for (key, value) in [
             ("collision_left", -4.0),
             ("collision_top", -4.0),
