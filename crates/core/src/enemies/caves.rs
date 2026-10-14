@@ -203,17 +203,30 @@ fn crushed(game: &Game, e: &Entity, offset: Vec2) -> bool {
         .solid_point_except(Vec2::new(e.pos.x + offset.x, e.pos.y + offset.y), e.id)
 }
 
-fn distance_to_player(game: &Game, e: &Entity) -> f64 {
-    // distance_to_object uses sprite bounds, not the platform-engine body.
-    let a = e.sprite_bounds();
-    let b = game.player.sprite_bounds();
-    let x = (a.x - (b.x + b.w - 1.0))
-        .max(b.x - (a.x + a.w - 1.0))
-        .max(0.0);
-    let y = (a.y - (b.y + b.h - 1.0))
-        .max(b.y - (a.y + a.h - 1.0))
-        .max(0.0);
-    x.hypot(y)
+// Native distance_to_object reads inclusive cached integer envelopes from
+// active target-family members. A destroyed receiver can continue its Step.
+fn distance_to_object(game: &Game, e: &Entity, family: &str) -> f64 {
+    let receiver = e.collision_mask().point_bounds();
+    let mut distance = 1_000_000.0_f64;
+    if game.player.engine_active && crate::catalog::is_a("oPlayer1", family) {
+        distance = distance.min(crate::world_events::mask_distance(
+            receiver,
+            game.player.collision_mask().point_bounds(),
+        ));
+    }
+    for target in &game.world.entities {
+        if target.id != e.id
+            && target.alive
+            && target.engine_active
+            && crate::catalog::is_a(&target.object, family)
+        {
+            distance = distance.min(crate::world_events::mask_distance(
+                receiver,
+                target.collision_mask().point_bounds(),
+            ));
+        }
+    }
+    distance
 }
 
 pub(super) fn collision(
@@ -248,9 +261,10 @@ pub(super) fn collision(
         .iter()
         .filter(|other| {
             other.alive
+                && other.engine_active
                 && matches!(other.object.as_str(), "oCaveman" | "oHawkman")
                 && other.state < 98
-                && distance_to_player(game, other) < 100.0
+                && distance_to_object(game, other, "oPlayer1") < 100.0
         })
         .map(|other| other.id)
         .collect();
@@ -433,7 +447,7 @@ fn hanging_spider(game: &mut Game, e: &mut Entity, giant: bool) {
         spider_death(game, e, giant);
         return;
     }
-    let beneath = distance_to_player(game, e) < 90.0
+    let beneath = distance_to_object(game, e, "oCharacter") < 90.0
         && game.player.pos.y > e.pos.y
         && (game.player.pos.x - (e.pos.x + half)).abs() < 8.0;
     if (giant && e.health < 10) || !game.world.solid_at(e.pos.x, e.pos.y - 16.0) || beneath {
@@ -512,6 +526,11 @@ fn snake(game: &mut Game, e: &mut Entity) {
         let blocked_right =
             !floor_ahead(&game.world, e, 1) || game.world.solid_at(e.pos.x + 16.0, e.pos.y);
         e.vel.x = if blocked_left && blocked_right {
+            e.facing = if game.world.solid_at(e.pos.x - 1.0, e.pos.y) {
+                1
+            } else {
+                -1
+            };
             0.0
         } else {
             f64::from(e.facing)
@@ -539,7 +558,11 @@ fn player_available(game: &Game) -> bool {
 }
 
 fn bat(game: &mut Game, e: &mut Entity) {
+    // Source moveTo changes position only. In particular, its wet guard can
+    // skip the later velocity assignments after a blocked vertical move.
+    let incoming_velocity = e.vel;
     move_body(&game.world, e, 0.0);
+    e.vel = incoming_velocity;
     if crushed(game, e, Vec2::new(8.0, 8.0)) {
         e.health = -999;
     }
@@ -563,7 +586,8 @@ fn bat(game: &mut Game, e: &mut Entity) {
         }
         return;
     }
-    if player_available(game) && distance < 160.0 {
+    let target_available = player_available(game);
+    if target_available && distance < 160.0 {
         let previous_velocity = e.vel;
         let target = game.player.pos;
         steer_toward(e, target, 1.0);
@@ -585,24 +609,28 @@ fn bat(game: &mut Game, e: &mut Entity) {
             e.vel = previous_velocity;
         }
     } else if ceiling {
+        // Both source ATTACK fallbacks assign only status under a ceiling.
         e.state = 0;
-        e.vel = Vec2::default();
     } else {
         e.vel = Vec2::new(0.0, -1.0);
     }
-    e.facing = if game.player.pos.x < body_center.x {
-        -1
-    } else {
-        1
-    };
-    set_sprite(
-        e,
-        if e.facing < 0 {
-            "sBatLeft"
+    // Directional sprites belong only to the eligible-target branch. The
+    // swimming/dead fallback retains its previous image until HANG's Step.
+    if target_available {
+        e.facing = if game.player.pos.x < body_center.x {
+            -1
         } else {
-            "sBatRight"
-        },
-    );
+            1
+        };
+        set_sprite(
+            e,
+            if e.facing < 0 {
+                "sBatLeft"
+            } else {
+                "sBatRight"
+            },
+        );
+    }
 }
 
 fn in_water(game: &Game, pos: Vec2) -> bool {
@@ -685,7 +713,7 @@ fn spider(game: &mut Game, e: &mut Entity, giant: bool) {
                 set_sprite(e, "sGiantSpider");
             }
         }
-        1 if distance_to_player(game, e) < if giant { 120.0 } else { 90.0 } => {
+        1 if distance_to_object(game, e, "oCharacter") < if giant { 120.0 } else { 90.0 } => {
             if giant {
                 set_sprite(e, "sGiantSpiderJump");
             }
@@ -1594,3 +1622,7 @@ mod tests {
         assert_eq!(spider.value("animation_speed"), 0.4);
     }
 }
+
+#[cfg(test)]
+#[path = "caves_cached_distance_tests.rs"]
+mod caves_cached_distance_tests;
