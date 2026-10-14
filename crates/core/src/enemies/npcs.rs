@@ -1123,18 +1123,33 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
             e.data.insert("firing".into(), 30.0);
             game.sound("sndShotgun", e.pos);
         }
-        if grounded
-            && (wall
-                || !game
-                    .world
-                    .solid_at(e.pos.x + f64::from(e.facing) * 24.0, e.pos.y + 16.0))
-            && game.player.pos.y <= e.pos.y + 8.0
-            && {
+        // Source first suppresses both jump branches for a close lower player.
+        if !(game.player.pos.y > e.pos.y && (game.player.pos.x - (e.pos.x + 8.0)).abs() < 64.0) {
+            let far_x = e.pos.x + if e.facing < 0 { -16.0 } else { 32.0 };
+            let far_wall = keeper_solid_point(
+                game,
+                Vec2::new(far_x, e.pos.y),
+                CollisionPrecision::BoundingBox,
+            );
+            let missing_ledge = !far_wall
+                && game.player.pos.y <= e.pos.y + 16.0
+                && !keeper_solid_point(
+                    game,
+                    Vec2::new(far_x, e.pos.y + 16.0),
+                    CollisionPrecision::BoundingBox,
+                );
+            if contacts.bottom && (far_wall || missing_ledge) {
                 let b = e.bounds();
-                !super::solid_mask(&game.world, Rect::new(b.x, b.y - 4.0, b.w, 1.0), e.id)
+                let top_y = (b.y - 4.0).round_ties_even();
+                let blocked_top = game.world.solid_line_except(
+                    Vec2::new(b.x.round_ties_even(), top_y),
+                    Vec2::new((b.x + b.w - 1.0).round_ties_even(), top_y),
+                    e.id,
+                );
+                if !blocked_top {
+                    e.vel.y = -f64::from(7 + game.rng.range(2));
+                }
             }
-        {
-            e.vel.y = -f64::from(7 + game.rng.range(2));
         }
         // Source ATTACK tail uses colBot cached before shooting/jump selection.
         if !contacts.bottom && game.player.pos.y > e.pos.y + 8.0 {
