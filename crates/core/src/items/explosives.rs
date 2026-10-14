@@ -36,7 +36,6 @@ pub fn init_entity(entity: &mut Entity) {
         }
         "oRope" | "oRopeTop" => {}
         "oRopeBurn" => {
-            entity.sprite = "sRopeBurn".into();
             entity.vel.y = -1.0;
             entity.set_image_speed(0.8);
         }
@@ -492,7 +491,7 @@ pub fn use_bomb(game: &mut Game, input: &InputFrame) {
     }
     if input.down {
         velocity.y = 3.0;
-        if game.player.grounded {
+        if crate::player::source_grounded(&game.player) {
             velocity.x *= 0.1;
         }
     }
@@ -639,7 +638,7 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
     match entity.object.as_str() {
         "oBomb" | "oFireFrogBomb" => {
             step_bomb_body(game, &mut entity);
-            warn_shopkeeper(game, &entity);
+            warn_shopkeeper(game, &mut entity);
         }
         "oRopeThrow" => tick_rope(game, &mut entity),
         "oRope" | "oRopeTop" => tick_rope_burn(game, &mut entity),
@@ -719,6 +718,11 @@ pub(crate) fn collision(game: &mut Game, self_id: u64, other: crate::dispatcher:
         Instance::Player => {} // Player hurt is a query in Player Step.
         Instance::Terrain(index) => {
             if solids_active && game.world.tiles.get(index).is_some_and(Tile::is_solid) {
+                let origin = Vec2::new(
+                    (index % game.world.width) as f64 * 16.0,
+                    (index / game.world.width) as f64 * 16.0,
+                );
+                explosion_solid_decoration(game, origin);
                 if game.world.tiles[index].is_destructible() {
                     destroy_terrain(game, index % game.world.width, index / game.world.width);
                 }
@@ -741,6 +745,7 @@ pub(crate) fn collision(game: &mut Game, self_id: u64, other: crate::dispatcher:
             }
             if crate::catalog::is_a(&entity.object, "oSolid") {
                 if solids_active {
+                    explosion_solid_decoration(game, entity.pos);
                     if entity.value("invincible") == 0.0 && entity.object != "oHardBlock" {
                         destroy_solid_instance(game, id);
                     }
@@ -875,6 +880,22 @@ fn explosion_boulder(game: &mut Game, boulder: &Entity) {
     destroy_solid_self(game, boulder.id);
 }
 
+/// The existing graphical tile adapter represents these layer3 crops apart
+/// from physical terrain. Source deletes two upper matches and one lower match
+/// before its invincibility guard, including for a protected Solid receiver.
+fn explosion_solid_decoration(game: &mut Game, origin: Vec2) {
+    let upper = Vec2::new(origin.x + 1.0, origin.y - 1.0);
+    for _ in 0..2 {
+        game.dispatcher
+            .remove_decoration_at(&mut game.world.entities, 3.0, upper);
+    }
+    game.dispatcher.remove_decoration_at(
+        &mut game.world.entities,
+        3.0,
+        Vec2::new(origin.x + 1.0, origin.y + 16.0),
+    );
+}
+
 fn explosion_solid_cleanup(game: &mut Game) {
     for entity in &mut game.world.entities {
         if entity.alive && crate::catalog::is_a(&entity.object, "oTreasure") {
@@ -963,7 +984,7 @@ pub(crate) fn tick_entities(game: &mut Game) {
         match entity.object.as_str() {
             "oBomb" | "oFireFrogBomb" => {
                 let normal_step = tick_bomb(game, &mut entity);
-                warn_shopkeeper(game, &entity);
+                warn_shopkeeper(game, &mut entity);
                 if normal_step && entity.object == "oFireFrogBomb" {
                     fire_frog_bomb_tail(game, &mut entity);
                 }
@@ -1059,9 +1080,11 @@ fn step_bomb_body(game: &mut Game, bomb: &mut Entity) {
         if bomb.object == "oFireFrogBomb" {
             super::align_held(game, bomb);
         } else {
+            let ducking =
+                game.player.state == PlayerState::Ducking && game.player.vel.x.abs() < 2.0;
             bomb.pos = Vec2::new(
                 game.player.pos.x + 4.0 * f64::from(game.player.facing),
-                game.player.pos.y + 2.0,
+                game.player.pos.y + if ducking { 4.0 } else { 2.0 },
             );
         }
         bomb.vel = Vec2::default();
@@ -1072,7 +1095,7 @@ fn step_bomb_body(game: &mut Game, bomb: &mut Entity) {
     if !projectile_motion(
         &game.world,
         bomb,
-        bomb.value("sticky") != 0.0 && bomb.value("armed") != 0.0,
+        bomb.value("sticky") != 0.0 && bomb.sprite == "sBombArmed",
     ) {
         return;
     }
@@ -1089,12 +1112,22 @@ fn step_bomb_body(game: &mut Game, bomb: &mut Entity) {
         bomb.data.insert("gravity".into(), 0.6);
     }
     if super::lava_at(game, Rect::new(bomb.pos.x, bomb.pos.y - 5.0, 1.0, 1.0)) {
+        if bomb.object == "oBomb" {
+            if let Some(stored) = game.world.entity_mut(bomb.id) {
+                *stored = bomb.clone();
+            }
+            explode(game, bomb.pos);
+            // oItem Step uses direct Creates here, outside graphicsHigh and
+            // scrCreateFlame's cap16. Each child retains Detritus's cap32.
+            for _ in 0..3 {
+                game.spawn("oFlame", bomb.pos);
+            }
+            game.sound("sndExplosion", bomb.pos);
+        }
+        // The receiver remains live through the synchronous effect Creates.
         bomb.alive = false;
         if let Some(stored) = game.world.entity_mut(bomb.id) {
             stored.alive = false;
-        }
-        if bomb.object == "oBomb" {
-            explode(game, bomb.pos);
         }
         return;
     }
@@ -1268,13 +1301,13 @@ fn fire_frog_bomb_tail(game: &mut Game, bomb: &mut Entity) {
                     (index % game.world.width) as i32,
                     (index / game.world.width) as i32,
                 )
-                .contains(bomb.pos, CollisionPrecision::Precise)
+                .contains(bomb.pos, CollisionPrecision::BoundingBox)
     }) || game.world.entities.iter().any(|water| {
         water.id != bomb.id
             && water.alive
             && water.engine_active
             && crate::catalog::is_a(&water.object, "oWaterSwim")
-            && water.mask_contains(bomb.pos, CollisionPrecision::Precise)
+            && water.mask_contains(bomb.pos, CollisionPrecision::BoundingBox)
     });
     if water {
         if bomb.value("swimming") == 0.0 {
@@ -1287,42 +1320,51 @@ fn fire_frog_bomb_tail(game: &mut Game, bomb: &mut Entity) {
     }
 }
 
-fn warn_shopkeeper(game: &mut Game, bomb: &Entity) {
-    if !bomb.alive || bomb.object != "oBomb" || bomb.value("armed") == 0.0 {
+fn warn_shopkeeper(game: &mut Game, bomb: &mut Entity) {
+    // oBomb own Step continues after inherited Item destruction.
+    if bomb.object != "oBomb" || bomb.value("armed") == 0.0 {
         return;
     }
-    let room = |pos: Vec2| {
-        (
-            (((pos.x - 16.0).max(0.0) / 160.0).floor() as i32).min(3),
-            (((pos.y - 16.0).max(0.0) / 128.0).floor() as i32).min(4),
-        )
-    };
-    let distance = |keeper: &Entity| {
-        let a = bomb.sprite_bounds();
-        let b = keeper.sprite_bounds();
-        let dx = (a.x - b.x - b.w + 1.0).max(b.x - a.x - a.w + 1.0).max(0.0);
-        let dy = (a.y - b.y - b.h + 1.0).max(b.y - a.y - a.h + 1.0).max(0.0);
-        dx.hypot(dy)
-    };
-    if game.world.entities.iter().any(|keeper| {
-        let keeper_room = room(keeper.pos);
-        keeper.alive
-            && keeper.object == "oShopkeeper"
-            && (
-                keeper
-                    .data
-                    .get("shop_room_x")
-                    .copied()
-                    .unwrap_or(f64::from(keeper_room.0)) as i32,
-                keeper
-                    .data
-                    .get("shop_room_y")
-                    .copied()
-                    .unwrap_or(f64::from(keeper_room.1)) as i32,
-            ) == room(bomb.pos)
-            && distance(keeper) < 96.0
-    }) {
-        crate::economy::anger(game, bomb.pos, "TERRORIST!");
+    let mut ids: Vec<_> = crate::dispatcher::descendant_instances(game, "oShopkeeper")
+        .into_iter()
+        .filter_map(|instance| match instance {
+            crate::dispatcher::Instance::Entity(id) => Some(id),
+            _ => None,
+        })
+        .collect();
+    if !game.dispatcher.running {
+        // Direct subsystem callers can have raw births; do not run Create or
+        // reorder registrations merely to evaluate the source query.
+        for keeper in &game.world.entities {
+            if crate::catalog::is_a(&keeper.object, "oShopkeeper") && !ids.contains(&keeper.id) {
+                ids.push(keeper.id);
+            }
+        }
+    }
+    let keepers: Vec<_> = ids
+        .into_iter()
+        .filter_map(|id| game.world.entity(id))
+        .filter(|keeper| keeper.engine_active)
+        .map(|keeper| (keeper.pos, keeper.collision_mask().point_bounds()))
+        .collect();
+    if keepers.is_empty() {
+        return;
+    }
+    // scrGetRoomX/Y in the guarded roomPath expression write the calling
+    // Bomb's scratch coordinates even when that room is not a shop.
+    bomb.data.insert("tx".into(), bomb.pos.x);
+    bomb.data.insert("ty".into(), bomb.pos.y);
+    let bounds = bomb.collision_mask().point_bounds();
+    if crate::economy::in_shop(game, bomb.pos)
+        && keepers
+            .iter()
+            .any(|(_, keeper)| crate::world_events::mask_distance(bounds, *keeper) < 96.0)
+    {
+        // The room guard and minimum family bbox distance are independent.
+        // `with oShopkeeper` invokes the nearest-keeper script at EACH keeper.
+        for (origin, _) in keepers {
+            crate::economy::anger(game, origin, "TERRORIST!");
+        }
     }
 }
 
@@ -5858,3 +5900,151 @@ mod rope_own_termination_state_tests {
 #[cfg(test)]
 #[path = "player_nearest_family_tests.rs"]
 mod player_nearest_family_tests;
+
+#[cfg(test)]
+#[path = "explosives_pose_contract_tests.rs"]
+mod explosives_pose_contract_tests;
+
+#[cfg(test)]
+#[path = "explosives_lava_contract_tests.rs"]
+mod explosives_lava_contract_tests;
+
+#[cfg(test)]
+mod bomb_warning_source_contract {
+    use super::*;
+
+    // Direct own-code prefix contexts; no full Game.step/campaign claim.
+    // All setup precedes the one warn_shopkeeper callback under test.
+    fn scene() -> (Game, Entity) {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.world = World::new(40, 24, Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        let id = game.spawn("oBomb", Vec2::new(80.0, 96.0));
+        arm_bomb(game.world.entity_mut(id).unwrap());
+        let bomb = game.world.entity(id).unwrap().clone();
+        assert_eq!(
+            bomb.collision_mask().point_bounds(),
+            Rect::new(77.0, 93.0, 7.0, 7.0)
+        );
+        (game, bomb)
+    }
+
+    fn keeper(game: &mut Game, object: &str, x: f64, home: i32, active: bool) -> u64 {
+        let id = game.spawn(object, Vec2::new(x, 96.0));
+        let receiver = game.world.entity_mut(id).unwrap();
+        receiver.engine_active = active;
+        receiver.data.insert("shop_room_x".into(), f64::from(home));
+        receiver.data.insert("shop_room_y".into(), 0.0);
+        id
+    }
+
+    #[test]
+    fn source_bomb_warning_uses_cached_bbox_and_literal_strict_96_threshold() {
+        for (x, left, distance, warns) in [
+            (176.49, 178.0, 95.0, true),
+            (176.51, 179.0, 96.0, false),
+            (177.0, 179.0, 96.0, false),
+            (178.0, 180.0, 97.0, false),
+        ] {
+            let (mut game, mut bomb) = scene();
+            let id = keeper(&mut game, "oShopkeeper", x, 0, true);
+            let receiver = game.world.entity(id).unwrap();
+            assert_eq!(receiver.sprite, "sShopLeft");
+            // Source alpha bounds1..7/origin4 give bomb right83; keeper
+            // bounds2..13/origin0 and native RTE origin give left178/179/180.
+            assert_eq!(receiver.collision_mask().point_bounds().x, left);
+            assert_eq!(left - 83.0, distance);
+            assert_eq!(distance < 96.0, warns);
+            if x == 176.51 {
+                assert!(
+                    receiver.sprite_bounds().x - 83.0 < 96.0,
+                    "FIXTURE: prior smooth geometry incorrectly passes threshold"
+                );
+            }
+            warn_shopkeeper(&mut game, &mut bomb);
+            assert_eq!(
+                game.data.get("thiefLevel").copied().unwrap_or(0.0),
+                if warns { 2.0 } else { 0.0 }
+            );
+            assert_eq!(game.flags.contains("wanted"), warns);
+            assert_eq!(bomb.data.get("tx"), Some(&80.0));
+            assert_eq!(bomb.data.get("ty"), Some(&96.0));
+            assert_eq!(game.world.entity(id).unwrap().state == 2, warns);
+        }
+    }
+
+    #[test]
+    fn source_bomb_warning_selects_active_keeper_family_and_invokes_each_receiver() {
+        for (object, active, warns) in [
+            ("oShopkeeper", true, true),
+            ("oShopkeeper2", true, true),
+            ("oShopkeeper", false, false),
+            ("oDamsel", true, false),
+        ] {
+            let (mut game, mut bomb) = scene();
+            keeper(&mut game, object, 100.0, 0, active);
+            warn_shopkeeper(&mut game, &mut bomb);
+            assert_eq!(
+                game.data.get("thiefLevel").copied().unwrap_or(0.0),
+                if warns { 2.0 } else { 0.0 },
+                "SOURCE_FAMILY {object} active={active}"
+            );
+            assert_eq!(game.flags.contains("wanted"), warns);
+        }
+        let (mut game, mut bomb) = scene();
+        // Home marker represents the existing shop-room adapter; the owner
+        // has walked away. A different room's nearby keeper supplies distance.
+        let far = keeper(&mut game, "oShopkeeper", 400.0, 0, true);
+        let near = keeper(&mut game, "oShopkeeper", 100.0, 1, true);
+        warn_shopkeeper(&mut game, &mut bomb);
+        assert_eq!(game.world.entity(far).unwrap().state, 2);
+        assert_eq!(game.world.entity(near).unwrap().state, 2);
+        assert_eq!(
+            game.data.get("thiefLevel"),
+            Some(&5.0),
+            "two source with receivers call nearest script from their own origins: 2 then +3"
+        );
+        assert_eq!(game.events.iter().filter(|event| matches!(event, GameEvent::Dialogue(message) if message.first == "TERRORIST!")).count(), 2);
+        let (mut game, mut bomb) = scene();
+        let first = keeper(&mut game, "oShopkeeper", 100.0, 0, true);
+        let second = keeper(&mut game, "oShopkeeper", 100.0, 0, true);
+        warn_shopkeeper(&mut game, &mut bomb);
+        assert_eq!(game.world.entity(first).unwrap().state, 2);
+        assert_eq!(
+            game.world.entity(second).unwrap().state,
+            0,
+            "nearest coincident tie stays first registered, even for second with receiver"
+        );
+        assert_eq!(
+            game.data.get("thiefLevel"),
+            Some(&5.0),
+            "ATTACK Step has not yet latched angered, so same first keeper receives both calls"
+        );
+    }
+
+    #[test]
+    fn source_bomb_warning_room_guard_and_after_destroy_continuation_are_independent() {
+        for (armed, alive, home, warns) in [
+            (false, true, 0, false),
+            (true, true, 1, false),
+            (true, true, 0, true),
+            (true, false, 0, true),
+        ] {
+            let (mut game, mut bomb) = scene();
+            keeper(&mut game, "oShopkeeper", 100.0, home, true);
+            bomb.data.insert("armed".into(), f64::from(armed));
+            // Controlled receiver snapshot at the start of the own CODE
+            // action, after the inherited action may already have destroyed it.
+            bomb.alive = alive;
+            warn_shopkeeper(&mut game, &mut bomb);
+            assert_eq!(
+                game.data.get("thiefLevel").copied().unwrap_or(0.0),
+                if warns { 2.0 } else { 0.0 },
+                "SOURCE_OWN_CONTINUATION armed={armed} alive={alive} home={home}"
+            );
+            assert_eq!(game.flags.contains("wanted"), warns);
+            assert_eq!(bomb.data.get("tx"), if armed { Some(&80.0) } else { None });
+            assert_eq!(bomb.data.get("ty"), if armed { Some(&96.0) } else { None });
+        }
+    }
+}
