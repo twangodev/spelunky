@@ -1071,7 +1071,13 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         look_step(game);
         return;
     }
-    // characterStepEvent alone samples kDown. Skipped controllers keep it.
+    // characterStepEvent alone samples these action keys. Skipped controllers
+    // retain them; a successful container opening separately clears Attack.
+    if input.attack_pressed {
+        set(p, "source_k_attack_pressed", 1.0);
+    } else {
+        p.data.remove("source_k_attack_pressed");
+    }
     set(p, "source_k_down", f64::from(input.down));
     if input.up {
         set(p, "source_k_up", 1.0);

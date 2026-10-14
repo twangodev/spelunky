@@ -574,7 +574,7 @@ fn container_query(game: &Game, family: &str) -> (bool, Option<u64>) {
 
 /// Returns true when the attack edge was consumed by a container.
 pub fn interact(game: &mut Game, input: &InputFrame) -> bool {
-    if !input.attack_pressed || super::player_dead(game) || game.player.is_stunned() {
+    if !input.attack_pressed {
         return false;
     }
     for entity in &mut game.world.entities {

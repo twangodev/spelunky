@@ -833,8 +833,12 @@ fn player_step(game: &mut Game, input: &InputFrame) {
     crate::items::weapons::firing_tick(game);
     crate::hub::begin_title_exit(game);
     crate::player::tick(game, input);
+    crate::items::player_attack_step(game, input);
     crate::hub::player_portal_actions(game, input);
     crate::economy::player_held_step(game);
+    let container_consumed = crate::items::player_containers(game, input);
+    // Game Over reads the physical edge independently of the consumed cached
+    // action key. Containers execute before its possible room transition.
     crate::progression::player_actions(game, input);
     if matches!(
         game.state,
@@ -843,6 +847,9 @@ fn player_step(game: &mut Game, input: &InputFrame) {
         return;
     }
     let mut item_input = *input;
+    if container_consumed {
+        item_input.attack_pressed = false;
+    }
     // oPlayer1 Step448–452 explicitly clears these cached edges at nonpositive
     // life, before inventory actions and the later Ankh revival action.
     if game.player.health <= 0 {

@@ -270,10 +270,46 @@ pub(crate) fn create_instance(game: &mut Game, id: u64) {
 }
 
 /// oPlayer1's item actions are one event, independent from item instance Steps.
-pub(crate) fn player_step(game: &mut Game, input: &InputFrame) {
+pub(crate) fn player_attack_step(game: &mut Game, input: &InputFrame) {
+    // Player Step443 refreshes only AttackPressed when dead. Other cached
+    // controller keys retain their last characterStepEvent values.
+    if player_dead(game) {
+        if input.attack_pressed {
+            game.player
+                .data
+                .insert("source_k_attack_pressed".into(), 1.0);
+        } else {
+            game.player.data.remove("source_k_attack_pressed");
+        }
+    }
     tick_whip(game);
     weapons::attack_step(game);
     clear_whip_when_not_whipping(game);
+}
+
+/// Player Step603–710 precedes the inventory gate and Game Over action.
+/// Successful opening consumes the cached action edge, not Game Over's
+/// independent physical checkAttackPressed/checkStartPressed query.
+pub(crate) fn player_containers(game: &mut Game, input: &InputFrame) -> bool {
+    let cached = InputFrame {
+        up: game.player.data.get("source_k_up").copied().unwrap_or(0.0) >= 0.5,
+        attack_pressed: game
+            .player
+            .data
+            .get("source_k_attack_pressed")
+            .copied()
+            .unwrap_or(0.0)
+            >= 0.5,
+        ..*input
+    };
+    let consumed = collectibles::interact(game, &cached);
+    if consumed {
+        game.player.data.remove("source_k_attack_pressed");
+    }
+    consumed
+}
+
+pub(crate) fn player_step(game: &mut Game, input: &InputFrame) {
     player_actions(game, input);
     weapons::player_step_with_release(game, input.attack_released);
 }
@@ -649,7 +685,18 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let input = &input;
     player_balance_step(game);
     weapons::firing_tick(game);
-    player_step(game, input);
+    player_attack_step(game, input);
+    // This compatibility driver has no characterStepEvent controller phase;
+    // retain its historical direct InputFrame interaction semantics.
+    let interacted = !player_dead(game)
+        && !game.player.is_stunned()
+        && game.player.data.get("active").copied().unwrap_or(1.0) != 0.0
+        && collectibles::interact(game, input);
+    let action_input = InputFrame {
+        attack_pressed: input.attack_pressed && !interacted,
+        ..*input
+    };
+    player_step(game, &action_input);
     let ids: Vec<_> = game
         .world
         .entities
@@ -680,7 +727,6 @@ fn player_actions(game: &mut Game, input: &InputFrame) {
         // Source action input is skipped; held release already preceded tumble
         // movement, and whip cancellation belongs to late Player Step1816.
     } else {
-        let interacted = collectibles::interact(game, input);
         let inventory_selected = if game.is_level() && game.player.attack_timer == 0 {
             if input.cycle_pressed {
                 explosives::cycle_inventory(game);
@@ -704,11 +750,11 @@ fn player_actions(game: &mut Game, input: &InputFrame) {
         let empty_attack =
             game.player.held.is_none() && input.attack_pressed && empty_attack_allowed(game);
         let character_input = InputFrame {
-            attack_pressed: empty_attack && !interacted && !inventory_selected,
+            attack_pressed: empty_attack && !inventory_selected,
             ..*input
         };
         crate::characters::tick(game, &character_input);
-        if !interacted && !inventory_selected && input.attack_pressed {
+        if !inventory_selected && input.attack_pressed {
             if let Some(id) = game.player.held {
                 use_held_item(game, id, input);
             } else if empty_attack {
