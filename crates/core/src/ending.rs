@@ -1624,7 +1624,10 @@ fn action(input: &InputFrame) -> bool {
 /// Cinematics have their own source Step/Alarm events. They do not run enemy
 /// combat, hazard damage, campaign clocks, or normal player input.
 pub fn tick(game: &mut Game, input: &InputFrame) {
-    tick_inner(game, input, false);
+    // Preserve the direct cinematic driver's held-only input contract using
+    // the same engine-frame normalization as Game.step (idempotent after it).
+    let input = game.normalize_action_edges(input);
+    tick_inner(game, &input, false);
 }
 /// Called after the live room has completed its original Step events during
 /// the player's exit animation. Keep its events, clocks and previous poses.
@@ -2952,9 +2955,9 @@ fn tunnel_step(game: &mut Game, s: &mut EndingState, e: &mut Entity, input: &Inp
         .copied()
         .unwrap_or(stage as f64 * 100_000.);
     let mut donate = e.value("donate");
-    if input.up && !s.previous_up {
+    if input.up_pressed {
         donate += 100.;
-    } else if input.down && !s.previous_down {
+    } else if input.down_pressed {
         donate -= 100.;
     }
     donate = donate.max(0.).min(remaining).min(game.player.money as f64);
@@ -3204,6 +3207,126 @@ mod ball2_cached_distance_tests {
                 game.dispatcher.registration_order, ledger,
                 "query does not register pending births"
             );
+        }
+    }
+}
+
+// Exercise source donation edges independently of aggregate held controls.
+#[cfg(test)]
+mod explicit_transition_direction_edge_tests {
+    use super::*;
+    use crate::RulesPreset;
+    #[test]
+    fn transition_selection_keeps_short_and_second_device_direction_presses() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for (up, held) in [(true, false), (true, true), (false, false), (false, true)] {
+                let mut game = Game::shell(7, rules);
+                game.player.money = 1000;
+                game.data.insert("tunnel1_remaining".into(), 1000.);
+                let mut state =
+                    EndingState::new(&game, EndingKind::Transition, EndingStage::Transition);
+                state.previous_up = up && held;
+                state.previous_down = !up && held;
+                let mut actor = Entity::new(900, "oTunnelMan", Vec2::new(104., 184.));
+                actor.data.insert("tunnel_stage".into(), 1.);
+                actor.data.insert("talk".into(), 1.);
+                actor.data.insert("donate".into(), 300.);
+                let input = InputFrame {
+                    up: up && held,
+                    down: !up && held,
+                    up_pressed: up,
+                    down_pressed: !up,
+                    ..Default::default()
+                };
+                tunnel_step(&mut game, &mut state, &mut actor, &input);
+                assert_eq!(
+                    actor.value("donate"),
+                    if up { 400. } else { 200. },
+                    "explicit source edge up={up}, aggregate held={held}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod direct_transition_action_compatibility {
+    use super::*;
+    use crate::RulesPreset;
+    fn configured_transition(rules: RulesPreset) -> (Game, u64) {
+        let mut game = Game::shell(7, rules);
+        game.player.money = 1000;
+        game.data.insert("tunnel1_remaining".into(), 1000.);
+        let mut state = EndingState::new(&game, EndingKind::Transition, EndingStage::Transition);
+        // Initial source-room creation, not a mid-run actor/state rewrite.
+        enter(
+            &mut game,
+            &mut state,
+            EndingStage::Transition,
+            "rTransition1x",
+        );
+        let id = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oTunnelMan")
+            .unwrap()
+            .id;
+        assert_eq!(game.world.entity(id).unwrap().value("donate"), 0.);
+        assert_eq!(game.world.entity(id).unwrap().value("talk"), 0.);
+        game.state = RunState::Ending;
+        game.ending = Some(state);
+        (game, id)
+    }
+    #[test]
+    fn direct_cinematic_and_game_step_keep_held_only_selection_compatibility() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for direct in [false, true] {
+                let (mut game, id) = configured_transition(rules);
+                let advance = |game: &mut Game, input: &InputFrame| {
+                    if direct {
+                        tick(game, input);
+                    } else {
+                        game.step(input);
+                    }
+                };
+                for _ in 0..3 {
+                    advance(
+                        &mut game,
+                        &InputFrame {
+                            up: true,
+                            ..Default::default()
+                        },
+                    );
+                    assert_eq!(game.world.entity(id).unwrap().value("donate"), 100.);
+                }
+                advance(&mut game, &InputFrame::default());
+                advance(
+                    &mut game,
+                    &InputFrame {
+                        down: true,
+                        ..Default::default()
+                    },
+                );
+                assert_eq!(game.world.entity(id).unwrap().value("donate"), 0.);
+                advance(
+                    &mut game,
+                    &InputFrame {
+                        down: true,
+                        ..Default::default()
+                    },
+                );
+                assert_eq!(game.world.entity(id).unwrap().value("donate"), 0.);
+                // A short explicit press survives aggregate-held=false.
+                advance(
+                    &mut game,
+                    &InputFrame {
+                        up_pressed: true,
+                        ..Default::default()
+                    },
+                );
+                assert_eq!(game.world.entity(id).unwrap().value("donate"), 100.);
+            }
         }
     }
 }

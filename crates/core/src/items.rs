@@ -578,6 +578,12 @@ pub(crate) fn end_instance(game: &mut Game, id: u64) {
 /// Compatibility entry point for subsystem fixtures; the live game dispatches
 /// each source event separately in resource order.
 pub fn tick(game: &mut Game, input: &InputFrame) {
+    // This isolated compatibility driver historically fired a charged bow
+    // whenever its supplied attack level was false. Live Player dispatch
+    // passes only the admitted frame's independent release edge instead.
+    let mut input = *input;
+    input.attack_released |= !input.attack;
+    let input = &input;
     player_balance_step(game);
     weapons::firing_tick(game);
     player_step(game, input);

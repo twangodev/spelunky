@@ -933,6 +933,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     // Direct controller callers retain held-transition inference. Game::step
     // already normalized this actual frame before all dispatcher/state guards.
     let frame = game.normalize_direction_releases(input);
+    let frame = game.normalize_action_edges(&frame);
     let input = &frame;
     let engine_time = game.engine_time();
     // scrStealItem destroys the Cape when a Jetpack replaces it. This port

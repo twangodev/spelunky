@@ -939,7 +939,8 @@ pub(crate) fn firing_tick(game: &mut Game) {
 /// firing_tick separately and only calls the late release helper below.
 pub fn player_step(game: &mut Game) {
     firing_tick(game);
-    player_step_with_release(game, false);
+    let released = game.player.data.get("attack_held").copied().unwrap_or(0.0) == 0.0;
+    player_step_with_release(game, released);
 }
 
 /// Source release is independent from aggregate held state in mixed-device play.
@@ -997,8 +998,9 @@ pub(crate) fn player_step_with_release(game: &mut Game, attack_released: bool) {
                 *strength = (*strength + 0.2).min(12.0);
             }
             // oPlayer1 charges first, then evaluates checkAttackReleased().
-            // Held-only input producers retain their existing falling-level path.
-            if attack_released || !held {
+            // The live source controller fires only on this frame's release.
+            // The compatibility entry point above supplies its held-only fallback.
+            if attack_released {
                 fire_bow(game);
             }
         }
@@ -3559,3 +3561,121 @@ mod rock_player_blood_source_tests;
 
 #[cfg(test)]
 include!("projectile_query_contract.rs");
+
+// Exercise the bow release contract and legacy subsystem entry points.
+#[cfg(test)]
+mod admitted_attack_release_tests {
+    use super::*;
+    use crate::RulesPreset;
+    fn charging(rules: RulesPreset) -> Game {
+        let mut game = Game::shell(7, rules);
+        game.player.pos = Vec2::new(80., 80.);
+        game.data.insert("arrows".into(), 3.);
+        let id = game.world.spawn("oBow", game.player.pos);
+        game.player.held = Some(id);
+        game.world.entity_mut(id).unwrap().held = true;
+        game.player.data.insert("attack_held".into(), 1.);
+        assert!(use_weapon(
+            &mut game,
+            id,
+            &InputFrame {
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            }
+        ));
+        player_step_with_release(&mut game, false);
+        assert_eq!(game.player.data["bow_armed"], 1.);
+        assert_eq!(game.data["arrows"], 3.);
+        game
+    }
+    #[test]
+    fn absent_release_edge_on_resumed_controller_does_not_fire_bow() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = charging(rules);
+            // An earlier engine frame may consume release while Player does not
+            // run; a fresh controller then samples held=false/released=false.
+            // This intentionally tests that actual reached helper contract only.
+            let before = game.player.data["bow_strength"];
+            game.player.data.insert("attack_held".into(), 0.);
+            player_step_with_release(&mut game, false);
+            assert_eq!(game.data["arrows"], 3.);
+            assert_eq!(game.player.data["bow_armed"], 1.);
+            assert_eq!(game.player.data["bow_strength"], before);
+            assert!(!game.world.entities.iter().any(|e| e.object == "oArrow"));
+            player_step_with_release(&mut game, true);
+            assert_eq!(game.data["arrows"], 2.);
+            assert_eq!(game.player.data["bow_armed"], 0.);
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oArrow")
+                    .count(),
+                1
+            );
+        }
+    }
+    #[test]
+    fn explicit_mixed_device_release_and_legacy_held_only_entry_still_fire() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut mixed = charging(rules);
+            player_step_with_release(&mut mixed, true);
+            assert_eq!(mixed.data["arrows"], 2.);
+            assert_eq!(mixed.player.data["bow_armed"], 0.);
+            let mut legacy = charging(rules);
+            legacy.player.data.insert("attack_held".into(), 0.);
+            player_step(&mut legacy);
+            assert_eq!(legacy.data["arrows"], 2.);
+            assert_eq!(legacy.player.data["bow_armed"], 0.);
+        }
+    }
+}
+
+#[cfg(test)]
+mod isolated_items_action_compatibility {
+    use super::*;
+    use crate::RulesPreset;
+    #[test]
+    fn isolated_items_driver_retains_falling_level_bow_release() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = Game::shell(7, rules);
+            game.player.pos = Vec2::new(80., 80.);
+            game.data.insert("arrows".into(), 3.);
+            let bow = game.world.spawn("oBow", game.player.pos);
+            game.player.held = Some(bow);
+            game.world.entity_mut(bow).unwrap().held = true;
+            game.player.data.insert("attack_held".into(), 1.);
+            assert!(use_weapon(
+                &mut game,
+                bow,
+                &InputFrame {
+                    attack: true,
+                    attack_pressed: true,
+                    ..Default::default()
+                }
+            ));
+            assert_eq!(game.player.data["bow_armed"], 1.);
+            crate::items::tick(
+                &mut game,
+                &InputFrame {
+                    attack: true,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(game.data["arrows"], 3.);
+            // No explicit edge: this isolated public driver keeps its legacy API.
+            crate::items::tick(&mut game, &InputFrame::default());
+            assert_eq!(game.data["arrows"], 2.);
+            assert_eq!(game.player.data["bow_armed"], 0.);
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oArrow")
+                    .count(),
+                1
+            );
+        }
+    }
+}

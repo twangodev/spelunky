@@ -278,6 +278,9 @@ impl Game {
     pub fn clear_direction_input_history(&mut self) {
         self.data.remove("input_frame_left");
         self.data.remove("input_frame_right");
+        self.data.remove("input_frame_attack");
+        self.data.remove("input_frame_up");
+        self.data.remove("input_frame_down");
     }
 
     /// Normalize held-only callers against actual input frames, independently
@@ -300,9 +303,32 @@ impl Game {
         frame
     }
 
+    /// Held-only action compatibility belongs to admitted engine frames,
+    /// never to a Player or cinematic callback cache. Explicit device edges
+    /// remain independently authoritative, including short taps and OR holds.
+    pub(crate) fn normalize_action_edges(&mut self, input: &InputFrame) -> InputFrame {
+        let mut frame = *input;
+        frame.attack_released |= self.data.get("input_frame_attack") == Some(&1.0) && !input.attack;
+        frame.up_pressed |= input.up && self.data.get("input_frame_up") != Some(&1.0);
+        frame.down_pressed |= input.down && self.data.get("input_frame_down") != Some(&1.0);
+        for (key, held) in [
+            ("input_frame_attack", input.attack),
+            ("input_frame_up", input.up),
+            ("input_frame_down", input.down),
+        ] {
+            if held {
+                self.data.insert(key.into(), 1.0);
+            } else {
+                self.data.remove(key);
+            }
+        }
+        frame
+    }
+
     /// Advance exactly one original 1/30-second tick.
     pub fn step(&mut self, input: &InputFrame) {
         let frame = self.normalize_direction_releases(input);
+        let frame = self.normalize_action_edges(&frame);
         let input = &frame;
         self.draw_view = None;
         if self.opening.is_some() {
@@ -2028,3 +2054,159 @@ mod jungle_public_contract_tests;
 #[cfg(test)]
 #[path = "selectors_public_tests.rs"]
 mod selectors_public_tests;
+
+// Exercise admitted action frames while the Player callback is skipped.
+#[cfg(test)]
+mod admitted_action_frame_controls {
+    use super::*;
+    #[test]
+    fn held_only_and_independent_edges_normalize_against_every_admitted_frame() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = Game::shell(7, rules);
+            // Transition/Won cannot run the ordinary Player controller, but
+            // Game.step is still an admitted input-frame boundary.
+            game.state = RunState::Transition;
+            game.step(&InputFrame {
+                attack: true,
+                up: true,
+                ..Default::default()
+            });
+            assert_eq!(game.data["input_frame_attack"], 1.);
+            assert_eq!(game.data["input_frame_up"], 1.);
+            game.step(&InputFrame {
+                up: true,
+                attack_released: true,
+                ..Default::default()
+            });
+            assert!(!game.data.contains_key("input_frame_attack"));
+            // The release was already consumed; first later receiver must not
+            // infer another one from a stale Player-local controller cache.
+            let ordinary = game.normalize_action_edges(&InputFrame {
+                up: true,
+                ..Default::default()
+            });
+            assert!(!ordinary.attack_released && !ordinary.up_pressed);
+            let independent = game.normalize_action_edges(&InputFrame {
+                up: true,
+                up_pressed: true,
+                attack: true,
+                attack_released: true,
+                down_pressed: true,
+                ..Default::default()
+            });
+            assert!(
+                independent.up_pressed && independent.down_pressed && independent.attack_released
+            );
+            assert_eq!(game.normalize_action_edges(&independent), independent);
+            let falling = game.normalize_action_edges(&InputFrame::default());
+            assert!(falling.attack_released);
+            assert!(
+                !game
+                    .normalize_action_edges(&InputFrame::default())
+                    .attack_released
+            );
+        }
+    }
+    #[test]
+    fn discarded_host_controls_clear_action_history_without_adding_jump_edges() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        let first = game.normalize_action_edges(&InputFrame {
+            attack: true,
+            up: true,
+            down: true,
+            jump: true,
+            ..Default::default()
+        });
+        assert!(first.up_pressed && first.down_pressed);
+        assert!(!first.jump_pressed);
+        game.clear_direction_input_history();
+        let reset = game.normalize_action_edges(&InputFrame::default());
+        assert!(!reset.attack_released && !reset.up_pressed && !reset.down_pressed);
+        assert!(!reset.jump_pressed && !reset.jump_released);
+        assert!(
+            game.normalize_action_edges(&InputFrame {
+                up: true,
+                down: true,
+                ..Default::default()
+            })
+            .up_pressed
+        );
+    }
+}
+
+#[cfg(test)]
+mod public_action_entry_compatibility {
+    use super::*;
+    #[test]
+    fn public_player_tick_updates_action_history_before_its_inactive_guard() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = Game::shell(7, rules);
+            game.world = World::new(20, 20, Area::Mines, 1);
+            game.player.pos = Vec2::new(88., 152.);
+            for x in 0..20 {
+                game.world.set_tile(x, 10, "oBlock");
+            }
+            game.player.data.insert("active".into(), 0.);
+            let held = InputFrame {
+                attack: true,
+                up: true,
+                ..Default::default()
+            };
+            crate::player::tick(&mut game, &held);
+            assert_eq!(game.data["input_frame_attack"], 1.);
+            assert_eq!(game.data["input_frame_up"], 1.);
+            crate::player::tick(
+                &mut game,
+                &InputFrame {
+                    up: true,
+                    ..Default::default()
+                },
+            );
+            assert!(!game.data.contains_key("input_frame_attack"));
+            let next = game.normalize_action_edges(&InputFrame {
+                up: true,
+                ..Default::default()
+            });
+            assert!(!next.attack_released && !next.up_pressed);
+            // Direct controller normalizes only its own input boundary; no
+            // implicit extra item event is added to this public Player API.
+            assert_eq!(game.player.data["active"], 0.);
+        }
+    }
+    #[test]
+    fn game_step_retains_held_only_bow_release_without_extra_item_events() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = Game::shell(7, rules);
+            game.world = World::new(20, 20, Area::Mines, 1);
+            for x in 0..20 {
+                game.world.set_tile(x, 10, "oBlock");
+            }
+            game.player.pos = Vec2::new(88., 152.);
+            game.player.previous_pos = game.player.pos;
+            game.player.state = PlayerState::Standing;
+            game.player.grounded = true;
+            game.data.insert("arrows".into(), 3.);
+            let bow = game.world.spawn("oBow", game.player.pos);
+            game.player.held = Some(bow);
+            game.world.entity_mut(bow).unwrap().held = true;
+            // Ordinary full dispatcher frames arm/charge the initial held Bow.
+            game.step(&InputFrame {
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            assert_eq!(game.player.data["bow_armed"], 1.);
+            let ammo = game.data["arrows"];
+            game.step(&InputFrame {
+                attack: true,
+                ..Default::default()
+            });
+            assert_eq!(game.data["arrows"], ammo);
+            game.step(&InputFrame::default());
+            assert_eq!(game.data["arrows"], ammo - 1.);
+            assert_eq!(game.player.data["bow_armed"], 0.);
+            game.step(&InputFrame::default());
+            assert_eq!(game.data["arrows"], ammo - 1.);
+        }
+    }
+}
