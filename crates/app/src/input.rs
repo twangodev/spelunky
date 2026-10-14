@@ -1202,7 +1202,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_source_single_device_bow_release_cap_and_empty_ammo_paths_stay_valid() {
+    fn mixed_source_single_device_bow_release_boundary_and_empty_ammo_paths_stay_valid() {
         for keyboard in [false, true] {
             for ammo in [0.0, 3.0] {
                 let mut game = mixed_source_floor();
@@ -1218,11 +1218,17 @@ mod tests {
                 } else {
                     input.accept_gamepads(pad, 0);
                 }
+                // Original Player Step1505 adds 0.2 only while below 12;
+                // the final addition can cross that boundary.
+                let mut source_strength = 0.0;
                 for _ in 0..65 {
+                    if source_strength < 12.0 {
+                        source_strength += 0.2;
+                    }
                     game.step(&input.take_tick());
                 }
                 if ammo > 0.0 {
-                    assert_eq!(game.player.data["bow_strength"], 12.0);
+                    assert_eq!(game.player.data["bow_strength"], source_strength);
                 }
                 if keyboard {
                     input.key(KeyCode::KeyX, false, false);
@@ -1242,7 +1248,7 @@ mod tests {
                     if ammo > 0.0 { ammo - 1.0 } else { 0.0 }
                 );
                 if ammo > 0.0 {
-                    assert!((arrows[0].vel.x.abs() - 13.0).abs() < 1e-10);
+                    assert!((arrows[0].vel.x.abs() - (1.0 + source_strength)).abs() < 1e-10);
                 }
             }
         }

@@ -363,7 +363,14 @@ fn ordinary_bow_pickup_draw_and_release_hits_a_configured_target_through_real_co
             });
         }
         assert_eq!(game.player.data["bow_armed"], 1.0);
-        assert_eq!(game.player.data["bow_strength"], 12.0);
+        // Original Player Step1505 permits a final addition across 12.
+        let mut source_strength = 0.0;
+        for _ in 0..61 {
+            if source_strength < 12.0 {
+                source_strength += 0.2;
+            }
+        }
+        assert_eq!(game.player.data["bow_strength"], source_strength);
         game.step(&InputFrame {
             attack_released: true,
             ..Default::default()

@@ -975,34 +975,34 @@ pub(crate) fn player_step_with_release(game: &mut Game, attack_released: bool) {
         item.set_sprite(&sprite);
     }
     if game.player.data.get("bow_armed").copied().unwrap_or(0.0) != 0.0 {
-        let holding_bow = game
-            .player
-            .held
-            .and_then(|id| game.world.entity(id))
-            .is_some_and(|e| e.object == "oBow");
+        let held = game.player.data.get("attack_held").copied().unwrap_or(0.0) != 0.0;
         let bow_strength = game.player.data.get("bow_strength").copied().unwrap_or(0.0);
-        if !holding_bow {
-            // oPlayer1 Step1505: cancellation sound belongs to the charging gate.
-            if game.player.held.is_none()
-                && game.player.data.get("attack_held").copied().unwrap_or(0.0) != 0.0
-                && bow_strength < 12.0
-            {
+        // Player Step1505–1516: charge first, cancel only a missing held ID
+        // inside this strict gate, then assign holdArrow = ARROW_NORM.
+        if held && bow_strength < 12.0 {
+            game.player
+                .data
+                .insert("bow_strength".into(), bow_strength + 0.2);
+            if game.player.held.is_none() {
+                game.player.data.insert("bow_armed".into(), 0.0);
+                game.player.data.insert("bow_strength".into(), 0.0);
                 game.stop_sound("sndBowPull");
             }
-            game.player.data.insert("bow_armed".into(), 0.0);
-            game.player.data.insert("bow_strength".into(), 0.0);
-        } else {
-            let held = game.player.data.get("attack_held").copied().unwrap_or(0.0) != 0.0;
-            if held {
-                let strength = game.player.data.entry("bow_strength".into()).or_default();
-                *strength = (*strength + 0.2).min(12.0);
-            }
-            // oPlayer1 charges first, then evaluates checkAttackReleased().
-            // The live source controller fires only on this frame's release.
-            // The compatibility entry point above supplies its held-only fallback.
-            if attack_released {
-                fire_bow(game);
-            }
+            // This flag projects holdArrow == ARROW_BOMB. Assigning normal
+            // clears it without resetting the separate bombArrowCounter.
+            game.player.data.insert("bow_bomb_armed".into(), 0.0);
+        }
+        // Player Step1518 and scrFireBow independently guard release and the
+        // actual held receiver's type. A different item is not cancellation.
+        if attack_released
+            && game.player.data.get("bow_armed").copied().unwrap_or(0.0) != 0.0
+            && game
+                .player
+                .held
+                .and_then(|id| game.world.entity(id))
+                .is_some_and(|item| super::explosives::source_type(item) == "Bow")
+        {
+            fire_bow(game);
         }
     }
 }
@@ -2189,6 +2189,15 @@ mod tests {
         game.data.insert("arrows".into(), 6.0);
         game.player.data.insert("attack_held".into(), 1.0);
         use_weapon(&mut game, id, &InputFrame::default());
+        // Source's later charge gate overwrites Bomb with Normal below 12.
+        // Reach the real full-charge boundary before testing cooked Bomb.
+        for _ in 0..64 {
+            if game.player.data["bow_strength"] >= 12.0 {
+                break;
+            }
+            tick(&mut game);
+        }
+        assert!(game.player.data["bow_strength"] >= 12.0);
         assert!(arm_bomb_arrow(&mut game));
         assert!(arm_bomb_arrow(&mut game));
         assert_eq!(game.player.bombs, 4);
@@ -2239,6 +2248,15 @@ mod tests {
         game.data.insert("arrows".into(), 6.0);
         game.player.data.insert("attack_held".into(), 1.0);
         use_weapon(&mut game, id, &InputFrame::default());
+        // Source's later charge gate overwrites Bomb with Normal below 12.
+        // Reach the real full-charge boundary before testing cooked Bomb.
+        for _ in 0..64 {
+            if game.player.data["bow_strength"] >= 12.0 {
+                break;
+            }
+            tick(&mut game);
+        }
+        assert!(game.player.data["bow_strength"] >= 12.0);
         arm_bomb_arrow(&mut game);
         for _ in 0..80 {
             pre_tick(&mut game);
@@ -2265,6 +2283,18 @@ mod tests {
             attack_pressed: true,
             ..Default::default()
         });
+        // Charge via ordinary full dispatcher frames before Bomb, keeping
+        // the later <12 charge gate from replacing its arrow type this Step.
+        for _ in 0..64 {
+            if game.player.data["bow_strength"] >= 12.0 {
+                break;
+            }
+            game.step(&InputFrame {
+                attack: true,
+                ..Default::default()
+            });
+        }
+        assert!(game.player.data["bow_strength"] >= 12.0);
         game.step(&InputFrame {
             attack: true,
             bomb_pressed: true,
@@ -3676,6 +3706,133 @@ mod isolated_items_action_compatibility {
                     .count(),
                 1
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod source_bow_charge_gate_tests {
+    use super::*;
+    use crate::RulesPreset;
+    fn configured(rules: RulesPreset, object: Option<&str>, strength: f64, attack: bool) -> Game {
+        let mut game = Game::shell(7, rules);
+        game.player.pos = Vec2::new(80., 80.);
+        game.data.insert("arrows".into(), 3.);
+        if let Some(object) = object {
+            let id = game.world.spawn(object, game.player.pos);
+            game.player.held = Some(id);
+            game.world.entity_mut(id).unwrap().held = true;
+        }
+        // Initial explicit boundary fixture; no natural ownership-change claim.
+        game.player.data.insert("bow_armed".into(), 1.);
+        game.player.data.insert("bow_strength".into(), strength);
+        game.player
+            .data
+            .insert("attack_held".into(), f64::from(attack));
+        game.player.data.insert("bow_bomb_armed".into(), 1.);
+        game.player.data.insert("bow_bomb_fuse".into(), 37.);
+        game
+    }
+    #[test]
+    fn cancellation_requires_charge_gate_and_missing_held_id() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for object in [None, Some("oBow"), Some("oRock")] {
+                for strength in [4., 11.9, 12.] {
+                    for attack in [false, true] {
+                        let mut game = configured(rules, object, strength, attack);
+                        let gate = attack && strength < 12.;
+                        let cancel = gate && object.is_none();
+                        player_step_with_release(&mut game, false);
+                        assert_eq!(game.player.data["bow_armed"], f64::from(!cancel));
+                        assert_eq!(
+                            game.player.data["bow_strength"],
+                            if cancel {
+                                0.
+                            } else if gate {
+                                strength + 0.2
+                            } else {
+                                strength
+                            }
+                        );
+                        assert_eq!(game.player.data["bow_bomb_armed"], f64::from(!gate));
+                        assert_eq!(game.player.data["bow_bomb_fuse"], 37.);
+                        assert_eq!(game.data["arrows"], 3.);
+                        assert!(!game.world.entities.iter().any(|e| e.object == "oArrow"));
+                        assert_eq!(
+                            game.events
+                                .iter()
+                                .filter(|e| matches!(e,
+                                    crate::GameEvent::SoundStop { name } if name == "sndBowPull"
+                                ))
+                                .count(),
+                            usize::from(cancel)
+                        );
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn release_uses_held_source_type_after_charge_and_normal_arrow_assignment() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for (object, item_type, fires) in [
+                (Some("oBow"), "Bow", true),
+                (Some("oBow"), "Rock", false),
+                (Some("oRock"), "Bow", true),
+                (Some("oRock"), "Rock", false),
+                (None, "Bow", false),
+            ] {
+                let mut game = configured(rules, object, 4., true);
+                if let Some(id) = game.player.held {
+                    game.world
+                        .entity_mut(id)
+                        .unwrap()
+                        .text
+                        .insert("type".into(), item_type.into());
+                }
+                player_step_with_release(&mut game, true);
+                assert_eq!(game.data["arrows"], if fires { 2. } else { 3. });
+                let arrows: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oArrow")
+                    .collect();
+                assert_eq!(arrows.len(), usize::from(fires));
+                if fires {
+                    assert_eq!(arrows[0].vel.x, 1. + 4. + 0.2);
+                    assert_eq!(arrows[0].sprite, "sArrowRight");
+                    assert_eq!(arrows[0].value("bomb_arrow"), 0.);
+                    assert_eq!(game.player.data["bow_armed"], 0.);
+                } else if object.is_some() {
+                    assert_eq!(game.player.data["bow_armed"], 1.);
+                    assert_eq!(game.player.data["bow_strength"], 4. + 0.2);
+                }
+                assert_eq!(game.player.data["bow_bomb_fuse"], 37.);
+            }
+        }
+    }
+    #[test]
+    fn strict_charge_boundary_allows_literal_and_accumulated_overshoot() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut boundary = configured(rules, Some("oBow"), 11.9, true);
+            player_step_with_release(&mut boundary, false);
+            assert_eq!(boundary.player.data["bow_strength"], 11.9 + 0.2);
+            assert!(boundary.player.data["bow_strength"] > 12.);
+            boundary.player.data.insert("bow_bomb_armed".into(), 1.);
+            player_step_with_release(&mut boundary, false);
+            assert_eq!(boundary.player.data["bow_strength"], 11.9 + 0.2);
+            assert_eq!(boundary.player.data["bow_bomb_armed"], 1.);
+            let mut accumulated = configured(rules, Some("oBow"), 0., true);
+            for _ in 0..60 {
+                player_step_with_release(&mut accumulated, false);
+            }
+            assert!(accumulated.player.data["bow_strength"] < 12.);
+            player_step_with_release(&mut accumulated, false);
+            let final_strength = accumulated.player.data["bow_strength"];
+            assert!(final_strength > 12.);
+            player_step_with_release(&mut accumulated, false);
+            assert_eq!(accumulated.player.data["bow_strength"], final_strength);
         }
     }
 }

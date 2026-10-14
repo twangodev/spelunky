@@ -292,6 +292,12 @@ fn natural_bomb_arrow_shop_prefix_updates_scratch_and_angers_only_local_keeper()
     for preset in PRESETS {
         for shop in [false, true] {
             let mut game = room(preset, Character::Explorer);
+            // Keep the prefix-query fixture protected during full charging:
+            // FOLLOW otherwise brings the owner into lethal shotgun range.
+            // This initial source-solid wall blocks both following and shots.
+            for y in 6..=7 {
+                game.world.set_tile(7, y, "oHardBlock");
+            }
             let keeper_id = if shop { Some(keeper(&mut game)) } else { None };
             let bow = game.spawn("oBow", Vec2::new(88.0, 124.0));
             game.step(&InputFrame::default());
@@ -300,6 +306,18 @@ fn natural_bomb_arrow_shop_prefix_updates_scratch_and_angers_only_local_keeper()
             game.step(&release());
             game.step(&attack());
             assert_eq!(game.player.data["bow_armed"], 1.0);
+            // Source's late charge gate replaces Bomb with Normal below 12.
+            // Reach full charge through ordinary frames before arming Bomb.
+            for _ in 0..64 {
+                if game.player.data["bow_strength"] >= 12.0 {
+                    break;
+                }
+                game.step(&InputFrame {
+                    attack: true,
+                    ..Default::default()
+                });
+            }
+            assert!(game.player.data["bow_strength"] >= 12.0);
             let resources = (game.player.bombs, game.player.ropes);
             game.step(&InputFrame {
                 attack: true,

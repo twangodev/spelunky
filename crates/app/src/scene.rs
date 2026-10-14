@@ -4943,6 +4943,10 @@ mod tests {
         let atlas = Atlas::load().unwrap();
         for right in [false, true] {
             let mut game = Game::shell(1, RulesPreset::Classic);
+            // Keep the configured render scene supported during full charging.
+            for x in 0..game.world.width {
+                game.world.set_tile(x, 6, "oBlock");
+            }
             game.player.pos = Vec2::new(120.0, 80.0);
             game.player.previous_pos = game.player.pos;
             game.player.facing = if right { 1 } else { -1 };
@@ -4958,6 +4962,18 @@ mod tests {
             assert_eq!(game.player.data.get("bow_armed"), Some(&1.0));
             for bomb in [false, true] {
                 if bomb {
+                    // Below full charge the source's later charge gate would
+                    // replace Bomb with Normal in this same Player Step.
+                    for _ in 0..64 {
+                        if game.player.data["bow_strength"] >= 12.0 {
+                            break;
+                        }
+                        game.step(&spelunky_core::InputFrame {
+                            attack: true,
+                            ..Default::default()
+                        });
+                    }
+                    assert!(game.player.data["bow_strength"] >= 12.0);
                     game.step(&spelunky_core::InputFrame {
                         attack: true,
                         bomb_pressed: true,

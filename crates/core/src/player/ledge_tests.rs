@@ -399,7 +399,17 @@ fn natural_bow_pickup_charge_embedding_and_walk_fall_arrow_grab_has_no_snap() {
             fired.step(&charge);
             held.step(&charge);
         }
-        assert_eq!(fired.player.data.get("bow_strength"), Some(&12.0));
+        // Literal Player Step1505 permits the last 0.2 addition to cross 12.
+        let mut source_strength = 0.0;
+        for _ in 0..61 {
+            if source_strength < 12.0 {
+                source_strength += 0.2;
+            }
+        }
+        assert_eq!(
+            fired.player.data.get("bow_strength"),
+            Some(&source_strength)
+        );
         fired.step(&InputFrame {
             attack_released: true,
             ..Default::default()
