@@ -801,9 +801,32 @@ fn move_by(
                     w.entities[index].pos.x + f64::from(dx.signum()),
                     w.entities[index].pos.y,
                 );
-                let old = w.entities[index].sprite_bounds();
-                let rect = Rect::new(old.x + f64::from(dx.signum()), old.y, old.w, old.h);
-                if w.collides_except(rect, w.entities[index].id) {
+                // moveTo tests place_meeting in the block's own context.
+                // Translate its source mask without changing the live receiver.
+                let mut moved = w.entities[index].clone();
+                moved.pos = destination;
+                let mask = moved.collision_mask();
+                let blocked = solid_order.iter().any(|instance| match *instance {
+                    crate::dispatcher::Instance::Player => false,
+                    crate::dispatcher::Instance::Terrain(index) => {
+                        let tile = &w.tiles[index];
+                        tile.engine_active
+                            && crate::catalog::is_a(&tile.object, "oSolid")
+                            && mask.intersects_mask(&w.tile_collision_mask(
+                                (index % w.width) as i32,
+                                (index / w.width) as i32,
+                            ))
+                    }
+                    crate::dispatcher::Instance::Entity(id) => {
+                        id != moved.id
+                            && w.entity(id).is_some_and(|other| {
+                                other.engine_active
+                                    && crate::catalog::is_a(&other.object, "oSolid")
+                                    && mask.intersects_mask(&other.collision_mask())
+                            })
+                    }
+                });
+                if blocked {
                     return false;
                 }
                 w.entities[index].pos = destination;
