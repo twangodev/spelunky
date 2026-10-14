@@ -1537,7 +1537,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
                 && object_at(
                     w,
                     Vec2::new(p.pos.x, p.pos.y + 9.0),
-                    &["oLadderTop", "oVineTop"],
+                    &["oLadderTop"],
                 )))
     {
         if let Some(ladder) = ladder_place(w, p, Vec2::new(p.pos.x, p.pos.y - 8.0), &ladder_order) {
