@@ -1125,7 +1125,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let mut ax: f64 = 0.0;
     let mut ay: f64 = 0.0;
     let mut limit_x = value(p, "velocity_limit_x", 16.0);
-    let mut limit_y_acc: f64 = 6.0;
+    let mut limit_y_acc = value(p, "yAccLimit", 6.0);
 
     // Classic intentionally waits two ticks before horizontal acceleration.
     let left_steps = if input.left {
@@ -1355,6 +1355,8 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             gravity = 0.5;
         } else if has(p, &["Spring Shoes", "SpringShoes", "spring_shoes"]) {
             ay *= 1.5;
+        } else {
+            limit_y_acc = 6.0;
         }
         p.state = PlayerState::Falling;
         p.jump_time = 0;
@@ -1726,6 +1728,11 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     set(p, "jetpack_fuel", fuel);
     set(p, "jumped", f64::from(jumped));
     set(p, "velocity_limit_x", limit_x);
+    // yAccLimit is an instance field: a Jordans jump retains twelve through
+    // climbing and water escape. Keep the unchanged default implicit in saves.
+    if limit_y_acc != 6.0 || p.data.contains_key("yAccLimit") {
+        set(p, "yAccLimit", limit_y_acc);
+    }
     remember_platform_traits(p);
     animate(p, input, w);
     if let Some(name) = sound {
