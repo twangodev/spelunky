@@ -733,6 +733,11 @@ fn complete(game: &mut Game, door_id: u64) {
                 redeem_held_idol(game, id, true);
             } else if object == "oDamsel" || heavy {
                 if let Some(item) = game.world.entity_mut(id) {
+                    // Ordinary exits put a dead Damsel in THROWN before
+                    // release; its later own Step still runs that branch.
+                    if object == "oDamsel" {
+                        item.state = 2;
+                    }
                     item.held = false;
                 }
             } else if object == "oBomb" {
