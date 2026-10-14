@@ -315,18 +315,21 @@ pub(super) fn stain_spike_at(game: &mut Game, e: &Entity, origin: Vec2) {
 }
 
 fn body_projectile(game: &mut Game, e: &Entity) {
-    let area = Rect::new(e.pos.x, e.pos.y, 17.0, 17.0);
-    // Preserve this query's existing representation; target effect callbacks
-    // below follow the literal `with obj` branch after selection.
-    let Some(id) = game
-        .world
-        .entities
-        .iter()
+    // oEnemy Step selects the first active family rectangle hit, using
+    // raw inclusive corners and cached aggregate bounds (false,true).
+    crate::dispatcher::register_instances(game);
+    let Some(id) = crate::dispatcher::descendant_instances(game, "oEnemy")
+        .into_iter()
+        .filter_map(|instance| match instance {
+            Instance::Entity(id) => game.world.entity(id),
+            _ => None,
+        })
         .find(|other| {
-            other.alive
-                && other.id != e.id
-                && is_enemy(&other.object)
-                && area.intersects(other.sprite_bounds())
+            other.id != e.id
+                && other.engine_active
+                && other
+                    .collision_mask()
+                    .intersects_rectangle_bbox(e.pos, Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0))
         })
         .map(|other| other.id)
     else {
