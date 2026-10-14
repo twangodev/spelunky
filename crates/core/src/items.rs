@@ -2083,7 +2083,11 @@ mod tests {
         let head = game.world.entity(id).unwrap();
         assert!(!head.held);
         assert!(head.vel.x > 0.0 && head.vel.y < 0.0);
-        assert_eq!(head.value("armed"), 0.0, "generic throw preserves Item Create armed=false");
+        assert_eq!(
+            head.value("armed"),
+            0.0,
+            "generic throw preserves Item Create armed=false"
+        );
     }
     #[test]
     fn game_step_mitt_throw_returns_to_source_item_gravity_after_first_tick() {
