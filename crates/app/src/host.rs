@@ -206,6 +206,8 @@ struct App {
     mouse_left: bool,
     mouse_right: bool,
     control: bool,
+    #[cfg(target_arch = "wasm32")]
+    browser_shortcuts: Option<crate::browser_shortcuts::BrowserShortcutModifiers>,
     message: String,
     message_until: f64,
     message_simulated: bool,
@@ -315,6 +317,8 @@ impl App {
             mouse_left: false,
             mouse_right: false,
             control: false,
+            #[cfg(target_arch = "wasm32")]
+            browser_shortcuts: None,
             message: String::new(),
             message_until: 0.,
             message_simulated: false,
@@ -577,7 +581,7 @@ impl App {
         }
         self.open_hub(spelunky_core::hub::HubKind::Scores);
     }
-    fn key(&mut self, key: KeyCode, text_value: Option<&str>) {
+    fn key(&mut self, key: KeyCode, text_value: Option<&str>, shortcut_control: Option<bool>) {
         // Deliver earlier room producers before a new F1/selector stop.
         self.flush_source_music();
         if key == KeyCode::F4
@@ -687,7 +691,9 @@ impl App {
                 _ => {}
             },
             Screen::Editor => {
-                let command = self.editor.key(key, text_value, self.control);
+                let command =
+                    self.editor
+                        .key(key, text_value, shortcut_control.unwrap_or(self.control));
                 self.editor_command(command);
             }
             _ => self.menu_key(key),
@@ -1320,7 +1326,7 @@ impl App {
                         // must not swallow a controller navigation or confirmation.
                         self.menu_key(key);
                     } else {
-                        self.key(key, None);
+                        self.key(key, None, None);
                     }
                 }
             }
@@ -2952,6 +2958,16 @@ impl ApplicationHandler<UserEvent> for App {
                 return;
             }
         };
+        #[cfg(target_arch = "wasm32")]
+        {
+            use winit::platform::web::WindowExtWebSys;
+            if let Some(canvas) = window.canvas() {
+                match crate::browser_shortcuts::BrowserShortcutModifiers::new(canvas) {
+                    Ok(observer) => self.browser_shortcuts = Some(observer),
+                    Err(error) => self.toast(error),
+                }
+            }
+        }
         self.window = Some(window.clone());
         self.timing.reset(self.now());
         self.settings_changed();
@@ -3007,9 +3023,21 @@ impl ApplicationHandler<UserEvent> for App {
             }
         }
     }
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
         if self.exit_requested {
             self.shutdown(event_loop);
+            return;
+        }
+        if self
+            .window
+            .as_ref()
+            .is_some_and(|window| window.id() != window_id)
+        {
             return;
         }
         match event {
@@ -3083,10 +3111,17 @@ impl ApplicationHandler<UserEvent> for App {
                         self.input.key(key, pressed, event.repeat);
                     }
                     if pressed && !event.repeat {
+                        #[cfg(target_arch = "wasm32")]
+                        let shortcut_control = self
+                            .browser_shortcuts
+                            .as_ref()
+                            .and_then(|observer| observer.take(key));
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let shortcut_control = None;
                         if key == KeyCode::F2 && self.screen == Screen::Title {
                             self.screen(Screen::Editor)
                         } else {
-                            self.key(key, event.text.as_deref())
+                            self.key(key, event.text.as_deref(), shortcut_control)
                         }
                         if self.exit_requested {
                             self.shutdown(event_loop);

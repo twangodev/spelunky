@@ -3,6 +3,8 @@
 mod adaptive_gameplay_tests;
 mod atlas;
 mod audio;
+#[cfg(any(target_arch = "wasm32", test))]
+mod browser_shortcuts;
 mod controller;
 mod donation_ui;
 mod editor_io;
