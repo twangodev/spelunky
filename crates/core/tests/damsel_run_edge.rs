@@ -1,4 +1,4 @@
-//! Source-derived configured-state probe, UNRUN.
+//! Source-derived configured-state probe.
 //! RUN/facing are authored initially; no claim of natural pickup/throw coverage.
 //! All subsequent behavior uses one neutral actual Game.step.
 use spelunky_core::*;
