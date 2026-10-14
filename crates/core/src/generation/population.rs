@@ -64,10 +64,17 @@ impl WaterMasks {
         self.0.iter().any(|mask| mask.contains(point))
     }
 }
+fn campaign_shop_membership(world: &World, origin: Vec2) -> Option<bool> {
+    let path = world.source_room_path.as_ref()?;
+    let (x, y) = source_room(origin);
+    Some(matches!(path[y as usize][x as usize], 4 | 5))
+}
 fn in_shop(world: &World, x: i32, y: i32) -> bool {
+    if let Some(in_shop) = campaign_shop_membership(world, at(x, y)) {
+        return in_shop;
+    }
     let cell = room(at(x, y));
-    // Source isInShop uses the room-path shop marker. Shopkeeper instances
-    // identify those same room cells after template expansion.
+    // Historical/None contexts retain their original template-keeper adapter.
     world
         .entities
         .iter()
@@ -747,6 +754,9 @@ fn source_room(origin: Vec2) -> (i32, i32) {
 }
 
 fn temple_in_shop(world: &World, origin: Vec2) -> bool {
+    if let Some(in_shop) = campaign_shop_membership(world, origin) {
+        return in_shop;
+    }
     let room = source_room(origin);
     world.entities.iter().any(|entity| {
         entity.alive && entity.object == "oShopkeeper" && source_room(entity.pos) == room
@@ -1511,12 +1521,9 @@ fn arrows(world: &mut World, rng: &mut Rng, _supports: &[(i32, i32)]) {
             // Source :500 precedes even the outer shop condition.
             clean_arrow_receiver(world, &mut receiver);
         }
-        let in_shop = world.entities.iter().any(|entity| {
-            entity.alive
-                && entity.object == "oShopkeeper"
-                && source_room(entity.pos) == source_room(origin)
-        });
-        if in_shop {
+        // Same literal isInShop as the Temple primary pass. Preserve its
+        // None-context fallback; the campaign path is keeper-independent.
+        if temple_in_shop(world, origin) {
             continue;
         }
         // Stock generated rooms always have an Entrance. Legacy isolated
@@ -4471,3 +4478,7 @@ mod jungle_primary;
 #[cfg(test)]
 #[path = "cemetery_v2_tests.rs"]
 mod cemetery_v2_tests;
+
+#[cfg(test)]
+#[path = "population_shop_path_tests.rs"]
+mod population_shop_path_tests;
