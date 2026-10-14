@@ -6693,6 +6693,174 @@ mod tests {
             game.step(&spelunky_core::InputFrame::default());
         }
     }
+
+    #[test]
+    fn ordinary_ledge_snap_and_jump_away_keep_tick_edges_and_draw_phase_at_high_refresh() {
+        use spelunky_core::{Area, InputFrame, PlayerState, RulesPreset, Vec2, World};
+        let atlas = Atlas::load().unwrap();
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for facing in [-1, 1] {
+                for rate in [60, 120, 144, 240] {
+                    let mut game = Game::shell(1, rules);
+                    game.world = World::new(20, 20, Area::Mines, 1);
+                    for x in 0..20 {
+                        game.world.set_tile(x, 10, "oBlock");
+                    }
+                    game.world.set_tile(6, 7, "oBlock");
+                    game.world.spawn("oPushBlock", Vec2::new(96., 96.));
+                    game.player.pos = Vec2::new(if facing > 0 { 91. } else { 117. }, 101.);
+                    game.player.previous_pos = game.player.pos;
+                    game.player.state = PlayerState::Falling;
+                    game.player.vel.y = 1.;
+                    game.player.facing = facing;
+                    game.player.grounded = true;
+                    // Canonical controlled fixture: no adaptive viewport or historical generation.
+                    assert_eq!(
+                        game.generation_revision,
+                        spelunky_core::GenerationRevision::SourceClassicV2
+                    );
+                    assert_eq!(
+                        game.rng.algorithm(),
+                        spelunky_core::RngAlgorithm::Gm8Lcg32V1
+                    );
+                    assert_eq!(
+                        game.simulation_view,
+                        spelunky_core::SimulationView::Original
+                    );
+                    assert_eq!(
+                        (game.world.width, game.world.height, game.world.level),
+                        (20, 20, 1)
+                    );
+                    let mut reference = game.clone();
+                    let mut timing = HostTiming::default();
+                    timing.reset(0.);
+                    let mut input = InputState::default();
+                    let toward = if facing > 0 {
+                        KeyCode::ArrowRight
+                    } else {
+                        KeyCode::ArrowLeft
+                    };
+                    let away = if facing > 0 {
+                        KeyCode::ArrowLeft
+                    } else {
+                        KeyCode::ArrowRight
+                    };
+                    input.key(toward, true, false);
+                    let mut ticks = 0;
+                    let mut jump_presses = 0;
+                    let mut jump_releases = 0;
+                    for callback in 0..rate {
+                        let now = f64::from(u32::try_from(callback).expect("callback below 240"))
+                            / f64::from(u32::try_from(rate).expect("rate at most 240"));
+                        let frame = timing.begin_frame(now);
+                        for _ in 0..timing.advance(frame).ticks {
+                            let actual = input.take_tick();
+                            let expected = match ticks {
+                                0 => InputFrame {
+                                    right: facing > 0,
+                                    left: facing < 0,
+                                    ..Default::default()
+                                },
+                                1 => InputFrame {
+                                    left: facing > 0,
+                                    right: facing < 0,
+                                    left_released: facing < 0,
+                                    right_released: facing > 0,
+                                    jump: true,
+                                    jump_pressed: true,
+                                    ..Default::default()
+                                },
+                                2 => InputFrame {
+                                    left: facing > 0,
+                                    right: facing < 0,
+                                    jump_released: true,
+                                    ..Default::default()
+                                },
+                                _ => InputFrame {
+                                    left: facing > 0,
+                                    right: facing < 0,
+                                    ..Default::default()
+                                },
+                            };
+                            assert_eq!(actual, expected, "{rate}Hz tick{ticks}");
+                            jump_presses += usize::from(actual.jump_pressed);
+                            jump_releases += usize::from(actual.jump_released);
+                            game.step(&actual);
+                            reference.step(&expected);
+                            assert_eq!(
+                                serde_json::to_vec(&game).unwrap(),
+                                serde_json::to_vec(&reference).unwrap()
+                            );
+                            assert_eq!(
+                                serde_json::to_vec(game.presentation()).unwrap(),
+                                serde_json::to_vec(reference.presentation()).unwrap()
+                            );
+                            ticks += 1;
+                            timing.history_ready = true;
+                            if ticks == 1 {
+                                assert_eq!(game.player.state, PlayerState::Hanging);
+                                // Source move_snap(1,8), before ordinary owner motion resumes.
+                                assert_eq!(
+                                    game.player.pos,
+                                    Vec2::new(if facing > 0 { 91. } else { 117. }, 104.)
+                                );
+                                assert_eq!(game.player.vel.y, 0.);
+                                assert_eq!(game.presentation().player.sprite, "sHangLeft");
+                                assert_eq!(game.presentation().player.animation, 0.);
+                                let drawn = game.presentation();
+                                assert_eq!(
+                                    drawn.player.previous_pos, drawn.player.pos,
+                                    "snap cannot sweep the actor"
+                                );
+                                input.key(toward, false, false);
+                                input.key(away, true, false);
+                                input.key(KeyCode::KeyZ, true, false);
+                            } else if ticks == 2 {
+                                // Source away+jump branch: FALLING, minus normal gravity, hangCountMax3.
+                                assert_eq!(game.player.state, PlayerState::Falling);
+                                assert_eq!(game.player.vel.y, -1.);
+                                assert_eq!(game.player.data.get("hang_count"), Some(&3.));
+                                input.key(KeyCode::KeyZ, false, false);
+                            }
+                        }
+                        // Original rLevel speed30; rational expected ticks, independent of FixedClock.
+                        assert_eq!(ticks, (callback * 30 / rate) as usize);
+                        if ticks > 0 {
+                            let before = serde_json::to_vec(&game).unwrap();
+                            let before_draw = serde_json::to_vec(game.presentation()).unwrap();
+                            let alpha = timing.render_alpha(now, true);
+                            let draw = game.presentation();
+                            let p = draw.player.previous_pos.lerp(draw.player.pos, alpha);
+                            let camera = draw.previous_camera.lerp(draw.camera, alpha);
+                            let anchor = drawn_player_anchor(&game, alpha, &atlas);
+                            assert!((anchor[0] - (p.x - camera.x)).abs() < 1e-4);
+                            assert!((anchor[1] - (p.y - camera.y)).abs() < 1e-4);
+                            let frozen_pose = (draw.player.sprite.clone(), draw.player.animation);
+                            for fraction in [0., 0.125, 0.25, 0.5, 0.875, 1.] {
+                                let _ = scene::game_scene(&game, fraction, false, &atlas);
+                                assert_eq!(
+                                    (
+                                        game.presentation().player.sprite.clone(),
+                                        game.presentation().player.animation
+                                    ),
+                                    frozen_pose
+                                );
+                                assert_eq!(serde_json::to_vec(&game).unwrap(), before);
+                                assert_eq!(
+                                    serde_json::to_vec(game.presentation()).unwrap(),
+                                    before_draw
+                                );
+                            }
+                        }
+                        if ticks == 4 {
+                            break;
+                        }
+                    }
+                    assert_eq!((ticks, jump_presses, jump_releases), (4, 1, 1));
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
