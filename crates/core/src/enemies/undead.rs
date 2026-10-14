@@ -164,13 +164,13 @@ fn source_move(world: &World, e: &mut Entity, gravity: f64) {
     e.vel.y = (y_velocity + gravity).min(10.0);
 }
 fn water(world: &World, p: Vec2) -> bool {
-    world
-        .tile((p.x / 16.0).floor() as i32, (p.y / 16.0).floor() as i32)
-        .is_some_and(|t| matches!(t.object.as_str(), "oWater" | "oWaterSwim" | "oWaterTop"))
+    // Vampire's six own Step probes select the oWater family, including Lava.
+    world.tiles_point_active(p, "oWater")
         || world.entities.iter().any(|e| {
             e.alive
-                && matches!(e.object.as_str(), "oWater" | "oWaterSwim" | "oWaterTop")
-                && e.bounds().contains(p)
+                && e.engine_active
+                && crate::catalog::is_a(&e.object, "oWater")
+                && e.mask_contains(p, CollisionPrecision::BoundingBox)
         })
 }
 fn distance_to_player(game: &Game, e: &Entity) -> f64 {
