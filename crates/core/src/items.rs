@@ -439,7 +439,7 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         // Lava's explicit instance_destroy precedes the remaining own Step;
         // wall/ceiling/floor damage only sets the final destruction latch.
         let lava_destroy = game.world.entity(id).is_some_and(|e| {
-            !e.held && lava_at(game, Rect::new(e.pos.x, e.pos.y - 5.0, 0.001, 0.001))
+            !e.held && utility::source_point_bbox(game, Vec2::new(e.pos.x, e.pos.y - 5.0), "oLava")
         });
         if lava_destroy {
             destroy_fragile_item(game, id);
@@ -1684,10 +1684,8 @@ fn advance_item_body(game: &mut Game, entity: &mut Entity) -> bool {
         // mitt changes this tick's acceleration; it is not permanent.
         entity.data.insert("gravity".into(), 0.6);
     }
-    if lava_at(
-        game,
-        Rect::new(entity.pos.x, entity.pos.y - 5.0, 0.001, 0.001),
-    ) && entity.object != "oSceptre"
+    if utility::source_point_bbox(game, Vec2::new(entity.pos.x, entity.pos.y - 5.0), "oLava")
+        && entity.object != "oSceptre"
         && !fragile
     {
         destroy = true;
@@ -1794,10 +1792,7 @@ fn advance_treasure_body(game: &mut Game, entity: &mut Entity) {
         entity.vel = Vec2::default();
         entity.pos.y += 0.05;
     }
-    if lava_at(
-        game,
-        Rect::new(entity.pos.x, entity.pos.y - 5.0, 0.001, 0.001),
-    ) {
+    if utility::source_point_bbox(game, Vec2::new(entity.pos.x, entity.pos.y - 5.0), "oLava") {
         entity.alive = false;
     }
 }
