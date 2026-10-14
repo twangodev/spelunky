@@ -948,6 +948,19 @@ fn temple_population(
     made_gold
 }
 
+fn mines_floor_clear(world: &World, source_classic: bool, floor: bool, x: i32, y: i32) -> bool {
+    if source_classic {
+        // scrEntityGen:69 tests only the literal receiver-origin Solid point.
+        !source_point_family(
+            world,
+            Vec2::new(f64::from(x) * 16.0, f64::from(y - 1) * 16.0),
+            "oSolid",
+        )
+    } else {
+        floor && !occupied(world, x, y - 1)
+    }
+}
+
 fn mines_ceiling(world: &mut World, rng: &mut Rng, giant_spider: bool, x: i32, y: i32) {
     // scrEntityGen:53-65: GM8 evaluates every Boolean operand, including
     // the roll when a flag or clearance check is false. Else-if statements
@@ -1104,6 +1117,8 @@ fn populate_internal(
             && !water.wet(x, y + 1)
             && !water.wet(x, y + 2);
         let far = at(x, y).distance(world.entrance) > 64.0;
+        #[cfg(test)]
+        let treasure_first_id = world.next_id;
         // Mines/Jungle call scrTreasureGen before their enemy statements;
         // Ice/Temple call it after them (scrEntityGen.gml:376,478).
         if matches!(world.area, Area::Mines | Area::Jungle) && !altar && !tree {
@@ -1121,13 +1136,25 @@ fn populate_internal(
                 if ceiling && !occupied(world, x, y + 1) {
                     mines_ceiling(world, rng, giant_spider, x, y);
                 }
-                if floor && !occupied(world, x, y - 1) {
+                #[cfg(test)]
+                let floor_trace = mines_floor_source_inputs_tests::before(
+                    world,
+                    rng,
+                    source_classic,
+                    floor,
+                    x,
+                    y,
+                    treasure_first_id,
+                );
+                if mines_floor_clear(world, source_classic, floor, x, y) {
                     if rng.chance(1, 60) {
                         spawn(world, rng, "oSnake", x, y - 1);
                     } else if rng.chance(1, 800) {
                         spawn(world, rng, "oCaveman", x, y - 1);
                     }
                 }
+                #[cfg(test)]
+                mines_floor_source_inputs_tests::after(world, rng, floor_trace);
             }
             Area::Jungle => {
                 if need_market
@@ -4519,3 +4546,7 @@ mod population_shop_path_tests;
 #[cfg(test)]
 #[path = "ice_ceiling_eager_rng_tests.rs"]
 mod ice_ceiling_eager_rng_tests;
+
+#[cfg(test)]
+#[path = "mines_floor_source_inputs_tests.rs"]
+mod mines_floor_source_inputs_tests;
