@@ -711,6 +711,199 @@ pub(super) fn setup_generated(world: &mut World, rng: &mut Rng, graphics_high: b
     );
 }
 
+#[derive(Clone, Copy)]
+enum SetupParent {
+    Tile(usize),
+    Entity(u64),
+}
+
+fn setup_source_point(world: &World, point: Vec2, family: &str) -> bool {
+    world.tiles_point_active(point, family)
+        || world.entities.iter().any(|entity| {
+            entity.alive
+                && entity.engine_active
+                && crate::catalog::is_a(&entity.object, family)
+                && entity.mask_contains(point, crate::CollisionPrecision::BoundingBox)
+        })
+}
+
+fn setup_source_sides(world: &World, origin: Vec2, family: &str) -> (bool, bool, bool, bool) {
+    let point = |dx: f64, dy: f64, group: &str| {
+        setup_source_point(world, Vec2::new(origin.x + dx, origin.y + dy), group)
+    };
+    let bottom = if world.area == crate::model::Area::Boss {
+        864.
+    } else if world.name == "Lake" {
+        656.
+    } else {
+        528.
+    };
+    match family {
+        "oBrick" => (
+            origin.y == 0. || point(0., -16., family) || point(0., -16., "oHardBlock"),
+            origin.y >= bottom || point(0., 16., family) || point(0., 16., "oHardBlock"),
+            point(-16., 0., family) || point(-16., 0., "oHardBlock"),
+            point(16., 0., family) || point(16., 0., "oHardBlock"),
+        ),
+        "oTemple" => (
+            // Literal source asymmetry: Temple probes Fake BELOW for up.
+            origin.y == 0. || point(0., -16., family) || point(0., 16., "oTempleFake"),
+            origin.y >= bottom || point(0., 16., family) || point(0., 16., "oTempleFake"),
+            point(-16., 0., family) || point(-16., 0., "oTempleFake"),
+            point(16., 0., family) || point(16., 0., "oTempleFake"),
+        ),
+        "oIce" => (
+            // Ice has neither y==0 nor argument0 hard-boundary override.
+            point(0., -16., family),
+            point(0., 16., family),
+            point(-16., 0., family),
+            point(16., 0., family),
+        ),
+        _ => (
+            origin.y == 0. || point(0., -16., family),
+            origin.y >= bottom || point(0., 16., family),
+            point(-16., 0., family),
+            point(16., 0., family),
+        ),
+    }
+}
+
+fn setup_source_fringe(
+    world: &mut World,
+    rng: &mut Rng,
+    family: &str,
+    origin: Vec2,
+    sides: (bool, bool, bool, bool),
+) {
+    // Keep the original upper-fringe selector and its conditional second
+    // draw, but use the active source Solid query for Lush's lower fringe.
+    let upper_only = if family == "oLush" {
+        (sides.0, true, sides.2, sides.3)
+    } else {
+        sides
+    };
+    setup_fringe(world, rng, family, origin, upper_only);
+    if family == "oLush"
+        && !sides.1
+        && !setup_source_point(world, Vec2::new(origin.x, origin.y + 16.), "oSolid")
+    {
+        let offset = if rng.chance(1, 12) {
+            Some(48.)
+        } else if rng.chance(1, 12) {
+            Some(64.)
+        } else {
+            None
+        };
+        if let Some(offset) = offset {
+            decoration(
+                world,
+                "bgCaveTop2",
+                Vec2::new(origin.x, origin.y + 16.),
+                offset,
+                16.,
+                3.,
+            );
+        }
+    }
+}
+
+fn setup_source_parents(world: &mut World, rng: &mut Rng, city: bool, graphics_high: bool) {
+    // The five canonical families have no descendants. No body creates a
+    // new parent in its own family, changes activation, or deletes another
+    // parent: each captured identity list is valid for this generation pass.
+    // Tile storage cannot recover parents already discarded by a producer.
+    for family in ["oBrick", "oLush", "oDark", "oIce", "oTemple"] {
+        let mut receivers: Vec<_> = world
+            .tiles
+            .iter()
+            .enumerate()
+            .filter(|(_, tile)| tile.engine_active && tile.object == family)
+            .map(|(index, tile)| (tile.creation_serial, SetupParent::Tile(index)))
+            .chain(
+                world
+                    .entities
+                    .iter()
+                    .filter(|entity| {
+                        entity.alive && entity.engine_active && entity.object == family
+                    })
+                    .map(|entity| (entity.creation_serial, SetupParent::Entity(entity.id))),
+            )
+            .collect();
+        receivers.sort_by_key(|(serial, _)| *serial);
+        for (serial, receiver) in receivers {
+            let (origin, id) = match receiver {
+                SetupParent::Tile(index) => {
+                    let tile = &world.tiles[index];
+                    if !tile.engine_active
+                        || tile.creation_serial != serial
+                        || tile.object != family
+                    {
+                        continue;
+                    }
+                    let (x, y) = (index % world.width, index / world.width);
+                    let origin = Vec2::new(x as f64 * 16., y as f64 * 16.);
+                    (origin, metadata(world, x, y))
+                }
+                SetupParent::Entity(id) => {
+                    let Some(entity) = world.entity(id) else {
+                        continue;
+                    };
+                    if !entity.engine_active
+                        || entity.creation_serial != serial
+                        || entity.object != family
+                    {
+                        continue;
+                    }
+                    (entity.pos, id)
+                }
+            };
+            if world.entity(id).unwrap().value("terrain_setup_initialized") != 0. {
+                continue;
+            }
+            let sides = setup_source_sides(world, origin, family);
+            let edge = edge_sprite(family, city, sides);
+            let entity = world.entity_mut(id).unwrap();
+            for (name, value) in ["up", "down", "left", "right"]
+                .into_iter()
+                .zip([sides.0, sides.1, sides.2, sides.3])
+            {
+                entity.data.insert(name.into(), f64::from(value));
+            }
+            if let Some(edge) = edge {
+                match receiver {
+                    SetupParent::Tile(_) => {
+                        entity.text.insert("terrain_sprite".into(), edge);
+                    }
+                    // Updating the real sprite also updates the live bbox;
+                    // no proxy metadata or replacement parent is created.
+                    SetupParent::Entity(_) => {
+                        entity.sprite = edge;
+                    }
+                }
+                if !(family == "oTemple" && city) {
+                    entity.data.remove("gold_chunks");
+                    entity.data.remove("gold_nuggets");
+                }
+            }
+            entity.data.insert("terrain_setup_initialized".into(), 1.);
+            if graphics_high {
+                setup_source_fringe(world, rng, family, origin, sides);
+            }
+            if family == "oIce" && !sides.1 && rng.chance(1, 20) {
+                let below = Vec2::new(origin.x, origin.y + 16.);
+                if !setup_source_point(world, below, "oSolid") {
+                    let child = world.spawn("oIceBottom", below);
+                    world
+                        .entity_mut(child)
+                        .unwrap()
+                        .data
+                        .insert("drip_alarm".into(), f64::from(20 + rng.range(381)));
+                }
+            }
+        }
+    }
+}
+
 pub(super) fn setup_generated_with_revision(
     world: &mut World,
     rng: &mut Rng,
@@ -719,50 +912,54 @@ pub(super) fn setup_generated_with_revision(
     cemetery: bool,
 ) {
     let city = world.name == "City of Gold";
-    for y in 0..world.height {
-        for x in 0..world.width {
-            let object = world.tiles[y * world.width + x].object.clone();
-            if !matches!(
-                object.as_str(),
-                "oBrick" | "oLush" | "oDark" | "oTemple" | "oIce"
-            ) {
-                continue;
-            }
-            let id = metadata(world, x, y);
-            if world.entity(id).unwrap().value("terrain_setup_initialized") != 0.0 {
-                continue;
-            }
-            let sides = neighbors(world, x, y, &object);
-            let edge = edge_sprite(&object, city, sides);
-            let entity = world.entity_mut(id).unwrap();
-            if let Some(edge) = edge {
-                entity.text.insert("terrain_sprite".into(), edge);
-                // Gold is determined by the current sprite at destruction.
-                // SetupWalls replaces Create's gold sprite on exposed edges.
-                if !(object == "oTemple" && city) {
-                    entity.data.remove("gold_chunks");
-                    entity.data.remove("gold_nuggets");
+    if revision == crate::GenerationRevision::SourceClassicV2 {
+        setup_source_parents(world, rng, city, graphics_high);
+    } else {
+        for y in 0..world.height {
+            for x in 0..world.width {
+                let object = world.tiles[y * world.width + x].object.clone();
+                if !matches!(
+                    object.as_str(),
+                    "oBrick" | "oLush" | "oDark" | "oTemple" | "oIce"
+                ) {
+                    continue;
                 }
-            }
-            entity.data.insert("terrain_setup_initialized".into(), 1.0);
-            if graphics_high {
-                setup_fringe(
-                    world,
-                    rng,
-                    &object,
-                    Vec2::new(x as f64 * 16.0, y as f64 * 16.0),
-                    sides,
-                );
-            }
-            if object == "oIce" && !sides.1 && rng.chance(1, 20) {
-                let below = Vec2::new(x as f64 * 16.0, (y + 1) as f64 * 16.0);
-                if !world.solid_point_except(below, 0) {
-                    let id = world.spawn("oIceBottom", below);
-                    world
-                        .entity_mut(id)
-                        .unwrap()
-                        .data
-                        .insert("drip_alarm".into(), f64::from(20 + rng.range(381)));
+                let id = metadata(world, x, y);
+                if world.entity(id).unwrap().value("terrain_setup_initialized") != 0.0 {
+                    continue;
+                }
+                let sides = neighbors(world, x, y, &object);
+                let edge = edge_sprite(&object, city, sides);
+                let entity = world.entity_mut(id).unwrap();
+                if let Some(edge) = edge {
+                    entity.text.insert("terrain_sprite".into(), edge);
+                    // Gold is determined by the current sprite at destruction.
+                    // SetupWalls replaces Create's gold sprite on exposed edges.
+                    if !(object == "oTemple" && city) {
+                        entity.data.remove("gold_chunks");
+                        entity.data.remove("gold_nuggets");
+                    }
+                }
+                entity.data.insert("terrain_setup_initialized".into(), 1.0);
+                if graphics_high {
+                    setup_fringe(
+                        world,
+                        rng,
+                        &object,
+                        Vec2::new(x as f64 * 16.0, y as f64 * 16.0),
+                        sides,
+                    );
+                }
+                if object == "oIce" && !sides.1 && rng.chance(1, 20) {
+                    let below = Vec2::new(x as f64 * 16.0, (y + 1) as f64 * 16.0);
+                    if !world.solid_point_except(below, 0) {
+                        let id = world.spawn("oIceBottom", below);
+                        world
+                            .entity_mut(id)
+                            .unwrap()
+                            .data
+                            .insert("drip_alarm".into(), f64::from(20 + rng.range(381)));
+                    }
                 }
             }
         }
@@ -1066,6 +1263,10 @@ fn create_lava(entity: &mut Entity, rng: &mut Rng) {
         entity.animation = 0.0;
     }
 }
+
+#[cfg(test)]
+#[path = "terrain_setup_order_tests.rs"]
+mod setup_order_tests;
 
 #[cfg(test)]
 mod tests {
