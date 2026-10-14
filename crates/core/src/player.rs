@@ -1105,11 +1105,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let col_moveable_left = precise_line(w, edge_rect(p, Side::Left, 1.0, false), "oMoveableSolid");
     let col_moveable_right =
         precise_line(w, edge_rect(p, Side::Right, 1.0, false), "oMoveableSolid");
-    let in_water = water(w, p.pos);
     let in_web = ledge_point(w, p.pos, "oWeb");
     let water_jump = precise_line(w, edge_rect(p, Side::Top, 1.0, false), "oWater");
     let col_ice_bot = ledge_point(w, Vec2::new(p.pos.x, p.pos.y + 8.0), "oIce");
-    let water_surface = in_water && !water(w, Vec2::new(p.pos.x, p.pos.y - 9.0));
     let mut fall = value(p, "fall_timer", 0.0);
     let mut gravity = value(p, "gravity", 1.0);
     let mut intensity = value(p, "gravity_intensity", 1.0);
@@ -1124,9 +1122,6 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let mut limit_x = value(p, "velocity_limit_x", 16.0);
     let mut limit_y_acc: f64 = 6.0;
 
-    if !in_water && !in_web {
-        set(p, "swimming", 0.0);
-    }
     set(p, "in_web", f64::from(in_web));
 
     // Classic intentionally waits two ticks before horizontal acceleration.
@@ -1582,19 +1577,23 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
                 p.set_image_speed(0.8);
             }
         }
-        if in_web {
+        // characterStepEvent735–770 queries AFTER ladder snapping/attachment.
+        // CLIMBING retains swimming; only the dry non-climbing branch clears it.
+        if ledge_point(w, p.pos, "oWeb") {
             xf = 0.2;
             yf = 0.2;
             fall = 0.0;
-        } else if in_water {
+        } else if water(w, p.pos) {
             cape = false;
             yf = if p.state == PlayerState::Falling && p.vel.y > 0.0 {
                 0.5
-            } else if water_surface {
+            } else if !water(w, Vec2::new(p.pos.x, p.pos.y - 9.0)) {
                 1.0
             } else {
                 0.9
             };
+        } else {
+            set(p, "swimming", 0.0);
         }
     }
     if col_ice_bot
