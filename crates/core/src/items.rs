@@ -201,7 +201,7 @@ pub(crate) fn handles(object: &str) -> bool {
         || explosives::handles(object)
         || utility::handles(object)
         || collectibles::handles(object)
-        || matches!(object, "oWhip" | "oWhipPre" | "oTarget")
+        || matches!(object, "oWhip" | "oWhipPre" | "oTarget" | "oBatTarget")
 }
 
 /// Context-dependent but RNG-free Create fields for the selected terrain
@@ -215,6 +215,14 @@ pub(crate) fn initialize_source_jungle_child(entity: &mut Entity, has_spectacles
 }
 
 pub(crate) fn create_instance(game: &mut Game, id: u64) {
+    if game
+        .world
+        .entity(id)
+        .is_some_and(|e| e.object == "oBatTarget")
+    {
+        crate::hub::create_bat_target(game, id);
+        return;
+    }
     if game.world.entity(id).is_some_and(|e| e.object == "oTarget") {
         crate::hub::create_target(game, id);
         return;
@@ -283,6 +291,14 @@ pub(crate) fn outside_room(game: &mut Game, id: u64) {
 }
 
 pub(crate) fn step_instance(game: &mut Game, id: u64) {
+    if game
+        .world
+        .entity(id)
+        .is_some_and(|e| e.object == "oBatTarget")
+    {
+        crate::hub::bat_target_step(game, id);
+        return;
+    }
     if game.world.entity(id).is_some_and(|e| e.object == "oTarget") {
         crate::hub::target_step(game, id);
         return;
@@ -450,6 +466,14 @@ pub(crate) fn builtin_motion(game: &mut Game, id: u64) {
 }
 
 pub(crate) fn collision(game: &mut Game, id: u64, other: crate::dispatcher::Instance) {
+    if game
+        .world
+        .entity(id)
+        .is_some_and(|e| e.object == "oBatTarget")
+    {
+        crate::hub::bat_target_collision(game, id, other);
+        return;
+    }
     if game.world.entity(id).is_some_and(|e| e.object == "oTarget") {
         crate::hub::target_collision(game, id, other);
         return;

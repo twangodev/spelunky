@@ -635,6 +635,9 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
             game.data.insert("arrows".into(), 100.0);
             game.data.insert("hub_alarm11".into(), -1.0);
             game.data.insert("hub_alarm10".into(), -1.0);
+            game.data.insert("hub_alarm1".into(), 30.0);
+            game.data.insert("hub_alarm2".into(), -1.0);
+            game.data.insert("hub_alarm3".into(), -1.0);
         }
     }
     // Selecting a source title spawn bypasses the purely cinematic first entrance.
@@ -695,7 +698,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         60..=69 => 2.0,
         _ => 3.0,
     };
-    game.data.insert("hub_draw_status".into(), draw);
+    if kind != HubKind::Moon || !game.dispatcher.running {
+        game.data.insert("hub_draw_status".into(), draw);
+    }
     match kind {
         HubKind::Sun => sun(game),
         HubKind::Moon => moon(game),
@@ -1034,6 +1039,9 @@ pub(crate) fn challenge_alarm(game: &mut Game, index: u8) {
     }
     let key = match index {
         0 => "hub_alarm0",
+        1 if resource == 715 => "hub_alarm1",
+        2 if resource == 715 => "hub_alarm2",
+        3 if resource == 715 => "hub_alarm3",
         10 if resource == 715 => "hub_alarm10",
         11 => "hub_alarm11",
         _ => return,
@@ -1052,6 +1060,20 @@ pub(crate) fn challenge_alarm(game: &mut Game, index: u8) {
         match index {
             0 if value(game, "timer") == 60.0 => {
                 game.data.insert("hub_alarm11".into(), 1.0);
+            }
+            1 => {
+                game.data.insert("hub_draw_status".into(), 1.0);
+                game.data.insert("hub_alarm2".into(), 30.0);
+            }
+            2 => {
+                game.data.insert("hub_draw_status".into(), 2.0);
+                game.data.insert("hub_alarm3".into(), 10.0);
+            }
+            3 => {
+                game.data.insert("hub_draw_status".into(), 3.0);
+                for (x, y) in [(160.0, -16.0), (208.0, -64.0), (256.0, -128.0)] {
+                    spawn_target(game, x, y);
+                }
             }
             10 if value(game, "timer") < 0.0 => {
                 game.game_over.draw_status = game.game_over.draw_status.max(3);
@@ -1181,26 +1203,146 @@ fn stars_alarm0(game: &mut Game) {
     );
 }
 fn spawn_target(game: &mut Game, x: f64, y: f64) {
-    let difficulty = if x == 208.0 {
+    game.spawn("oBatTarget", Vec2::new(x, y));
+}
+
+/// Root object: this Create has no Item/Enemy inheritance and no RNG draws.
+pub(crate) fn create_bat_target(game: &mut Game, id: u64) {
+    let ufo = value(game, "timer") <= 20.0;
+    let Some(e) = game.world.entity_mut(id) else {
+        return;
+    };
+    if e.value("bat_target_create_initialized") != 0.0 {
+        return;
+    }
+    let difficulty = if e.pos.x == 208.0 {
         2.0
-    } else if x == 256.0 {
+    } else if e.pos.x == 256.0 {
         4.0
     } else {
         1.0
     };
-    let ufo = value(game, "timer") <= 20.0;
-    let id = game.spawn("oBatTarget", Vec2::new(x, y));
-    let e = game.world.entity_mut(id).unwrap();
-    e.data.insert(
-        "difficulty".into(),
-        difficulty + if ufo { 2.0 } else { 0.0 },
-    );
-    e.data.insert("bloodless".into(), 0.0);
-    e.data.insert("xMid".into(), x);
-    e.data.insert("xDiff".into(), 0.0);
-    e.data.insert("dir".into(), 1.0);
+    for (name, field) in [
+        // Explicit builtin default bypasses Scene's directional-name fallback;
+        // this parentless object's source Create never flips the sprite.
+        ("image_xscale", 1.0),
+        ("bat_target_create_initialized", 1.0),
+        ("bloodless", 0.0),
+        ("UP", 0.0),
+        ("DOWN", 1.0),
+        ("dir", 1.0),
+        ("difficulty", difficulty + if ufo { 2.0 } else { 0.0 }),
+        ("xMid", e.pos.x),
+        ("xDiff", 0.0),
+    ] {
+        e.data.insert(name.into(), field);
+    }
     if ufo {
         e.set_sprite("sUFO");
+    }
+}
+
+pub(crate) fn bat_target_step(game: &mut Game, id: u64) {
+    let timer = value(game, "timer");
+    let Some(e) = game.world.entity_mut(id) else {
+        return;
+    };
+    if e.value("dir") == e.value("UP") {
+        e.pos.y -= e.value("difficulty");
+        if e.pos.y <= 64.0 {
+            e.data.insert("dir".into(), e.value("DOWN"));
+        }
+    } else if e.value("dir") == e.value("DOWN") {
+        e.pos.y += e.value("difficulty");
+        if e.pos.y >= 160.0 {
+            e.data.insert("dir".into(), e.value("UP"));
+        }
+    }
+    if timer <= 20.0 && e.pos.y > 64.0 {
+        e.pos.x = e.value("xMid") - (e.value("xDiff").sin() * 32.0).abs();
+        e.data.insert("xDiff".into(), e.value("xDiff") + 0.01);
+    }
+}
+
+/// Source Collision supplies current precise mask overlap and active membership.
+pub(crate) fn bat_target_collision(game: &mut Game, id: u64, other: crate::dispatcher::Instance) {
+    let Some(target) = game.world.entity(id).cloned() else {
+        return;
+    };
+    match other {
+        crate::dispatcher::Instance::Entity(arrow)
+            if crate::catalog::is_a(other.object(game), "oArrow") =>
+        {
+            game.sound("sndHit", target.pos);
+            game.sound("sndCoin", target.pos);
+            *game.data.entry("baskets".into()).or_default() += target.value("difficulty");
+            // Inherited Item Destroy uses held alone; pickupItemType survives.
+            if game.world.entity(arrow).is_some_and(|e| e.held) {
+                game.player.held = None;
+            }
+            if let Some(e) = game.world.entity_mut(arrow) {
+                e.alive = false;
+            }
+            spawn_target(game, target.value("xMid"), -64.0);
+            if target.sprite == "sUFO" {
+                game.spawn("oUFOCrash", target.pos);
+            } else {
+                crate::enemies::create_blood(
+                    game,
+                    &target,
+                    Vec2::new(target.pos.x + 8.0, target.pos.y + 8.0),
+                    3,
+                );
+            }
+            game.world.entity_mut(id).unwrap().alive = false;
+        }
+        // oPlayer1 is the source corpus's sole oCharacter descendant.
+        crate::dispatcher::Instance::Player => {
+            if (game.player.pos.x - (target.pos.x + 8.0)).abs() > 12.0 {
+                return;
+            }
+            let stomp = !crate::items::player_dead(game)
+                && matches!(
+                    game.player.state,
+                    PlayerState::Jumping | PlayerState::Falling
+                )
+                && game.player.pos.y < target.pos.y + 8.0
+                && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0;
+            if stomp {
+                game.player.vel.y = -6.0 - 0.2 * game.player.vel.y;
+                game.sound("sndHit", target.pos);
+                game.sound("sndCoin", target.pos);
+                *game.data.entry("baskets".into()).or_default() += target.value("difficulty");
+                spawn_target(game, target.pos.x, -64.0);
+                crate::enemies::create_blood(
+                    game,
+                    &target,
+                    Vec2::new(target.pos.x + 8.0, target.pos.y + 8.0),
+                    3,
+                );
+                game.world.entity_mut(id).unwrap().alive = false;
+            } else if game.player.invincible == 0 {
+                game.player.data.insert("blink".into(), 30.0);
+                game.player.invincible = 30;
+                game.player.vel.x = if game.player.pos.x < target.pos.x {
+                    -6.0
+                } else {
+                    6.0
+                };
+                if game.player.health > 0 {
+                    game.player.health -= 1;
+                    game.events.push(GameEvent::Damage { amount: 1 });
+                }
+                crate::enemies::create_blood(
+                    game,
+                    &target,
+                    Vec2::new(target.pos.x + 4.0, target.pos.y + 4.0),
+                    1,
+                );
+                game.sound("sndHurt", game.player.pos);
+            }
+        }
+        _ => {}
     }
 }
 // Literal oMoonRoom Alarm 11: record/reveal, targets in creation order,
@@ -1219,7 +1361,7 @@ fn moon_alarm11(game: &mut Game) {
         .world
         .entities
         .iter()
-        .filter(|e| e.alive && e.object == "oBatTarget")
+        .filter(|e| e.alive && e.engine_active && e.object == "oBatTarget")
         .map(|e| (e.creation_serial, e.id, e.pos))
         .collect();
     targets.sort_by_key(|(serial, _, _)| *serial);
@@ -1246,7 +1388,7 @@ fn moon_alarm11(game: &mut Game) {
 }
 
 fn moon(game: &mut Game) {
-    if game.level_tick == 70 {
+    if !game.dispatcher.running && game.level_tick == 70 {
         for (x, y) in [(160.0, -16.0), (208.0, -64.0), (256.0, -128.0)] {
             spawn_target(game, x, y);
         }
@@ -1261,6 +1403,11 @@ fn moon(game: &mut Game) {
         game.data.insert("timer".into(), -1.0);
         game.data.insert("hub_alarm10".into(), 30.0);
         game.data.insert("moon_death_recorded".into(), 1.0);
+    }
+    // Live BatTarget Steps/Collisions are source-dispatched; preserve the
+    // direct nonrunning adapter below for historical subsystem fixtures only.
+    if game.dispatcher.running {
+        return;
     }
     // Score/reveal bookkeeping does not disable the targets' independent
     // Step and collision callbacks. Timeout Alarm 11 destroys them explicitly.
