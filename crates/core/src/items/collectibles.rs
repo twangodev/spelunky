@@ -454,6 +454,17 @@ pub(crate) fn handles(object: &str) -> bool {
 }
 
 pub(crate) fn step_instance(game: &mut Game, id: u64) {
+    // oKey's own Step follows inherited attachment and selects the current
+    // directional sprite, whose origin also changes its collision-event mask.
+    let facing = game.player.facing;
+    if let Some(entity) = game.world.entity_mut(id) {
+        if entity.object == "oKey" {
+            if entity.held {
+                entity.set_sprite(if facing < 0 { "sKeyLeft" } else { "sKeyRight" });
+            }
+            return;
+        }
+    }
     // oJetpack inherits Item Step, then checks the existing Player's visibility.
     if !game.player.engine_active || game.player.data.get("visible").copied().unwrap_or(1.0) != 0.0
     {
