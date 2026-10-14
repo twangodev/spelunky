@@ -737,11 +737,28 @@ fn damsel(game: &mut Game, e: &mut Entity) {
             } else {
                 "sDamselRunL"
             });
-            if game
-                .world
-                .solid_at(e.pos.x + f64::from(e.facing) * 8.0, e.pos.y)
+            // Source RUN uses two independent precise custom-edge checks.
+            // Left omits Right's -1 term; round each complete endpoint.
+            let body = e.bounds();
+            let top = body.y.round_ties_even();
+            let bottom = (body.y + body.h - 1.0).round_ties_even();
+            let left = (body.x - 2.0).round_ties_even();
+            if e.facing < 0
+                && game
+                    .world
+                    .solid_line_except(Vec2::new(left, top), Vec2::new(left, bottom), e.id)
             {
-                e.facing *= -1;
+                e.facing = 1;
+            }
+            let right = (body.x + body.w + 2.0 - 1.0).round_ties_even();
+            if e.facing > 0
+                && game.world.solid_line_except(
+                    Vec2::new(right, top),
+                    Vec2::new(right, bottom),
+                    e.id,
+                )
+            {
+                e.facing = -1;
             }
             e.vel.x = f64::from(e.facing) * 1.5;
         }
