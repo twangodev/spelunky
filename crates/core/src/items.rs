@@ -1794,7 +1794,9 @@ fn break_item_callback(game: &mut Game, id: u64, repeat: bool) {
     let right = entity.value("colRight") != 0.0;
     let top = entity.value("colTop") != 0.0;
     let skull = entity.object == "oSkull";
-    if game.player.held == Some(id) {
+    // action_inherited runs Item Destroy before the breakPieces guard.
+    // Its source predicate is receiver.held, independent of the backlink.
+    if entity.held {
         game.player.held = None;
     }
     if !pieces {
@@ -2624,6 +2626,7 @@ mod tests {
         let mut game = game();
         let jar = game.world.spawn("oJar", game.player.pos);
         game.player.held = Some(jar);
+        game.world.entity_mut(jar).unwrap().held = true;
         game.world
             .entity_mut(jar)
             .unwrap()
