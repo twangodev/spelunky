@@ -256,6 +256,14 @@ fn replace_host_toast(
     *simulated = false;
 }
 
+/// The host retires blocked physical input without advancing the simulation.
+fn reset_gameplay_input(input: &mut InputState, game: Option<&mut Game>) {
+    input.clear_gameplay();
+    if let Some(game) = game {
+        game.clear_direction_input_history();
+    }
+}
+
 impl App {
     fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
         let store = Store::load();
@@ -334,7 +342,7 @@ impl App {
         self.pause_start_requested = false;
         self.donation_confirm = false;
         self.timing.reset(self.now());
-        self.input.clear_gameplay();
+        reset_gameplay_input(&mut self.input, self.game.as_mut());
         self.mouse_left = false;
         self.mouse_right = false;
         self.editor.cancel_pointer();
@@ -4956,6 +4964,55 @@ mod tests {
         assert_eq!(teleported["alpha"], 1.);
         assert_eq!(teleported["rendered"]["x"], teleported["player"]["x"]);
     }
+    #[test]
+    fn gameplay_input_reset_retires_direction_history_without_moving_the_world() {
+        let mut level = spelunky_core::level::Level::default();
+        level.set_tile(4, 20, '@').unwrap();
+        for x in 0..40 {
+            level.set_tile(x, 21, '1').unwrap();
+        }
+        let mut game = Game::shell(42, spelunky_core::RulesPreset::Classic);
+        game.load_custom(&level, "input-reset-history", "");
+        for _ in 0..4 {
+            game.step(&Default::default());
+        }
+        assert!(game.player.grounded);
+        let mut input = InputState::default();
+        input.key(KeyCode::ArrowRight, true, false);
+        game.step(&input.take_tick());
+        assert_eq!(game.player.vel.x, 0.0);
+        assert_eq!(game.player.data.get("previous_right"), Some(&1.0));
+        let before = game.clone();
+        let rng = game.rng.clone().next_u64();
+        reset_gameplay_input(&mut input, Some(&mut game));
+        assert_eq!(
+            serde_json::to_value(&game.player).unwrap(),
+            serde_json::to_value(&before.player).unwrap(),
+            "source controller caches remain intact"
+        );
+        assert_eq!(
+            serde_json::to_value(&game.world).unwrap(),
+            serde_json::to_value(&before.world).unwrap()
+        );
+        assert_eq!(
+            (game.tick, game.level_tick, game.camera),
+            (before.tick, before.level_tick, before.camera)
+        );
+        assert_eq!(game.events, before.events);
+        assert_eq!(game.rng.clone().next_u64(), rng);
+        let resumed = input.take_tick();
+        assert_eq!(
+            resumed,
+            spelunky_core::InputFrame::default(),
+            "blocked pause/focus controls produce no queued release"
+        );
+        game.step(&resumed);
+        assert_eq!(
+            game.player.vel.x, 0.0,
+            "SOURCE_HOST_RESET_DOES_NOT_INVENT_A_RESUME_RELEASE"
+        );
+    }
+
     fn camera_follow_fixture() -> Game {
         use spelunky_core::{RulesPreset, Vec2, World};
         let mut game = Game::shell(7, RulesPreset::Classic);

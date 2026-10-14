@@ -273,8 +273,37 @@ impl Game {
         self.previous_camera = self.camera;
     }
 
+    /// Retire adapter-held history when a host discards gameplay controls.
+    /// Source controller keys stay cached until their next actual sample.
+    pub fn clear_direction_input_history(&mut self) {
+        self.data.remove("input_frame_left");
+        self.data.remove("input_frame_right");
+    }
+
+    /// Normalize held-only callers against actual input frames, independently
+    /// of whether the Player controller is active. Explicit device edges win.
+    /// Repeating this on an already normalized frame is idempotent.
+    pub(crate) fn normalize_direction_releases(&mut self, input: &InputFrame) -> InputFrame {
+        let mut frame = *input;
+        frame.left_released |= self.data.get("input_frame_left") == Some(&1.0) && !input.left;
+        frame.right_released |= self.data.get("input_frame_right") == Some(&1.0) && !input.right;
+        for (key, held) in [
+            ("input_frame_left", input.left),
+            ("input_frame_right", input.right),
+        ] {
+            if held {
+                self.data.insert(key.into(), 1.0);
+            } else {
+                self.data.remove(key);
+            }
+        }
+        frame
+    }
+
     /// Advance exactly one original 1/30-second tick.
     pub fn step(&mut self, input: &InputFrame) {
+        let frame = self.normalize_direction_releases(input);
+        let input = &frame;
         self.draw_view = None;
         if self.opening.is_some() {
             opening::tick(self, input);

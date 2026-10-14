@@ -930,6 +930,10 @@ fn apply_ball_tether(w: &World, p: &mut Player, input: &InputFrame, fall: &mut f
 /// Advance exactly one authoritative Classic tick. Presentation interpolation
 /// belongs to the host; this function never accepts a frame delta.
 pub fn tick(game: &mut Game, input: &InputFrame) {
+    // Direct controller callers retain held-transition inference. Game::step
+    // already normalized this actual frame before all dispatcher/state guards.
+    let frame = game.normalize_direction_releases(input);
+    let input = &frame;
     let engine_time = game.engine_time();
     // scrStealItem destroys the Cape when a Jetpack replaces it. This port
     // stores Cape openness on the player, so discard that derived state once
@@ -1113,14 +1117,10 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         0.0
     };
     if !matches!(p.state, PlayerState::Climbing | PlayerState::Hanging) {
-        if (input.left_released || (value(p, "previous_left", 0.0) > 0.0 && !input.left))
-            && p.vel.x.abs() < 0.1
-        {
+        if input.left_released && p.vel.x.abs() < 0.1 {
             ax -= 0.5;
         }
-        if (input.right_released || (value(p, "previous_right", 0.0) > 0.0 && !input.right))
-            && p.vel.x.abs() < 0.1
-        {
+        if input.right_released && p.vel.x.abs() < 0.1 {
             ax += 0.5;
         }
         if input.left && !input.right {
