@@ -3,7 +3,9 @@
 #[cfg(test)]
 use super::event_bounds;
 use super::{center, move_body};
-use crate::model::{Area, CollisionPrecision, Entity, Game, PlayerState, Rect, Vec2, World};
+#[cfg(test)]
+use crate::model::Rect;
+use crate::model::{Area, CollisionPrecision, Entity, Game, PlayerState, Vec2, World};
 
 pub fn matches(object: &str) -> bool {
     matches!(
@@ -115,17 +117,34 @@ fn countdown(e: &mut Entity, key: &str) {
 
 fn collision_offset(world: &World, e: &Entity, dx: f64, dy: f64) -> bool {
     let b = e.bounds();
-    // isCollisionLeft/Right/Top/Bottom check inclusive boundary lines.
-    let edge = if dx < 0.0 {
-        Rect::new(b.x + dx, b.y, 1.0, b.h)
+    // Source isCollision* recalculates controller bounds, then rounds each
+    // complete inclusive axis endpoint before collision_line(oSolid,1,1).
+    let (first, second) = if dx < 0.0 {
+        (
+            Vec2::new(b.x + dx, b.y),
+            Vec2::new(b.x + dx, b.y + b.h - 1.0),
+        )
     } else if dx > 0.0 {
-        Rect::new(b.x + b.w + dx - 1.0, b.y, 1.0, b.h)
+        (
+            Vec2::new(b.x + b.w + dx - 1.0, b.y),
+            Vec2::new(b.x + b.w + dx - 1.0, b.y + b.h - 1.0),
+        )
     } else if dy < 0.0 {
-        Rect::new(b.x, b.y + dy, b.w, 1.0)
+        (
+            Vec2::new(b.x, b.y + dy),
+            Vec2::new(b.x + b.w - 1.0, b.y + dy),
+        )
     } else {
-        Rect::new(b.x, b.y + b.h + dy - 1.0, b.w, 1.0)
+        (
+            Vec2::new(b.x, b.y + b.h + dy - 1.0),
+            Vec2::new(b.x + b.w - 1.0, b.y + b.h + dy - 1.0),
+        )
     };
-    super::solid_mask(world, edge, e.id)
+    world.solid_line_except(
+        Vec2::new(first.x.round_ties_even(), first.y.round_ties_even()),
+        Vec2::new(second.x.round_ties_even(), second.y.round_ties_even()),
+        e.id,
+    )
 }
 
 fn distance_to_player(game: &Game, e: &Entity) -> f64 {
