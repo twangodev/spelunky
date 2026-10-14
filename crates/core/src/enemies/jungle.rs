@@ -311,11 +311,15 @@ fn frog(game: &mut Game, e: &mut Entity) {
 
 fn monkey(game: &mut Game, e: &mut Entity) {
     e.data.insert("depth".into(), 40.0);
-    move_body(
-        &game.world,
-        e,
-        if matches!(e.state, 5..=7) { 0.0 } else { 0.2 },
-    );
+    let entry_y_velocity = e.vel.y;
+    let gravity = if matches!(e.state, 5..=7) {
+        0.0
+    } else {
+        super::inherited::gravity(e, 0.2)
+    };
+    move_body(&game.world, e, gravity);
+    // Source moveTo blocks displacement without clearing stored yVel.
+    e.vel.y = (entry_y_velocity + gravity).min(10.0);
     if game.world.solid_at(e.pos.x + 8.0, e.pos.y + 8.0) {
         e.health = -999;
     }
