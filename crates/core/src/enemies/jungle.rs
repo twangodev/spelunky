@@ -31,12 +31,14 @@ pub fn init(e: &mut Entity) {
     let sprite = match e.object.as_str() {
         "oFrog" => "sFrogLeft",
         "oFireFrog" => "sFireFrogLeft",
-        "oMonkey" => "sMonkeyHangL",
-        "oPiranha" => "sPiranhaRight",
         "oJaws" => "sJawsLeft",
         _ => "sManTrapLeft",
     };
-    e.set_sprite(sprite);
+    // Monkey/Piranha own Create never replaces their object-definition sprite.
+    // Their HANG/swimming artwork is assigned by the first real Step.
+    if !matches!(e.object.as_str(), "oMonkey" | "oPiranha") {
+        e.set_sprite(sprite);
+    }
     if e.object == "oJaws" {
         e.facing = -1;
     }

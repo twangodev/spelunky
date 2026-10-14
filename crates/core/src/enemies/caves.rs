@@ -55,7 +55,6 @@ pub fn init(e: &mut Entity) {
     match e.object.as_str() {
         "oSnake" => {
             e.vel.x = 2.5;
-            set_sprite(e, "sSnakeWalkL");
         }
         "oBat" => {
             set_sprite(e, "sBatHang");
@@ -1643,3 +1642,7 @@ mod caves_cached_distance_tests;
 #[cfg(test)]
 #[path = "enemy_sight_family_order_tests.rs"]
 mod enemy_sight_family_order_tests;
+
+#[cfg(test)]
+#[path = "snake_create_sprite_source_tests.rs"]
+mod snake_create_sprite_source_tests;

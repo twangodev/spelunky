@@ -1011,6 +1011,13 @@ mod tests {
         game.player.state = PlayerState::Standing;
         game.player.sprite = "sStandLeft".into();
         game.player.grounded = true;
+        // This fixture starts after the standing character's previous Draw.
+        // Facing alone does not update the loaded collision mask transform.
+        assert_eq!(game.player.facing, 1);
+        let draw_rng = game.rng.state_bits();
+        crate::player::draw_event(&mut game);
+        assert_eq!(game.player.data["image_xscale"], -1.0);
+        assert_eq!(game.rng.state_bits(), draw_rng);
         for x in 0..game.world.width {
             game.world.set_tile(x, 11, "oBlock");
         }
@@ -1027,6 +1034,25 @@ mod tests {
             .unwrap()
             .data
             .insert("invincible".into(), 1.0);
+        let enemy_mask = game.world.entity(snake).unwrap().collision_mask();
+        assert_eq!(game.world.entity(snake).unwrap().sprite, "sSnakeLeft");
+        let player_mask = game.player.collision_mask_at(target);
+        let contact = Vec2::new(target.x + 6.0, target.y);
+        assert!(player_mask.contains(contact, CollisionPrecision::Precise));
+        assert!(enemy_mask.contains(contact, CollisionPrecision::Precise));
+        assert!(player_mask.intersects_mask(&enemy_mask));
+        let mut unmirrored = game.player.clone();
+        unmirrored.pos = target;
+        unmirrored.data.insert("image_xscale".into(), 1.0);
+        assert!(
+            !unmirrored.collision_mask().intersects_mask(&enemy_mask),
+            "the same source sprites do not overlap without the prior Draw mirror"
+        );
+        let movement = unmirrored.bounds();
+        assert!(
+            enemy_mask.point_bounds().x > movement.x + movement.w,
+            "the contact is outside the platform movement rectangle"
+        );
         game.step(&InputFrame {
             attack_pressed: true,
             ..InputFrame::default()

@@ -52,7 +52,7 @@ pub fn init(e: &mut Entity) {
             e.timer = 20;
         }
         "oDeadFish" => {
-            e.set_sprite("sDeadFishRight");
+            // Create leaves the catalog's sDeadFishLeft until its real Step.
             e.facing = 1;
             e.data.insert("dir".into(), 0.0);
             e.data.insert("bloodless".into(), 1.0);

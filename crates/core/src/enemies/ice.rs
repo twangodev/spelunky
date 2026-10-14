@@ -87,7 +87,6 @@ pub fn init(e: &mut Entity) {
     }
     let sprite = match e.object.as_str() {
         "oYeti" => "sYetiLeft",
-        "oYetiKing" => "sYetiKingRight",
         "oAlienBoss" => "sAlienBoss",
         "oAlienEject" => "sAlienEject",
         "oUFOCrash" => "sUFOCrash",
@@ -97,7 +96,10 @@ pub fn init(e: &mut Entity) {
         "oUFO" => "sUFO",
         _ => "sAlien",
     };
-    e.set_sprite(sprite);
+    // Create leaves sYetiKingLeft despite facing RIGHT. Its Step chooses art.
+    if e.object != "oYetiKing" {
+        e.set_sprite(sprite);
+    }
 }
 
 /// Source Create fields requiring only the generated room and its RNG.

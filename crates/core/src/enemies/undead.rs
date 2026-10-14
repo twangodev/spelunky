@@ -24,11 +24,14 @@ pub fn init(e: &mut Entity) {
         if e.object == "oZombie" { 0.0 } else { 1.0 },
     );
     e.data.insert("source_facing_pending".into(), 1.0);
-    e.set_sprite(match e.object.as_str() {
-        "oSkeleton" => "sSkeletonLeft",
-        "oZombie" => "sZombieLeft",
-        _ => "sVampireLeft",
-    });
+    // Skeleton Create leaves sSkeletonCreateL; only its Step selects idle/walk.
+    if e.object != "oSkeleton" {
+        e.set_sprite(if e.object == "oZombie" {
+            "sZombieLeft"
+        } else {
+            "sVampireLeft"
+        });
+    }
 }
 
 pub(super) fn create_local(ctx: &mut crate::creation::EntityCreateContext<'_>, e: &mut Entity) {
