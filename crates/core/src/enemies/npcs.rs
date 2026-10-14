@@ -1077,7 +1077,7 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
         }
         e.vel.x = f64::from(e.facing) * 3.0;
         let cooldown = e.value("firing");
-        if cooldown > 0.0 {
+        if e.value("has_gun") > 0.0 && cooldown > 0.0 {
             e.data.insert("firing".into(), cooldown - 1.0);
         } else if e.value("has_gun") > 0.0
             && (game.player.pos.y - center(e).y).abs() < 32.0
