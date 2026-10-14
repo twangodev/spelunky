@@ -201,7 +201,7 @@ pub(crate) fn handles(object: &str) -> bool {
         || explosives::handles(object)
         || utility::handles(object)
         || collectibles::handles(object)
-        || matches!(object, "oWhip" | "oWhipPre")
+        || matches!(object, "oWhip" | "oWhipPre" | "oTarget")
 }
 
 /// Context-dependent but RNG-free Create fields for the selected terrain
@@ -215,12 +215,32 @@ pub(crate) fn initialize_source_jungle_child(entity: &mut Entity, has_spectacles
 }
 
 pub(crate) fn create_instance(game: &mut Game, id: u64) {
+    if game.world.entity(id).is_some_and(|e| e.object == "oTarget") {
+        crate::hub::create_target(game, id);
+        return;
+    }
     let Some(mut entity) = game.world.entity(id).cloned() else {
         return;
     };
     init_entity(&mut entity);
     if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
         initialize_source_jungle_child(&mut entity, game.player.has("Spectacles"));
+        // These own Creates inherit oItem depth and do not override it.
+        if matches!(entity.object.as_str(), "oRock" | "oJar" | "oSkull")
+            && entity.value("source_item_depth_initialized") == 0.0
+        {
+            entity
+                .data
+                .insert("source_item_depth_initialized".into(), 1.0);
+            entity.data.insert(
+                "depth".into(),
+                if game.player.has("Spectacles") {
+                    51.0
+                } else {
+                    101.0
+                },
+            );
+        }
     } else {
         initialize_terrain_child(&mut entity, game.player.has("Spectacles"));
     }
@@ -263,6 +283,10 @@ pub(crate) fn outside_room(game: &mut Game, id: u64) {
 }
 
 pub(crate) fn step_instance(game: &mut Game, id: u64) {
+    if game.world.entity(id).is_some_and(|e| e.object == "oTarget") {
+        crate::hub::target_step(game, id);
+        return;
+    }
     let Some(mut entity) = game.world.entity(id).cloned() else {
         return;
     };
@@ -322,13 +346,15 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
             game.player.pos.y,
         );
     }
-    if entity.held && (fragile || item_body_active(game, &entity)) {
+    let held_branch = entity.held && (fragile || item_body_active(game, &entity));
+    // Arrow and Flare call the parent event from their own Step below.
+    if held_branch && !matches!(entity.object.as_str(), "oArrow" | "oFlare") {
         align_held(game, &mut entity);
     }
     let mut broken = false;
-    if ordinary_body(&entity.object) {
+    if ordinary_body(&entity.object) && !held_branch {
         broken = advance_item_body(game, &mut entity);
-    } else if collectibles::treasure_value(&entity.object).is_some() {
+    } else if collectibles::treasure_value(&entity.object).is_some() && !held_branch {
         advance_treasure_body(game, &mut entity);
     }
     if fragile {
@@ -383,7 +409,10 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         crate::catalog::is_a(&e.object, "oItem")
             && !matches!(e.object.as_str(), "oArrow" | "oFlare")
             && (item_body_active(game, e)
-                || matches!(e.object.as_str(), "oJar" | "oSkull" | "oRope"))
+                || matches!(
+                    e.object.as_str(),
+                    "oJar" | "oSkull" | "oRope" | "oRopeThrow"
+                ))
     }) {
         crate::enemies::item_step_impacts(game, id);
     }
@@ -399,6 +428,13 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         return;
     };
     update_depth(game, &mut entity);
+    if held_branch
+        && !entity.held
+        && !(entity.object == "oBomb"
+            && (entity.sprite == "sBombArmed" || entity.value("sticky") != 0.0))
+    {
+        entity.data.insert("depth".into(), 1.0);
+    }
     if entity.object == "oBow" {
         weapons::bow_step(game, &mut entity);
     }
@@ -414,6 +450,10 @@ pub(crate) fn builtin_motion(game: &mut Game, id: u64) {
 }
 
 pub(crate) fn collision(game: &mut Game, id: u64, other: crate::dispatcher::Instance) {
+    if game.world.entity(id).is_some_and(|e| e.object == "oTarget") {
+        crate::hub::target_collision(game, id, other);
+        return;
+    }
     if game.world.entity(id).is_some_and(|entity| {
         crate::catalog::is_a(&entity.object, "oSkull")
             && crate::catalog::is_a(other.object(game), "oBullet")
@@ -928,7 +968,7 @@ fn throw_item(game: &mut Game, id: u64, input: &InputFrame) {
     let facing = f64::from(game.player.facing);
     let pos = game.player.pos;
     let velocity = game.player.vel;
-    let grounded = game.player.grounded;
+    let grounded = crate::player::source_grounded(&game.player);
     let mitt = game.player.has("Mitt");
     let ducking = player_is_ducking(&game.player);
     let throwing_bomb = game.world.entity(id).is_some_and(|e| e.object == "oBomb");
@@ -1012,14 +1052,14 @@ fn throw_item(game: &mut Game, id: u64, input: &InputFrame) {
     game.sound("sndThrow", pos);
 }
 
-fn align_held(game: &Game, entity: &mut Entity) {
+pub(super) fn align_held(game: &Game, entity: &mut Entity) {
     let pos = game.player.pos;
     let facing = game.player.facing;
     let ducking = game.player.state == PlayerState::Ducking && game.player.vel.x.abs() < 2.0;
     entity.held = true;
-    // Their replacement held branch changes position/depth only. Retained
-    // custom velocity still participates in the following creature queries.
-    if !matches!(entity.object.as_str(), "oJar" | "oSkull") {
+    // These replacement held branches change position/depth only. Dice also
+    // uses retained velocity in its independent rolling/RNG tail.
+    if !matches!(entity.object.as_str(), "oJar" | "oSkull" | "oDice") {
         entity.vel = Vec2::default();
     }
     let heavy = entity.value("heavy") != 0.0;
@@ -1042,6 +1082,11 @@ fn align_held(game: &Game, entity: &mut Entity) {
     };
     entity.pos = Vec2::new(pos.x + f64::from(facing) * 4.0, pos.y + y_offset);
     entity.facing = facing;
+    entity.data.insert("depth".into(), 1.0);
+    // Jar/Skull replace Item Step and have no hand-empty reconciliation.
+    if !matches!(entity.object.as_str(), "oJar" | "oSkull") && game.player.held.is_none() {
+        entity.held = false;
+    }
 }
 
 fn start_whip(game: &mut Game) {
@@ -1297,10 +1342,11 @@ pub(crate) fn tick_inherited_ball_body(game: &mut Game, entity: &mut Entity) {
         return;
     }
     crate::economy::item_step(game, entity);
-    if entity.held {
+    let held_branch = entity.held;
+    if held_branch {
         align_held(game, entity);
     }
-    if advance_item_body(game, entity) {
+    if !held_branch && advance_item_body(game, entity) {
         entity.alive = false;
     }
     let id = entity.id;
@@ -1597,8 +1643,10 @@ fn advance_treasure_body(game: &mut Game, entity: &mut Entity) {
         }
         entity.vel.y = 0.0;
     }
-    if left && !right {
-        entity.pos.x += 1.0;
+    if left {
+        if !right {
+            entity.pos.x += 1.0;
+        }
     } else if right {
         entity.pos.x -= 1.0;
     }

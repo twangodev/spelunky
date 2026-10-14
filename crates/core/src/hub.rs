@@ -706,7 +706,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         scores_step(game);
     }
     basketball(game);
-    static_targets(game);
+    if !game.dispatcher.running {
+        static_targets(game);
+    }
     if !game.dispatcher.running {
         player_portal_actions(game, input);
     }
@@ -1497,37 +1499,46 @@ fn basketball(game: &mut Game) {
         game.world.entities[index] = ball;
     }
 }
-fn static_targets(game: &mut Game) {
-    let ids: Vec<_> = game
+/// Literal oTarget Create; normal Game.spawn invokes this synchronously.
+pub(crate) fn create_target(game: &mut Game, id: u64) {
+    if !game
         .world
-        .entities
-        .iter()
-        .filter(|e| e.alive && e.object == "oTarget")
-        .map(|e| e.id)
-        .collect();
-    for id in ids {
-        let timer = value(game, "timer");
-        let initial_dir = if game.world.entity(id).unwrap().value("hub_initialized") == 0.0 {
-            game.rng.range(2)
+        .entity(id)
+        .is_some_and(|e| e.value("hub_initialized") == 0.0)
+    {
+        return;
+    }
+    let direction = game.rng.range(2);
+    let e = game.world.entity_mut(id).unwrap();
+    for (name, value) in [
+        ("hub_initialized", 1.0),
+        ("life", 20.0),
+        ("dying", 0.0),
+        ("UP", 0.0),
+        ("DOWN", 1.0),
+        ("dir", f64::from(direction)),
+        ("moveOff", 32.0),
+        ("hard", f64::from(e.pos.x > 208.0)),
+        ("xDiff", 0.0),
+    ] {
+        e.data.insert(name.into(), value);
+    }
+}
+
+pub(crate) fn target_step(game: &mut Game, id: u64) {
+    let timer = value(game, "timer");
+    let Some(e) = game.world.entity_mut(id) else {
+        return;
+    };
+    if e.value("dying") != 0.0 {
+        if e.value("life") > 0.0 {
+            e.data.insert("life".into(), e.value("life") - 1.0);
         } else {
-            0
-        };
-        let e = game.world.entity_mut(id).unwrap();
-        if e.value("hub_initialized") == 0.0 {
-            e.data.insert("hub_initialized".into(), 1.0);
             e.data.insert("life".into(), 20.0);
-            e.data.insert("dir".into(), f64::from(initial_dir));
-            e.data.insert("moveOff".into(), 32.0);
-            e.data.insert("hard".into(), f64::from(e.pos.x > 208.0));
+            e.data.insert("dying".into(), 0.0);
         }
-        if e.value("dying") != 0.0 {
-            if e.value("life") > 0.0 {
-                e.data.insert("life".into(), e.value("life") - 1.0);
-            } else {
-                e.data.insert("life".into(), 20.0);
-                e.data.insert("dying".into(), 0.0);
-            }
-        } else {
+    } else {
+        if e.value("dir") == 0.0 || e.value("dir") == 1.0 {
             let up = e.value("dir") == 0.0;
             let speed = if e.value("hard") != 0.0 { 2.0 } else { 1.0 };
             e.pos.y += if up { -speed } else { speed };
@@ -1536,49 +1547,86 @@ fn static_targets(game: &mut Game) {
                 e.data.insert("dir".into(), f64::from(up));
                 e.data.insert("moveOff".into(), 0.0);
             }
-            if timer <= 30.0 {
-                e.pos.x = 240.0 - (e.value("xDiff").sin() * 64.0).abs();
-                e.data.insert("xDiff".into(), e.value("xDiff") + 0.01);
-            }
         }
-        let target = e.clone();
+        if timer <= 30.0 {
+            e.pos.x = 240.0 - (e.value("xDiff").sin() * 64.0).abs();
+            e.data.insert("xDiff".into(), e.value("xDiff") + 0.01);
+        }
+    }
+}
+
+pub(crate) fn target_collision(game: &mut Game, id: u64, other: crate::dispatcher::Instance) {
+    let crate::dispatcher::Instance::Entity(arrow) = other else {
+        return;
+    };
+    let Some(a) = game.world.entity(arrow) else {
+        return;
+    };
+    if !crate::catalog::is_a(&a.object, "oArrow") {
+        return;
+    }
+    let arrow_y = a.pos.y;
+    game.world.entity_mut(arrow).unwrap().vel = Vec2::default();
+    let Some(target) = game.world.entity(id).cloned() else {
+        return;
+    };
+    if target.value("dying") == 0.0 {
+        game.world
+            .entity_mut(id)
+            .unwrap()
+            .data
+            .insert("dying".into(), 1.0);
+        let distance = (arrow_y - target.pos.y).abs();
+        let points = if distance <= 2.0 {
+            game.sound("sndCoin", target.pos);
+            5.0
+        } else if (3.0..=6.0).contains(&distance) {
+            3.0
+        } else if (7.0..=10.0).contains(&distance) {
+            2.0
+        } else {
+            1.0
+        };
+        *game.data.entry("baskets".into()).or_default() += points;
+        game.sound("sndHit", target.pos);
+    }
+    if target.value("life") <= 2.0 {
+        // Arrow inherits only oItem's held-hand cleanup in Destroy.
+        if game.world.entity(arrow).is_some_and(|e| e.held) {
+            game.player.held = None;
+        }
+        game.world.entity_mut(arrow).unwrap().alive = false;
+    }
+}
+
+/// Compatibility for direct hub::tick callers without the engine dispatcher.
+/// Live source Steps and precise Collision events use the callbacks above.
+fn static_targets(game: &mut Game) {
+    let ids: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|e| e.alive && e.engine_active && e.object == "oTarget")
+        .map(|e| e.id)
+        .collect();
+    for id in ids {
+        create_target(game, id);
+        target_step(game, id);
+        let target = game.world.entity(id).unwrap().clone();
         let arrows: Vec<_> = game
             .world
             .entities
             .iter()
             .filter(|a| {
-                a.alive && a.object == "oArrow" && swept(a).intersects(target.sprite_bounds())
+                a.alive
+                    && a.engine_active
+                    && crate::catalog::is_a(&a.object, "oArrow")
+                    && a.event_intersects(&target)
             })
-            .map(|a| (a.id, a.pos.y))
+            .map(|a| a.id)
             .collect();
-        for (arrow, y) in arrows {
-            let a = game.world.entity_mut(arrow).unwrap();
-            a.vel = Vec2::default();
-            if target.value("life") <= 2.0 {
-                a.alive = false;
-            }
-            if game.world.entity(id).unwrap().value("dying") == 0.0 {
-                game.world
-                    .entity_mut(id)
-                    .unwrap()
-                    .data
-                    .insert("dying".into(), 1.0);
-                let d = (y - target.pos.y).abs();
-                let points = if d <= 2.0 {
-                    5.0
-                } else if (3.0..=6.0).contains(&d) {
-                    3.0
-                } else if (7.0..=10.0).contains(&d) {
-                    2.0
-                } else {
-                    1.0
-                };
-                *game.data.entry("baskets".into()).or_default() += points;
-                game.sound("sndHit", target.pos);
-                if points == 5.0 {
-                    game.sound("sndCoin", target.pos);
-                }
-            }
+        for arrow in arrows {
+            target_collision(game, id, crate::dispatcher::Instance::Entity(arrow));
         }
     }
 }
