@@ -17,6 +17,8 @@ pub(crate) mod shop_dialogue;
 #[cfg(test)]
 mod source_facing_tests;
 mod temple;
+#[cfg(test)]
+mod ufo_item_producer_source_tests;
 mod undead;
 
 use crate::dispatcher::Instance;
@@ -1523,8 +1525,15 @@ fn apply_item_hit(game: &mut Game, e: &mut Entity, item: &Entity, fragile: bool)
                 if game.rng.range(3) == 0 {
                     game.spawn("oAlienEject", pos);
                 }
-                e.health = 0;
-                record_death(game, e);
+                // oItem Step credits this explicit destruction regardless
+                // of countsAsKill; it never deducts or assigns the UFO's hp.
+                e.data.insert("death_recorded".into(), 1.0);
+                if crate::statistics::is_real_level(game) {
+                    game.lifetime_stats
+                        .enemy_kill(crate::statistics::EnemyKill::Ufo);
+                }
+                *game.data.entry("ufos".into()).or_default() += 1.0;
+                *game.data.entry("kills".into()).or_default() += 1.0;
                 e.alive = false;
                 // This source branch plays its own explosion sounds, without
                 // the ordinary item-hit sound below.
