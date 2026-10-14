@@ -1,5 +1,9 @@
 //! Temple enemies translated from Classic 1.1's individual object events.
 //! Instances retain the original GameMaker origins, including top-left boss origins.
+#[cfg(test)]
+#[path = "temple_followup_tests.rs"]
+mod followup_tests;
+
 use super::{center, move_body};
 use crate::dispatcher::Instance;
 use crate::model::{Entity, Game, GameEvent, Rect, Vec2, World};
@@ -88,6 +92,15 @@ pub fn init(e: &mut Entity) {
             e.alarms[1] = 1;
         }
         _ => {}
+    }
+}
+
+/// Olmec's random facing belongs to Create, including generated births.
+/// Bootstrap must preserve any producer writes after that initial draw.
+pub(super) fn create_local(ctx: &mut crate::creation::EntityCreateContext<'_>, e: &mut Entity) {
+    if e.object == "oOlmec" && e.value("olmec_facing_created") == 0.0 {
+        e.facing = if ctx.rng.range(2) == 0 { -1 } else { 1 };
+        e.data.insert("olmec_facing_created".into(), 1.0);
     }
 }
 
@@ -299,6 +312,8 @@ pub(super) fn create(game: &mut Game, e: &mut Entity) {
         game.view_target = crate::ViewTarget::Object("oOlmec".into());
     } else if e.object == "oOlmecSlam" {
         game.sound("sndSlam", e.pos);
+    } else if e.object == "oYellowBall" {
+        initialize_yellow_ball(&mut game.rng, e);
     }
 }
 
@@ -507,13 +522,13 @@ fn spawn(game: &mut Game, object: &str, pos: Vec2) -> u64 {
 
 fn hawk_idle_wall(world: &World, e: &Entity) -> bool {
     let point_is_solid = |point| {
-        world.tiles_point_precision(point, "oSolid", crate::CollisionPrecision::Precise)
+        world.tiles_point_precision(point, "oSolid", crate::CollisionPrecision::BoundingBox)
             || world.entities.iter().any(|other| {
                 other.id != e.id
                     && other.alive
                     && other.engine_active
                     && crate::catalog::is_a(&other.object, "oSolid")
-                    && other.mask_contains(point, crate::CollisionPrecision::Precise)
+                    && other.mask_contains(point, crate::CollisionPrecision::BoundingBox)
             })
     };
     point_is_solid(Vec2::new(e.pos.x - 1.0, e.pos.y))
@@ -778,7 +793,8 @@ fn tomb_lord(game: &mut Game, e: &mut Entity) {
             {
                 e.state = 2;
                 e.timer = 30;
-                e.vel.x = 0.0;
+                // TURN clears xVel in its own next Step, after moveTo has
+                // consumed the velocity retained by this WALK branch.
                 e.set_sprite(if e.facing < 0 {
                     "sTombLordTurnR"
                 } else {
@@ -954,7 +970,11 @@ pub(super) fn alarm(game: &mut Game, e: &mut Entity, index: u8) {
                 .world
                 .entities
                 .iter()
-                .filter(|trail| trail.alive && trail.object == "oYellowTrail")
+                .filter(|trail| {
+                    trail.alive
+                        && trail.engine_active
+                        && crate::catalog::is_a(&trail.object, "oYellowTrail")
+                })
                 .count()
                 < 12
             {
@@ -1368,6 +1388,9 @@ fn debris(game: &mut Game, e: &mut Entity) {
 }
 fn initialize_yellow_ball(rng: &mut crate::Rng, e: &mut Entity) {
     if e.value("launch") != 0.0 {
+        // Inherited DrawnSprite Create precedes the three launch draws.
+        e.text.insert("type".into(), String::new());
+        e.data.insert("blinkToggle".into(), 0.0);
         // Source Create consumes yVel, xVel, then the sign draw, immediately
         // after its caller's preceding emissions have been created.
         let vy = -4.0 - rng.unit() * 3.0;
@@ -1379,18 +1402,41 @@ fn initialize_yellow_ball(rng: &mut crate::Rng, e: &mut Entity) {
         e.data.insert("launch".into(), 0.0);
     }
 }
+/// Literal collision_rectangle(..., family, precise=0, notme=0).
+/// YellowBall is not a member of either queried family, so its detached
+/// executing receiver cannot be a missing target in these active arrays.
+fn yellow_ball_rectangle(game: &Game, first: Vec2, last: Vec2, family: &str) -> bool {
+    crate::dispatcher::descendant_instances(game, family)
+        .into_iter()
+        .filter(|instance| crate::dispatcher::is_active(game, *instance))
+        .any(|instance| match instance {
+            Instance::Entity(id) => game.world.entity(id).is_some_and(|target| {
+                target
+                    .collision_mask()
+                    .intersects_rectangle_bbox(first, last)
+            }),
+            Instance::Terrain(index) => game
+                .world
+                .tile_collision_mask(
+                    (index % game.world.width) as i32,
+                    (index / game.world.width) as i32,
+                )
+                .intersects_rectangle_bbox(first, last),
+            Instance::Player => false,
+        })
+}
+
 fn yellow_ball(game: &mut Game, e: &mut Entity) {
     initialize_yellow_ball(&mut game.rng, e);
-    let old = e.pos;
     e.pos.x += e.vel.x;
     e.pos.y += e.vel.y;
-    e.vel.y = (e.vel.y + 0.15).min(6.0);
-    let boss_overlaps = game
-        .world
-        .entities
-        .iter()
-        .any(|o| o.object == "oOlmec" && olmec_rect(o).intersects(e.bounds()));
-    if game.world.collides(e.bounds()) && !boss_overlaps {
+    let first = Vec2::new(e.pos.x - 8.0, e.pos.y - 8.0);
+    let last = Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0);
+    if yellow_ball_rectangle(game, first, last, "oSolid")
+        && !yellow_ball_rectangle(game, first, last, "oOlmec")
+    {
+        e.pos.x -= e.vel.x;
+        e.pos.y -= e.vel.y;
         let n = if game.rng.chance(1, 2) {
             game.rng.range(4)
         } else {
@@ -1399,9 +1445,14 @@ fn yellow_ball(game: &mut Game, e: &mut Entity) {
         spawn(
             game,
             ["oBat", "oSpider", "oSnake", "oFrog", "oFireFrog"][n as usize],
-            Vec2::new(old.x - 8.0, old.y - 8.0),
+            Vec2::new(e.pos.x - 8.0, e.pos.y - 8.0),
         );
         e.alive = false;
+        super::destroyed(game, e);
+    }
+    // Source's independent tail runs after impact/Destroy and may cross 6.
+    if e.vel.y < 6.0 {
+        e.vel.y += 0.15;
     }
 }
 
@@ -1840,7 +1891,7 @@ mod tests {
             game.world.set_tile(x, 10, "oBlock");
         }
         let origin = Vec2::new(160.0, 96.0);
-        let boss = spawn(&mut game, "oOlmec", origin);
+        let boss = game.spawn("oOlmec", origin);
         let e = game.world.entity_mut(boss).unwrap();
         e.state = -2;
         e.alarms[1] = 1;
@@ -2580,7 +2631,7 @@ mod tests {
         }
         let origin = Vec2::new(160.0, 96.0);
         let target = Vec2::new(origin.x + 32.0, origin.y + 16.0);
-        let boss_id = spawn(&mut game, "oOlmec", origin);
+        let boss_id = game.spawn("oOlmec", origin);
         game.world.entity_mut(boss_id).unwrap().state = 7;
         let mut expected_rng = game.rng.clone();
         let positions: Vec<_> = (0..6)

@@ -164,7 +164,17 @@ fn natural_default_create_idle_retains_velocity_for_the_following_move() {
                 x + dx,
                 "retained velocity moves before TURN selection"
             );
-            assert_eq!((second.state, second.timer, second.vel.x), (2, 30, 0.0));
+            assert_eq!((second.state, second.timer, second.vel.x), (2, 30, 2.5));
+            let x = second.pos.x;
+            step_healthy(&mut game, lord);
+            let third = game.world.entity(lord).unwrap();
+            let dx = 2.0 + f64::from(game.engine_time() % 2 == 0);
+            assert_eq!(
+                third.pos.x,
+                x + dx,
+                "TURN moves once with the incoming WALK velocity before stopping"
+            );
+            assert_eq!((third.state, third.timer, third.vel.x), (2, 30, 0.0));
         }
     }
 }

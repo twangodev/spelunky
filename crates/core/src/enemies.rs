@@ -246,6 +246,7 @@ pub(crate) fn create_local(
 ) {
     jungle::create_local(context, entity);
     ice::create_local(context, entity);
+    temple::create_local(context, entity);
     undead::create_local(context, entity);
     npcs::create_local(context, entity);
 }
