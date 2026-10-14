@@ -34,6 +34,18 @@ pub(super) fn point(world: &World, p: Vec2, family: &str) -> bool {
         })
 }
 
+// These two inherited Lava calls explicitly request collision_point prec0.
+// WaterSwim's separate precise query and the other point callers are unchanged.
+fn lava_point_bbox(world: &World, p: Vec2) -> bool {
+    world.tiles_point_active(p, "oLava")
+        || world.entities.iter().any(|other| {
+            other.alive
+                && other.engine_active
+                && crate::catalog::is_a(&other.object, "oLava")
+                && other.mask_contains(p, crate::CollisionPrecision::BoundingBox)
+        })
+}
+
 pub(super) fn gravity(e: &Entity, fallback: f64) -> f64 {
     e.data.get("inherited_gravity").copied().unwrap_or(fallback)
 }
@@ -132,7 +144,7 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
         }
         e.data.insert("burning".into(), e.value("burning") - 1.0);
     }
-    if point(&game.world, Vec2::new(center.x, e.pos.y - 1.0), "oLava") {
+    if lava_point_bbox(&game.world, Vec2::new(center.x, e.pos.y - 1.0)) {
         e.alive = false;
         // Enemy Destroy runs at this statement, before the lower Lava probe
         // and later parent/child statements on the retired receiver.
@@ -140,10 +152,9 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
         // Source instance_destroy does not return from the current event.
         // Later spear/spike statements still execute on this receiver.
     }
-    if point(
+    if lava_point_bbox(
         &game.world,
         Vec2::new(center.x, e.pos.y + fluid_dimensions.1 - 2.0),
-        "oLava",
     ) {
         e.health = 0;
         set_counts_as_kill(e, false);
