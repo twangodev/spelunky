@@ -693,7 +693,9 @@ pub(crate) fn idol_pickup(game: &mut Game, id: u64) {
 /// unsupported trigger share the narrower viewport, without an isRealLevel gate.
 pub(crate) fn idol_step(game: &mut Game, id: u64) {
     let view = game.simulation_view_rect();
-    let Some(entity) = game.world.entity(id) else {
+    // Own Code follows action_inherited, including a parent Lava Destroy.
+    // Read only the entered receiver; do not restore it to live membership.
+    let Some(entity) = game.world.entities.iter().find(|entity| entity.id == id) else {
         return;
     };
     let pos = entity.pos;
@@ -745,7 +747,12 @@ pub(crate) fn idol_step(game: &mut Game, id: u64) {
         game.sound("sndCoin", pos);
         game.spawn("oBigCollect", Vec2::new(pos.x, pos.y - 8.));
         crate::enemies::shop_dialogue::say(game, "PLEASURE DOING BUSINESS!", "", 100);
-        game.world.entity_mut(id).unwrap().alive = false;
+        game.world
+            .entities
+            .iter_mut()
+            .find(|entity| entity.id == id)
+            .unwrap()
+            .alive = false;
     }
     // instance_destroy does not stop the remainder of the current source event.
     if !unsupported {

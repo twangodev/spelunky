@@ -1126,10 +1126,16 @@ fn step_bomb_body(game: &mut Game, bomb: &mut Entity) {
         }
         // The receiver remains live through the synchronous effect Creates.
         bomb.alive = false;
-        if let Some(stored) = game.world.entity_mut(bomb.id) {
-            stored.alive = false;
+        if let Some(stored) = game.world.entities.iter_mut().find(|e| e.id == bomb.id) {
+            *stored = bomb.clone();
         }
-        return;
+        // Destroy clears the OLD backlink here. The later sticky branch is
+        // still in this entered Item code block and can assign a new one.
+        // Preserve the callback latch when the detached receiver is published.
+        destroy_bomb(game, bomb.id);
+        if let Some(stored) = game.world.entities.iter().find(|e| e.id == bomb.id) {
+            *bomb = stored.clone();
+        }
     }
     if bomb.object == "oBomb"
         && bomb.value("sticky") != 0.0

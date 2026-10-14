@@ -434,12 +434,6 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
     }
     utility::step_instance(game, id);
     collectibles::step_instance(game, id);
-    if let Some(e) = game.world.entity_mut(id) {
-        if e.object == "oFishBone" {
-            e.data
-                .insert("rotation".into(), weapons::item_rotation(e.vel, false, 0.0));
-        }
-    }
     if game
         .world
         .entities
@@ -457,10 +451,20 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
     {
         crate::enemies::inherited_item_step_impacts(game, id);
     }
+    // Fish Bone's own angle action follows the complete inherited Item
+    // event, even when that event has already retired the receiver.
+    if let Some(e) = game.world.entities.iter_mut().find(|e| e.id == id) {
+        if e.object == "oFishBone" {
+            e.data
+                .insert("rotation".into(), weapons::item_rotation(e.vel, false, 0.0));
+        }
+    }
     explosives::fire_frog_bomb_own_step(game, id);
     if game
         .world
-        .entity(id)
+        .entities
+        .iter()
+        .find(|e| e.id == id)
         .is_some_and(|e| e.object == "oGoldIdol" || e.object == "oCrystalSkull")
     {
         crate::traps::altar::idol_step(game, id);
@@ -3419,3 +3423,7 @@ mod source_balance_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "retired_item_child_tail_tests.rs"]
+mod retired_item_child_tail_tests;
