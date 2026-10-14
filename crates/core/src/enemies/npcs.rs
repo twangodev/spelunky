@@ -620,8 +620,8 @@ fn damsel(game: &mut Game, e: &mut Entity) {
         if super::inherited::lava_point_bbox(&game.world, Vec2::new(e.pos.x, e.pos.y + 6.0)) {
             if e.health > 0 {
                 super::record_damsel_death(game, e, false);
+                e.health = 0;
             }
-            e.health = 0;
             e.state = 99;
             e.data.insert("dead".into(), 1.0);
             e.data.insert("death_recorded".into(), 1.0);
