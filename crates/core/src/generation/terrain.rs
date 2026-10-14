@@ -148,6 +148,25 @@ pub(super) fn create_source_boundary(
     }
 }
 
+/// oLava owns Create (no inherited action): its rand must finish before
+/// the room-script caller proceeds to the next cell/condition/selector.
+/// Fresh SourceClassic room births have no caller overrides at this point.
+pub(super) fn create_source_room_lava(world: &mut World, rng: &mut Rng, id: u64) {
+    let parent = world.entity_mut(id).expect("fresh Lava room birth");
+    assert_eq!(parent.object, "oLava");
+    assert_eq!(parent.value("lava_initialized"), 0.);
+    parent.text.insert("type".into(), "Lava".into());
+    parent.data.insert("spurt".into(), 0.);
+    // rand.gml's current-receiver local write precedes random()/return.
+    parent.data.insert("randNum".into(), 201.);
+    let time = f64::from(100 + rng.range(201));
+    parent.data.insert("spurt_time".into(), time);
+    parent.data.insert("spurt_counter".into(), time);
+    // Separate following DND variable action in oLava's own Create.
+    parent.set_image_speed(0.4);
+    parent.data.insert("lava_initialized".into(), 1.);
+}
+
 /// Complete the remaining room-script terrain constructors at actual birth.
 /// The grid/proxy representation is retained; duplicate overlapping instances
 /// and SetupWalls interleaving remain separately stated adapter debt.
@@ -1725,3 +1744,7 @@ pub(super) fn observe_init_cleanup(world: &World, after: bool) {
 #[cfg(test)]
 #[path = "synchronous_room_terrain_tests.rs"]
 mod synchronous_room_terrain_tests;
+
+#[cfg(test)]
+#[path = "lava_source_birth_tests.rs"]
+pub(super) mod lava_source_birth_tests;

@@ -599,6 +599,30 @@ fn room_terrain(
     }
 }
 
+/// Both literal Temple Lava births finish own Create before the room caller
+/// proceeds. The random `3` predicate remains outside this helper, so its
+/// rand(1,2) precedes the selected newborn's rand(100,300).
+fn room_lava(
+    world: &mut World,
+    rng: &mut Rng,
+    pos: Vec2,
+    source_context: Option<super::GenerationContext>,
+) {
+    #[cfg(test)]
+    let trace = super::terrain::lava_source_birth_tests::before_birth(
+        world,
+        rng,
+        pos,
+        source_context.is_some(),
+    );
+    let id = spawn(world, rng, "oLava", pos);
+    if source_context.is_some() {
+        super::terrain::create_source_room_lava(world, rng, id);
+    }
+    #[cfg(test)]
+    super::terrain::lava_source_birth_tests::after_birth(world, rng, trace, id);
+}
+
 fn ground(area: Area, yeti: bool, certain: bool, rng: &mut Rng) -> &'static str {
     match area {
         Area::Mines => {
@@ -926,7 +950,7 @@ fn temple(
     match c {
         b'3' if !occupied => {
             if r.chance(1, 2) {
-                spawn(w, r, "oLava", p);
+                room_lava(w, r, p, source_context);
             } else {
                 room_terrain(w, r, x, y, "oTemple", source_context);
             }
@@ -1010,9 +1034,7 @@ fn temple(
         b'p' => {
             spawn(w, r, "oLampRed", p);
         }
-        b'w' => {
-            spawn(w, r, "oLava", p);
-        }
+        b'w' => room_lava(w, r, p, source_context),
         b'd' => room_terrain(w, r, x, y, "oLush", source_context),
         b'e' if r.chance(1, 2) => room_terrain(w, r, x, y, "oLush", source_context),
         b'T' => tree(w, r, x, y, p),

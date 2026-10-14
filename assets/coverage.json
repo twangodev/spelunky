@@ -1442,7 +1442,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1387,
+          "line": 1409,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -1503,17 +1503,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1377,
+          "line": 1399,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1378,
+          "line": 1400,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1388,
+          "line": 1410,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -1715,17 +1715,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1084,
+          "line": 1106,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1379,
+          "line": 1401,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1398,
+          "line": 1420,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -1792,32 +1792,32 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 232,
+          "line": 251,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 430,
+          "line": 449,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 598,
+          "line": 617,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 742,
+          "line": 761,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1043,
+          "line": 1062,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1188,
+          "line": 1207,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
@@ -2107,12 +2107,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1095,
+          "line": 1117,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1394,
+          "line": 1416,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -2368,7 +2368,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1078,
+          "line": 1100,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -2623,7 +2623,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1389,
+          "line": 1411,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -2935,7 +2935,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1090,
+          "line": 1112,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -3014,27 +3014,27 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 233,
+          "line": 252,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 442,
+          "line": 461,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 600,
+          "line": 619,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1054,
+          "line": 1073,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1190,
+          "line": 1209,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
@@ -3348,7 +3348,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1083,
+          "line": 1105,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -3887,7 +3887,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1094,
+          "line": 1116,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -4477,7 +4477,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 637,
+          "line": 656,
           "module": "crates/core/src/generation/terrain.rs"
         }
       ],
@@ -4807,17 +4807,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1093,
+          "line": 1115,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1378,
+          "line": 1400,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1392,
+          "line": 1414,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -5424,12 +5424,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 471,
+          "line": 490,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 755,
+          "line": 774,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
@@ -5731,7 +5731,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1101,
+          "line": 1123,
           "module": "crates/core/src/generation/tiles.rs"
         }
       ],
@@ -5763,17 +5763,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1096,
+          "line": 1118,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1378,
+          "line": 1400,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1393,
+          "line": 1415,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -5902,7 +5902,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1081,
+          "line": 1103,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -6759,22 +6759,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 436,
+          "line": 455,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 599,
+          "line": 618,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1044,
+          "line": 1063,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1189,
+          "line": 1208,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
@@ -6804,17 +6804,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1088,
+          "line": 1110,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1379,
+          "line": 1401,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1397,
+          "line": 1419,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -7194,12 +7194,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1085,
+          "line": 1107,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1392,
+          "line": 1414,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -7547,12 +7547,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1378,
+          "line": 1400,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1391,
+          "line": 1413,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -8354,7 +8354,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1396,
+          "line": 1418,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -8486,7 +8486,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1389,
+          "line": 1411,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -8608,17 +8608,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1086,
+          "line": 1108,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1379,
+          "line": 1401,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1390,
+          "line": 1412,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -9330,12 +9330,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1380,
+          "line": 1402,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1387,
+          "line": 1409,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -9993,7 +9993,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1091,
+          "line": 1113,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -10142,17 +10142,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1087,
+          "line": 1109,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1379,
+          "line": 1401,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1395,
+          "line": 1417,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -10746,7 +10746,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1099,
+          "line": 1121,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -11007,7 +11007,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1392,
+          "line": 1414,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -11188,7 +11188,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1391,
+          "line": 1413,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -11298,7 +11298,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1390,
+          "line": 1412,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -11525,12 +11525,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1379,
+          "line": 1401,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1388,
+          "line": 1410,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -11637,22 +11637,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 234,
+          "line": 253,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 448,
+          "line": 467,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 748,
+          "line": 767,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1055,
+          "line": 1074,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
@@ -11682,7 +11682,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1079,
+          "line": 1101,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -11733,7 +11733,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1082,
+          "line": 1104,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -11973,7 +11973,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1098,
+          "line": 1120,
           "module": "crates/core/src/generation/tiles.rs"
         }
       ],
@@ -12039,7 +12039,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1092,
+          "line": 1114,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -12140,7 +12140,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1077,
+          "line": 1099,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -12656,7 +12656,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1080,
+          "line": 1102,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -12783,17 +12783,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1089,
+          "line": 1111,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1379,
+          "line": 1401,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1396,
+          "line": 1418,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -13410,7 +13410,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1097,
+          "line": 1119,
           "module": "crates/core/src/generation/tiles.rs"
         },
         {
@@ -13500,7 +13500,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1100,
+          "line": 1122,
           "module": "crates/core/src/generation/tiles.rs"
         }
       ],
