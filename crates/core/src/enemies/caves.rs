@@ -253,28 +253,41 @@ pub(super) fn collision(
     if !crate::catalog::is_a(other.object(game), "oCharacter") {
         return false;
     }
-    // Character contact alerts both families using each target's distance to
-    // Player1; a sight destroyed by an earlier solid contact cannot reach it.
-    let alerted: Vec<_> = game
-        .world
-        .entities
-        .iter()
-        .filter(|other| {
-            other.alive
-                && other.engine_active
-                && matches!(other.object.as_str(), "oCaveman" | "oHawkman")
-                && other.state < 98
-                && distance_to_object(game, other, "oPlayer1") < 100.0
-        })
-        .map(|other| other.id)
-        .collect();
-    for id in alerted {
-        let Some(other) = game.world.entity_mut(id) else {
-            continue;
-        };
-        other.state = 2;
-        let pos = other.pos;
-        game.sound("sndAlert", pos);
+    // Source executes two separate with statements: all Cavemen, then all
+    // Hawkmen. Each family follows its current native array, independent of
+    // storage partitioning. Pending raw World births append by creation order
+    // without an impure registration/Create call inside this query.
+    for object in ["oCaveman", "oHawkman"] {
+        let family = crate::dispatcher::descendant_instances(game, object);
+        let mut targets: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|target| {
+                target.alive && target.engine_active && crate::catalog::is_a(&target.object, object)
+            })
+            .collect();
+        targets.sort_by_key(|target| {
+            family
+                .iter()
+                .position(|instance| *instance == crate::dispatcher::Instance::Entity(target.id))
+                .map_or((1_u8, target.creation_serial), |rank| (0, rank as u64))
+        });
+        let alerted: Vec<_> = targets
+            .into_iter()
+            .filter(|target| {
+                target.state < 98 && distance_to_object(game, target, "oPlayer1") < 100.0
+            })
+            .map(|target| target.id)
+            .collect();
+        for id in alerted {
+            let Some(target) = game.world.entity_mut(id) else {
+                continue;
+            };
+            target.state = 2;
+            let pos = target.pos;
+            game.sound("sndAlert", pos);
+        }
     }
     true
 }
@@ -1626,3 +1639,7 @@ mod tests {
 #[cfg(test)]
 #[path = "caves_cached_distance_tests.rs"]
 mod caves_cached_distance_tests;
+
+#[cfg(test)]
+#[path = "enemy_sight_family_order_tests.rs"]
+mod enemy_sight_family_order_tests;

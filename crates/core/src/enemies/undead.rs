@@ -172,7 +172,10 @@ fn distance_to_player(game: &Game, e: &Entity) -> f64 {
     distance
 }
 fn distance_to_point(e: &Entity, point: Vec2) -> f64 {
-    let r = e.sprite_bounds();
+    // Canonical55B380 reads the receiver's cached integer envelope. The
+    // point arguments stay real-valued; this intrinsic has no family/alive
+    // gate, no bbox refresh, and no distance_to_object million-distance cap.
+    let r = e.collision_mask().point_bounds();
     let dx = (r.x - point.x).max(point.x - (r.x + r.w - 1.0)).max(0.0);
     let dy = (r.y - point.y).max(point.y - (r.y + r.h - 1.0)).max(0.0);
     dx.hypot(dy)
@@ -1790,3 +1793,7 @@ mod undead_own_destroy_tail_tests {
 #[cfg(test)]
 #[path = "zombie_cached_distance_tests.rs"]
 mod zombie_cached_distance_tests;
+
+#[cfg(test)]
+#[path = "vampire_cached_point_tests.rs"]
+mod vampire_cached_point_tests;
