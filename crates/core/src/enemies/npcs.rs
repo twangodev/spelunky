@@ -955,14 +955,24 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
                 }
             }
         }
-        if e.value("has_gun") > 0.0 {
-            keeper_drop_gun(game, e);
-        }
-        super::settle_body(e, contacts, impact_y);
-        if e.vel.x == 0.0 && e.vel.y == 0.0 && e.health <= 0 {
-            e.state = 99;
+        // Source rechecks status after STUNNED recovery before the late tail.
+        if e.state >= 98 {
+            if e.value("has_gun") > 0.0 {
+                keeper_drop_gun(game, e);
+            }
+            super::settle_body(e, contacts, impact_y);
+            if e.vel.x == 0.0 && e.vel.y == 0.0 && e.health <= 0 {
+                e.state = 99;
+            }
         }
         keeper_friction(e);
+        if e.state < 98 && e.state != 3 {
+            e.set_sprite(if e.vel.x.abs() > 0.0 {
+                "sShopRunLeft"
+            } else {
+                "sShopLeft"
+            });
+        }
         if e.held {
             e.set_sprite(if e.health > 0 {
                 "sShopHeldL"
