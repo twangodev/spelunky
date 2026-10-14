@@ -398,6 +398,14 @@ impl Entity {
             .map(str::to_owned)
             .unwrap_or_else(|| format!("s{}", object.strip_prefix('o').unwrap_or(&object)));
         let solid = crate::catalog::is_solid(&object);
+        // oHawkmanWorship is parentless and has no Draw override. Every birth
+        // keeps the engine's default positive sprite scale; port-facing is not
+        // a source Draw property. Explicit later scale overrides remain valid.
+        let data = if object == "oHawkmanWorship" {
+            BTreeMap::from([("image_xscale".into(), 1.0)])
+        } else {
+            BTreeMap::new()
+        };
         Self {
             id,
             creation_serial: 0,
@@ -415,7 +423,7 @@ impl Entity {
             alive: true,
             solid,
             held: false,
-            data: BTreeMap::new(),
+            data,
             text: BTreeMap::new(),
             alarms: crate::dispatcher::unset_alarms(),
             engine_active: true,

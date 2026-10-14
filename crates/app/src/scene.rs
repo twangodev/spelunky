@@ -5689,3 +5689,7 @@ mod ghost_player_visibility_draw_tests;
 #[cfg(test)]
 #[path = "configured_whip_draw_tests.rs"]
 mod configured_whip_draw_tests;
+
+#[cfg(test)]
+#[path = "hawkman_worship_draw_tests.rs"]
+mod hawkman_worship_draw_tests;
