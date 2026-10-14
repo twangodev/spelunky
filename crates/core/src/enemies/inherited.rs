@@ -36,7 +36,7 @@ pub(super) fn point(world: &World, p: Vec2, family: &str) -> bool {
 
 // These two inherited Lava calls explicitly request collision_point prec0.
 // WaterSwim's separate precise query and the other point callers are unchanged.
-fn lava_point_bbox(world: &World, p: Vec2) -> bool {
+pub(super) fn lava_point_bbox(world: &World, p: Vec2) -> bool {
     world.tiles_point_active(p, "oLava")
         || world.entities.iter().any(|other| {
             other.alive

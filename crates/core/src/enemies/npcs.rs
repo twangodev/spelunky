@@ -617,7 +617,7 @@ fn damsel(game: &mut Game, e: &mut Entity) {
             }
             e.data.insert("burning".into(), e.value("burning") - 1.0);
         }
-        if super::inherited::point(&game.world, Vec2::new(e.pos.x, e.pos.y + 6.0), "oLava") {
+        if super::inherited::lava_point_bbox(&game.world, Vec2::new(e.pos.x, e.pos.y + 6.0)) {
             if e.health > 0 {
                 super::record_damsel_death(game, e, false);
             }
