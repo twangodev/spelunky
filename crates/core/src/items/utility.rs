@@ -135,7 +135,13 @@ pub fn use_utility(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
     // Classic searches only three tiles upward, even if the result stays solid.
     for _ in 0..3 {
         if target.y <= 16.0
-            || !solid_rect(game, Rect::new(target.x - 4.0, target.y - 4.0, 9.0, 9.0))
+            || !game.world.rectangle_family_except(
+                Vec2::new(target.x - 4.0, target.y - 4.0),
+                Vec2::new(target.x + 4.0, target.y + 4.0),
+                "oSolid",
+                None,
+                CollisionPrecision::BoundingBox,
+            )
         {
             break;
         }
@@ -174,16 +180,28 @@ pub fn use_utility(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
     // instance_place uses sprite masks, independent of setCollisionBounds used
     // by the platform engine. In particular the standing sprite is 12px wide
     // while the normal movement rectangle is 10px wide.
-    let player_bounds = game.player.sprite_bounds();
-    let receiver = game
-        .world
-        .entities
-        .iter()
-        .find(|e| {
-            e.alive
-                && crate::catalog::is_a(&e.object, "oEnemy")
-                && e.sprite_bounds().intersects(player_bounds)
+    // Live Player Step already has source registration (including the three
+    // synchronous spark Creates above). Query it without mutating any slots.
+    let mut candidates = crate::dispatcher::descendant_instances(game, "oEnemy");
+    if !game.dispatcher.running {
+        // Direct legacy helpers may receive World::spawn instances whose
+        // source Create/registration was deliberately bypassed. Retain that
+        // adapter without executing Create or rewriting the live registry.
+        for enemy in &game.world.entities {
+            let instance = crate::dispatcher::Instance::Entity(enemy.id);
+            if crate::catalog::is_a(&enemy.object, "oEnemy") && !candidates.contains(&instance) {
+                candidates.push(instance);
+            }
+        }
+    }
+    let player_mask = game.player.collision_mask();
+    let receiver = candidates
+        .into_iter()
+        .filter_map(|instance| match instance {
+            crate::dispatcher::Instance::Entity(id) => game.world.entity(id),
+            _ => None,
         })
+        .find(|enemy| enemy.engine_active && player_mask.intersects_mask(&enemy.collision_mask()))
         .cloned();
     if let Some(receiver) = receiver {
         // scrUseItem runs scrCreateBlood in the receiver's context, at the
@@ -201,6 +219,47 @@ pub fn use_utility(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
     }
     game.sound("sndTeleport", target);
     true
+}
+
+/// Source collision_point with false precise/notme flags. The builtin converts
+/// finite flags with >= 0.5, so FlareCrate's -1/-1 also selects these modes
+/// (canonical handler 0x55C044..0x55C08B).
+pub(super) fn source_point_bbox(game: &Game, point: Vec2, family: &str) -> bool {
+    use crate::dispatcher::Instance;
+    let mut candidates = crate::dispatcher::descendant_instances(game, family);
+    if !game.dispatcher.running {
+        // Direct compatibility calls can inspect raw World births without
+        // running Create or changing source registration during a query.
+        for entity in &game.world.entities {
+            let instance = Instance::Entity(entity.id);
+            if crate::catalog::is_a(&entity.object, family) && !candidates.contains(&instance) {
+                candidates.push(instance);
+            }
+        }
+        for (index, tile) in game.world.tiles.iter().enumerate() {
+            let instance = Instance::Terrain(index);
+            if crate::catalog::is_a(&tile.object, family) && !candidates.contains(&instance) {
+                candidates.push(instance);
+            }
+        }
+    }
+    candidates.into_iter().any(|instance| match instance {
+        Instance::Entity(id) => game.world.entity(id).is_some_and(|target| {
+            target.engine_active && target.mask_contains(point, CollisionPrecision::BoundingBox)
+        }),
+        Instance::Terrain(index) => game.world.tiles.get(index).is_some_and(|tile| {
+            tile.engine_active
+                && !tile.object.is_empty()
+                && game
+                    .world
+                    .tile_collision_mask(
+                        (index % game.world.width) as i32,
+                        (index / game.world.width) as i32,
+                    )
+                    .contains(point, CollisionPrecision::BoundingBox)
+        }),
+        Instance::Player => false,
+    })
 }
 
 fn solid_rect(game: &Game, rect: Rect) -> bool {
@@ -321,18 +380,7 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
     let mut entity = game.world.entities[index].clone();
     match entity.object.as_str() {
         "oFlareCrate" => {
-            let water = game
-                .world
-                .tile(
-                    (entity.pos.x / TILE_SIZE).floor() as i32,
-                    (entity.pos.y / TILE_SIZE).floor() as i32,
-                )
-                .is_some_and(|tile| crate::catalog::is_a(&tile.object, "oWater"))
-                || game.world.entities.iter().any(|water| {
-                    water.alive
-                        && crate::catalog::is_a(&water.object, "oWater")
-                        && water.sprite_bounds().contains(entity.pos)
-                });
+            let water = source_point_bbox(game, entity.pos, "oWater");
             if water {
                 game.spawn("oSplash", entity.pos);
                 game.sound("sndSplash", entity.pos);
@@ -400,7 +448,7 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         "oFlareSpark" => {
             entity.pos.y += entity.vel.y;
             // Animation End is dispatched by the shared endframe pass.
-            if solid_rect(game, Rect::new(entity.pos.x, entity.pos.y, 0.001, 0.001)) {
+            if source_point_bbox(game, entity.pos, "oSolid") {
                 entity.alive = false;
             }
         }
@@ -652,6 +700,16 @@ mod tests {
         for water in ["oWater", "oWaterSwim"] {
             let mut game = Game::shell(7, RulesPreset::Classic);
             game.world.set_tile(2, 2, water);
+            if water == "oWater" {
+                // Base Water has no source sprite. This configured family
+                // control supplies its actual mask before the first Step.
+                let metadata = game.spawn("oTerrainMetadata", Vec2::new(40.0, 40.0));
+                game.world
+                    .entity_mut(metadata)
+                    .unwrap()
+                    .text
+                    .insert("terrain_sprite".into(), "sWater".into());
+            }
             let id = game.spawn("oFlareCrate", game.player.pos);
             game.world.entity_mut(id).unwrap().held = true;
             game.player.held = Some(id);
