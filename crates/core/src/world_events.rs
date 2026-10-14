@@ -701,7 +701,7 @@ pub(crate) fn animation_end(game: &mut Game, id: u64) {
         "oBone" if e.value("dying") != 0.0 => e.alive = false,
         "oParachute" if e.sprite == "sParaOpen" => e.set_sprite("sParachute"),
         "oFakeBones" if e.sprite == "sSkeletonCreateL" => {
-            game.world.spawn("oSkeleton", e.pos);
+            game.spawn("oSkeleton", e.pos);
             e.alive = false;
         }
         _ => {}
