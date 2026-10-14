@@ -1521,6 +1521,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
                 || (airborne(p.state)
                     && ladder_segment_at(w, Vec2::new(p.pos.x, p.pos.y - 8.0)).is_some())))
             || (input.down
+                // characterStepEvent608/612 requires the CURRENT origin point
+                // on a Ladder or LadderTop, independently of the mask below.
+                && (ledge_point(w, p.pos, "oLadder") || ledge_point(w, p.pos, "oLadderTop"))
                 && grounded_state(p.state)
                 && p.vel.x == 0.0
                 && object_at(
