@@ -502,8 +502,9 @@ fn side(e: &Entity) -> &'static str {
     if e.facing < 0 { "L" } else { "R" }
 }
 fn spawn(game: &mut Game, object: &str, pos: Vec2) -> u64 {
-    if object == "oOlmecSlam" {
-        // Complete Create synchronously, including the sound, exactly once.
+    if matches!(object, "oOlmecSlam" | "oFrog" | "oFireFrog") {
+        // Slam's sound and the hatching frogs' facing/water Creates finish
+        // synchronously before their source producer resumes or retires.
         return game.spawn(object, pos);
     }
     let id = game.world.spawn(object, pos);
