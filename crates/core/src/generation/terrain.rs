@@ -965,7 +965,7 @@ pub(super) fn setup_generated_with_revision(
         }
     }
     setup_fake_temple(world, rng, city, graphics_high);
-    super::water::setup(world, rng);
+    super::water::setup_with_revision(world, rng, revision);
     for y in 0..world.height {
         for x in 0..world.width {
             if world.tile(x as i32, y as i32).unwrap().object != "oLava" {

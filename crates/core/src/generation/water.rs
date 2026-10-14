@@ -113,11 +113,22 @@ fn place(world: &World, source: Cell, destination: Vec2) -> Option<Cell> {
 }
 
 /// scrSetupWalls.gml:360–398. Invoke before the separate lava setup loop.
+#[cfg(test)]
 pub(super) fn setup(world: &mut World, rng: &mut Rng) {
+    setup_with_revision(world, rng, crate::GenerationRevision::HistoricalV1);
+}
+
+pub(super) fn setup_with_revision(
+    world: &mut World,
+    rng: &mut Rng,
+    revision: crate::GenerationRevision,
+) {
     for cell in cells(world) {
         if lava(world, cell) {
             continue;
         }
+        #[cfg(test)]
+        let stock_prefix = stock_prefix_tests::observe_before(world, rng, cell);
         let p = origin(world, cell);
         let above = Vec2::new(p.x, p.y - 16.0);
         let below = Vec2::new(p.x, p.y + 16.0);
@@ -127,11 +138,21 @@ pub(super) fn setup(world: &mut World, rng: &mut Rng) {
         if !up && !up_water {
             set_sprite(world, cell, "sWaterTop");
         }
-        if up_water
-            && point(world, Vec2::new(p.x, p.y - 32.0), "oWater")
-            && down
-            && rng.chance(1, 4)
-        {
+        let tall = if revision == crate::GenerationRevision::SourceClassicV2 {
+            // Original AND evaluates each operand expression before its
+            // operator truth checks, even when upWater/down is false.
+            // Preserve query then rand order; the else-if roll is separate.
+            let two_above = point(world, Vec2::new(p.x, p.y - 32.0), "oWater");
+            let tall_roll = rng.chance(1, 4);
+            up_water && two_above && down && tall_roll
+        } else {
+            // Explicit historical generation retains its earlier RNG tape.
+            up_water
+                && point(world, Vec2::new(p.x, p.y - 32.0), "oWater")
+                && down
+                && rng.chance(1, 4)
+        };
+        if tall {
             set_sprite(world, cell, "sWaterBottomTall2");
             if let Some(above_cell) = place(world, cell, above) {
                 set_sprite(world, above_cell, "sWaterBottomTall1");
@@ -145,6 +166,8 @@ pub(super) fn setup(world: &mut World, rng: &mut Rng) {
             };
             set_sprite(world, cell, selected);
         }
+        #[cfg(test)]
+        stock_prefix_tests::observe_after(world, rng, stock_prefix);
     }
 }
 
@@ -244,3 +267,7 @@ mod tests {
         assert_eq!(w.entity(lava).unwrap().sprite, "sLavaTop");
     }
 }
+
+#[cfg(test)]
+#[path = "water_stock_prefix_tests.rs"]
+mod stock_prefix_tests;
