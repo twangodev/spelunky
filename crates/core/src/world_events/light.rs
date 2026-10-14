@@ -221,6 +221,88 @@ pub(crate) fn lighting_tick(game: &mut Game) {
     game.data.insert("darkness".into(), darkness.min(0.9));
 }
 
+const SCREEN_RED_SAMPLE_TICK: &str = "source_screen_red_sample_tick";
+const SCREEN_RED_DISTANCE_KEYS: [&str; 2] = [
+    "source_screen_static_red_distance",
+    "source_screen_carried_red_distance",
+];
+
+// distance_to_object compares all active family cached inclusive envelopes;
+// it does not first choose an instance by origin distance. Querying is pure.
+fn current_red_lamp_distances(game: &Game) -> [Option<f64>; 2] {
+    if !game.player.engine_active {
+        return [None, None];
+    }
+    let player = game.player.collision_mask().point_bounds();
+    ["oLampRed", "oLampRedItem"].map(|family| {
+        game.world
+            .entities
+            .iter()
+            .filter(|e| e.alive && e.engine_active && catalog::is_a(&e.object, family))
+            .map(|e| mask_distance(player, e.collision_mask().point_bounds()))
+            .chain(
+                game.world
+                    .tiles
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| t.engine_active && catalog::is_a(&t.object, family))
+                    .map(|(index, _)| {
+                        mask_distance(
+                            player,
+                            game.world
+                                .tile_collision_mask(
+                                    (index % game.world.width) as i32,
+                                    (index / game.world.width) as i32,
+                                )
+                                .point_bounds(),
+                        )
+                    }),
+            )
+            .min_by(f64::total_cmp)
+            .map(|distance| distance.min(1_000_000.0))
+    })
+}
+
+/// Literal oScreen Begin Step samples red tint before alarms and movement.
+/// The Screen receiver adapter is shared with that event's message callback.
+pub(super) fn capture_screen_red_lamps(game: &mut Game, screen_present: bool) {
+    game.data.remove(SCREEN_RED_SAMPLE_TICK);
+    for key in SCREEN_RED_DISTANCE_KEYS {
+        game.data.remove(key);
+    }
+    if !screen_present
+        || !game.world.dark
+        || game.player.state == crate::PlayerState::Dead
+        || game.state == crate::RunState::Dead
+    {
+        return;
+    }
+    let distances = current_red_lamp_distances(game);
+    game.data
+        .insert(SCREEN_RED_SAMPLE_TICK.into(), game.level_tick as f64);
+    for (key, distance) in SCREEN_RED_DISTANCE_KEYS.into_iter().zip(distances) {
+        if let Some(distance) = distance {
+            game.data.insert(key.into(), distance);
+            // Source runs the static class first and carried class second.
+            // Even an out-of-range second class writes this Player variable.
+            game.player.data.insert("dist_to_lamp".into(), distance);
+        }
+    }
+}
+
+/// Presentation reads the admitted simulation sample without resampling it.
+/// Only pre-first-step fixture/room Draw has a pure current-pose fallback.
+/// A stepped runtime missing a matching sample cannot silently query again.
+pub fn screen_red_lamp_distances(game: &Game) -> [Option<f64>; 2] {
+    if game.data.get(SCREEN_RED_SAMPLE_TICK) == Some(&(game.level_tick as f64)) {
+        SCREEN_RED_DISTANCE_KEYS.map(|key| game.data.get(key).copied())
+    } else if game.level_tick == 0 {
+        current_red_lamp_distances(game)
+    } else {
+        [None, None]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

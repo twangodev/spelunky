@@ -1628,32 +1628,7 @@ fn scene_lights(game: &Game, alpha: f64) -> Vec<Light> {
 }
 
 fn red_lamp_distances(game: &Game) -> [Option<f64>; 2] {
-    let game = game.presentation();
-    let player_mask = game.player.sprite_bounds();
-    ["oLampRed", "oLampRedItem"].map(|object| {
-        game.world
-            .entities
-            .iter()
-            .filter(|e| e.alive && e.engine_active && e.object == object)
-            .map(|e| sprite_distance(player_mask, e.sprite_bounds()))
-            .chain(
-                game.world
-                    .tiles
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, tile)| tile.engine_active && tile.object == object)
-                    .map(|(index, _)| {
-                        sprite_distance(
-                            player_mask,
-                            game.world.tile_bounds(
-                                (index % game.world.width.max(1)) as i32,
-                                (index / game.world.width.max(1)) as i32,
-                            ),
-                        )
-                    }),
-            )
-            .min_by(f64::total_cmp)
-    })
+    spelunky_core::world_events::screen_red_lamp_distances(game.presentation())
 }
 
 #[cfg(any(test, target_arch = "wasm32"))]
@@ -1682,19 +1657,6 @@ fn source_mask_rgb(red: f64, green: f64, blue: f64) -> [f64; 3] {
         .wrapping_add((green.round_ties_even() as i64).wrapping_mul(256))
         .wrapping_add((blue.round_ties_even() as i64).wrapping_mul(65536));
     [0, 8, 16].map(|shift| ((packed >> shift) & 255) as f64 / 255.0)
-}
-
-fn sprite_distance(a: spelunky_core::Rect, b: spelunky_core::Rect) -> f64 {
-    if !a.is_valid() || !b.is_valid() {
-        return f64::INFINITY;
-    }
-    let x = (a.x - (b.x + b.w - 1.0))
-        .max(b.x - (a.x + a.w - 1.0))
-        .max(0.0);
-    let y = (a.y - (b.y + b.h - 1.0))
-        .max(b.y - (a.y + a.h - 1.0))
-        .max(0.0);
-    x.hypot(y)
 }
 
 fn source_light(object: &str) -> Option<(f64, f64, f64)> {
@@ -5488,10 +5450,9 @@ mod tests {
         let static_tint = scene_lights(&game, 1.0)[0].tint;
         assert!(static_tint[0] > static_tint[1]);
         game.world.entity_mut(item).unwrap().pos = Vec2::new(150.0, 100.0);
-        let distance = sprite_distance(
-            game.player.sprite_bounds(),
-            game.world.entity(item).unwrap().sprite_bounds(),
-        );
+        // Source cached aggregate StandLeft at(100,100) ends x105;
+        // positive-unit LampRedItem at(150,100) starts x143. Y overlaps.
+        let distance = 38.0;
         let lights = scene_lights(&game, 1.0);
         let expected = source_mask_rgb(255.0 - distance, 24.0 + distance, 24.0 + distance);
         assert_eq!(
@@ -5699,3 +5660,7 @@ mod hawkman_worship_draw_tests;
 #[cfg(test)]
 #[path = "weapon_default_draw_tests.rs"]
 mod weapon_default_draw_tests;
+
+#[cfg(test)]
+#[path = "source_red_lamp_begin_tests.rs"]
+mod source_red_lamp_begin_tests;

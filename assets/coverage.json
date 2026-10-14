@@ -1155,17 +1155,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 442,
+          "line": 444,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 633,
+          "line": 635,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 400,
+          "line": 402,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -1264,27 +1264,27 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 422,
+          "line": 424,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 448,
+          "line": 450,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 621,
+          "line": 623,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1516,
+          "line": 1518,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 379,
+          "line": 381,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -1307,32 +1307,32 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 418,
+          "line": 420,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 545,
+          "line": 547,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 627,
+          "line": 629,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 698,
+          "line": 700,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1322,
+          "line": 1324,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 385,
+          "line": 387,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -1353,22 +1353,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 419,
+          "line": 421,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 627,
+          "line": 629,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 698,
+          "line": 700,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 386,
+          "line": 388,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -1591,22 +1591,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 422,
+          "line": 424,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 621,
+          "line": 623,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 701,
+          "line": 703,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 380,
+          "line": 382,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -1627,12 +1627,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 630,
+          "line": 632,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 395,
+          "line": 397,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -1885,32 +1885,32 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 420,
+          "line": 422,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 546,
+          "line": 548,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 627,
+          "line": 629,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 698,
+          "line": 700,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1322,
+          "line": 1324,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 387,
+          "line": 389,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -1986,32 +1986,32 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 416,
+          "line": 418,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 461,
+          "line": 463,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 628,
+          "line": 630,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 699,
+          "line": 701,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1322,
+          "line": 1324,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 389,
+          "line": 391,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -2349,7 +2349,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 415,
+          "line": 417,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -3448,7 +3448,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 641,
+          "line": 643,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -3800,17 +3800,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 570,
+          "line": 572,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 772,
+          "line": 774,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 363,
+          "line": 365,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -3892,17 +3892,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 630,
+          "line": 632,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 703,
+          "line": 705,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 396,
+          "line": 398,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -4104,32 +4104,32 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 422,
+          "line": 424,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 456,
+          "line": 458,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 622,
+          "line": 624,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 791,
+          "line": 793,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1524,
+          "line": 1526,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 381,
+          "line": 383,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -4152,22 +4152,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 416,
+          "line": 418,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 628,
+          "line": 630,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 699,
+          "line": 701,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 392,
+          "line": 394,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -4279,32 +4279,32 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 416,
+          "line": 418,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 461,
+          "line": 463,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 628,
+          "line": 630,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 699,
+          "line": 701,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1322,
+          "line": 1324,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 390,
+          "line": 392,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -4467,12 +4467,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 613,
+          "line": 615,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 378,
+          "line": 380,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -5143,17 +5143,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 433,
+          "line": 435,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 583,
+          "line": 585,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 364,
+          "line": 366,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -5341,17 +5341,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 442,
+          "line": 444,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 633,
+          "line": 635,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 401,
+          "line": 403,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -5394,12 +5394,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 418,
+          "line": 420,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 370,
+          "line": 372,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -5490,17 +5490,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 548,
+          "line": 550,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 612,
+          "line": 614,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 377,
+          "line": 379,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -5605,22 +5605,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 419,
+          "line": 421,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 443,
+          "line": 445,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 633,
+          "line": 635,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 402,
+          "line": 404,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -6079,17 +6079,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 418,
+          "line": 420,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 367,
+          "line": 369,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1705,
+          "line": 1667,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -6152,17 +6152,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 418,
+          "line": 420,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 368,
+          "line": 370,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1633,
+          "line": 1667,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -6290,27 +6290,27 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 419,
+          "line": 421,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 547,
+          "line": 549,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 628,
+          "line": 630,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 699,
+          "line": 701,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 391,
+          "line": 393,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -6330,22 +6330,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 419,
+          "line": 421,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 629,
+          "line": 631,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 700,
+          "line": 702,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 394,
+          "line": 396,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -6370,17 +6370,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 423,
+          "line": 425,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 623,
+          "line": 625,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 382,
+          "line": 384,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -6401,17 +6401,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 417,
+          "line": 419,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 700,
+          "line": 702,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 641,
+          "line": 643,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -6498,17 +6498,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 420,
+          "line": 422,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 462,
+          "line": 464,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 641,
+          "line": 643,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -6527,12 +6527,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 603,
+          "line": 605,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 372,
+          "line": 374,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -6942,7 +6942,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1524,
+          "line": 1526,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -7847,12 +7847,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 795,
+          "line": 797,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 362,
+          "line": 364,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -8393,12 +8393,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 630,
+          "line": 632,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 397,
+          "line": 399,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -8423,22 +8423,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 631,
+          "line": 633,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 702,
+          "line": 704,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 796,
+          "line": 798,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 398,
+          "line": 400,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -8765,27 +8765,27 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 416,
+          "line": 418,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 627,
+          "line": 629,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 698,
+          "line": 700,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1317,
+          "line": 1319,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 383,
+          "line": 385,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -8852,22 +8852,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 423,
+          "line": 425,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 611,
+          "line": 613,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 700,
+          "line": 702,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 376,
+          "line": 378,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -8888,27 +8888,27 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 420,
+          "line": 422,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 611,
+          "line": 613,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 700,
+          "line": 702,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 790,
+          "line": 792,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 375,
+          "line": 377,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -9470,7 +9470,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 641,
+          "line": 643,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -9487,12 +9487,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 634,
+          "line": 636,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 403,
+          "line": 405,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -9513,7 +9513,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 641,
+          "line": 643,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -9532,7 +9532,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 641,
+          "line": 643,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -9552,7 +9552,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 641,
+          "line": 643,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -10535,22 +10535,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 416,
+          "line": 418,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 442,
+          "line": 444,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 633,
+          "line": 635,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 399,
+          "line": 401,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -10670,32 +10670,32 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 416,
+          "line": 418,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 460,
+          "line": 462,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 627,
+          "line": 629,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 698,
+          "line": 700,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1321,
+          "line": 1323,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 384,
+          "line": 386,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -11258,22 +11258,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 421,
+          "line": 423,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 627,
+          "line": 629,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 698,
+          "line": 700,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 388,
+          "line": 390,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -11662,7 +11662,7 @@
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 366,
+          "line": 368,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -11687,12 +11687,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 582,
+          "line": 584,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 365,
+          "line": 367,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -11803,17 +11803,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 418,
+          "line": 420,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 369,
+          "line": 371,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1707,
+          "line": 1669,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -12114,12 +12114,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 599,
+          "line": 601,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 374,
+          "line": 376,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -12150,12 +12150,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 603,
+          "line": 605,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 373,
+          "line": 375,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -13215,17 +13215,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 447,
+          "line": 449,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 632,
+          "line": 634,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 371,
+          "line": 373,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -13285,17 +13285,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 628,
+          "line": 630,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 699,
+          "line": 701,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 393,
+          "line": 395,
           "module": "crates/core/src/world_events.rs"
         }
       ],

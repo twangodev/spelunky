@@ -21,6 +21,7 @@ pub(crate) fn mask_distance(a: Rect, b: Rect) -> f64 {
 mod direct_terrain_create;
 mod light;
 mod temple;
+pub use light::screen_red_lamp_distances;
 pub(crate) use light::{lighting_tick, sample_light_distances};
 
 /// oGame318 fluid pass runs before Player319 and Level553 activation.
@@ -271,6 +272,7 @@ pub(crate) fn begin_step(game: &mut Game) -> f64 {
     } else {
         0
     };
+    light::capture_screen_red_lamps(game, receivers > 0);
     consume_message(game, receivers)
 }
 
