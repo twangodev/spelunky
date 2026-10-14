@@ -275,24 +275,26 @@ fn source_rectangle_bbox(game: &Game, first: Vec2, second: Vec2, family: &str) -
 // Basketball's target families are root, entity-backed objects. The nearest
 // lookup is independent of the preceding collision gate and preserves ties.
 fn nearest_basketball_target(game: &Game, origin: Vec2, family: &str) -> Option<u64> {
-    source_query_instances(game, family)
-        .into_iter()
-        .filter_map(|instance| match instance {
-            crate::dispatcher::Instance::Entity(id) => {
-                game.world.entity(id).filter(|target| target.engine_active)
-            }
-            _ => None,
-        })
-        .fold(None, |nearest: Option<&Entity>, target| {
-            if nearest
-                .is_none_or(|current| target.pos.distance(origin) < current.pos.distance(origin))
-            {
-                Some(target)
-            } else {
-                nearest
-            }
-        })
-        .map(|target| target.id)
+    // Native 4E434C initializes squared distance to finite 1e10; only
+    // strictly smaller replaces the incumbent (first family entry wins ties).
+    let mut best_squared = 1e10;
+    let mut nearest = None;
+    for instance in source_query_instances(game, family) {
+        let crate::dispatcher::Instance::Entity(id) = instance else {
+            continue;
+        };
+        let Some(target) = game.world.entity(id).filter(|target| target.engine_active) else {
+            continue;
+        };
+        let dx = target.pos.x - origin.x;
+        let dy = target.pos.y - origin.y;
+        let squared = dx * dx + dy * dy;
+        if squared < best_squared {
+            best_squared = squared;
+            nearest = Some(id);
+        }
+    }
+    nearest
 }
 
 /// Literal oBasketball own Step, after its inherited Item action.
@@ -320,7 +322,12 @@ fn basketball_step(game: &mut Game, ball: &mut Entity) {
         && ball.value("bounces") < 40.0
     {
         ball.vel.y = -ball.vel.y * 0.8;
-        if let Some(id) = nearest_basketball_target(game, ball.pos, "oRimDeflect") {
+        let Some(id) = nearest_basketball_target(game, ball.pos, "oRimDeflect") else {
+            ball.data.insert("obj".into(), -4.0);
+            basketball_owner_error(game, "obj.x: instance_nearest(oRimDeflect) returned noone");
+            return;
+        };
+        {
             ball.data.insert("obj".into(), id as f64);
             let center = game.world.entity(id).unwrap().pos.x + 8.0;
             let distance = (center - ball.pos.x).abs();
@@ -1398,3 +1405,7 @@ mod telefrag_blood_source_tests {
 #[cfg(test)]
 #[path = "basketball_missing_owner_tests.rs"]
 mod basketball_missing_owner_source_tests;
+
+#[cfg(test)]
+#[path = "basketball_nearest_sentinel_tests.rs"]
+mod basketball_nearest_sentinel_source_tests;
