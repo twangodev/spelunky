@@ -224,3 +224,6 @@ fn historical_ground_lush_retains_deferred_constructor_and_old_two_guard_tapes()
         }
     }
 }
+
+#[path = "synchronous_lush_caller_tests.rs"]
+mod synchronous_lush_caller_tests;

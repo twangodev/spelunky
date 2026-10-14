@@ -530,9 +530,9 @@ fn historical_decoder_before(
             }
             _ => match world.area {
                 Area::Mines => mines(world, rng, symbol, tx, ty, p),
-                Area::Jungle => jungle(world, rng, symbol, tx, ty, p, market, occupied),
+                Area::Jungle => jungle(world, rng, symbol, tx, ty, p, market, occupied, None),
                 Area::Ice => ice(world, rng, symbol, tx, ty, p, yeti, occupied, false),
-                Area::Temple => temple(world, rng, symbol, tx, ty, p, occupied),
+                Area::Temple => temple(world, rng, symbol, tx, ty, p, occupied, None),
                 Area::Boss => boss(world, rng, symbol, tx, ty, p),
             },
         }

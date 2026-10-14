@@ -148,10 +148,9 @@ pub(super) fn create_source_boundary(
     }
 }
 
-/// The smallest synchronous interior path: SourceClassic Jungle ground
-/// glyphs1/2. Run complete Lush Create (including a real child constructor)
-/// before the room script's later independent predicates/next glyph. Other
-/// terrain producers retain their existing adapter until separately migrated.
+/// Complete every SourceClassic room-script Lush birth, including its real
+/// child constructor, before later predicates, births, or caller overrides.
+/// Other terrain families retain their existing adapter until migrated.
 pub(super) fn create_source_ground_lush(
     world: &mut World,
     rng: &mut Rng,

@@ -229,6 +229,7 @@ fn stamp_tile_body(
     predicates_prechecked: bool,
     terrain_context: super::GenerationContext,
 ) {
+    let source_context = predicates_prechecked.then_some(terrain_context);
     match symbol {
         b'1' | b'2' => {
             if symbol == b'2' && !predicates_prechecked && !rng.chance(1, 2) {
@@ -236,12 +237,7 @@ fn stamp_tile_body(
             }
             if !occupied {
                 let object = ground(world.area, yeti, symbol == b'1', rng);
-                world.set_tile(tx, ty, object);
-                if predicates_prechecked && world.area == Area::Jungle && object == "oLush" {
-                    // scrRoomGen2/Market instance_create returns only after
-                    // inherited/own Lush Create and its child constructor.
-                    super::terrain::create_source_ground_lush(world, rng, tx, ty, terrain_context);
-                }
+                room_terrain(world, rng, tx, ty, object, source_context);
             }
         }
         b'9' => {
@@ -251,7 +247,7 @@ fn stamp_tile_body(
                 Area::Ice => "oDark",
                 _ => "oTemple",
             };
-            world.set_tile(tx, ty + 1, floor);
+            room_terrain(world, rng, tx, ty + 1, floor, source_context);
             let id = spawn(world, rng, if is_start { "oEntrance" } else { "oExit" }, p);
             if is_start {
                 world.entrance = offset(p, 8.0, 8.0);
@@ -312,7 +308,7 @@ fn stamp_tile_body(
                     Area::Ice => "oDark",
                     _ => "oTemple",
                 };
-                world.set_tile(tx, ty, object);
+                room_terrain(world, rng, tx, ty, object, source_context);
                 terrain_property(world, tx, ty, "shopWall", 1.0);
             }
         }
@@ -427,7 +423,17 @@ fn stamp_tile_body(
         }
         _ => match world.area {
             Area::Mines => mines(world, rng, symbol, tx, ty, p),
-            Area::Jungle => jungle(world, rng, symbol, tx, ty, p, market, occupied),
+            Area::Jungle => jungle(
+                world,
+                rng,
+                symbol,
+                tx,
+                ty,
+                p,
+                market,
+                occupied,
+                source_context,
+            ),
             Area::Ice => ice(
                 world,
                 rng,
@@ -439,7 +445,7 @@ fn stamp_tile_body(
                 occupied,
                 predicates_prechecked,
             ),
-            Area::Temple => temple(world, rng, symbol, tx, ty, p, occupied),
+            Area::Temple => temple(world, rng, symbol, tx, ty, p, occupied, source_context),
             Area::Boss => boss(world, rng, symbol, tx, ty, p),
         },
     }
@@ -558,6 +564,27 @@ fn stamp_source_tile(
 #[path = "source_tile_predicate_tests.rs"]
 mod source_tile_predicate_tests;
 
+/// Each SourceClassic Lush birth completes inherited/own Create before
+/// returning to its literal room-script caller. Other terrain families retain
+/// their existing adapter; historical decoding does not enter this constructor.
+fn room_terrain(
+    world: &mut World,
+    rng: &mut Rng,
+    x: usize,
+    y: usize,
+    object: &str,
+    source_context: Option<super::GenerationContext>,
+) {
+    world.set_tile(x, y, object);
+    if let Some(context) = source_context
+        && object == "oLush"
+        && x < world.width
+        && y < world.height
+    {
+        super::terrain::create_source_ground_lush(world, rng, x, y, context);
+    }
+}
+
 fn ground(area: Area, yeti: bool, certain: bool, rng: &mut Rng) -> &'static str {
     match area {
         Area::Mines => {
@@ -651,17 +678,19 @@ fn jungle(
     p: Vec2,
     market: bool,
     occupied: bool,
+    source_context: Option<super::GenerationContext>,
 ) {
     match c {
         b't' if !occupied => w.set_tile(x, y, "oTemple"),
         b'r' if !market && !occupied => {
-            w.set_tile(x, y, if r.chance(1, 2) { "oTemple" } else { "oLush" })
+            let object = if r.chance(1, 2) { "oTemple" } else { "oLush" };
+            room_terrain(w, r, x, y, object, source_context);
         }
         b'3' if !occupied => {
             if r.chance(1, 2) {
                 spawn(w, r, "oWaterSwim", p);
             } else {
-                w.set_tile(x, y, "oLush");
+                room_terrain(w, r, x, y, "oLush", source_context);
             }
         }
         b's' => {
@@ -681,12 +710,12 @@ fn jungle(
         }
         b'v' if !market => {
             spawn(w, r, "oWaterSwim", p);
-            w.set_tile(x, y, "oLush");
+            room_terrain(w, r, x, y, "oLush", source_context);
         }
         b',' if !market => {
             spawn(w, r, "oWaterSwim", p);
             if r.chance(1, 2) {
-                w.set_tile(x, y, "oLush");
+                room_terrain(w, r, x, y, "oLush", source_context);
             }
         }
         b'J' if !market => {
@@ -857,7 +886,16 @@ fn ice(
     }
 }
 
-fn temple(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2, occupied: bool) {
+fn temple(
+    w: &mut World,
+    r: &mut Rng,
+    c: u8,
+    x: usize,
+    y: usize,
+    p: Vec2,
+    occupied: bool,
+    source_context: Option<super::GenerationContext>,
+) {
     match c {
         b'3' if !occupied => {
             if r.chance(1, 2) {
@@ -948,8 +986,8 @@ fn temple(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2, occupi
         b'w' => {
             spawn(w, r, "oLava", p);
         }
-        b'd' => w.set_tile(x, y, "oLush"),
-        b'e' if r.chance(1, 2) => w.set_tile(x, y, "oLush"),
+        b'd' => room_terrain(w, r, x, y, "oLush", source_context),
+        b'e' if r.chance(1, 2) => room_terrain(w, r, x, y, "oLush", source_context),
         b'T' => tree(w, r, x, y, p),
         _ => {}
     }
