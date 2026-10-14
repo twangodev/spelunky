@@ -221,10 +221,8 @@ pub fn use_utility(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
     true
 }
 
-/// Source collision_point with false precise/notme flags. The builtin converts
-/// finite flags with >= 0.5, so FlareCrate's -1/-1 also selects these modes
-/// (canonical handler 0x55C044..0x55C08B).
-pub(super) fn source_point_bbox(game: &Game, point: Vec2, family: &str) -> bool {
+/// Query-visible source family order, without registration or Create side effects.
+fn source_query_instances(game: &Game, family: &str) -> Vec<crate::dispatcher::Instance> {
     use crate::dispatcher::Instance;
     let mut candidates = crate::dispatcher::descendant_instances(game, family);
     if !game.dispatcher.running {
@@ -243,6 +241,165 @@ pub(super) fn source_point_bbox(game: &Game, point: Vec2, family: &str) -> bool 
             }
         }
     }
+    candidates
+}
+
+fn source_rectangle_bbox(game: &Game, first: Vec2, second: Vec2, family: &str) -> bool {
+    use crate::dispatcher::Instance;
+    source_query_instances(game, family)
+        .into_iter()
+        .any(|instance| match instance {
+            Instance::Entity(id) => game.world.entity(id).is_some_and(|target| {
+                target.engine_active
+                    && target.collision_mask().intersects_rectangle(
+                        first,
+                        second,
+                        CollisionPrecision::BoundingBox,
+                    )
+            }),
+            Instance::Terrain(index) => game.world.tiles.get(index).is_some_and(|tile| {
+                tile.engine_active
+                    && !tile.object.is_empty()
+                    && game
+                        .world
+                        .tile_collision_mask(
+                            (index % game.world.width) as i32,
+                            (index / game.world.width) as i32,
+                        )
+                        .intersects_rectangle(first, second, CollisionPrecision::BoundingBox)
+            }),
+            Instance::Player => false,
+        })
+}
+
+// Basketball's target families are root, entity-backed objects. The nearest
+// lookup is independent of the preceding collision gate and preserves ties.
+fn nearest_basketball_target(game: &Game, origin: Vec2, family: &str) -> Option<u64> {
+    source_query_instances(game, family)
+        .into_iter()
+        .filter_map(|instance| match instance {
+            crate::dispatcher::Instance::Entity(id) => {
+                game.world.entity(id).filter(|target| target.engine_active)
+            }
+            _ => None,
+        })
+        .fold(None, |nearest: Option<&Entity>, target| {
+            if nearest
+                .is_none_or(|current| target.pos.distance(origin) < current.pos.distance(origin))
+            {
+                Some(target)
+            } else {
+                nearest
+            }
+        })
+        .map(|target| target.id)
+}
+
+/// Literal oBasketball own Step, after its inherited Item action.
+// Stable port error record, not a claim about the native dialog's exact text.
+// The original interpreter aborts this code block while retaining prior writes.
+fn basketball_owner_error(game: &mut Game, field: &str) {
+    *game.data.entry("source_runtime_errors".into()).or_default() += 1.0;
+    game.events.push(GameEvent::Message(format!(
+        "SOURCE RUNTIME ERROR: oBasketball Step: {field}; code block aborted."
+    )));
+}
+
+fn basketball_step(game: &mut Game, ball: &mut Entity) {
+    if ball.value("colLeft") != 0.0 || ball.value("colRight") != 0.0 {
+        ball.data.insert("wallBounce".into(), 1.0);
+    } else if ball.value("colBot") != 0.0 {
+        ball.data.insert("wallBounce".into(), 0.0);
+    }
+    if source_rectangle_bbox(
+        game,
+        Vec2::new(ball.pos.x - 1.0, ball.pos.y + 4.0),
+        Vec2::new(ball.pos.x + 1.0, ball.pos.y + 5.0),
+        "oRimDeflect",
+    ) && ball.value("goingIn") == 0.0
+        && ball.value("bounces") < 40.0
+    {
+        ball.vel.y = -ball.vel.y * 0.8;
+        if let Some(id) = nearest_basketball_target(game, ball.pos, "oRimDeflect") {
+            ball.data.insert("obj".into(), id as f64);
+            let center = game.world.entity(id).unwrap().pos.x + 8.0;
+            let distance = (center - ball.pos.x).abs();
+            if ball.pos.x < center && distance > 7.0 {
+                ball.vel = Vec2::new(-2.0, -0.5);
+            } else if ball.pos.x > center && distance > 7.0 {
+                ball.vel = Vec2::new(2.0, -0.5);
+            } else if distance < 4.0 {
+                ball.vel = Vec2::new(if ball.pos.x < center { 1.0 } else { -0.2 }, -0.5);
+            }
+        }
+        ball.data
+            .insert("bounces".into(), ball.value("bounces") + 10.0);
+    }
+    if ball.value("bounces") > 0.0 {
+        ball.data
+            .insert("bounces".into(), ball.value("bounces") - 1.0);
+    }
+    if source_point_bbox(game, ball.pos, "oRim") {
+        if ball.value("goingIn") == 0.0
+            && (ball.vel.y > 0.0 || ball.held && game.player.state == PlayerState::Falling)
+        {
+            // The represented stock Moon controller owns virtual alarm/data
+            // slots. Configured scoring scenes must contain that controller.
+            if crate::hub::challenge_alarm_resource(game) == Some(715) {
+                game.data.insert("hub_alarm0".into(), 20.0);
+            }
+            ball.vel = Vec2::default();
+            ball.data.insert("goingIn".into(), 1.0);
+            let Some(id) = nearest_basketball_target(game, ball.pos, "oBasket") else {
+                // Empty instance_nearest returns noone (-4). The following
+                // obj.sprite_index assignment fails before the held tail.
+                ball.data.insert("obj".into(), -4.0);
+                basketball_owner_error(game, "obj.sprite_index: oBasket has no active instance");
+                return;
+            };
+            ball.data.insert("obj".into(), id as f64);
+            let basket = game.world.entity_mut(id).unwrap();
+            basket.set_sprite("sBasketSwoosh");
+            basket.animation = 0.0;
+            if crate::hub::challenge_alarm_resource(game) != Some(715) {
+                // Unlike with's empty body, the compound field assignment
+                // first reads baskets and aborts on the missing controller.
+                basketball_owner_error(game, "oMoonRoom.baskets has no active instance");
+                return;
+            }
+            let points = if ball.held {
+                1.0
+            } else if ball.value("wallBounce") != 0.0 {
+                3.0
+            } else {
+                2.0
+            };
+            *game.data.entry("baskets".into()).or_default() += points;
+            if ball.held {
+                // Source writes baskets before clearing the Player backlink.
+                game.player.held = None;
+            }
+            ball.held = false;
+        }
+    } else {
+        ball.data.insert("goingIn".into(), 0.0);
+    }
+    let sprite = if ball.held
+        && source_point_bbox(game, Vec2::new(ball.pos.x, ball.pos.y + 6.0), "oSolid")
+    {
+        "sDribble"
+    } else {
+        "sBasketball"
+    };
+    ball.set_sprite(sprite);
+}
+
+/// Source collision_point with false precise/notme flags. The builtin converts
+/// finite flags with >= 0.5, so FlareCrate's -1/-1 also selects these modes
+/// (canonical handler 0x55C044..0x55C08B).
+pub(super) fn source_point_bbox(game: &Game, point: Vec2, family: &str) -> bool {
+    use crate::dispatcher::Instance;
+    let candidates = source_query_instances(game, family);
     candidates.into_iter().any(|instance| match instance {
         Instance::Entity(id) => game.world.entity(id).is_some_and(|target| {
             target.engine_active && target.mask_contains(point, CollisionPrecision::BoundingBox)
@@ -262,26 +419,6 @@ pub(super) fn source_point_bbox(game: &Game, point: Vec2, family: &str) -> bool 
     })
 }
 
-fn solid_rect(game: &Game, rect: Rect) -> bool {
-    // GameMaker collision queries do not create solid walls at room edges.
-    // Tile storage must therefore ignore missing cells instead of using the
-    // generic World::collides adapter's implicit outside-room collider.
-    for y in (rect.y / TILE_SIZE).floor() as i32
-        ..=((rect.y + rect.h - 0.00001) / TILE_SIZE).floor() as i32
-    {
-        for x in (rect.x / TILE_SIZE).floor() as i32
-            ..=((rect.x + rect.w - 0.00001) / TILE_SIZE).floor() as i32
-        {
-            if game.world.tile(x, y).is_some_and(Tile::is_solid) {
-                return true;
-            }
-        }
-    }
-    game.world.entities.iter().any(|e| {
-        e.alive && crate::catalog::is_solid(&e.object) && rect.intersects(e.sprite_bounds())
-    })
-}
-
 /// The trap subsystem owns the source idol pickup and Step producers.
 pub fn on_pickup(_game: &mut Game, _id: u64) {}
 
@@ -293,6 +430,7 @@ pub(crate) fn handles(object: &str) -> bool {
         "oFlareCrate"
             | "oDice"
             | "oBasketball"
+            | "oBasket"
             | "oFlareSpark"
             | "oTeleporter"
             | "oLampItem"
@@ -324,10 +462,12 @@ pub(crate) fn alarm(game: &mut Game, id: u64, alarm: u8) {
 }
 
 pub(crate) fn animation_end(game: &mut Game, id: u64) {
-    if let Some(entity) = game.world.entity_mut(id)
-        && entity.object == "oFlareSpark"
-    {
-        entity.alive = false;
+    if let Some(entity) = game.world.entity_mut(id) {
+        if entity.object == "oFlareSpark" {
+            entity.alive = false;
+        } else if entity.object == "oBasket" && entity.sprite == "sBasketSwoosh" {
+            entity.set_sprite("sBasket");
+        }
     }
 }
 
@@ -365,10 +505,11 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         .world
         .entities
         .iter()
-        // Dice and FlareCrate continue their own Step after inherited lava
+        // Dice, FlareCrate and Basketball continue their own Step after inherited lava
         // instance_destroy. Retain those receivers without reviving them.
         .position(|e| {
-            e.id == id && (e.alive || matches!(e.object.as_str(), "oDice" | "oFlareCrate"))
+            e.id == id
+                && (e.alive || matches!(e.object.as_str(), "oDice" | "oFlareCrate" | "oBasketball"))
         })
     else {
         return;
@@ -437,14 +578,7 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
                 }
             }
         }
-        "oBasketball" => {
-            let sprite = if entity.held && game.world.solid_at(entity.pos.x, entity.pos.y + 6.0) {
-                "sDribble"
-            } else {
-                "sBasketball"
-            };
-            crate::animation::assign(&mut entity.sprite, &mut entity.animation, sprite);
-        }
+        "oBasketball" => basketball_step(game, &mut entity),
         "oFlareSpark" => {
             entity.pos.y += entity.vel.y;
             // Animation End is dispatched by the shared endframe pass.
@@ -1260,3 +1394,7 @@ mod telefrag_blood_source_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "basketball_missing_owner_tests.rs"]
+mod basketball_missing_owner_source_tests;

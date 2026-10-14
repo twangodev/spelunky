@@ -710,7 +710,9 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     if kind == HubKind::Scores {
         scores_step(game);
     }
-    basketball(game);
+    if !game.dispatcher.running {
+        basketball(game);
+    }
     if !game.dispatcher.running {
         static_targets(game);
     }

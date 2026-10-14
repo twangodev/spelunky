@@ -215,6 +215,10 @@ pub(crate) fn initialize_source_jungle_child(entity: &mut Entity, has_spectacles
 }
 
 pub(crate) fn create_instance(game: &mut Game, id: u64) {
+    // Root Basket has no Create event and must not inherit Item defaults.
+    if game.world.entity(id).is_some_and(|e| e.object == "oBasket") {
+        return;
+    }
     if game
         .world
         .entity(id)
@@ -234,8 +238,10 @@ pub(crate) fn create_instance(game: &mut Game, id: u64) {
     if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
         initialize_source_jungle_child(&mut entity, game.player.has("Spectacles"));
         // These own Creates inherit oItem depth and do not override it.
-        if matches!(entity.object.as_str(), "oRock" | "oJar" | "oSkull")
-            && entity.value("source_item_depth_initialized") == 0.0
+        if matches!(
+            entity.object.as_str(),
+            "oRock" | "oJar" | "oSkull" | "oBasketball"
+        ) && entity.value("source_item_depth_initialized") == 0.0
         {
             entity
                 .data
@@ -291,6 +297,10 @@ pub(crate) fn outside_room(game: &mut Game, id: u64) {
 }
 
 pub(crate) fn step_instance(game: &mut Game, id: u64) {
+    // Root Basket has only Animation End, not an inherited Item Step.
+    if game.world.entity(id).is_some_and(|e| e.object == "oBasket") {
+        return;
+    }
     if game
         .world
         .entity(id)
@@ -413,6 +423,13 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
     }
     weapons::step_instance(game, id);
     explosives::step_instance(game, id);
+    if game
+        .world
+        .entity(id)
+        .is_some_and(|e| e.object == "oBasketball" && item_body_active(game, e))
+    {
+        crate::enemies::item_step_impacts(game, id);
+    }
     utility::step_instance(game, id);
     collectibles::step_instance(game, id);
     if let Some(e) = game.world.entity_mut(id) {
@@ -423,7 +440,7 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
     }
     if game.world.entity(id).is_some_and(|e| {
         crate::catalog::is_a(&e.object, "oItem")
-            && !matches!(e.object.as_str(), "oArrow" | "oFlare")
+            && !matches!(e.object.as_str(), "oArrow" | "oFlare" | "oBasketball")
             && (item_body_active(game, e)
                 || matches!(
                     e.object.as_str(),
