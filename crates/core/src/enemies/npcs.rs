@@ -796,11 +796,13 @@ fn damsel(game: &mut Game, e: &mut Entity) {
             let b = e.bounds();
             let supported =
                 super::solid_mask(&game.world, Rect::new(b.x, b.y + b.h + 1.0, b.w, 1.0), e.id)
-                    || game.world.entities.iter().any(|web| {
-                        web.alive
-                            && web.object == "oWeb"
-                            && web.sprite_bounds().intersects(e.sprite_bounds())
-                    });
+                    || game.world.rectangle_family_except(
+                        Vec2::new(e.pos.x - 4.0, e.pos.y - 6.0),
+                        Vec2::new(e.pos.x + 4.0, e.pos.y + 8.0),
+                        "oWeb",
+                        None,
+                        CollisionPrecision::BoundingBox,
+                    );
             if grounded || supported {
                 if e.value("dead") == 0.0 {
                     if e.timer > 0 {
