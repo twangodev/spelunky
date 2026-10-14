@@ -276,7 +276,7 @@ fn exercise(seed: u32, rules: RulesPreset, trap: bool) {
 #[test]
 fn real_arrow_stun_at_generated_perimeter_recovers_for_running_and_jumping() {
     // First left-side match from an initial-geometry-only 0..2048 census.
-    let seed = 1881;
+    let seed = 2036;
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         exercise(seed, rules, true);
     }
@@ -285,7 +285,7 @@ fn real_arrow_stun_at_generated_perimeter_recovers_for_running_and_jumping() {
 #[test]
 fn same_generated_geometry_without_added_trap_keeps_normal_health_and_inputs() {
     // First left-side match from an initial-geometry-only 0..2048 census.
-    let seed = 1881;
+    let seed = 2036;
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         exercise(seed, rules, false);
     }
@@ -522,10 +522,10 @@ fn exercise_right(seed: u32, rules: RulesPreset, trap: bool) {
 
 #[test]
 fn independent_right_wall_arrow_and_healthy_routes_recover_for_fresh_inputs() {
-    // Fixed by the initial-only 0..2048 census, before any gameplay. Seed1111
-    // satisfies the unchanged predicate in both presets; exercise_right keeps
+    // First right-side match in the initial-only 0..8192 pool, before gameplay.
+    // Seed2151 satisfies the unchanged predicate in both presets; exercise_right keeps
     // that premise and every hit, wall, recovery, running and jump assertion.
-    let seed = 1111;
+    let seed = 2151;
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         exercise_right(seed, rules, true);
         exercise_right(seed, rules, false);

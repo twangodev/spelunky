@@ -529,11 +529,11 @@ fn historical_decoder_before(
                     .insert("terrain_sprite".into(), "sDarkSmooth".into());
             }
             _ => match world.area {
-                Area::Mines => mines(world, rng, symbol, tx, ty, p),
+                Area::Mines => mines(world, rng, symbol, tx, ty, p, None),
                 Area::Jungle => jungle(world, rng, symbol, tx, ty, p, market, occupied, None),
-                Area::Ice => ice(world, rng, symbol, tx, ty, p, yeti, occupied, false),
+                Area::Ice => ice(world, rng, symbol, tx, ty, p, yeti, occupied, false, None),
                 Area::Temple => temple(world, rng, symbol, tx, ty, p, occupied, None),
-                Area::Boss => boss(world, rng, symbol, tx, ty, p),
+                Area::Boss => boss(world, rng, symbol, tx, ty, p, None),
             },
         }
     }

@@ -109,6 +109,13 @@ pub(crate) fn initialize_entity_local(world: &mut World, rng: &mut Rng, id: u64)
     // world. The local context cannot mutate storage, so the original slot is
     // still authoritative when the body returns.
     let mut entity = world.entities.remove(index);
+    if entity.object == "oFrozenCaveman" && entity.value("frozen_create_initialized") == 0.0 {
+        // No own Create: it inherits oDrawnSprite's empty type and blinkToggle.
+        // Its live Step/Destroy receiver is created at the Ice parent's origin.
+        entity.text.insert("type".into(), String::new());
+        entity.data.insert("blinkToggle".into(), 0.0);
+        entity.data.insert("frozen_create_initialized".into(), 1.0);
+    }
     let mut context = EntityCreateContext { world, rng };
     crate::enemies::create_local(&mut context, &mut entity);
     crate::traps::create_local(&mut context, &mut entity);

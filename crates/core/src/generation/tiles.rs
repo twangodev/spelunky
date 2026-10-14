@@ -247,7 +247,11 @@ fn stamp_tile_body(
                 Area::Ice => "oDark",
                 _ => "oTemple",
             };
-            room_terrain(world, rng, tx, ty + 1, floor, source_context);
+            // scrRoomGen5 uniquely births the door BEFORE its support.
+            let door_first = source_context.is_some() && world.area == Area::Boss;
+            if !door_first {
+                room_terrain(world, rng, tx, ty + 1, floor, source_context);
+            }
             let id = spawn(world, rng, if is_start { "oEntrance" } else { "oExit" }, p);
             if is_start {
                 world.entrance = offset(p, 8.0, 8.0);
@@ -259,6 +263,9 @@ fn stamp_tile_body(
                 .unwrap()
                 .data
                 .insert("level_exit".into(), if is_start { 0.0 } else { 1.0 });
+            if door_first {
+                room_terrain(world, rng, tx, ty + 1, floor, source_context);
+            }
             if !is_start || world.area == Area::Boss {
                 terrain_property(world, tx, ty + 1, "invincible", 1.0);
             }
@@ -398,7 +405,7 @@ fn stamp_tile_body(
             } else {
                 "oBrickSmooth"
             };
-            world.set_tile(tx, ty, tile);
+            room_terrain(world, rng, tx, ty, tile, source_context);
             let id = terrain_property(world, tx, ty, "shopWall", 1.0);
             let sprite = match world.area {
                 Area::Jungle => "sLushSmooth",
@@ -406,11 +413,15 @@ fn stamp_tile_body(
                 Area::Temple => "sTemple",
                 _ => "sCaveSmooth",
             };
-            world
-                .entity_mut(id)
-                .unwrap()
-                .text
-                .insert("terrain_sprite".into(), sprite.into());
+            // scrRoomGen4's b caller assigns only shopWall. Its own Temple
+            // variant (including CityGold) survives; Historical keeps the adapter.
+            if !(source_context.is_some() && world.area == Area::Temple) {
+                world
+                    .entity_mut(id)
+                    .unwrap()
+                    .text
+                    .insert("terrain_sprite".into(), sprite.into());
+            }
         }
         b':' if world.area == Area::Ice && !yeti => {
             world.set_tile(tx, ty, "oBrickSmooth");
@@ -422,7 +433,7 @@ fn stamp_tile_body(
                 .insert("terrain_sprite".into(), "sDarkSmooth".into());
         }
         _ => match world.area {
-            Area::Mines => mines(world, rng, symbol, tx, ty, p),
+            Area::Mines => mines(world, rng, symbol, tx, ty, p, source_context),
             Area::Jungle => jungle(
                 world,
                 rng,
@@ -444,9 +455,10 @@ fn stamp_tile_body(
                 yeti,
                 occupied,
                 predicates_prechecked,
+                source_context,
             ),
             Area::Temple => temple(world, rng, symbol, tx, ty, p, occupied, source_context),
-            Area::Boss => boss(world, rng, symbol, tx, ty, p),
+            Area::Boss => boss(world, rng, symbol, tx, ty, p, source_context),
         },
     }
 }
@@ -564,9 +576,8 @@ fn stamp_source_tile(
 #[path = "source_tile_predicate_tests.rs"]
 mod source_tile_predicate_tests;
 
-/// Each SourceClassic Lush birth completes inherited/own Create before
-/// returning to its literal room-script caller. Other terrain families retain
-/// their existing adapter; historical decoding does not enter this constructor.
+/// Complete represented source room-terrain Create before returning to its
+/// literal caller. Historical decoding retains its deferred constructor tape.
 fn room_terrain(
     world: &mut World,
     rng: &mut Rng,
@@ -577,11 +588,14 @@ fn room_terrain(
 ) {
     world.set_tile(x, y, object);
     if let Some(context) = source_context
-        && object == "oLush"
+        && matches!(
+            object,
+            "oBrick" | "oLush" | "oDark" | "oTemple" | "oIce" | "oBlock"
+        )
         && x < world.width
         && y < world.height
     {
-        super::terrain::create_source_ground_lush(world, rng, x, y, context);
+        super::terrain::create_source_room_terrain(world, rng, x, y, context);
     }
 }
 
@@ -620,7 +634,15 @@ fn ground(area: Area, yeti: bool, certain: bool, rng: &mut Rng) -> &'static str 
     }
 }
 
-fn mines(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2) {
+fn mines(
+    w: &mut World,
+    r: &mut Rng,
+    c: u8,
+    x: usize,
+    y: usize,
+    p: Vec2,
+    source_context: Option<super::GenerationContext>,
+) {
     match c {
         b'A' => altar(w, r, p, false),
         b'a' => {
@@ -652,7 +674,7 @@ fn mines(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2) {
             if r.chance(1, 10) {
                 spawn(w, r, "oSnake", p);
             } else if r.chance(1, 2) {
-                w.set_tile(x, y, "oBrick");
+                room_terrain(w, r, x, y, "oBrick", source_context);
             }
         }
         b'S' => {
@@ -662,7 +684,7 @@ fn mines(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2) {
             spawn(w, r, "oRubyBig", offset(p, 8.0, 8.0));
         }
         b'M' => {
-            w.set_tile(x, y, "oBrick");
+            room_terrain(w, r, x, y, "oBrick", source_context);
             free_item(w, r, "oMattock", offset(p, 8.0, 8.0));
         }
         _ => {}
@@ -681,7 +703,7 @@ fn jungle(
     source_context: Option<super::GenerationContext>,
 ) {
     match c {
-        b't' if !occupied => w.set_tile(x, y, "oTemple"),
+        b't' if !occupied => room_terrain(w, r, x, y, "oTemple", source_context),
         b'r' if !market && !occupied => {
             let object = if r.chance(1, 2) { "oTemple" } else { "oLush" };
             room_terrain(w, r, x, y, object, source_context);
@@ -767,6 +789,7 @@ fn ice(
     yeti: bool,
     occupied: bool,
     predicates_prechecked: bool,
+    source_context: Option<super::GenerationContext>,
 ) {
     if yeti {
         match c {
@@ -789,8 +812,10 @@ fn ice(
             b'T' => {
                 spawn(w, r, "oRubyBig", offset(p, 8.0, 8.0));
             }
-            b'i' => w.set_tile(x, y, "oIce"),
-            b'j' if predicates_prechecked || r.chance(1, 2) => w.set_tile(x, y, "oIce"),
+            b'i' => room_terrain(w, r, x, y, "oIce", source_context),
+            b'j' if predicates_prechecked || r.chance(1, 2) => {
+                room_terrain(w, r, x, y, "oIce", source_context)
+            }
             b'Y' => {
                 spawn(w, r, "oYetiKing", p);
             }
@@ -814,7 +839,7 @@ fn ice(
         b'b' => {
             if r.chance(1, 2) {
                 let obj = ground(Area::Ice, false, true, r);
-                w.set_tile(x, y, obj);
+                room_terrain(w, r, x, y, obj, source_context);
             } else {
                 ship(w, r, x, y, p, "sAlienFloor");
             }
@@ -840,7 +865,7 @@ fn ice(
             spawn(w, r, "oAlienBoss", p);
         }
         b'T' => {
-            w.set_tile(x, y, "oDark");
+            room_terrain(w, r, x, y, "oDark", source_context);
             free_item(w, r, "oJetpack", offset(p, 8.0, 8.0));
         }
         b't' => {
@@ -871,11 +896,13 @@ fn ice(
             free_item(w, r, "oCrown", offset(p, 24.0, 56.0));
         }
         b'm' if !occupied => {
-            w.set_tile(x, y, "oDark");
+            room_terrain(w, r, x, y, "oDark", source_context);
             terrain_property(w, x, y, "invincible", 1.0);
         }
-        b'i' => w.set_tile(x, y, "oIce"),
-        b'j' if predicates_prechecked || r.chance(1, 2) => w.set_tile(x, y, "oIce"),
+        b'i' => room_terrain(w, r, x, y, "oIce", source_context),
+        b'j' if predicates_prechecked || r.chance(1, 2) => {
+            room_terrain(w, r, x, y, "oIce", source_context)
+        }
         b'f' => {
             spawn(w, r, "oDarkFall", p);
         }
@@ -901,11 +928,11 @@ fn temple(
             if r.chance(1, 2) {
                 spawn(w, r, "oLava", p);
             } else {
-                w.set_tile(x, y, "oTemple");
+                room_terrain(w, r, x, y, "oTemple", source_context);
             }
         }
         b'R' if !occupied => {
-            w.set_tile(x, y, "oTemple");
+            room_terrain(w, r, x, y, "oTemple", source_context);
             terrain_treasure(w, x, y, "Big Ruby");
         }
         b'a' => {
@@ -993,7 +1020,15 @@ fn temple(
     }
 }
 
-fn boss(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2) {
+fn boss(
+    w: &mut World,
+    r: &mut Rng,
+    c: u8,
+    x: usize,
+    y: usize,
+    p: Vec2,
+    source_context: Option<super::GenerationContext>,
+) {
     match c {
         b'a' => {
             r.range(1);
@@ -1013,9 +1048,9 @@ fn boss(w: &mut World, r: &mut Rng, c: u8, x: usize, y: usize, p: Vec2) {
             } else if r.chance(1, 10) {
                 spawn(w, r, "oCrate", offset(p, 8.0, 8.0));
             } else if r.chance(1, 10) {
-                w.set_tile(x, y, "oBlock");
+                room_terrain(w, r, x, y, "oBlock", source_context);
             } else {
-                w.set_tile(x, y, "oTemple");
+                room_terrain(w, r, x, y, "oTemple", source_context);
             }
         }
         b't' => {

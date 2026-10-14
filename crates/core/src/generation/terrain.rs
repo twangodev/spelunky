@@ -148,9 +148,150 @@ pub(super) fn create_source_boundary(
     }
 }
 
+/// Complete the remaining room-script terrain constructors at actual birth.
+/// The grid/proxy representation is retained; duplicate overlapping instances
+/// and SetupWalls interleaving remain separately stated adapter debt.
+pub(super) fn create_source_room_terrain(
+    world: &mut World,
+    rng: &mut Rng,
+    x: usize,
+    y: usize,
+    context: super::GenerationContext,
+) {
+    let object = world.tiles[y * world.width + x].object.clone();
+    if object == "oLush" {
+        create_source_ground_lush(world, rng, x, y, context);
+        return;
+    }
+    assert!(matches!(
+        object.as_str(),
+        "oBrick" | "oDark" | "oTemple" | "oIce" | "oBlock"
+    ));
+    for old in &mut world.entities {
+        if old.alive
+            && old.object == "oTerrainMetadata"
+            && (old.pos.x / 16.).floor() as usize == x
+            && (old.pos.y / 16.).floor() as usize == y
+        {
+            old.alive = false;
+        }
+    }
+    let id = metadata(world, x, y);
+    let parent = world.entity_mut(id).unwrap();
+    for name in ["blinkToggle", "invincible", "shopWall", "cleanDeath"] {
+        parent.data.insert(name.into(), 0.);
+    }
+    parent.text.insert("type".into(), "None".into());
+    parent.text.insert("treasure".into(), String::new());
+    #[cfg(test)]
+    let trace = synchronous_room_terrain_tests::observe_before(world, rng, id);
+    #[cfg(test)]
+    let contents_trace = create_contents_tests::observe_before(world, rng, x, y, id, false);
+    let city = world.name == "City of Gold";
+    let in_level = if world.name.starts_with('r') {
+        matches!(
+            world.name.as_str(),
+            "rTutorial" | "rLoadLevel" | "rLevel" | "rLevel2" | "rLevel3" | "rOlmec"
+        )
+    } else {
+        (1..=16).contains(&world.level) || world.name == "Tutorial Cave"
+    };
+    let interior = in_level && x > 0 && y > 0 && x + 1 < world.width && y + 1 < world.height;
+    let mut sprite = format!("s{}", &object[1..]);
+    let mut gold = 0;
+    let mut selected = None;
+    let mut frozen = false;
+    if object == "oBlock" {
+        if city {
+            sprite = "sGoldBlock".into();
+        }
+    } else if object == "oIce" {
+        frozen = rng.range(80) == 0;
+    } else {
+        if object == "oBrick" && rng.range(10) == 0 {
+            sprite = "sBrick2".into();
+        }
+        let n = 1 + rng.range(100);
+        world
+            .entity_mut(id)
+            .unwrap()
+            .data
+            .insert("n".into(), f64::from(n));
+        if object == "oTemple" && city {
+            sprite = "sGTemple".into();
+            gold = 2;
+        } else if object != "oDark" || world.name != "rIntro" {
+            if n < 20 {
+                sprite = format!("s{}Gold", &object[1..]);
+                gold = 1;
+            } else if n < 30 {
+                sprite = format!("s{}GoldBig", &object[1..]);
+                gold = 2;
+            } else if interior {
+                let chances = match object.as_str() {
+                    "oBrick" => [100, 120, 140],
+                    "oDark" => [40, 60, 80],
+                    "oTemple" => [60, 80, 100],
+                    _ => unreachable!(),
+                };
+                for (name, width) in ["oSapphireBig", "oEmeraldBig", "oRubyBig"]
+                    .into_iter()
+                    .zip(chances)
+                {
+                    if rng.range(width) == 0 {
+                        selected = Some((name, 0., 0.));
+                        break;
+                    }
+                }
+                if selected.is_none() && rng.range(1200) == 0 {
+                    selected = Some(UNDERGROUND[rng.range(19) as usize]);
+                }
+            }
+        }
+    }
+    let parent = world.entity_mut(id).unwrap();
+    parent.data.insert("terrain_initialized".into(), 1.);
+    parent.data.insert("source_room_terrain_created".into(), 1.);
+    parent.text.insert("terrain_sprite".into(), sprite);
+    if gold != 0 {
+        parent.data.insert("gold_chunks".into(), 3.);
+        parent
+            .data
+            .insert("gold_nuggets".into(), if gold == 2 { 1. } else { 0. });
+    }
+    if let Some((object, dx, dy)) = selected {
+        let child = crate::creation::spawn_generated_terrain_child(
+            world,
+            rng,
+            object,
+            Vec2::new(x as f64 * 16. + 8. + dx, y as f64 * 16. + 8. + dy),
+            context.has_spectacles,
+        );
+        if crate::catalog::is_a(object, "oItem") {
+            let child = world.entity_mut(child).unwrap();
+            child.data.insert("cost".into(), 0.);
+            child.data.insert("forSale".into(), 0.);
+        }
+    }
+    if frozen {
+        // This is the source's real independent child. Do not record the old
+        // virtual frozen_caveman/embedded_treasure debt on parent metadata.
+        crate::creation::spawn_generated_entity(
+            world,
+            rng,
+            "oFrozenCaveman",
+            Vec2::new(x as f64 * 16., y as f64 * 16.),
+        );
+    }
+    #[cfg(test)]
+    create_contents_tests::observe_after(world, rng, contents_trace);
+    #[cfg(test)]
+    synchronous_room_terrain_tests::observe_after(world, rng, trace);
+}
+
 /// Complete every SourceClassic room-script Lush birth, including its real
 /// child constructor, before later predicates, births, or caller overrides.
-/// Other terrain families retain their existing adapter until migrated.
+/// Shared with the complete represented room-terrain constructor above.
 pub(super) fn create_source_ground_lush(
     world: &mut World,
     rng: &mut Rng,
@@ -1379,3 +1520,7 @@ mod create_contents_tests;
 pub(super) fn observe_init_cleanup(world: &World, after: bool) {
     create_contents_tests::observe_init_cleanup(world, after);
 }
+
+#[cfg(test)]
+#[path = "synchronous_room_terrain_tests.rs"]
+mod synchronous_room_terrain_tests;
