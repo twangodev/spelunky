@@ -650,7 +650,6 @@ fn damsel(game: &mut Game, e: &mut Entity) {
             e.vel = Vec2::new(0.0, 0.2);
             e.data.insert("gravity".into(), 0.0);
         }
-        let spear_area = Rect::new(e.pos.x - 3.0, e.pos.y - 3.0, 7.0, 7.0);
         crate::dispatcher::register_instances(game);
         let spears: Vec<_> = crate::dispatcher::descendant_instances(game, "oSpearsLeft")
             .into_iter()
@@ -661,10 +660,13 @@ fn damsel(game: &mut Game, e: &mut Entity) {
             .filter(|s| s.engine_active)
             .collect();
         let mut spear = None;
-        if spears
-            .iter()
-            .any(|s| s.sprite_bounds().intersects(spear_area))
-        {
+        if game.world.rectangle_family_except(
+            Vec2::new(e.pos.x - 3.0, e.pos.y - 3.0),
+            Vec2::new(e.pos.x + 3.0, e.pos.y + 3.0),
+            "oSpearsLeft",
+            None,
+            CollisionPrecision::BoundingBox,
+        ) {
             // Source rectangle contact gates a separate instance_nearest
             // query over the entire active family. Equal distances retain
             // the first instance in the current array.
@@ -689,7 +691,9 @@ fn damsel(game: &mut Game, e: &mut Entity) {
                 game.player.held = game.player.held.filter(|id| *id != e.id);
                 game.player.pickup_item_type.clear();
             }
+            e.set_image_speed(0.5);
             game.sound("sndHit", e.pos);
+            game.spawn("oBlood", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
         }
     }
     if !e.held && e.vel.y > 2.0 && e.state != 2 {
