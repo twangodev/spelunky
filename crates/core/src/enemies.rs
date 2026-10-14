@@ -877,8 +877,9 @@ fn source_active(game: &Game, e: &Entity) -> bool {
     let (before, after_x, after_y) = match e.object.as_str() {
         "oGhost" | "oOlmec" | "oEnemySight" | "oUFOCrash" | "oLaser" | "oPsychicWave"
         | "oPsychicCreate" | "oFly" | "oOlmecDebris" | "oOlmecSlam" | "oYellowBall"
-        | "oMagmaMan" | "oMagma" | "oMagmaTrail" | "oBarrier" | "oCavemanWorship" | "oPiranha"
-        | "oDamsel" => return true,
+        | "oMagmaMan" | "oMagma" | "oMagmaTrail" | "oBarrier" | "oPiranha" | "oDamsel" => {
+            return true;
+        }
         "oGiantSpider" | "oGiantSpiderHang" => (32.0, 0.0, 0.0),
         "oYetiKing" | "oTombLord" | "oAlienBoss" => (36.0, 0.0, 0.0),
         "oJaws" => (48.0, 48.0, 48.0),

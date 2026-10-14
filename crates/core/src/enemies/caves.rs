@@ -25,7 +25,6 @@ pub fn matches(object: &str) -> bool {
             | "oGiantSpider"
             | "oGiantSpiderHang"
             | "oCaveman"
-            | "oCavemanWorship"
             | "oEnemySight"
     )
 }
@@ -82,12 +81,6 @@ pub fn init(e: &mut Entity) {
             set_sprite(e, "sCavemanLeft");
             e.data.insert("animation_speed".into(), 0.5);
             e.data.insert("stun_time".into(), 200.0);
-        }
-        "oCavemanWorship" => {
-            // This source object has no enemy parent or gameplay events.
-            set_sprite(e, "sCavemanWorshipR");
-            e.data.insert("animation_speed".into(), 0.25);
-            e.data.insert("enemy".into(), 0.0);
         }
         "oEnemySight" => {
             set_sprite(e, "sSight");

@@ -411,6 +411,8 @@ pub(crate) fn init_entity(e: &mut Entity) {
     }
     e.data.insert("world_create_initialized".into(), 1.0);
     let speed = match e.object.as_str() {
+        // Parentless oCavemanWorship owns only this Create assignment.
+        "oCavemanWorship" => Some(0.25),
         "oPoof" | "oSmokePuff" | "oBurn" | "oFlareSpark" | "oFlameTrail" | "oSmallCollect"
         | "oLavaDrip" => Some(0.4),
         "oBloodSpark" | "oLamp" | "oLampRed" | "oTikiTorch" | "oHintHand" => Some(0.5),
