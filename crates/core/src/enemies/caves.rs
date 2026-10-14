@@ -1419,9 +1419,37 @@ mod tests {
     #[test]
     fn caveman_worship_is_stationary_decoration() {
         let mut game = Game::shell(1, RulesPreset::Classic);
-        let mut decoration = Entity::new(100, "oCavemanWorship", Vec2::new(64.0, 64.0));
-        init(&mut decoration);
-        tick(&mut game, &mut decoration);
+        // Original oLevel Create calls startMusic only if global.music. Disable
+        // that initial global setting so the no-event oracle isolates the statue.
+        game.source_music.enabled = false;
+        // Parentless Original owns only Create's image_speed=0.25. Use
+        // the real constructor and engine Step, not an Enemy initializer.
+        assert_eq!(
+            crate::catalog::object("oCavemanWorship").unwrap().parent,
+            ""
+        );
+        let id = game.spawn("oCavemanWorship", Vec2::new(64.0, 64.0));
+        assert_eq!(game.world.entity(id).unwrap().image_speed(), 0.25);
+        assert!(crate::dispatcher::descendant_instances(&game, "oEnemy").is_empty());
+        assert!(game.events.is_empty(), "parentless Create emits no event");
+        game.step(&crate::InputFrame::default());
+        let decoration = game.world.entity(id).unwrap();
+        assert_eq!(
+            decoration.animation, 0.25,
+            "ordinary first animation advance"
+        );
+        for field in [
+            "enemy_initialized",
+            "enemy_context_created",
+            "enemy",
+            "stun_time",
+        ] {
+            assert!(
+                !decoration.data.contains_key(field),
+                "invented Enemy field {field}"
+            );
+        }
+        assert!(crate::dispatcher::descendant_instances(&game, "oEnemy").is_empty());
         assert_eq!(decoration.pos, Vec2::new(64.0, 64.0));
         assert_eq!(decoration.sprite, "sCavemanWorshipR");
         assert_eq!(decoration.value("animation_speed"), 0.25);
