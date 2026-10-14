@@ -949,7 +949,7 @@ pub(crate) fn generate_campaign_result(
                     shop,
                 );
             } else if state.revision == crate::GenerationRevision::SourceClassicV2 {
-                tiles::stamp_with_damsel(
+                tiles::stamp_with_source_context(
                     &mut world,
                     rng,
                     &expanded,
@@ -959,6 +959,7 @@ pub(crate) fn generate_campaign_result(
                     end,
                     shop,
                     features.damsel,
+                    context,
                 );
             } else {
                 tiles::stamp(&mut world, rng, &expanded, col, row, start, end, shop);

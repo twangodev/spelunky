@@ -876,3 +876,6 @@ fn live_terrain_create_retained_concrete_item_debt_applies_set2_overrides_after_
         }
     }
 }
+
+#[path = "synchronous_lush_ground_tests.rs"]
+mod synchronous_lush_ground_tests;

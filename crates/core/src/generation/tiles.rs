@@ -25,6 +25,58 @@ pub(super) fn stamp(
 
 /// Versioned source selector globals, consumed at the actual instance births.
 /// Historical callers retain the old adapter without an invented latch.
+/// Source ground-Lush Create receives the actual campaign equipment context.
+pub(super) fn stamp_with_source_context(
+    world: &mut World,
+    rng: &mut Rng,
+    template: &str,
+    room_x: usize,
+    room_y: usize,
+    is_start: bool,
+    is_end: bool,
+    shop_type: &str,
+    damsel: bool,
+    context: super::GenerationContext,
+) {
+    stamp_at_source_context(
+        world,
+        rng,
+        template,
+        1 + room_x * 10,
+        1 + room_y * 8,
+        is_start,
+        is_end,
+        shop_type,
+        damsel,
+        context,
+    );
+}
+pub(super) fn stamp_at_source_context(
+    world: &mut World,
+    rng: &mut Rng,
+    template: &str,
+    origin_x: usize,
+    origin_y: usize,
+    is_start: bool,
+    is_end: bool,
+    shop_type: &str,
+    damsel: bool,
+    context: super::GenerationContext,
+) {
+    stamp_at_with_damsel(
+        world,
+        rng,
+        template,
+        origin_x,
+        origin_y,
+        is_start,
+        is_end,
+        shop_type,
+        Some(damsel),
+        context,
+    );
+}
+
 pub(super) fn stamp_with_damsel(
     world: &mut World,
     rng: &mut Rng,
@@ -46,6 +98,7 @@ pub(super) fn stamp_with_damsel(
         is_end,
         shop_type,
         Some(damsel),
+        super::GenerationContext::default(),
     );
 }
 
@@ -60,7 +113,16 @@ pub(super) fn stamp_at(
     shop_type: &str,
 ) {
     stamp_at_with_damsel(
-        world, rng, template, origin_x, origin_y, is_start, is_end, shop_type, None,
+        world,
+        rng,
+        template,
+        origin_x,
+        origin_y,
+        is_start,
+        is_end,
+        shop_type,
+        None,
+        super::GenerationContext::default(),
     );
 }
 
@@ -87,6 +149,7 @@ pub(super) fn stamp_at_source(
         is_end,
         shop_type,
         Some(damsel),
+        super::GenerationContext::default(),
     );
 }
 
@@ -100,6 +163,7 @@ fn stamp_at_with_damsel(
     _is_end: bool,
     shop_type: &str,
     source_damsel: Option<bool>,
+    terrain_context: super::GenerationContext,
 ) {
     let name = world.name.to_ascii_lowercase();
     let yeti = name.contains("yeti");
@@ -125,12 +189,25 @@ fn stamp_at_with_damsel(
                 source_damsel.unwrap(),
                 yeti,
                 market,
+                terrain_context,
             );
         } else {
             let occupied = solid_point(world, p);
             stamp_tile_body(
-                world, rng, symbol, tx, ty, p, is_start, shop_type, None, yeti, market, occupied,
+                world,
+                rng,
+                symbol,
+                tx,
+                ty,
+                p,
+                is_start,
+                shop_type,
+                None,
+                yeti,
+                market,
+                occupied,
                 false,
+                terrain_context,
             );
         }
     }
@@ -150,6 +227,7 @@ fn stamp_tile_body(
     market: bool,
     occupied: bool,
     predicates_prechecked: bool,
+    terrain_context: super::GenerationContext,
 ) {
     match symbol {
         b'1' | b'2' => {
@@ -159,6 +237,11 @@ fn stamp_tile_body(
             if !occupied {
                 let object = ground(world.area, yeti, symbol == b'1', rng);
                 world.set_tile(tx, ty, object);
+                if predicates_prechecked && world.area == Area::Jungle && object == "oLush" {
+                    // scrRoomGen2/Market instance_create returns only after
+                    // inherited/own Lush Create and its child constructor.
+                    super::terrain::create_source_ground_lush(world, rng, tx, ty, terrain_context);
+                }
             }
         }
         b'9' => {
@@ -437,6 +520,7 @@ fn stamp_source_tile(
     damsel: bool,
     yeti: bool,
     market: bool,
+    terrain_context: super::GenerationContext,
 ) {
     let dialect = tile_dialect(world.area, yeti, market);
     for group in source_statement_groups(dialect) {
@@ -462,6 +546,7 @@ fn stamp_source_tile(
                     market,
                     occupied,
                     true,
+                    terrain_context,
                 );
                 break;
             }

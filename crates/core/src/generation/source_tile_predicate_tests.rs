@@ -222,6 +222,7 @@ fn reached_predicates_preserve_body_order_clearance_failures_and_independent_cha
                                     dialect == TileDialect::Market,
                                     blocked,
                                     true,
+                                    super::super::GenerationContext::default(),
                                 );
                                 state = body_rng.state_bits() as u32;
                                 break;

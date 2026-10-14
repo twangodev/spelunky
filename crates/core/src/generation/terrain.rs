@@ -148,6 +148,91 @@ pub(super) fn create_source_boundary(
     }
 }
 
+/// The smallest synchronous interior path: SourceClassic Jungle ground
+/// glyphs1/2. Run complete Lush Create (including a real child constructor)
+/// before the room script's later independent predicates/next glyph. Other
+/// terrain producers retain their existing adapter until separately migrated.
+pub(super) fn create_source_ground_lush(
+    world: &mut World,
+    rng: &mut Rng,
+    x: usize,
+    y: usize,
+    context: super::GenerationContext,
+) {
+    assert_eq!(world.tiles[y * world.width + x].object, "oLush");
+    // set_tile has just created/replaced the represented parent. A stale
+    // metadata proxy must not carry old initialization/sprite/loot fields into
+    // its new Create. This changes no lifetime of its already-live children.
+    for old in &mut world.entities {
+        if old.alive
+            && old.object == "oTerrainMetadata"
+            && (old.pos.x / 16.).floor() as usize == x
+            && (old.pos.y / 16.).floor() as usize == y
+        {
+            old.alive = false;
+        }
+    }
+    let id = metadata(world, x, y);
+    let parent = world.entity_mut(id).unwrap();
+    parent.data.insert("blinkToggle".into(), 0.);
+    parent.data.insert("invincible".into(), 0.);
+    parent.data.insert("shopWall".into(), 0.);
+    parent.data.insert("cleanDeath".into(), 0.);
+    parent.text.insert("type".into(), "None".into());
+    parent.text.insert("treasure".into(), String::new());
+    #[cfg(test)]
+    let trace = create_contents_tests::observe_before(world, rng, x, y, id, false);
+    let n = 1 + rng.range(100);
+    let mut sprite = "sLush";
+    let mut gold = 0;
+    let mut selected = None;
+    if n < 20 {
+        sprite = "sLushGold";
+        gold = 1;
+    } else if n < 30 {
+        sprite = "sLushGoldBig";
+        gold = 2;
+    } else if x > 0 && x + 1 < world.width && y > 0 && y + 1 < world.height {
+        if rng.range(80) == 0 {
+            selected = Some(("oSapphireBig", 0., 0.));
+        } else if rng.range(100) == 0 {
+            selected = Some(("oEmeraldBig", 0., 0.));
+        } else if rng.range(120) == 0 {
+            selected = Some(("oRubyBig", 0., 0.));
+        } else if rng.range(1200) == 0 {
+            selected = Some(UNDERGROUND[rng.range(19) as usize]);
+        }
+    }
+    let parent = world.entity_mut(id).unwrap();
+    parent.data.insert("n".into(), f64::from(n));
+    parent.data.insert("terrain_initialized".into(), 1.);
+    parent.data.insert("source_ground_lush_created".into(), 1.);
+    parent.text.insert("terrain_sprite".into(), sprite.into());
+    if gold != 0 {
+        parent.data.insert("gold_chunks".into(), 3.);
+        parent
+            .data
+            .insert("gold_nuggets".into(), if gold == 2 { 1. } else { 0. });
+    }
+    if let Some((object, dx, dy)) = selected {
+        let child = crate::creation::spawn_generated_terrain_child(
+            world,
+            rng,
+            object,
+            Vec2::new(x as f64 * 16. + 8. + dx, y as f64 * 16. + 8. + dy),
+            context.has_spectacles,
+        );
+        if crate::catalog::is_a(object, "oItem") {
+            // scrGenerateItem Set2 assigns these only after own Create.
+            let child = world.entity_mut(child).unwrap();
+            child.data.insert("cost".into(), 0.);
+            child.data.insert("forSale".into(), 0.);
+        }
+    }
+    #[cfg(test)]
+    create_contents_tests::observe_after(world, rng, trace);
+}
+
 fn neighbors(world: &World, x: usize, y: usize, object: &str) -> (bool, bool, bool, bool) {
     let connected = |dx: i32, dy: i32| {
         let point = Vec2::new(
