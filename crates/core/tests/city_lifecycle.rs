@@ -142,6 +142,18 @@ fn generated_excavation_site(game: &Game) -> (usize, usize, Vec2, i8) {
                 {
                     continue;
                 }
+                // This positioned fixture needs a dry source bbox, including
+                // Player's lava point y+6 and Item's rectangle +/-3 and point
+                // y-5 (after the optional 0.05 sink). Keep the generated lava.
+                if game.world.rectangle_family_except(
+                    Vec2::new(pos.x - 8., pos.y - 8.),
+                    Vec2::new(pos.x + 8., pos.y + 8.),
+                    "oLava",
+                    None,
+                    CollisionPrecision::BoundingBox,
+                ) {
+                    continue;
+                }
                 if game.world.entities.iter().any(|entity| {
                     entity.alive
                         && spelunky_core::catalog::is_a(&entity.object, "oEnemy")
