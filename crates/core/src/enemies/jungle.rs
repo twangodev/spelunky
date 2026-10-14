@@ -3,7 +3,7 @@
 #[cfg(test)]
 use super::event_bounds;
 use super::{center, move_body};
-use crate::model::{Area, Entity, Game, PlayerState, Rect, Vec2, World};
+use crate::model::{Area, CollisionPrecision, Entity, Game, PlayerState, Rect, Vec2, World};
 
 pub fn matches(object: &str) -> bool {
     matches!(
@@ -71,7 +71,16 @@ pub(super) fn create_local(ctx: &mut crate::creation::EntityCreateContext<'_>, e
     match e.object.as_str() {
         "oFrog" | "oFireFrog" | "oMonkey" => {
             e.facing = if ctx.rng.range(2) == 0 { -1 } else { 1 };
-            if water(ctx.world, e.pos) {
+            // Own Create probes the exact active instance bbox at (x,y).
+            // Keep the separate Step water helper and its caller probes intact.
+            if ctx.world.tiles_point_active(e.pos, "oWater")
+                || ctx.world.entities.iter().any(|water| {
+                    water.alive
+                        && water.engine_active
+                        && crate::catalog::is_a(&water.object, "oWater")
+                        && water.mask_contains(e.pos, CollisionPrecision::BoundingBox)
+                })
+            {
                 e.data.insert("swimming".into(), 1.0);
             }
         }

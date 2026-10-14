@@ -2,7 +2,7 @@
 //! Source instance origins and the separate movement/collision masks are retained.
 //! Automatic animation and paired Collision events belong to the engine dispatcher.
 use super::{bounds, move_body};
-use crate::{Entity, Game, PlayerState, Rect, Vec2, World};
+use crate::{CollisionPrecision, Entity, Game, PlayerState, Rect, Vec2, World};
 
 pub fn matches(object: &str) -> bool {
     matches!(object, "oSkeleton" | "oZombie" | "oVampire")
@@ -38,11 +38,12 @@ pub(super) fn create_local(ctx: &mut crate::creation::EntityCreateContext<'_>, e
     if e.object == "oZombie" && e.value("source_facing_pending") > 0.0 {
         e.facing = if ctx.rng.range(2) == 0 { -1 } else { 1 };
         // Create uses collision_point(x, y, oWater, 0, 0), including descendants.
-        if ctx.world.tiles_point(e.pos, "oWater")
+        if ctx.world.tiles_point_active(e.pos, "oWater")
             || ctx.world.entities.iter().any(|water| {
                 water.alive
+                    && water.engine_active
                     && crate::catalog::is_a(&water.object, "oWater")
-                    && water.sprite_bounds().contains(e.pos)
+                    && water.mask_contains(e.pos, CollisionPrecision::BoundingBox)
             })
         {
             e.data.insert("swimming".into(), 1.0);
