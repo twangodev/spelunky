@@ -135,9 +135,7 @@ pub fn init_entity(e: &mut Entity) {
     }
     let collision = match e.object.as_str() {
         "oSnake" | "oCaveman" | "oManTrap" | "oShopkeeper" | "oShopkeeper2" | "oYeti"
-        | "oHawkman" | "oHawkmanWorship" | "oSkeleton" | "oVampire" | "oMagmaMan" => {
-            Some([2.0, 0.0, 14.0, 16.0])
-        }
+        | "oHawkman" | "oSkeleton" | "oVampire" | "oMagmaMan" => Some([2.0, 0.0, 14.0, 16.0]),
         "oBat" => Some([2.0, 2.0, 14.0, 14.0]),
         "oSpider" => Some([1.0, 5.0, 15.0, 16.0]),
         "oGiantSpider" => Some([2.0, 16.0, 30.0, 32.0]),
@@ -799,8 +797,8 @@ fn source_active(game: &Game, e: &Entity) -> bool {
     let (before, after_x, after_y) = match e.object.as_str() {
         "oGhost" | "oOlmec" | "oEnemySight" | "oUFOCrash" | "oLaser" | "oPsychicWave"
         | "oPsychicCreate" | "oFly" | "oOlmecDebris" | "oOlmecSlam" | "oYellowBall"
-        | "oMagmaMan" | "oMagma" | "oMagmaTrail" | "oBarrier" | "oCavemanWorship"
-        | "oHawkmanWorship" | "oPiranha" | "oDamsel" => return true,
+        | "oMagmaMan" | "oMagma" | "oMagmaTrail" | "oBarrier" | "oCavemanWorship" | "oPiranha"
+        | "oDamsel" => return true,
         "oGiantSpider" | "oGiantSpiderHang" => (32.0, 0.0, 0.0),
         "oYetiKing" | "oTombLord" | "oAlienBoss" => (36.0, 0.0, 0.0),
         "oJaws" => (48.0, 48.0, 48.0),

@@ -12,7 +12,6 @@ pub fn matches(object: &str) -> bool {
     matches!(
         object,
         "oHawkman"
-            | "oHawkmanWorship"
             | "oTombLord"
             | "oFly"
             | "oOlmec"
@@ -27,14 +26,14 @@ pub fn matches(object: &str) -> bool {
 
 pub fn init(e: &mut Entity) {
     e.set_image_speed(match e.object.as_str() {
-        "oHawkman" | "oHawkmanWorship" | "oMagmaMan" => 0.5,
+        "oHawkman" | "oMagmaMan" => 0.5,
         "oTombLord" => 0.25,
         "oOlmec" | "oMagmaTrail" => 0.4,
         "oOlmecDebris" | "oMagma" => 0.3,
         _ => 1.0,
     });
     match e.object.as_str() {
-        "oHawkman" | "oHawkmanWorship" => {
+        "oHawkman" => {
             e.health = 4;
             e.vel.x = 2.5;
             e.set_sprite("sHawkLeft");
@@ -107,7 +106,6 @@ pub(super) fn create_local(ctx: &mut crate::creation::EntityCreateContext<'_>, e
 pub fn tick(game: &mut Game, e: &mut Entity) {
     match e.object.as_str() {
         "oHawkman" => hawk(game, e),
-        "oHawkmanWorship" => {}
         "oTombLord" => tomb_lord(game, e),
         "oFly" => fly(game, e),
         "oOlmec" => olmec(game, e),
