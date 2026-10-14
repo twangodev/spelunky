@@ -421,11 +421,8 @@ fn yeti(game: &mut Game, e: &mut Entity) {
         e.set_sprite("sYetiHeldL");
         return;
     }
-    if e.state == 3 {
-        e.vel.x = 0.0;
-        e.set_sprite("sYetiThrowL");
-        return;
-    }
+    // THROW has no own AI branch. Entry stops xVel, but a later Laser/Wave
+    // collision can impart velocity that still passes through final friction.
     match e.state {
         0 => {
             e.data.insert("bounced".into(), 0.0);
@@ -546,7 +543,7 @@ fn settle_yeti(e: &mut Entity, contacts: super::BodyContacts, impact_y: f64) {
 
 fn alien(game: &mut Game, e: &mut Entity) {
     let next_y = e.vel.y + 0.6;
-    let (wall, floor) = move_body(&game.world, e, 0.6);
+    let (_, floor) = move_body(&game.world, e, 0.6);
     if game
         .world
         .solid_point_except(Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), e.id)
@@ -579,23 +576,28 @@ fn alien(game: &mut Game, e: &mut Entity) {
             enter(e, 1);
         }
     } else if e.state == 1 {
-        if wall {
-            e.facing = -e.facing;
-        }
-        let left = game.world.solid_at(e.pos.x - 1.0, e.pos.y + 16.0)
-            && !game.world.solid_at(e.pos.x - 1.0, e.pos.y);
-        let right = game.world.solid_at(e.pos.x + 16.0, e.pos.y + 16.0)
-            && !game.world.solid_at(e.pos.x + 16.0, e.pos.y);
-        if e.facing < 0 && !left {
-            e.facing = 1;
-        } else if e.facing > 0 && !right {
+        let contacts = super::body_contacts(&game.world, e);
+        if contacts.right {
             e.facing = -1;
         }
-        e.vel.x = if !left && !right {
-            0.0
+        if contacts.left {
+            e.facing = 1;
+        }
+        let left_head = game.world.solid_at(e.pos.x - 1.0, e.pos.y);
+        let left_foot = game.world.solid_at(e.pos.x - 1.0, e.pos.y + 16.0);
+        let right_head = game.world.solid_at(e.pos.x + 16.0, e.pos.y);
+        let right_foot = game.world.solid_at(e.pos.x + 16.0, e.pos.y + 16.0);
+        if e.facing < 0 && !left_head && !left_foot {
+            e.facing = 1;
+        } else if e.facing > 0 && !right_head && !right_foot {
+            e.facing = -1;
+        }
+        if (!left_foot || left_head) && (!right_foot || right_head) {
+            e.facing = if left_head { 1 } else { -1 };
+            e.vel.x = 0.0;
         } else {
-            f64::from(e.facing)
-        };
+            e.vel.x = f64::from(e.facing);
+        }
         if game.rng.range(100) == 0 {
             enter(e, 0);
             e.vel.x = 0.0;
@@ -820,7 +822,7 @@ fn king_yell_ice(game: &mut Game, receiver: &Entity) {
 
 fn ufo(game: &mut Game, e: &mut Entity) {
     let previous_y = e.vel.y;
-    let (wall, _) = move_body(&game.world, e, 0.0);
+    move_body(&game.world, e, 0.0);
     e.vel.y = previous_y;
     if e.health < 1 {
         game.spawn("oUFOCrash", e.pos);
@@ -853,35 +855,12 @@ fn ufo(game: &mut Game, e: &mut Entity) {
     {
         return;
     }
-    let limit = if e.state == 1 { 64.0 } else { 32.0 };
-    let mut shift = e.value("shift");
-    if e.value("shift_toggle") == 0.0 {
-        e.vel.x = 1.0;
-        shift += 1.0;
-        if shift >= limit {
-            e.data.insert("shift_toggle".into(), 1.0);
-        }
-    } else {
-        e.vel.x = -1.0;
-        shift -= 1.0;
-        if shift <= -limit {
-            e.data.insert("shift_toggle".into(), 0.0);
-        }
-    }
-    if wall {
-        e.data
-            .insert("shift_toggle".into(), if e.vel.x > 0.0 { 1.0 } else { 0.0 });
-    }
-    e.data.insert("shift".into(), shift);
-    if e.state == 1 {
+    // Keep the selected branch even when SEARCH's vertical crossover writes
+    // DESTROY: its horizontal limit and target reset remain SEARCH's ones.
+    let destroying = e.state == 1;
+    let limit = if destroying { 64.0 } else { 32.0 };
+    if destroying {
         e.vel.y = 0.0;
-        if (game.player.pos.x - (e.pos.x + 8.0)).abs() < 8.0 {
-            enter(e, 2);
-            game.sound("sndLaserCharge", e.pos);
-        }
-        if game.player.pos.y < e.pos.y || e.pos.y < game.player.pos.y - 96.0 {
-            enter(e, 0);
-        }
     } else {
         let next = if e.pos.y > game.player.pos.y - 48.0 {
             -2.0
@@ -892,6 +871,48 @@ fn ufo(game: &mut Game, e: &mut Entity) {
             enter(e, 1);
         }
         e.vel.y = next;
+    }
+    let mut shift = e.value("shift");
+    if e.value("shift_toggle") == 0.0 {
+        e.vel.x = 1.0;
+        shift += 1.0;
+        if shift >= limit {
+            e.data.insert("shift_toggle".into(), 1.0);
+            if !destroying && game.player.pos.x > e.pos.x {
+                shift = 0.0;
+            }
+        }
+    } else {
+        e.vel.x = -1.0;
+        shift -= 1.0;
+        if shift <= -limit {
+            e.data.insert("shift_toggle".into(), 0.0);
+            if !destroying && game.player.pos.x < e.pos.x {
+                shift = 0.0;
+            }
+        }
+    }
+    // Source probes both sides independently after movement, including when
+    // incoming xVel was zero. The right probe observes the left nudge.
+    if super::body_contacts(&game.world, e).left {
+        e.pos.x += 1.0;
+        e.data.insert("shift_toggle".into(), 0.0);
+        shift = -limit;
+    }
+    if super::body_contacts(&game.world, e).right {
+        e.pos.x -= 1.0;
+        e.data.insert("shift_toggle".into(), 1.0);
+        shift = limit;
+    }
+    e.data.insert("shift".into(), shift);
+    if destroying {
+        if (game.player.pos.x - (e.pos.x + 8.0)).abs() < 8.0 {
+            enter(e, 2);
+            game.sound("sndLaserCharge", e.pos);
+        }
+        if game.player.pos.y < e.pos.y || e.pos.y < game.player.pos.y - 96.0 {
+            enter(e, 0);
+        }
     }
 }
 
@@ -3395,3 +3416,7 @@ mod yeti_stun_source_tests;
 #[cfg(test)]
 #[path = "psychic_wave_step_contract_tests.rs"]
 mod psychic_wave_step_contract_tests;
+
+#[cfg(test)]
+#[path = "ice_patrol_throw_followup_tests.rs"]
+mod ice_patrol_throw_followup_tests;

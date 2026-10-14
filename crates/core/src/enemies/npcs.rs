@@ -633,20 +633,10 @@ fn damsel(game: &mut Game, e: &mut Entity) {
         if e.vel.y > 2.0
             && super::inherited::point(&game.world, Vec2::new(e.pos.x, e.pos.y + 6.0), "oSpikes")
         {
+            super::inherited::stain_spike_at(game, e, Vec2::new(e.pos.x, e.pos.y + 6.0));
             if e.health > 0 {
                 create_blood(game, e, e.pos, 3);
                 super::record_damsel_death(game, e, false);
-            }
-            for spike in &mut game.world.entities {
-                if spike.alive
-                    && spike.object == "oSpikes"
-                    && spike
-                        .sprite_bounds()
-                        .contains(Vec2::new(e.pos.x, e.pos.y + 6.0))
-                {
-                    spike.set_sprite("sSpikesBlood");
-                    break;
-                }
             }
             e.health = 0;
             e.state = 99;
@@ -3197,6 +3187,10 @@ mod deadfish_isolated_membership_tests {
         inactive_membership_case(true);
     }
 }
+
+#[cfg(test)]
+#[path = "npc_movement_spike_followup_tests.rs"]
+mod npc_movement_spike_followup_tests;
 
 #[cfg(test)]
 #[path = "shopkeeper_patrol_burst_source_tests.rs"]

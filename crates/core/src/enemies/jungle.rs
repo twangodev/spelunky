@@ -2,7 +2,7 @@
 //! Instances retain original GameMaker sprite origins; probes use collision centers.
 #[cfg(test)]
 use super::event_bounds;
-use super::{center, move_body, steer_toward};
+use super::{center, move_body};
 use crate::model::{Area, Entity, Game, PlayerState, Rect, Vec2, World};
 
 pub fn matches(object: &str) -> bool {
@@ -89,9 +89,9 @@ fn water(world: &World, p: Vec2) -> bool {
 }
 
 fn vine(world: &World, p: Vec2) -> bool {
-    world.tiles_point(p, "oLadder")
+    world.tiles_point(p, "oVine")
         || world.entities.iter().any(|e| {
-            e.alive && crate::catalog::is_a(&e.object, "oLadder") && e.sprite_bounds().contains(p)
+            e.alive && crate::catalog::is_a(&e.object, "oVine") && e.sprite_bounds().contains(p)
         })
 }
 
@@ -300,7 +300,7 @@ fn frog(game: &mut Game, e: &mut Entity) {
 
 fn monkey(game: &mut Game, e: &mut Entity) {
     e.data.insert("depth".into(), 40.0);
-    let (wall, _) = move_body(
+    move_body(
         &game.world,
         e,
         if matches!(e.state, 5..=7) { 0.0 } else { 0.2 },
@@ -370,7 +370,9 @@ fn monkey(game: &mut Game, e: &mut Entity) {
             }
         }
         3 => {
-            if wall {
+            if collision_offset(&game.world, e, -1.0, 0.0)
+                || collision_offset(&game.world, e, 1.0, 0.0)
+            {
                 e.facing *= -1;
             }
             e.vel.x = 2.0 * e.facing as f64;
@@ -562,7 +564,7 @@ fn fish(game: &mut Game, e: &mut Entity) {
                 e.timer -= 1;
             } else {
                 e.state = 0;
-                e.facing = if game.rng.chance(1, 2) { -1 } else { 1 };
+                e.facing = if game.rng.range(2) == 0 { 1 } else { -1 };
             }
         }
         3 => {
@@ -616,10 +618,18 @@ fn fish(game: &mut Game, e: &mut Entity) {
 }
 
 fn aim_fish(game: &mut Game, e: &mut Entity, target: Vec2) {
-    steer_toward(e, target, 1.0);
-    let jitter = (game.rng.range(2) as f64 - game.rng.range(2) as f64).to_radians();
-    let (sin, cos) = jitter.sin_cos();
-    e.vel = Vec2::new(e.vel.x * cos - e.vel.y * sin, e.vel.x * sin + e.vel.y * cos);
+    // GameMaker angles increase toward the top of the screen. Keep the
+    // source's ordered jitter draws, then choose artwork from the final dir.
+    let direction = crate::world_events::psychic_direction(center(e), target)
+        + f64::from(game.rng.range(2))
+        - f64::from(game.rng.range(2));
+    let (sin, cos) = direction.to_radians().sin_cos();
+    e.vel = Vec2::new(cos, -sin);
+    e.facing = if direction > 90.0 && direction < 270.0 {
+        -1
+    } else {
+        1
+    };
 }
 
 fn fish_target(world: &World, pos: Vec2) -> Option<u64> {
@@ -641,7 +651,7 @@ fn fish_target(world: &World, pos: Vec2) -> Option<u64> {
 
 fn swim_move(world: &World, e: &mut Entity) -> bool {
     let next = Vec2::new(e.pos.x + e.vel.x, e.pos.y + e.vel.y);
-    if !water(world, next) || world.solid_at(next.x, next.y) {
+    if !water(world, next) {
         return false;
     }
     move_body(world, e, 0.0);
@@ -858,12 +868,11 @@ fn release_shopkeeper(game: &mut Game, e: &Entity) {
 fn mantrap(game: &mut Game, e: &mut Entity) {
     let gravity = if e.value("swimming") > 0.0 { 0.2 } else { 0.6 };
     let incoming_y = if e.held { 0.0 } else { e.vel.y };
-    let (wall, _) = if e.held {
+    if e.held {
         e.vel = Vec2::default();
-        (false, false)
     } else {
-        move_body(&game.world, e, gravity)
-    };
+        move_body(&game.world, e, gravity);
+    }
     // moveTo does not clear source yVel at a collision. Preserve the incoming
     // speed for scrCheckCollisions' stunned-body bounce.
     e.vel.y = if e.held {
@@ -893,7 +902,7 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
             }
         }
         1 => {
-            if wall {
+            if left || right {
                 e.facing *= -1;
             }
             let left_top = game.world.solid_at(e.pos.x - 1.0, e.pos.y);
@@ -2931,3 +2940,7 @@ mod tests {
         assert_eq!(game.rng.next_u64(), expected.next_u64());
     }
 }
+
+#[cfg(test)]
+#[path = "jungle_parity_followup_tests.rs"]
+mod parity_followup_tests;
