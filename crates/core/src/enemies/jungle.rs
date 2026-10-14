@@ -341,7 +341,7 @@ fn monkey(game: &mut Game, e: &mut Entity) {
     if collision_offset(&game.world, e, -1.0, 0.0) {
         e.vel.x = 1.0;
     }
-    let grounded = ground(&game.world, e);
+    let grounded = super::body_contacts(&game.world, e).bottom;
     for key in ["grab_counter", "vine_counter", "throw_counter"] {
         countdown(e, key);
     }
