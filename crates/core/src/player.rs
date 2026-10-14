@@ -1105,7 +1105,6 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let col_moveable_left = precise_line(w, edge_rect(p, Side::Left, 1.0, false), "oMoveableSolid");
     let col_moveable_right =
         precise_line(w, edge_rect(p, Side::Right, 1.0, false), "oMoveableSolid");
-    let in_web = ledge_point(w, p.pos, "oWeb");
     let water_jump = precise_line(w, edge_rect(p, Side::Top, 1.0, false), "oWater");
     let col_ice_bot = ledge_point(w, Vec2::new(p.pos.x, p.pos.y + 8.0), "oIce");
     let mut fall = value(p, "fall_timer", 0.0);
@@ -1121,8 +1120,6 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let mut ay: f64 = 0.0;
     let mut limit_x = value(p, "velocity_limit_x", 16.0);
     let mut limit_y_acc: f64 = 6.0;
-
-    set(p, "in_web", f64::from(in_web));
 
     // Classic intentionally waits two ticks before horizontal acceleration.
     let left_steps = if input.left {
@@ -1287,6 +1284,10 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
 
     let normal_jump =
         jump_pressed && (grounded_state(p.state) || can_coyote) && (fall == 0.0 || can_coyote);
+    // characterStepEvent295 samples the current origin after Climbing snaps.
+    // colWaterTop remains the earlier source collision snapshot.
+    let in_web = ledge_point(w, p.pos, "oWeb");
+    set(p, "in_web", f64::from(in_web));
     if jump_pressed && (in_web || water_jump) {
         ay -= 4.0;
         p.vel.y -= 3.0;
