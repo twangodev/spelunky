@@ -7093,7 +7093,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1061,
+          "line": 1064,
           "module": "crates/core/src/enemies/jungle.rs"
         },
         {
@@ -7709,7 +7709,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1062,
+          "line": 1065,
           "module": "crates/core/src/enemies/jungle.rs"
         },
         {
@@ -12877,7 +12877,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 299,
+          "line": 335,
           "module": "crates/core/src/items.rs"
         }
       ],
