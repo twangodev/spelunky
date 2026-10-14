@@ -639,14 +639,14 @@ fn bat(game: &mut Game, e: &mut Entity) {
 }
 
 fn in_water(game: &Game, pos: Vec2) -> bool {
-    game.world.entities.iter().any(|other| {
-        other.alive
-            && crate::catalog::is_a(&other.object, "oWater")
-            && other.sprite_bounds().contains(pos)
-    }) || game
-        .world
-        .tile((pos.x / 16.0).floor() as i32, (pos.y / 16.0).floor() as i32)
-        .is_some_and(|tile| crate::catalog::is_a(&tile.object, "oWater"))
+    // Bat/Spider own events explicitly request collision_point prec0.
+    game.world.tiles_point_active(pos, "oWater")
+        || game.world.entities.iter().any(|other| {
+            other.alive
+                && other.engine_active
+                && crate::catalog::is_a(&other.object, "oWater")
+                && other.mask_contains(pos, crate::CollisionPrecision::BoundingBox)
+        })
 }
 
 fn launch_spider(game: &mut Game, e: &mut Entity, low: u32, alarm: bool) {
