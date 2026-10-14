@@ -216,7 +216,7 @@ pub fn use_weapon(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
         }
         "oMachete" | "oMattock" => {
             let mattock = object == "oMattock";
-            if mattock && !game.player.grounded {
+            if mattock && !crate::player::source_grounded(&game.player) {
                 return true;
             }
             // characterStepEvent restores speed 1 every tick. Mattock's 0.2
@@ -274,6 +274,16 @@ pub fn use_weapon(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
             } else {
                 8.0
             };
+            let flash = if facing < 0.0 {
+                "oShotgunBlastLeft"
+            } else {
+                "oShotgunBlastRight"
+            };
+            let id = game.spawn(
+                flash,
+                Vec2::new(pos.x + muzzle_x, pos.y + if web { 0.0 } else { 1.0 }),
+            );
+            init_entity(game.world.entity_mut(id).unwrap());
             for _ in 0..if shotgun { 6 } else { 1 } {
                 let id = game.spawn(
                     if web { "oWebBall" } else { "oBullet" },
@@ -302,13 +312,6 @@ pub fn use_weapon(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
                     y_speed,
                 );
             }
-            let flash = if facing < 0.0 {
-                "oShotgunBlastLeft"
-            } else {
-                "oShotgunBlastRight"
-            };
-            let id = game.spawn(flash, Vec2::new(pos.x + muzzle_x, pos.y + 1.0));
-            init_entity(game.world.entity_mut(id).unwrap());
             if !matches!(
                 game.player.state,
                 PlayerState::Hanging | PlayerState::Climbing
@@ -462,7 +465,11 @@ fn fire_bow(game: &mut Game) {
 /// Keep movement on the room's integer moveTo clock and preserve the original
 /// order of wall bounce, ground friction, arrow embedding and ceiling bounce.
 fn tick_item_body(game: &Game, e: &mut Entity) {
-    if e.held || !super::item_body_active(game, e) {
+    if !super::item_body_active(game, e) {
+        return;
+    }
+    if e.held {
+        super::align_held(game, e);
         return;
     }
     let contact = |e: &Entity, x, y| super::body_contact(&game.world, e, x, y);
@@ -1181,6 +1188,35 @@ pub fn step_instance(game: &mut Game, id: u64) {
             }
             let angle = item_rotation(e.vel, e.value("stuck") != 0.0, e.value("rotation"));
             e.data.insert("rotation".into(), angle);
+            if game.world.name == "rMoon" {
+                crate::dispatcher::register_instances(game);
+                let targets: Vec<_> = crate::dispatcher::descendant_instances(game, "oTarget")
+                    .into_iter()
+                    .filter_map(|instance| match instance {
+                        crate::dispatcher::Instance::Entity(id) => game.world.entity(id),
+                        _ => None,
+                    })
+                    .filter(|target| target.engine_active)
+                    .collect();
+                if let Some(first) = targets.first() {
+                    // Object-qualified x/y select the first active target;
+                    // distance_to_object considers the entire target family.
+                    let close = targets.iter().any(|target| {
+                        crate::world_events::mask_distance(
+                            e.collision_mask().point_bounds(),
+                            target.collision_mask().point_bounds(),
+                        ) < 4.0
+                    });
+                    if e.pos.x > first.pos.x
+                        && e.pos.y > first.pos.y - 16.0
+                        && e.pos.y < first.pos.y + 16.0
+                        && close
+                    {
+                        e.pos.x = first.pos.x + 4.0;
+                        e.vel = Vec2::default();
+                    }
+                }
+            }
         }
         "oFlare" => {
             // The child event continues after inherited lava destruction.
@@ -1192,22 +1228,16 @@ pub fn step_instance(game: &mut Game, id: u64) {
                     game.player.collision_mask().point_bounds(),
                 ),
             );
-            if game
-                .world
-                .tiles_point_precision(e.pos, "oWater", CollisionPrecision::Precise)
-                || game.world.entities.iter().any(|water| {
-                    water.alive
-                        && crate::catalog::is_a(&water.object, "oWater")
-                        && water.mask_contains(e.pos, CollisionPrecision::Precise)
-                })
-            {
-                e.alive = false;
-                if game.player.held == Some(id) {
-                    game.player.held = None;
-                    game.player.pickup_item_type.clear();
-                }
+            // Original -1 flags convert to false in the GM8 point wrapper.
+            if super::utility::source_point_bbox(game, e.pos, "oWater") {
                 game.spawn("oSplash", e.pos);
                 game.sound("sndSplash", e.pos);
+                if e.held {
+                    game.player.held = None;
+                    game.player.pickup_item_type.clear();
+                    e.held = false;
+                }
+                e.alive = false;
             }
             e.data.insert("light_radius".into(), 96.0);
         }
@@ -1385,6 +1415,30 @@ pub fn alarm(game: &mut Game, id: u64, number: u8) {
     };
     match (e.object.as_str(), number) {
         ("oMachetePre" | "oMattockPre", 0) => game.world.entity_mut(id).unwrap().alive = false,
+        ("oWebBall", 0) => {
+            game.world
+                .entity_mut(id)
+                .unwrap()
+                .data
+                .insert("invincible".into(), 0.0);
+        }
+        ("oWebBall", 1) => {
+            crate::dispatcher::register_instances(game);
+            let trails = crate::dispatcher::descendant_instances(game, "oYellowTrail")
+                .into_iter()
+                .filter(|instance| match instance {
+                    crate::dispatcher::Instance::Entity(id) => game
+                        .world
+                        .entity(*id)
+                        .is_some_and(|trail| trail.engine_active),
+                    _ => false,
+                })
+                .count();
+            if trails < 12 {
+                game.spawn("oYellowTrail", e.pos);
+            }
+            game.world.entity_mut(id).unwrap().alarms[1] = 4;
+        }
         ("oBullet", 0) | ("oArrow", 2) => {
             game.world
                 .entity_mut(id)
@@ -1562,6 +1616,57 @@ mod tests {
                 .count(),
             6
         );
+    }
+
+    #[test]
+    fn gun_flash_precedes_projectiles_at_source_muzzle_origin() {
+        for object in ["oPistol", "oShotgun", "oWebCannon"] {
+            for facing in [-1, 1] {
+                let (mut game, held) = armed(object);
+                game.player.facing = facing;
+                let origin = game.player.pos;
+                use_weapon(&mut game, held, &InputFrame::default());
+                let flash = game
+                    .world
+                    .entities
+                    .iter()
+                    .find(|entity| entity.object.starts_with("oShotgunBlast"))
+                    .unwrap();
+                let muzzle_x = if object == "oWebCannon" {
+                    12.0 * f64::from(facing)
+                } else if facing < 0 {
+                    -9.0
+                } else {
+                    8.0
+                };
+                assert_eq!(
+                    flash.pos,
+                    Vec2::new(
+                        origin.x + muzzle_x,
+                        origin.y + if object == "oWebCannon" { 0.0 } else { 1.0 },
+                    )
+                );
+                let projectile_type = if object == "oWebCannon" {
+                    "oWebBall"
+                } else {
+                    "oBullet"
+                };
+                let projectiles: Vec<_> = game
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|entity| entity.object == projectile_type)
+                    .collect();
+                assert_eq!(projectiles.len(), if object == "oShotgun" { 6 } else { 1 });
+                for projectile in projectiles {
+                    assert!(flash.creation_serial < projectile.creation_serial);
+                    assert_eq!(
+                        projectile.pos,
+                        Vec2::new(origin.x + muzzle_x, origin.y - 2.0)
+                    );
+                }
+            }
+        }
     }
     #[test]
     fn bow_charges_until_release_and_consumes_one_arrow() {
@@ -1903,6 +2008,7 @@ mod tests {
         use_weapon(&mut game, id, &InputFrame::default());
         assert_eq!(game.player.attack_timer, 0);
         game.player.grounded = true;
+        game.player.state = PlayerState::Standing;
         use_weapon(&mut game, id, &InputFrame::default());
         assert_eq!(game.player.attack_timer, 12);
         tick(&mut game);
@@ -1925,6 +2031,154 @@ mod tests {
                 .entities
                 .iter()
                 .any(|e| e.object == "oMattockHit" && e.alive)
+        );
+    }
+
+    #[test]
+    fn game_step_natural_mattock_walkoff_uses_source_ground_state() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut level = crate::level::Level::default();
+            level.set_tile(4, 3, '@').unwrap();
+            for x in 0..8 {
+                level.set_tile(x, 4, '1').unwrap();
+            }
+            let mut game = Game::shell(7, rules);
+            game.load_custom(&level, "mattock-source-ground", "");
+            let held = game.spawn("oMattock", game.player.pos);
+            for _ in 0..8 {
+                game.step(&InputFrame::default());
+            }
+            assert_eq!(game.world.entity(held).unwrap().value("cost"), 0.0);
+            game.step(&InputFrame {
+                down: true,
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            assert_eq!(game.player.held, Some(held));
+            game.step(&InputFrame::default());
+            assert!(game.player.grounded);
+            assert!(crate::player::source_grounded(&game.player));
+            assert_eq!(game.player.health, 4);
+
+            let mut grounded = game.clone();
+            grounded.step(&InputFrame {
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            assert!(grounded.player.grounded);
+            assert_eq!(grounded.player.attack_timer, 12);
+            assert_eq!(grounded.player.data["cantJump"], 20.0);
+
+            let mut swung_at_edge = false;
+            for _ in 0..80 {
+                // Locate the ordinary walk-off without altering player state,
+                // position, support, health or motion in the live fixture.
+                let mut probe = game.clone();
+                probe.step(&InputFrame {
+                    right: true,
+                    ..Default::default()
+                });
+                if !probe.player.grounded && crate::player::source_grounded(&probe.player) {
+                    game.step(&InputFrame {
+                        right: true,
+                        attack: true,
+                        attack_pressed: true,
+                        ..Default::default()
+                    });
+                    assert!(!game.player.grounded);
+                    assert!(crate::player::source_grounded(&game.player));
+                    assert_eq!(game.player.attack_timer, 12);
+                    assert_eq!(game.player.data["cantJump"], 20.0);
+                    assert_eq!(game.player.health, 4);
+                    assert_eq!(game.world.entity(held).unwrap().value("hidden"), 1.0);
+                    swung_at_edge = true;
+                    break;
+                }
+                game = probe;
+                assert_eq!(game.player.health, 4);
+            }
+            assert!(
+                swung_at_edge,
+                "fixture must reach the first ordinary walk-off"
+            );
+        }
+    }
+
+    #[test]
+    fn moon_arrow_stop_keeps_strict_source_guard_and_first_target_origin() {
+        for (room, target_x, arrow_x, arrow_y, stops) in [
+            ("rMoon", 100.0, 102.0, 120.0, true),
+            ("rLevel", 100.0, 102.0, 120.0, false),
+            ("rMoon", 100.0, 100.0, 120.0, false),
+            ("rMoon", 100.0, 102.0, 104.0, false),
+            ("rMoon", 100.0, 102.0, 136.0, false),
+            ("rMoon", 100.0, 140.0, 120.0, false),
+        ] {
+            let mut game = Game::shell(7, RulesPreset::Classic);
+            game.world.name = room.into();
+            game.spawn("oTarget", Vec2::new(target_x, 120.0));
+            let arrow = game.spawn("oArrow", Vec2::new(arrow_x, arrow_y));
+            step_instance(&mut game, arrow);
+            let arrow = game.world.entity(arrow).unwrap();
+            assert_eq!(arrow.pos.x, if stops { target_x + 4.0 } else { arrow_x });
+            assert_eq!(arrow.vel.y, if stops { 0.0 } else { 0.2 });
+        }
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.world.name = "rMoon".into();
+        game.spawn("oTarget", Vec2::new(100.0, 120.0));
+        game.spawn("oTarget", Vec2::new(200.0, 120.0));
+        let arrow = game.spawn("oArrow", Vec2::new(202.0, 120.0));
+        step_instance(&mut game, arrow);
+        let arrow = game.world.entity(arrow).unwrap();
+        assert_eq!(arrow.pos, Vec2::new(104.0, 120.0));
+        assert_eq!(arrow.vel, Vec2::default());
+    }
+
+    #[test]
+    fn webball_disabled_alarms_have_literal_callbacks_without_new_schedules() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        let ball = game.spawn("oWebBall", Vec2::new(100.0, 120.0));
+        assert_eq!(game.world.entity(ball).unwrap().alarms[0], -1);
+        assert_eq!(game.world.entity(ball).unwrap().alarms[1], -1);
+        alarm(&mut game, ball, 0);
+        assert_eq!(game.world.entity(ball).unwrap().value("invincible"), 0.0);
+        for _ in 0..12 {
+            alarm(&mut game, ball, 1);
+        }
+        assert_eq!(game.world.entity(ball).unwrap().alarms[1], 4);
+        let trails: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|entity| entity.object == "oYellowTrail")
+            .collect();
+        assert_eq!(trails.len(), 12);
+        assert!(
+            trails
+                .iter()
+                .all(|trail| trail.pos == Vec2::new(100.0, 120.0))
+        );
+        let retired = trails[0].id;
+        alarm(&mut game, ball, 1);
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|entity| entity.object == "oYellowTrail")
+                .count(),
+            12
+        );
+        game.world.entity_mut(retired).unwrap().alive = false;
+        alarm(&mut game, ball, 1);
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.object == "oYellowTrail")
+                .count(),
+            12
         );
     }
     #[test]
@@ -2302,6 +2556,7 @@ mod tests {
     fn mattock_rear_effect_preserves_original_machete_guard_hierarchy() {
         let (mut game, id) = armed("oMattock");
         game.player.grounded = true;
+        game.player.state = PlayerState::Standing;
         assert!(!crate::catalog::is_a("oMattockPre", "oMachetePre"));
         use_weapon(&mut game, id, &InputFrame::default());
         for _ in 0..3 {
