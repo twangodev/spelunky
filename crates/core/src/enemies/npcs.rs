@@ -1136,6 +1136,10 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
         {
             e.vel.y = -f64::from(7 + game.rng.range(2));
         }
+        // Source ATTACK tail uses colBot cached before shooting/jump selection.
+        if !contacts.bottom && game.player.pos.y > e.pos.y + 8.0 {
+            e.vel.x = f64::from(e.facing) * 1.5;
+        }
         e.set_sprite(if e.state == 3 {
             "sShopThrowL"
         } else {
