@@ -1,4 +1,4 @@
-//! Proposed public Step fixtures. UNCOMPILED/UNRUN. Only setup writes precede
+//! Public Step fixtures. Only setup writes precede
 //! the first Step. The Dice/PushBlock route uses fresh Create state throughout;
 //! authored DEAD fixtures below are explicitly controlled branch tests.
 use spelunky_core::*;
@@ -33,7 +33,12 @@ fn proposed_natural_dice_theft_then_falling_block_keeps_first_attack_prices() {
                 game.world.set_tile(x, 8, "oBlock");
             }
             let keeper = game.spawn("oShopkeeper", Vec2::new(96.0, 112.0));
-            let block_x = if hit { 96.0 } else { 192.0 };
+            // Source IDLE's full-height side probes are x97 and110. An
+            // aligned16px block covers both before its bottom reaches the
+            // center120, provoking ATTACK before Dice theft. Offset the
+            // initial falling block two pixels: [98,113] excludes x97 while
+            // still reaching both the initial and normally displaced center.
+            let block_x = if hit { 98.0 } else { 192.0 };
             let block = game.spawn("oPushBlock", Vec2::new(block_x, 93.0));
             let die = game.spawn("oDice", Vec2::new(144.0, 141.0));
             let stock = game.spawn("oJetpack", Vec2::new(400.0, 120.0));
