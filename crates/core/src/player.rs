@@ -1801,6 +1801,8 @@ fn duck_to_hang_ladder(game: &Game, point: Vec2) -> Option<Vec2> {
 }
 
 fn duck_to_hang_end(game: &mut Game) {
+    // Source move_snap(1, 8) snaps X before the ladder query and ledge offset.
+    game.player.pos.x = gm_round(game.player.pos.x);
     let y = gm_round((game.player.pos.y + 16.0) / 8.0) * 8.0;
     let point = Vec2::new(game.player.pos.x + f64::from(game.player.facing) * 8.0, y);
     let ladder = duck_to_hang_ladder(game, point);
