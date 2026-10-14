@@ -427,27 +427,52 @@ pub(super) fn player_crush(game: &mut Game) {
     game.player.data.insert("hidden".into(), 1.0);
 }
 
+fn nearest_active_smash(game: &Game, origin: Vec2) -> Option<Entity> {
+    let family = crate::dispatcher::descendant_instances(game, "oSmashTrap");
+    // Native births already belong to the active family. Keep the port's
+    // pending raw World births as an appended, read-only birth projection;
+    // looking up the nearest trap must not register or reactivate anything.
+    let mut candidates: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|entity| entity.alive && entity.engine_active && entity.object == "oSmashTrap")
+        .collect();
+    candidates.sort_by_key(|entity| {
+        family
+            .iter()
+            .position(|instance| *instance == Instance::Entity(entity.id))
+            .map_or((1_u8, entity.creation_serial), |index| (0, index as u64))
+    });
+    let mut nearest = None;
+    let mut distance_squared = f64::INFINITY;
+    for candidate in candidates {
+        let dx = candidate.pos.x - origin.x;
+        let dy = candidate.pos.y - origin.y;
+        let squared = dx * dx + dy * dy;
+        // The original strict comparison keeps the first current-family tie.
+        if nearest.is_none() || squared < distance_squared {
+            nearest = Some(candidate);
+            distance_squared = squared;
+        }
+    }
+    nearest.cloned()
+}
+
 /// Source oPlayer1 Step1719/1740, once per family, independent of invincibility.
 pub(super) fn player_hurt(game: &mut Game) {
     // The enclosing source hurt guard was evaluated before crush/projectiles;
     // visibility or life changes inside that block do not leave it early.
     let pos = game.player.pos;
     let smash_probe = Rect::new(pos.x - 6.0, pos.y - 6.0, 13.0, 14.0);
-    if game
-        .world
-        .entities
-        .iter()
-        .any(|e| e.alive && e.object == "oSmashTrap" && e.sprite_bounds().intersects(smash_probe))
-    {
+    if game.world.entities.iter().any(|e| {
+        e.alive
+            && e.engine_active
+            && e.object == "oSmashTrap"
+            && e.sprite_bounds().intersects(smash_probe)
+    }) {
         // instance_nearest is independent of which instance intersects the query.
-        let nearest = game
-            .world
-            .entities
-            .iter()
-            .filter(|e| e.alive && e.object == "oSmashTrap")
-            .min_by(|a, b| a.pos.distance(pos).total_cmp(&b.pos.distance(pos)))
-            .cloned()
-            .unwrap();
+        let nearest = nearest_active_smash(game, pos).unwrap();
         if game.player.health > 0 && crate::statistics::is_real_level(game) {
             game.lifetime_stats
                 .misc_death(crate::statistics::MiscDeath::SmashTrap);
@@ -858,17 +883,44 @@ fn move_body(game: &Game, entity: &mut Entity, delta: Vec2, precision: Collision
 }
 
 fn thwomp(game: &mut Game, entity: &mut Entity) {
-    let source = entity.sprite_bounds();
-    let target = game.player.sprite_bounds();
-    let dx = (source.x - (target.x + target.w - 1.0))
-        .max(target.x - (source.x + source.w - 1.0))
-        .max(0.0);
-    let dy = (source.y - (target.y + target.h - 1.0))
-        .max(target.y - (source.y + source.h - 1.0))
-        .max(0.0);
+    let source = entity.collision_mask().point_bounds();
+    // distance_to_object scans the active Character family and retains its
+    // native million-pixel cap. The subsequent coordinates still read Player1.
+    let mut distance = 1_000_000.0_f64;
+    if game.player.engine_active {
+        distance = distance.min(crate::world_events::mask_distance(
+            source,
+            game.player.collision_mask().point_bounds(),
+        ));
+    }
+    for target in game.world.entities.iter().filter(|target| {
+        target.id != entity.id
+            && target.alive
+            && target.engine_active
+            && crate::catalog::is_a(&target.object, "oCharacter")
+    }) {
+        distance = distance.min(crate::world_events::mask_distance(
+            source,
+            target.collision_mask().point_bounds(),
+        ));
+    }
+    for (index, _) in game.world.tiles.iter().enumerate().filter(|(_, target)| {
+        target.engine_active && crate::catalog::is_a(&target.object, "oCharacter")
+    }) {
+        distance = distance.min(crate::world_events::mask_distance(
+            source,
+            game.world
+                .tile_collision_mask(
+                    (index % game.world.width) as i32,
+                    (index / game.world.width) as i32,
+                )
+                .point_bounds(),
+        ));
+    }
+    entity.data.insert("dist".into(), distance);
     match entity.state {
         0 if game.player.pos.y > entity.pos.y
-            && dx.hypot(dy) < 96.0
+            && distance < 96.0
             && (game.player.pos.x - entity.pos.x).abs() < 8.0 =>
         {
             entity.state = 1
@@ -2179,3 +2231,95 @@ mod player_moving_blood_contract_tests;
 #[cfg(test)]
 #[path = "moving_character_endpoint_rounding_tests.rs"]
 mod moving_character_endpoint_rounding_tests;
+
+#[cfg(test)]
+mod thwomp_cached_distance_tests {
+    use super::*;
+    use crate::RulesPreset;
+
+    fn fixture(rules: RulesPreset, player_y: f64) -> (Game, Entity) {
+        let mut game = Game::shell(42, rules);
+        game.player.pos = Vec2::new(80.0, player_y);
+        game.player.set_sprite("sRunLeft");
+        game.player.animation = 2.0;
+        let trap = Entity::new(900, "oThwompTrap", Vec2::new(80.0, 80.0));
+        assert_eq!(
+            trap.collision_mask().point_bounds(),
+            Rect::new(80.0, 81.0, 16.0, 15.0)
+        );
+        assert_eq!(
+            game.player.collision_mask().point_bounds(),
+            Rect::new(73.0, player_y - 8.0, 14.0, 16.0)
+        );
+        (game, trap)
+    }
+
+    #[test]
+    fn configured_thwomp_uses_aggregate_gap_and_strict_96_boundary() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            // Native trap bottom95; Run aggregate top=y-8 regardless of
+            // selected frame2's top=y-6. Compatibility precedes the old gap.
+            let (mut positive, mut positive_trap) = fixture(rules, 196.0);
+            thwomp(&mut positive, &mut positive_trap);
+            assert_eq!(
+                positive_trap.state, 1,
+                "near compatibility control precedes the old boundary failure"
+            );
+            for (y, gap, drop) in [(198.0, 95.0, true), (199.0, 96.0, false)] {
+                let (mut game, mut trap) = fixture(rules, y);
+                thwomp(&mut game, &mut trap);
+                assert_eq!(
+                    trap.state,
+                    i32::from(drop),
+                    "THWOMP_NATIVE_AGGREGATE_STRICT96 y={y}"
+                );
+                assert_eq!(trap.value("dist"), gap);
+                assert_eq!(trap.pos, Vec2::new(80.0, 80.0));
+                assert_eq!(
+                    trap.vel,
+                    Vec2::default(),
+                    "IDLE selects DROP without running its body yet"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn configured_thwomp_character_family_minimum_excludes_inactive_and_nonfamily_targets() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for (object, active, gap, drop) in [
+                ("oCharacter", true, 17.0, true),
+                ("oCharacter", false, 97.0, false),
+                ("oDamsel", true, 97.0, false),
+            ] {
+                let (mut game, mut trap) = fixture(rules, 200.0);
+                // Explicit initial sprite for the abstract Character; no claim
+                // of a generated second player. Coordinates still read Player1.
+                let id = game.world.spawn(object, Vec2::new(80.0, 120.0));
+                let target = game.world.entity_mut(id).unwrap();
+                target.set_sprite("sStandLeft");
+                target.engine_active = active;
+                thwomp(&mut game, &mut trap);
+                assert_eq!(
+                    trap.state,
+                    i32::from(drop),
+                    "object={object} active={active}"
+                );
+                assert_eq!(trap.value("dist"), gap);
+            }
+        }
+    }
+
+    #[test]
+    fn configured_thwomp_retains_dead_but_active_character_distance() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let (mut game, mut trap) = fixture(rules, 198.0);
+            game.player.health = 0;
+            game.player.state = crate::PlayerState::Dead;
+            assert!(game.player.engine_active);
+            thwomp(&mut game, &mut trap);
+            assert_eq!(trap.state, 1);
+            assert_eq!(trap.value("dist"), 95.0);
+        }
+    }
+}
