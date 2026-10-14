@@ -1014,6 +1014,11 @@ fn populate_internal(
     if world.area == Area::Boss {
         return;
     }
+    #[cfg(test)]
+    let ice_revision = campaign.as_ref().map(|state| state.revision);
+    let source_classic = campaign
+        .as_ref()
+        .is_some_and(|state| state.revision == crate::GenerationRevision::SourceClassicV2);
     let water = WaterMasks::new(world);
     let cemetery = flag(flags, &["cemetery", "cemetary"]);
     let market = flag(flags, &["black_market", "blackMarket"]);
@@ -1193,9 +1198,27 @@ fn populate_internal(
             Area::Ice => {
                 if !start_room(world, x, y - 1) {
                     if ceiling {
-                        if world.dark && rng.chance(1, 40) {
+                        #[cfg(test)]
+                        let ice_prefix = ice_ceiling_eager_rng_tests::observe_before(
+                            world,
+                            rng,
+                            x,
+                            y,
+                            ice_revision,
+                        );
+                        // scrEntityGen:355 evaluates rand even on a bright Ice level.
+                        // Preserve the prior stream for Historical/None callers.
+                        let scarab = if source_classic {
+                            let roll = rng.chance(1, 40);
+                            world.dark && roll
+                        } else {
+                            world.dark && rng.chance(1, 40)
+                        };
+                        if scarab {
                             spawn(world, rng, "oScarab", x, y + 1);
                         }
+                        #[cfg(test)]
+                        ice_ceiling_eager_rng_tests::observe_after(world, rng, ice_prefix);
                     } else if floor
                         && y > 1
                         && y < 37
@@ -4492,3 +4515,7 @@ mod cemetery_v2_tests;
 #[cfg(test)]
 #[path = "population_shop_path_tests.rs"]
 mod population_shop_path_tests;
+
+#[cfg(test)]
+#[path = "ice_ceiling_eager_rng_tests.rs"]
+mod ice_ceiling_eager_rng_tests;
