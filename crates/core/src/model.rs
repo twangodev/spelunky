@@ -517,6 +517,11 @@ pub struct World {
     /// A destroyed solid requests the source global water/lava drainage pass.
     #[serde(default)]
     pub fluid_dirty: bool,
+    /// Campaign room-path markers captured by SourceClassic generation.
+    /// Missing historical/custom context retains its prior shop adapter; no
+    /// keeper-derived grid is reconstructed or serialized on those worlds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_room_path: Option<[[u8; 4]; 5]>,
 }
 impl World {
     pub fn new(width: usize, height: usize, area: Area, level: u32) -> Self {
@@ -535,6 +540,7 @@ impl World {
             creation_serial: 0,
             tile_revision: 0,
             fluid_dirty: false,
+            source_room_path: None,
         }
     }
     pub fn tile(&self, x: i32, y: i32) -> Option<&Tile> {

@@ -811,6 +811,13 @@ pub(crate) fn generate_campaign_result(
         source_boundary_tests::observe_before_path(&world, rng);
     }
     let path = room_path(rng, area, level, &mut selected, source_classic);
+    if source_classic && (1..=16).contains(&level) {
+        // Preserve the selected grid before room Create/population callbacks.
+        // Source isInShop reads these markers throughout gameplay, even after
+        // a keeper moves, deactivates, or is destroyed. Synthetic level0 and
+        // authored tutorial/custom/hub contexts do not establish this grid.
+        world.source_room_path = Some(path.rooms);
+    }
     if select_cemetery(rng, area, has(&selected, "cemetery"), source_classic) {
         selected.insert("cemetery".into());
     }

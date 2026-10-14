@@ -11,6 +11,14 @@ fn room(pos: Vec2) -> (i32, i32) {
     )
 }
 pub(crate) fn in_shop(game: &Game, pos: Vec2) -> bool {
+    if let Some(path) = &game.world.source_room_path {
+        // isInShop and scrGetRoomX/Y clamp the source global grid by origin.
+        // Room ownership never follows live/dead/active keeper membership.
+        let (x, y) = room(pos);
+        return matches!(path[y as usize][x as usize], 4 | 5);
+    }
+    // Historical snapshots and authored contexts lacking a source grid keep
+    // their existing adapter. Do not fabricate roomPath from their keepers.
     game.world.entities.iter().any(|e| {
         e.alive
             && crate::catalog::is_a(&e.object, "oShopkeeper")
@@ -1223,3 +1231,7 @@ mod tests {
 #[cfg(test)]
 #[path = "economy_damsel_cached_distance_tests.rs"]
 mod damsel_cached_distance_tests;
+
+#[cfg(test)]
+#[path = "economy_campaign_shop_path_tests.rs"]
+mod campaign_shop_path_tests;
