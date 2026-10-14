@@ -345,8 +345,10 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         if let Some(slot) = game.world.entities.iter_mut().find(|e| e.id == id) {
             *slot = entity;
         }
-        if body_active {
-            crate::enemies::item_step_impacts(game, id);
+        if body_active && !crate::enemies::dice_step_impacts(game, id) {
+            // Dice owns ONE Code action: a failed qualified target read
+            // aborts that same action before its later rolling/RNG statements.
+            return;
         }
         utility::step_instance(game, id);
         return;
@@ -372,7 +374,8 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
             game.player.pos.y,
         );
     }
-    let held_branch = entity.held && (fragile || item_body_active(game, &entity));
+    let held_branch = entity.held
+        && (fragile || entity.object == "oRopeThrow" || item_body_active(game, &entity));
     // Arrow and Flare call the parent event from their own Step below.
     if held_branch && !matches!(entity.object.as_str(), "oArrow" | "oFlare") {
         align_held(game, &mut entity);
@@ -422,7 +425,16 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         break_item(game, id);
     }
     weapons::step_instance(game, id);
-    explosives::step_instance(game, id);
+    if game
+        .world
+        .entities
+        .iter()
+        .any(|entity| entity.id == id && entity.object == "oRopeThrow")
+    {
+        explosives::rope_throw_step_after_attachment(game, id, held_branch);
+    } else {
+        explosives::step_instance(game, id);
+    }
     if game
         .world
         .entities
@@ -441,7 +453,10 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         .find(|e| e.id == id)
         .is_some_and(|e| {
             crate::catalog::is_a(&e.object, "oItem")
-                && !matches!(e.object.as_str(), "oArrow" | "oFlare" | "oBasketball")
+                && !matches!(
+                    e.object.as_str(),
+                    "oArrow" | "oFlare" | "oBasketball" | "oRopeThrow"
+                )
                 && (item_body_active(game, e)
                     || matches!(
                         e.object.as_str(),
@@ -469,6 +484,23 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
     {
         crate::traps::altar::idol_step(game, id);
     }
+    if let Some(mut bow) = game
+        .world
+        .entities
+        .iter()
+        .find(|entity| entity.id == id && entity.object == "oBow")
+        .cloned()
+    {
+        weapons::bow_step(game, &mut bow);
+        if let Some(slot) = game
+            .world
+            .entities
+            .iter_mut()
+            .find(|entity| entity.id == id)
+        {
+            *slot = bow;
+        }
+    }
     let Some(mut entity) = game.world.entity(id).cloned() else {
         return;
     };
@@ -479,9 +511,6 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
             && (entity.sprite == "sBombArmed" || entity.value("sticky") != 0.0))
     {
         entity.data.insert("depth".into(), 1.0);
-    }
-    if entity.object == "oBow" {
-        weapons::bow_step(game, &mut entity);
     }
     if let Some(slot) = game.world.entities.iter_mut().find(|e| e.id == id) {
         *slot = entity;
@@ -3427,3 +3456,7 @@ mod source_balance_tests {
 #[cfg(test)]
 #[path = "retired_item_child_tail_tests.rs"]
 mod retired_item_child_tail_tests;
+
+#[cfg(test)]
+#[path = "item_replacement_tail_tests.rs"]
+mod item_replacement_tail_tests;

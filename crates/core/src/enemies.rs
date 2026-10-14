@@ -630,6 +630,21 @@ pub(crate) fn inherited_item_step_impacts(game: &mut Game, item_id: u64) {
     item_impacts_from_receiver(game, &item);
 }
 
+/// Dice replaces the parent Step; its entered own block continues after Lava
+/// Destroy, through both creature bodies and then the rolling action.
+pub(crate) fn dice_step_impacts(game: &mut Game, item_id: u64) -> bool {
+    let Some(item) = game
+        .world
+        .entities
+        .iter()
+        .find(|item| item.id == item_id && item.object == "oDice")
+        .cloned()
+    else {
+        return false;
+    };
+    item_impacts_from_receiver(game, &item)
+}
+
 /// Active descendant-array order. Bare World births are a direct-call
 /// compatibility adapter and append by creation serial without running Create.
 fn item_impact_family(game: &Game, family: &str, receiver: u64) -> Vec<u64> {
@@ -663,15 +678,15 @@ fn item_impact_family(game: &Game, family: &str, receiver: u64) -> Vec<u64> {
     members
 }
 
-fn item_impacts_from_receiver(game: &mut Game, item: &Entity) {
+fn item_impacts_from_receiver(game: &mut Game, item: &Entity) -> bool {
     let item_id = item.id;
     let fragile = matches!(item.object.as_str(), "oJar" | "oSkull");
     let speed = if item.object == "oDice" { 3. } else { 2. };
-    if item.held
+    if (item.held && item.object != "oDice")
         || (item.vel.x.abs() <= speed && item.vel.y.abs() <= speed)
         || (item.object == "oBomb" && item.value("sticky") > 0.)
     {
-        return;
+        return true;
     }
     let radius = if fragile { 3. } else { 2. };
     let first = Vec2::new(item.pos.x - radius, item.pos.y - radius);
@@ -701,11 +716,15 @@ fn item_impacts_from_receiver(game: &mut Game, item: &Entity) {
             // Native instance_nearest returns noone at its finite distance
             // sentinel; the following obj.invincible read aborts this block.
             *game.data.entry("source_runtime_errors".into()).or_default() += 1.0;
-            game.events.push(GameEvent::Message(
-                "SOURCE RUNTIME ERROR: oItem Step: obj.invincible has no instance; code block aborted."
-                    .into(),
-            ));
-            return;
+            let owner = if item.object == "oDice" {
+                "oDice"
+            } else {
+                "oItem"
+            };
+            game.events.push(GameEvent::Message(format!(
+                "SOURCE RUNTIME ERROR: {owner} Step: obj.invincible has no instance; code block aborted."
+            )));
+            return false;
         }
         nearest
     } else {
@@ -732,7 +751,12 @@ fn item_impacts_from_receiver(game: &mut Game, item: &Entity) {
             continue;
         };
         with_actor(game, target_id, |game, e| {
-            if e.value("invincible") != 0. || (!fragile && e.object == "oMagmaMan") {
+            let magma = if item.object == "oDice" {
+                dice_enemy_type(e) == "Magma Man"
+            } else {
+                e.object == "oMagmaMan"
+            };
+            if e.value("invincible") != 0. || (!fragile && magma) {
                 return;
             }
             if e.object == "oDamsel"
@@ -774,58 +798,60 @@ fn item_impacts_from_receiver(game: &mut Game, item: &Entity) {
     }
     if item.object == "oDice" {
         // Dice's separate Damsel statement follows the entire Enemy branch.
-        dice_damsel_impact(game, &item);
+        if !dice_damsel_impact(game, &item) {
+            return false;
+        }
     }
     if broke {
         crate::items::break_item(game, item_id);
     }
+    true
 }
 
 /// oDice Step200-220: bbox rectangle only gates the subsequent whole-family
 /// nearest query. Target selection and eligibility run after the Enemy body.
-fn dice_damsel_impact(game: &mut Game, item: &Entity) {
-    crate::dispatcher::register_instances(game);
-    let members = crate::dispatcher::descendant_instances(game, "oDamsel");
+fn dice_damsel_impact(game: &mut Game, item: &Entity) -> bool {
+    // Pure query: no registration/Create replay. Use the same active family
+    // ledger and explicitly bounded pending-birth adapter as the Enemy body.
+    let members = item_impact_family(game, "oDamsel", item.id);
     let first = Vec2::new(item.pos.x - 2.0, item.pos.y - 2.0);
     let second = Vec2::new(item.pos.x + 2.0, item.pos.y + 2.0);
-    let overlaps = members.iter().any(|instance| {
-        let Instance::Entity(id) = *instance else {
-            return false;
-        };
+    let overlaps = members.iter().any(|&id| {
         game.world.entity(id).is_some_and(|target| {
-            target.engine_active
-                && target
-                    .collision_mask()
-                    .intersects_rectangle_bbox(first, second)
+            target
+                .collision_mask()
+                .intersects_rectangle_bbox(first, second)
         })
     });
     if !overlaps {
-        return;
+        return true;
     }
     let mut nearest = None;
-    let mut distance = f64::INFINITY;
-    for instance in members {
-        let Instance::Entity(id) = instance else {
-            continue;
-        };
-        let Some(target) = game.world.entity(id) else {
-            continue;
-        };
-        let candidate = target.pos.distance(item.pos);
-        if target.engine_active && candidate < distance {
+    let mut squared_distance = 10_000_000_000.0;
+    for id in members {
+        let target = game.world.entity(id).unwrap();
+        let dx = target.pos.x - item.pos.x;
+        let dy = target.pos.y - item.pos.y;
+        let candidate = dx * dx + dy * dy;
+        if candidate < squared_distance {
             nearest = Some(id);
-            distance = candidate;
+            squared_distance = candidate;
         }
     }
     let Some(id) = nearest else {
-        return;
+        *game.data.entry("source_runtime_errors".into()).or_default() += 1.0;
+        game.events.push(GameEvent::Message(
+            "SOURCE RUNTIME ERROR: oDice Step: obj.invincible has no instance; code block aborted."
+                .into(),
+        ));
+        return false;
     };
     if !game
         .world
         .entity(id)
         .is_some_and(|target| target.value("invincible") == 0.0 && !matches!(target.state, 2 | 99))
     {
-        return;
+        return true;
     }
     // Direct instance_create, not scrCreateBlood's bloodless/16 precheck.
     // Blood's synchronous inherited Detritus Create still owns its 32 cap.
@@ -839,12 +865,12 @@ fn dice_damsel_impact(game: &mut Game, item: &Entity) {
     target.timer = 120;
     target.vel.x = item.vel.x * 0.3;
     if release {
-        // The source clears the Player pointer unconditionally when held.
         game.player.held = None;
         game.player.pickup_item_type.clear();
     }
     // No hit_cooldown, safe, assaulted or source Blood-script side effects.
     game.sound("sndHit", item.pos);
+    true
 }
 
 pub(super) fn create_blood(game: &mut Game, e: &Entity, pos: Vec2, count: u32) {
@@ -1301,7 +1327,88 @@ fn base_character_collision(game: &mut Game, e: &mut Entity) {
     }
 }
 
+// Explicit source type wins; absent fields retain the existing stock-object
+// adapter. Hawkman's own Create literally writes "Yeti". GiantSpiderHang has
+// only inherited "None", and therefore follows Dice's default branch.
+fn dice_enemy_type(e: &Entity) -> &str {
+    e.text
+        .get("type")
+        .map(String::as_str)
+        .unwrap_or(match e.object.as_str() {
+            "oCaveman" => "Caveman",
+            "oManTrap" => "ManTrap",
+            "oYeti" | "oHawkman" => "Yeti",
+            "oShopkeeper" | "oShopkeeper2" => "Shopkeeper",
+            "oGiantSpider" => "Giant Spider",
+            "oAlienBoss" => "Alien Boss",
+            "oMagmaMan" => "Magma Man",
+            _ => "None",
+        })
+}
+
+/// Complete oDice's own Enemy body. All Blood births are direct Creates,
+/// including bloodless targets and the Detritus 16..32 population interval.
+fn dice_enemy_hit(game: &mut Game, e: &mut Entity, item: &Entity) -> bool {
+    e.vel.x = item.vel.x;
+    let kind = dice_enemy_type(e).to_owned();
+    let mut hit = false;
+    match kind.as_str() {
+        "Caveman" | "ManTrap" | "Yeti" | "Hawkman" if e.state != 98 => {
+            if kind == "ManTrap" {
+                let x = e.pos.x + f64::from(game.rng.range(17));
+                let y = e.pos.y - 8.0 + f64::from(game.rng.range(17));
+                game.spawn("oLeaf", Vec2::new(x, y));
+            } else {
+                game.spawn("oBlood", e.pos);
+            }
+            e.health -= 1;
+            e.state = 98;
+            e.timer = e.value("stun_time") as u32;
+            e.vel.y = -6.0;
+            hit = true;
+        }
+        "Shopkeeper" if e.state < 98 => {
+            game.spawn("oBlood", e.pos);
+            e.health -= 1;
+            e.vel.y = -6.0;
+            e.state = 2;
+            hit = true;
+        }
+        "Giant Spider" if e.value("hit_cooldown") == 0.0 => {
+            game.spawn("oBlood", Vec2::new(e.pos.x + 16.0, e.pos.y + 24.0));
+            e.health -= 1;
+            e.data.insert("hit_cooldown".into(), 10.0);
+            hit = true;
+        }
+        "Alien Boss" if e.state != 99 && e.sprite != "sAlienBossHurt" => {
+            game.spawn("oBlood", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
+            e.health -= 1;
+            e.set_sprite("sAlienBossHurt");
+            e.set_image_speed(0.8);
+            hit = true;
+        }
+        "Caveman" | "ManTrap" | "Yeti" | "Hawkman" | "Shopkeeper" | "Giant Spider"
+        | "Alien Boss" => {}
+        _ => {
+            game.spawn("oBlood", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
+            e.health -= 1;
+            e.data.insert("origX".into(), e.pos.x);
+            e.data.insert("origY".into(), e.pos.y);
+            hit = true;
+        }
+    }
+    if hit {
+        game.sound("sndHit", e.pos);
+    }
+    // This assignment is outside with obj, after every admitted branch.
+    e.vel.x = item.vel.x * 0.3;
+    hit
+}
+
 fn apply_item_hit(game: &mut Game, e: &mut Entity, item: &Entity, fragile: bool) -> bool {
+    if item.object == "oDice" {
+        return dice_enemy_hit(game, e, item);
+    }
     let object = item.object.as_str();
     let velocity = item.vel;
     // Dice and fragile bodies replace oItem Step and create Blood directly.

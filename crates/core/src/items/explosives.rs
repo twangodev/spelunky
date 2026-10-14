@@ -1544,13 +1544,40 @@ fn projectile_motion(world: &World, entity: &mut Entity, sticky: bool) -> bool {
     true
 }
 
-fn tick_rope(game: &mut Game, rope: &mut Entity) {
-    if rope.held {
+/// Items captured the entered held branch before align_held can clear held.
+pub(super) fn rope_throw_step_after_attachment(game: &mut Game, id: u64, held_branch: bool) {
+    let Some(mut rope) = game
+        .world
+        .entities
+        .iter()
+        .find(|entity| entity.id == id && entity.object == "oRopeThrow")
+        .cloned()
+    else {
         return;
+    };
+    init_entity(&mut rope);
+    rope.data
+        .insert("simulation_tick".into(), game.engine_time() as f64);
+    tick_rope_after_attachment(game, &mut rope, held_branch);
+    if let Some(slot) = game
+        .world
+        .entities
+        .iter_mut()
+        .find(|entity| entity.id == id)
+    {
+        *slot = rope;
     }
+}
+
+fn tick_rope(game: &mut Game, rope: &mut Entity) {
+    let held_branch = rope.held;
+    tick_rope_after_attachment(game, rope, held_branch);
+}
+
+fn tick_rope_after_attachment(game: &mut Game, rope: &mut Entity, held_branch: bool) {
     // oItem's inherited Step always runs for ropes, even outside the view and
     // while the custom rope extension step is suppressing their velocity.
-    if projectile_motion(&game.world, rope, false) {
+    if !held_branch && projectile_motion(&game.world, rope, false) {
         if super::lava_at(
             game,
             Rect::new(rope.pos.x - 3.0, rope.pos.y - 3.0, 7.0, 7.0),
@@ -1575,7 +1602,16 @@ fn tick_rope(game: &mut Game, rope: &mut Entity) {
             }
         }
     }
-    if rope.value("falling") == 0.0 {
+    // Complete inherited creature callbacks before the child can zero motion
+    // or create rope parts. This also runs after parent Lava retirement.
+    if let Some(slot) = game.world.entities.iter_mut().find(|e| e.id == rope.id) {
+        *slot = rope.clone();
+    }
+    crate::enemies::inherited_item_step_impacts(game, rope.id);
+    if let Some(slot) = game.world.entities.iter().find(|e| e.id == rope.id) {
+        *rope = slot.clone();
+    }
+    {
         if rope.value("armed") != 0.0 && rope.vel.y >= 0.0 {
             let snapped = (rope.pos.x / 16.0).round_ties_even() * 16.0;
             let near = if rope.value("px") < snapped {
