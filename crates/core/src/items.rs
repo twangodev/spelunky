@@ -1092,9 +1092,6 @@ fn throw_item(game: &mut Game, id: u64, input: &InputFrame) {
         entity.data.insert("safe".into(), 1.0);
         entity.data.insert("safe_ticks".into(), 10.0);
         entity.alarms[2] = 10;
-        if entity.object != "oFireFrogBomb" {
-            entity.data.insert("armed".into(), 1.0);
-        }
         entity.data.insert("owner".into(), 1.0);
         if wall {
             entity.pos.x -= facing * 8.0;
@@ -2047,6 +2044,7 @@ mod tests {
         // y78 for the later controlled reposition and Down pickup.
         game.spawn("oHardBlock", Vec2::new(96.0, 86.0));
         let id = game.world.spawn("oMattockHead", Vec2::new(100.0, 80.0));
+        assert_eq!(game.world.entity(id).unwrap().value("armed"), 0.0);
         game.world.entity_mut(id).unwrap().vel = Vec2::new(2.0, -2.0);
         game.step(&InputFrame::default());
         let head = game.world.entity(id).unwrap();
@@ -2085,7 +2083,7 @@ mod tests {
         let head = game.world.entity(id).unwrap();
         assert!(!head.held);
         assert!(head.vel.x > 0.0 && head.vel.y < 0.0);
-        assert_eq!(head.value("armed"), 1.0);
+        assert_eq!(head.value("armed"), 0.0, "generic throw preserves Item Create armed=false");
     }
     #[test]
     fn game_step_mitt_throw_returns_to_source_item_gravity_after_first_tick() {
