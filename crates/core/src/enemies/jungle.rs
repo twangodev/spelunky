@@ -674,6 +674,7 @@ fn swim_move(world: &World, e: &mut Entity) -> bool {
 }
 
 fn jaws(game: &mut Game, e: &mut Entity) {
+    let stored_velocity = e.vel;
     // Source tests the mouth, not the middle of the 64-pixel body.
     if !water(&game.world, Vec2::new(e.pos.x + 8.0, e.pos.y + 16.0)) {
         e.health -= 1;
@@ -766,6 +767,8 @@ fn jaws(game: &mut Game, e: &mut Entity) {
             e.state = 0;
         }
     }
+    // Source uses temporary moveTo arguments without assigning custom velocities.
+    e.vel = stored_velocity;
     let turning = matches!(e.sprite.as_str(), "sJawsTurnL" | "sJawsTurnR");
     let sprite = match (turning, e.facing < 0) {
         (true, true) => "sJawsTurnL",
