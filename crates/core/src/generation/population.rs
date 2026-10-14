@@ -4018,7 +4018,17 @@ mod tests {
         // import and raw vectors have separate explicit compatibility tests.
         for seed in [0, 1, 23, u32::MAX] {
             let mut world = World::new(12, 12, Area::Jungle, 5);
-            world.set_tile(4, 4, "oWater");
+            // Original oWater is an abstract, sprite-less parent. Use its
+            // concrete oWaterSwim child (sWater) for this wet birth premise.
+            world.set_tile(4, 4, "oWaterSwim");
+            let water = world.tile(4, 4).unwrap();
+            assert!(water.engine_active);
+            assert!(crate::catalog::is_a(&water.object, "oWater"));
+            assert_eq!(crate::catalog::sprite(&water.object), Some("sWater"));
+            assert!(world.tile_collision_mask(4, 4).contains(
+                Vec2::new(64.0, 64.0),
+                crate::CollisionPrecision::BoundingBox
+            ));
             let mut actual = Rng::new(seed);
             let mut source = actual.clone();
             for object in [
