@@ -168,12 +168,31 @@ fn natural_bomb_arrow_cycle_transfers_the_running_fuse_once() {
         let mut game = room(rules);
         pickup(&mut game, "oBow");
         draw(&mut game);
+        // draw() supplied five +.2 charges. The source assigns holdArrow=NORM
+        // while strength<12, including the crossing frame; complete the fixed
+        // remaining56 held Steps BEFORE arming this bomb-arrow-only scenario.
+        assert_eq!(game.player.data["bow_strength"], 1.0);
+        for _ in 0..56 {
+            game.step(&InputFrame {
+                attack: true,
+                ..Default::default()
+            });
+        }
+        assert!(game.player.data["bow_strength"] >= 12.0);
+        assert!(game.player.data["bow_strength"] < 12.21);
+        assert_eq!(game.data["arrows"], 6.0);
+        assert_eq!(game.player.bombs, 4);
+        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.data["bow_armed"], 1.0);
+        assert_eq!(game.player.data["bow_bomb_armed"], 0.0);
         game.step(&InputFrame {
             attack: true,
             bomb_pressed: true,
             ..Default::default()
         });
         let fuse = game.player.data["bow_bomb_fuse"];
+        assert_eq!(fuse, 80.0);
+        assert_eq!(game.player.data["bow_bomb_armed"], 1.0);
         cycle(&mut game, true);
         let arrows: Vec<_> = game
             .world

@@ -175,6 +175,26 @@ fn draw_and_arm_bow(game: &mut Game) -> u64 {
         attack_pressed: true,
         ..Default::default()
     });
+    // The drawing onset already executed one literal +.2 charge. With
+    // stored IEEE doubles, addition60 is still just below12; addition61
+    // crosses it. Fully charge BEFORE arming: Player Step1505–1515 assigns
+    // holdArrow=NORM on every held charging Step, including the crossing one.
+    assert_eq!(game.player.data["bow_strength"], 0.2);
+    for _ in 0..60 {
+        game.step(&InputFrame {
+            attack: true,
+            ..Default::default()
+        });
+    }
+    assert!(game.player.data["bow_strength"] >= 12.0);
+    assert!(game.player.data["bow_strength"] < 12.21);
+    assert_eq!(game.player.data["bow_bomb_armed"], 0.0);
+    assert_eq!(game.player.held, Some(bow));
+    assert_eq!(game.player.pos, Vec2::new(240.0, 152.0));
+    assert_eq!(game.player.vel, Vec2::default());
+    assert_eq!(game.player.facing, 1);
+    assert_eq!(game.player.health, 20);
+    assert_eq!(game.data["arrows"], 6.0);
     game.step(&InputFrame {
         attack: true,
         bomb_pressed: true,
@@ -182,14 +202,7 @@ fn draw_and_arm_bow(game: &mut Game) -> u64 {
     });
     assert_eq!(game.player.data["bow_bomb_fuse"], 80.0);
     assert_eq!(game.player.bombs, 4);
-    // The oItem enemy/Damsel queries require |xVel|>2 or |yVel|>2.
-    // Build actual bow strength through held input before releasing the arrow.
-    for _ in 0..10 {
-        game.step(&InputFrame {
-            attack: true,
-            ..Default::default()
-        });
-    }
+    assert_eq!(game.player.data["bow_bomb_armed"], 1.0);
     bow
 }
 
@@ -429,10 +442,33 @@ fn naturally_fired_bomb_arrow_enemy_query_then_damsel_query_emit_only_one_burst(
         for low_graphics in [false, true] {
             let mut game = room(low_graphics);
             draw_and_arm_bow(&mut game);
-            // Arriving ordinary actors overlap the arrow's upcoming source
-            // spawn/move. No projectile velocity or fuse is assigned.
-            let snake = enemy_overlap.then(|| game.spawn("oSnake", Vec2::new(248.0, 144.0)));
-            let damsel = game.spawn("oDamsel", Vec2::new(255.0, 152.0));
+            // scrFireBow32–58 births at x+14 with speed1+strength; Item's
+            // same-frame moveTo uses the next source engine clock. Preserve
+            // the original arrival geometry relative to that endpoint: Snake
+            // origin nine pixels left, Damsel origin two pixels left. These
+            // actors still use their real Create and later own Step callbacks.
+            // No projectile position, velocity, fuse or HP is assigned.
+            let source_spawn = Vec2::new(game.player.pos.x + 14.0, game.player.pos.y);
+            let source_speed = 1.0 + game.player.data["bow_strength"];
+            let next_time = game.engine_time().wrapping_add(1) % 100_000_001;
+            let endpoint = Vec2::new(
+                source_spawn.x + displacement(source_speed, next_time),
+                source_spawn.y,
+            );
+            assert!(source_speed > 13.0 && source_speed < 13.21);
+            assert!(
+                !game.world.rectangle_family_except(
+                    Vec2::new(source_spawn.x - 4.0, source_spawn.y - 4.0),
+                    Vec2::new(endpoint.x + 4.0, endpoint.y + 3.0),
+                    "oSolid",
+                    None,
+                    spelunky_core::CollisionPrecision::Precise,
+                ),
+                "source Arrow's entire first horizontal path must be clear"
+            );
+            let snake = enemy_overlap
+                .then(|| game.spawn("oSnake", Vec2::new(endpoint.x - 9.0, endpoint.y - 8.0)));
+            let damsel = game.spawn("oDamsel", Vec2::new(endpoint.x - 2.0, endpoint.y));
             let mut oracle = Oracle::checkpoint(&game);
             game.step(&InputFrame::default());
             assert!(live(&game, "oArrow").is_empty());
