@@ -1,6 +1,6 @@
 //! Treasure and pickup effects translated from Classic 1.1's collectible Create
 //! events, oPlayer1 Step, and scrStealItem. Ordinary item motion belongs to items.
-use crate::model::{Area, Entity, Game, GameEvent, InputFrame, Rect, Vec2};
+use crate::model::{Area, Entity, Game, GameEvent, InputFrame, Vec2};
 
 pub(super) fn treasure_value(object: &str) -> Option<u32> {
     Some(match object {
@@ -148,15 +148,10 @@ pub fn init_entity(entity: &mut Entity) {
     }
 }
 
-fn bounds(entity: &Entity) -> Rect {
-    // GM collision_point/rectangle and collision events use sprite masks;
-    // setCollisionBounds supplies the separate movement-engine rectangle.
-    entity.sprite_bounds()
-}
-
 fn origin_is_solid(game: &Game, entity: &Entity) -> bool {
-    game.world
-        .solid_at_except(entity.pos.x, entity.pos.y, entity.id)
+    // Source collision_point(..., oSolid, 0, 0) selects the active
+    // object family, independently of the object's builtin solid flag.
+    super::utility::source_point_bbox(game, entity.pos, "oSolid")
 }
 
 fn spawn(game: &mut Game, object: &str, pos: Vec2, vel: Vec2) -> u64 {
@@ -365,7 +360,6 @@ pub fn player_step(game: &mut Game) {
     if super::player_dead(game) || game.player.is_stunned() {
         return;
     }
-    let contact = Rect::new(game.player.pos.x - 8., game.player.pos.y - 8., 17., 17.);
     // Source first tests contact with any treasure, then independently selects
     // instance_nearest across the whole treasure family (not only the hits).
     crate::dispatcher::register_instances(game);
@@ -377,9 +371,14 @@ pub fn player_step(game: &mut Game) {
         })
         .filter(|entity| entity.engine_active)
         .collect();
-    let touching_treasure = treasures
-        .iter()
-        .any(|entity| contact.intersects(bounds(entity)));
+    let touching_treasure = treasures.iter().any(|entity| {
+        // Source collision_rectangle uses raw inclusive query corners and
+        // the target's cached aggregate integer bbox (precision=false).
+        entity.collision_mask().intersects_rectangle_bbox(
+            Vec2::new(game.player.pos.x - 8., game.player.pos.y - 8.),
+            Vec2::new(game.player.pos.x + 8., game.player.pos.y + 8.),
+        )
+    });
     let treasure = touching_treasure
         .then(|| {
             treasures
@@ -431,11 +430,21 @@ pub fn player_step(game: &mut Game) {
         }
     }
     for object in ["oBombBag", "oBombBox", "oRopePile"] {
-        let id = game
-            .world
-            .entities
-            .iter()
-            .find(|e| e.alive && e.object == object && contact.intersects(bounds(e)))
+        // Source selects the first current active family hit before checking
+        // that receiver's eligibility. An ineligible first hit blocks later hits.
+        let id = crate::dispatcher::descendant_instances(game, object)
+            .into_iter()
+            .filter_map(|instance| match instance {
+                crate::dispatcher::Instance::Entity(id) => game.world.entity(id),
+                _ => None,
+            })
+            .find(|e| {
+                e.engine_active
+                    && e.collision_mask().intersects_rectangle_bbox(
+                        Vec2::new(game.player.pos.x - 8., game.player.pos.y - 8.),
+                        Vec2::new(game.player.pos.x + 8., game.player.pos.y + 8.),
+                    )
+            })
             .filter(|e| !e.held && e.value("cost") == 0. && !origin_is_solid(game, e))
             .map(|e| e.id);
         if let Some(id) = id {
@@ -693,6 +702,7 @@ fn open_chest(game: &mut Game, id: u64, pos: Vec2) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Rect;
     use crate::model::RulesPreset;
     fn game() -> Game {
         Game::shell(7, RulesPreset::Classic)
