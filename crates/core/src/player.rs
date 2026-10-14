@@ -1013,6 +1013,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     // oPlayer1 Step gates characterStepEvent on active, independently of
     // environmental damage and the dead/stunned controller above.
     if !active {
+        look_step(game);
         return;
     }
     // Ankh revival can reactivate a player during the existing exit animation.
@@ -1025,6 +1026,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         let ground = grounded_state(p.state) && value(p, "duck_to_hang", 0.0) == 0.0;
         set(p, "source_platform_grounded", f64::from(ground));
         set(p, "source_platform_climbing", 0.0);
+        look_step(game);
         return;
     }
     // Classic keeps its platform state STANDING while the separate `stunned`
@@ -1038,10 +1040,16 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         p.vel = Vec2::default();
         set(p, "source_platform_grounded", 0.0);
         set(p, "source_platform_climbing", 0.0);
+        look_step(game);
         return;
     }
     // characterStepEvent alone samples kDown. Skipped controllers keep it.
     set(p, "source_k_down", f64::from(input.down));
+    if input.up {
+        set(p, "source_k_up", 1.0);
+    } else {
+        p.data.remove("source_k_up");
+    }
     set(p, "bounced", 0.0);
     let mut effective = *input;
     let cant_jump = value(p, "cantJump", 0.0);
@@ -1689,6 +1697,34 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     animate(p, input, w);
     if let Some(name) = sound {
         game.sound(name, game.player.pos);
+    }
+    look_step(game);
+}
+
+/// oPlayer1 Step399-412: the live branch follows its physical controller,
+/// including skipped inactive/exit controllers with their cached keys. The
+/// dead/stunned movement branch never reaches this helper in the same Step.
+fn look_step(game: &mut Game) {
+    if !game.is_level() {
+        return;
+    }
+    let p = &mut game.player;
+    let eligible = (source_grounded(p) || p.state == PlayerState::Hanging)
+        && value(p, "previous_left", 0.0) == 0.0
+        && value(p, "previous_right", 0.0) == 0.0;
+    let direction = if eligible && value(p, "source_k_down", 0.0) != 0.0 {
+        1.0
+    } else if eligible && value(p, "source_k_up", 0.0) != 0.0 {
+        -1.0
+    } else {
+        p.data.remove("view_count");
+        return;
+    };
+    let count = value(p, "view_count", 0.0);
+    if count <= 30.0 {
+        set(p, "view_count", count + 1.0);
+    } else {
+        game.camera.y += direction * 4.0;
     }
 }
 
