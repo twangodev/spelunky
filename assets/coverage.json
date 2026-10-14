@@ -1684,7 +1684,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 517,
+          "line": 528,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
@@ -2388,7 +2388,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 524,
+          "line": 535,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
@@ -3074,7 +3074,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 522,
+          "line": 533,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
@@ -3409,7 +3409,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 521,
+          "line": 532,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
@@ -5459,7 +5459,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 523,
+          "line": 534,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
@@ -7828,7 +7828,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 523,
+          "line": 534,
           "module": "crates/core/src/traps/moving.rs"
         }
       ],
@@ -8675,7 +8675,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 523,
+          "line": 534,
           "module": "crates/core/src/traps/moving.rs"
         }
       ],
@@ -9038,7 +9038,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 523,
+          "line": 534,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
@@ -10586,7 +10586,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 518,
+          "line": 529,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
@@ -10627,7 +10627,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 518,
+          "line": 529,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
@@ -11778,7 +11778,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 523,
+          "line": 534,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
