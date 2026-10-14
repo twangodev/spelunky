@@ -381,7 +381,7 @@ fn entity_draw_x(object: &str, x: f32, mirrored: bool) -> f32 {
     }
 }
 
-fn entity_mirrored(entity: &Entity, name: &str) -> bool {
+fn entity_mirrored(entity: &Entity, _name: &str) -> bool {
     // These objects override oEnemy's Draw event and use their already
     // directional sprite without the inherited horizontal flip.
     if matches!(entity.object.as_str(), "oJaws" | "oYetiKing" | "oTombLord") {
@@ -401,8 +401,10 @@ fn entity_mirrored(entity: &Entity, name: &str) -> bool {
         // the engine's default +1 scale, independent of port-facing metadata.
         false
     } else {
-        (entity.object == "oAlien" || name.ends_with("Left") || name.ends_with('L'))
-            && entity.facing > 0
+        // Objects without a custom Draw override use the engine's default
+        // +1 image_xscale. Directional sprite names and port AI facing do
+        // not assign that source property (notably left muzzle flashes).
+        false
     }
 }
 
@@ -5693,3 +5695,7 @@ mod configured_whip_draw_tests;
 #[cfg(test)]
 #[path = "hawkman_worship_draw_tests.rs"]
 mod hawkman_worship_draw_tests;
+
+#[cfg(test)]
+#[path = "weapon_default_draw_tests.rs"]
+mod weapon_default_draw_tests;

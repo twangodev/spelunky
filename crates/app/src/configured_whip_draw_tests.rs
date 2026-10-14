@@ -64,15 +64,29 @@ fn chosen_whip_art_draws_unchanged_for_either_facing_and_obeys_explicit_scale() 
 }
 
 #[test]
-fn whip_render_exception_keeps_unrelated_directional_fallback_unchanged() {
+fn non_enemy_builtin_draw_uses_source_scale_without_directional_inference() {
     let mut game = Game::shell(123, RulesPreset::Classic);
-    let id = game.world.spawn("oRock", Vec2::new(160.0, 96.0));
+    // Parentless flash has no Draw override: builtin Draw uses image_xscale.
+    // Rock's own inherited Item Draw passes literal +1, so it is not a valid
+    // control for the builtin scale behavior or directional-name inference.
+    let id = game
+        .world
+        .spawn("oShotgunBlastLeft", Vec2::new(160.0, 96.0));
+    assert!(
+        catalog::object("oShotgunBlastLeft")
+            .unwrap()
+            .parent
+            .is_empty()
+    );
     let actor = game.world.entity_mut(id).unwrap();
     actor.set_sprite("sWhipLeft");
-    actor.facing = 1;
-    assert!(entity_mirrored(actor, "sWhipLeft"));
-    actor.data.insert("image_xscale".into(), 1.0);
-    assert!(!entity_mirrored(actor, "sWhipLeft"));
-    actor.data.insert("image_xscale".into(), -1.0);
-    assert!(entity_mirrored(actor, "sWhipLeft"));
+    for facing in [-1, 1] {
+        actor.facing = facing;
+        actor.data.remove("image_xscale");
+        assert!(!entity_mirrored(actor, "sWhipLeft"), "default +1 scale");
+        actor.data.insert("image_xscale".into(), 1.0);
+        assert!(!entity_mirrored(actor, "sWhipLeft"));
+        actor.data.insert("image_xscale".into(), -1.0);
+        assert!(entity_mirrored(actor, "sWhipLeft"));
+    }
 }
