@@ -36,6 +36,20 @@ pub fn source_facing(entity: &Entity) -> i8 {
     )
 }
 
+/// The closed player-dependent part of Skeleton Create. Producers call this
+/// at actual birth, after defaults, with the target visible at that time.
+pub(crate) fn create_skeleton_player_facing(entity: &mut Entity, target: Option<Vec2>) {
+    if entity.object != "oSkeleton" || entity.value("source_facing_pending") <= 0.0 {
+        return;
+    }
+    entity.facing = if target.is_some_and(|player| player.x < entity.pos.x + 8.0) {
+        -1
+    } else {
+        1
+    };
+    entity.data.insert("source_facing_pending".into(), 0.0);
+}
+
 /// Create events execute at instance creation, including outside AI viewports.
 pub(crate) fn on_spawn(world: &mut World, id: u64) {
     caves::on_spawn(world, id);

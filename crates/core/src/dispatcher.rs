@@ -1621,3 +1621,6 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
         game.draw_view = None;
     }
 }
+
+#[cfg(test)]
+mod skeleton_player_create_tests;

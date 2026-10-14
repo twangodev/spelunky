@@ -52,6 +52,37 @@ pub(super) fn create_local(ctx: &mut crate::creation::EntityCreateContext<'_>, e
     }
 }
 
+// Pure active-family getter. Registered targets retain current family order;
+// still-visible raw World births follow in source creation order. Player health
+// and its independent input-active flag do not change engine query existence.
+fn first_active_player_position(game: &Game) -> Option<Vec2> {
+    use crate::dispatcher::Instance;
+    let order = crate::dispatcher::descendant_instances(game, "oPlayer1");
+    let rank = |instance| {
+        order
+            .iter()
+            .position(|current| *current == instance)
+            .unwrap_or(order.len())
+    };
+    let primary = game
+        .player
+        .engine_active
+        .then_some(((rank(Instance::Player), 0), game.player.pos));
+    primary
+        .into_iter()
+        .chain(game.world.entities.iter().filter_map(|target| {
+            (target.alive
+                && target.engine_active
+                && crate::catalog::is_a(&target.object, "oPlayer1"))
+            .then_some((
+                (rank(Instance::Entity(target.id)), target.creation_serial),
+                target.pos,
+            ))
+        }))
+        .min_by_key(|(rank, _)| *rank)
+        .map(|(_, position)| position)
+}
+
 pub(super) fn create(game: &mut Game, e: &mut Entity) {
     create_local(
         &mut crate::creation::EntityCreateContext {
@@ -60,17 +91,10 @@ pub(super) fn create(game: &mut Game, e: &mut Entity) {
         },
         e,
     );
-    if e.value("source_facing_pending") > 0.0 {
-        e.facing = match e.object.as_str() {
-            "oSkeleton" => {
-                if game.player.pos.x < e.pos.x + 8.0 {
-                    -1
-                } else {
-                    1
-                }
-            }
-            _ => 1,
-        };
+    if e.object == "oSkeleton" && e.value("source_facing_pending") > 0.0 {
+        super::create_skeleton_player_facing(e, first_active_player_position(game));
+    } else if e.value("source_facing_pending") > 0.0 {
+        e.facing = 1;
         e.data.insert("source_facing_pending".into(), 0.0);
     }
 }

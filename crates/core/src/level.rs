@@ -221,6 +221,26 @@ impl Level {
                     // state/sprite/free-item overrides. Use the same initializer path
                     // as generated levels, so the first tick cannot undo those overrides.
                     let id = world.spawn(spawn.object, pos);
+                    if spawn.object == "oSkeleton" {
+                        // scrLoadLevel creates each tile object before the later
+                        // Player birth. Complete Skeleton's closed query body at
+                        // this producer point, against only already-born targets.
+                        // Other deferred custom Create components remain separate.
+                        let player = world
+                            .entities
+                            .iter()
+                            .filter(|entity| {
+                                entity.alive
+                                    && entity.engine_active
+                                    && crate::catalog::is_a(&entity.object, "oPlayer1")
+                            })
+                            .min_by_key(|entity| entity.creation_serial)
+                            .map(|entity| entity.pos);
+                        crate::enemies::create_skeleton_player_facing(
+                            world.entity_mut(id).unwrap(),
+                            player,
+                        );
+                    }
                     if spawn.object == "oLeaves" {
                         crate::world_events::initialize_leaves(&mut world, id, false);
                     }
