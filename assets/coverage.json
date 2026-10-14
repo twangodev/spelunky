@@ -148,22 +148,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 356,
+          "line": 367,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 360,
+          "line": 371,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 399,
+          "line": 410,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 422,
+          "line": 433,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -2249,22 +2249,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 346,
+          "line": 357,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 359,
+          "line": 370,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 367,
+          "line": 378,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 421,
+          "line": 432,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -4605,22 +4605,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 350,
+          "line": 361,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 360,
+          "line": 371,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 387,
+          "line": 398,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 422,
+          "line": 433,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -5193,22 +5193,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 346,
+          "line": 357,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 359,
+          "line": 370,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 367,
+          "line": 378,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 421,
+          "line": 432,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -7068,17 +7068,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 359,
+          "line": 370,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 367,
+          "line": 378,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 421,
+          "line": 432,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -9918,22 +9918,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 349,
+          "line": 360,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 359,
+          "line": 370,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 381,
+          "line": 392,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 421,
+          "line": 432,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -10025,22 +10025,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 349,
-          "module": "crates/core/src/enemies/inherited.rs"
-        },
-        {
-          "kind": "explicit_object_match_arm",
           "line": 360,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 381,
+          "line": 371,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 422,
+          "line": 392,
+          "module": "crates/core/src/enemies/inherited.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 433,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -11893,22 +11893,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 353,
+          "line": 364,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 360,
+          "line": 371,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 387,
+          "line": 398,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 422,
+          "line": 433,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -12295,12 +12295,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 360,
+          "line": 371,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 405,
+          "line": 416,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -12442,22 +12442,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 346,
+          "line": 357,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 359,
+          "line": 370,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 367,
+          "line": 378,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 421,
+          "line": 432,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
@@ -13350,22 +13350,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 346,
+          "line": 357,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 359,
+          "line": 370,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 367,
+          "line": 378,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 421,
+          "line": 432,
           "module": "crates/core/src/enemies/inherited.rs"
         },
         {
