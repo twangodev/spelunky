@@ -146,11 +146,14 @@ fn source_stomp(rules: RulesPreset, rng: RngAlgorithm, boots: bool, bones: usize
             assert_eq!(actor.vel.y, -6.0);
             assert_eq!(
                 actor.vel.x,
-                -3.0 + if game.player.pos.x < actor.pos.x + 8.0 {
-                    1.0
-                } else {
-                    -1.0
-                },
+                // Source Step391 and557-559: left ATTACK assigns -3, then
+                // unconditional friction adds 0.1 before Character Collision31.
+                (-3.0 + 0.1)
+                    + if game.player.pos.x < actor.pos.x + 8.0 {
+                        1.0
+                    } else {
+                        -1.0
+                    },
                 "own ATTACK speed then source side kick"
             );
             assert_eq!(actor.value("killed_by_player"), 0.0);
