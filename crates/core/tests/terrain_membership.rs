@@ -57,12 +57,22 @@ pub fn fixture_change(game: &mut Game, tick: u32) {
         _ => {}
     }
 }
+// Original rand(100) omits argument1: 100 + rand(100) is
+// 200 + floor(-99 * U). Compute its one LCG draw independently of range/source_rand.
+fn source_repeater_delay_oracle(rng: &mut Rng) -> f64 {
+    assert_eq!(rng.algorithm(), RngAlgorithm::Gm8Lcg32V1);
+    let state = u32::try_from(rng.state_bits()).expect("canonical raw u32 state");
+    let next = state.wrapping_mul(0x08088405).wrapping_add(1);
+    // Advance only this expected clone; the literal state is the value oracle.
+    assert_eq!(rng.next_u64(), u64::from(next));
+    200.0 + (-99.0 * f64::from(next) / 4_294_967_296.0).floor()
+}
 #[test]
 fn terrain_birth_create_rng_follows_grid_order_not_tile_serials() {
     let mut game = fixture_game();
     let mut expected_rng = game.rng.clone();
-    let first = 100. + f64::from(expected_rng.range(100));
-    let second = 100. + f64::from(expected_rng.range(100));
+    let first = source_repeater_delay_oracle(&mut expected_rng);
+    let second = source_repeater_delay_oracle(&mut expected_rng);
     fixture_change(&mut game, 1);
     game.step(&InputFrame::default());
     let a = 4 * game.world.width + 4;
@@ -90,7 +100,7 @@ fn inactive_registered_terrain_preserves_create_then_replacement_gets_fresh_crea
     assert_eq!(game.rng.clone().next_u64(), rng);
     let serial = game.world.tiles[index].creation_serial;
     let mut expected_rng = game.rng.clone();
-    let replacement_delay = 100. + f64::from(expected_rng.range(100));
+    let replacement_delay = source_repeater_delay_oracle(&mut expected_rng);
     game.world.set_tile(34, 4, "oArrowRepeaterR");
     game.step(&InputFrame::default());
     assert_eq!(
