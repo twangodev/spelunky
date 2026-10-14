@@ -1185,9 +1185,9 @@ pub fn step_instance(game: &mut Game, id: u64) {
             e.pos.y += e.vel.y;
         }
         "oArrow" => {
-            if !inherited_item_step(game, &mut e) {
-                return;
-            }
+            // Synchronous inherited Destroy retires the receiver, but does not
+            // abort this already-entered child Step or its Moon target tail.
+            inherited_item_step(game, &mut e);
             let angle = item_rotation(e.vel, e.value("stuck") != 0.0, e.value("rotation"));
             e.data.insert("rotation".into(), angle);
             if game.world.name == "rMoon" {
@@ -1308,7 +1308,7 @@ pub fn step_instance(game: &mut Game, id: u64) {
         }
         _ => {}
     }
-    let continue_retired = e.object == "oFlare";
+    let continue_retired = matches!(e.object.as_str(), "oArrow" | "oFlare");
     if let Some(original) = game
         .world
         .entities
@@ -1327,8 +1327,8 @@ fn inherited_item_step(game: &mut Game, e: &mut Entity) -> bool {
     if let Some(slot) = game.world.entities.iter_mut().find(|slot| slot.id == e.id) {
         *slot = e.clone();
     }
-    if impacts && e.alive {
-        crate::enemies::item_step_impacts(game, e.id);
+    if impacts {
+        crate::enemies::inherited_item_step_impacts(game, e.id);
     }
     if let Some(updated) = game.world.entities.iter().find(|slot| slot.id == e.id) {
         *e = updated.clone();
@@ -3836,3 +3836,7 @@ mod source_bow_charge_gate_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "arrow_lava_own_continuation_tests.rs"]
+mod arrow_lava_own_continuation_source_tests;

@@ -425,10 +425,12 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
     explosives::step_instance(game, id);
     if game
         .world
-        .entity(id)
+        .entities
+        .iter()
+        .find(|e| e.id == id)
         .is_some_and(|e| e.object == "oBasketball" && item_body_active(game, e))
     {
-        crate::enemies::item_step_impacts(game, id);
+        crate::enemies::inherited_item_step_impacts(game, id);
     }
     utility::step_instance(game, id);
     collectibles::step_instance(game, id);
@@ -438,16 +440,22 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
                 .insert("rotation".into(), weapons::item_rotation(e.vel, false, 0.0));
         }
     }
-    if game.world.entity(id).is_some_and(|e| {
-        crate::catalog::is_a(&e.object, "oItem")
-            && !matches!(e.object.as_str(), "oArrow" | "oFlare" | "oBasketball")
-            && (item_body_active(game, e)
-                || matches!(
-                    e.object.as_str(),
-                    "oJar" | "oSkull" | "oRope" | "oRopeThrow"
-                ))
-    }) {
-        crate::enemies::item_step_impacts(game, id);
+    if game
+        .world
+        .entities
+        .iter()
+        .find(|e| e.id == id)
+        .is_some_and(|e| {
+            crate::catalog::is_a(&e.object, "oItem")
+                && !matches!(e.object.as_str(), "oArrow" | "oFlare" | "oBasketball")
+                && (item_body_active(game, e)
+                    || matches!(
+                        e.object.as_str(),
+                        "oJar" | "oSkull" | "oRope" | "oRopeThrow"
+                    ))
+        })
+    {
+        crate::enemies::inherited_item_step_impacts(game, id);
     }
     explosives::fire_frog_bomb_own_step(game, id);
     if game
@@ -1403,7 +1411,7 @@ pub(crate) fn tick_inherited_ball_body(game: &mut Game, entity: &mut Entity) {
     } else {
         game.world.entities.push(entity.clone());
     }
-    crate::enemies::item_step_impacts(game, id);
+    crate::enemies::inherited_item_step_impacts(game, id);
     if let Some(index) = game.world.entities.iter().position(|e| e.id == id) {
         *entity = game.world.entities[index].clone();
         if existing.is_none() {

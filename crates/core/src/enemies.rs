@@ -606,6 +606,65 @@ pub(crate) fn item_step_impacts(game: &mut Game, item_id: u64) {
     let Some(item) = game.world.entity(item_id).cloned() else {
         return;
     };
+    item_impacts_from_receiver(game, &item);
+}
+
+/// Continue the already-entered inherited Item event after its synchronous
+/// Destroy. This receiver is not returned to query membership or dispatched
+/// again, and the live-only direct adapter above keeps its existing contract.
+pub(crate) fn inherited_item_step_impacts(game: &mut Game, item_id: u64) {
+    let Some(item) = game
+        .world
+        .entities
+        .iter()
+        .find(|item| item.id == item_id)
+        .cloned()
+    else {
+        return;
+    };
+    if !crate::catalog::is_a(&item.object, "oItem")
+        || matches!(item.object.as_str(), "oDice" | "oJar" | "oSkull")
+    {
+        return;
+    }
+    item_impacts_from_receiver(game, &item);
+}
+
+/// Active descendant-array order. Bare World births are a direct-call
+/// compatibility adapter and append by creation serial without running Create.
+fn item_impact_family(game: &Game, family: &str, receiver: u64) -> Vec<u64> {
+    let mut members: Vec<_> = crate::dispatcher::descendant_instances(game, family)
+        .into_iter()
+        .filter_map(|instance| match instance {
+            Instance::Entity(id) => game
+                .world
+                .entity(id)
+                .filter(|e| e.engine_active && e.id != receiver)
+                .map(|e| e.id),
+            _ => None,
+        })
+        .collect();
+    if !game.dispatcher.running {
+        let mut pending: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|e| {
+                e.alive
+                    && e.engine_active
+                    && e.id != receiver
+                    && crate::catalog::is_a(&e.object, family)
+                    && !members.contains(&e.id)
+            })
+            .collect();
+        pending.sort_by_key(|e| e.creation_serial);
+        members.extend(pending.into_iter().map(|e| e.id));
+    }
+    members
+}
+
+fn item_impacts_from_receiver(game: &mut Game, item: &Entity) {
+    let item_id = item.id;
     let fragile = matches!(item.object.as_str(), "oJar" | "oSkull");
     let speed = if item.object == "oDice" { 3. } else { 2. };
     if item.held
@@ -617,40 +676,61 @@ pub(crate) fn item_step_impacts(game: &mut Game, item_id: u64) {
     let radius = if fragile { 3. } else { 2. };
     let first = Vec2::new(item.pos.x - radius, item.pos.y - radius);
     let second = Vec2::new(item.pos.x + radius, item.pos.y + radius);
-    let overlaps_enemy = game.world.entities.iter().any(|e| {
-        e.alive
-            && e.id != item_id
-            && is_enemy(&e.object)
-            && e.collision_mask().intersects_rectangle_bbox(first, second)
+    // The Enemy rectangle gates a distinct nearest query over the entire
+    // active family. Equal distances retain source registration order.
+    let enemy_members = item_impact_family(game, "oEnemy", item_id);
+    let overlaps_enemy = enemy_members.iter().any(|&id| {
+        game.world
+            .entity(id)
+            .is_some_and(|e| e.collision_mask().intersects_rectangle_bbox(first, second))
     });
     let enemy = if overlaps_enemy {
-        game.world
-            .entities
-            .iter()
-            .filter(|e| e.alive && e.id != item_id && is_enemy(&e.object))
-            .min_by(|a, b| {
-                a.pos
-                    .distance(item.pos)
-                    .total_cmp(&b.pos.distance(item.pos))
-            })
-            .map(|e| e.id)
+        let mut nearest = None;
+        let mut squared_distance = 10_000_000_000.0;
+        for id in enemy_members {
+            let e = game.world.entity(id).unwrap();
+            let dx = e.pos.x - item.pos.x;
+            let dy = e.pos.y - item.pos.y;
+            let candidate = dx * dx + dy * dy;
+            if candidate < squared_distance {
+                squared_distance = candidate;
+                nearest = Some(id);
+            }
+        }
+        if nearest.is_none() {
+            // Native instance_nearest returns noone at its finite distance
+            // sentinel; the following obj.invincible read aborts this block.
+            *game.data.entry("source_runtime_errors".into()).or_default() += 1.0;
+            game.events.push(GameEvent::Message(
+                "SOURCE RUNTIME ERROR: oItem Step: obj.invincible has no instance; code block aborted."
+                    .into(),
+            ));
+            return;
+        }
+        nearest
     } else {
         None
     };
-    let damsel = game
-        .world
-        .entities
-        .iter()
-        .find(|e| {
-            item.object != "oDice"
-                && e.alive
-                && e.id != item_id
-                && e.object == "oDamsel"
-                && e.collision_mask().intersects_rectangle_bbox(first, second)
-        })
-        .map(|e| e.id);
     let mut broke = false;
-    for target_id in enemy.into_iter().chain(damsel) {
+    for family in ["oEnemy", "oDamsel"] {
+        let selected = if family == "oEnemy" {
+            enemy
+        } else if item.object != "oDice" {
+            // Both source Damsel rectangle calls occur after the complete
+            // Enemy body, including its synchronous Create/Destroy callbacks.
+            item_impact_family(game, "oDamsel", item_id)
+                .into_iter()
+                .find(|&id| {
+                    game.world.entity(id).is_some_and(|e| {
+                        e.collision_mask().intersects_rectangle_bbox(first, second)
+                    })
+                })
+        } else {
+            None
+        };
+        let Some(target_id) = selected else {
+            continue;
+        };
         with_actor(game, target_id, |game, e| {
             if e.value("invincible") != 0. || (!fragile && e.object == "oMagmaMan") {
                 return;

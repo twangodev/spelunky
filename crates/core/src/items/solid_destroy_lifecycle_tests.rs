@@ -567,3 +567,6 @@ fn altar_fanout_preserves_mixed_active_birth_order_and_skips_inactive_sibling() 
         }
     }
 }
+
+#[path = "item_impact_query_order_tests.rs"]
+mod item_impact_query_order_tests;
