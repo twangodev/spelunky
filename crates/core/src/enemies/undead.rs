@@ -146,17 +146,30 @@ fn water(world: &World, p: Vec2) -> bool {
         })
 }
 fn distance_to_player(game: &Game, e: &Entity) -> f64 {
-    // GM distance_to_object measures the gap between inclusive sprite bboxes,
-    // Vampire instead measures from its bbox to player.x-8, player.y-8.
-    let a = e.sprite_bounds();
-    let b = game.player.sprite_bounds();
-    let dx = (a.x - (b.x + b.w - 1.0))
-        .max(b.x - (a.x + a.w - 1.0))
-        .max(0.0);
-    let dy = (a.y - (b.y + b.h - 1.0))
-        .max(b.y - (a.y + a.h - 1.0))
-        .max(0.0);
-    dx.hypot(dy)
+    // Zombie's literal target is oPlayer1, not the wider Character family.
+    // Native queries read cached integer envelopes and retain the million
+    // sentinel when no active target exists, even for a destroyed receiver.
+    let receiver = e.collision_mask().point_bounds();
+    let mut distance = 1_000_000.0_f64;
+    if game.player.engine_active {
+        distance = distance.min(crate::world_events::mask_distance(
+            receiver,
+            game.player.collision_mask().point_bounds(),
+        ));
+    }
+    for target in &game.world.entities {
+        if target.id != e.id
+            && target.alive
+            && target.engine_active
+            && crate::catalog::is_a(&target.object, "oPlayer1")
+        {
+            distance = distance.min(crate::world_events::mask_distance(
+                receiver,
+                target.collision_mask().point_bounds(),
+            ));
+        }
+    }
+    distance
 }
 fn distance_to_point(e: &Entity, point: Vec2) -> f64 {
     let r = e.sprite_bounds();
@@ -383,7 +396,11 @@ fn vampire(game: &mut Game, e: &mut Entity) {
                 e.state = 1;
             }
             if distance < 96.0 {
-                e.facing = if target.x < e.pos.x + 8.0 { -1 } else { 1 };
+                if target.x < e.pos.x + 8.0 {
+                    e.facing = -1;
+                } else if target.x > e.pos.x + 8.0 {
+                    e.facing = 1;
+                }
                 e.state = 2;
             }
         }
@@ -1769,3 +1786,7 @@ mod undead_own_destroy_tail_tests {
         skeleton_idle_tail_case(true)
     }
 }
+
+#[cfg(test)]
+#[path = "zombie_cached_distance_tests.rs"]
+mod zombie_cached_distance_tests;
