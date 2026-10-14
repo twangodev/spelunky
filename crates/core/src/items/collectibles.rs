@@ -357,6 +357,8 @@ pub fn player_step(game: &mut Game) {
             .insert("collect".into(), pending - f64::from(amount));
     }
 
+    super::weapons::collect_arrows(game);
+
     if super::player_dead(game) || game.player.is_stunned() {
         return;
     }

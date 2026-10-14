@@ -1131,20 +1131,6 @@ pub fn player_hurt_queries(game: &mut Game) {
         if let Some(mut arrow) = nearest {
             if arrow.vel.x.abs() > 3.0 && arrow.value("safe") == 0.0 {
                 hit_player(game, &mut arrow, 2);
-            } else if game
-                .player
-                .held
-                .and_then(|id| game.world.entity(id))
-                .is_some_and(|e| e.object == "oBow")
-                && !super::player_dead(game)
-                && !game.player.is_stunned()
-                && arrow.value("stuck") == 0.0
-                && arrow.vel.x.abs() < 1.0
-                && arrow.vel.y.abs() < 1.0
-            {
-                arrow.alive = false;
-                *game.data.entry("arrows".into()).or_default() += 1.0;
-                game.sound("sndPickup", arrow.pos);
             }
             if let Some(original) = game.world.entity_mut(arrow.id) {
                 *original = arrow;
@@ -1152,6 +1138,43 @@ pub fn player_hurt_queries(game: &mut Game) {
         }
     }
     rock_player_contact(game);
+}
+
+/// oPlayer1 Collect2097–2113 follows hurt, held release, revival and countup.
+pub(super) fn collect_arrows(game: &mut Game) {
+    let holding_bow = game
+        .player
+        .held
+        .and_then(|id| game.world.entity(id))
+        .is_some_and(|item| super::explosives::source_type(item) == "Bow");
+    if !holding_bow || super::player_dead(game) || game.player.is_stunned() {
+        return;
+    }
+    let first = Vec2::new(game.player.pos.x - 8.0, game.player.pos.y - 8.0);
+    let second = Vec2::new(game.player.pos.x + 8.0, game.player.pos.y + 8.0);
+    if !game.world.entities.iter().any(|e| {
+        e.alive
+            && e.engine_active
+            && e.object == "oArrow"
+            && e.collision_mask().intersects_rectangle_bbox(first, second)
+    }) {
+        return;
+    }
+    // Collision gates the call; nearest then independently searches the family.
+    let Some(arrow) = nearest_active_projectile(game, "oArrow") else {
+        return;
+    };
+    if arrow.vel.x.abs() < 1.0 && arrow.vel.y.abs() < 1.0 && arrow.value("stuck") == 0.0 {
+        *game.data.entry("arrows".into()).or_default() += 1.0;
+        game.sound("sndPickup", game.player.pos);
+        // Source with obj instance_destroy inherits Item's held backlink clear.
+        if arrow.held {
+            game.player.held = None;
+        }
+        if let Some(original) = game.world.entity_mut(arrow.id) {
+            original.alive = false;
+        }
+    }
 }
 
 pub fn handles(object: &str) -> bool {
