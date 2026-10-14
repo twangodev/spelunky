@@ -46,7 +46,7 @@ pub(crate) fn on_spawn(world: &mut World, id: u64) {
     if !world
         .entities
         .iter()
-        .any(|e| e.alive && e.object == "oBarrier")
+        .any(|e| e.alive && e.engine_active && e.object == "oBarrier")
     {
         world.spawn("oBarrier", pos);
     }
