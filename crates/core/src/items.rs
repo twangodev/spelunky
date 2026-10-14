@@ -1405,16 +1405,13 @@ pub(super) fn displacement(velocity: f64, tick: u64) -> i32 {
 }
 
 fn lava_at(game: &Game, rect: Rect) -> bool {
-    let x0 = (rect.x / 16.0).floor() as i32;
-    let y0 = (rect.y / 16.0).floor() as i32;
-    let x1 = ((rect.x + rect.w - 0.0001) / 16.0).floor() as i32;
-    let y1 = ((rect.y + rect.h - 0.0001) / 16.0).floor() as i32;
-    (y0..=y1).any(|y| (x0..=x1).any(|x| game.world.tile(x, y).is_some_and(|t| t.object == "oLava")))
-        || game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.alive && e.object == "oLava" && rect.intersects(e.bounds()))
+    // Callers encode the source's inclusive x/y +/-3 corners as a 7px Rect.
+    utility::source_rectangle_bbox(
+        game,
+        Vec2::new(rect.x, rect.y),
+        Vec2::new(rect.x + rect.w - 1.0, rect.y + rect.h - 1.0),
+        "oLava",
+    )
 }
 
 fn body_contact(world: &World, entity: &Entity, dx: i8, dy: i8) -> bool {

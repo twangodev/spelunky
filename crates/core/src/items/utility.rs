@@ -244,7 +244,7 @@ fn source_query_instances(game: &Game, family: &str) -> Vec<crate::dispatcher::I
     candidates
 }
 
-fn source_rectangle_bbox(game: &Game, first: Vec2, second: Vec2, family: &str) -> bool {
+pub(super) fn source_rectangle_bbox(game: &Game, first: Vec2, second: Vec2, family: &str) -> bool {
     use crate::dispatcher::Instance;
     source_query_instances(game, family)
         .into_iter()
