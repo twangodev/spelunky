@@ -364,15 +364,20 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         crate::economy::item_step(game, &mut entity);
     }
     if matches!(entity.object.as_str(), "oWhip" | "oWhipPre") {
-        let direction = if entity.object == "oWhipPre" {
-            -1.0
+        // Root Whip events test the active Player instance, then sprite_index;
+        // their scripts never read the port's Entity.facing bookkeeping field.
+        if !game.player.engine_active {
+            entity.alive = false;
         } else {
-            1.0
-        };
-        entity.pos = Vec2::new(
-            game.player.pos.x + direction * f64::from(entity.facing) * 16.0,
-            game.player.pos.y,
-        );
+            let offset = match (entity.object.as_str(), entity.sprite.as_str()) {
+                ("oWhip", "sWhipRight") | ("oWhipPre", "sWhipPreL") => Some(16.0),
+                ("oWhip", "sWhipLeft") | ("oWhipPre", "sWhipPreR") => Some(-16.0),
+                _ => None,
+            };
+            if let Some(offset) = offset {
+                entity.pos = Vec2::new(game.player.pos.x + offset, game.player.pos.y);
+            }
+        }
     }
     let held_branch = entity.held
         && (fragile || entity.object == "oRopeThrow" || item_body_active(game, &entity));

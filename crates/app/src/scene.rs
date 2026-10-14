@@ -396,6 +396,10 @@ fn entity_mirrored(entity: &Entity, name: &str) -> bool {
         spelunky_core::enemies::source_facing(entity) > 0
     } else if entity.data.contains_key("image_xscale") {
         entity.value("image_xscale") < 0.0
+    } else if matches!(entity.object.as_str(), "oWhip" | "oWhipPre") {
+        // oDrawnSprite has no Draw override. These directional sprites keep
+        // the engine's default +1 scale, independent of port-facing metadata.
+        false
     } else {
         (entity.object == "oAlien" || name.ends_with("Left") || name.ends_with('L'))
             && entity.facing > 0
@@ -5681,3 +5685,7 @@ mod inherited_enemy_draw_tests;
 #[cfg(test)]
 #[path = "ghost_player_visibility_draw_tests.rs"]
 mod ghost_player_visibility_draw_tests;
+
+#[cfg(test)]
+#[path = "configured_whip_draw_tests.rs"]
+mod configured_whip_draw_tests;
