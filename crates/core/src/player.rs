@@ -2189,7 +2189,8 @@ fn animate(p: &mut Player, input: &InputFrame, w: &World) {
         PlayerState::Hanging => "sHangLeft",
         PlayerState::Climbing => {
             speed = p.vel.x.hypot(p.vel.y) * 0.4;
-            if object_at(w, p.pos, &["oRope", "oRopeTop", "oRopeSegment"]) {
+            // characterSprite186 queries the active oRope family only.
+            if ledge_point(w, p.pos, "oRope") {
                 if input.down { "sClimbUp3" } else { "sClimbUp2" }
             } else {
                 "sClimbUp"
