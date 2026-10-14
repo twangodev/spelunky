@@ -637,8 +637,8 @@ fn damsel(game: &mut Game, e: &mut Entity) {
             if e.health > 0 {
                 create_blood(game, e, e.pos, 3);
                 super::record_damsel_death(game, e, false);
+                e.health = 0;
             }
-            e.health = 0;
             e.state = 99;
             e.data.insert("dead".into(), 1.0);
             e.data.insert("death_recorded".into(), 1.0);
