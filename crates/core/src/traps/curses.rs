@@ -52,24 +52,14 @@ pub(super) fn step_instance(game: &mut Game, instance: crate::dispatcher::Instan
         "oBall" | "oBall2" => {
             init(&mut entity);
             crate::items::tick_inherited_ball_body(game, &mut entity);
-            if entity.alive {
-                // Child follow still runs when the inherited parent is gated.
-                if entity.object == "oBall" {
+            if entity.object == "oBall" {
+                if entity.alive {
                     follow_player(game, &mut entity);
-                } else if let Some(dummy) = game
-                    .world
-                    .entities
-                    .iter()
-                    .find(|e| e.alive && e.object == "oPDummy")
-                {
-                    if crate::world_events::mask_distance(
-                        entity.collision_mask().point_bounds(),
-                        dummy.collision_mask().point_bounds(),
-                    ) >= 24.0
-                    {
-                        entity.pos.x = dummy.pos.x - 24.0;
-                    }
                 }
+            } else {
+                // The explicit inherited action does not abort Ball2's own
+                // following action when Item Step destroys its receiver.
+                follow_dummy(game, &mut entity);
             }
         }
         "oChain" | "oChain2" => chain_step(game, &mut entity),
@@ -133,6 +123,43 @@ fn spawn_chain(game: &mut Game, pos: Vec2, presentation: bool) {
             .unwrap()
             .data
             .insert("linkVal".into(), f64::from(link));
+    }
+}
+
+fn follow_dummy(game: &Game, ball: &mut Entity) {
+    let family = crate::dispatcher::descendant_instances(game, "oPDummy");
+    let mut targets: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .enumerate()
+        .filter(|(_, target)| {
+            target.alive && target.engine_active && crate::catalog::is_a(&target.object, "oPDummy")
+        })
+        .collect();
+    // Qualified x uses current family order; raw pending births append by
+    // creation serial. Like moai_revival_anchor, this query stays read-only.
+    targets.sort_by_key(|(storage, target)| {
+        family
+            .iter()
+            .position(|instance| *instance == crate::dispatcher::Instance::Entity(target.id))
+            .map_or((1_u8, target.creation_serial, *storage), |rank| {
+                (0, rank as u64, *storage)
+            })
+    });
+    if let Some((_, dummy)) = targets.first() {
+        let source = ball.collision_mask().point_bounds();
+        let distance = targets
+            .iter()
+            .fold(1_000_000.0_f64, |distance, (_, target)| {
+                distance.min(crate::world_events::mask_distance(
+                    source,
+                    target.collision_mask().point_bounds(),
+                ))
+            });
+        if distance >= 24.0 {
+            ball.pos.x = dummy.pos.x - 24.0;
+        }
     }
 }
 
@@ -668,6 +695,163 @@ mod native_distance_boundary_tests {
                 ball.vel.x, expected,
                 "SOURCE_INCLUSIVE_GAP24 scale={scale} player_x={player_x}"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod ball2_membership_order_tests {
+    use super::*;
+    use crate::RulesPreset;
+    use crate::dispatcher::{self, Instance};
+
+    fn fixture(rules: RulesPreset, x_velocity: f64) -> (Game, u64) {
+        let mut game = Game::shell(42, rules);
+        game.player.pos = Vec2::new(240.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        let ball = game.spawn("oBall2", Vec2::new(80.0, 104.0));
+        game.world.entity_mut(ball).unwrap().vel.x = x_velocity;
+        (game, ball)
+    }
+
+    fn dummy(game: &mut Game, x: f64, active: bool) -> u64 {
+        let id = game.world.spawn("oPDummy", Vec2::new(x, 104.0));
+        let target = game.world.entity_mut(id).unwrap();
+        target.set_sprite("sRunLeft");
+        target.animation = 2.0;
+        target.engine_active = active;
+        id
+    }
+
+    #[test]
+    fn configured_ball2_parent_motion_precedes_family_minimum_and_qualified_x() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for (second_x, expected) in [(110.0, 83.0), (120.0, 136.0)] {
+                let (mut game, ball) = fixture(rules, 3.0);
+                dummy(&mut game, 160.0, true);
+                dummy(&mut game, second_x, true);
+                step_instance(&mut game, Instance::Entity(ball));
+                let ball = game.world.entity(ball).unwrap();
+                assert_eq!(
+                    ball.pos.x, expected,
+                    "family minimum is independent of first qualified x"
+                );
+                assert_eq!(
+                    ball.vel.x, 3.0,
+                    "child x write does not change inherited velocity"
+                );
+                assert_eq!(ball.pos.y, 104.0);
+            }
+        }
+    }
+
+    #[test]
+    fn configured_ball2_target_existence_excludes_inactive_and_retired_members() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for retired in [false, true] {
+                let (mut game, ball) = fixture(rules, 3.0);
+                let target = dummy(&mut game, 160.0, retired);
+                if retired {
+                    game.world.entity_mut(target).unwrap().alive = false;
+                }
+                step_instance(&mut game, Instance::Entity(ball));
+                assert_eq!(game.world.entity(ball).unwrap().pos.x, 83.0);
+            }
+        }
+    }
+
+    #[test]
+    fn configured_ball2_qualified_target_uses_family_ledger_and_pending_birth_order() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let (mut game, ball) = fixture(rules, 0.0);
+            let c = dummy(&mut game, 320.0, true);
+            let b = dummy(&mut game, 192.0, true);
+            let a = dummy(&mut game, 160.0, true);
+            dispatcher::register_instances(&mut game);
+            game.world.entity_mut(a).unwrap().engine_active = false;
+            dispatcher::activate_region(&mut game, crate::Rect::new(316.0, 100.0, 24.0, 24.0));
+            game.world.entity_mut(b).unwrap().engine_active = false;
+            dispatcher::activate_region(&mut game, crate::Rect::new(316.0, 100.0, 24.0, 24.0));
+            dispatcher::activate_object(&mut game, "oPDummy");
+            assert_eq!(
+                dispatcher::descendant_instances(&game, "oPDummy"),
+                vec![
+                    Instance::Entity(c),
+                    Instance::Entity(a),
+                    Instance::Entity(b)
+                ]
+            );
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oPDummy")
+                    .map(|e| e.id)
+                    .collect::<Vec<_>>(),
+                vec![c, b, a]
+            );
+            game.world.entity_mut(c).unwrap().alive = false;
+            let ledger = game.dispatcher.registration_order.clone();
+            step_instance(&mut game, Instance::Entity(ball));
+            assert_eq!(game.world.entity(ball).unwrap().pos.x, 136.0);
+            assert_eq!(game.dispatcher.registration_order, ledger);
+
+            let (mut game, ball) = fixture(rules, 0.0);
+            let a = dummy(&mut game, 160.0, true);
+            let b = dummy(&mut game, 192.0, true);
+            // No registration: reversed storage must not reverse birth order.
+            game.world.entities.reverse();
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oPDummy")
+                    .map(|e| e.id)
+                    .collect::<Vec<_>>(),
+                vec![b, a]
+            );
+            assert!(dispatcher::descendant_instances(&game, "oPDummy").is_empty());
+            let ledger = game.dispatcher.registration_order.clone();
+            step_instance(&mut game, Instance::Entity(ball));
+            assert_eq!(game.world.entity(ball).unwrap().pos.x, 136.0);
+            assert_eq!(game.dispatcher.registration_order, ledger);
+        }
+    }
+
+    #[test]
+    fn configured_ball2_child_follows_after_inherited_lava_destroy_without_reviving_receiver() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for lava in [false, true] {
+                for target in [false, true] {
+                    let (mut game, ball) = fixture(rules, 0.0);
+                    if lava {
+                        game.spawn("oLava", Vec2::new(80.0, 96.0));
+                    }
+                    if target {
+                        dummy(&mut game, 160.0, true);
+                    }
+                    step_instance(&mut game, Instance::Entity(ball));
+                    // Explicit callback-context observation before cleanup.
+                    // A retired receiver's remaining source action can write
+                    // its tombstone; no live/visible resurrection is claimed.
+                    let stored = game.world.entities.iter().find(|e| e.id == ball).unwrap();
+                    assert_eq!(
+                        stored.alive, !lava,
+                        "parent deep-lava retirement happened first"
+                    );
+                    assert_eq!(stored.pos.y, if lava { 104.05 } else { 104.0 });
+                    if lava {
+                        assert_eq!(stored.vel, Vec2::default());
+                        assert_eq!(stored.value("gravity"), 0.0);
+                        assert!(game.world.entity(ball).is_none());
+                    }
+                    assert_eq!(
+                        stored.pos.x,
+                        if target { 136.0 } else { 80.0 },
+                        "BALL2_OWN_ACTION_CONTINUES_AFTER_PARENT_DESTROY"
+                    );
+                }
+            }
         }
     }
 }
