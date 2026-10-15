@@ -596,9 +596,15 @@ fn tick_item_body(game: &Game, e: &mut Entity) {
     }
 }
 
+/// Historical adapter retained for the existing unit assertions.
+#[cfg(test)]
+pub(super) fn item_rotation(velocity: Vec2, stuck: bool, previous: f64) -> f64 {
+    item_rotation_with_revision(velocity, stuck, previous, GenerationRevision::HistoricalV1)
+}
+
 /// oArrow/oFishBone Step's literal image_angle quadrants. GML angles
 /// rotate counterclockwise; renderer/collision rotations use screen radians.
-pub(super) fn item_rotation(
+pub(super) fn item_rotation_with_revision(
     velocity: Vec2,
     stuck: bool,
     previous: f64,
@@ -901,21 +907,13 @@ fn source_mattock_target(game: &mut Game, e: &Entity) -> Option<Option<DigTarget
                 body.collision_mask()
             }
             Instance::Terrain(index) => {
-                // Match World::tile_collision_mask's first live coordinate
-                // metadata provider before admitting its selected frame.
+                // Admit the same metadata allocation that supplies the mask,
+                // including an explicit source_metadata_id binding.
                 let x = (index % game.world.width) as i32;
                 let y = (index / game.world.width) as i32;
                 if game
                     .world
-                    .entities
-                    .iter()
-                    .find(|metadata| {
-                        metadata.alive
-                            && metadata.object == "oTerrainMetadata"
-                            && (metadata.pos.x / 16.0).floor() as i32 == x
-                            && (metadata.pos.y / 16.0).floor() as i32 == y
-                            && metadata.text.contains_key("terrain_sprite")
-                    })
+                    .tile_sprite_metadata(x, y)
                     .is_some_and(|metadata| {
                         !metadata.animation.is_finite() || metadata.animation < 0.0
                     })
@@ -1347,7 +1345,12 @@ pub fn step_instance(game: &mut Game, id: u64) {
             } else {
                 stuck_value != 0.0
             };
-            let angle = item_rotation(e.vel, stuck, e.value("rotation"), game.generation_revision);
+            let angle = item_rotation_with_revision(
+                e.vel,
+                stuck,
+                e.value("rotation"),
+                game.generation_revision,
+            );
             e.data.insert("rotation".into(), angle);
             if game.world.name == "rMoon" {
                 crate::dispatcher::register_instances(game);
@@ -2971,18 +2974,9 @@ mod tests {
             (Vec2::new(-1.0, 1.0), -225.0),
             (Vec2::new(0.0, 1.0), 0.0),
         ] {
-            assert!(
-                (item_rotation(velocity, false, 1.0, GenerationRevision::HistoricalV1)
-                    .to_degrees()
-                    - degrees)
-                    .abs()
-                    < 1e-10
-            );
+            assert!((item_rotation(velocity, false, 1.0).to_degrees() - degrees).abs() < 1e-10);
         }
-        assert_eq!(
-            item_rotation(Vec2::default(), true, 0.7, GenerationRevision::HistoricalV1),
-            0.7
-        );
+        assert_eq!(item_rotation(Vec2::default(), true, 0.7), 0.7);
     }
 
     fn incoming_rock(mitt: bool) -> (Game, u64) {
@@ -4012,3 +4006,7 @@ mod arrow_lava_own_continuation_source_tests;
 #[cfg(test)]
 #[path = "item_rotation_zero_tests.rs"]
 mod item_rotation_zero_source_tests;
+
+#[cfg(test)]
+#[path = "mattock_preferred_metadata_tests.rs"]
+mod mattock_preferred_metadata_tests;

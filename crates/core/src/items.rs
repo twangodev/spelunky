@@ -513,7 +513,7 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         if e.object == "oFishBone" {
             e.data.insert(
                 "rotation".into(),
-                weapons::item_rotation(e.vel, false, 0.0, game.generation_revision),
+                weapons::item_rotation_with_revision(e.vel, false, 0.0, game.generation_revision),
             );
         }
     }
@@ -1746,7 +1746,12 @@ fn tick_bodies(game: &mut Game) {
             // its own orientation runs even when parent body motion is gated.
             entity.data.insert(
                 "rotation".into(),
-                weapons::item_rotation(entity.vel, false, 0.0, game.generation_revision),
+                weapons::item_rotation_with_revision(
+                    entity.vel,
+                    false,
+                    0.0,
+                    game.generation_revision,
+                ),
             );
         }
     }

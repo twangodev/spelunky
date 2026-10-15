@@ -359,17 +359,23 @@ impl Entity {
             .intersects_mask(&other.collision_mask())
     }
     pub(crate) fn collision_mask(&self) -> crate::catalog::CollisionMask {
-        let (scale, angle) = self.collision_transform();
-        crate::catalog::instance_mask(
-            &self.object,
-            &self.sprite,
-            self.pos,
-            self.animation,
-            scale,
-            angle,
-        )
+        self.collision_mask_with_geometry(&self.object, &self.sprite, self.pos)
+    }
+    /// Same authoritative mask construction with a borrowed canonical parent
+    /// projection. Data/frame/transform remain this actual allocation's fields.
+    pub(crate) fn collision_mask_with_geometry(
+        &self,
+        object: &str,
+        sprite: &str,
+        pos: Vec2,
+    ) -> crate::catalog::CollisionMask {
+        let (scale, angle) = self.collision_transform_for_object(object);
+        crate::catalog::instance_mask(object, sprite, pos, self.animation, scale, angle)
     }
     fn collision_transform(&self) -> (Vec2, f64) {
+        self.collision_transform_for_object(&self.object)
+    }
+    fn collision_transform_for_object(&self, object: &str) -> (Vec2, f64) {
         // Source image_xscale is an instance property. Damsel/dummy Draw
         // writes it after Collision; a Step-facing change cannot alter it yet.
         let default_xscale = 1.0;
@@ -384,7 +390,7 @@ impl Entity {
             .get("image_angle")
             .map(|angle| -angle.to_radians())
             .unwrap_or_else(|| {
-                if matches!(self.object.as_str(), "oArrow" | "oFishBone") {
+                if matches!(object, "oArrow" | "oFishBone") {
                     self.value("rotation")
                 } else {
                     0.0
@@ -449,6 +455,8 @@ impl Entity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Tile {
     pub object: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_metadata_id: Option<u64>,
     #[serde(default)]
     pub creation_serial: u64,
     #[serde(default = "crate::dispatcher::unset_alarms")]
@@ -460,6 +468,7 @@ impl Default for Tile {
     fn default() -> Self {
         Self {
             object: String::new(),
+            source_metadata_id: None,
             creation_serial: 0,
             alarms: crate::dispatcher::unset_alarms(),
             engine_active: true,
@@ -683,23 +692,31 @@ impl World {
         self.tile_collision_mask(x, y).bounds()
     }
 
+    /// Exact metadata allocation supplying a tile's explicit sprite/frame.
+    /// A preferred Source binding excludes coordinate aliases. With no binding,
+    /// the first live coordinate provider with terrain_sprite retains authority.
+    pub(crate) fn tile_sprite_metadata(&self, x: i32, y: i32) -> Option<&Entity> {
+        let tile = self.tile(x, y)?;
+        self.entities.iter().find(|metadata| {
+            metadata.alive
+                && metadata.object == "oTerrainMetadata"
+                && tile.source_metadata_id.is_none_or(|id| metadata.id == id)
+                && (metadata.pos.x / TILE_SIZE).floor() as i32 == x
+                && (metadata.pos.y / TILE_SIZE).floor() as i32 == y
+                && metadata.text.contains_key("terrain_sprite")
+        })
+    }
+
     pub fn tile_collision_mask(&self, x: i32, y: i32) -> crate::catalog::CollisionMask {
         let origin = Vec2::new(f64::from(x) * TILE_SIZE, f64::from(y) * TILE_SIZE);
         let Some(tile) = self.tile(x, y) else {
             return crate::catalog::instance_mask("", "", origin, 0.0, Vec2::new(1.0, 1.0), 0.0);
         };
-        let sprite = self.entities.iter().find_map(|metadata| {
-            (metadata.alive
-                && metadata.object == "oTerrainMetadata"
-                && (metadata.pos.x / TILE_SIZE).floor() as i32 == x
-                && (metadata.pos.y / TILE_SIZE).floor() as i32 == y)
-                .then(|| {
-                    metadata
-                        .text
-                        .get("terrain_sprite")
-                        .map(|sprite| (sprite.as_str(), metadata.animation))
-                })
-                .flatten()
+        let sprite = self.tile_sprite_metadata(x, y).and_then(|metadata| {
+            metadata
+                .text
+                .get("terrain_sprite")
+                .map(|sprite| (sprite.as_str(), metadata.animation))
         });
         crate::catalog::instance_mask(
             &tile.object,

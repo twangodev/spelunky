@@ -1,3 +1,4 @@
+use super::item_rotation_with_revision as item_rotation;
 use super::*;
 
 #[test]
