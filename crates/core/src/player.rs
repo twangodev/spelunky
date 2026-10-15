@@ -1262,7 +1262,15 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             p.facing = 1;
         }
         if input.up {
-            if ladder_at(w, Vec2::new(p.pos.x, p.pos.y - 8.0)).is_some() {
+            let above = Vec2::new(p.pos.x, p.pos.y - 8.0);
+            let ladder_above = if source_ladder_point {
+                // characterStepEvent201 uses the actual cached mask point,
+                // including transparent borders within a terrain cell.
+                ledge_point(w, above, "oLadder") || ledge_point(w, above, "oLadderTop")
+            } else {
+                ladder_at(w, above).is_some()
+            };
+            if ladder_above {
                 ay -= 0.6;
                 if p.alarms[2] < 1 {
                     p.alarms[2] = 8;
