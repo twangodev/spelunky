@@ -7,7 +7,7 @@ mod source_real;
 
 use crate::{CollisionPrecision, Rect, Vec2};
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -57,9 +57,9 @@ pub(crate) fn object_names() -> impl Iterator<Item = &'static str> {
 
 /// True for the named object itself and for all descendants of `parent`.
 pub fn is_a(name: &str, parent: &str) -> bool {
-    static ANCESTORS: OnceLock<BTreeMap<&'static str, Vec<&'static str>>> = OnceLock::new();
+    static ANCESTORS: OnceLock<HashMap<&'static str, Vec<&'static str>>> = OnceLock::new();
     ANCESTORS
-        .get_or_init(|| ancestry(&catalog().objects))
+        .get_or_init(|| ancestry(&catalog().objects).into_iter().collect())
         .get(name)
         .is_some_and(|ancestors| ancestors.contains(&parent))
 }
@@ -115,7 +115,7 @@ pub fn sprite_dimensions(name: &str) -> Option<(u32, u32)> {
 
 /// Unscaled first-frame sprite mask at its original source origin.
 pub fn sprite_bounds(name: &str, pos: Vec2) -> Rect {
-    static BOUNDS: OnceLock<BTreeMap<String, Rect>> = OnceLock::new();
+    static BOUNDS: OnceLock<HashMap<String, Rect>> = OnceLock::new();
     let bounds = BOUNDS
         .get_or_init(|| {
             catalog()
@@ -136,6 +136,37 @@ pub fn sprite_bounds(name: &str, pos: Vec2) -> Rect {
                 .collect()
         })
         .get(name)
+        .copied()
+        .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
+    Rect::new(pos.x + bounds.x, pos.y + bounds.y, bounds.w, bounds.h)
+}
+
+/// Conservative envelope for a unit, unrotated terrain mask. Unlike
+/// `sprite_bounds`, this includes every animation frame of a separate mask.
+pub(crate) fn terrain_mask_envelope(object: &str, sprite: &str, pos: Vec2) -> Rect {
+    static ENVELOPES: OnceLock<HashMap<&'static str, Rect>> = OnceLock::new();
+    let bounds = ENVELOPES
+        .get_or_init(|| {
+            catalog()
+                .sprites
+                .iter()
+                .map(|(name, sprite)| {
+                    let [left, top, right, bottom] = sprite.bounds;
+                    let bounds = if right < left || bottom < top {
+                        Rect::new(0.0, 0.0, 0.0, 0.0)
+                    } else {
+                        Rect::new(
+                            f64::from(left - sprite.origin[0]),
+                            f64::from(top - sprite.origin[1]),
+                            f64::from(right - left + 1),
+                            f64::from(bottom - top + 1),
+                        )
+                    };
+                    (name.as_str(), bounds)
+                })
+                .collect()
+        })
+        .get(mask_sprite(object_mask(object), sprite))
         .copied()
         .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
     Rect::new(pos.x + bounds.x, pos.y + bounds.y, bounds.w, bounds.h)

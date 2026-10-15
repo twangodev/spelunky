@@ -943,18 +943,24 @@ impl World {
             if (active_only && !tile.engine_active) || !crate::catalog::is_a(&tile.object, group) {
                 continue;
             }
+            let origin = Vec2::new(f64::from(x) * TILE_SIZE, f64::from(y) * TILE_SIZE);
+            // Overrides can extend beyond the object's default envelope. Use
+            // this override's aggregate sprite bounds to reject distant tiles
+            // before constructing/sampling its precise mask. Separate masks
+            // need the all-frame envelope, not their first frame's bounds.
+            let sprite_envelope =
+                crate::catalog::terrain_mask_envelope(&tile.object, sprite, origin);
+            if !sprite_envelope.intersects(r) {
+                continue;
+            }
             let mask = crate::catalog::instance_mask(
                 &tile.object,
                 sprite,
-                Vec2::new(f64::from(x) * TILE_SIZE, f64::from(y) * TILE_SIZE),
+                origin,
                 metadata.animation,
                 Vec2::new(1.0, 1.0),
                 0.0,
             );
-            let near = x >= x0 && x <= x1 && y >= y0 && y <= y1;
-            if !near && !matches(&mask) {
-                continue;
-            }
             if matches(&mask) {
                 return true;
             }
@@ -1997,6 +2003,50 @@ mod geometry_tests {
         assert!(world.collides(Rect::new(170.0, 50.0, 1.0, 1.0)));
         assert!(!world.tiles_point(Vec2::new(31.9995, 50.0), "oSolid"));
         assert!(!world.tiles_point(Vec2::new(f64::NAN, 50.0), "oSolid"));
+    }
+
+    #[test]
+    fn terrain_broad_phase_preserves_animated_and_oversized_override_queries() {
+        let mut world = World::new(40, 12, Area::Mines, 1);
+        world.set_tile(2, 3, "oSolid");
+        let id = world.spawn("oTerrainMetadata", Vec2::new(40.0, 56.0));
+        for sprite in ["sThinIce1", "sExplosion", "sCopy"] {
+            world
+                .entity_mut(id)
+                .unwrap()
+                .text
+                .insert("terrain_sprite".into(), sprite.into());
+            for frame in [0.0, 1.0, 4.0, 9.0] {
+                world.entity_mut(id).unwrap().animation = frame;
+                let mask = world.tile_collision_mask(2, 3);
+                for x in [15.9995, 16.0, 31.9995, 32.0, 48.0, 64.0, 96.0, 170.0, 192.0] {
+                    for y in [39.0, 40.0, 47.9995, 48.0, 55.0, 56.0, 57.0, 64.0, 80.0] {
+                        for precision in
+                            [CollisionPrecision::BoundingBox, CollisionPrecision::Precise]
+                        {
+                            let point = Vec2::new(x, y);
+                            assert_eq!(
+                                world.tiles_point_precision(point, "oSolid", precision),
+                                mask.contains(point, precision),
+                                "point {sprite}/{frame}/{point:?}"
+                            );
+                            let end = Vec2::new(x + 3.0, y);
+                            assert_eq!(
+                                world.tiles_line_precision(point, end, "oSolid", precision),
+                                mask.intersects_axis_line(point, end, precision),
+                                "line {sprite}/{frame}/{point:?}"
+                            );
+                            let rect = Rect::new(x, y, 3.0, 2.0);
+                            assert_eq!(
+                                world.tiles_collide_precision(rect, "oSolid", precision),
+                                mask.intersects(rect, precision),
+                                "rect {sprite}/{frame}/{point:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
