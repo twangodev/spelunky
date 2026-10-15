@@ -43,3 +43,8 @@ pub(crate) mod finite_pc64;
 pub(crate) mod native_ledger;
 pub(crate) mod nearest_ledger;
 pub(crate) mod nearest_numeric;
+
+// Literal Source global programs; lifecycle callers supply actual capabilities.
+pub(crate) mod source_generation_clear_globals;
+pub(crate) mod source_generation_globals_create;
+pub(crate) mod source_generation_reset_highscores;
