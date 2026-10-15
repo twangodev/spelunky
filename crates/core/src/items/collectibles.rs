@@ -477,7 +477,10 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         }
     }
     // oJetpack inherits Item Step, then checks the existing Player's visibility.
-    if !game.player.engine_active || game.player.data.get("visible").copied().unwrap_or(1.0) != 0.0
+    if !game.player.engine_active
+        || (game.player.data.get("visible").copied().unwrap_or(1.0) != 0.0
+            && !(game.generation_revision == crate::model::GenerationRevision::SourceClassicV2
+                && game.player.data.get("hidden").copied().unwrap_or(0.0) != 0.0))
     {
         return;
     }
