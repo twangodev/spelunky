@@ -37,3 +37,6 @@ mod sound_contract_tests;
 
 #[cfg(test)]
 mod music_toggle_tests;
+
+// Explicit native ledger numeric component; no default Scene selection.
+pub(crate) mod finite_pc64;
