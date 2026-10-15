@@ -40,3 +40,6 @@ mod music_toggle_tests;
 
 // Explicit native ledger numeric component; no default Scene selection.
 pub(crate) mod finite_pc64;
+pub(crate) mod native_ledger;
+pub(crate) mod nearest_ledger;
+pub(crate) mod nearest_numeric;
