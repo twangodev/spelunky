@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 spelunky-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-wgpu = { version = "=24.0.5", default-features = false, features = ["wgsl", "webgl"] }
+wgpu = { version = "=30.0.0", default-features = false, features = ["wgsl", "webgl"] }
 winit = { version = "=0.30.13", default-features = false, features = ["x11", "wayland", "wayland-dlopen", "rwh_06"] }
 bytemuck = { version = "1", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
