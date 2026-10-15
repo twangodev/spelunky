@@ -1058,7 +1058,7 @@ fn crash(_game: &mut Game, e: &mut Entity) {
 /// contact invincibility and do not grant a new invincibility interval.
 fn hurt_player(game: &mut Game, amount: i32) {
     if game.player.health > 0 {
-        game.player.health -= amount;
+        game.player.lose_health(amount);
         game.events.push(GameEvent::Damage { amount });
     }
     game.sound("sndHurt", game.player.pos);
@@ -1162,7 +1162,7 @@ pub(super) fn player_hurt(game: &mut Game) {
         if object == "oLaser" {
             let had_life = game.player.health > 0;
             if had_life {
-                game.player.health -= damage;
+                game.player.lose_health(damage);
                 game.events.push(GameEvent::Damage { amount: damage });
                 if game.player.health <= 0 && crate::statistics::is_real_level(game) {
                     game.lifetime_stats.enemy_death(cause);
@@ -1186,7 +1186,7 @@ pub(super) fn player_hurt(game: &mut Game) {
             // PsychicWave has no source blood call; retain its independent path.
             let had_life = game.player.health > 0;
             if had_life {
-                game.player.health -= damage;
+                game.player.lose_health(damage);
                 game.events.push(GameEvent::Damage { amount: damage });
                 if game.player.health <= 0 && crate::statistics::is_real_level(game) {
                     game.lifetime_stats.enemy_death(cause);

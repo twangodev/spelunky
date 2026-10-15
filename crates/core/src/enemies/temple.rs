@@ -154,7 +154,7 @@ pub(super) fn animation_end(game: &mut Game, e: &mut Entity, sprite: &str) {
 
 fn hurt_player(game: &mut Game, amount: i32, cause: Option<crate::statistics::EnemyDeath>) {
     if game.player.health > 0 {
-        game.player.health -= amount;
+        game.player.lose_health(amount);
         game.events.push(GameEvent::Damage { amount });
         if game.player.health <= 0 && crate::statistics::is_real_level(game) {
             if let Some(cause) = cause {

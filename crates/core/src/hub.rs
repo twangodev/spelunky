@@ -1338,7 +1338,7 @@ pub(crate) fn bat_target_collision(game: &mut Game, id: u64, other: crate::dispa
                     6.0
                 };
                 if game.player.health > 0 {
-                    game.player.health -= 1;
+                    game.player.lose_health(1);
                     game.events.push(GameEvent::Damage { amount: 1 });
                 }
                 crate::enemies::create_blood(
@@ -1516,7 +1516,7 @@ fn moon(game: &mut Game) {
                 6.0
             };
             if game.player.health > 0 {
-                game.player.health -= 1;
+                game.player.lose_health(1);
                 game.events.push(GameEvent::Damage { amount: 1 });
             }
             crate::enemies::create_blood(

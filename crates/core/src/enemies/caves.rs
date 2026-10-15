@@ -371,7 +371,7 @@ fn cave_contact_damage(
         6.0
     };
     if game.player.health > 0 {
-        game.player.health -= amount;
+        game.player.lose_health(amount);
         game.events.push(crate::GameEvent::Damage { amount });
         if game.player.health <= 0 && crate::statistics::is_real_level(game) {
             game.lifetime_stats.enemy_death(cause);

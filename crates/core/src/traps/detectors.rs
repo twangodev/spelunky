@@ -407,7 +407,7 @@ pub(super) fn player_hurt(game: &mut Game) {
         game.lifetime_stats
             .misc_death(crate::statistics::MiscDeath::SpearTrap);
     }
-    game.player.health -= 4;
+    game.player.lose_health(4);
     game.events.push(GameEvent::Damage { amount: 4 });
     let speed = 4.0 + f64::from(game.rng.range(3));
     game.player.vel = Vec2::new(if faces_left { -speed } else { speed }, -6.0);

@@ -1161,7 +1161,8 @@ fn mantrap_collision(game: &mut Game, e: &mut Entity, other: crate::dispatcher::
             };
             e.data.insert("animation_speed".into(), 0.5);
             game.sound("sndHit", e.pos);
-        } else if game.player.data.get("hidden").copied().unwrap_or(0.0) == 0.0
+        } else if !game.player.cheat_invulnerable
+            && game.player.data.get("hidden").copied().unwrap_or(0.0) == 0.0
             && game.player.invincible == 0
             && !matches!(e.state, 97 | 98)
         {

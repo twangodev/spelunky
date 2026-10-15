@@ -646,7 +646,7 @@ fn hit_player(game: &mut Game, projectile: &mut Entity, damage: i32) {
     // Classic projectile damage bypasses contact-damage invulnerability.
     let damaged = game.player.health > 0;
     if damaged {
-        game.player.health -= damage;
+        game.player.lose_health(damage);
     }
     if damaged
         && projectile.object == "oArrow"
@@ -749,7 +749,7 @@ fn rock_player_contact(game: &mut Game) {
     } else {
         let damaged = game.player.health > 0;
         if damaged {
-            game.player.health -= 2;
+            game.player.lose_health(2);
         }
         if damaged && game.player.health <= 0 && crate::statistics::is_real_level(game) {
             game.lifetime_stats

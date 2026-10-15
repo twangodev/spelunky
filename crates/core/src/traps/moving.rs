@@ -423,7 +423,7 @@ pub(super) fn player_crush(game: &mut Game) {
                 .misc_death(crate::statistics::MiscDeath::Crushed);
         }
     }
-    game.player.health -= 99;
+    game.player.lose_health(99);
     game.events.push(GameEvent::Damage { amount: 99 });
     game.player.data.insert("active".into(), 0.0);
     game.player.vel.y = -3.0;
@@ -493,7 +493,7 @@ pub(super) fn player_hurt(game: &mut Game) {
             game.lifetime_stats
                 .misc_death(crate::statistics::MiscDeath::SmashTrap);
         }
-        game.player.health -= 10;
+        game.player.lose_health(10);
         game.events.push(GameEvent::Damage { amount: 10 });
         let speed = 4.0 + f64::from(game.rng.range(3));
         game.player.vel.x = if nearest.pos.x + 8.0 < pos.x {
@@ -522,7 +522,7 @@ pub(super) fn player_hurt(game: &mut Game) {
             game.lifetime_stats
                 .misc_death(crate::statistics::MiscDeath::CeilingTrap);
         }
-        game.player.health -= 10;
+        game.player.lose_health(10);
         game.events.push(GameEvent::Damage { amount: 10 });
         crate::player::script_player_blood(game, 1);
     }

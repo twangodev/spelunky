@@ -795,7 +795,7 @@ fn vampire_character_collision(game: &mut Game, e: &mut Entity) {
         };
         game.spawn("oBlood", game.player.pos);
         if game.player.health > 0 {
-            game.player.health -= 1;
+            game.player.lose_health(1);
             game.events.push(crate::GameEvent::Damage { amount: 1 });
         }
         // This particular source override has no enemyDeaths[7] producer.

@@ -387,7 +387,7 @@ fn current_rect(game: &Game, h: &Hazard) -> Rect {
 fn lethal(game: &mut Game) {
     // The independent source dead flag is latched after the entire player Step.
     // Hazard damage must not eagerly replace the player's movement state.
-    game.player.health -= 99;
+    game.player.lose_health(99);
     game.events.push(GameEvent::Damage { amount: 99 });
 }
 
@@ -407,7 +407,8 @@ pub(crate) fn player_health_prelude(game: &mut Game) {
 }
 
 pub(crate) fn player_hurt_enabled(game: &Game) -> bool {
-    game.player.health >= -99
+    !game.player.cheat_invulnerable
+        && game.player.health >= -99
         && game.player.data.get("hidden").copied().unwrap_or(0.) == 0.
         && game.player.data.get("visible").copied().unwrap_or(1.) != 0.
         && !game.player.is_exiting()
@@ -415,6 +416,9 @@ pub(crate) fn player_hurt_enabled(game: &Game) -> bool {
 
 /// oPlayer1 Step 210: before active/controller and outside the exit hurt guard.
 pub(crate) fn player_lava(game: &mut Game) {
+    if game.player.cheat_invulnerable {
+        return;
+    }
     let pos = game.player.pos;
     let foot = Vec2::new(pos.x, pos.y + 6.0);
     let in_lava = crate::dispatcher::descendant_instances(game, "oLava")
@@ -825,7 +829,7 @@ fn detectors(game: &mut Game) {
                     if damaging && game.player.health > 0 && !game.player.is_exiting() {
                         // oPlayer1 Step intentionally bypasses both ordinary
                         // damage immunity and stun. Every active frame can hit.
-                        game.player.health -= 4;
+                        game.player.lose_health(4);
                         game.events.push(GameEvent::Damage { amount: 4 });
                         let speed = 4.0 + f64::from(game.rng.range(3));
                         game.player.vel = Vec2::new(if right { speed } else { -speed }, -6.0);

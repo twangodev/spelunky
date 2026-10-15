@@ -1284,7 +1284,7 @@ fn base_character_collision(game: &mut Game, e: &mut Entity) {
         let source_type = crate::items::explosives::source_type(e);
         let prior_health = game.player.health;
         if prior_health > 0 {
-            game.player.health -= damage;
+            game.player.lose_health(damage);
         }
         if prior_health > 0 && game.player.health <= 0 && crate::statistics::is_real_level(game) {
             use crate::statistics::EnemyDeath;

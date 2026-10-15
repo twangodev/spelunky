@@ -1834,7 +1834,7 @@ pub(crate) fn player_explosion_hurt(game: &mut Game) {
         .unwrap()
         .pos;
     // This source block bypasses ordinary contact invincibility.
-    game.player.health -= 10;
+    game.player.lose_health(10);
     // Literal source survivor quirk: this cause counter increments after subtraction.
     if game.player.health > 0 && crate::statistics::is_real_level(game) {
         game.lifetime_stats

@@ -541,7 +541,7 @@ fn active_prelude(game: &mut Game) {
     if injury > 0 {
         // The source subtracts life directly: fall injury bypasses the hit
         // invulnerability check and does not invent its hurt sound or flash.
-        game.player.health -= injury;
+        game.player.lose_health(injury);
         game.events.push(GameEvent::Damage { amount: injury });
         if game.player.health < 1 {
             for _ in 0..3 {
@@ -593,7 +593,7 @@ fn pit_prelude(game: &mut Game) {
         game.lifetime_stats
             .misc_death(crate::statistics::MiscDeath::Pit);
     }
-    game.player.health -= 99;
+    game.player.lose_health(99);
     game.player.vel = Vec2::default();
     set(&mut game.player, "gravity", 0.0);
     set(&mut game.player, "my_gravity", 0.0);
@@ -2057,7 +2057,7 @@ fn player_origin_on_spikes(world: &World, pos: Vec2) -> bool {
 }
 
 fn wall_injury(game: &mut Game) {
-    game.player.health -= 1;
+    game.player.lose_health(1);
     let remaining = value(
         &game.player,
         "wall_hurt",

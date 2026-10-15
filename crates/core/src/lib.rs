@@ -27,6 +27,7 @@ pub mod replay;
 pub mod world_events;
 
 pub mod characters;
+pub mod cheats;
 pub(crate) mod creation;
 pub mod hub;
 pub mod opening;

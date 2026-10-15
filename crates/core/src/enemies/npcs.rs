@@ -458,7 +458,7 @@ fn ghost(game: &mut Game, e: &mut Entity) {
 }
 
 fn ghost_player_collision(game: &mut Game, e: &mut Entity) {
-    if game.player.invincible != 0 {
+    if game.player.cheat_invulnerable || game.player.invincible != 0 {
         return;
     }
     if crate::statistics::is_real_level(game) {
@@ -1525,7 +1525,7 @@ fn keeper_player_collision(game: &mut Game, e: &mut Entity) {
         };
         crate::world_events::spawn_detritus(game, "oBlood", game.player.pos);
         if game.player.health > 0 {
-            game.player.health -= 1;
+            game.player.lose_health(1);
             if game.player.health <= 0 && crate::statistics::is_real_level(game) {
                 game.lifetime_stats
                     .enemy_death(crate::statistics::EnemyDeath::Shopkeeper);
@@ -1557,7 +1557,7 @@ fn barrier_player_collision(game: &mut Game, e: &Entity) {
         return;
     }
     if game.player.health > 0 {
-        game.player.health -= 1;
+        game.player.lose_health(1);
     }
     game.events.push(GameEvent::Damage { amount: 1 });
     game.sound("sndHurt", game.player.pos);
