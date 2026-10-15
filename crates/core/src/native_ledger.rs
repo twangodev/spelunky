@@ -151,6 +151,7 @@ pub struct RoomStorageKey(pub u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CapturedSelf<K> {
     room: RoomStorageKey,
+    lifetime: RoomLifetime,
     key: K,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -803,11 +804,12 @@ impl<K: Copy + Ord> RoomLedger<K> {
         self.record(key)?;
         Ok(CapturedSelf {
             room: self.room_key,
+            lifetime: self.lifetime,
             key,
         })
     }
     pub fn captured_self_record(&self, token: CapturedSelf<K>) -> Result<&Record, Error> {
-        if token.room != self.room_key {
+        if token.room != self.room_key || token.lifetime != self.lifetime {
             return Err(Error::WrongRoomContext);
         }
         self.record(token.key)
@@ -867,3 +869,7 @@ pub fn validate_canonical_graph() -> Result<(), Error> {
 #[cfg(test)]
 #[path = "native_ledger_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "native_ledger_capture_lifetime_tests.rs"]
+mod capture_lifetime_tests;
