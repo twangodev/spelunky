@@ -752,3 +752,6 @@ pub(crate) fn nearest_mul_pc53_rn(a: F128, b: F128) -> Result<F128, ArithmeticEr
 
 // Additive direct PC53/PC64 operation-rounding metadata; historical APIs unchanged.
 include!("finite_pc64_arithmetic_info.rs");
+
+// Additive all-RC QWORD store response and exact rounding facts; old APIs unchanged.
+include!("finite_pc64_store_info.rs");
