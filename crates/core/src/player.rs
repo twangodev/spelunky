@@ -268,6 +268,43 @@ fn ladder_at(w: &World, pos: Vec2) -> Option<Vec2> {
 fn ladder_segment_at(w: &World, pos: Vec2) -> Option<Vec2> {
     ladder_match(w, pos, false)
 }
+/// Climbing's collision_point returns the first source-family receiver,
+/// independently of whether its storage happens to be terrain or an entity.
+fn ordered_ladder_segment_at(
+    w: &World,
+    point: Vec2,
+    order: &[crate::dispatcher::Instance],
+) -> Option<Vec2> {
+    order.iter().find_map(|instance| {
+        let (mask, origin) = match *instance {
+            crate::dispatcher::Instance::Terrain(index) => {
+                let tile = w.tiles.get(index)?;
+                if !tile.engine_active || !crate::catalog::is_a(&tile.object, "oLadder") {
+                    return None;
+                }
+                let x = (index % w.width) as i32;
+                let y = (index / w.width) as i32;
+                (
+                    w.tile_collision_mask(x, y),
+                    Vec2::new(f64::from(x) * 16.0, f64::from(y) * 16.0),
+                )
+            }
+            crate::dispatcher::Instance::Entity(id) => {
+                let entity = w.entity(id)?;
+                if !entity.alive
+                    || !entity.engine_active
+                    || !crate::catalog::is_a(&entity.object, "oLadder")
+                {
+                    return None;
+                }
+                (entity.collision_mask(), entity.pos)
+            }
+            crate::dispatcher::Instance::Player => return None,
+        };
+        mask.contains(point, CollisionPrecision::BoundingBox)
+            .then_some(Vec2::new(origin.x + 8.0, origin.y))
+    })
+}
 /// Literal instance_place: translate the current Player sprite mask without
 /// changing its transform or frame, then return the first active source-family
 /// instance in registration order. This is separate from ladder point probes.
@@ -1003,10 +1040,15 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             _ => None,
         })
         .collect();
-    // Only attachment uses instance_place; climbing/eligibility keep their
-    // literal point probes. Never substitute World storage order for source
-    // registration order when a caller bypasses the dispatcher.
-    let ladder_order = if input.up || input.down {
+    // HistoricalV1 retains its earlier tile-first climbing point adapter.
+    let source_ladder_point =
+        game.generation_revision == crate::GenerationRevision::SourceClassicV2;
+    // Attachment uses instance_place; SourceClassicV2 climbing uses collision_point.
+    // Both source receiver queries retain the family's registration order.
+    let ladder_order = if (source_ladder_point && game.player.state == PlayerState::Climbing)
+        || input.up
+        || input.down
+    {
         crate::dispatcher::descendant_instances(game, "oLadder")
     } else {
         Vec::new()
@@ -1206,7 +1248,12 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         cape = false;
         jumped = false;
         ladder_timer = 10.0;
-        if let Some(ladder) = ladder_segment_at(w, p.pos) {
+        let ladder = if source_ladder_point {
+            ordered_ladder_segment_at(w, p.pos, &ladder_order)
+        } else {
+            ladder_segment_at(w, p.pos)
+        };
+        if let Some(ladder) = ladder {
             p.pos.x = ladder.x;
         }
         if input.left {
