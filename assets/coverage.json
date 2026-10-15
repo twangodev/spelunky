@@ -5404,7 +5404,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 787,
+          "line": 831,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -6089,7 +6089,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1667,
+          "line": 1725,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -6162,7 +6162,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1667,
+          "line": 1725,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -11813,7 +11813,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1669,
+          "line": 1727,
           "module": "crates/app/src/scene.rs"
         }
       ],

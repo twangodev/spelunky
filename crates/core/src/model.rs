@@ -505,12 +505,60 @@ impl Area {
     }
 }
 
+/// An adapter-local graphic handle. This is neither an actor ID nor the
+/// original engine's numeric tile_add result/counter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct GeneratedGraphicTileHandle(u64);
+
+/// Fully supplied graphics state, independent of solid grid/actor storage.
+/// The source setup sink supplies converted integral crop coordinates; retaining
+/// f64 here does not implement the native conversion/Variant protocol.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GeneratedGraphicTileSpec {
+    pub background: String,
+    pub source: [f64; 4],
+    pub position: Vec2,
+    pub depth: f64,
+    pub scale: Vec2,
+    pub color: u32,
+    pub alpha: f64,
+    pub visible: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GeneratedGraphicTile {
+    pub handle: GeneratedGraphicTileHandle,
+    pub graphic: GeneratedGraphicTileSpec,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GraphicTileAllocationError {
+    HandleExhausted,
+}
+impl std::fmt::Display for GraphicTileAllocationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("generated graphic adapter handle space exhausted")
+    }
+}
+impl std::error::Error for GraphicTileAllocationError {}
+
+fn generated_graphic_counter_is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct World {
     pub width: usize,
     pub height: usize,
     pub tiles: Vec<Tile>,
     pub entities: Vec<Entity>,
+    /// Source-generated tile graphics, never registered actors or collision cells.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub generated_graphic_tiles: Vec<GeneratedGraphicTile>,
+    /// World-scoped adapter sequence; unrelated to any native per-room counter.
+    #[serde(default, skip_serializing_if = "generated_graphic_counter_is_zero")]
+    generated_graphic_serial: u64,
     pub entrance: Vec2,
     pub exit: Vec2,
     pub area: Area,
@@ -538,6 +586,8 @@ impl World {
             height,
             tiles: vec![Tile::default(); width * height],
             entities: Vec::new(),
+            generated_graphic_tiles: Vec::new(),
+            generated_graphic_serial: 0,
             entrance: Vec2::new(40.0, 40.0),
             exit: Vec2::new(616.0, 504.0),
             area,
@@ -551,6 +601,58 @@ impl World {
             source_room_path: None,
         }
     }
+    /// Append in source emission order. Only the independent graphics counter
+    /// advances: no actor reservation/Create, terrain replacement, RNG or event.
+    pub fn add_generated_graphic_tile(
+        &mut self,
+        graphic: GeneratedGraphicTileSpec,
+    ) -> Result<GeneratedGraphicTileHandle, GraphicTileAllocationError> {
+        let next = self
+            .generated_graphic_serial
+            .checked_add(1)
+            .ok_or(GraphicTileAllocationError::HandleExhausted)?;
+        let handle = GeneratedGraphicTileHandle(next);
+        self.generated_graphic_tiles
+            .push(GeneratedGraphicTile { handle, graphic });
+        self.generated_graphic_serial = next;
+        Ok(handle)
+    }
+
+    pub fn generated_graphic_tile(
+        &self,
+        handle: GeneratedGraphicTileHandle,
+    ) -> Option<&GeneratedGraphicTile> {
+        self.generated_graphic_tiles
+            .iter()
+            .find(|tile| tile.handle == handle)
+    }
+
+    /// Adapter issuer-range validation, also after deletion. This does not
+    /// expose or reconstruct an Original numeric tile ID/counter.
+    pub(crate) fn generated_graphic_handle_was_issued(
+        &self,
+        handle: GeneratedGraphicTileHandle,
+    ) -> bool {
+        handle.0 > 0 && handle.0 <= self.generated_graphic_serial
+    }
+
+    /// Physical graphics removal only; it never dispatches actor Destroy.
+    pub fn remove_generated_graphic_tile(&mut self, handle: GeneratedGraphicTileHandle) -> bool {
+        let before = self.generated_graphic_tiles.len();
+        self.generated_graphic_tiles
+            .retain(|tile| tile.handle != handle);
+        before != self.generated_graphic_tiles.len()
+    }
+
+    /// Exact source depth equality, including equal signed zero. Remaining
+    /// records retain their current order; the host graphics counter persists.
+    pub fn remove_generated_graphics_at_depth(&mut self, depth: f64) -> usize {
+        let before = self.generated_graphic_tiles.len();
+        self.generated_graphic_tiles
+            .retain(|tile| tile.graphic.depth != depth);
+        before - self.generated_graphic_tiles.len()
+    }
+
     pub fn tile(&self, x: i32, y: i32) -> Option<&Tile> {
         if x < 0 || y < 0 || x as usize >= self.width || y as usize >= self.height {
             None
@@ -2321,3 +2423,7 @@ mod canonical_rng_stage_one_tests {
         assert_eq!(hash, 0x0a36895396092cd3);
     }
 }
+
+#[cfg(test)]
+#[path = "model_generated_graphics_tests.rs"]
+mod generated_graphics_tests;

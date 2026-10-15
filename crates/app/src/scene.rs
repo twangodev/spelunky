@@ -548,6 +548,50 @@ fn entity_draw_extras(
 
 /// Alpha interpolates positions only. Sprite frames and all HUD values are
 /// simulation state, so presentation never changes gameplay or animation speed.
+/// Default Scene's atlas-backed generated graphic projection. This is a
+/// presentation adapter, not a native tile raster/culling or conversion proof.
+/// Unsupported nonfinite/fractional/negative crop data stays in model storage
+/// and does not produce a guessed atlas rectangle.
+fn generated_graphic_quad(
+    graphic: &spelunky_core::GeneratedGraphicTileSpec,
+    atlas: &Atlas,
+    camera: Vec2,
+    pixel_snap: bool,
+) -> Option<DrawQuad> {
+    if !graphic.visible
+        || !graphic.depth.is_finite()
+        || !graphic.position.x.is_finite()
+        || !graphic.position.y.is_finite()
+        || !graphic.scale.x.is_finite()
+        || !graphic.scale.y.is_finite()
+        || !graphic.alpha.is_finite()
+        || graphic
+            .source
+            .iter()
+            .any(|v| !v.is_finite() || *v < 0.0 || *v > f64::from(u32::MAX) || v.fract() != 0.0)
+    {
+        return None;
+    }
+    let frame = atlas.region(&graphic.background, graphic.source.map(|v| v as u32))?;
+    let [x, y] = screen(graphic.position, graphic.position, camera, 1.0, pixel_snap);
+    let width = (f64::from(frame.size[0]) * graphic.scale.x) as f32;
+    let height = (f64::from(frame.size[1]) * graphic.scale.y) as f32;
+    if ![x, y, width, height].iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    Some(DrawQuad {
+        rect: [x, y, width, height],
+        uv: frame.uv,
+        color: [
+            (graphic.color & 255) as f32 / 255.0,
+            ((graphic.color >> 8) & 255) as f32 / 255.0,
+            ((graphic.color >> 16) & 255) as f32 / 255.0,
+            graphic.alpha.clamp(0.0, 1.0) as f32,
+        ],
+        ..DrawQuad::default()
+    })
+}
+
 pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> Vec<DrawQuad> {
     game_scene_in_view(game, alpha, pixel_snap, atlas, Viewport::canonical())
 }
@@ -634,7 +678,7 @@ pub fn game_scene_in_view(
         .filter(|ending| ending.stage != spelunky_core::ending::EndingStage::Exit);
     let mut quads = Vec::with_capacity(1000);
     background_in_view(&mut quads, game, camera, pixel_snap, atlas, view);
-    let mut layers: Vec<(i32, u64, Vec<DrawQuad>)> = Vec::new();
+    let mut layers: Vec<(f64, u8, u64, Vec<DrawQuad>)> = Vec::new();
     let terrain_sprites: BTreeMap<(usize, usize), (&str, f64, Option<i32>)> = hidden
         .iter()
         .copied()
@@ -710,7 +754,7 @@ pub fn game_scene_in_view(
         let depth = override_sprite
             .and_then(|(_, _, depth)| depth)
             .unwrap_or_else(|| definition.map_or(100, |def| def.depth));
-        layers.push((depth, index as u64, layer));
+        layers.push((f64::from(depth), 0, index as u64, layer));
     }
     for metadata in entities
         .clone()
@@ -763,7 +807,7 @@ pub fn game_scene_in_view(
         let [x, y] = screen(position, position, camera, alpha, pixel_snap);
         let mut layer = Vec::with_capacity(1);
         sprite(&mut layer, atlas, name, 0.0, x, y, false, WHITE);
-        layers.push((depth, 1_000_000 + metadata.id, layer));
+        layers.push((f64::from(depth), 0, 1_000_000 + metadata.id, layer));
     }
     for entity in entities.clone().filter(|entity| entity.alive) {
         if entity.data.get("visible") == Some(&0.0)
@@ -846,7 +890,7 @@ pub fn game_scene_in_view(
                     } else {
                         9005.0
                     }) as i32;
-                layers.push((depth, 1_000_000 + entity.id, layer));
+                layers.push((f64::from(depth), 0, 1_000_000 + entity.id, layer));
             }
             continue;
         }
@@ -909,7 +953,7 @@ pub fn game_scene_in_view(
             || definition.map_or(60, |def| def.depth),
             |depth| *depth as i32,
         );
-        layers.push((depth, 1_000_000 + entity.id, layer));
+        layers.push((f64::from(depth), 0, 1_000_000 + entity.id, layer));
     }
     let player = &game.player;
     if cinematic.is_none()
@@ -963,7 +1007,7 @@ pub fn game_scene_in_view(
                 false,
                 WHITE,
             );
-            layers.push((if climbing { 0 } else { 100 }, u64::MAX - 1, cape));
+            layers.push((if climbing { 0.0 } else { 100.0 }, 0, u64::MAX - 1, cape));
         }
         if player.data.get("parachute_open").copied().unwrap_or(0.0) > 0.0
             && !game
@@ -983,7 +1027,7 @@ pub fn game_scene_in_view(
                 false,
                 WHITE,
             );
-            layers.push((900, u64::MAX - 2, canopy));
+            layers.push((900.0, 0, u64::MAX - 2, canopy));
         }
         if jetpack && !back_jetpack {
             sprite(
@@ -1057,11 +1101,25 @@ pub fn game_scene_in_view(
                 50.0
             }
         }) as i32;
-        layers.push((depth, u64::MAX, layer));
+        layers.push((f64::from(depth), 0, u64::MAX, layer));
     }
-    // GameMaker draws larger depths first. Stable IDs break ties deterministically.
-    layers.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-    for (_, _, layer) in layers {
+    for (index, tile) in game.world.generated_graphic_tiles.iter().enumerate() {
+        if let Some(quad) = generated_graphic_quad(&tile.graphic, atlas, camera, pixel_snap) {
+            // Graphics order is current record order, never a fabricated actor
+            // identity. Finite equal-depth actors are emitted before graphics.
+            layers.push((tile.graphic.depth, 1, index as u64, vec![quad]));
+        }
+    }
+    // Existing actor integer depths and tie keys retain their exact ordering.
+    // partial_cmp preserves finite equal signed zero; total_cmp would reorder it.
+    // This reconstructed Scene is not the complete native Draw traversal.
+    layers.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.1.cmp(&b.1))
+            .then(a.2.cmp(&b.2))
+    });
+    for (_, _, _, layer) in layers {
         quads.extend(layer);
     }
     let mut panel_start = quads.len();
@@ -5664,3 +5722,7 @@ mod weapon_default_draw_tests;
 #[cfg(test)]
 #[path = "source_red_lamp_begin_tests.rs"]
 mod source_red_lamp_begin_tests;
+
+#[cfg(test)]
+#[path = "scene_generated_graphics_tests.rs"]
+mod generated_graphics_tests;
