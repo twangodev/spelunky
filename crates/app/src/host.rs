@@ -2,6 +2,7 @@
 use crate::{
     atlas::Atlas,
     audio::Audio,
+    cheat_ui::CheatUi,
     donation_ui::{self, TransitionDonation},
     editor_ui::{EditorCommand, EditorUi},
     input::{InputState, UiButton},
@@ -32,6 +33,7 @@ enum Screen {
     Playing,
     Pause,
     Settings,
+    Cheats,
     Editor,
     Custom,
     Shortcuts,
@@ -188,6 +190,7 @@ struct App {
     settings_return: Screen,
     selection: usize,
     settings_ui: SettingsUi,
+    cheat_ui: CheatUi,
     editor: EditorUi,
     editor_play: bool,
     donation: Option<TransitionDonation>,
@@ -299,6 +302,7 @@ impl App {
             settings_return: Screen::Title,
             selection: 0,
             settings_ui: SettingsUi::new(),
+            cheat_ui: CheatUi::default(),
             editor,
             editor_play: false,
             donation: None,
@@ -379,8 +383,9 @@ impl App {
             0
         };
         self.reset_timing();
-        self.audio
-            .pause(!self.focused || self.occluded || matches!(screen, Screen::Pause));
+        self.audio.pause(
+            !self.focused || self.occluded || matches!(screen, Screen::Pause | Screen::Cheats),
+        );
     }
     fn toast(&mut self, message: impl Into<String>) {
         let expiry = self.now() + 6.;
@@ -582,6 +587,27 @@ impl App {
         self.open_hub(spelunky_core::hub::HubKind::Scores);
     }
     fn key(&mut self, key: KeyCode, text_value: Option<&str>, shortcut_control: Option<bool>) {
+        if key == KeyCode::F4 && self.screen == Screen::Cheats {
+            self.fullscreen();
+            return;
+        }
+        if self.screen == Screen::Cheats {
+            if let Some(game) = &mut self.game {
+                if self.cheat_ui.key(key, game) {
+                    self.screen(Screen::Pause);
+                }
+            }
+            return;
+        }
+        if key == KeyCode::F6
+            && matches!(self.screen, Screen::Playing | Screen::Pause)
+            && self.game.as_ref().is_some_and(|g| {
+                g.state == RunState::Playing && g.opening.is_none() && g.ending.is_none()
+            })
+        {
+            self.screen(Screen::Cheats);
+            return;
+        }
         // Deliver earlier room producers before a new F1/selector stop.
         self.flush_source_music();
         if key == KeyCode::F4
@@ -722,9 +748,9 @@ impl App {
             Screen::Shortcuts => self.shortcuts().len() + 1,
             Screen::Pause => {
                 if self.editor_play {
-                    4
+                    5
                 } else {
-                    3
+                    4
                 }
             }
             Screen::Finished => 2,
@@ -790,7 +816,9 @@ impl App {
                     self.screen(Screen::Settings)
                 }
                 2 if self.editor_play => self.screen(Screen::Editor),
-                _ => self.screen(Screen::Title),
+                2 => self.screen(Screen::Title),
+                3 if self.editor_play => self.screen(Screen::Title),
+                _ => self.screen(Screen::Cheats),
             },
             Screen::Finished => match self.selection {
                 0 => {
@@ -994,7 +1022,7 @@ impl App {
         let Some(game) = self.game.as_ref() else {
             return;
         };
-        if self.recorded {
+        if self.recorded || game.flags.contains("cheats_used") {
             return;
         }
         let Some(record) = campaign_record(game) else {
@@ -1382,7 +1410,9 @@ impl App {
                         .apply_gameplay_extent(game)
                         .expect("renderer logical viewport is a valid gameplay extent");
                     consume_source_music(&mut self.audio, &mut self.source_music, game);
+                    self.cheat_ui.cheats.apply(game);
                     game.step(&input);
+                    self.cheat_ui.cheats.apply(game);
                     consume_source_music(&mut self.audio, &mut self.source_music, game);
                     self.timing.history_ready = true;
                     for event in &game.events {
@@ -1550,7 +1580,7 @@ impl App {
         let viewport = self.viewport();
         let mut quads = if matches!(
             self.screen,
-            Screen::Playing | Screen::Pause | Screen::Finished | Screen::Donation
+            Screen::Playing | Screen::Pause | Screen::Cheats | Screen::Finished | Screen::Donation
         ) {
             self.game
                 .as_ref()
@@ -1738,6 +1768,7 @@ impl App {
                     WHITE,
                 );
             }
+            Screen::Cheats => self.cheat_ui.draw(atlas, &mut quads),
             Screen::Pause => {
                 self.panel(&mut quads);
                 text(&mut quads, atlas, "PAUSED", 123., 53., 1.5, GOLD);
@@ -1745,9 +1776,9 @@ impl App {
                     &mut quads,
                     atlas,
                     if self.editor_play {
-                        &["RESUME", "SETTINGS", "RETURN TO EDITOR", "TITLE"]
+                        &["RESUME", "SETTINGS", "RETURN TO EDITOR", "TITLE", "CHEATS"]
                     } else {
-                        &["RESUME", "SETTINGS", "TITLE"]
+                        &["RESUME", "SETTINGS", "TITLE", "CHEATS"]
                     },
                     84.,
                     91.,
@@ -2677,7 +2708,7 @@ fn source_game_over_hint(game: &Game, editor_play: bool, attack: &str) -> String
 }
 
 fn campaign_record(game: &Game) -> Option<Record> {
-    if ["custom", "tutorial", "hub"]
+    if ["custom", "tutorial", "hub", "cheats_used"]
         .iter()
         .any(|flag| game.flags.contains(*flag))
     {
@@ -3066,8 +3097,11 @@ impl ApplicationHandler<UserEvent> for App {
                 if !focused {
                     self.input.clear();
                 }
-                self.audio
-                    .pause(!focused || self.occluded || self.screen == Screen::Pause)
+                self.audio.pause(
+                    !focused
+                        || self.occluded
+                        || matches!(self.screen, Screen::Pause | Screen::Cheats),
+                )
             }
             WindowEvent::Occluded(occluded) => {
                 self.occluded = occluded;
@@ -3075,8 +3109,11 @@ impl ApplicationHandler<UserEvent> for App {
                 if occluded {
                     self.input.clear();
                 }
-                self.audio
-                    .pause(occluded || !self.focused || self.screen == Screen::Pause);
+                self.audio.pause(
+                    occluded
+                        || !self.focused
+                        || matches!(self.screen, Screen::Pause | Screen::Cheats),
+                );
             }
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.control = modifiers.state().control_key()
