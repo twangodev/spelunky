@@ -185,6 +185,7 @@ struct App {
     source_music: SourceMusicState,
     store: Store,
     timing: HostTiming,
+    scene_buffers: scene::SceneBuffers,
     game: Option<Game>,
     screen: Screen,
     settings_return: Screen,
@@ -297,6 +298,7 @@ impl App {
             source_music,
             store,
             timing: HostTiming::default(),
+            scene_buffers: scene::SceneBuffers::default(),
             game: Some(game),
             screen: Screen::Playing,
             settings_return: Screen::Title,
@@ -1573,36 +1575,34 @@ impl App {
         self.flush_source_music();
         self.audio.update();
     }
-    fn draw(&self, alpha: f64) -> Vec<DrawQuad> {
+    fn draw(&self, alpha: f64, buffers: &mut scene::SceneBuffers) {
+        buffers.quads.clear();
         let Some(atlas) = &self.atlas else {
-            return vec![];
+            return;
         };
         let viewport = self.viewport();
-        let mut quads = if matches!(
+        if matches!(
             self.screen,
             Screen::Playing | Screen::Pause | Screen::Cheats | Screen::Finished | Screen::Donation
         ) {
-            self.game
-                .as_ref()
-                .map(|g| {
-                    scene::game_scene_in_view(
-                        g,
-                        alpha,
-                        self.store.data.settings.pixel_snap,
-                        atlas,
-                        viewport,
-                    )
-                })
-                .unwrap_or_default()
+            if let Some(game) = &self.game {
+                scene::game_scene_in_view_into(
+                    game,
+                    alpha,
+                    self.store.data.settings.pixel_snap,
+                    atlas,
+                    viewport,
+                    buffers,
+                );
+            }
         } else {
-            let mut q = vec![];
             rect(
-                &mut q,
+                &mut buffers.quads,
                 [0., 0., viewport.width, viewport.height],
                 [0.055, 0.035, 0.03, 1.],
             );
-            q
-        };
+        }
+        let quads = &mut buffers.quads;
         // Scene owns the expanded world and its HUD. Host menus, editor and
         // overlays retain their authored coordinates within the centered UI.
         let ui_start = quads.len();
@@ -1618,16 +1618,12 @@ impl App {
                         self.editor_play,
                         &self.input.action_label("attack"),
                     );
-                    scene::game_over_overlay(&mut quads, atlas, game, &hint);
+                    scene::game_over_overlay(quads, atlas, game, &hint);
                 }
             }
             Screen::Donation => {
-                rect(
-                    &mut quads,
-                    [22., 25., 276., 190.],
-                    [0.035, 0.02, 0.015, 0.97],
-                );
-                text(&mut quads, atlas, "TUNNEL MAN", 99., 38., 1.5, GOLD);
+                rect(quads, [22., 25., 276., 190.], [0.035, 0.02, 0.015, 0.97]);
+                text(quads, atlas, "TUNNEL MAN", 99., 38., 1.5, GOLD);
                 if let Some(frame) = atlas.sprite("sTunnelManLeft", 0.) {
                     quads.push(DrawQuad {
                         rect: [38., 76., frame.size[0] * 2., frame.size[1] * 2.],
@@ -1638,7 +1634,7 @@ impl App {
                 }
                 if let (Some(ui), Some(game)) = (&self.donation, &self.game) {
                     text(
-                        &mut quads,
+                        quads,
                         atlas,
                         &format!("SHORTCUT TO LEVEL {}", ui.destination),
                         91.,
@@ -1647,7 +1643,7 @@ impl App {
                         WHITE,
                     );
                     text(
-                        &mut quads,
+                        quads,
                         atlas,
                         &format!("STILL NEEDED: ${}", ui.remaining(game)),
                         91.,
@@ -1656,7 +1652,7 @@ impl App {
                         WHITE,
                     );
                     text(
-                        &mut quads,
+                        quads,
                         atlas,
                         &format!("YOUR GOLD: ${}", game.player.money),
                         91.,
@@ -1665,18 +1661,10 @@ impl App {
                         WHITE,
                     );
                     if ui.complete(game) {
-                        text(
-                            &mut quads,
-                            atlas,
-                            "THE SHORTCUT IS OPEN!",
-                            60.,
-                            141.,
-                            1.,
-                            GOLD,
-                        );
+                        text(quads, atlas, "THE SHORTCUT IS OPEN!", 60., 141., 1., GOLD);
                     } else {
                         text(
-                            &mut quads,
+                            quads,
                             atlas,
                             &format!("DONATE: ${}", ui.amount),
                             83.,
@@ -1687,7 +1675,7 @@ impl App {
                     }
                 }
                 text(
-                    &mut quads,
+                    quads,
                     atlas,
                     "UP/DOWN SELECT (HOLD TO SPEED UP)",
                     35.,
@@ -1696,7 +1684,7 @@ impl App {
                     WHITE,
                 );
                 text(
-                    &mut quads,
+                    quads,
                     atlas,
                     "ATTACK / PAY / A: DONATE",
                     56.,
@@ -1705,7 +1693,7 @@ impl App {
                     WHITE,
                 );
                 text(
-                    &mut quads,
+                    quads,
                     atlas,
                     "ENTER / ESC / B: CONTINUE",
                     54.,
@@ -1714,15 +1702,15 @@ impl App {
                     WHITE,
                 );
             }
-            Screen::Editor => self.editor.draw(atlas, &mut quads),
+            Screen::Editor => self.editor.draw(atlas, quads),
             Screen::Settings => self
                 .settings_ui
-                .draw(atlas, &mut quads, &self.store.data.settings),
+                .draw(atlas, quads, &self.store.data.settings),
             Screen::Title => {
-                text(&mut quads, atlas, "SPELUNKY", 64., 18., 2.8, GOLD);
-                text(&mut quads, atlas, "CLASSIC / RUST", 88., 45., 1., WHITE);
+                text(quads, atlas, "SPELUNKY", 64., 18., 2.8, GOLD);
+                text(quads, atlas, "CLASSIC / RUST", 88., 45., 1., WHITE);
                 self.menu(
-                    &mut quads,
+                    quads,
                     atlas,
                     &[
                         "START ADVENTURE",
@@ -1741,7 +1729,7 @@ impl App {
                     14.,
                 );
                 text(
-                    &mut quads,
+                    quads,
                     atlas,
                     "ARROWS + ENTER / CONTROLLER",
                     54.,
@@ -1750,7 +1738,7 @@ impl App {
                     WHITE,
                 );
                 text(
-                    &mut quads,
+                    quads,
                     atlas,
                     "F2 EDITOR  F4 FULLSCREEN",
                     65.,
@@ -1759,7 +1747,7 @@ impl App {
                     WHITE,
                 );
                 text(
-                    &mut quads,
+                    quads,
                     atlas,
                     "UNOFFICIAL MOD - (C) 2008,2009 DEREK YU/MOSSMOUTH",
                     12.,
@@ -1768,12 +1756,12 @@ impl App {
                     WHITE,
                 );
             }
-            Screen::Cheats => self.cheat_ui.draw(atlas, &mut quads),
+            Screen::Cheats => self.cheat_ui.draw(atlas, quads),
             Screen::Pause => {
-                self.panel(&mut quads);
-                text(&mut quads, atlas, "PAUSED", 123., 53., 1.5, GOLD);
+                self.panel(quads);
+                text(quads, atlas, "PAUSED", 123., 53., 1.5, GOLD);
                 self.menu(
-                    &mut quads,
+                    quads,
                     atlas,
                     if self.editor_play {
                         &["RESUME", "SETTINGS", "RETURN TO EDITOR", "TITLE", "CHEATS"]
@@ -1786,10 +1774,10 @@ impl App {
                 );
             }
             Screen::Finished => {
-                self.panel(&mut quads);
+                self.panel(quads);
                 let won = self.game.as_ref().is_some_and(|g| g.state == RunState::Won);
                 text(
-                    &mut quads,
+                    quads,
                     atlas,
                     if won {
                         "YOU MADE IT!"
@@ -1803,7 +1791,7 @@ impl App {
                 );
                 if let Some(game) = &self.game {
                     text(
-                        &mut quads,
+                        quads,
                         atlas,
                         &format!(
                             "${}  LEVEL {}  {:.1}S",
@@ -1818,7 +1806,7 @@ impl App {
                     );
                 }
                 self.menu(
-                    &mut quads,
+                    quads,
                     atlas,
                     if self.editor_play {
                         &["RETURN TO EDITOR", "TITLE"]
@@ -1835,7 +1823,7 @@ impl App {
                 );
             }
             Screen::Shortcuts => {
-                text(&mut quads, atlas, "TUNNEL SHORTCUTS", 68., 20., 1.5, GOLD);
+                text(quads, atlas, "TUNNEL SHORTCUTS", 68., 20., 1.5, GOLD);
                 let mut entries: Vec<String> = self
                     .shortcuts()
                     .iter()
@@ -1843,7 +1831,7 @@ impl App {
                     .collect();
                 if entries.is_empty() {
                     text(
-                        &mut quads,
+                        quads,
                         atlas,
                         "DONATE TO TUNNEL MAN TO OPEN SHORTCUTS",
                         16.,
@@ -1854,10 +1842,10 @@ impl App {
                 }
                 entries.push("BACK".into());
                 let refs: Vec<&str> = entries.iter().map(String::as_str).collect();
-                self.menu(&mut quads, atlas, &refs, 73., 103., 23.);
+                self.menu(quads, atlas, &refs, 73., 103., 23.);
             }
             Screen::Custom => {
-                text(&mut quads, atlas, "CUSTOM LEVELS", 74., 12., 1.5, GOLD);
+                text(quads, atlas, "CUSTOM LEVELS", 74., 12., 1.5, GOLD);
                 let mut names: Vec<String> =
                     self.store.data.custom_levels.keys().cloned().collect();
                 names.extend(["IMPORT .LVL".into(), "BACK".into()]);
@@ -1865,7 +1853,7 @@ impl App {
                 for (index, name) in names.iter().enumerate().skip(start).take(11) {
                     let color = if index == self.selection { GOLD } else { WHITE };
                     text(
-                        &mut quads,
+                        quads,
                         atlas,
                         &format!(
                             "{} {}",
@@ -1879,7 +1867,7 @@ impl App {
                     );
                 }
                 text(
-                    &mut quads,
+                    quads,
                     atlas,
                     "ENTER PLAY / E EDIT / DROP .LVL IMPORT",
                     14.,
@@ -1889,12 +1877,12 @@ impl App {
                 );
             }
             Screen::Records => {
-                text(&mut quads, atlas, "RUN RECORDS", 88., 14., 1.5, GOLD);
+                text(quads, atlas, "RUN RECORDS", 88., 14., 1.5, GOLD);
                 let mut records: Vec<_> = self.store.data.records.iter().collect();
                 records.sort_by_key(|r| std::cmp::Reverse(r.score));
                 for (index, record) in records.iter().take(11).enumerate() {
                     text(
-                        &mut quads,
+                        quads,
                         atlas,
                         &format!(
                             "${:<7} L{:02} {:>5.1}S K{:03} R{:02} {} {}",
@@ -1918,7 +1906,7 @@ impl App {
                 }
                 if records.is_empty() {
                     text(
-                        &mut quads,
+                        quads,
                         atlas,
                         "YOUR ADVENTURES WILL APPEAR HERE",
                         24.,
@@ -1927,18 +1915,10 @@ impl App {
                         WHITE,
                     );
                 }
-                text(
-                    &mut quads,
-                    atlas,
-                    "ESC / ENTER BACK",
-                    102.,
-                    220.,
-                    0.8,
-                    WHITE,
-                );
+                text(quads, atlas, "ESC / ENTER BACK", 102., 220., 0.8, WHITE);
             }
             Screen::About => {
-                text(&mut quads, atlas, "SPELUNKY CLASSIC", 50., 20., 1.6, GOLD);
+                text(quads, atlas, "SPELUNKY CLASSIC", 50., 20., 1.6, GOLD);
                 for (index, line) in [
                     "(C) 2008,2009 DEREK YU / MOSSMOUTH",
                     "UNOFFICIAL MODIFIED RUST PORT",
@@ -1958,7 +1938,7 @@ impl App {
                 .enumerate()
                 {
                     text(
-                        &mut quads,
+                        quads,
                         atlas,
                         line,
                         13.,
@@ -1967,13 +1947,13 @@ impl App {
                         WHITE,
                     );
                 }
-                text(&mut quads, atlas, "ESC / ENTER BACK", 98., 220., 0.8, WHITE);
+                text(quads, atlas, "ESC / ENTER BACK", 98., 220., 0.8, WHITE);
             }
         }
         if self.store.warning.is_some() {
-            rect(&mut quads, [0., 0., 320., 10.], [0.4, 0.08, 0.03, 0.95]);
+            rect(quads, [0., 0., 320., 10.], [0.4, 0.08, 0.03, 0.95]);
             text(
-                &mut quads,
+                quads,
                 atlas,
                 "SAVE UNAVAILABLE - SESSION DATA IS IN MEMORY",
                 4.,
@@ -2000,7 +1980,7 @@ impl App {
             let message = self.drawn_source_message.as_ref().unwrap();
             let pay = self.input.action_label("pay");
             scene::source_message(
-                &mut quads,
+                quads,
                 atlas,
                 &message.first.replace("{PAY}", &pay),
                 &message.second.replace("{PAY}", &pay),
@@ -2017,10 +1997,10 @@ impl App {
             let lines = wrap_message(&self.message, 54);
             let height = lines.len() as f32 * 9. + 8.;
             let top = 240. - height;
-            rect(&mut quads, [0., top, 320., height], [0., 0., 0., 0.92]);
+            rect(quads, [0., top, 320., height], [0., 0., 0., 0.92]);
             for (index, line) in lines.iter().enumerate() {
                 text(
-                    &mut quads,
+                    quads,
                     atlas,
                     line,
                     5.,
@@ -2031,7 +2011,7 @@ impl App {
             }
         }
         offset_fixed_ui(&mut quads[ui_start..], viewport.ui_origin());
-        quads
+
     }
     fn viewport(&self) -> Viewport {
         self.renderer
@@ -3228,7 +3208,8 @@ impl ApplicationHandler<UserEvent> for App {
                         self.game.as_ref(),
                     ),
                 );
-                let quads = self.draw(alpha);
+                let mut buffers = std::mem::take(&mut self.scene_buffers);
+                self.draw(alpha, &mut buffers);
                 #[cfg(target_arch = "wasm32")]
                 self.publish_test_snapshot(alpha);
                 if let Some(window) = &self.window {
@@ -3237,7 +3218,8 @@ impl ApplicationHandler<UserEvent> for App {
                 let result = self
                     .renderer
                     .as_mut()
-                    .map(|r| r.render(&quads, [0.005, 0.005, 0.005, 1.]));
+                    .map(|r| r.render(&buffers.quads, [0.005, 0.005, 0.005, 1.]));
+                self.scene_buffers = buffers;
                 match result {
                     Some(Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated)) => {
                         if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {

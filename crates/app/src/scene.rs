@@ -1,6 +1,6 @@
 //! Builds a presentation snapshot without advancing simulation or animation.
 use spelunky_core::{Area, Entity, Game, PlayerState, TICK_RATE, Vec2, catalog};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     atlas::Atlas,
@@ -592,11 +592,26 @@ fn generated_graphic_quad(
     })
 }
 
+#[cfg(test)]
 pub fn game_scene(game: &Game, alpha: f64, pixel_snap: bool, atlas: &Atlas) -> Vec<DrawQuad> {
     game_scene_in_view(game, alpha, pixel_snap, atlas, Viewport::canonical())
 }
 
 /// Expands presentation only; source activation and the frozen Draw state stay unchanged.
+/// Scratch storage belongs to the host, not the simulation. Ranges index a
+/// flat sprite arena, preserving each actor's internal Draw order after sorting.
+#[derive(Default)]
+pub struct SceneBuffers {
+    pub quads: Vec<DrawQuad>,
+    sprites: Vec<DrawQuad>,
+    layers: Vec<(f64, u8, u64, std::ops::Range<usize>)>,
+    visible_ids: HashSet<u64>,
+    hidden_ids: HashSet<u64>,
+    hidden_indices: Vec<usize>,
+    terrain_sprites: HashMap<(usize, usize), (bool, usize)>,
+}
+
+#[cfg(test)]
 pub fn game_scene_in_view(
     game: &Game,
     alpha: f64,
@@ -604,6 +619,35 @@ pub fn game_scene_in_view(
     atlas: &Atlas,
     view: Viewport,
 ) -> Vec<DrawQuad> {
+    let mut buffers = SceneBuffers::default();
+    game_scene_in_view_into(game, alpha, pixel_snap, atlas, view, &mut buffers);
+    buffers.quads
+}
+
+pub fn game_scene_in_view_into(
+    game: &Game,
+    alpha: f64,
+    pixel_snap: bool,
+    atlas: &Atlas,
+    view: Viewport,
+    buffers: &mut SceneBuffers,
+) {
+    let SceneBuffers {
+        quads,
+        sprites,
+        layers,
+        visible_ids,
+        hidden_ids,
+        hidden_indices,
+        terrain_sprites,
+    } = buffers;
+    quads.clear();
+    sprites.clear();
+    layers.clear();
+    visible_ids.clear();
+    hidden_ids.clear();
+    hidden_indices.clear();
+    terrain_sprites.clear();
     let game = game.presentation();
     let alpha = if game.flags.contains("render_discontinuity") {
         1.0
@@ -628,27 +672,24 @@ pub fn game_scene_in_view(
         |quads: &mut Vec<DrawQuad>, atlas: &Atlas, name: &str, frame, x, y, mirrored, color| {
             sprite_in_view(quads, atlas, name, frame, x, y, mirrored, color, view);
         };
-    let visible_ids: BTreeSet<_> = if expanded {
-        game.world.entities.iter().map(|entity| entity.id).collect()
-    } else {
-        BTreeSet::new()
-    };
-    let hidden: Vec<_> = if expanded {
-        game.dispatcher
-            .hidden_entities()
-            .iter()
-            .filter(|entity| !visible_ids.contains(&entity.id))
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let hidden_ids: BTreeSet<_> = hidden.iter().map(|entity| entity.id).collect();
+    if expanded {
+        visible_ids.extend(game.world.entities.iter().map(|entity| entity.id));
+        for (index, entity) in game.dispatcher.hidden_entities().iter().enumerate() {
+            if !visible_ids.contains(&entity.id) {
+                hidden_indices.push(index);
+                hidden_ids.insert(entity.id);
+            }
+        }
+    }
+    let hidden = hidden_indices
+        .iter()
+        .map(|&i| &game.dispatcher.hidden_entities()[i]);
     let entities = game
         .world
         .entities
         .iter()
         .filter(|entity| entity.engine_active)
-        .chain(hidden.iter().copied());
+        .chain(hidden.clone());
     // Keep visible grid traversal first; hidden storage is borrowed, never activated.
     let hidden_tile_storage = if expanded {
         game.dispatcher.hidden_tiles()
@@ -676,47 +717,56 @@ pub fn game_scene_in_view(
         .ending
         .as_ref()
         .filter(|ending| ending.stage != spelunky_core::ending::EndingStage::Exit);
-    let mut quads = Vec::with_capacity(1000);
-    background_in_view(&mut quads, game, camera, pixel_snap, atlas, view);
-    let mut layers: Vec<(f64, u8, u64, Vec<DrawQuad>)> = Vec::new();
-    let terrain_sprites: BTreeMap<(usize, usize), (&str, f64, Option<i32>)> = hidden
+    background_in_view(quads, game, camera, pixel_snap, atlas, view);
+    // Match the old collect's last-writer wins behavior: hidden first, then
+    // active physical metadata. Store locations, never stale borrowed sprites.
+    for (hidden, index, entity) in hidden_indices
         .iter()
-        .copied()
+        .map(|&i| (true, i, &game.dispatcher.hidden_entities()[i]))
         .chain(
             game.world
                 .entities
                 .iter()
-                .filter(|entity| entity.engine_active),
+                .enumerate()
+                .filter(|(_, e)| e.engine_active)
+                .map(|(i, e)| (false, i, e)),
         )
-        .filter(|entity| {
-            entity.alive
-                && entity.object == "oTerrainMetadata"
-                && entity.pos.x >= 0.0
-                && entity.pos.y >= 0.0
-        })
-        .filter_map(|entity| {
-            entity.text.get("terrain_sprite").map(|name| {
+    {
+        if entity.alive
+            && entity.object == "oTerrainMetadata"
+            && entity.pos.x >= 0.0
+            && entity.pos.y >= 0.0
+            && entity.text.contains_key("terrain_sprite")
+        {
+            terrain_sprites.insert(
                 (
-                    (
-                        (entity.pos.x / 16.0).floor() as usize,
-                        (entity.pos.y / 16.0).floor() as usize,
-                    ),
-                    (
-                        name.as_str(),
-                        entity.animation,
-                        entity.data.get("depth").map(|depth| *depth as i32),
-                    ),
-                )
-            })
-        })
-        .collect();
+                    (entity.pos.x / 16.0).floor() as usize,
+                    (entity.pos.y / 16.0).floor() as usize,
+                ),
+                (hidden, index),
+            );
+        }
+    }
     for (index, tile) in tiles {
         if tile.object.is_empty() {
             continue;
         }
         let tile_x = index % game.world.width.max(1);
         let tile_y = index / game.world.width.max(1);
-        let override_sprite = terrain_sprites.get(&(tile_x, tile_y)).copied();
+        let override_sprite = terrain_sprites
+            .get(&(tile_x, tile_y))
+            .map(|&(hidden, index)| {
+                let entity = if hidden {
+                    &game.dispatcher.hidden_entities()[index]
+                } else {
+                    &game.world.entities[index]
+                };
+                (
+                    entity.text["terrain_sprite"].as_str(),
+                    entity.animation,
+                    entity.data.get("depth").map(|depth| *depth as i32),
+                )
+            });
         let Some(name) = override_sprite
             .map(|(name, _, _)| name)
             .or_else(|| catalog::sprite(&tile.object))
@@ -740,9 +790,10 @@ pub fn game_scene_in_view(
         if definition.is_some_and(|def| !def.visible) {
             continue;
         }
-        let mut layer = Vec::with_capacity(1);
+        let layer_start = sprites.len();
+        let layer = &mut *sprites;
         sprite(
-            &mut layer,
+            layer,
             atlas,
             name,
             override_sprite.map_or(0.0, |(_, frame, _)| frame),
@@ -754,7 +805,7 @@ pub fn game_scene_in_view(
         let depth = override_sprite
             .and_then(|(_, _, depth)| depth)
             .unwrap_or_else(|| definition.map_or(100, |def| def.depth));
-        layers.push((f64::from(depth), 0, index as u64, layer));
+        layers.push((f64::from(depth), 0, index as u64, layer_start..layer.len()));
     }
     for metadata in entities
         .clone()
@@ -805,9 +856,15 @@ pub fn game_scene_in_view(
             )
         };
         let [x, y] = screen(position, position, camera, alpha, pixel_snap);
-        let mut layer = Vec::with_capacity(1);
-        sprite(&mut layer, atlas, name, 0.0, x, y, false, WHITE);
-        layers.push((f64::from(depth), 0, 1_000_000 + metadata.id, layer));
+        let layer_start = sprites.len();
+        let layer = &mut *sprites;
+        sprite(layer, atlas, name, 0.0, x, y, false, WHITE);
+        layers.push((
+            f64::from(depth),
+            0,
+            1_000_000 + metadata.id,
+            layer_start..layer.len(),
+        ));
     }
     for entity in entities.clone().filter(|entity| entity.alive) {
         if entity.data.get("visible") == Some(&0.0)
@@ -827,7 +884,8 @@ pub fn game_scene_in_view(
         let position =
             presented_entity_position(game, entity, alpha, hidden_ids.contains(&entity.id));
         let [x, y] = screen(position, position, camera, alpha, pixel_snap);
-        let mut layer = Vec::with_capacity(1);
+        let layer_start = sprites.len();
+        let layer = &mut *sprites;
         if entity.object == "oHintHand" && (game.player.pos.x - (entity.pos.x + 8.0)).abs() < 8.0 {
             // oHintHand Draw uses room coordinates, centered in the right
             // 320-pixel title view. Camera translation keeps the text attached
@@ -841,7 +899,7 @@ pub fn game_scene_in_view(
                 alpha,
                 pixel_snap,
             );
-            text(&mut layer, atlas, message, text_x, text_y, 1.0, WHITE);
+            text(layer, atlas, message, text_x, text_y, 1.0, WHITE);
         }
         if entity.object == "oGenerationDecoration" {
             let region =
@@ -890,7 +948,12 @@ pub fn game_scene_in_view(
                     } else {
                         9005.0
                     }) as i32;
-                layers.push((f64::from(depth), 0, 1_000_000 + entity.id, layer));
+                layers.push((
+                    f64::from(depth),
+                    0,
+                    1_000_000 + entity.id,
+                    layer_start..layer.len(),
+                ));
             }
             continue;
         }
@@ -909,7 +972,7 @@ pub fn game_scene_in_view(
             )
         {
             sprite(
-                &mut layer,
+                layer,
                 atlas,
                 "sJetpackRight",
                 0.0,
@@ -920,7 +983,7 @@ pub fn game_scene_in_view(
             );
         }
         sprite(
-            &mut layer,
+            layer,
             atlas,
             name,
             entity.animation,
@@ -929,7 +992,7 @@ pub fn game_scene_in_view(
             mirror,
             [1.0, 1.0, 1.0, alpha],
         );
-        if let Some(quad) = layer.last_mut() {
+        if let Some(quad) = layer[layer_start..].last_mut() {
             // Fish Bone inherits oItem Draw, whose angle argument is literal0.
             // Its Step still sets image_angle for collisions; Arrow overrides
             // Draw and uses that angle, so its visual rotation stays intact.
@@ -948,12 +1011,17 @@ pub fn game_scene_in_view(
                 ];
             }
         }
-        entity_draw_extras(&mut layer, game, entity, atlas, x, y, view);
+        entity_draw_extras(layer, game, entity, atlas, x, y, view);
         let depth = entity.data.get("depth").map_or_else(
             || definition.map_or(60, |def| def.depth),
             |depth| *depth as i32,
         );
-        layers.push((f64::from(depth), 0, 1_000_000 + entity.id, layer));
+        layers.push((
+            f64::from(depth),
+            0,
+            1_000_000 + entity.id,
+            layer_start..layer.len(),
+        ));
     }
     let player = &game.player;
     if cinematic.is_none()
@@ -962,7 +1030,6 @@ pub fn game_scene_in_view(
         && player.data.get("blink_toggle") != Some(&1.0)
     {
         let [x, y] = screen(player.previous_pos, player.pos, camera, alpha, pixel_snap);
-        let mut layer = Vec::with_capacity(3);
         let jetpack = player.has("Jetpack") || player.has("jetpack");
         let climbing = spelunky_core::player::source_climbing(game)
             || matches!(
@@ -992,9 +1059,10 @@ pub fn game_scene_in_view(
             } else {
                 "sCapeDL"
             };
-            let mut cape = Vec::with_capacity(1);
+            let cape_start = sprites.len();
+            let cape = &mut *sprites;
             sprite(
-                &mut cape,
+                cape,
                 atlas,
                 name,
                 player.animation,
@@ -1007,7 +1075,12 @@ pub fn game_scene_in_view(
                 false,
                 WHITE,
             );
-            layers.push((if climbing { 0.0 } else { 100.0 }, 0, u64::MAX - 1, cape));
+            layers.push((
+                if climbing { 0.0 } else { 100.0 },
+                0,
+                u64::MAX - 1,
+                cape_start..cape.len(),
+            ));
         }
         if player.data.get("parachute_open").copied().unwrap_or(0.0) > 0.0
             && !game
@@ -1016,9 +1089,10 @@ pub fn game_scene_in_view(
                 .iter()
                 .any(|entity| entity.alive && entity.engine_active && entity.object == "oParachute")
         {
-            let mut canopy = Vec::with_capacity(1);
+            let canopy_start = sprites.len();
+            let canopy = &mut *sprites;
             sprite(
-                &mut canopy,
+                canopy,
                 atlas,
                 "sParachute",
                 0.0,
@@ -1027,11 +1101,13 @@ pub fn game_scene_in_view(
                 false,
                 WHITE,
             );
-            layers.push((900.0, 0, u64::MAX - 2, canopy));
+            layers.push((900.0, 0, u64::MAX - 2, canopy_start..canopy.len()));
         }
+        let layer_start = sprites.len();
+        let layer = &mut *sprites;
         if jetpack && !back_jetpack {
             sprite(
-                &mut layer,
+                layer,
                 atlas,
                 if player.facing > 0 {
                     "sJetpackRight"
@@ -1058,7 +1134,7 @@ pub fn game_scene_in_view(
             WHITE
         };
         sprite(
-            &mut layer,
+            layer,
             atlas,
             name,
             player.animation,
@@ -1077,7 +1153,7 @@ pub fn game_scene_in_view(
                 (true, true) => "sBombArrowRight",
             };
             sprite(
-                &mut layer,
+                layer,
                 atlas,
                 name,
                 if bomb && player.data.get("bow_arrow_toggle").copied().unwrap_or(0.0) == 0.0 {
@@ -1092,7 +1168,7 @@ pub fn game_scene_in_view(
             );
         }
         if back_jetpack {
-            sprite(&mut layer, atlas, "sJetpackBack", 0.0, x, y, false, WHITE);
+            sprite(layer, atlas, "sJetpackBack", 0.0, x, y, false, WHITE);
         }
         let depth = player.data.get("depth").copied().unwrap_or_else(|| {
             if player.data.get("burning").copied().unwrap_or(0.0) > 0.0 {
@@ -1101,13 +1177,15 @@ pub fn game_scene_in_view(
                 50.0
             }
         }) as i32;
-        layers.push((f64::from(depth), 0, u64::MAX, layer));
+        layers.push((f64::from(depth), 0, u64::MAX, layer_start..layer.len()));
     }
     for (index, tile) in game.world.generated_graphic_tiles.iter().enumerate() {
         if let Some(quad) = generated_graphic_quad(&tile.graphic, atlas, camera, pixel_snap) {
             // Graphics order is current record order, never a fabricated actor
             // identity. Finite equal-depth actors are emitted before graphics.
-            layers.push((tile.graphic.depth, 1, index as u64, vec![quad]));
+            let start = sprites.len();
+            sprites.push(quad);
+            layers.push((tile.graphic.depth, 1, index as u64, start..sprites.len()));
         }
     }
     // Existing actor integer depths and tie keys retain their exact ordering.
@@ -1119,8 +1197,8 @@ pub fn game_scene_in_view(
             .then(a.1.cmp(&b.1))
             .then(a.2.cmp(&b.2))
     });
-    for (_, _, _, layer) in layers {
-        quads.extend(layer);
+    for (_, _, _, range) in layers.iter() {
+        quads.extend_from_slice(&sprites[range.clone()]);
     }
     let mut panel_start = quads.len();
     if let Some(ending) = cinematic {
@@ -1128,7 +1206,7 @@ pub fn game_scene_in_view(
         let fade = interpolate_fade(ending.previous_fade_level, ending.fade_level, alpha);
         match ending.stage {
             EndingStage::Landing | EndingStage::Summary => ending_summary(
-                &mut quads,
+                quads,
                 atlas,
                 ending.draw_status,
                 ending.money_count,
@@ -1139,13 +1217,13 @@ pub fn game_scene_in_view(
                 fade,
             ),
             EndingStage::Credits => {
-                ending_credits(&mut quads, atlas, ending.credits_page);
+                ending_credits(quads, atlas, ending.credits_page);
                 if ending.fade_in || ending.fade_out {
-                    cinematic_fade(&mut quads, fade);
+                    cinematic_fade(quads, fade);
                 }
             }
             EndingStage::Transition => transition_text(
-                &mut quads,
+                quads,
                 atlas,
                 game,
                 ending.draw_loot,
@@ -1161,14 +1239,14 @@ pub fn game_scene_in_view(
         }
     } else {
         if darkness_enabled(game) {
-            darkness_in_view(&mut quads, game, camera, alpha, view);
+            darkness_in_view(quads, game, camera, alpha, view);
             // Darkness already occupies world coordinates, outside the fixed UI panel.
         }
         panel_start = quads.len();
         let [ox, oy] = view.ui_origin();
         // World-attached source HUD text retains world coordinates after panel translation.
         hud_in_view(
-            &mut quads,
+            quads,
             game,
             Vec2::new(camera.x + f64::from(ox), camera.y + f64::from(oy)),
             atlas,
@@ -1180,7 +1258,7 @@ pub fn game_scene_in_view(
                 && ending.fade_out
         }) {
             cinematic_fade(
-                &mut quads,
+                quads,
                 interpolate_fade(ending.previous_fade_level, ending.fade_level, alpha),
             );
         }
@@ -1188,7 +1266,7 @@ pub fn game_scene_in_view(
     if let Some(opening) = &game.opening {
         match opening.kind {
             spelunky_core::opening::OpeningKind::Intro => intro_narrative(
-                &mut quads,
+                quads,
                 atlas,
                 opening.draw_status,
                 interpolate_fade(opening.previous_fade_level, opening.fade_level, alpha),
@@ -1196,7 +1274,7 @@ pub fn game_scene_in_view(
             ),
             spelunky_core::opening::OpeningKind::Title => {
                 title_opening_overlay(
-                    &mut quads,
+                    quads,
                     atlas,
                     opening.stage,
                     interpolate_fade(opening.previous_darkness, opening.darkness, alpha),
@@ -1205,9 +1283,7 @@ pub fn game_scene_in_view(
         }
     }
     place_authored_panel(&mut quads[panel_start..], view);
-    quads
 }
-
 /// Center authored UI and expand the full-screen fades emitted by cinematic_fade.
 fn place_authored_panel(quads: &mut [DrawQuad], view: Viewport) {
     let [x, y] = view.ui_origin();
@@ -3129,6 +3205,75 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn culled_actor_does_not_rotate_a_previous_layer_and_buffers_survive_room_changes() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = adaptive_room();
+        let rock = game.world.spawn("oRock", Vec2::new(80.0, 80.0));
+        game.world
+            .entity_mut(rock)
+            .unwrap()
+            .data
+            .insert("rotation".into(), 0.25);
+        let mut buffers = SceneBuffers::default();
+        game_scene_in_view_into(
+            &game,
+            0.5,
+            false,
+            &atlas,
+            Viewport::canonical(),
+            &mut buffers,
+        );
+        let before = quad_bytes(&buffers.quads);
+        let arrow = game.world.spawn("oArrow", Vec2::new(10000.0, 10000.0));
+        game.world
+            .entity_mut(arrow)
+            .unwrap()
+            .data
+            .insert("rotation".into(), 1.5);
+        game_scene_in_view_into(
+            &game,
+            0.5,
+            false,
+            &atlas,
+            Viewport::canonical(),
+            &mut buffers,
+        );
+        assert_eq!(
+            quad_bytes(&buffers.quads),
+            before,
+            "culled actor changed an earlier sprite"
+        );
+        for (w, h) in [(960, 540), (540, 960), (320, 240)] {
+            let view = Viewport::from_surface(w, h);
+            // Same tick: metadata, world and viewport can change without stepping.
+            let metadata = game.world.spawn("oTerrainMetadata", Vec2::new(8.0, 168.0));
+            game.world
+                .entity_mut(metadata)
+                .unwrap()
+                .text
+                .insert("terrain_sprite".into(), "sIce".into());
+            game_scene_in_view_into(&game, 0.375, true, &atlas, view, &mut buffers);
+            let fresh = game_scene_in_view(&game, 0.375, true, &atlas, view);
+            assert_eq!(quad_bytes(&buffers.quads), quad_bytes(&fresh));
+            game = adaptive_room();
+        }
+        // Reuse scratch storage for a wholly different, empty room.
+        game.world = spelunky_core::World::new(8, 8, Area::Ice, 2);
+        game_scene_in_view_into(
+            &game,
+            1.0,
+            false,
+            &atlas,
+            Viewport::canonical(),
+            &mut buffers,
+        );
+        assert_eq!(
+            quad_bytes(&buffers.quads),
+            quad_bytes(&game_scene(&game, 1.0, false, &atlas))
+        );
     }
 
     #[test]

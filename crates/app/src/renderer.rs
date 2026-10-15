@@ -432,17 +432,20 @@ fn create_pipeline(
     })
 }
 
-fn draw_batches(quads: &[DrawQuad]) -> Vec<(QuadBlend, std::ops::Range<u32>)> {
-    let mut batches: Vec<(QuadBlend, std::ops::Range<u32>)> = Vec::with_capacity(3);
-    for (index, quad) in quads.iter().enumerate() {
-        let end = (index as u32 + 1) * 6;
-        if let Some((_, range)) = batches.last_mut().filter(|(blend, _)| *blend == quad.blend) {
-            range.end = end;
-        } else {
-            batches.push((quad.blend, index as u32 * 6..end));
+fn draw_batches(
+    quads: &[DrawQuad],
+) -> impl Iterator<Item = (QuadBlend, std::ops::Range<u32>)> + '_ {
+    let mut start = 0;
+    std::iter::from_fn(move || {
+        let blend = quads.get(start)?.blend;
+        let mut end = start + 1;
+        while end < quads.len() && quads[end].blend == blend {
+            end += 1;
         }
-    }
-    batches
+        let range = start as u32 * 6..end as u32 * 6;
+        start = end;
+        Some((blend, range))
+    })
 }
 
 fn create_vertex_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
@@ -724,6 +727,31 @@ pub(crate) mod tests {
             assert!((dx - dy).abs() < 0.001);
             assert!((f64::from(dx) - 16.0 * view.scale).abs() < 0.001);
         }
+    }
+
+    #[test]
+    fn batches_preserve_transparent_draw_order_across_blend_changes() {
+        assert!(draw_batches(&[]).next().is_none());
+        let quads: Vec<_> = [
+            QuadBlend::Alpha,
+            QuadBlend::Alpha,
+            QuadBlend::Multiply,
+            QuadBlend::Alpha,
+        ]
+        .into_iter()
+        .map(|blend| DrawQuad {
+            blend,
+            ..DrawQuad::default()
+        })
+        .collect();
+        assert_eq!(
+            draw_batches(&quads).collect::<Vec<_>>(),
+            vec![
+                (QuadBlend::Alpha, 0..12),
+                (QuadBlend::Multiply, 12..18),
+                (QuadBlend::Alpha, 18..24)
+            ]
+        );
     }
 
     #[test]
