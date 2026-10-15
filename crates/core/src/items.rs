@@ -1569,9 +1569,6 @@ fn advance_item_body(game: &mut Game, entity: &mut Entity) -> bool {
             entity.pos.y += f64::from(dy.signum());
         }
     }
-    if entity.object == "oJar" && embedded {
-        destroy = true;
-    }
     let left = body_contact(&game.world, entity, -1, 0);
     let right = body_contact(&game.world, entity, 1, 0);
     let bottom = body_contact(&game.world, entity, 0, 1);
@@ -1615,6 +1612,20 @@ fn advance_item_body(game: &mut Game, entity: &mut Entity) -> bool {
         entity.vel.x = -velocity.x * 0.5;
         if !overrides_parent {
             entity.data.insert("gravity".into(), 0.6);
+        }
+    }
+    if entity.object == "oJar" {
+        // oJar Step tests its origin after moveTo and the top/side response,
+        // before bottom bounce or contact nudges. Preserve historical timing.
+        let jar_embedded = if game.generation_revision == crate::GenerationRevision::SourceClassicV2
+        {
+            game.world
+                .solid_at_except(entity.pos.x, entity.pos.y, entity.id)
+        } else {
+            embedded
+        };
+        if jar_embedded {
+            destroy = true;
         }
     }
     if bottom || (hit_y && velocity.y > 0.0) {
