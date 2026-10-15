@@ -42,7 +42,7 @@ jobs:
         run: cargo test --workspace --locked
       - name: Build Linux application
         run: cargo build -p spelunky --release --locked
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: spelunky-linux-x86_64
           path: |
@@ -71,7 +71,7 @@ jobs:
         run: cargo check -p spelunky --lib --target wasm32-unknown-unknown --locked
       - name: Build static web bundle
         run: ./tools/build_web.sh --release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: spelunky-web
           path: web/dist
