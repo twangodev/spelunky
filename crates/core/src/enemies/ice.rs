@@ -978,8 +978,11 @@ fn boss(game: &mut Game, e: &mut Entity) {
     } else if distance < 96.0
         && e.state != 99
         && super::player_alive(game)
-        && game.player.stun == 0
-        && game.player.state != PlayerState::Stunned
+        && if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+            !game.player.is_stunned()
+        } else {
+            game.player.stun == 0 && game.player.state != PlayerState::Stunned
+        }
         && game.player.invincible == 0
     {
         for _ in 0..6 {
@@ -1112,9 +1115,11 @@ pub(super) fn player_hurt(game: &mut Game) {
         ),
     ] {
         if object == "oPsychicWave"
-            && (game.player.stun > 0
-                || game.player.state == PlayerState::Stunned
-                || !super::player_alive(game))
+            && ((if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+                game.player.is_stunned()
+            } else {
+                game.player.stun > 0 || game.player.state == PlayerState::Stunned
+            }) || !super::player_alive(game))
         {
             continue;
         }
@@ -1176,7 +1181,7 @@ pub(super) fn player_hurt(game: &mut Game) {
             }
             game.sound("sndHurt", game.player.pos);
             game.player.stun = stun;
-            game.player.state = PlayerState::Stunned;
+            crate::player::enter_stunned(game);
         } else {
             // PsychicWave has no source blood call; retain its independent path.
             let had_life = game.player.health > 0;
@@ -1190,7 +1195,7 @@ pub(super) fn player_hurt(game: &mut Game) {
             game.player.vel = Vec2::new(if pos.x < game.player.pos.x { 2.0 } else { -2.0 }, -4.0);
             game.sound("sndHurt", game.player.pos);
             game.player.stun = stun;
-            game.player.state = PlayerState::Stunned;
+            crate::player::enter_stunned(game);
         }
     }
 }
@@ -1427,12 +1432,12 @@ fn yeti_player_collision(game: &mut Game, e: &mut Entity) {
         return;
     }
     if super::player_alive(game)
-        && game.player.stun == 0
-        && game.player.state != PlayerState::Stunned
-        && matches!(
-            game.player.state,
-            PlayerState::Jumping | PlayerState::Falling
-        )
+        && if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+            !game.player.is_stunned()
+        } else {
+            game.player.stun == 0 && game.player.state != PlayerState::Stunned
+        }
+        && crate::player::source_airborne(game)
         && game.player.pos.y < e.pos.y + 5.0
         && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
     {
@@ -1486,7 +1491,7 @@ fn yeti_player_collision(game: &mut Game, e: &mut Entity) {
             enter(e, 3);
             e.vel.x = 0.0;
             game.player.vel = Vec2::new(f64::from(e.facing) * 6.0, -6.0);
-            game.player.state = PlayerState::Stunned;
+            crate::player::enter_stunned(game);
             game.player.data.insert("wall_hurt".into(), 1.0);
             game.player.data.insert("bounced".into(), 0.0);
             super::drop_from_throw(game);
@@ -1519,10 +1524,7 @@ fn king_player_collision(game: &mut Game, e: &mut Entity) {
         return;
     }
     if super::player_alive(game)
-        && matches!(
-            game.player.state,
-            PlayerState::Jumping | PlayerState::Falling
-        )
+        && crate::player::source_airborne(game)
         && game.player.pos.y < e.pos.y + 8.0
         && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
     {
@@ -1565,10 +1567,7 @@ fn king_player_collision(game: &mut Game, e: &mut Entity) {
 // and hurt/dead-state gate differ from the King's independent callback.
 fn alien_boss_player_collision(game: &mut Game, e: &mut Entity) {
     if super::player_alive(game)
-        && matches!(
-            game.player.state,
-            PlayerState::Jumping | PlayerState::Falling
-        )
+        && crate::player::source_airborne(game)
         && game.player.pos.y < e.pos.y + 8.0
         && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
     {
@@ -1607,10 +1606,7 @@ fn alien_boss_player_collision(game: &mut Game, e: &mut Entity) {
 
 fn eject_player_collision(game: &mut Game, e: &mut Entity) {
     if super::player_alive(game)
-        && matches!(
-            game.player.state,
-            PlayerState::Jumping | PlayerState::Falling
-        )
+        && crate::player::source_airborne(game)
         && game.player.pos.y < e.pos.y - 3.0
         && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
     {

@@ -502,7 +502,7 @@ pub fn use_bomb(game: &mut Game, input: &InputFrame) {
     }
     if input.down {
         velocity.y = 3.0;
-        if crate::player::source_grounded(&game.player) {
+        if crate::player::source_platform_grounded(game) {
             velocity.x *= 0.1;
         }
     }
@@ -1091,8 +1091,7 @@ fn step_bomb_body(game: &mut Game, bomb: &mut Entity) {
         if bomb.object == "oFireFrogBomb" {
             super::align_held(game, bomb);
         } else {
-            let ducking =
-                game.player.state == PlayerState::Ducking && game.player.vel.x.abs() < 2.0;
+            let ducking = crate::player::source_ducking(game) && game.player.vel.x.abs() < 2.0;
             bomb.pos = Vec2::new(
                 game.player.pos.x + 4.0 * f64::from(game.player.facing),
                 game.player.pos.y + if ducking { 4.0 } else { 2.0 },
@@ -1688,13 +1687,13 @@ fn tick_rope_burn(game: &mut Game, rope: &mut Entity) {
         // oRope Step releases a climber touching the segment being removed.
         // Waiting for a later ladder query leaves the player climbing a rope
         // that has already disappeared during this authoritative frame.
-        if game.player.state == PlayerState::Climbing
+        if crate::player::source_climbing(game)
             && game
                 .player
                 .sprite_bounds()
                 .contains(Vec2::new(rope.pos.x + 12.0, rope.pos.y + 4.0))
         {
-            game.player.state = PlayerState::Falling;
+            crate::player::assign_platform(game, PlayerState::Falling);
         }
         rope.alive = false;
     }

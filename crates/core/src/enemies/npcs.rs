@@ -1471,16 +1471,17 @@ fn keeper_player_collision(game: &mut Game, e: &mut Entity) {
     if matches!(e.state, 0 | 5 | 98 | 99)
         || e.health < 1
         || !super::player_alive(game)
-        || game.player.stun > 0
-        || game.player.state == PlayerState::Stunned
+        || if game.generation_revision == GenerationRevision::SourceClassicV2 {
+            game.player.is_stunned()
+        } else {
+            game.player.stun > 0 || game.player.state == PlayerState::Stunned
+        }
         || (game.player.pos.x - (e.pos.x + 8.0)).abs() > 8.0
     {
         return;
     }
-    if matches!(
-        game.player.state,
-        PlayerState::Jumping | PlayerState::Falling
-    ) && game.player.pos.y < e.pos.y + 5.0
+    if crate::player::source_airborne(game)
+        && game.player.pos.y < e.pos.y + 5.0
         && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
     {
         if e.state < 98 {
@@ -1544,7 +1545,7 @@ fn keeper_player_collision(game: &mut Game, e: &mut Entity) {
         game.player.pos = Vec2::new(e.pos.x + if e.facing > 0 { 0.0 } else { 16.0 }, e.pos.y);
         game.player.previous_pos = game.player.pos;
         game.player.vel = Vec2::new(f64::from(e.facing) * 6.0, -6.0);
-        game.player.state = PlayerState::Stunned;
+        crate::player::enter_stunned(game);
         game.player.data.insert("bounced".into(), 0.0);
         game.player.data.insert("wall_hurt".into(), 1.0);
         super::drop_from_throw(game);

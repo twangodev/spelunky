@@ -1129,7 +1129,7 @@ fn throw_item(game: &mut Game, id: u64, input: &InputFrame) {
     let facing = f64::from(game.player.facing);
     let pos = game.player.pos;
     let velocity = game.player.vel;
-    let grounded = crate::player::source_grounded(&game.player);
+    let grounded = crate::player::source_platform_grounded(game);
     let mitt = game.player.has("Mitt");
     let ducking = player_is_ducking(&game.player);
     let throwing_bomb = game.world.entity(id).is_some_and(|e| e.object == "oBomb");
@@ -1213,7 +1213,7 @@ fn throw_item(game: &mut Game, id: u64, input: &InputFrame) {
 pub(super) fn align_held(game: &Game, entity: &mut Entity) {
     let pos = game.player.pos;
     let facing = game.player.facing;
-    let ducking = game.player.state == PlayerState::Ducking && game.player.vel.x.abs() < 2.0;
+    let ducking = crate::player::source_ducking(game) && game.player.vel.x.abs() < 2.0;
     entity.held = true;
     // These replacement held branches change position/depth only. Dice also
     // uses retained velocity in its independent rolling/RNG tail.

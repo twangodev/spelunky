@@ -172,7 +172,7 @@ fn character_collision(game: &mut Game, e: &mut Entity) {
         }
         game.player.invincible = 30;
         game.player.data.insert("blink".into(), 30.0);
-        game.player.state = crate::PlayerState::Stunned;
+        crate::player::enter_stunned(game);
         game.player.stun = 20;
         game.player.data.insert("burning".into(), 100.0);
         game.player.vel = Vec2::new(
@@ -199,7 +199,7 @@ fn character_collision(game: &mut Game, e: &mut Entity) {
         }
         hurt_player(game, 2, Some(EnemyDeath::TombLord));
         game.player.vel = Vec2::new(e.vel.x, -4.0);
-        game.player.state = crate::PlayerState::Stunned;
+        crate::player::enter_stunned(game);
         game.player.stun = 20;
         crate::world_events::spawn_detritus(game, "oBlood", game.player.pos);
         game.sound("sndHurt", game.player.pos);
@@ -220,10 +220,7 @@ fn character_collision(game: &mut Game, e: &mut Entity) {
     }
     let stomp = game.player.state != crate::PlayerState::Dead
         && (!hawk || !game.player.is_stunned())
-        && matches!(
-            game.player.state,
-            crate::PlayerState::Jumping | crate::PlayerState::Falling
-        )
+        && crate::player::source_airborne(game)
         && game.player.pos.y < e.pos.y + top
         && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0;
     if stomp {
@@ -272,7 +269,7 @@ fn character_collision(game: &mut Game, e: &mut Entity) {
             game.player.pos = Vec2::new(e.pos.x + if e.facing > 0 { 0.0 } else { 16.0 }, e.pos.y);
             game.player.previous_pos = game.player.pos;
             game.player.vel = Vec2::new(6.0 * e.facing as f64, -6.0);
-            game.player.state = crate::PlayerState::Stunned;
+            crate::player::enter_stunned(game);
             game.player.data.insert("bounced".into(), 0.0);
             super::drop_from_throw(game);
             game.player.data.insert("wall_hurt".into(), 1.0);

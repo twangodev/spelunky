@@ -132,7 +132,10 @@ fn configured_terminal_yeti_throw_keeps_zero_timer_stun_after_platform_state_cha
                 draw.pos.x + 6.0,
                 ((draw.pos.y + 16.0) / 8.0).round_ties_even() * 8.0,
             );
-            assert_eq!(game.player.state, PlayerState::Hanging);
+            assert!(
+                source_hanging(&game),
+                "Source Animation End assigns HANGING independently of stunned"
+            );
             assert_eq!(game.player.pos, expected_pos);
             assert_eq!(game.player.previous_pos, expected_pos);
             assert_eq!(game.player.facing, -1);

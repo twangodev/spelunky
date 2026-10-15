@@ -66,7 +66,7 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
         e.pos = Vec2::new(
             game.player.pos.x + if game.player.facing < 0 { -12.0 } else { -4.0 },
             game.player.pos.y
-                - if game.player.state == PlayerState::Ducking && game.player.vel.x.abs() < 2.0 {
+                - if crate::player::source_ducking(game) && game.player.vel.x.abs() < 2.0 {
                     10.0
                 } else {
                     12.0

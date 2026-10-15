@@ -342,14 +342,19 @@ pub(super) fn collision(game: &mut Game, this: Instance, other: Instance) {
             let sprung = match other {
                 Instance::Player => {
                     if (game.player.pos.x - entity.pos.x - 8.0).abs() < 6.0
-                        && matches!(
-                            game.player.state,
-                            crate::PlayerState::Standing
-                                | crate::PlayerState::Running
-                                | crate::PlayerState::Ducking
-                                | crate::PlayerState::LookingUp
-                                | crate::PlayerState::Stunned
-                        )
+                        && if game.generation_revision == crate::GenerationRevision::SourceClassicV2
+                        {
+                            crate::player::source_platform_grounded(game)
+                        } else {
+                            matches!(
+                                game.player.state,
+                                crate::PlayerState::Standing
+                                    | crate::PlayerState::Running
+                                    | crate::PlayerState::Ducking
+                                    | crate::PlayerState::LookingUp
+                                    | crate::PlayerState::Stunned
+                            )
+                        }
                         && !matches!(game.player.sprite.as_str(), "sPExit" | "sDamselExit")
                     {
                         game.player.pos.y -= 16.0;

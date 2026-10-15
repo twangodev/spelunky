@@ -216,7 +216,7 @@ pub fn use_weapon(game: &mut Game, held_id: u64, input: &InputFrame) -> bool {
         }
         "oMachete" | "oMattock" => {
             let mattock = object == "oMattock";
-            if mattock && !crate::player::source_grounded(&game.player) {
+            if mattock && !crate::player::source_platform_grounded(game) {
                 return true;
             }
             // characterStepEvent restores speed 1 every tick. Mattock's 0.2

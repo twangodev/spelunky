@@ -920,7 +920,7 @@ pub fn game_scene_in_view(
         let [x, y] = screen(player.previous_pos, player.pos, camera, alpha, pixel_snap);
         let mut layer = Vec::with_capacity(3);
         let jetpack = player.has("Jetpack") || player.has("jetpack");
-        let climbing = player.state == PlayerState::Climbing
+        let climbing = spelunky_core::player::source_climbing(game)
             || matches!(
                 player.sprite.as_str(),
                 "sPExit" | "sDamselExit" | "sTunnelExit"

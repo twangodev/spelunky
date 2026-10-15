@@ -330,16 +330,7 @@ fn revive(game: &mut Game) {
     game.player.data.remove("hidden");
     // Revival resets death, not the separate stun flag or its countdown.
     // A fatal explosion therefore retains its source 100-tick stun.
-    if game.player.state == PlayerState::Dead {
-        // The Rust health controller can select its corpse enum earlier in the
-        // fatal frame, before Classic's separate dead flag is latched. An Ankh
-        // cancels that pending death while retaining any independent stun.
-        game.player.state = if game.player.stun > 0 {
-            PlayerState::Stunned
-        } else {
-            PlayerState::Falling
-        };
-    }
+    crate::player::revive(game);
     // oPlayer1's Ankh branch resets the accumulated fall before resuming.
     game.player.data.insert("fall_timer".into(), 0.);
     game.player.data.insert("fall_ticks".into(), 0.);

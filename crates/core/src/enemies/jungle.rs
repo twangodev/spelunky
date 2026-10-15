@@ -508,7 +508,7 @@ fn monkey_steal(game: &mut Game, e: &Entity) {
     if game.rng.chance(1, 4) {
         game.player.vel = Vec2::new(3.0 * game.player.facing as f64, -3.0);
         game.player.stun = 40;
-        game.player.state = PlayerState::Stunned;
+        crate::player::enter_stunned(game);
         crate::items::drop_held_with_velocity(game, Vec2::default());
         game.sound("sndHit", e.pos);
         return;
@@ -1127,11 +1127,12 @@ fn mantrap_collision(game: &mut Game, e: &mut Entity, other: crate::dispatcher::
         }
         let stomp = (game.player.has("SpikeShoes") || e.state == 97)
             && super::player_alive(game)
-            && game.player.stun == 0
-            && matches!(
-                game.player.state,
-                PlayerState::Jumping | PlayerState::Falling
-            )
+            && if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+                !game.player.is_stunned()
+            } else {
+                game.player.stun == 0
+            }
+            && crate::player::source_airborne(game)
             && game.player.pos.y < e.pos.y + 5.0
             && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0;
         if stomp {
@@ -1267,10 +1268,7 @@ fn monkey_collision(game: &mut Game, e: &mut Entity, other: crate::dispatcher::I
             return true;
         }
         if super::player_alive(game)
-            && matches!(
-                game.player.state,
-                PlayerState::Jumping | PlayerState::Falling
-            )
+            && crate::player::source_airborne(game)
             && game.player.pos.y < e.pos.y + 2.0
             && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
         {

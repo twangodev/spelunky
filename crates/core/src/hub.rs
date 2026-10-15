@@ -833,7 +833,7 @@ fn scores_step(game: &mut Game) {
 /// release the rope. The dummy then ascends and fades into the exit credits.
 pub(crate) fn begin_title_exit(game: &mut Game) -> bool {
     if !game.flags.contains("hub_title")
-        || game.player.state != PlayerState::Climbing
+        || !crate::player::source_climbing(game)
         || game.player.pos.y >= 32.
         || game.state != RunState::Playing
     {
@@ -927,7 +927,7 @@ pub fn complete_portal(game: &mut Game, portal: HubPortal) {
         // Source character switches mutate inventory, not image_index. Its
         // automatic animation pass has already wrapped the Exit index.
         game.player.animation = image_index;
-        game.player.state = PlayerState::Standing;
+        crate::player::assign_platform(game, PlayerState::Standing);
         game.player.vel.x = 0.;
         game.player.invincible = 0;
         game.player.data.insert("active".into(), 1.);
@@ -1304,10 +1304,7 @@ pub(crate) fn bat_target_collision(game: &mut Game, id: u64, other: crate::dispa
                 return;
             }
             let stomp = !crate::items::player_dead(game)
-                && matches!(
-                    game.player.state,
-                    PlayerState::Jumping | PlayerState::Falling
-                )
+                && crate::player::source_airborne(game)
                 && game.player.pos.y < target.pos.y + 8.0
                 && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0;
             if stomp {
@@ -1457,10 +1454,7 @@ fn moon(game: &mut Game) {
         let stomp = touching
             && game.player.state != PlayerState::Dead
             && game.state != RunState::Dead
-            && matches!(
-                game.player.state,
-                PlayerState::Jumping | PlayerState::Falling
-            )
+            && crate::player::source_airborne(game)
             && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
             && game.player.pos.y < target.pos.y + 8.0;
         if let Some(arrow) = arrow {
@@ -1604,7 +1598,7 @@ fn basketball(game: &mut Game) {
         let inside = rims.iter().any(|r| r.contains(ball.pos));
         if inside
             && ball.value("goingIn") == 0.0
-            && (ball.vel.y > 0.0 || ball.held && game.player.state == PlayerState::Falling)
+            && (ball.vel.y > 0.0 || ball.held && crate::player::source_falling(game))
         {
             let points = if ball.held {
                 1.0

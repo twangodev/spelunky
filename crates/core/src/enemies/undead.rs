@@ -754,10 +754,7 @@ fn vampire_character_collision(game: &mut Game, e: &mut Entity) {
     }
     let jumped_on = game.player.state != PlayerState::Dead
         && game.state != crate::RunState::Dead
-        && matches!(
-            game.player.state,
-            PlayerState::Jumping | PlayerState::Falling
-        )
+        && crate::player::source_airborne(game)
         && game.player.pos.y < e.pos.y + 5.0
         && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0;
     if jumped_on {

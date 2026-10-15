@@ -969,10 +969,7 @@ pub(super) fn can_stomp(game: &Game, e: &Entity) -> bool {
     let (x, max_x, y) = contact_gate(e);
     let spike = game.player.has("SpikeShoes");
     player_alive(game)
-        && matches!(
-            game.player.state,
-            PlayerState::Jumping | PlayerState::Falling
-        )
+        && crate::player::source_airborne(game)
         && game.player.data.get("swimming").copied().unwrap_or(0.0) == 0.0
         && (game.player.pos.x - (e.pos.x + x)).abs() <= max_x
         && game.player.pos.y < e.pos.y + y
@@ -982,7 +979,11 @@ pub(super) fn can_stomp(game: &Game, e: &Entity) -> bool {
         && !(matches!(
             e.object.as_str(),
             "oYeti" | "oHawkman" | "oShopkeeper" | "oShopkeeper2" | "oManTrap"
-        ) && game.player.stun > 0)
+        ) && if game.generation_revision == GenerationRevision::SourceClassicV2 {
+            game.player.is_stunned()
+        } else {
+            game.player.stun > 0
+        })
         && (e.object != "oManTrap" || spike || e.state == 97)
 }
 

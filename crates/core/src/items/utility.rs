@@ -348,7 +348,7 @@ fn basketball_step(game: &mut Game, ball: &mut Entity) {
     }
     if source_point_bbox(game, ball.pos, "oRim") {
         if ball.value("goingIn") == 0.0
-            && (ball.vel.y > 0.0 || ball.held && game.player.state == PlayerState::Falling)
+            && (ball.vel.y > 0.0 || ball.held && crate::player::source_falling(game))
         {
             // The represented stock Moon controller owns virtual alarm/data
             // slots. Configured scoring scenes must contain that controller.

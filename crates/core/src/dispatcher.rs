@@ -885,7 +885,7 @@ fn player_step(game: &mut Game, input: &InputFrame) {
         if first {
             game.player.health = 0;
         }
-        game.player.state = crate::PlayerState::Dead;
+        crate::player::enter_dead(game);
         game.state = crate::RunState::Dead;
         if first {
             game.data.insert("death_ticks".into(), 0.0);

@@ -5,6 +5,12 @@
 //! ordinary gravity is 1 (the separate stunned/dead controller starts at 0.6),
 //! and fractional movement is scheduled against the global tick, not accumulated.
 use crate::model::*;
+mod platform_state;
+pub use platform_state::source_climbing;
+pub(crate) use platform_state::{
+    assign_platform, enter_dead, enter_stunned, revive, source_airborne, source_ducking,
+    source_falling, source_grounded as source_platform_grounded, source_hanging,
+};
 
 const JUMP_TICKS: u32 = 10;
 const ASSIST_TICKS: u32 = 3;
@@ -441,6 +447,7 @@ fn swimming_effects(game: &mut Game) {
 /// by a stun, death, ledge transition, or exit animation. Its fall injury and
 /// synchronous Create events precede the swimming/bubble branch.
 fn active_prelude(game: &mut Game) {
+    let canonical = platform_state::canonical(game);
     let parachute_exists = game
         .world
         .entities
@@ -459,9 +466,7 @@ fn active_prelude(game: &mut Game) {
         // Source clears its independent stunned flag only on the stationary
         // stun sprite, including a zero-timer throw completed during Animation End.
         p.data.remove("source_stunned");
-        if p.state == PlayerState::Stunned {
-            p.state = PlayerState::Standing;
-        }
+        platform_state::recovered(p, canonical);
     }
     let mut fall = value(p, "fall_timer", 0.0);
     // This is a derived controller cache, not the source existence predicate.
@@ -473,8 +478,15 @@ fn active_prelude(game: &mut Game) {
     let mut remove_parachute = false;
     let mut injury = 0;
     let hidden_state = matches!(p.state, PlayerState::Stunned | PlayerState::Dead);
-    let climbing = p.state == PlayerState::Climbing
-        || (hidden_state && value(p, "source_platform_climbing", 0.0) != 0.0);
+    let climbing = if canonical {
+        match platform_state::read(p, true) {
+            Some(state) => state == platform_state::State::Climbing,
+            None => hidden_state && value(p, "source_platform_climbing", 0.0) != 0.0,
+        }
+    } else {
+        p.state == PlayerState::Climbing
+            || (hidden_state && value(p, "source_platform_climbing", 0.0) != 0.0)
+    };
     if p.vel.y > 0.0 && !climbing {
         fall += 1.0;
         if fall > 16.0 {
@@ -488,9 +500,7 @@ fn active_prelude(game: &mut Game) {
         {
             deploy_parachute = true;
         }
-    } else if (grounded_state(p.state)
-        || (matches!(p.state, PlayerState::Stunned | PlayerState::Dead)
-            && value(p, "source_platform_grounded", 0.0) != 0.0))
+    } else if platform_state::prelude_grounded(p, canonical)
         && fall > 16.0
         && !collision_rect(
             &game.world,
@@ -1012,16 +1022,14 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     crate::traps::player_lava(game);
     // Source refuels before the active/controller guard, and only an owned
     // Jetpack. A pickup later in this Step cannot retroactively refill it.
+    let grounded = platform_state::prelude_grounded(&game.player, platform_state::canonical(game));
     let p = &mut game.player;
-    let source_grounded = grounded_state(p.state)
-        || (matches!(p.state, PlayerState::Stunned | PlayerState::Dead)
-            && value(p, "source_platform_grounded", 0.0) != 0.0);
-    if source_grounded && has(p, &["Jetpack", "jetpack"]) {
+    if grounded && has(p, &["Jetpack", "jetpack"]) {
         set(p, "jetpack_fuel", 50.0);
     }
     pit_prelude(game);
     if game.state == RunState::Dead {
-        game.player.state = PlayerState::Dead;
+        enter_dead(game);
     }
     let damsel = game.flags.contains("character_damsel");
     let tunnelman = game.flags.contains("character_tunnelman");
@@ -1066,16 +1074,27 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         // skipped active controller forces STANDING only after the fall
         // prelude, so retain the preceding tick's trait for first-hit onset.
         if active {
-            let standing = value(p, "duck_to_hang", 0.0) == 0.0;
-            set(p, "source_platform_grounded", f64::from(standing));
-            set(p, "source_platform_climbing", 0.0);
+            if source_ladder_point {
+                let state = platform_state::read(p, true);
+                if !matches!(
+                    state,
+                    Some(platform_state::State::Ducking | platform_state::State::DuckToHang)
+                ) {
+                    platform_state::assign(p, platform_state::State::Standing, true);
+                }
+            } else {
+                let standing = value(p, "duck_to_hang", 0.0) == 0.0;
+                set(p, "source_platform_grounded", f64::from(standing));
+                set(p, "source_platform_climbing", 0.0);
+            }
         }
         crate::items::release_held_before_stunned_motion(game);
-        let retain_ducking = source_ladder_point && game.player.state == PlayerState::Ducking;
+        let retain_ducking = source_ladder_point && source_ducking(game);
         stunned_tick(
             &mut game.world,
             &mut game.player,
             engine_time,
+            source_ladder_point,
             retain_ducking,
             &solid_order,
             &mut game.events,
@@ -1820,8 +1839,10 @@ fn look_step(game: &mut Game) {
     if !game.is_level() {
         return;
     }
+    let grounded = source_platform_grounded(game);
+    let hanging = source_hanging(game);
     let p = &mut game.player;
-    let eligible = (source_grounded(p) || p.state == PlayerState::Hanging)
+    let eligible = (grounded || hanging)
         && value(p, "previous_left", 0.0) == 0.0
         && value(p, "previous_right", 0.0) == 0.0;
     let direction = if eligible && value(p, "source_k_down", 0.0) != 0.0 {
@@ -1885,7 +1906,11 @@ fn duck_to_hang_end(game: &mut Game) {
     let y = gm_round((game.player.pos.y + 16.0) / 8.0) * 8.0;
     let point = Vec2::new(game.player.pos.x + f64::from(game.player.facing) * 8.0, y);
     let ladder = duck_to_hang_ladder(game, point);
+    let canonical = platform_state::canonical(game);
     let p = &mut game.player;
+    if canonical {
+        set(p, "duck_to_hang", 0.0);
+    }
     // Animation End writes the platform state without clearing the independent
     // stunned flag. Preserve a zero-timer automatic throw before replacing its enum.
     let stunned = p.is_stunned();
@@ -1896,14 +1921,18 @@ fn duck_to_hang_end(game: &mut Game) {
     p.pos.y = y;
     if let Some(ladder) = ladder {
         p.pos.x = ladder.x;
-        p.state = PlayerState::Climbing;
+        platform_state::assign(p, platform_state::State::Climbing, canonical);
     } else {
         p.pos.x += if p.facing < 0 { -5.0 } else { 6.0 };
         p.facing = -p.facing;
-        p.state = PlayerState::Hanging;
+        platform_state::assign(p, platform_state::State::Hanging, canonical);
     }
     p.previous_pos = p.pos;
-    remember_platform_traits(p);
+    if canonical && matches!(p.state, PlayerState::Stunned | PlayerState::Dead) {
+        platform_state::capture(p, true);
+    } else {
+        remember_platform_traits(p);
+    }
     // The source callback changes movement state, leaving sprite/index/speed
     // untouched until characterSprite runs during the following Step.
     set(p, "duck_to_hang", 0.0);
@@ -1916,6 +1945,7 @@ fn stunned_tick(
     w: &mut World,
     p: &mut Player,
     time: u64,
+    canonical: bool,
     retain_ducking: bool,
     solid_order: &[crate::dispatcher::Instance],
     events: &mut Vec<GameEvent>,
@@ -1954,6 +1984,9 @@ fn stunned_tick(
     let down = value(p, "source_k_down", 0.0) != 0.0;
     move_player(w, p, time, down, solid_order, events);
     p.grounded = below(w, p);
+    // Timer-only Arrow/Bullet/Rock/explosion hits do not enter the producer
+    // collapse helper. Capture every physical-tail collapse as well.
+    platform_state::capture(p, canonical);
     p.state = if dead {
         PlayerState::Dead
     } else if p.is_stunned() {
@@ -2160,10 +2193,15 @@ pub(crate) fn draw_event(game: &mut Game) {
 /// oPlayer1's separate End Step event runs after automatic Collision. It
 /// restores held-item drawing depth and repairs an interrupted ledge animation.
 pub(crate) fn end_step(game: &mut Game) {
+    let canonical = platform_state::canonical(game);
     let p = &game.player;
-    let climbing = p.state == PlayerState::Climbing
-        || (matches!(p.state, PlayerState::Stunned | PlayerState::Dead)
-            && value(p, "source_platform_climbing", 0.0) != 0.0);
+    let climbing = if canonical {
+        source_climbing(game)
+    } else {
+        p.state == PlayerState::Climbing
+            || (matches!(p.state, PlayerState::Stunned | PlayerState::Dead)
+                && value(p, "source_platform_climbing", 0.0) != 0.0)
+    };
     let depth = if climbing && has(p, &["Cape", "cape", "Jetpack", "jetpack", "Jet Pack"]) {
         51.0
     } else {
@@ -2183,7 +2221,9 @@ pub(crate) fn end_step(game: &mut Game) {
         // Classic's state=STANDING leaves its independent dead/stunned flags
         // intact. Keep the port's enum representation of those flags as well,
         // including enemy throws whose stun timer is zero.
-        if !matches!(p.state, PlayerState::Stunned | PlayerState::Dead) {
+        if canonical {
+            platform_state::assign(p, platform_state::State::Standing, true);
+        } else if !matches!(p.state, PlayerState::Stunned | PlayerState::Dead) {
             p.state = PlayerState::Standing;
         }
         set(p, "source_platform_grounded", 1.0);

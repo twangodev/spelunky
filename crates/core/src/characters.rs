@@ -118,8 +118,8 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     }
     if !active {
         if !input.attack_pressed
-            || !crate::player::source_grounded(&game.player)
-            || game.player.state == PlayerState::Ducking
+            || !crate::player::source_platform_grounded(game)
+            || crate::player::source_ducking(game)
             || game.player.attack_timer > 0
             || game.player.data.get("duck_to_hang").copied().unwrap_or(0.0) > 0.0
         {
