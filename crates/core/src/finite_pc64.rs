@@ -749,3 +749,6 @@ pub(crate) fn nearest_mul_pc53_rn(a: F128, b: F128) -> Result<F128, ArithmeticEr
     nearest_domain(value)?;
     Ok(value)
 }
+
+// Additive direct PC53/PC64 operation-rounding metadata; historical APIs unchanged.
+include!("finite_pc64_arithmetic_info.rs");
