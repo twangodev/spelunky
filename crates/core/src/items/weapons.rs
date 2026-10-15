@@ -598,17 +598,30 @@ fn tick_item_body(game: &Game, e: &mut Entity) {
 
 /// oArrow/oFishBone Step's literal image_angle quadrants. GML angles
 /// rotate counterclockwise; renderer/collision rotations use screen radians.
-pub(super) fn item_rotation(velocity: Vec2, stuck: bool, previous: f64) -> f64 {
+pub(super) fn item_rotation(
+    velocity: Vec2,
+    stuck: bool,
+    previous: f64,
+    revision: GenerationRevision,
+) -> f64 {
     let Vec2 { x, y } = velocity;
-    let angle = if x > 0.0 && y < 0.0 {
+    // Native comparisons subtract stored +0 then compare the QWORD result
+    // to epsilon80. Subtract-zero is exact at both PC53 and PC64; this is
+    // the greatest binary64 below that epsilon, not rounded f64(1e-13).
+    let zero_band = if revision == GenerationRevision::SourceClassicV2 {
+        f64::from_bits(0x3d3c25c268497681)
+    } else {
+        0.0
+    };
+    let angle = if x > zero_band && y < -zero_band {
         (-y / x).atan()
-    } else if x < 0.0 && y < 0.0 {
+    } else if x < -zero_band && y < -zero_band {
         std::f64::consts::PI - (-y / -x).atan()
-    } else if x > 0.0 && y > 0.0 {
+    } else if x > zero_band && y > zero_band {
         (y / x).atan()
-    } else if x < 0.0 && y > 0.0 {
+    } else if x < -zero_band && y > zero_band {
         std::f64::consts::PI + (y / -x).atan()
-    } else if x < 0.0 {
+    } else if x < -zero_band {
         std::f64::consts::PI
     } else if !stuck {
         0.0
@@ -1324,7 +1337,17 @@ pub fn step_instance(game: &mut Game, id: u64) {
             // Synchronous inherited Destroy retires the receiver, but does not
             // abort this already-entered child Step or its Moon target tail.
             inherited_item_step(game, &mut e);
-            let angle = item_rotation(e.vel, e.value("stuck") != 0.0, e.value("rotation"));
+            let stuck_value = e.value("stuck");
+            // oArrow's `not stuck` tests finite numbers against exact 0.5.
+            // Historical/nonfinite operands retain the existing adapter policy.
+            let stuck = if game.generation_revision == GenerationRevision::SourceClassicV2
+                && stuck_value.is_finite()
+            {
+                stuck_value >= 0.5
+            } else {
+                stuck_value != 0.0
+            };
+            let angle = item_rotation(e.vel, stuck, e.value("rotation"), game.generation_revision);
             e.data.insert("rotation".into(), angle);
             if game.world.name == "rMoon" {
                 crate::dispatcher::register_instances(game);
@@ -2948,9 +2971,18 @@ mod tests {
             (Vec2::new(-1.0, 1.0), -225.0),
             (Vec2::new(0.0, 1.0), 0.0),
         ] {
-            assert!((item_rotation(velocity, false, 1.0).to_degrees() - degrees).abs() < 1e-10);
+            assert!(
+                (item_rotation(velocity, false, 1.0, GenerationRevision::HistoricalV1)
+                    .to_degrees()
+                    - degrees)
+                    .abs()
+                    < 1e-10
+            );
         }
-        assert_eq!(item_rotation(Vec2::default(), true, 0.7), 0.7);
+        assert_eq!(
+            item_rotation(Vec2::default(), true, 0.7, GenerationRevision::HistoricalV1),
+            0.7
+        );
     }
 
     fn incoming_rock(mitt: bool) -> (Game, u64) {
@@ -3976,3 +4008,7 @@ mod source_bow_charge_gate_tests {
 #[cfg(test)]
 #[path = "arrow_lava_own_continuation_tests.rs"]
 mod arrow_lava_own_continuation_source_tests;
+
+#[cfg(test)]
+#[path = "item_rotation_zero_tests.rs"]
+mod item_rotation_zero_source_tests;
