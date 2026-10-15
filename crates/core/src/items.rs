@@ -796,7 +796,13 @@ fn use_held_item(game: &mut Game, id: u64, input: &InputFrame) {
     let object = item.object.clone();
     // scrUseItem's sprite-specific reserved objects precede its type branches.
     if item.sprite == "sBomb" {
-        explosives::arm_bomb(game.world.entity_mut(id).unwrap());
+        let source = game.generation_revision == crate::GenerationRevision::SourceClassicV2;
+        let bomb = game.world.entity_mut(id).unwrap();
+        if source {
+            explosives::arm_source_carried_bomb(bomb);
+        } else {
+            explosives::arm_bomb(bomb);
+        }
         return;
     }
     if item.sprite == "sRopeEnd" {

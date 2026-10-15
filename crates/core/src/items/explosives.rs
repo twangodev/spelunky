@@ -87,6 +87,17 @@ pub fn arm_bomb(bomb: &mut Entity) {
     }
 }
 
+/// scrUseItem25-32 enters by sBomb, independently of the armed property.
+/// Late Player hurt can set armed=true without assigning a fuse or sprite.
+/// Keep the current image index; source does not restart it on first use.
+pub(super) fn arm_source_carried_bomb(bomb: &mut Entity) {
+    init_entity(bomb);
+    bomb.sprite = "sBombArmed".into();
+    bomb.data.insert("armed".into(), 1.0);
+    bomb.alarms[0] = 80;
+    bomb.set_image_speed(0.2);
+}
+
 /// Literal scrHoldItem whitelist, shared by inventory and room-entry carry.
 const HOLD_TYPES: [(&str, &str); 16] = [
     ("Rock", "oRock"),
