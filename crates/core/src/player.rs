@@ -1071,10 +1071,12 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             set(p, "source_platform_climbing", 0.0);
         }
         crate::items::release_held_before_stunned_motion(game);
+        let retain_ducking = source_ladder_point && game.player.state == PlayerState::Ducking;
         stunned_tick(
             &mut game.world,
             &mut game.player,
             engine_time,
+            retain_ducking,
             &solid_order,
             &mut game.events,
         );
@@ -1914,6 +1916,7 @@ fn stunned_tick(
     w: &mut World,
     p: &mut Player,
     time: u64,
+    retain_ducking: bool,
     solid_order: &[crate::dispatcher::Instance],
     events: &mut Vec<GameEvent>,
 ) {
@@ -1954,7 +1957,13 @@ fn stunned_tick(
     p.state = if dead {
         PlayerState::Dead
     } else if p.is_stunned() {
-        PlayerState::Stunned
+        // oPlayer1 Step338 preserves DUCKING while the independent stunned
+        // flag owns motion. Its eventual Down release must still clear xAcc.
+        if retain_ducking {
+            PlayerState::Ducking
+        } else {
+            PlayerState::Stunned
+        }
     } else {
         PlayerState::Falling
     };
