@@ -826,14 +826,14 @@ fn mattock_break(game: &mut Game, origin: Vec2) {
     }
 }
 
-fn mattock_dig(game: &mut Game, e: &Entity) {
-    if matches!(game.world.name.as_str(), "rTitle" | "rHighscores") {
-        return;
-    }
-    enum DigTarget {
-        Tile(i32, i32),
-        Dynamic(u64),
-    }
+enum DigTarget {
+    Tile(i32, i32),
+    Dynamic(u64),
+}
+
+// Preserve historical selection and the existing fallback for mask domains
+// outside the admitted loaded, unrotated source-query kernel.
+fn legacy_mattock_target(game: &Game, e: &Entity) -> Option<DigTarget> {
     let mut target = None;
     for point_y in [e.pos.y, e.pos.y + 9.0] {
         let x = (e.pos.x / 16.0).floor() as i32;
@@ -853,6 +853,119 @@ fn mattock_dig(game: &mut Game, e: &Entity) {
             break;
         }
     }
+    target
+}
+
+// Some(None) is a source miss. None requests the legacy unsupported-domain
+// adapter; a failed point gate must never fall through to that adapter.
+// A true gate with no precise receiver also retains legacy behavior: the
+// native noone property/error path is outside this admitted source correction.
+fn source_mattock_target(game: &mut Game, e: &Entity) -> Option<Option<DigTarget>> {
+    use crate::dispatcher::Instance;
+    if !e.animation.is_finite()
+        || e.animation < 0.0
+        || !e.collision_mask().supports_source_query_pixels()
+    {
+        return None;
+    }
+    crate::dispatcher::register_instances(game);
+    let mut solids = Vec::new();
+    for instance in crate::dispatcher::descendant_instances(game, "oSolid") {
+        if !crate::dispatcher::is_active(game, instance) {
+            continue;
+        }
+        let mask = match instance {
+            Instance::Entity(id) => {
+                let Some(body) = game.world.entity(id) else {
+                    continue;
+                };
+                if id == e.id {
+                    continue;
+                }
+                if !body.animation.is_finite() || body.animation < 0.0 {
+                    return None;
+                }
+                body.collision_mask()
+            }
+            Instance::Terrain(index) => {
+                // Match World::tile_collision_mask's first live coordinate
+                // metadata provider before admitting its selected frame.
+                let x = (index % game.world.width) as i32;
+                let y = (index / game.world.width) as i32;
+                if game
+                    .world
+                    .entities
+                    .iter()
+                    .find(|metadata| {
+                        metadata.alive
+                            && metadata.object == "oTerrainMetadata"
+                            && (metadata.pos.x / 16.0).floor() as i32 == x
+                            && (metadata.pos.y / 16.0).floor() as i32 == y
+                            && metadata.text.contains_key("terrain_sprite")
+                    })
+                    .is_some_and(|metadata| {
+                        !metadata.animation.is_finite() || metadata.animation < 0.0
+                    })
+                {
+                    return None;
+                }
+                game.world.tile_collision_mask(x, y)
+            }
+            Instance::Player => continue,
+        };
+        if !mask.supports_source_query_pixels() {
+            return None;
+        }
+        solids.push((instance, mask));
+    }
+    let mut translated = e.clone();
+    // Native instance_place keeps the current mask/frame/transform and only
+    // translates the receiver. The first point is a boolean gate, not a target.
+    let point = if solids
+        .iter()
+        .any(|(_, mask)| mask.contains(e.pos, CollisionPrecision::BoundingBox))
+    {
+        e.pos
+    } else {
+        let fallback = Vec2::new(e.pos.x, e.pos.y + 9.0);
+        if !solids
+            .iter()
+            .any(|(_, mask)| mask.contains(fallback, CollisionPrecision::BoundingBox))
+        {
+            return Some(None);
+        }
+        fallback
+    };
+    translated.pos = point;
+    let mask = translated.collision_mask();
+    if !mask.supports_source_query_pixels() {
+        return None;
+    }
+    let target = solids.into_iter().find_map(|(instance, target)| {
+        if !mask.intersects_mask(&target) {
+            return None;
+        }
+        Some(match instance {
+            Instance::Entity(id) => DigTarget::Dynamic(id),
+            Instance::Terrain(index) => DigTarget::Tile(
+                (index % game.world.width) as i32,
+                (index / game.world.width) as i32,
+            ),
+            Instance::Player => unreachable!(),
+        })
+    });
+    target.map(Some)
+}
+
+fn mattock_dig(game: &mut Game, e: &Entity) {
+    if matches!(game.world.name.as_str(), "rTitle" | "rHighscores") {
+        return;
+    }
+    let target = if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+        source_mattock_target(game, e).unwrap_or_else(|| legacy_mattock_target(game, e))
+    } else {
+        legacy_mattock_target(game, e)
+    };
     if let Some(target) = target {
         match target {
             DigTarget::Tile(x, y) => {
