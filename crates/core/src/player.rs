@@ -1578,11 +1578,20 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
             -8.0
         },
     );
+    // characterStepEvent608 snapshots the origin point before attachment.
+    let col_point_ladder = if source_ladder_point {
+        ledge_point(w, p.pos, "oLadder") || ledge_point(w, p.pos, "oLadderTop")
+    } else {
+        ladder_at(w, p.pos).is_some()
+    };
+    let airborne_ladder_above = airborne(p.state)
+        && if source_ladder_point {
+            ledge_point(w, Vec2::new(p.pos.x, p.pos.y - 8.0), "oLadder")
+        } else {
+            ladder_segment_at(w, Vec2::new(p.pos.x, p.pos.y - 8.0)).is_some()
+        };
     if ladder_timer == 0.0
-        && ((input.up
-            && (ladder_at(w, p.pos).is_some()
-                || (airborne(p.state)
-                    && ladder_segment_at(w, Vec2::new(p.pos.x, p.pos.y - 8.0)).is_some())))
+        && ((input.up && (col_point_ladder || airborne_ladder_above))
             || (input.down
                 // characterStepEvent608/612 requires the CURRENT origin point
                 // on a Ladder or LadderTop, independently of the mask below.
@@ -1598,7 +1607,13 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         if let Some(ladder) = ladder_place(w, p, Vec2::new(p.pos.x, p.pos.y - 8.0), &ladder_order) {
             if (p.pos.x - ladder.x).abs() < 4.0 {
                 p.pos.x = ladder.x;
-                if ladder_at(w, p.pos).is_none() {
+                // The source repeats collision_point after snapping X.
+                let on_ladder = if source_ladder_point {
+                    ledge_point(w, p.pos, "oLadder") || ledge_point(w, p.pos, "oLadderTop")
+                } else {
+                    ladder_at(w, p.pos).is_some()
+                };
+                if !on_ladder {
                     p.pos.y = ladder.y + 14.0;
                 }
                 p.vel = Vec2::default();
