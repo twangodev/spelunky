@@ -1097,6 +1097,20 @@ fn pick_up(game: &mut Game) {
         game.player.pickup_item_type = explosives::source_type(entity);
         game.player.held = Some(id);
         explosives::pickup_pose(game);
+        // Player Step1326-1338 selects the carried pose at pickup. Damsel's
+        // later held Step only copies facing and must retain this sprite.
+        if game.generation_revision == GenerationRevision::SourceClassicV2
+            && game.player.pickup_item_type == "Damsel"
+        {
+            let sprite = if game.flags.contains("character_damsel") {
+                "sDieLBounce"
+            } else {
+                "sDamselHoldL"
+            };
+            if let Some(entity) = game.world.entity_mut(id).filter(|entity| entity.state != 4) {
+                entity.set_sprite(sprite);
+            }
+        }
         utility::on_pickup(game, id);
         crate::traps::altar::idol_pickup(game, id);
         // Source scrStealItem consumes equipment only after this single
