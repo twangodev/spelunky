@@ -1494,16 +1494,20 @@ fn magma_man(game: &mut Game, e: &mut Entity) {
     }
     e.data.insert("burning".into(), e.value("burning") - 1.0);
     let b = e.bounds();
-    let wall = super::solid_mask(
-        &game.world,
-        Rect::new(
-            if e.facing < 0 { b.x - 1.0 } else { b.x + b.w },
-            b.y,
-            1.0,
-            b.h,
-        ),
-        e.id,
-    );
+    let wall = if game.generation_revision == crate::GenerationRevision::HistoricalV1 {
+        super::solid_mask(
+            &game.world,
+            Rect::new(
+                if e.facing < 0 { b.x - 1.0 } else { b.x + b.w },
+                b.y,
+                1.0,
+                b.h,
+            ),
+            e.id,
+        )
+    } else {
+        false
+    };
     e.vel.y = 0.0;
     if e.state == 0 {
         if grounded && e.timer > 0 {
@@ -1525,6 +1529,26 @@ fn magma_man(game: &mut Game, e: &mut Entity) {
             }
         }
     } else if e.state == 1 {
+        let wall = if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+            let top = b.y.round_ties_even();
+            let bottom = (b.y + b.h - 1.0).round_ties_even();
+            let left_x = (b.x - 1.0).round_ties_even();
+            let right_x = (b.x + b.w).round_ties_even();
+            // GML evaluates both helpers, left before right, before moveTo.
+            let left = game.world.solid_line_except(
+                Vec2::new(left_x, top),
+                Vec2::new(left_x, bottom),
+                e.id,
+            );
+            let right = game.world.solid_line_except(
+                Vec2::new(right_x, top),
+                Vec2::new(right_x, bottom),
+                e.id,
+            );
+            left || right
+        } else {
+            wall
+        };
         if wall {
             e.facing = -e.facing;
         }
