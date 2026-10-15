@@ -412,3 +412,159 @@ fn dedicated_bomb_button_keeps_its_existing_newborn_arming_contract() {
         }
     }
 }
+
+/// Extends the same real-hurt/recollection route through the source alarms.
+/// The existing four tests above remain byte-for-byte unchanged.
+#[test]
+fn source_reignited_same_bomb_reaches_both_alarms_and_one_explosion() {
+    for rules in PRESETS {
+        for facing in [-1, 1] {
+            let mut game = room(rules, facing, false, true, true);
+            let bomb = stock_id(&game);
+            assert_eq!(game.world.entity(bomb).unwrap().value("armed"), 0.0);
+            pickup(&mut game, bomb, 4);
+            real_hurt(&mut game, bomb, facing);
+            recover_and_recollect(&mut game, bomb);
+            let resources = game.player.bombs;
+            game.step(&InputFrame {
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            assert_eq!(game.world.entity(bomb).unwrap().sprite, "sBombArmed");
+            assert_eq!(game.player.held, Some(bomb));
+            assert_eq!(game.world.entity(bomb).unwrap().alarms[0], 80);
+            assert_eq!(game.world.entity(bomb).unwrap().alarms[1], -1);
+            assert_eq!(game.world.entity(bomb).unwrap().image_speed(), 0.2);
+            assert_eq!(game.player.bombs, resources);
+            assert_eq!(game.player.health, 2);
+            assert_eq!(sounds(&game, "sndThrow"), 0);
+            let armed_tick = game.tick;
+            let mut explosion = None;
+            let mut explosion_events = 0;
+            let mut explosion_sounds = 0;
+            for elapsed in 1..=122 {
+                let origin = if elapsed <= 119 {
+                    let live = game
+                        .world
+                        .entity(bomb)
+                        .expect("CONTRACT same Bomb until Alarm1");
+                    assert!(live.engine_active, "FIXTURE fuse receiver stays active");
+                    Some(live.pos)
+                } else {
+                    None
+                };
+                // Release Attack; then grounded Down+Attack gently throws the
+                // same Bomb. Walk away using thirty ordinary Right frames.
+                let input = match elapsed {
+                    2 => InputFrame {
+                        down: true,
+                        attack: true,
+                        attack_pressed: true,
+                        ..Default::default()
+                    },
+                    3..=32 => InputFrame {
+                        right: true,
+                        ..Default::default()
+                    },
+                    _ => InputFrame::default(),
+                };
+                game.step(&input);
+                assert_eq!(game.tick, armed_tick + elapsed);
+                assert_eq!(
+                    game.player.health, 2,
+                    "FIXTURE safe fuse observation at {elapsed}"
+                );
+                assert_eq!(game.state, RunState::Playing);
+                assert_eq!(game.player.bombs, resources);
+                assert_eq!(sounds(&game, "sndHurt"), 0);
+                if elapsed >= 2 {
+                    assert!(
+                        game.player.held.is_none(),
+                        "CONTRACT thrown Bomb stays released"
+                    );
+                    assert!(game.player.pickup_item_type.is_empty());
+                }
+                if elapsed == 2 {
+                    assert!(!game.world.entity(bomb).unwrap().held);
+                    assert_eq!(sounds(&game, "sndThrow"), 1);
+                }
+                let births: Vec<_> = game
+                    .events
+                    .iter()
+                    .filter_map(|event| {
+                        if let GameEvent::Explosion { pos, .. } = event {
+                            Some(*pos)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                explosion_events += births.len();
+                explosion_sounds += sounds(&game, "sndExplosion");
+                if elapsed < 119 {
+                    assert!(births.is_empty(), "CONTRACT no premature Alarm1 blast");
+                    assert_eq!(sounds(&game, "sndExplosion"), 0);
+                    let live = game
+                        .world
+                        .entity(bomb)
+                        .expect("CONTRACT no premature Bomb retirement");
+                    assert_eq!(live.sprite, "sBombArmed");
+                    if elapsed < 80 {
+                        assert_eq!(live.alarms[0], 80 - elapsed as i32);
+                        assert_eq!(live.alarms[1], -1);
+                        assert_eq!(live.image_speed(), 0.2);
+                    } else {
+                        // Native index-outer alarms run Alarm1 after Alarm0's
+                        // synchronous write of 40, decrementing it that frame.
+                        assert_eq!(live.alarms[0], if elapsed == 80 { 0 } else { -1 });
+                        assert_eq!(live.alarms[1], 119 - elapsed as i32);
+                        assert_eq!(live.image_speed(), 1.0);
+                    }
+                    if elapsed >= 32 {
+                        assert!(
+                            (live.pos.x - game.player.pos.x).abs() > 48.0,
+                            "FIXTURE player clear of 48px Explosion canvas at {elapsed}"
+                        );
+                    }
+                    assert!(
+                        !game
+                            .world
+                            .entities
+                            .iter()
+                            .any(|item| item.alive && item.object == "oExplosion")
+                    );
+                } else if elapsed == 119 {
+                    assert_eq!(
+                        births,
+                        vec![origin.unwrap()],
+                        "CONTRACT Alarm1 births at Bomb origin"
+                    );
+                    assert_eq!(sounds(&game, "sndExplosion"), 1);
+                    assert!(
+                        game.world.entity(bomb).is_none(),
+                        "CONTRACT Alarm1 retires same Bomb"
+                    );
+                    let blasts: Vec<_> = game
+                        .world
+                        .entities
+                        .iter()
+                        .filter(|item| item.alive && item.object == "oExplosion")
+                        .collect();
+                    assert_eq!(blasts.len(), 1);
+                    assert_eq!(blasts[0].pos, origin.unwrap());
+                    assert_eq!(blasts[0].age, 0);
+                    assert_eq!(blasts[0].image_speed(), 0.8);
+                    explosion = Some(blasts[0].id);
+                } else {
+                    assert!(births.is_empty(), "CONTRACT one Alarm1 invocation");
+                    assert_eq!(sounds(&game, "sndExplosion"), 0);
+                    assert!(game.world.entity(bomb).is_none());
+                    assert!(game.world.entity(explosion.unwrap()).is_some());
+                }
+            }
+            assert_eq!(explosion_events, 1);
+            assert_eq!(explosion_sounds, 1);
+        }
+    }
+}
