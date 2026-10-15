@@ -6,6 +6,7 @@ use crate::{
     donation_ui::{self, TransitionDonation},
     editor_ui::{EditorCommand, EditorUi},
     input::{InputState, UiButton},
+    performance::{FrameSample, Profiler, Stamp},
     renderer::{DrawQuad, Renderer},
     scene::{self, rect, text},
     settings_ui::{SettingsCommand, SettingsUi},
@@ -186,6 +187,7 @@ struct App {
     store: Store,
     timing: HostTiming,
     scene_buffers: scene::SceneBuffers,
+    profiler: Profiler,
     game: Option<Game>,
     screen: Screen,
     settings_return: Screen,
@@ -299,6 +301,7 @@ impl App {
             store,
             timing: HostTiming::default(),
             scene_buffers: scene::SceneBuffers::default(),
+            profiler: Profiler::default(),
             game: Some(game),
             screen: Screen::Playing,
             settings_return: Screen::Title,
@@ -589,6 +592,12 @@ impl App {
         self.open_hub(spelunky_core::hub::HubKind::Scores);
     }
     fn key(&mut self, key: KeyCode, text_value: Option<&str>, shortcut_control: Option<bool>) {
+        if key == KeyCode::F7
+            && !(self.screen == Screen::Settings && self.settings_ui.awaiting_binding())
+        {
+            self.profiler.toggle();
+            return;
+        }
         if key == KeyCode::F4 && self.screen == Screen::Cheats {
             self.fullscreen();
             return;
@@ -2011,7 +2020,21 @@ impl App {
             }
         }
         offset_fixed_ui(&mut quads[ui_start..], viewport.ui_origin());
-
+        if self.profiler.enabled {
+            let x = (viewport.width - 298.0).max(0.0);
+            rect(quads, [x, 0.0, 298.0, 79.0], [0.0, 0.0, 0.0, 0.88]);
+            for (row, line) in self.profiler.overlay.lines().enumerate() {
+                text(
+                    quads,
+                    atlas,
+                    line,
+                    x + 3.0,
+                    3.0 + row as f32 * 9.0,
+                    0.72,
+                    WHITE,
+                );
+            }
+        }
     }
     fn viewport(&self) -> Viewport {
         self.renderer
@@ -3193,7 +3216,10 @@ impl ApplicationHandler<UserEvent> for App {
                     // is due. about_to_wait schedules the next browser RAF.
                     return;
                 }
+                let profile = self.profiler.enabled;
+                let timer = Stamp::start(profile);
                 self.update();
+                let update_ms = Stamp::elapsed_ms(&timer);
                 if self.exit_requested {
                     self.shutdown(event_loop);
                     return;
@@ -3208,8 +3234,11 @@ impl ApplicationHandler<UserEvent> for App {
                         self.game.as_ref(),
                     ),
                 );
+                let timer = Stamp::start(profile);
                 let mut buffers = std::mem::take(&mut self.scene_buffers);
                 self.draw(alpha, &mut buffers);
+                let scene_ms = Stamp::elapsed_ms(&timer);
+                let quad_count = buffers.quads.len();
                 #[cfg(target_arch = "wasm32")]
                 self.publish_test_snapshot(alpha);
                 if let Some(window) = &self.window {
@@ -3218,8 +3247,25 @@ impl ApplicationHandler<UserEvent> for App {
                 let result = self
                     .renderer
                     .as_mut()
-                    .map(|r| r.render(&buffers.quads, [0.005, 0.005, 0.005, 1.]));
+                    .map(|r| r.render(&buffers.quads, [0.005, 0.005, 0.005, 1.], profile));
                 self.scene_buffers = buffers;
+                let render_sample = result
+                    .as_ref()
+                    .and_then(|result| result.as_ref().ok())
+                    .copied()
+                    .unwrap_or_default();
+                if profile {
+                    self.profiler.record(
+                        frame_started,
+                        FrameSample {
+                            update_ms,
+                            scene_ms,
+                            quads: quad_count,
+                            render: render_sample,
+                            ..FrameSample::default()
+                        },
+                    );
+                }
                 match result {
                     Some(Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated)) => {
                         if let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) {

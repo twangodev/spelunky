@@ -3,7 +3,10 @@
 //! Logical positions stay fractional all the way to rasterization. The viewport
 //! uses a uniform scale and expands the visible world to fill the surface.
 
-use crate::viewport::Viewport;
+use crate::{
+    performance::{RenderSample, Stamp},
+    viewport::Viewport,
+};
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
@@ -310,11 +313,15 @@ impl Renderer {
         &mut self,
         quads: &[DrawQuad],
         clear: [f64; 4],
-    ) -> Result<(), wgpu::SurfaceError> {
+        profile: bool,
+    ) -> Result<RenderSample, wgpu::SurfaceError> {
         if self.suspended {
-            return Ok(());
+            return Ok(RenderSample::default());
         }
+        let timer = Stamp::start(profile);
         let frame = self.surface.get_current_texture()?;
+        let acquire_ms = Stamp::elapsed_ms(&timer);
+        let timer = Stamp::start(profile);
         self.vertices.clear();
         let view = self.viewport();
         for quad in quads {
@@ -328,6 +335,9 @@ impl Renderer {
             self.queue
                 .write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.vertices));
         }
+        let prepare_upload_ms = Stamp::elapsed_ms(&timer);
+        let timer = Stamp::start(profile);
+        let mut draw_calls = 0;
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.render_format),
             ..Default::default()
@@ -369,6 +379,7 @@ impl Renderer {
                 pass.set_bind_group(0, &self.atlas_bind_group, &[]);
                 pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
                 for (blend, range) in draw_batches(quads) {
+                    draw_calls += 1;
                     pass.set_pipeline(match blend {
                         QuadBlend::Alpha => &self.pipeline,
                         QuadBlend::Multiply => &self.multiply_pipeline,
@@ -379,7 +390,13 @@ impl Renderer {
         }
         self.queue.submit(Some(encoder.finish()));
         frame.present();
-        Ok(())
+        Ok(RenderSample {
+            acquire_ms,
+            prepare_upload_ms,
+            encode_present_ms: Stamp::elapsed_ms(&timer),
+            draw_calls,
+            upload_bytes: self.vertices.len() * std::mem::size_of::<Vertex>(),
+        })
     }
 }
 

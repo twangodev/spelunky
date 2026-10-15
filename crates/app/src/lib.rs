@@ -12,6 +12,7 @@ mod editor_io;
 mod editor_ui;
 mod host;
 mod input;
+mod performance;
 mod renderer;
 mod scene;
 mod settings_ui;
