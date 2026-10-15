@@ -743,8 +743,127 @@ pub fn activate_object(game: &mut Game, object: &str) {
     update_membership(game);
 }
 pub fn descendant_instances(game: &Game, parent: &str) -> Vec<Instance> {
-    game.dispatcher.registration_order.iter().copied().filter(|i| !matches!(i,Instance::Entity(id) if i.object(game)=="oTerrainMetadata" && game.world.entities.iter().any(|e|e.id==*id)) && catalog::is_a(&source_object(game,*i),parent)).collect()
+    // The query has no callbacks: index this immutable storage once instead of
+    // searching all actors for every registered identity. Retain both first
+    // physical and first live matches, as the existing lookup APIs do.
+    let mut entities: HashMap<u64, (&Entity, Option<&Entity>, bool)> = HashMap::new();
+    for entity in &game.world.entities {
+        let entry = entities.entry(entity.id).or_insert((entity, None, true));
+        if entry.1.is_none() && entity.alive {
+            entry.1 = Some(entity);
+        }
+    }
+    for entity in &game.dispatcher.hidden_entities {
+        entities.entry(entity.id).or_insert((entity, None, false));
+    }
+    game.dispatcher
+        .registration_order
+        .iter()
+        .copied()
+        .filter(|instance| {
+            let object = match instance {
+                Instance::Entity(id) => {
+                    let Some((first, live, physical)) = entities.get(id) else {
+                        return catalog::is_a("", parent);
+                    };
+                    if first.object == "oTerrainMetadata" && *physical {
+                        return false;
+                    }
+                    live.and_then(|entity| {
+                        if entity.object != "oTerrainMetadata" {
+                            return Some(entity.object.as_str());
+                        }
+                        game.world
+                            .tile(
+                                (entity.pos.x / 16.0).floor() as i32,
+                                (entity.pos.y / 16.0).floor() as i32,
+                            )
+                            .map(|tile| tile.object.as_str())
+                            .filter(|object| matches!(*object, "oTree" | "oLava"))
+                    })
+                    .unwrap_or(first.object.as_str())
+                }
+                _ => instance.object(game),
+            };
+            catalog::is_a(object, parent)
+        })
+        .collect()
 }
+#[cfg(test)]
+mod descendant_query_tests {
+    use super::*;
+    use crate::{Area, RulesPreset, World};
+
+    // Retain the pre-index lookup as an independent ordering/identity oracle.
+    fn original(game: &Game, parent: &str) -> Vec<Instance> {
+        game.dispatcher
+            .registration_order
+            .iter()
+            .copied()
+            .filter(|i| {
+                !matches!(i, Instance::Entity(id) if i.object(game) == "oTerrainMetadata"
+                && game.world.entities.iter().any(|e| e.id == *id))
+                    && catalog::is_a(&source_object(game, *i), parent)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn indexed_family_queries_preserve_order_hidden_storage_and_duplicate_identities() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.world = World::new(16, 12, Area::Mines, 1);
+        game.world.set_tile(2, 3, "oLava");
+        game.world.set_tile(3, 3, "oTree");
+        game.world.entities = vec![
+            Entity::new(1, "oBomb", Vec2::new(40.0, 56.0)),
+            Entity::new(2, "oTerrainMetadata", Vec2::new(40.0, 56.0)),
+            Entity::new(3, "oRock", Vec2::default()),
+            Entity::new(3, "oTerrainMetadata", Vec2::new(56.0, 56.0)),
+            Entity::new(4, "oSnake", Vec2::default()),
+        ];
+        game.world.entities[2].alive = false;
+        game.dispatcher.hidden_entities = vec![
+            Entity::new(1, "oSnake", Vec2::default()),
+            Entity::new(5, "oTerrainMetadata", Vec2::default()),
+            Entity::new(6, "oBomb", Vec2::default()),
+        ];
+        game.dispatcher.registration_order = vec![
+            Instance::Entity(6),
+            Instance::Player,
+            Instance::Entity(3),
+            Instance::Terrain(50),
+            Instance::Entity(2),
+            Instance::Entity(1),
+            Instance::Entity(4),
+            Instance::Entity(5),
+            Instance::Entity(999),
+            Instance::Entity(1),
+        ];
+        for reversed in [false, true] {
+            if reversed {
+                game.world.entities.reverse();
+            }
+            for parent in [
+                "oItem",
+                "oEnemy",
+                "oSolid",
+                "oTree",
+                "oLava",
+                "oTerrainMetadata",
+                "oPlayer1",
+                "",
+                "unknown",
+            ] {
+                assert_eq!(
+                    descendant_instances(&game, parent),
+                    original(&game, parent),
+                    "family={parent}, reversed={reversed}"
+                );
+            }
+        }
+    }
+}
+
 fn level_step(game: &mut Game) {
     crate::progression::level_music_step(game);
     crate::camera_shake::level_step(game);
