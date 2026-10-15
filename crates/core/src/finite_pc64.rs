@@ -755,3 +755,6 @@ include!("finite_pc64_arithmetic_info.rs");
 
 // Additive all-RC QWORD store response and exact rounding facts; old APIs unchanged.
 include!("finite_pc64_store_info.rs");
+
+// Additive direct all-RC DWORD store response; historical APIs unchanged.
+include!("finite_pc64_store_f32_info.rs");

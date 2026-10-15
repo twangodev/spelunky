@@ -1,4 +1,4 @@
-// Exact binary64 store conversion and rounding facts. This is numerical data,
+// Shared floating store rounding facts plus binary64 conversion. Numerical data,
 // not an x87 status/mask/stack/retirement implementation. `value` is the masked
 // destination response; consumers decide whether that response may retire.
 
@@ -24,17 +24,18 @@ pub struct StoreRounded<T> {
     /// Masked destination magnitude is larger than the exact input magnitude.
     /// This differs from the internal increment when overflow saturates.
     pub magnitude_rounded_up: bool,
-    /// Discarded tail when rounding to53 bits with an UNBOUNDED exponent.
+    /// Discarded tail at destination normal precision with an UNBOUNDED exponent.
+    /// QWORD stores use53 significant bits; DWORD stores use24.
     /// Needed separately for an unmasked overflow/underflow response.
     pub precision_inexact: bool,
     pub precision_magnitude_rounded_up: bool,
-    /// The53-bit rounded result exceeds the maximum binary64 exponent.
+    /// The destination-precision rounded result exceeds its maximum exponent.
     /// An already infinite operand is not a numerical overflow.
     pub overflow: bool,
     pub overflow_to_infinity: bool,
-    /// Nonzero exact finite input is below the minimum normal binary64.
+    /// Nonzero exact finite input is below the destination minimum normal.
     pub tiny_before_rounding: bool,
-    /// Nonzero53-bit result is tiny before exponent-range/subnormal rounding.
+    /// Nonzero destination-precision result is tiny before subnormal rounding.
     /// This can be TRUE even when the final destination becomes min-normal.
     pub tiny_after_precision_rounding: bool,
     /// Nonzero finite input rounds below min-normal in the destination; this
