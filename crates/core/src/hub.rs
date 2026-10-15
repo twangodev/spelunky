@@ -1087,6 +1087,15 @@ pub(crate) fn challenge_alarm(game: &mut Game, index: u8) {
         }
         return;
     }
+    // oStarsRoom Alarm 11 evaluates rand(1,100) even when dead. Keep
+    // historical snapshots' skipped draw; alive callbacks still roll below.
+    if resource == 701
+        && index == 11
+        && game.generation_revision == GenerationRevision::SourceClassicV2
+        && crate::items::player_dead(game)
+    {
+        game.rng.range(100);
+    }
     if crate::items::player_dead(game) {
         return;
     }
@@ -2839,3 +2848,7 @@ mod tests {
         assert_eq!(title.tile(21, 11).unwrap().object, "oBrick");
     }
 }
+
+#[cfg(test)]
+#[path = "stars_alarm11_eager_tests.rs"]
+mod stars_alarm11_eager_tests;
