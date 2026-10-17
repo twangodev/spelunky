@@ -271,6 +271,16 @@ fn cached_ladder_collision(w: &World, p: &Player) -> bool {
 fn ladder_at(w: &World, pos: Vec2) -> Option<Vec2> {
     ladder_match(w, pos, true)
 }
+/// characterStepEvent's climbing continuation uses collision_point for both
+/// ladder families in SourceClassicV2. HistoricalV1 keeps its older tile-first
+/// adapter, while the source query excludes deactivated instances.
+fn climbing_ladder_point(w: &World, pos: Vec2, source_collision_point: bool) -> bool {
+    if source_collision_point {
+        ledge_point(w, pos, "oLadder") || ledge_point(w, pos, "oLadderTop")
+    } else {
+        ladder_at(w, pos).is_some()
+    }
+}
 fn ladder_segment_at(w: &World, pos: Vec2) -> Option<Vec2> {
     ladder_match(w, pos, false)
 }
@@ -1284,21 +1294,15 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
         }
         if input.up {
             let above = Vec2::new(p.pos.x, p.pos.y - 8.0);
-            let ladder_above = if source_ladder_point {
-                // characterStepEvent201 uses the actual cached mask point,
-                // including transparent borders within a terrain cell.
-                ledge_point(w, above, "oLadder") || ledge_point(w, above, "oLadderTop")
-            } else {
-                ladder_at(w, above).is_some()
-            };
-            if ladder_above {
+            if climbing_ladder_point(w, above, source_ladder_point) {
                 ay -= 0.6;
                 if p.alarms[2] < 1 {
                     p.alarms[2] = 8;
                 }
             }
         } else if input.down {
-            if ladder_at(w, Vec2::new(p.pos.x, p.pos.y + 8.0)).is_some() {
+            let below = Vec2::new(p.pos.x, p.pos.y + 8.0);
+            if climbing_ladder_point(w, below, source_ladder_point) {
                 ay += 0.6;
                 if p.alarms[2] < 1 {
                     p.alarms[2] = 8;
@@ -2432,6 +2436,72 @@ fn character_sprite<'a>(p: &Player, name: &'a str) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_climb_continuation_uses_active_ladder_family_points() {
+        for object in ["oLadderOrange", "oLadderTop"] {
+            for terrain in [true, false] {
+                let mut world = World::new(4, 4, Area::Mines, 1);
+                let index = 2 * world.width + 1;
+                if terrain {
+                    world.set_tile(1, 2, object);
+                } else {
+                    world.spawn(object, Vec2::new(16.0, 32.0));
+                }
+                let point = Vec2::new(24.0, 40.0);
+                assert!(
+                    climbing_ladder_point(&world, point, true),
+                    "{object}/{terrain}"
+                );
+
+                if terrain {
+                    world.tiles[index].engine_active = false;
+                } else {
+                    world.entities[0].engine_active = false;
+                }
+                assert!(
+                    !climbing_ladder_point(&world, point, true),
+                    "SourceClassicV2 collision_point must skip inactive {object}/{terrain}"
+                );
+                assert!(
+                    climbing_ladder_point(&world, point, false),
+                    "HistoricalV1 keeps its legacy predicate for {object}/{terrain}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn source_climb_down_input_drops_when_ladder_below_is_deactivated() {
+        for (active, expected_state) in
+            [(true, PlayerState::Climbing), (false, PlayerState::Falling)]
+        {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            game.world = World::new(8, 8, Area::Mines, 1);
+            game.world.set_tile(1, 3, "oLadderOrange");
+            game.world.tiles[3 * game.world.width + 1].engine_active = active;
+            game.player.pos = Vec2::new(24.0, 40.0);
+            game.player.previous_pos = game.player.pos;
+            game.player.state = PlayerState::Climbing;
+            game.player.vel = Vec2::default();
+
+            // Exercise the production controller directly so a surrounding
+            // oLevel activation event cannot reactivate the deliberately
+            // deactivated ladder before characterStepEvent runs.
+            tick(
+                &mut game,
+                &InputFrame {
+                    down: true,
+                    ..Default::default()
+                },
+            );
+
+            assert_eq!(
+                game.player.state, expected_state,
+                "SourceClassicV2 down continuation with active={active}"
+            );
+        }
+    }
 
     #[test]
     fn game_step_sinking_block_still_accepts_player_ledge_grab() {

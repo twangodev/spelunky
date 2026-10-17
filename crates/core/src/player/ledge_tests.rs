@@ -19,6 +19,61 @@ fn quiet(game: &Game) {
     assert_eq!(game.state, RunState::Playing);
 }
 
+#[test]
+fn generated_campaign_side_boundary_blocks_full_game_steps() {
+    let mut game = Game::shell(0, RulesPreset::Classic);
+    game.start_from_hub(false, 1);
+    assert_eq!(game.world.tile(41, 12).unwrap().object, "oBrick");
+    // Open a test corridor through the ordinary room's edge wall so this
+    // specifically exercises the generated outer boundary at x=656.
+    for x in 1..=40 {
+        game.world.set_tile(x, 11, "");
+        game.world.set_tile(x, 12, "");
+        game.world.set_tile(x, 13, "oBrick");
+    }
+    game.player.pos = Vec2::new(600.0, 200.0);
+    game.player.previous_pos = game.player.pos;
+    game.player.vel = Vec2::new(6.0, 0.0);
+    game.player.state = PlayerState::Falling;
+    game.player.grounded = false;
+
+    for _ in 0..12 {
+        game.step(&InputFrame {
+            right: true,
+            run: true,
+            ..Default::default()
+        });
+        assert!(
+            game.player.pos.x <= 651.0,
+            "player crossed boundary at x={}",
+            game.player.pos.x
+        );
+    }
+    assert_eq!(game.player.pos.x, 651.0, "test must reach the wall");
+
+    game.player.equipment.insert("Climbing Gloves".into());
+    game.player.pos.y = 197.0;
+    game.player.previous_pos = game.player.pos;
+    game.player.vel = Vec2::new(0.0, 1.0);
+    game.player.state = PlayerState::Falling;
+    game.player.grounded = false;
+    game.step(&InputFrame {
+        right: true,
+        ..Default::default()
+    });
+    assert_eq!(game.player.state, PlayerState::Hanging);
+    game.step(&InputFrame {
+        jump: true,
+        jump_pressed: true,
+        ..Default::default()
+    });
+    // The source side-support check can overwrite the animation state for this
+    // one Step even while its jump impulse has already sent y velocity upward.
+    assert_eq!(game.player.state, PlayerState::Falling);
+    assert!(game.player.vel.y < 0.0);
+    assert_eq!(game.player.pos.x, 649.0);
+}
+
 fn shaft(rules: RulesPreset) -> Game {
     let mut level = crate::level::Level::default();
     cell(&mut level, 4, 5, '@'); // Ordinary entrance gives (72,88).
