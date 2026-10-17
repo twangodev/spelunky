@@ -281,7 +281,9 @@ fn generated_shop_wanted_posters_use_source_gate_and_character_crops() {
 
 #[test]
 fn generated_ice_underside_reaches_real_drip_alarm_behavior() {
-    let world = generation::generate(&mut Rng::new(0), 9, &flags(&[]));
+    // Seed 0 no longer places an underside after source room-route fallback
+    // parity changed the generated layout. Seed 1 retains the real icicle case.
+    let world = generation::generate(&mut Rng::new(1), 9, &flags(&[]));
     let bottom = world
         .entities
         .iter()

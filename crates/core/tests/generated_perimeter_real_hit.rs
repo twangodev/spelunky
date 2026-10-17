@@ -1,6 +1,7 @@
 //! Ordinary inputs exercise recovery against a generated Mines perimeter.
 //! Retains the complete generated Mines geometry and actors. The hit case
-//! adds one ordinary trap before the first Step; it is an augmented room.
+//! adds one ordinary trap after walking through the generated entrance
+//! ceiling; it is an augmented room.
 //! Seeds are fixed from initial geometry before running any input route.
 use spelunky_core::{Game, InputFrame, Rect, RulesPreset, RunState, Vec2, catalog};
 
@@ -301,6 +302,11 @@ fn eligible_right(g: &Game) -> bool {
         if !g.world.solid_at(f64::from(x), p.y + 8.0) {
             return false;
         }
+    }
+    // Require open space beyond the generated entrance ceiling for the tested
+    // rightward route. The input and jump assertions verify the ceiling itself.
+    let route_left = (p.x as i32 + 24)..=655;
+    for x in route_left {
         for y in (p.y as i32 - 48)..=(p.y as i32 + 7) {
             if g.world.solid_at(f64::from(x), f64::from(y)) {
                 return false;
@@ -356,15 +362,6 @@ fn exercise_right(seed: u32, rules: RulesPreset, trap: bool) {
         }
     }
     let entrance = g.player.pos;
-    if trap {
-        // Source grid origins: entrance has +8 offset; subtract40 is aligned.
-        // The higher mouth intersects an ordinary jump, allowing knockback
-        // to reach the wall before bottom-contact friction arrests it.
-        g.spawn(
-            "oArrowTrapRight",
-            Vec2::new(entrance.x - 40.0, entrance.y - 24.0),
-        );
-    }
     let tiles = g
         .world
         .tiles
@@ -378,6 +375,31 @@ fn exercise_right(seed: u32, rules: RulesPreset, trap: bool) {
     assert_eq!(g.player.health, 4);
     assert!(g.player.grounded && !g.player.is_stunned());
     assert_eq!(g.player.vel, Vec2::default());
+    // The source-generated entrance ceiling can sit over the spawn. Walk under
+    // it so the measured jump and right-wall hit occur in the open route.
+    for _ in 0..24 {
+        if g.player.bounds().x >= entrance.x + 24.0 {
+            break;
+        }
+        step(
+            &mut g,
+            InputFrame {
+                right: true,
+                ..Default::default()
+            },
+            &mut previous,
+            &tiles,
+        );
+    }
+    assert!(g.player.bounds().x >= entrance.x + 24.0);
+    if trap {
+        // Source grid origins align this trap at entrance.x + 8. Its higher
+        // mouth intersects the jump from the now-clear side of the ceiling.
+        g.spawn(
+            "oArrowTrapRight",
+            Vec2::new(entrance.x + 8.0, entrance.y - 24.0),
+        );
+    }
     let mut saw_arrow = false;
     let mut hit = false;
     let mut wall_contact = false;
@@ -426,7 +448,13 @@ fn exercise_right(seed: u32, rules: RulesPreset, trap: bool) {
     }
     assert!(
         wall_contact,
-        "FIXTURE_WALL no real contact with the generated right perimeter"
+        "FIXTURE_WALL no real contact with the generated right perimeter: tick={} pos={:?} bounds={:?} vel={:?} stun={} state={:?}",
+        g.tick,
+        g.player.pos,
+        g.player.bounds(),
+        g.player.vel,
+        g.player.stun,
+        g.player.state
     );
     assert!(
         !g.player.is_stunned() && g.player.grounded && g.player.vel == Vec2::default(),
@@ -456,10 +484,10 @@ fn exercise_right(seed: u32, rules: RulesPreset, trap: bool) {
     for _ in 0..12 {
         step(&mut g, InputFrame::default(), &mut previous, &tiles);
     }
-    // Ordinary walking places the fresh jump east of the added overhead
-    // trap. A jump blocked by its real ceiling would be a fixture mistake.
+    // Ordinary walking places the fresh jump east of the added trap and the
+    // generated entrance ceiling. The following jump must have clear headroom.
     for _ in 0..48 {
-        if g.player.pos.x >= entrance.x + 8.0 {
+        if g.player.pos.x >= entrance.x + 32.0 {
             break;
         }
         step(
@@ -473,8 +501,8 @@ fn exercise_right(seed: u32, rules: RulesPreset, trap: bool) {
         );
     }
     assert!(
-        g.player.pos.x >= entrance.x + 8.0,
-        "FIXTURE_CLEARANCE walking did not leave the trap's ceiling"
+        g.player.pos.x >= entrance.x + 32.0,
+        "FIXTURE_CLEARANCE walking did not leave the trap and entrance ceiling"
     );
     for _ in 0..12 {
         step(&mut g, InputFrame::default(), &mut previous, &tiles);

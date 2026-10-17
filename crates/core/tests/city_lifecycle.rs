@@ -100,7 +100,9 @@ fn count_new(game: &Game, object: &str, first_id: u64) -> usize {
 }
 
 fn generated_excavation_site(game: &Game) -> (usize, usize, Vec2, i8) {
-    for y in 2..game.world.height - 2 {
+    // Avoid the upper generated wall rows: the source mattock's strike mask
+    // can miss a supported pose directly under the top-room ceiling.
+    for y in 4..game.world.height - 2 {
         for x in 2..game.world.width - 2 {
             let Some(tile) = game.world.tile(x as i32, y as i32) else {
                 continue;
@@ -186,6 +188,7 @@ fn excavate_existing_wall(game: &mut Game) -> (usize, usize) {
         attack_pressed: true,
         ..Default::default()
     });
+    assert!(game.player.attack_timer > 0, "mattock attack must start");
     for _ in 0..30 {
         if game.world.tile(x as i32, y as i32).unwrap().object != "oTemple" {
             break;
@@ -194,7 +197,13 @@ fn excavate_existing_wall(game: &mut Game) -> (usize, usize) {
     }
     assert_ne!(
         game.world.tile(x as i32, y as i32).unwrap().object,
-        "oTemple"
+        "oTemple",
+        "city wall did not break at ({x},{y}); player={:?} facing={} held={:?} attack_timer={} events={:?}",
+        game.player.pos,
+        game.player.facing,
+        game.player.held,
+        game.player.attack_timer,
+        game.events
     );
     (
         count_new(game, "oGoldChunk", first_output_id),

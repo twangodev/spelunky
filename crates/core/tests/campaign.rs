@@ -34,6 +34,7 @@ fn positioned_exit(game: &mut Game) {
         .find(|e| e.alive && e.object == "oExit" && e.bounds().contains(game.world.exit))
         .expect("generated normal exit at the recorded destination");
     let origin = door.pos;
+    let door_id = door.id;
     let bounds = door.bounds();
     let center = Vec2::new(bounds.x + bounds.w / 2.0, bounds.y + bounds.h / 2.0);
     assert!(
@@ -105,6 +106,23 @@ fn positioned_exit(game: &mut Game) {
                 break;
             }
         }
+        // Momentum can carry the Player's exit-query point just past the
+        // door's source mask after the Smash clears. Re-aim using real input
+        // until the live exit action succeeds.
+        for _ in 0..16 {
+            if game.state != RunState::Playing {
+                break;
+            }
+            let left = game.player.pos.x > center.x;
+            let right = game.player.pos.x < center.x;
+            game.step(&InputFrame {
+                left,
+                right,
+                up: true,
+                ..Default::default()
+            });
+            gate_cleared |= !game.world.solid_at(origin.x, origin.y);
+        }
         assert!(
             gate_cleared,
             "Smash must actually vacate the source exit gate"
@@ -116,10 +134,20 @@ fn positioned_exit(game: &mut Game) {
         assert_eq!(
             game.state,
             RunState::Ending,
-            "bait and enter: seed {}, level {}, player {:?}",
+            "bait and enter: seed {}, level {}, player {:?}, vel {:?}, grounded {}, stun {}, attack_timer {}, door {} at {:?}, center {:?}, approach {:?}, gate_cleared {}, door_live {}",
             game.seed,
             game.world.level,
-            game.player.pos
+            game.player.pos,
+            game.player.vel,
+            game.player.grounded,
+            game.player.stun,
+            game.player.attack_timer,
+            door_id,
+            origin,
+            center,
+            approach,
+            gate_cleared,
+            game.world.entity(door_id).is_some()
         );
     } else {
         position_player(game, center);
