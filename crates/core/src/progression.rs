@@ -658,27 +658,52 @@ fn deposit_at_exit(game: &mut Game) {
     let Some(id) = game.player.held else {
         return;
     };
-    let Some(center) = game
-        .world
-        .entities
-        .iter()
-        .find(|e| {
-            e.alive
-                && crate::catalog::is_a(&e.object, "oExit")
-                && e.sprite_bounds().contains(game.player.pos)
-        })
-        .map(|e| Vec2::new(e.pos.x + 8., e.pos.y + 8.))
-    else {
+    let (point_hit, receiver) = exit_query(game, "oExit");
+    if !point_hit {
         return;
-    };
+    }
     let Some(object) = game.world.entity(id).map(|e| e.object.clone()) else {
         return;
     };
     if object == "oDamsel" {
-        rescue_held_damsel(game, id, center);
+        if let Some(center) = receiver
+            .and_then(|door| game.world.entity(door))
+            .map(|door| Vec2::new(door.pos.x + 8., door.pos.y + 8.))
+        {
+            rescue_held_damsel(game, id, center);
+        }
     } else if matches!(object.as_str(), "oGoldIdol" | "oCrystalSkull") {
         redeem_held_idol(game, id, false);
     }
+}
+
+/// Player Step gates its door branches with collision_point(...,prec=false),
+/// then independently resolves instance_place with the Player's full mask.
+/// Both queries use source family order, independently of physical storage.
+fn exit_query(game: &mut Game, family: &str) -> (bool, Option<u64>) {
+    crate::dispatcher::register_instances(game);
+    let doors: Vec<_> = crate::dispatcher::descendant_instances(game, family)
+        .into_iter()
+        .filter_map(|instance| match instance {
+            crate::dispatcher::Instance::Entity(id) => game.world.entity(id),
+            _ => None,
+        })
+        .filter(|door| door.engine_active)
+        .collect();
+    if !doors
+        .iter()
+        .any(|door| door.mask_contains(game.player.pos, crate::CollisionPrecision::BoundingBox))
+    {
+        return (false, None);
+    }
+    let player_mask = game.player.collision_mask();
+    (
+        true,
+        doors
+            .into_iter()
+            .find(|door| player_mask.intersects_mask(&door.collision_mask()))
+            .map(|door| door.id),
+    )
 }
 
 fn complete(game: &mut Game, door_id: u64) {
@@ -849,17 +874,10 @@ pub(crate) fn player_actions(game: &mut Game, input: &InputFrame) {
     {
         return;
     }
-    let door = game
-        .world
-        .entities
-        .iter()
-        .find(|e| {
-            e.alive
-                && matches!(e.object.as_str(), "oExit" | "oXMarket" | "oXGold" | "oXEnd")
-                && e.bounds().contains(game.player.pos)
-                && !game.world.solid_at(e.pos.x, e.pos.y)
-        })
-        .map(|e| e.id);
+    // The oXStart-derived ending branch precedes ordinary oExit in the source.
+    let door = exit_query(game, "oXEnd")
+        .1
+        .or_else(|| exit_query(game, "oExit").1);
     if let Some(id) = door {
         complete(game, id);
     }
@@ -2412,3 +2430,7 @@ mod tests {
 #[cfg(test)]
 #[path = "udjat_cached_distance_tests.rs"]
 mod udjat_cached_distance_tests;
+
+#[cfg(test)]
+#[path = "progression_exit_receiver_tests.rs"]
+mod exit_receiver_tests;
