@@ -120,3 +120,27 @@ fn monkey_water_step_uses_precise_current_mask_pixels() {
     game.step(&InputFrame::default());
     assert_eq!(game.world.entity(monkey).unwrap().value("swimming"), 0.0);
 }
+
+#[test]
+fn jaws_at_coincident_target_uses_source_zero_direction() {
+    let mut game = room();
+    game.player.pos = Vec2::new(88.0, 104.0);
+    game.player.previous_pos = game.player.pos;
+    game.player.data.insert("swimming".into(), 1.0);
+    for y in 4..9 {
+        for x in 4..10 {
+            game.world.set_tile(x, y, "oWaterSwim");
+        }
+    }
+    let jaws = game.spawn("oJaws", Vec2::new(80.0, 80.0));
+    let enemy = game.world.entity_mut(jaws).unwrap();
+    enemy.state = 1;
+    enemy.facing = 1;
+    enemy.set_sprite("sJawsRight");
+
+    let mut enemy = game.world.entity(jaws).unwrap().clone();
+    super::tick(&mut game, &mut enemy);
+
+    assert_eq!(game.player.pos, Vec2::new(88.0, 104.0));
+    assert_eq!(enemy.pos, Vec2::new(83.0, 80.0));
+}

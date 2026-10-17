@@ -771,14 +771,20 @@ fn jaws(game: &mut Game, e: &mut Entity) {
                     let origin = Vec2::new(e.pos.x + 8.0, e.pos.y + 16.0);
                     let target = Vec2::new(game.player.pos.x, game.player.pos.y - 8.0);
                     let dist = origin.distance(target);
-                    if dist > 0.0 {
-                        let dir =
-                            Vec2::new((target.x - origin.x) / dist, (target.y - origin.y) / dist);
-                        let probe = Vec2::new(e.pos.x + dir.x, e.pos.y + dir.y);
-                        if water(&game.world, probe) && !game.world.solid_at(probe.x, probe.y) {
-                            e.vel = Vec2::new(dir.x * 3.0, dir.y * 3.0);
-                            move_body(&game.world, e, 0.0);
-                        }
+                    // GameMaker point_direction returns 0 when both points
+                    // coincide, so its cos/sin movement still probes one
+                    // pixel right and advances three pixels if that point is
+                    // clear water. The normalized Rust vector needs this
+                    // explicit zero-length direction.
+                    let dir = if dist == 0.0 {
+                        Vec2::new(1.0, 0.0)
+                    } else {
+                        Vec2::new((target.x - origin.x) / dist, (target.y - origin.y) / dist)
+                    };
+                    let probe = Vec2::new(e.pos.x + dir.x, e.pos.y + dir.y);
+                    if water(&game.world, probe) && !game.world.solid_at(probe.x, probe.y) {
+                        e.vel = Vec2::new(dir.x * 3.0, dir.y * 3.0);
+                        move_body(&game.world, e, 0.0);
                     }
                 }
             }
