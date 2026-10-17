@@ -34,6 +34,18 @@ pub(super) fn point(world: &World, p: Vec2, family: &str) -> bool {
         })
 }
 
+/// oEnemy's water probe explicitly uses collision_point(..., -1, -1).
+/// Keep its precise selected pixels separate from the prec0 spike probes.
+pub(super) fn swimming_point(world: &World, p: Vec2) -> bool {
+    world.tiles_point_active_precision(p, "oWaterSwim", CollisionPrecision::Precise)
+        || world.entities.iter().any(|water| {
+            water.alive
+                && water.engine_active
+                && crate::catalog::is_a(&water.object, "oWaterSwim")
+                && water.mask_contains(p, CollisionPrecision::Precise)
+        })
+}
+
 // These two inherited Lava calls explicitly request collision_point prec0.
 // WaterSwim's separate precise query and the other point callers are unchanged.
 pub(super) fn lava_point_bbox(world: &World, p: Vec2) -> bool {
@@ -97,7 +109,7 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
         e.pos.x + (fluid_dimensions.0 / 2.0).floor(),
         e.pos.y + (fluid_dimensions.1 / 2.0).floor(),
     );
-    let swimming = point(&game.world, center, "oWaterSwim");
+    let swimming = swimming_point(&game.world, center);
     if swimming && e.value("swimming") == 0.0 {
         game.world.spawn("oSplash", Vec2::new(center.x, e.pos.y));
         game.sound("sndSplash", e.pos);
@@ -453,6 +465,98 @@ mod tests {
         g.player.pos = Vec2::new(240.0, 160.0);
         g.player.previous_pos = g.player.pos;
         g
+    }
+
+    #[test]
+    fn actual_enemy_step_water_probe_uses_cached_fractional_source_mask() {
+        let source =
+            include_str!("../../../../references/classic-1.1/Objects/Basis/oEnemy.events/Step.xml");
+        assert!(source.contains(
+            "collision_point(x+floor(sprite_width/2), y+floor(sprite_height/2), oWaterSwim, -1, -1)"
+        ));
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            // Precise RECTANGLE masks still sample the rounded source pixel:
+            // 95.875 passes the raw bbox but samples the excluded column96.
+            for (x, expected) in [
+                (80.125, true),
+                (95.25, true),
+                (95.875, false),
+                (96.125, false),
+            ] {
+                let mut game = room();
+                game.rules = rules;
+                let water = game.spawn("oWaterSwim", Vec2::new(80.25, 80.25));
+                game.world
+                    .entity_mut(water)
+                    .unwrap()
+                    .set_sprite("sWaterTop");
+                let probe = Vec2::new(x, 88.);
+                assert_eq!(
+                    game.world
+                        .entity(water)
+                        .unwrap()
+                        .mask_contains(probe, CollisionPrecision::Precise),
+                    expected
+                );
+                let enemy = game.spawn("oSnake", Vec2::new(x - 8., 80.));
+                game.world.fluid_dirty = false;
+                game.step(&InputFrame::default());
+                assert_eq!(
+                    game.world.entity(enemy).unwrap().value("swimming"),
+                    f64::from(expected),
+                    "rules={rules:?}, x={x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn enemy_step_precise_water_probe_respects_alpha_and_activity() {
+        for scheduled in [false, true] {
+            for terrain in [false, true] {
+                for active in [false, true] {
+                    for opaque in [false, true] {
+                        let mut game = room();
+                        let water = game.spawn("oWaterSwim", Vec2::new(80., 80.));
+                        game.world.entity_mut(water).unwrap().set_sprite("sWeb");
+                        let probe = (80..96)
+                            .flat_map(|y| (80..96).map(move |x| Vec2::new(x.into(), y.into())))
+                            .find(|p| {
+                                let mask = game.world.entity(water).unwrap().collision_mask();
+                                mask.contains(*p, CollisionPrecision::BoundingBox)
+                                    && mask.contains(*p, CollisionPrecision::Precise) == opaque
+                            })
+                            .expect("web has both opaque and transparent pixels inside its bbox");
+                        if terrain {
+                            game.world.entities.retain(|e| e.id != water);
+                            game.world.set_tile(5, 5, "oWaterSwim");
+                            game.world.tiles[5 * game.world.width + 5].engine_active = active;
+                            let metadata =
+                                game.world.spawn("oTerrainMetadata", Vec2::new(80., 80.));
+                            game.world
+                                .entity_mut(metadata)
+                                .unwrap()
+                                .text
+                                .insert("terrain_sprite".into(), "sWeb".into());
+                        } else {
+                            game.world.entity_mut(water).unwrap().engine_active = active;
+                        }
+                        let enemy = game.spawn("oSnake", Vec2::new(probe.x - 8., probe.y - 8.));
+                        game.world.fluid_dirty = false;
+                        if scheduled {
+                            game.step(&InputFrame::default());
+                        } else {
+                            crate::enemies::step_instance(&mut game, enemy);
+                        }
+                        assert_eq!(
+                            game.world.entity(enemy).unwrap().value("swimming"),
+                            f64::from(active && opaque),
+                            "scheduled={scheduled}, terrain={terrain}, active={active}, opaque={opaque}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     fn live_blood(game: &Game) -> Vec<&Entity> {
