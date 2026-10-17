@@ -33,7 +33,8 @@ jobs:
           bun tools/export_hub.ts --check
           bun tools/export_cinematics.ts --check
           bun tools/extract_templates.ts --check
-          bun tools/audit_coverage.ts --check
+      - name: Check coverage inventory freshness
+        run: bun tools/audit_coverage.ts --check
       - name: Test build tools
         run: bun test tools
       - name: Check formatting
