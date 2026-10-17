@@ -1,8 +1,12 @@
+import gameModulePath from './public/pkg/module-path.json';
 import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+  define: {
+    __GAME_MODULE_PATH__: JSON.stringify(gameModulePath),
+  },
   plugins: [
     {
       name: 'spelunky-full-page-reload',

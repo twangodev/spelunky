@@ -1,3 +1,5 @@
+declare const __GAME_MODULE_PATH__: string;
+
 type WasmGame = {
   default: () => Promise<unknown>;
   start: () => void | Promise<void>;
@@ -9,7 +11,7 @@ export async function startGame(canvas: HTMLCanvasElement, status: HTMLParagraph
       throw new Error('WebGL 2 is required. Enable hardware acceleration or use a browser with WebGL 2 support.');
     }
     // Keep wasm-pack's JavaScript and Wasm together, unmodified, at their original URLs.
-    const moduleUrl = new URL('./pkg/spelunky.js', document.baseURI).href;
+    const moduleUrl = new URL(__GAME_MODULE_PATH__, document.baseURI).href;
     const { default: init, start } = await import(/* @vite-ignore */ moduleUrl) as WasmGame;
     await init();
     await start();

@@ -49,3 +49,35 @@ cargo run -p spelunky-tools -- replay 42 600 classic
 ```
 
 See [development](docs/development.md), [replay tools](docs/replay.md), [editor compatibility](docs/editor.md), and the subsystem status documents for implementation details and known differences. No deployment or publication is performed by these commands.
+
+## Web deployment
+
+GitHub Actions builds a static release and deploys the same `spelunky-web` artifact
+through Cloudflare Workers Static Assets to https://spelunky.twango.dev on pushes
+to `main`. Deployment waits for the web job; native checks run independently.
+The `production` GitHub environment allows only `main` and requires the
+`CLOUDFLARE_API_TOKEN` secret and `CLOUDFLARE_ACCOUNT_ID` variable. The token needs
+Workers Scripts Write for the deployment account, plus Workers Routes Write and
+Zone Read for `twango.dev`.
+
+Game JavaScript and Wasm share a content-hashed directory and a one-year immutable
+browser cache, as do Svelte's hashed assets. HTML and unversioned files revalidate.
+The build verifies the package hash and Cloudflare asset limits before upload.
+After deployment, CI checks the served HTML/JS/Wasm against the artifact and
+verifies cache headers, Wasm MIME type, and missing-file 404s.
+No game code runs on the Worker and no server or database is required.
+
+The first CI deployment replaces the existing `spelunky.twango.dev` CNAME to
+GitHub Pages with the Worker custom domain. Until that deployment, the current
+site and DNS remain unchanged.
+
+After building, preview Cloudflare routing and headers with:
+
+```sh
+cd web
+bunx --no-install wrangler dev --ip 127.0.0.1
+```
+
+To roll back, select a previous version in Cloudflare's deployment history, or
+rerun the successful GitHub Actions deploy job for the desired release. Verify
+that the served game files match that run's artifact after deployment.

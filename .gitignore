@@ -35,3 +35,6 @@ rustc-ice-*.txt
 /web/dist/
 /web/public/pkg/
 /web/public/assets/
+
+# Local Cloudflare emulator state
+/web/.wrangler/

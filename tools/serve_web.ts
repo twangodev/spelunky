@@ -83,8 +83,8 @@ if (import.meta.main) {
     } else {
       if (!/^\d+$/.test(values.port!) || Number(values.port) > 65535) throw new Error('Port must be between 0 and 65535');
       const directory = resolve(import.meta.dir, '../web/dist');
-      if (!(await Bun.file(resolve(directory, 'pkg/spelunky.js')).exists())) {
-        throw new Error('Missing web/dist/pkg/spelunky.js; run ./tools/build_web.sh first');
+      if (!(await Bun.file(resolve(directory, 'pkg/module-path.json')).exists())) {
+        throw new Error('Missing web/dist/pkg/module-path.json; run ./tools/build_web.sh first');
       }
       const server = Bun.serve({ hostname: values.bind, port: Number(values.port), fetch: await bundleHandler(directory) });
       console.log(`Spelunky: http://${values.bind}:${server.port}/`);

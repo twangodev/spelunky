@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "spelunky",
+  "compatibility_date": "2026-10-17",
+  "workers_dev": false,
+  "routes": [{ "pattern": "spelunky.twango.dev", "zone_name": "twango.dev", "custom_domain": true }],
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "none"
+  }
+}

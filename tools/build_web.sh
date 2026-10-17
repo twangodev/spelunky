@@ -31,10 +31,13 @@ fi
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd -- "$repo_root"
 bun tools/export_assets.ts --verify
+# Only generated output is cleaned; source assets and the main checkout are untouched.
+rm -rf web/public/pkg web/dist web/.svelte-kit
 # Relative output paths are relative to crates/app, not the shell directory.
 wasm-pack build crates/app --target web --out-dir ../../web/public/pkg \
   --out-name spelunky "$mode" -- --locked
 bun tools/stage_web_assets.ts
 bun install --cwd web --frozen-lockfile
 bun run --cwd web build
+bun tools/check_web_bundle.ts
 echo "Static bundle ready in web/dist/. Serve with bun tools/serve_web.ts."

@@ -204,29 +204,38 @@ jobs:
           name: spelunky-web
           path: web/dist
           if-no-files-found: error
-      - name: Upload GitHub Pages artifact
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        uses: actions/upload-pages-artifact@v5
-        with:
-          path: web/dist
 
   deploy:
-    name: Deploy GitHub Pages
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    name: Deploy Cloudflare production
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: web
     runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
     environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      name: production
+      url: https://spelunky.twango.dev
     concurrency:
-      group: github-pages
+      group: cloudflare-production
       cancel-in-progress: false
     steps:
-      - name: Configure GitHub Pages
-        uses: actions/configure-pages@v6
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+      - run: bun install --cwd web --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: spelunky-web
+          path: web/dist
+      - name: Verify deployment bundle
+        run: bun tools/check_web_bundle.ts
+      - name: Deploy static assets
+        working-directory: web
+        run: bun run deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Verify production artifact and cache headers
+        run: bun tools/check_web_deployment.ts https://spelunky.twango.dev
