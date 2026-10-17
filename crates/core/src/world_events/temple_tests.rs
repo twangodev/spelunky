@@ -87,6 +87,90 @@ fn actual_falling_door_exposes_both_source_fake_cells() {
 }
 
 #[test]
+fn fake_step_door_probe_excludes_inactive_masks_before_storage_partition() {
+    let source = include_str!(
+        "../../../../references/classic-1.1/Objects/Blocks/oTempleFake.events/Step.xml"
+    );
+    assert!(source.contains("collision_point(x+8, y+8, oDoor, 0, 0)"));
+    for scheduled in [false, true] {
+        for terrain in [false, true] {
+            for active in [false, true] {
+                let mut game = room(7);
+                let origin = Vec2::new(80., 80.);
+                if terrain {
+                    game.world.set_tile(5, 5, "oDoor");
+                    let width = game.world.width;
+                    game.world.tiles[5 * width + 5].engine_active = active;
+                    assert!(
+                        game.world
+                            .tile_collision_mask(5, 5)
+                            .contains(Vec2::new(88., 88.), crate::CollisionPrecision::BoundingBox)
+                    );
+                } else {
+                    let door = game.spawn("oDoor", origin);
+                    game.world.entity_mut(door).unwrap().engine_active = active;
+                }
+                let fake = game.spawn("oTempleFake", origin);
+                if scheduled {
+                    game.step(&InputFrame::default());
+                } else {
+                    // Enter the real Step with storage still restored. The
+                    // collision predicate must enforce activity itself.
+                    crate::world_events::step_instance(&mut game, fake);
+                }
+                assert_eq!(
+                    game.world.entity(fake).is_some(),
+                    active,
+                    "scheduled={scheduled}, terrain={terrain}, active={active}"
+                );
+                assert_eq!(
+                    game.world
+                        .entities
+                        .iter()
+                        .any(|e| { e.alive && e.object == "oTemple" && e.pos == origin }),
+                    !active,
+                    "replacement: scheduled={scheduled}, terrain={terrain}, active={active}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn active_terrain_door_requires_a_source_collision_mask() {
+    for scheduled in [false, true] {
+        let mut game = room(7);
+        let origin = Vec2::new(80., 80.);
+        game.world.set_tile(5, 5, "oDoor");
+        let metadata = game.world.spawn("oTerrainMetadata", origin);
+        game.world
+            .entity_mut(metadata)
+            .unwrap()
+            .text
+            .insert("terrain_sprite".into(), String::new());
+        assert!(
+            !game
+                .world
+                .tile_collision_mask(5, 5)
+                .contains(Vec2::new(88., 88.), crate::CollisionPrecision::BoundingBox)
+        );
+        let fake = game.spawn("oTempleFake", origin);
+        if scheduled {
+            game.step(&InputFrame::default());
+        } else {
+            crate::world_events::step_instance(&mut game, fake);
+        }
+        assert!(game.world.entity(fake).is_none(), "scheduled={scheduled}");
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .any(|e| { e.alive && e.object == "oTemple" && e.pos == origin })
+        );
+    }
+}
+
+#[test]
 fn runtime_temple_create_keeps_parent_defaults_and_city_draw_before_any_branch() {
     for seed in 1..=128 {
         for city in [false, true] {

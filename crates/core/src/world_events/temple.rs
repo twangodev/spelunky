@@ -1,5 +1,5 @@
 //! oTempleFake's own Step and the synchronous oTemple Create it invokes.
-use crate::{CollisionPrecision, Entity, Game, Vec2};
+use crate::{Entity, Game, Vec2};
 
 // scrGenerateItem(x,y,2): switch(rand(0,18)), in literal source order.
 const UNDERGROUND: [(&str, f64, f64); 19] = [
@@ -92,13 +92,7 @@ fn underground(game: &mut Game, center: Vec2) {
 
 pub(super) fn fake_step(game: &mut Game, fake: &mut Entity) {
     let probe = Vec2::new(fake.pos.x + 8.0, fake.pos.y + 8.0);
-    let door = game.world.tiles_point(probe, "oDoor")
-        || game.world.entities.iter().any(|e| {
-            e.alive
-                && e.engine_active
-                && crate::catalog::is_a(&e.object, "oDoor")
-                && e.mask_contains(probe, CollisionPrecision::BoundingBox)
-        });
+    let door = super::point_family(game, probe, "oDoor");
     if !door {
         // instance_create returns only after inherited/nested Create callbacks;
         // the old fake remains alive during those callbacks. It has no parent
