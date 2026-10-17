@@ -34,8 +34,8 @@ pub(super) fn point(world: &World, p: Vec2, family: &str) -> bool {
         })
 }
 
-/// oEnemy's water probe explicitly uses collision_point(..., -1, -1).
-/// Keep its precise selected pixels separate from the prec0 spike probes.
+/// oEnemy and oDamsel use collision_point(..., oWaterSwim, -1, -1).
+/// Keep precise selected pixels separate from the prec0 Lava spike probes.
 pub(super) fn swimming_point(world: &World, p: Vec2) -> bool {
     world.tiles_point_active_precision(p, "oWaterSwim", CollisionPrecision::Precise)
         || world.entities.iter().any(|water| {

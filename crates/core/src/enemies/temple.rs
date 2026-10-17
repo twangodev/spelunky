@@ -73,10 +73,9 @@ pub fn init(e: &mut Entity) {
             if e.object == "oMagmaMan" {
                 e.vel.x = 2.5;
             }
-            // oMagmaMan Create sets invincible=0; its whip collision only
-            // plays a sound, but other projectile damage remains possible.
+            // oMagmaMan owns a harmless oWhip callback, while its rear-whip
+            // collision inherits oEnemy's damaging oWhipPre event.
             e.data.insert("no_stomp".into(), 1.0);
-            e.data.insert("no_whip".into(), 1.0);
             e.data.insert("contact_damage".into(), 2.0);
             // Airborne oMagma inherits oDetritus, so oEnemy projectile collision
             // handlers do not apply until it becomes oMagmaMan again.

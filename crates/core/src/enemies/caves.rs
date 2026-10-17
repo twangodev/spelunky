@@ -546,14 +546,18 @@ fn snake(game: &mut Game, e: &mut Entity) {
             e.vel.x = 0.0;
         }
     }
-    set_sprite(e, "sSnakeWalkL");
     if super::body_overlaps_solid(&game.world, e) {
         e.pos.y -= 2.0;
     }
-    e.data.insert(
-        "animation_speed".into(),
-        if e.vel.x == 0.0 { 0.2 } else { 0.4 },
-    );
+    if e.state != 98 {
+        // oSnake Step.xml only recalculates sprite and image_speed outside
+        // STUNNED; retain the previous animation settings during Fly stun.
+        set_sprite(e, "sSnakeWalkL");
+        e.data.insert(
+            "animation_speed".into(),
+            if e.vel.x == 0.0 { 0.2 } else { 0.4 },
+        );
+    }
 }
 
 fn player_available(game: &Game) -> bool {
@@ -1108,6 +1112,62 @@ mod tests {
             }
             assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
         }
+    }
+
+    #[test]
+    fn integrated_fly_stun_preserves_snake_animation_speed() {
+        // Classic oSnake Step.xml:107-113 skips both image_speed and sprite
+        // updates while STUNNED. oFly Collision with oEnemy.xml:31-40 enters
+        // that state through the normal automatic collision dispatcher.
+        assert_eq!(
+            crate::dispatcher::collision_owner("oFly", "oSnake"),
+            Some("oFly"),
+            "the source Fly->Enemy collision must dispatch on oFly"
+        );
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.world = World::new(20, 16, crate::Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        game.player.pos = Vec2::new(250.0, 100.0);
+        game.player.previous_pos = game.player.pos;
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        let snake_id = game.spawn("oSnake", Vec2::new(80.0, 144.0));
+        {
+            let snake = game.world.entity_mut(snake_id).unwrap();
+            // Default source HP is 1, so Fly's 2 damage retires Snake on the
+            // next Step. Keep it alive to inspect the status-gated animation.
+            snake.health = 3;
+            snake.state = 1;
+        }
+        // sFlyRight's 7x7 mask is centered at origin (4,4); place it inside
+        // the Snake mask so normal Step movement retains overlap at collision.
+        let fly_id = game.spawn("oFly", Vec2::new(88.0, 154.0));
+        game.world.entity_mut(fly_id).unwrap().vel = Vec2::default();
+        assert!(
+            game.world
+                .entity(snake_id)
+                .unwrap()
+                .event_intersects(game.world.entity(fly_id).unwrap())
+        );
+
+        game.step(&crate::InputFrame::default());
+        let snake = game.world.entity(snake_id).unwrap();
+        assert_eq!(snake.state, 98, "actual Fly collision must stun Snake");
+        assert_eq!(snake.value("animation_speed"), 0.4);
+        assert!(
+            game.world.entity(fly_id).is_none(),
+            "Fly collision consumes Fly"
+        );
+
+        game.step(&crate::InputFrame::default());
+        let snake = game.world.entity(snake_id).unwrap();
+        assert_eq!(snake.state, 98);
+        assert_eq!(
+            snake.value("animation_speed"),
+            0.4,
+            "STUNNED Step must retain Snake's pre-stun animation speed"
+        );
     }
 
     #[test]

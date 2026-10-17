@@ -447,6 +447,10 @@ fn ghost(game: &mut Game, e: &mut Entity) {
     if distance > 0.0 {
         e.pos.x += (game.player.pos.x - origin.x) / distance;
         e.pos.y += (game.player.pos.y - origin.y) / distance;
+    } else if distance == 0.0 {
+        // Source point_direction at coincident points is zero degrees;
+        // its unconditional cos/sin displacement still moves one pixel right.
+        e.pos.x += 1.0;
     }
     if game.player.pos.x < e.pos.x + 8.0 {
         if e.sprite == "sGhostRight" {
@@ -587,7 +591,7 @@ fn damsel(game: &mut Game, e: &mut Entity) {
         e.data
             .insert("hit_cooldown".into(), e.value("hit_cooldown") - 1.0);
     }
-    let swimming = super::inherited::point(&game.world, e.pos, "oWaterSwim");
+    let swimming = super::inherited::swimming_point(&game.world, e.pos);
     if swimming && e.value("swimming") == 0.0 {
         game.spawn("oSplash", e.pos);
         game.sound("sndSplash", e.pos);
@@ -1592,7 +1596,7 @@ fn barrier_item_collision(game: &mut Game, id: u64) {
         return;
     }
     // Source arms Bomb before drawing its horizontal reflection speed.
-    if matches!(item.object.as_str(), "oBomb" | "oFireFrogBomb") {
+    if crate::items::explosives::source_type(item) == "Bomb" {
         let alarm = 4 + game.rng.range(5);
         let item = game.world.entity_mut(id).unwrap();
         item.set_sprite("sBombArmed");
@@ -2222,6 +2226,49 @@ mod tests {
         assert_eq!(g.player.invincible, 30);
         assert_ne!(g.player.state, PlayerState::Stunned);
     }
+
+    #[test]
+    fn actual_step_barrier_only_shortens_the_classic_bomb_fuse() {
+        let source = include_str!(
+            "../../../../references/classic-1.1/Objects/Enemies/oBarrier.events/Collision with oItem.xml"
+        );
+        assert!(source.contains("if (other.type == \"Bomb\")"));
+
+        for (object, type_override, armed) in [
+            ("oBomb", None, true),
+            ("oFireFrogBomb", None, false),
+            ("oRock", Some("Bomb"), true),
+        ] {
+            let mut game = actual_room();
+            let barrier = game.spawn("oBarrier", Vec2::new(96.0, 96.0));
+            let item = game.spawn(object, Vec2::new(96.0, 96.0));
+            {
+                let item = game.world.entity_mut(item).unwrap();
+                item.vel = Vec2::default();
+                item.data.insert("gravity".into(), 0.0);
+                if let Some(kind) = type_override {
+                    item.text.insert("type".into(), kind.into());
+                }
+            }
+
+            game.step(&InputFrame::default());
+
+            let item = game.world.entity(item).expect("Barrier bounces the item");
+            assert!(item.vel.x <= -4.0, "Barrier must bounce {object}");
+            assert_eq!(item.vel.y, -2.0);
+            if armed {
+                assert_eq!(item.value("armed"), 1.0);
+                assert_eq!(item.sprite, "sBombArmed");
+                assert!((4..=8).contains(&item.alarms[1]));
+            } else {
+                assert_eq!(item.value("armed"), 0.0);
+                assert_ne!(item.sprite, "sBombArmed");
+                assert_eq!(item.alarms[1], 119);
+            }
+            assert!(game.world.entity(barrier).is_some());
+        }
+    }
+
     #[test]
     fn actual_step_ghost_visible_edge_hits_player() {
         let mut g = actual_room();
@@ -2497,6 +2544,44 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn actual_step_damsel_water_probe_uses_active_precise_collision_point() {
+        let source = include_str!(
+            "../../../../references/classic-1.1/Objects/Characters/oDamsel.events/Step.xml"
+        );
+        assert!(source.contains("collision_point(x, y, oWaterSwim, -1, -1)"));
+
+        for opaque in [false, true] {
+            let mut game = actual_room();
+            let water = game.spawn("oWaterSwim", Vec2::new(80.0, 80.0));
+            game.world.entity_mut(water).unwrap().set_sprite("sWeb");
+            let mask = game.world.entity(water).unwrap().collision_mask();
+            let probe = (80..96)
+                .flat_map(|y| (80..96).map(move |x| Vec2::new(f64::from(x), f64::from(y))))
+                .find(|point| {
+                    mask.contains(*point, CollisionPrecision::BoundingBox)
+                        && mask.contains(*point, CollisionPrecision::Precise) == opaque
+                })
+                .expect("web water has opaque and transparent points inside its bounds");
+            let damsel = game.spawn("oDamsel", probe);
+
+            game.step(&InputFrame::default());
+
+            let damsel = game.world.entity(damsel).unwrap();
+            assert_eq!(damsel.value("swimming"), f64::from(opaque));
+            assert_eq!(damsel.value("gravity"), if opaque { 0.2 } else { 0.6 });
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .any(|entity| entity.object == "oSplash"),
+                opaque,
+                "Damsel splashes only on an active opaque WaterSwim point"
+            );
+        }
+    }
+
     #[test]
     fn actual_step_kiss_frame_emits_once_and_returns_to_slave() {
         let mut g = actual_room();
@@ -3252,3 +3337,11 @@ mod shopkeeper_patrol_burst_source_tests;
 #[cfg(test)]
 #[path = "shopkeeper_cached_distance_tests.rs"]
 mod shopkeeper_cached_distance_tests;
+
+#[cfg(test)]
+#[path = "scarab_body_source_tests.rs"]
+mod scarab_body_source_tests;
+
+#[cfg(test)]
+#[path = "ghost_move_source_tests.rs"]
+mod ghost_move_source_tests;

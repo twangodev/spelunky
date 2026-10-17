@@ -563,15 +563,8 @@ fn alien(game: &mut Game, e: &mut Entity) {
     // Alien Step does not apply the inherited yVelLimit and moveTo itself
     // does not clear velocity when it resolves a ceiling collision.
     e.vel.y = if floor && e.state != 98 { 0.0 } else { next_y };
-    if e.state == 98 {
-        if floor {
-            e.timer = e.timer.saturating_sub(1);
-            if e.timer == 0 {
-                enter(e, 0);
-            }
-        }
-        return;
-    }
+    // Classic oAlien Step has no STUNNED branch: counter is only consumed in
+    // IDLE, so Fly's status=98/counter=20 remains STUNNED while alive.
     if e.state == 0 {
         if counter(e, "counter") == 0.0 {
             e.facing = if game.rng.range(2) == 0 { -1 } else { 1 };
@@ -3324,6 +3317,62 @@ mod tests {
         g.world.entity_mut(id).unwrap().vel.y = 12.0;
         g.step(&crate::InputFrame::default());
         assert!((g.world.entity(id).unwrap().vel.y - 12.6).abs() < 1e-9);
+    }
+
+    #[test]
+    fn integrated_fly_stun_keeps_alien_permanently_stunned() {
+        // Classic oAlien Step.xml:51-101 applies gravity and only handles
+        // IDLE/WALK; it has no STUNNED recovery. oFly Collision with oEnemy.xml:31-40
+        // supplies status=98 and counter=20, but Alien does not consume it.
+        assert_eq!(
+            crate::dispatcher::collision_owner("oFly", "oAlien"),
+            Some("oFly"),
+            "the source Fly->Enemy collision must dispatch on oFly"
+        );
+        let mut g = game();
+        g.world.name = "rLevel".into();
+        g.player.pos = Vec2::new(250.0, 100.0);
+        for x in 0..g.world.width {
+            g.world.set_tile(x, 10, "oBlock");
+        }
+        let alien_id = g.spawn("oAlien", Vec2::new(80.0, 144.0));
+        {
+            let alien = g.world.entity_mut(alien_id).unwrap();
+            // Default source HP is 1, so a real Fly's 2 damage kills it on
+            // the next Step before status behavior can be observed. Raise HP
+            // only to isolate the same source STUNNED branch after the hit.
+            alien.health = 3;
+            alien.vel = Vec2::default();
+        }
+        // oFly's 7x7 sprite is centered at a 4,4 origin, whereas sAlien's
+        // source mask occupies x+1..14/y+5..15. Center it in that mask so
+        // normal Step motion preserves overlap through AutomaticCollision.
+        let fly_id = g.spawn("oFly", Vec2::new(88.0, 154.0));
+        g.world.entity_mut(fly_id).unwrap().vel = Vec2::default();
+        assert!(
+            g.world
+                .entity(alien_id)
+                .unwrap()
+                .event_intersects(g.world.entity(fly_id).unwrap())
+        );
+
+        g.step(&crate::InputFrame::default());
+        let alien = g.world.entity(alien_id).unwrap();
+        assert_eq!(alien.state, 98, "actual Fly collision must stun Alien");
+        assert_eq!(alien.timer, 20);
+        assert!(
+            g.world.entity(fly_id).is_none(),
+            "Fly collision consumes Fly"
+        );
+
+        for _ in 0..50 {
+            g.step(&crate::InputFrame::default());
+        }
+        let alien = g.world.entity(alien_id).unwrap();
+        assert_eq!(
+            alien.state, 98,
+            "Classic Alien Step has no STUNNED recovery even after landing"
+        );
     }
 
     #[test]

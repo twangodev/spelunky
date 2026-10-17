@@ -2708,6 +2708,47 @@ mod tests {
     }
 
     #[test]
+    fn actual_step_magma_man_rear_whip_uses_inherited_enemy_damage_and_blood() {
+        let source = include_str!(
+            "../../../references/classic-1.1/Objects/Enemies/oMagmaMan.events/Create.xml"
+        );
+        assert!(source.contains("hp = 200;\ninvincible = 0;"));
+        assert!(!source.contains("no_whip"));
+        let inherited = include_str!(
+            "../../../references/classic-1.1/Objects/Basis/oEnemy.events/Collision with oWhipPre.xml"
+        );
+        assert!(inherited.contains("hp -= other.damage;"));
+        assert!(inherited.contains("scrCreateBlood(x+sprite_width/2, y+sprite_height/2, 1);"));
+        assert_eq!(
+            crate::dispatcher::collision_owner("oMagmaMan", "oWhipPre"),
+            Some("oEnemy")
+        );
+
+        let (mut game, man) = custom_melee_blood_room("oMagmaMan", true, RulesPreset::Classic);
+
+        let mut hit_frame = None;
+        for frame in 0..18 {
+            game.step(&InputFrame {
+                attack: frame == 0,
+                attack_pressed: frame == 0,
+                ..Default::default()
+            });
+            let victim = game.world.entity(man).unwrap();
+            assert_eq!(victim.value("no_whip"), 0.0);
+            if counts_as_kill(victim) {
+                hit_frame = Some(frame);
+                break;
+            }
+        }
+
+        let frame = hit_frame.expect("natural rear whip reaches Magma Man");
+        let victim = game.world.entity(man).unwrap();
+        assert_eq!(victim.health, 200 - (frame as i32 + 1) - 1);
+        assert!(counts_as_kill(victim));
+        assert_eq!(source_contact_live_blood(&game).len(), 1);
+    }
+
+    #[test]
     fn actual_step_bullet_damsel_uses_own_safe_and_velocity_contract() {
         let mut game = psychic_room();
         let damsel = game.spawn("oDamsel", Vec2::new(136., 152.));
