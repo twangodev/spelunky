@@ -10,21 +10,27 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  NEXTEST_VERSION: 0.9.148
 
 jobs:
-  native:
+  formatting:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.98.0
           components: rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  assets-and-tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
-      - name: Install Linux development libraries
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev
       - name: Verify original assets
         run: |
           bun tools/export_assets.ts --verify
@@ -37,13 +43,94 @@ jobs:
         run: bun tools/audit_coverage.ts --check
       - name: Test build tools
         run: bun test tools
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-      - name: Test workspace
-        run: cargo test --workspace --locked
+
+  core-tools-build:
+    runs-on: ubuntu-latest
+    env:
+      # Keep debug assertions while avoiding large debug-symbol transfers.
+      CARGO_PROFILE_TEST_DEBUG: '0'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
+      - name: Test gameplay core and tools documentation
+        run: cargo test -p spelunky-core -p spelunky-tools --doc --locked
+      - name: Build and archive gameplay core and tools tests
+        run: cargo nextest archive -p spelunky-core -p spelunky-tools --locked --archive-file "$RUNNER_TEMP/core-tests.tar.zst"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: spelunky-core-tests
+          path: ${{ runner.temp }}/core-tests.tar.zst
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+  core-tools-tests:
+    name: Core/tools tests (${{ matrix.shard }}/16)
+    needs: [core-tools-build]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: spelunky-core-tests
+          path: ${{ runner.temp }}
+      - name: Test gameplay core and tools
+        env:
+          TEST_SHARD: ${{ matrix.shard }}
+        run: |
+          cargo nextest run --archive-file "$RUNNER_TEMP/core-tests.tar.zst" \
+            --workspace-remap "$GITHUB_WORKSPACE" \
+            --partition "hash:$TEST_SHARD/16" --no-fail-fast
+
+  app-tests:
+    runs-on: ubuntu-latest
+    env:
+      LIBGL_ALWAYS_SOFTWARE: 'true'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+      - name: Install Linux development libraries and software graphics
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libegl1 libgl1-mesa-dri mesa-vulkan-drivers
+      - name: Prepare graphics runtime directory
+        run: |
+          install -d -m 700 "$RUNNER_TEMP/spelunky-runtime"
+          echo "XDG_RUNTIME_DIR=$RUNNER_TEMP/spelunky-runtime" >> "$GITHUB_ENV"
+      - name: Test application
+        run: cargo test -p spelunky --locked
+
+  linux-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+      - name: Install Linux development libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev
       - name: Build Linux application
         run: cargo build -p spelunky --release --locked
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: spelunky-linux-x86_64
           path: |
@@ -52,15 +139,55 @@ jobs:
             LICENSE
           if-no-files-found: error
 
+  # Keep the existing required status context while making each expensive suite
+  # run independently. This check fails if any native constituent fails or skips.
+  native:
+    name: native
+    needs:
+      - formatting
+      - assets-and-tools
+      - core-tools-build
+      - core-tools-tests
+      - app-tests
+      - linux-build
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every native check
+        env:
+          FORMATTING_RESULT: ${{ needs.formatting.result }}
+          ASSETS_RESULT: ${{ needs.assets-and-tools.result }}
+          CORE_BUILD_RESULT: ${{ needs.core-tools-build.result }}
+          CORE_TESTS_RESULT: ${{ needs.core-tools-tests.result }}
+          APP_TESTS_RESULT: ${{ needs.app-tests.result }}
+          LINUX_BUILD_RESULT: ${{ needs.linux-build.result }}
+        run: |
+          failed=0
+          for check in \
+            "formatting=$FORMATTING_RESULT" \
+            "assets-and-tools=$ASSETS_RESULT" \
+            "core-tools-build=$CORE_BUILD_RESULT" \
+            "core-tools-tests=$CORE_TESTS_RESULT" \
+            "app-tests=$APP_TESTS_RESULT" \
+            "linux-build=$LINUX_BUILD_RESULT"; do
+            name=${check%%=*}
+            result=${check#*=}
+            if [ "$result" != success ]; then
+              echo "::error::$name finished with $result"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
   web:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.98.0
           targets: wasm32-unknown-unknown
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
       - uses: oven-sh/setup-bun@v2
@@ -72,7 +199,7 @@ jobs:
         run: cargo check -p spelunky --lib --target wasm32-unknown-unknown --locked
       - name: Build static web bundle
         run: ./tools/build_web.sh --release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: spelunky-web
           path: web/dist
