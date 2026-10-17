@@ -878,12 +878,21 @@ impl World {
     /// Source collision_point(..., family, 0, 0) only sees active instances.
     /// Retain the sparse mask broadphase used by other tile queries.
     pub(crate) fn tiles_point_active(&self, point: Vec2, group: &str) -> bool {
+        self.tiles_point_active_precision(point, group, CollisionPrecision::BoundingBox)
+    }
+
+    pub(crate) fn tiles_point_active_precision(
+        &self,
+        point: Vec2,
+        group: &str,
+        precision: CollisionPrecision,
+    ) -> bool {
         self.tiles_match(
             Rect::new(point.x, point.y, 0.001, 0.001),
             group,
             Some(point),
             None,
-            CollisionPrecision::BoundingBox,
+            precision,
             true,
         )
     }

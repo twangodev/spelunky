@@ -92,13 +92,21 @@ pub(super) fn create_local(ctx: &mut crate::creation::EntityCreateContext<'_>, e
 }
 
 fn water(world: &World, p: Vec2) -> bool {
-    world
-        .tile((p.x / 16.0).floor() as i32, (p.y / 16.0).floor() as i32)
-        .is_some_and(|t| crate::catalog::is_a(&t.object, "oWater"))
-        || world
-            .entities
-            .iter()
-            .any(|e| e.alive && crate::catalog::is_a(&e.object, "oWater") && e.bounds().contains(p))
+    water_with_precision(world, p, CollisionPrecision::BoundingBox)
+}
+
+fn precise_water(world: &World, p: Vec2) -> bool {
+    water_with_precision(world, p, CollisionPrecision::Precise)
+}
+
+fn water_with_precision(world: &World, p: Vec2, precision: CollisionPrecision) -> bool {
+    world.tiles_point_active_precision(p, "oWater", precision)
+        || world.entities.iter().any(|e| {
+            e.alive
+                && e.engine_active
+                && crate::catalog::is_a(&e.object, "oWater")
+                && e.mask_contains(p, precision)
+        })
 }
 
 fn vine(world: &World, p: Vec2) -> bool {
@@ -342,7 +350,8 @@ fn monkey(game: &mut Game, e: &mut Entity) {
     if game.world.solid_at(e.pos.x + 8.0, e.pos.y + 8.0) {
         e.health = -999;
     }
-    let swimming = water(&game.world, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
+    // Monkey Step42 uses collision_point(..., oWater, -1, -1).
+    let swimming = precise_water(&game.world, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
     if swimming && e.value("swimming") == 0.0 {
         game.spawn("oSplash", Vec2::new(e.pos.x + 8.0, e.pos.y));
         game.sound("sndSplash", e.pos);
@@ -2980,3 +2989,7 @@ mod tests {
 #[cfg(test)]
 #[path = "jungle_parity_followup_tests.rs"]
 mod parity_followup_tests;
+
+#[cfg(test)]
+#[path = "jungle_water_query_tests.rs"]
+mod water_query_tests;

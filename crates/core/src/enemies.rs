@@ -2738,8 +2738,10 @@ mod tests {
         game.player.grounded = true;
         if object == "oPiranha" {
             // Preserve the real fish Step instead of its dry-land FishBone exit.
+            // Classic water hitboxes belong to active oWaterSwim instances;
+            // bare oWater parents have no sprite mask to collide against.
             for x in 7..=10 {
-                game.world.set_tile(x, 9, "oWater");
+                game.spawn("oWaterSwim", Vec2::new(f64::from(x * 16), 144.0));
             }
             game.player.data.insert("bubble_timer".into(), 20.0);
         }
