@@ -4187,7 +4187,9 @@ mod tests {
         eprintln!("natural generated local Create births checked: {birth_counts:?}");
         // The seed selects content; no fixed entity IDs, positions or room
         // layouts encode the earlier, incorrectly deferred random stream.
-        for object in ["oFrog", "oUFO", "oDamsel"] {
+        // Correct source room routing changes the stock seed-0 campaign
+        // content; the dedicated generated-birth test above covers UFO Create.
+        for object in ["oFrog", "oDamsel"] {
             assert!(checked.contains(object), "fixture must exercise {object}");
         }
     }

@@ -139,13 +139,52 @@ fn room_path(
         flags.insert("sacrifice_pit".into());
     }
     while y < 4 {
-        let n = if x == 0 {
+        let mut n = if x == 0 {
             rand(rng, 3, 5)
         } else if x == 3 {
             rand(rng, 5, 7)
         } else {
             rand(rng, 1, 5)
         };
+        if source_classic {
+            // Preserve scrLevelGen's literal nested if/else binding. If the
+            // requested neighbor is occupied, its inner `else if` tries the
+            // opposite side; two occupied sides change n to 5 and descend.
+            if n < 3 || n > 5 {
+                if x > 0 {
+                    if path.rooms[y][x - 1] == 0 {
+                        x -= 1;
+                    } else if x < 3 {
+                        if path.rooms[y][x + 1] == 0 {
+                            x += 1;
+                        } else {
+                            n = 5;
+                        }
+                    }
+                }
+            } else if n == 3 || n == 4 {
+                if x < 3 {
+                    if path.rooms[y][x + 1] == 0 {
+                        x += 1;
+                    } else if x > 0 {
+                        if path.rooms[y][x - 1] == 0 {
+                            x -= 1;
+                        } else {
+                            n = 5;
+                        }
+                    }
+                }
+            }
+        } else if n != 5 {
+            let next = if n < 3 || n > 5 {
+                x.saturating_sub(1)
+            } else {
+                (x + 1).min(3)
+            };
+            if path.rooms[y][next] == 0 {
+                x = next;
+            }
+        }
         if n == 5 {
             if y < 3 {
                 path.rooms[y][x] = 2;
@@ -155,14 +194,6 @@ fn room_path(
             }
             y += 1;
         } else {
-            let next = if n < 3 || n > 5 {
-                x.saturating_sub(1)
-            } else {
-                (x + 1).min(3)
-            };
-            if path.rooms[y][next] == 0 {
-                x = next;
-            }
             path.rooms[y][x] = 1;
         }
     }
@@ -1225,19 +1256,39 @@ mod tests {
             selected.insert("sacrifice_pit".into());
         }
         while y < 4 {
-            let draw = match x {
+            let mut draw = match x {
                 0 => 3 + rng.range(3),
                 3 => 5 + rng.range(3),
                 _ => 1 + rng.range(5),
             };
             let (previous_x, previous_y) = (x, y);
+            // Keep the source's unbraced nested if/else structure: when the
+            // requested horizontal neighbor is occupied, its `else if`
+            // checks the opposite side; if that side is occupied too, source
+            // changes n to 5 and descends instead of staying in this room.
             if draw < 3 || draw > 5 {
-                if x > 0 && rooms[x - 1][y] == 0 {
-                    x -= 1;
+                if x > 0 {
+                    if rooms[x - 1][y] == 0 {
+                        x -= 1;
+                    } else if x < 3 {
+                        if rooms[x + 1][y] == 0 {
+                            x += 1;
+                        } else {
+                            draw = 5;
+                        }
+                    }
                 }
             } else if draw == 3 || draw == 4 {
-                if x < 3 && rooms[x + 1][y] == 0 {
-                    x += 1;
+                if x < 3 {
+                    if rooms[x + 1][y] == 0 {
+                        x += 1;
+                    } else if x > 0 {
+                        if rooms[x - 1][y] == 0 {
+                            x -= 1;
+                        } else {
+                            draw = 5;
+                        }
+                    }
                 }
             }
             if draw == 5 {
