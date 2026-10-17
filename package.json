@@ -1,0 +1,19 @@
+{
+  "name": "spelunky",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.0",
+  "workspaces": [
+    "web"
+  ],
+  "scripts": {
+    "dev": "bun run --cwd web dev",
+    "build": "bun run assets:verify && bun run --cwd web build",
+    "check": "bun run --cwd web check",
+    "preview": "bun run --cwd web preview",
+    "deploy": "bun run --cwd web deploy",
+    "assets:verify": "bun tools/export_assets.ts --verify && bun tools/export_catalog.ts --check && bun tools/export_collision_events.ts --check && bun tools/export_hub.ts --check && bun tools/export_cinematics.ts --check && bun tools/extract_templates.ts --check",
+    "coverage:check": "bun tools/audit_coverage.ts --check",
+    "test:tools": "bun test tools"
+  }
+}

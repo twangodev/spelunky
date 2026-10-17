@@ -32,17 +32,11 @@ jobs:
         with:
           bun-version: 1.4.0
       - name: Verify original assets
-        run: |
-          bun tools/export_assets.ts --verify
-          bun tools/export_catalog.ts --check
-          bun tools/export_collision_events.ts --check
-          bun tools/export_hub.ts --check
-          bun tools/export_cinematics.ts --check
-          bun tools/extract_templates.ts --check
+        run: bun run assets:verify
       - name: Check coverage inventory freshness
-        run: bun tools/audit_coverage.ts --check
+        run: bun run coverage:check
       - name: Test build tools
-        run: bun test tools
+        run: bun run test:tools
 
   core-tools-build:
     runs-on: ubuntu-latest
@@ -197,8 +191,9 @@ jobs:
         run: cargo install wasm-pack --version 0.15.0 --locked
       - name: Check Wasm application
         run: cargo check -p spelunky --lib --target wasm32-unknown-unknown --locked
+      - run: bun install --frozen-lockfile
       - name: Build static web bundle
-        run: ./tools/build_web.sh --release
+        run: bun run build
       - uses: actions/upload-artifact@v7
         with:
           name: spelunky-web
@@ -217,25 +212,33 @@ jobs:
       group: cloudflare-production
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.0
-      - run: bun install --cwd web --frozen-lockfile
-      - uses: actions/download-artifact@v4
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v8
         with:
           name: spelunky-web
           path: web/dist
-      - name: Verify deployment bundle
-        run: bun tools/check_web_bundle.ts
       - name: Deploy static assets
-        working-directory: web
         run: bun run deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-      - name: Verify production artifact and cache headers
-        run: bun tools/check_web_deployment.ts https://spelunky.twango.dev
+      - name: Smoke check production
+        shell: bash
+        run: |
+          set -euo pipefail
+          origin=https://spelunky.twango.dev
+          curl --fail --silent --show-error --retry 5 --retry-all-errors --retry-delay 5 "$origin/" -o /tmp/spelunky-index.html
+          cmp web/dist/index.html /tmp/spelunky-index.html
+          wasm=$(find web/dist/_app/immutable -name '*.wasm' -type f)
+          test -n "$wasm"
+          curl --fail --silent --show-error --retry 5 --retry-all-errors --retry-delay 5 -D /tmp/spelunky-wasm.headers "$origin/${wasm#web/dist/}" -o /tmp/spelunky.wasm
+          cmp "$wasm" /tmp/spelunky.wasm
+          grep -qi '^content-type: application/wasm' /tmp/spelunky-wasm.headers
+          grep -qi '^cache-control: .*max-age=31536000.*immutable' /tmp/spelunky-wasm.headers

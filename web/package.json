@@ -8,7 +8,7 @@
     "dev": "vite --host 127.0.0.1",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "build": "bun run check && vite build",
-    "preview": "vite preview --host 127.0.0.1",
+    "preview": "wrangler dev --ip 127.0.0.1",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {
@@ -19,7 +19,8 @@
     "svelte-check": "4.7.6",
     "typescript": "5.9.3",
     "vite": "7.3.6",
-    "wrangler": "4.151.1"
+    "wrangler": "4.151.1",
+    "@types/node": "26.6.5"
   },
   "engines": {
     "node": "^22.12.0 || >=24.0.0"

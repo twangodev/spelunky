@@ -1,6 +1,2 @@
-/pkg/*/spelunky.js
-  Cache-Control: public, max-age=31536000, immutable
-/pkg/*/spelunky_bg.wasm
-  Cache-Control: public, max-age=31536000, immutable
 /_app/immutable/*
   Cache-Control: public, max-age=31536000, immutable

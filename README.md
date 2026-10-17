@@ -15,11 +15,12 @@ cargo run -p spelunky
 For the browser, install the `wasm32-unknown-unknown` target and `wasm-pack`, then:
 
 ```sh
-./tools/build_web.sh
-bun tools/serve_web.ts
+bun install --frozen-lockfile
+bun run dev
 ```
 
-Open `http://127.0.0.1:8000/`. The generated `web/` bundle can be served by a static HTTP server. WebGL 2 is required; WebGPU is not required.
+Open `http://127.0.0.1:5173/`. The Vite plugin builds Wasm and reloads the game after Rust edits.
+Use `bun run build` for a static release in `web/dist`, then `bun run preview` to serve it locally through Wrangler. WebGL 2 is required; WebGPU is not required.
 
 ## Play and edit
 
@@ -42,7 +43,7 @@ Actual 240 Hz pacing depends on hardware and has not been measured in this headl
 The workspace separates `spelunky-core`, the native/browser application, and `spelunky-tools`. Original source, provenance, and checksums are archived in [references](references/README.md). The asset exporter verifies every packed sprite pixel against the original data.
 
 ```sh
-bun tools/export_assets.ts --verify
+bun run assets:verify
 cargo test --workspace --locked
 cargo fmt --all -- --check
 cargo run -p spelunky-tools -- replay 42 600 classic
@@ -60,12 +61,11 @@ The `production` GitHub environment allows only `main` and requires the
 Workers Scripts Write for the deployment account, plus Workers Routes Write and
 Zone Read for `twango.dev`.
 
-Game JavaScript and Wasm share a content-hashed directory and a one-year immutable
-browser cache, as do Svelte's hashed assets. HTML and unversioned files revalidate.
-The build verifies the package hash and Cloudflare asset limits before upload.
-After deployment, CI checks the served HTML/JS/Wasm against the artifact and
-verifies cache headers, Wasm MIME type, and missing-file 404s.
-No game code runs on the Worker and no server or database is required.
+Vite bundles the generated game JavaScript and gives Wasm a content-hashed URL.
+Files under `/_app/immutable/` use a one-year immutable browser cache; HTML and
+unversioned files revalidate. Wrangler validates asset upload limits. After
+deployment, CI compares the served HTML and Wasm with its artifact and checks
+Wasm MIME and caching headers. No game code runs on the Worker.
 
 The first CI deployment replaces the existing `spelunky.twango.dev` CNAME to
 GitHub Pages with the Worker custom domain. Until that deployment, the current
@@ -74,8 +74,7 @@ site and DNS remain unchanged.
 After building, preview Cloudflare routing and headers with:
 
 ```sh
-cd web
-bunx --no-install wrangler dev --ip 127.0.0.1
+bun run preview
 ```
 
 To roll back, select a previous version in Cloudflare's deployment history, or

@@ -1,22 +1,11 @@
-import gameModulePath from './public/pkg/module-path.json';
 import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
+import { spelunky } from './plugins/spelunky';
 
 export default defineConfig({
-  define: {
-    __GAME_MODULE_PATH__: JSON.stringify(gameModulePath),
-  },
   plugins: [
-    {
-      name: 'spelunky-full-page-reload',
-      enforce: 'pre',
-      handleHotUpdate({ server }) {
-        // The Rust event loop owns its canvas for the lifetime of the page.
-        server.ws.send({ type: 'full-reload' });
-        return [];
-      },
-    },
+    spelunky(),
     sveltekit({
       adapter: adapter({ pages: 'dist', assets: 'dist' }),
       files: { assets: 'public' },
