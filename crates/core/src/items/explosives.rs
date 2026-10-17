@@ -806,7 +806,6 @@ pub(crate) fn collision(game: &mut Game, self_id: u64, other: crate::dispatcher:
                         entity.alarms[1] = 4 + game.rng.range(5) as i32;
                         entity.timer = entity.alarms[1] as u32;
                         entity.data.insert("attached_id".into(), 0.0);
-                        entity.data.insert("stuck".into(), 0.0);
                         if entity.pos.y < explosion.pos.y {
                             entity.vel.y = -(2.0 + f64::from(game.rng.range(3)));
                         }
@@ -1529,7 +1528,6 @@ fn projectile_motion(world: &World, entity: &mut Entity, sticky: bool) -> bool {
     if sticky {
         if side || floor || ceiling {
             entity.vel = Vec2::default();
-            entity.data.insert("stuck".into(), 1.0);
             if floor {
                 entity.pos.y += 1.0;
             }
@@ -1895,7 +1893,6 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
             entity.sprite = "sBombArmed".into();
             entity.data.insert("armed".into(), 1.0);
             entity.data.insert("attached_id".into(), 0.0);
-            entity.data.insert("stuck".into(), 0.0);
             entity.timer = 4 + game.rng.range(5);
             if entity.pos.y < explosion.pos.y {
                 entity.vel.y = -(2.0 + f64::from(game.rng.range(3)));
@@ -3577,12 +3574,32 @@ mod tests {
             },
         );
         tick(&mut g);
-        assert_eq!(g.world.entities[0].value("stuck"), 1.0);
+        // `stuck` is reserved for fast arrows; the sticky bomb branch never
+        // writes it in the original oItem Step.
+        assert_eq!(g.world.entities[0].value("stuck"), 0.0);
         assert_eq!(g.world.entities[0].vel, Vec2::default());
         g.world.set_tile(6, 5, "");
         tick(&mut g);
         assert_eq!(g.world.entities[0].value("stuck"), 0.0);
         assert!(g.world.entities[0].vel.y > 0.0);
+    }
+
+    #[test]
+    fn game_step_sticky_bomb_wall_contact_does_not_set_arrow_stuck_flag() {
+        let mut g = game();
+        g.world.set_tile(6, 5, "oHardBlock");
+        let id = g.world.spawn("oBomb", Vec2::new(88.0, 88.0));
+        let bomb = g.world.entity_mut(id).unwrap();
+        arm_bomb(bomb);
+        bomb.data.insert("sticky".into(), 1.0);
+        bomb.vel.x = 8.0;
+
+        g.step(&InputFrame::default());
+
+        let bomb = g.world.entity(id).unwrap();
+        assert_eq!(bomb.value("colRight"), 1.0);
+        assert_eq!(bomb.vel, Vec2::default());
+        assert_eq!(bomb.value("stuck"), 0.0);
     }
 
     #[test]
