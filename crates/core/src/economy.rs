@@ -458,6 +458,15 @@ pub(crate) fn player_pay_step(game: &mut Game, input: &InputFrame) {
     if !player_in_shop(game, game.player.pos) {
         return;
     }
+    // oPlayer1 Step1404 also requires instance_exists(oShopkeeper).
+    // Room ownership survives keeper retirement/deactivation; neither a
+    // roomPath marker nor a hidden actor permits payment. A corpse still
+    // counts while its source instance remains active.
+    if !game.world.entities.iter().any(|keeper| {
+        keeper.alive && keeper.engine_active && crate::catalog::is_a(&keeper.object, "oShopkeeper")
+    }) {
+        return;
+    }
     // Purchase failure sets source n=1, but both shop-service blocks continue.
     let mut purchase_failed = false;
     if let Some(id) = game.player.held {
@@ -1235,3 +1244,7 @@ mod damsel_cached_distance_tests;
 #[cfg(test)]
 #[path = "economy_campaign_shop_path_tests.rs"]
 mod campaign_shop_path_tests;
+
+#[cfg(test)]
+#[path = "economy_payment_keeper_tests.rs"]
+mod payment_keeper_tests;
