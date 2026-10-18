@@ -1907,91 +1907,113 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
     }
     let mut magma_spawns = Vec::new();
     let mut solid_destroys = Vec::new();
-    let mut fragile_destroys = Vec::new();
-    for entity in &mut game.world.entities {
-        if !entity.alive || entity.id == explosion.id || !hits(entity.sprite_bounds()) {
-            continue;
-        }
-        if entity.object == "oBoulder" {
-            boulders.push(entity.clone());
-            entity.alive = false;
-        } else if entity.object == "oBarrierEmitter" {
-            emitters.push(entity.id);
-            entity.alive = false;
-        } else if crate::catalog::is_a(&entity.object, "oSolid") {
-            solid_collision |= solids_active;
-            // The original Collision with oSolid event applies equally to
-            // tiles and instances such as push blocks and thin ice.
-            if solids_active && entity.value("invincible") == 0.0 && entity.object != "oHardBlock" {
-                solid_destroys.push(entity.id);
-            }
-        } else if entity.object == "oBomb" {
-            // Collision callbacks run on every overlapping frame. In
-            // particular an overlapping blast resets this short fuse again.
-            entity.sprite = "sBombArmed".into();
-            entity.data.insert("armed".into(), 1.0);
-            entity.data.insert("attached_id".into(), 0.0);
-            entity.timer = 4 + game.rng.range(5);
-            if entity.pos.y < explosion.pos.y {
-                entity.vel.y = -(2.0 + f64::from(game.rng.range(3)));
-            }
-            let horizontal_speed = 2.0 + f64::from(game.rng.range(3));
-            entity.vel.x = if entity.pos.x < explosion.pos.x {
-                -horizontal_speed
-            } else {
-                horizontal_speed
-            };
-        } else if entity.object == "oMagmaMan" {
-            entity.alive = false;
-            for _ in 0..2 {
-                magma_spawns.push(Vec2::new(entity.pos.x + 8.0, entity.pos.y - 4.0));
-            }
-        } else if (crate::enemies::is_enemy(&entity.object) || entity.object == "oDamsel")
-            && entity.value("invincible") == 0.0
+    // Collision pair order follows source object resource IDs; preserve the
+    // instance order within each class while taking a stable scan snapshot.
+    // Destroy callbacks run inline so Jar/Skull draws precede later item RNG.
+    let mut entity_order: Vec<_> = (0..game.world.entities.len()).collect();
+    let explosion_resource = crate::catalog::object("oExplosion").unwrap().id;
+    entity_order.sort_by_key(|&index| {
+        let target_resource = crate::catalog::object(&game.world.entities[index].object)
+            .map_or(i32::MAX, |object| object.id);
+        (
+            target_resource.min(explosion_resource),
+            target_resource.max(explosion_resource),
+        )
+    });
+    for index in entity_order {
+        let mut fragile_destroy = None;
         {
-            entity.health -= if entity.object == "oDamsel" { 100 } else { 30 };
-            let speed = 4.0 + f64::from(game.rng.range(3));
-            entity.vel = Vec2::new(
-                if entity.pos.x > explosion.pos.x {
-                    speed
-                } else {
-                    -speed
-                },
-                -6.0,
-            );
-            entity.data.insert("burning".into(), 50.0);
-            if entity.object == "oDamsel" {
-                entity.state = 2;
+            let entity = &mut game.world.entities[index];
+            if !entity.alive || entity.id == explosion.id || !hits(entity.sprite_bounds()) {
+                continue;
             }
-        } else if matches!(
-            entity.object.as_str(),
-            "oWeb" | "oArrow" | "oFishBone" | "oJar" | "oSkull"
-        ) {
-            entity.alive = false;
-            if matches!(entity.object.as_str(), "oJar" | "oSkull") {
-                fragile_destroys.push(entity.id);
-            }
-        } else if crate::catalog::is_a(&entity.object, "oItem") {
-            if entity.object != "oRopeThrow" || entity.value("falling") == 0.0 {
-                entity.vel.y += if entity.pos.y < explosion.pos.y {
-                    -6.0
+            if entity.object == "oBoulder" {
+                boulders.push(entity.clone());
+                entity.alive = false;
+            } else if entity.object == "oBarrierEmitter" {
+                emitters.push(entity.id);
+                entity.alive = false;
+            } else if crate::catalog::is_a(&entity.object, "oSolid") {
+                solid_collision |= solids_active;
+                // The original Collision with oSolid event applies equally to
+                // tiles and instances such as push blocks and thin ice.
+                if solids_active
+                    && entity.value("invincible") == 0.0
+                    && entity.object != "oHardBlock"
+                {
+                    solid_destroys.push(entity.id);
+                }
+            } else if entity.object == "oBomb" {
+                // Collision callbacks run on every overlapping frame. In
+                // particular an overlapping blast resets this short fuse again.
+                entity.sprite = "sBombArmed".into();
+                entity.data.insert("armed".into(), 1.0);
+                entity.data.insert("attached_id".into(), 0.0);
+                entity.timer = 4 + game.rng.range(5);
+                if entity.pos.y < explosion.pos.y {
+                    entity.vel.y = -(2.0 + f64::from(game.rng.range(3)));
+                }
+                let horizontal_speed = 2.0 + f64::from(game.rng.range(3));
+                entity.vel.x = if entity.pos.x < explosion.pos.x {
+                    -horizontal_speed
                 } else {
-                    6.0
+                    horizontal_speed
                 };
+            } else if entity.object == "oMagmaMan" {
+                entity.alive = false;
+                for _ in 0..2 {
+                    magma_spawns.push(Vec2::new(entity.pos.x + 8.0, entity.pos.y - 4.0));
+                }
+            } else if (crate::enemies::is_enemy(&entity.object) || entity.object == "oDamsel")
+                && entity.value("invincible") == 0.0
+            {
+                entity.health -= if entity.object == "oDamsel" { 100 } else { 30 };
                 let speed = 4.0 + f64::from(game.rng.range(3));
-                entity.vel.x += if entity.pos.x < explosion.pos.x {
-                    -speed
-                } else {
-                    speed
-                };
+                entity.vel = Vec2::new(
+                    if entity.pos.x > explosion.pos.x {
+                        speed
+                    } else {
+                        -speed
+                    },
+                    -6.0,
+                );
+                entity.data.insert("burning".into(), 50.0);
+                if entity.object == "oDamsel" {
+                    entity.state = 2;
+                }
+            } else if matches!(
+                entity.object.as_str(),
+                "oWeb" | "oArrow" | "oFishBone" | "oJar" | "oSkull"
+            ) {
+                entity.alive = false;
+                if matches!(entity.object.as_str(), "oJar" | "oSkull") {
+                    fragile_destroy = Some(entity.id);
+                }
+            } else if crate::catalog::is_a(&entity.object, "oItem") {
+                if entity.object != "oRopeThrow" || entity.value("falling") == 0.0 {
+                    entity.vel.y += if entity.pos.y < explosion.pos.y {
+                        -6.0
+                    } else {
+                        6.0
+                    };
+                    let speed = 4.0 + f64::from(game.rng.range(3));
+                    entity.vel.x += if entity.pos.x < explosion.pos.x {
+                        -speed
+                    } else {
+                        speed
+                    };
+                }
+            }
+            if entity.held && entity.object != "oExplosion" {
+                entity.held = false;
+                if game.player.held == Some(entity.id) {
+                    game.player.held = None;
+                    game.player.pickup_item_type.clear();
+                }
             }
         }
-        if entity.held && entity.object != "oExplosion" {
-            entity.held = false;
-            if game.player.held == Some(entity.id) {
-                game.player.held = None;
-                game.player.pickup_item_type.clear();
-            }
+        if let Some(id) = fragile_destroy {
+            super::break_item(game, id);
         }
     }
     for boulder in boulders {
@@ -1999,9 +2021,6 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
     }
     for id in emitters {
         crate::enemies::destroy_barrier_emitter(game, id);
-    }
-    for id in fragile_destroys {
-        super::break_item(game, id);
     }
     for id in solid_destroys {
         destroy_solid_instance(game, id);

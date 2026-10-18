@@ -189,3 +189,112 @@ fn own_non_spear_trap_destroy_uses_literal_three_piece_clean_guards() {
         }
     }
 }
+
+fn literal_jar_destroy_without_loot(rng: &mut Rng) -> bool {
+    // oJar Destroy creates three rubble pieces before checking its short-circuiting
+    // loot table. This focused order oracle chooses seeds with no loot branch.
+    for _ in 0..3 {
+        rng.range(3);
+        rng.range(3);
+        rng.range(4);
+    }
+    [3, 6, 12, 12, 12, 6, 12]
+        .into_iter()
+        .all(|denominator| rng.range(denominator) != 0)
+}
+
+#[test]
+fn explosion_runs_jar_destroy_before_later_item_resource_rng() {
+    // Source collision pairs order the Jar resource (635) before SpikeShoes
+    // (876), regardless of instance creation order. Create shoes first to
+    // ensure source resource order, not storage order, selects the RNG stream.
+    let seed = (0..128)
+        .find(|seed| {
+            let mut probe = Game::shell(*seed, RulesPreset::Classic);
+            literal_jar_destroy_without_loot(&mut probe.rng)
+        })
+        .expect("a seed without Jar loot exists in this range");
+    let mut game = Game::shell(seed, RulesPreset::Classic);
+    game.player.pos = Vec2::new(240.0, 200.0);
+    let shoes = game.spawn("oSpikeShoes", Vec2::new(88.0, 88.0));
+    let jar = game.spawn("oJar", Vec2::new(88.0, 88.0));
+    game.world.entity_mut(shoes).unwrap().vel = Vec2::new(0.0, 0.0);
+
+    let mut source_order = game.rng.clone();
+    assert!(literal_jar_destroy_without_loot(&mut source_order));
+    let expected_shoes_speed = 4.0 + f64::from(source_order.range(3));
+
+    assert!(
+        mask_intersects(
+            Vec2::new(88.0, 88.0),
+            0,
+            game.world.entity(jar).unwrap().sprite_bounds()
+        ),
+        "jar bounds: {:?}",
+        game.world.entity(jar).unwrap().sprite_bounds()
+    );
+    let explosion_id = game.world.spawn("oExplosion", Vec2::new(88.0, 88.0));
+    init_entity(game.world.entity_mut(explosion_id).unwrap());
+    let explosion = game.world.entity(explosion_id).unwrap().clone();
+    apply_explosion(&mut game, &explosion);
+
+    assert!(game.world.entity(jar).is_none());
+    assert_eq!(
+        game.world.entity(shoes).unwrap().vel.x,
+        expected_shoes_speed
+    );
+}
+
+fn literal_skull_destroy(rng: &mut Rng) {
+    let mut pieces = 0;
+    loop {
+        if pieces >= 1 + rng.range(2) {
+            break;
+        }
+        // Each Bone Create consumes four source draws before Skull's caller
+        // overwrites the launch velocities with three more draws.
+        rng.unit();
+        rng.unit();
+        rng.unit();
+        rng.range(6);
+        rng.range(3);
+        rng.range(3);
+        rng.range(4);
+        pieces += 1;
+    }
+}
+
+#[test]
+fn explosion_runs_skull_destroy_before_later_item_resource_rng() {
+    // Source collision pairs order the Skull resource (663) before
+    // SpikeShoes (876), even though the fixture creates shoes first.
+    let mut game = Game::shell(7, RulesPreset::Classic);
+    game.player.pos = Vec2::new(240.0, 200.0);
+    let shoes = game.spawn("oSpikeShoes", Vec2::new(88.0, 88.0));
+    let skull = game.spawn("oSkull", Vec2::new(88.0, 88.0));
+    game.world.entity_mut(shoes).unwrap().vel = Vec2::new(0.0, 0.0);
+
+    let mut source_order = game.rng.clone();
+    literal_skull_destroy(&mut source_order);
+    let expected_shoes_speed = 4.0 + f64::from(source_order.range(3));
+
+    assert!(
+        mask_intersects(
+            Vec2::new(88.0, 88.0),
+            0,
+            game.world.entity(skull).unwrap().sprite_bounds()
+        ),
+        "skull bounds: {:?}",
+        game.world.entity(skull).unwrap().sprite_bounds()
+    );
+    let explosion_id = game.world.spawn("oExplosion", Vec2::new(88.0, 88.0));
+    init_entity(game.world.entity_mut(explosion_id).unwrap());
+    let explosion = game.world.entity(explosion_id).unwrap().clone();
+    apply_explosion(&mut game, &explosion);
+
+    assert!(game.world.entity(skull).is_none());
+    assert_eq!(
+        game.world.entity(shoes).unwrap().vel.x,
+        expected_shoes_speed
+    );
+}
