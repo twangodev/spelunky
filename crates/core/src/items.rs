@@ -1910,6 +1910,7 @@ fn break_item_callback(game: &mut Game, id: u64, repeat: bool) {
     if entity.held {
         game.player.held = None;
     }
+    let held = entity.held;
     if !pieces {
         return;
     }
@@ -1946,6 +1947,11 @@ fn break_item_callback(game: &mut Game, id: u64, repeat: bool) {
     }
     if jar {
         spawn_jar_loot(game, pos, left, right);
+    }
+    // Jar and Skull put their held-type clear at the end of their
+    // breakPieces-guarded Destroy code, after the inherited oItem Destroy.
+    if (jar || skull) && held {
+        game.player.pickup_item_type.clear();
     }
 }
 
@@ -2042,6 +2048,78 @@ mod tests {
         assert_eq!(game.player.held, Some(rock));
         game.step(&InputFrame::default());
         (game, rock)
+    }
+
+    #[test]
+    fn game_step_bullet_destroy_of_held_fragile_item_respects_breakpieces_guard() {
+        for (object, item_type) in [("oJar", "Jar"), ("oSkull", "Skull")] {
+            for break_pieces in [false, true] {
+                let mut game = game();
+                game.world = World::new(30, 20, Area::Mines, 1);
+                game.world.name = "rLevel".into();
+                for x in 0..game.world.width {
+                    game.world.set_tile(x, 13, "oHardBlock");
+                }
+                game.player.pos = Vec2::new(88.0, 200.0);
+                game.player.previous_pos = game.player.pos;
+                game.player.state = PlayerState::Standing;
+                game.player.grounded = true;
+                let held = game.spawn(
+                    object,
+                    Vec2::new(game.player.pos.x + 4.0, game.player.pos.y),
+                );
+                let item = game.world.entity_mut(held).unwrap();
+                item.held = true;
+                if !break_pieces {
+                    item.data.insert("breakPieces".into(), 0.0);
+                }
+                game.player.held = Some(held);
+                game.player.pickup_item_type = item_type.into();
+                let bullet = game.spawn("oBullet", game.player.pos);
+                game.world.entity_mut(bullet).unwrap().vel = Vec2::default();
+                assert_eq!(
+                    crate::dispatcher::collision_owner(object, "oBullet"),
+                    Some(object)
+                );
+                let held_mask = game.world.entity(held).unwrap().collision_mask();
+                let player_mask = game.player.collision_mask();
+                let mut bullet_pos = None;
+                for dy in -10..=10 {
+                    for dx in -8..=24 {
+                        let pos = Vec2::new(
+                            game.player.pos.x + f64::from(dx),
+                            game.player.pos.y + f64::from(dy),
+                        );
+                        let projectile = game.world.entity_mut(bullet).unwrap();
+                        projectile.pos = pos;
+                        let bullet_mask = projectile.collision_mask();
+                        if held_mask.intersects_mask(&bullet_mask)
+                            && !player_mask.intersects_mask(&bullet_mask)
+                        {
+                            bullet_pos = Some(pos);
+                            break;
+                        }
+                    }
+                    if bullet_pos.is_some() {
+                        break;
+                    }
+                }
+                assert!(
+                    bullet_pos.is_some(),
+                    "{object}: bullet must hit the exposed held-item mask"
+                );
+
+                game.step(&InputFrame::default());
+
+                assert!(game.world.entity(held).is_none(), "{object}");
+                assert_eq!(game.player.held, None, "{object}");
+                assert_eq!(
+                    game.player.pickup_item_type.is_empty(),
+                    break_pieces,
+                    "{object} Destroy's held-type clear follows the breakPieces guard"
+                );
+            }
+        }
     }
 
     #[test]
