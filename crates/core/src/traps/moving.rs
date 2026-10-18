@@ -1222,18 +1222,55 @@ fn spring(game: &mut Game, entity: &mut Entity) {
     if active {
         entity.timer = entity.timer.saturating_sub(1);
     }
-    let support = Rect::new(entity.pos.x, entity.pos.y + 16.0, 1.0, 1.0);
-    if active
-        && !game.world.collides(support)
-        && !game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.id != entity.id && e.alive && e.solid && bounds(e).intersects(support))
-    {
+    let support = Vec2::new(entity.pos.x, entity.pos.y + 16.0);
+    if active && !source_point_bbox(game, support, "oSolid") {
         entity.alive = false;
         return;
     }
+}
+
+/// Source collision_point(x, y, oSolid, 0, 0): active family instances and
+/// inclusive source bounding-box point containment, including terrain masks.
+fn source_point_bbox(game: &Game, point: Vec2, family: &str) -> bool {
+    use crate::dispatcher::Instance;
+
+    let mut candidates = crate::dispatcher::descendant_instances(game, family);
+    if !game.dispatcher.running {
+        // Direct compatibility calls may query World births before dispatcher
+        // registration, matching the source-style utility queries elsewhere.
+        for entity in &game.world.entities {
+            let instance = Instance::Entity(entity.id);
+            if crate::catalog::is_a(&entity.object, family) && !candidates.contains(&instance) {
+                candidates.push(instance);
+            }
+        }
+        for (index, tile) in game.world.tiles.iter().enumerate() {
+            let instance = Instance::Terrain(index);
+            if crate::catalog::is_a(&tile.object, family) && !candidates.contains(&instance) {
+                candidates.push(instance);
+            }
+        }
+    }
+
+    candidates.into_iter().any(|instance| match instance {
+        Instance::Entity(id) => game.world.entity(id).is_some_and(|target| {
+            target.alive
+                && target.engine_active
+                && target.mask_contains(point, CollisionPrecision::BoundingBox)
+        }),
+        Instance::Terrain(index) => game.world.tiles.get(index).is_some_and(|tile| {
+            tile.engine_active
+                && !tile.object.is_empty()
+                && game
+                    .world
+                    .tile_collision_mask(
+                        (index % game.world.width) as i32,
+                        (index / game.world.width) as i32,
+                    )
+                    .contains(point, CollisionPrecision::BoundingBox)
+        }),
+        Instance::Player => false,
+    })
 }
 
 fn is_enemy(object: &str) -> bool {
@@ -2093,6 +2130,50 @@ mod tests {
                 .any(|e| e.object == "oSpringTrap" && e.timer == 10)
         );
     }
+
+    #[test]
+    fn imported_spring_stays_supported_by_smash_trap_at_inclusive_bbox_edge() {
+        let mut level = crate::level::Level::default();
+        level.set_tile(4, 4, '_').unwrap();
+        level.set_tile(4, 5, '+').unwrap();
+        level.set_tile(10, 4, '@').unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.load_custom(&level, "spring-smash-support", "");
+        let spring = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oSpringTrap")
+            .unwrap()
+            .id;
+        let smash = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oSmashTrap")
+            .unwrap()
+            .id;
+        let spring_entity = game.world.entity(spring).unwrap();
+        let support = Vec2::new(spring_entity.pos.x, spring_entity.pos.y + 16.0);
+        let view = game.simulation_view_rect();
+        assert!(spring_entity.pos.x > view.x - 16.0);
+        assert!(spring_entity.pos.x < view.x + view.w);
+        assert!(spring_entity.pos.y > view.y - 16.0);
+        assert!(spring_entity.pos.y < view.y + view.h);
+        assert!((game.player.pos.x - game.world.entity(smash).unwrap().pos.x).abs() > 90.0);
+        assert_eq!(game.world.entity(smash).unwrap().pos, support);
+        assert!(source_point_bbox(&game, support, "oSolid"));
+        assert!(
+            !bounds(game.world.entity(smash).unwrap())
+                .intersects(Rect::new(support.x, support.y, 1.0, 1.0))
+        );
+
+        game.step(&crate::InputFrame::default());
+
+        assert!(game.world.entity(spring).is_some_and(|entity| entity.alive));
+        assert!(game.world.entity(smash).is_some_and(|entity| entity.alive));
+    }
+
     #[test]
     fn airborne_spring_overlap_does_not_launch_before_grounded_state() {
         let mut game = Game::shell(1, RulesPreset::Classic);
