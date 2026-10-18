@@ -1926,7 +1926,6 @@ fn break_item_callback(game: &mut Game, id: u64, repeat: bool) {
     if entity.held {
         game.player.held = None;
     }
-    let held = entity.held;
     if !pieces {
         return;
     }
@@ -1964,11 +1963,8 @@ fn break_item_callback(game: &mut Game, id: u64, repeat: bool) {
     if jar {
         spawn_jar_loot(game, pos, left, right);
     }
-    // Jar and Skull put their held-type clear at the end of their
-    // breakPieces-guarded Destroy code, after the inherited oItem Destroy.
-    if (jar || skull) && held {
-        game.player.pickup_item_type.clear();
-    }
+    // The Jar and Skull Destroy bodies clear the source `pickupItem` field,
+    // which is separate from `pickupItemType`. Do not erase the HUD type here.
 }
 
 fn spawn_jar_loot(game: &mut Game, pos: Vec2, left: bool, right: bool) {
