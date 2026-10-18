@@ -713,6 +713,26 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn authored_chamber_lava_uses_its_source_create_animation_speed() {
+        let mut g = game();
+        let mut s = EndingState::new(&g, EndingKind::Campaign, EndingStage::Chamber);
+        enter(&mut g, &mut s, EndingStage::Chamber, "rEnd");
+        let lava = g
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oLava")
+            .expect("rEnd has animated lava instances")
+            .id;
+        assert_eq!(g.world.entity(lava).unwrap().value("animation_speed"), 0.4);
+        g.ending = Some(s);
+
+        let before = g.world.entity(lava).unwrap().animation;
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(lava).unwrap().animation, before + 0.4);
+    }
     #[test]
     fn higher_resource_newborn_steps_and_animation_follow_the_source_phases() {
         let mut g = game();
@@ -1695,6 +1715,13 @@ fn init_actor(game: &mut Game, s: &mut EndingState, id: u64) {
     };
     e.data.insert("animation_speed".into(), 1.);
     match e.object.as_str() {
+        // rEnd's authored lava Create sets image_speed to 0.4. `enter` also
+        // initializes these static instances through this cinematic adapter,
+        // so preserve that room object's animation rate instead of the
+        // generic ending-actor default.
+        "oLava" => {
+            e.data.insert("animation_speed".into(), 0.4);
+        }
         "oPDummy" => {
             e.sprite = run;
             e.facing = 1;
