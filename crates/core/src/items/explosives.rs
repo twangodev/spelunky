@@ -34,7 +34,25 @@ pub fn init_entity(entity: &mut Entity) {
             entity.animation = 0.0;
             entity.set_image_speed(0.8);
         }
-        "oRope" | "oRopeTop" => {}
+        "oRope" | "oRopeTop" => {
+            // Both Create events assign the shared source type and narrow
+            // platform-engine movement bounds. oRope additionally initializes
+            // its burn timer; source_type() and rope callbacks use the same
+            // source variable name even though the generic sprite mask remains
+            // independent from these movement dimensions.
+            entity.text.insert("type".into(), "Rope".into());
+            for (key, value) in [
+                ("collision_left", -4.0),
+                ("collision_top", -4.0),
+                ("collision_right", 4.0),
+                ("collision_bottom", 4.0),
+            ] {
+                entity.data.insert(key.into(), value);
+            }
+            if entity.object == "oRope" {
+                entity.data.insert("burn_timer".into(), 0.0);
+            }
+        }
         "oRopeBurn" => {
             entity.vel.y = -1.0;
             entity.set_image_speed(0.8);
@@ -6179,6 +6197,47 @@ mod bomb_warning_source_contract {
             assert_eq!(game.flags.contains("wanted"), warns);
             assert_eq!(bomb.data.get("tx"), if armed { Some(&80.0) } else { None });
             assert_eq!(bomb.data.get("ty"), if armed { Some(&96.0) } else { None });
+        }
+    }
+}
+
+#[cfg(test)]
+mod rope_create_source_state_tests {
+    use super::*;
+
+    #[test]
+    fn rope_segments_keep_their_source_create_type_and_movement_bounds() {
+        let rope_create = include_str!(
+            "../../../../references/classic-1.1/Objects/Items/oRope.events/Create.xml"
+        );
+        let top_create = include_str!(
+            "../../../../references/classic-1.1/Objects/Items/oRopeTop.events/Create.xml"
+        );
+        for create in [rope_create, top_create] {
+            assert!(create.contains("type = \"Rope\";"));
+            assert!(create.contains("setCollisionBounds(-4, -4, 4, 4)"));
+        }
+        assert!(rope_create.contains("burnTimer = 0;"));
+        assert!(!top_create.contains("burnTimer = 0;"));
+
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        for (object, origin, has_burn_timer) in [
+            ("oRope", Vec2::new(80.0, 96.0), true),
+            ("oRopeTop", Vec2::new(96.0, 96.0), false),
+        ] {
+            let id = game.spawn(object, origin);
+            let rope = game.world.entity(id).unwrap();
+            assert_eq!(rope.text.get("type").map(String::as_str), Some("Rope"));
+            assert_eq!(source_type(rope), "Rope");
+            assert_eq!(
+                rope.bounds(),
+                Rect::new(origin.x - 4.0, origin.y - 4.0, 8.0, 8.0)
+            );
+            assert!(rope.engine_active);
+            assert_eq!(
+                rope.data.get("burn_timer").copied(),
+                has_burn_timer.then_some(0.0)
+            );
         }
     }
 }
