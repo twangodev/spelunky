@@ -1172,11 +1172,12 @@ pub(crate) fn challenge_alarm(game: &mut Game, index: u8) {
 }
 
 fn sun(game: &mut Game) {
-    if game
-        .world
-        .entities
-        .iter()
-        .all(|e| e.object != "oDamsel" || !e.alive || e.health < 1)
+    if value(game, "hub_draw_status") == 0.0
+        && game
+            .world
+            .entities
+            .iter()
+            .all(|e| e.object != "oDamsel" || !e.alive || e.health < 1)
     {
         game.player.health = 0;
     }
@@ -2729,6 +2730,24 @@ mod tests {
         assert_eq!(g.player.health, 0);
         assert_eq!(g.data["mini1"], 42.0);
         assert!(g.flags.contains("hub_challenge_finished"));
+    }
+    #[test]
+    fn sun_damsel_loss_after_intro_does_not_fail_challenge() {
+        let mut g = challenge(HubKind::Sun);
+        g.level_tick = 70;
+        tick_hub(&mut g);
+        assert_eq!(g.data["hub_draw_status"], 3.0);
+        for e in &mut g.world.entities {
+            if e.object == "oDamsel" {
+                e.health = 0;
+            }
+        }
+
+        tick_hub(&mut g);
+
+        assert!(g.player.health > 0);
+        assert!(!g.flags.contains("hub_challenge_finished"));
+        assert!(!g.data.contains_key("mini1"));
     }
     #[test]
     fn sun_setup_walls_initializes_authored_vines_even_with_low_graphics() {
