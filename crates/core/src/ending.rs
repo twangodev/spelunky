@@ -1067,6 +1067,36 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn city_of_gold_persists_through_level_fifteen_then_clears_for_olmec() {
+        // oPlayer1 Step advances currLevel before Animation End; the latter
+        // clears cityOfGold only when that new value is 16. Verify the flag
+        // changes at that source callback and controls the following room.
+        for (level, expected_next_name, expected_city) in
+            [(14, "City of Gold", true), (15, "Olmec's Lair", false)]
+        {
+            let mut game = Game::shell(level, RulesPreset::Classic);
+            game.world = World::new(40, 20, Area::Temple, level);
+            game.flags.insert("cityOfGold".into());
+            game.flags.insert("city_of_gold".into());
+            activate_fixture_exit(&mut game);
+            assert_eq!(game.data["next_level"], f64::from(level + 1));
+
+            until(&mut game, 100, |state| {
+                state.stage == EndingStage::Transition
+            });
+            assert_eq!(
+                game.flags.contains("cityOfGold") || game.flags.contains("city_of_gold"),
+                expected_city,
+                "city flag after exiting level {level}"
+            );
+
+            game.next_level();
+            assert_eq!(game.world.name, expected_next_name, "after level {level}");
+        }
+    }
+
     #[test]
     fn natural_treasure_pickup_and_door_show_and_consume_transition_icon_once() {
         for (object, category, sprite, lifetime, expected_money) in [
