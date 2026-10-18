@@ -33,6 +33,13 @@ const CAPS: [Option<u32>; 5] = [None, Some(60), Some(120), Some(144), Some(240)]
 const WHITE: [f32; 4] = [0.94, 0.95, 0.98, 1.0];
 const GOLD: [f32; 4] = [1.0, 0.81, 0.32, 1.0];
 const MUTED: [f32; 4] = [0.68, 0.74, 0.82, 1.0];
+const ROW_X: f32 = 14.0;
+const ROW_WIDTH: f32 = 292.0;
+const ROW_TOP: f32 = 39.0;
+const ROW_HEIGHT: f32 = 12.0;
+const ROW_STEP: f32 = 14.0;
+const VOLUME_TRACK_X: f32 = 210.0;
+const VOLUME_TRACK_WIDTH: f32 = 86.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsCommand {
@@ -48,6 +55,7 @@ pub struct SettingsUi {
     binding: Option<usize>,
     controller_binding: Option<usize>,
     unsupported_key: bool,
+    volume_drag: Option<usize>,
 }
 
 impl SettingsUi {
@@ -61,6 +69,71 @@ impl SettingsUi {
 
     pub fn awaiting_controller_binding(&self) -> bool {
         self.controller_binding.is_some()
+    }
+
+    /// Activate a clicked row. Source checkboxes and config buttons react to a
+    /// mouse press; source sliders continue tracking the pointer while held.
+    pub fn pointer_press(&mut self, x: f32, y: f32, settings: &mut Settings) -> SettingsCommand {
+        if self.awaiting_binding() {
+            return SettingsCommand::None;
+        }
+        let Some(index) = settings_row_at(self.selected, x, y) else {
+            return SettingsCommand::None;
+        };
+        let slot = index - visible_start(self.selected);
+        self.selected = index;
+        if matches!(index, 2 | 3) {
+            let track_y = ROW_TOP + slot as f32 * ROW_STEP + 9.0;
+            if !(VOLUME_TRACK_X..=VOLUME_TRACK_X + VOLUME_TRACK_WIDTH).contains(&x)
+                || !(track_y..track_y + 2.0).contains(&y)
+            {
+                return SettingsCommand::None;
+            }
+            self.volume_drag = Some(index);
+            return self.set_volume_from_pointer(index, x, settings);
+        }
+        self.adjust(settings, 1, true)
+    }
+
+    /// Update a source-style volume slider while the left mouse button is held.
+    pub fn pointer_move(
+        &mut self,
+        x: f32,
+        left_down: bool,
+        settings: &mut Settings,
+    ) -> SettingsCommand {
+        let Some(index) = self.volume_drag else {
+            return SettingsCommand::None;
+        };
+        if !left_down {
+            self.volume_drag = None;
+            return SettingsCommand::None;
+        }
+        self.set_volume_from_pointer(index, x, settings)
+    }
+
+    pub fn cancel_pointer(&mut self) {
+        self.volume_drag = None;
+    }
+
+    fn set_volume_from_pointer(
+        &self,
+        index: usize,
+        x: f32,
+        settings: &mut Settings,
+    ) -> SettingsCommand {
+        let volume = ((x - VOLUME_TRACK_X) / VOLUME_TRACK_WIDTH).clamp(0.0, 1.0);
+        let target = (volume * 100.0).round() / 100.0;
+        let value = if index == 2 {
+            &mut settings.music_volume
+        } else {
+            &mut settings.effects_volume
+        };
+        if (*value - target).abs() < f32::EPSILON {
+            return SettingsCommand::None;
+        }
+        *value = target;
+        SettingsCommand::Changed
     }
 
     pub fn controller(
@@ -187,12 +260,9 @@ impl SettingsUi {
             0.75,
             MUTED,
         );
-        let start = self
-            .selected
-            .saturating_sub(VISIBLE / 2)
-            .min(ROWS - VISIBLE);
+        let start = visible_start(self.selected);
         for (slot, index) in (start..start + VISIBLE).enumerate() {
-            let y = 42.0 + slot as f32 * 14.0;
+            let y = 42.0 + slot as f32 * ROW_STEP;
             let selected = index == self.selected;
             if selected {
                 scene::rect(quads, [14.0, y - 3.0, 292.0, 12.0], [0.2, 0.22, 0.29, 1.0]);
@@ -206,11 +276,28 @@ impl SettingsUi {
             let color = if selected { GOLD } else { WHITE };
             scene::text(quads, atlas, &label, 20.0, y, 0.75, color);
             scene::text(quads, atlas, &short(&value, 25), 150.0, y, 0.75, color);
+            if matches!(index, 2 | 3) {
+                let volume = if index == 2 {
+                    settings.music_volume
+                } else {
+                    settings.effects_volume
+                };
+                scene::rect(
+                    quads,
+                    [VOLUME_TRACK_X, y + 6.0, VOLUME_TRACK_WIDTH, 2.0],
+                    [0.20, 0.24, 0.31, 1.0],
+                );
+                scene::rect(
+                    quads,
+                    [VOLUME_TRACK_X, y + 6.0, VOLUME_TRACK_WIDTH * volume, 2.0],
+                    if selected { GOLD } else { MUTED },
+                );
+            }
         }
         let description = match self.selected {
             0 => "RULES APPLY WHEN STARTING A NEW RUN.",
             1 => "OFF: SMOOTH MOTION. ON: PIXEL SNAPPING.",
-            2 | 3 => "LEFT / RIGHT: ADJUST VOLUME.",
+            2 | 3 => "CLICK / DRAG TRACK OR USE LEFT / RIGHT.",
             4 => "SYNC TO DISPLAY REFRESH WHEN AVAILABLE.",
             5 => "BROWSER FRAME TIMING FOLLOWS THE DISPLAY.",
             6 => "ENTER: TOGGLE FULLSCREEN.",
@@ -259,7 +346,7 @@ impl SettingsUi {
             scene::text(
                 quads,
                 atlas,
-                "ENTER: CHOOSE. ESC: BACK.",
+                "CLICK: ACTIVATE. ENTER: CHOOSE. ESC: BACK.",
                 18.0,
                 223.0,
                 0.75,
@@ -302,6 +389,22 @@ impl SettingsUi {
             );
         }
     }
+}
+
+fn visible_start(selected: usize) -> usize {
+    selected.saturating_sub(VISIBLE / 2).min(ROWS - VISIBLE)
+}
+
+fn settings_row_at(selected: usize, x: f32, y: f32) -> Option<usize> {
+    if !(ROW_X..ROW_X + ROW_WIDTH).contains(&x) || y < ROW_TOP {
+        return None;
+    }
+    let slot = ((y - ROW_TOP) / ROW_STEP) as usize;
+    let row_top = ROW_TOP + slot as f32 * ROW_STEP;
+    if slot >= VISIBLE || y >= row_top + ROW_HEIGHT {
+        return None;
+    }
+    Some(visible_start(selected) + slot)
 }
 
 fn volume_step(value: f32, direction: i32) -> f32 {
@@ -592,6 +695,104 @@ mod tests {
             menu.key(KeyCode::Enter, &mut settings),
             SettingsCommand::Fullscreen
         );
+    }
+
+    #[test]
+    fn pointer_clicks_hit_visible_rows_and_match_the_settings_actions() {
+        let mut menu = SettingsUi::new();
+        let mut settings = Settings::default();
+
+        assert_eq!(
+            menu.pointer_press(100.0, 55.0, &mut settings),
+            SettingsCommand::Changed
+        );
+        assert!(settings.pixel_snap);
+        assert_eq!(
+            menu.pointer_press(10.0, 55.0, &mut settings),
+            SettingsCommand::None
+        );
+        assert_eq!(
+            menu.pointer_press(100.0, 52.0, &mut settings),
+            SettingsCommand::None
+        );
+
+        assert_eq!(
+            menu.pointer_press(100.0, 123.0 + 3.0, &mut settings),
+            SettingsCommand::Fullscreen
+        );
+        menu.selected = BACK;
+        let back_y = ROW_TOP + (VISIBLE - 1) as f32 * ROW_STEP + 3.0;
+        assert_eq!(
+            menu.pointer_press(100.0, back_y, &mut settings),
+            SettingsCommand::Back
+        );
+    }
+
+    #[test]
+    fn pointer_volume_tracks_only_the_source_style_slider_and_stops_on_release() {
+        let mut menu = SettingsUi::new();
+        let mut settings = Settings::default();
+        let music_label_y = ROW_TOP + 2.0 * ROW_STEP + 3.0;
+        let music_track_y = ROW_TOP + 2.0 * ROW_STEP + 9.0;
+
+        assert_eq!(
+            menu.pointer_press(100.0, music_label_y, &mut settings),
+            SettingsCommand::None
+        );
+        assert_eq!(
+            menu.pointer_press(253.0, music_label_y, &mut settings),
+            SettingsCommand::None
+        );
+        assert_eq!(settings.music_volume, Settings::default().music_volume);
+        assert_eq!(
+            menu.pointer_press(253.0, music_track_y, &mut settings),
+            SettingsCommand::Changed
+        );
+        assert_eq!(settings.music_volume, 0.5);
+        assert_eq!(
+            menu.pointer_move(296.0, true, &mut settings),
+            SettingsCommand::Changed
+        );
+        assert_eq!(settings.music_volume, 1.0);
+        assert_eq!(
+            menu.pointer_move(210.0, false, &mut settings),
+            SettingsCommand::None
+        );
+        assert_eq!(
+            menu.pointer_move(210.0, true, &mut settings),
+            SettingsCommand::None
+        );
+        assert_eq!(settings.music_volume, 1.0);
+    }
+
+    #[test]
+    fn pointer_does_not_interrupt_keyboard_or_controller_binding_capture() {
+        let mut menu = SettingsUi::new();
+        let mut settings = Settings::default();
+        menu.selected = FIRST_BINDING;
+        assert_eq!(
+            menu.key(KeyCode::Enter, &mut settings),
+            SettingsCommand::None
+        );
+        assert!(menu.awaiting_binding());
+        assert_eq!(
+            menu.pointer_press(100.0, 55.0, &mut settings),
+            SettingsCommand::None
+        );
+        assert!(menu.awaiting_binding());
+
+        menu.binding = None;
+        menu.selected = CONFIGURE_CONTROLLER;
+        assert_eq!(
+            menu.key(KeyCode::Enter, &mut settings),
+            SettingsCommand::None
+        );
+        assert!(menu.awaiting_controller_binding());
+        assert_eq!(
+            menu.pointer_press(100.0, 55.0, &mut settings),
+            SettingsCommand::None
+        );
+        assert!(menu.awaiting_controller_binding());
     }
 
     #[test]

@@ -1167,7 +1167,8 @@ mod backend {
                 last_update: 0.0,
             }
         }
-        /// Call synchronously inside a keyboard, pointer, or controller gesture.
+        /// Try to resume after a browser-accepted user gesture. Only a fulfilled
+        /// resume opens the playback gate; rejected attempts stay queued.
         pub fn unlock(&mut self) {
             if self.context.is_none() {
                 self.context = AudioContext::new().ok();

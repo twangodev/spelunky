@@ -28,6 +28,8 @@ use winit::{
 
 const WHITE: [f32; 4] = [1.0, 0.95, 0.85, 1.0];
 const GOLD: [f32; 4] = [1.0, 0.78, 0.30, 1.0];
+#[cfg(target_arch = "wasm32")]
+const AUDIO_UNLOCK_EVENT: &str = "spelunky-audio-gesture";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Screen {
     Title,
@@ -45,6 +47,8 @@ enum Screen {
 }
 enum UserEvent {
     Ready(Result<(Renderer, Atlas), String>),
+    #[cfg(target_arch = "wasm32")]
+    UnlockAudio,
     #[cfg(target_arch = "wasm32")]
     Imported(String, String),
     #[cfg(target_arch = "wasm32")]
@@ -240,6 +244,8 @@ struct App {
     control: bool,
     #[cfg(target_arch = "wasm32")]
     browser_shortcuts: Option<crate::browser_shortcuts::BrowserShortcutModifiers>,
+    #[cfg(target_arch = "wasm32")]
+    browser_audio_unlock: Option<wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>>,
     message: String,
     message_until: f64,
     message_simulated: bool,
@@ -314,10 +320,7 @@ impl App {
         game.set_graphics_high(store.data.settings.graphics_high);
         hydrate_run(&mut game, &store.data);
         spelunky_core::opening::begin_intro(&mut game);
-        let editor = EditorUi::with_source_rng(
-            spelunky_core::editor::preview::PreviewContext::default(),
-            game.rng.clone(),
-        );
+        let editor = fresh_editor_for_game(Some(&game));
         Self {
             proxy,
             window: None,
@@ -357,6 +360,8 @@ impl App {
             control: false,
             #[cfg(target_arch = "wasm32")]
             browser_shortcuts: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_audio_unlock: None,
             message: String::new(),
             message_until: 0.,
             message_simulated: false,
@@ -379,6 +384,40 @@ impl App {
                 .unwrap_or_else(|| js_sys::Date::now() / 1000.)
         }
     }
+    #[cfg(target_arch = "wasm32")]
+    fn install_browser_audio_unlock(&mut self) {
+        use wasm_bindgen::JsCast;
+        if self.browser_audio_unlock.is_some() {
+            return;
+        }
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let proxy = self.proxy.clone();
+        let listener =
+            wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
+                let _ = proxy.send_event(UserEvent::UnlockAudio);
+            });
+        if window
+            .add_event_listener_with_callback(AUDIO_UNLOCK_EVENT, listener.as_ref().unchecked_ref())
+            .is_ok()
+        {
+            self.browser_audio_unlock = Some(listener);
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn remove_browser_audio_unlock(&mut self) {
+        use wasm_bindgen::JsCast;
+        let Some(listener) = self.browser_audio_unlock.take() else {
+            return;
+        };
+        if let Some(window) = web_sys::window() {
+            let _ = window.remove_event_listener_with_callback(
+                AUDIO_UNLOCK_EVENT,
+                listener.as_ref().unchecked_ref(),
+            );
+        }
+    }
     fn reset_timing(&mut self) {
         self.cinematic_action = false;
         self.credits_keyboard_skip = false;
@@ -388,6 +427,7 @@ impl App {
         reset_gameplay_input(&mut self.input, self.game.as_mut());
         self.mouse_left = false;
         self.mouse_right = false;
+        self.settings_ui.cancel_pointer();
         self.editor.cancel_pointer();
     }
     fn reset_room_timing(&mut self) {
@@ -423,6 +463,22 @@ impl App {
         self.reset_timing();
         self.apply_audio_policy();
     }
+    /// Classic clears `global.testLevel` before opening the level editor from
+    /// the title screen, so a fresh title/editor entry must not revive the last
+    /// document. Its preview still shares the game's source RNG stream.
+    fn enter_fresh_editor(&mut self) {
+        self.editor = fresh_editor_for_game(self.game.as_ref());
+        self.editor_play = false;
+        self.source_message = None;
+        self.drawn_source_message = None;
+        if let Some(game) = &mut self.game {
+            game.flags.remove("editor_test");
+            game.flags.remove("source_load_level_menu");
+            game.flags.insert("source_music_stopped".into());
+        }
+        self.audio.stop_music();
+        self.screen(Screen::Editor);
+    }
     fn apply_audio_policy(&mut self) {
         let policy = audio_policy(
             self.screen,
@@ -450,6 +506,8 @@ impl App {
         }
     }
     fn shutdown(&mut self, event_loop: &ActiveEventLoop) {
+        #[cfg(target_arch = "wasm32")]
+        self.remove_browser_audio_unlock();
         self.exit_requested = true;
         self.snapshot_lifetime_stats();
         let _ = self.store.save();
@@ -694,30 +752,20 @@ impl App {
                 self.audio.pause(true);
                 return;
             }
-            Some(SourceHostControl::Editor | SourceHostControl::CustomLevels) => {
+            Some(SourceHostControl::Editor) => {
+                self.enter_fresh_editor();
+                return;
+            }
+            Some(SourceHostControl::CustomLevels) => {
                 self.editor_play = false;
                 self.source_message = None;
                 self.drawn_source_message = None;
                 if let Some(game) = &mut self.game {
                     game.flags.remove("editor_test");
                     game.flags.insert("source_music_stopped".into());
-                    if control == Some(SourceHostControl::CustomLevels) {
-                        game.flags.insert("source_load_level_menu".into());
-                    } else {
-                        game.flags.remove("source_load_level_menu");
-                    }
+                    game.flags.insert("source_load_level_menu".into());
                 }
-                if control == Some(SourceHostControl::Editor) {
-                    self.editor = EditorUi::with_context(
-                        self.game
-                            .as_ref()
-                            .map(editor_preview_context)
-                            .unwrap_or_default(),
-                    );
-                    self.screen(Screen::Editor);
-                } else {
-                    self.screen(Screen::Custom);
-                }
+                self.screen(Screen::Custom);
                 self.audio.stop_music();
                 return;
             }
@@ -778,12 +826,10 @@ impl App {
                     self.screen(Screen::Pause)
                 }
             }
-            Screen::Settings => match self.settings_ui.key(key, &mut self.store.data.settings) {
-                SettingsCommand::Changed => self.settings_changed(),
-                SettingsCommand::Back => self.screen(self.settings_return),
-                SettingsCommand::Fullscreen => self.fullscreen(),
-                _ => {}
-            },
+            Screen::Settings => {
+                let command = self.settings_ui.key(key, &mut self.store.data.settings);
+                self.apply_settings_command(command);
+            }
             Screen::Editor => {
                 let command =
                     self.editor
@@ -867,7 +913,7 @@ impl App {
                 1 => self.start_game(true),
                 2 => self.open_hub(spelunky_core::hub::HubKind::Title),
                 3 => self.screen(Screen::Custom),
-                4 => self.screen(Screen::Editor),
+                4 => self.enter_fresh_editor(),
                 5 => self.screen(Screen::Shortcuts),
                 6 => {
                     self.settings_return = Screen::Title;
@@ -930,6 +976,14 @@ impl App {
                 }
             }
             _ => self.screen(Screen::Title),
+        }
+    }
+    fn apply_settings_command(&mut self, command: SettingsCommand) {
+        match command {
+            SettingsCommand::Changed => self.settings_changed(),
+            SettingsCommand::Back => self.screen(self.settings_return),
+            SettingsCommand::Fullscreen => self.fullscreen(),
+            SettingsCommand::None => {}
         }
     }
     fn return_from_custom_selector(&mut self) {
@@ -2155,16 +2209,107 @@ impl App {
         }
     }
     fn pointer(&mut self) {
-        if self.screen == Screen::Editor {
-            let command = self.editor.stage_pointer(
-                self.cursor[0],
-                self.cursor[1],
-                self.mouse_left,
-                self.mouse_right,
-            );
-            self.editor_command(command);
+        match self.screen {
+            Screen::Editor => {
+                let command = self.editor.stage_pointer(
+                    self.cursor[0],
+                    self.cursor[1],
+                    self.mouse_left,
+                    self.mouse_right,
+                );
+                self.editor_command(command);
+            }
+            Screen::Settings => {
+                let command = self.settings_ui.pointer_move(
+                    self.cursor[0],
+                    self.mouse_left,
+                    &mut self.store.data.settings,
+                );
+                self.apply_settings_command(command);
+            }
+            _ => {}
         }
     }
+    fn pointer_press(&mut self) {
+        match self.screen {
+            Screen::Settings => {
+                let command = self.settings_ui.pointer_press(
+                    self.cursor[0],
+                    self.cursor[1],
+                    &mut self.store.data.settings,
+                );
+                self.apply_settings_command(command);
+            }
+            _ => {}
+        }
+    }
+    fn pointer_release(&mut self) {
+        if self.screen != Screen::Custom {
+            return;
+        }
+        let count = self.store.data.custom_levels.len() + 2;
+        let Some(action) =
+            custom_menu_pointer_action(self.selection, count, self.cursor[0], self.cursor[1])
+        else {
+            return;
+        };
+        match action {
+            CustomPointerAction::Select(index) => self.selection = index,
+            CustomPointerAction::Import => {
+                self.selection = count - 2;
+                self.import_dialog();
+            }
+            CustomPointerAction::Back => {
+                self.selection = count - 1;
+                self.return_from_custom_selector();
+            }
+        }
+    }
+}
+
+const CUSTOM_ROW_X: f32 = 14.0;
+const CUSTOM_ROW_WIDTH: f32 = 292.0;
+const CUSTOM_ROW_TOP: f32 = 40.0;
+const CUSTOM_ROW_HEIGHT: f32 = 14.0;
+const CUSTOM_ROW_STEP: f32 = 15.0;
+const CUSTOM_VISIBLE_ROWS: usize = 11;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CustomPointerAction {
+    Select(usize),
+    Import,
+    Back,
+}
+
+fn custom_menu_start(selection: usize) -> usize {
+    selection.saturating_sub(9)
+}
+
+fn custom_menu_row_at(selection: usize, count: usize, x: f32, y: f32) -> Option<usize> {
+    if !(CUSTOM_ROW_X..CUSTOM_ROW_X + CUSTOM_ROW_WIDTH).contains(&x) || y < CUSTOM_ROW_TOP {
+        return None;
+    }
+    let slot = ((y - CUSTOM_ROW_TOP) / CUSTOM_ROW_STEP) as usize;
+    let row_top = CUSTOM_ROW_TOP + slot as f32 * CUSTOM_ROW_STEP;
+    if slot >= CUSTOM_VISIBLE_ROWS || y >= row_top + CUSTOM_ROW_HEIGHT {
+        return None;
+    }
+    let index = custom_menu_start(selection) + slot;
+    (index < count).then_some(index)
+}
+
+fn custom_menu_pointer_action(
+    selection: usize,
+    count: usize,
+    x: f32,
+    y: f32,
+) -> Option<CustomPointerAction> {
+    let index = custom_menu_row_at(selection, count, x, y)?;
+    Some(match index {
+        index if index + 1 == count => CustomPointerAction::Back,
+        index if index + 2 == count => CustomPointerAction::Import,
+        index => CustomPointerAction::Select(index),
+    })
 }
 #[cfg(any(test, target_arch = "wasm32"))]
 fn adaptive_actor_snapshot(game: &Game) -> (Vec<serde_json::Value>, usize) {
@@ -2616,6 +2761,14 @@ fn editor_preview_context(game: &Game) -> spelunky_core::editor::preview::Previe
     }
 }
 
+fn fresh_editor_for_game(game: Option<&Game>) -> EditorUi {
+    let context = game.map(editor_preview_context).unwrap_or_default();
+    let rng = game
+        .map(|game| game.rng.clone())
+        .unwrap_or_else(|| spelunky_core::Rng::new_canonical(0));
+    EditorUi::with_source_rng(context, rng)
+}
+
 fn editor_palette_progress(
     unlocks: &std::collections::BTreeSet<String>,
 ) -> spelunky_core::editor::EditorPaletteProgress {
@@ -3064,6 +3217,8 @@ impl ApplicationHandler<UserEvent> for App {
             }
         };
         #[cfg(target_arch = "wasm32")]
+        self.install_browser_audio_unlock();
+        #[cfg(target_arch = "wasm32")]
         {
             use winit::platform::web::WindowExtWebSys;
             if let Some(canvas) = window.canvas() {
@@ -3120,6 +3275,8 @@ impl ApplicationHandler<UserEvent> for App {
                 event_loop.exit()
             }
             #[cfg(target_arch = "wasm32")]
+            UserEvent::UnlockAudio => self.audio.unlock(),
+            #[cfg(target_arch = "wasm32")]
             UserEvent::Imported(name, text) => self.import_level(name, text),
             #[cfg(target_arch = "wasm32")]
             UserEvent::ImportError(error) => {
@@ -3155,6 +3312,7 @@ impl ApplicationHandler<UserEvent> for App {
                 // the mouse is stationary. End the old stroke before remapping.
                 self.mouse_left = false;
                 self.mouse_right = false;
+                self.settings_ui.cancel_pointer();
                 self.editor.cancel_pointer();
                 if let Some([x, y]) = self.cursor_physical {
                     self.cursor = logical_pointer(x, y, size.width, size.height);
@@ -3222,7 +3380,7 @@ impl ApplicationHandler<UserEvent> for App {
                         #[cfg(not(target_arch = "wasm32"))]
                         let shortcut_control = None;
                         if key == KeyCode::F2 && self.screen == Screen::Title {
-                            self.screen(Screen::Editor)
+                            self.enter_fresh_editor()
                         } else {
                             self.key(key, event.text.as_deref(), shortcut_control)
                         }
@@ -3247,6 +3405,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let pressed = state == ElementState::Pressed;
+                let was_left_pressed = self.mouse_left;
                 if pressed {
                     self.audio.unlock();
                 }
@@ -3256,6 +3415,13 @@ impl ApplicationHandler<UserEvent> for App {
                     _ => {}
                 }
                 self.pointer();
+                if button == MouseButton::Left {
+                    if pressed && !was_left_pressed {
+                        self.pointer_press();
+                    } else if !pressed && was_left_pressed {
+                        self.pointer_release();
+                    }
+                }
             }
             WindowEvent::MouseWheel { delta, .. } if self.screen == Screen::Editor => {
                 let vertical = match delta {
@@ -4294,6 +4460,77 @@ mod tests {
         for key in [KeyCode::F2, KeyCode::F3] {
             assert_eq!(source_host_control(Screen::Pause, Some(&game), key), None);
         }
+    }
+    #[test]
+    fn fresh_title_editor_entry_discards_the_old_draft_and_preserves_game_rng() {
+        let mut game = Game::shell(17, spelunky_core::RulesPreset::Classic);
+        game.rng.next_u64();
+        let expected_rng = game.rng.clone();
+
+        let mut previous = EditorUi::new();
+        let mut authored = spelunky_core::level::Level::default();
+        authored.set_tile(0, 0, '1').unwrap();
+        previous.load("previous.lvl", &authored.to_text()).unwrap();
+        assert_eq!(previous.level_name(), "previous.lvl");
+
+        let mut fresh = fresh_editor_for_game(Some(&game));
+        assert_eq!(fresh.level_name(), "custom.lvl");
+        assert_eq!(fresh.source_rng().algorithm(), expected_rng.algorithm());
+        assert_eq!(fresh.source_rng().state_bits(), expected_rng.state_bits());
+        let EditorCommand::Save { text, .. } =
+            fresh.key(winit::keyboard::KeyCode::KeyS, None, true)
+        else {
+            panic!("Ctrl+S should serialize the fresh editor document");
+        };
+        assert_eq!(text, spelunky_core::level::Level::default().to_text());
+        assert_ne!(text, authored.to_text());
+    }
+
+    #[test]
+    fn custom_menu_pointer_hits_drawn_rows_and_only_selects_the_source_list_entry() {
+        let total_rows = 18 + 2;
+        assert_eq!(
+            custom_menu_pointer_action(0, total_rows, 30.0, 47.0),
+            Some(CustomPointerAction::Select(0))
+        );
+        assert_eq!(
+            custom_menu_pointer_action(0, total_rows, 30.0, 62.0),
+            Some(CustomPointerAction::Select(1))
+        );
+        assert_eq!(
+            custom_menu_pointer_action(0, total_rows, 30.0, 77.0),
+            Some(CustomPointerAction::Select(2))
+        );
+
+        // The renderer keeps the selected row near slot 9 as the list scrolls.
+        let selected = 10;
+        let selected_slot_y = CUSTOM_ROW_TOP + 9.0 * CUSTOM_ROW_STEP + 7.0;
+        assert_eq!(
+            custom_menu_pointer_action(selected, total_rows, 30.0, selected_slot_y),
+            Some(CustomPointerAction::Select(selected))
+        );
+        assert_eq!(
+            custom_menu_pointer_action(
+                18,
+                total_rows,
+                30.0,
+                CUSTOM_ROW_TOP + 9.0 * CUSTOM_ROW_STEP + 7.0,
+            ),
+            Some(CustomPointerAction::Import)
+        );
+        assert_eq!(
+            custom_menu_pointer_action(
+                18,
+                total_rows,
+                30.0,
+                CUSTOM_ROW_TOP + 10.0 * CUSTOM_ROW_STEP + 7.0,
+            ),
+            Some(CustomPointerAction::Back)
+        );
+        assert_eq!(custom_menu_pointer_action(0, total_rows, 13.0, 47.0), None);
+        assert_eq!(custom_menu_pointer_action(0, total_rows, 30.0, 54.0), None);
+        assert_eq!(custom_menu_pointer_action(0, 2, 30.0, 77.0), None);
+        assert_eq!(custom_menu_pointer_action(0, total_rows, 30.0, 223.0), None);
     }
     #[test]
     fn source_f1_sets_raw_health_and_knockback_before_ordinary_ankh_processing() {
