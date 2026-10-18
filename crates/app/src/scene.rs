@@ -1036,6 +1036,10 @@ pub fn game_scene_in_view_into(
                 player.sprite.as_str(),
                 "sPExit" | "sDamselExit" | "sTunnelExit"
             );
+        // oCape Step uses the climbing/exit back sprite only while Player is
+        // not whipping. During an attack it falls through to the facing/open
+        // branches even if the platform state still says Climbing.
+        let cape_back = climbing && player.attack_timer == 0;
         // characterDrawEvent's early back-jetpack branch bypasses redColor.
         // Whipping uses the ordinary tinted character and side jetpack instead.
         let back_jetpack = jetpack && climbing && player.attack_timer == 0;
@@ -1048,7 +1052,7 @@ pub fn game_scene_in_view_into(
         {
             let right = player.facing > 0;
             let open = player.data.get("cape_open").copied().unwrap_or(0.0) > 0.0;
-            let name = if climbing {
+            let name = if cape_back {
                 "sCapeBack"
             } else if open {
                 if right { "sCapeUR" } else { "sCapeUL" }
@@ -1066,17 +1070,17 @@ pub fn game_scene_in_view_into(
                 atlas,
                 name,
                 player.animation,
-                if climbing {
+                if cape_back {
                     x
                 } else {
                     x - if right { 4.0 } else { -4.0 }
                 },
-                if climbing { y + 4.0 } else { y - 2.0 },
+                if cape_back { y + 4.0 } else { y - 2.0 },
                 false,
                 WHITE,
             );
             layers.push((
-                if climbing { 0.0 } else { 100.0 },
+                if cape_back { 0.0 } else { 100.0 },
                 0,
                 u64::MAX - 1,
                 cape_start..cape.len(),
@@ -1677,6 +1681,29 @@ fn background_in_view(
             x += width;
         }
         y += height;
+    }
+
+    // rLevel2.xml authors these two full-width scenery rows at the bottom of
+    // the Ice room. They sit behind the open abyss and fade the tiled cave
+    // background to black; the source objects are static oMenu descendants.
+    // Custom editor rooms use rLoadLevel and do not inherit these room objects.
+    if game.world.area == Area::Ice && !game.flags.contains("custom") {
+        // Greater GameMaker depths draw first, so preserve the oBlackBG then
+        // oBlackFadeUp ordering where their one-pixel overlap is visible.
+        for (sprite_name, world_y) in [("sBlack", 592.0_f32), ("sBlackFadeUp", 576.0_f32)] {
+            for x in 0..42 {
+                sprite(
+                    quads,
+                    atlas,
+                    sprite_name,
+                    0.0,
+                    x as f32 * 16.0 - camera.x as f32,
+                    world_y - camera.y as f32,
+                    false,
+                    WHITE,
+                );
+            }
+        }
     }
 }
 
@@ -4443,6 +4470,108 @@ mod tests {
         for (actual, expected) in final_row.into_iter().zip(expected) {
             assert_eq!(actual.uv, expected.uv);
         }
+    }
+
+    #[test]
+    fn natural_whip_while_climbing_uses_the_cape_facing_pose() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.world = spelunky_core::World::new(30, 20, Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        for column in 0..30 {
+            game.world.set_tile(column, 10, "oHardBlock");
+        }
+        for row in 7..10 {
+            game.world.set_tile(6, row, "oLadderOrange");
+        }
+        game.player.pos = Vec2::new(104.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.world.entrance = game.player.pos;
+        game.player.equipment.insert("Cape".into());
+
+        for _ in 0..4 {
+            game.step(&spelunky_core::InputFrame::default());
+        }
+        assert!(game.player.grounded, "authored floor must settle Player");
+        game.step(&spelunky_core::InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        assert!(spelunky_core::player::source_climbing(&game));
+        game.step(&spelunky_core::InputFrame {
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert!(spelunky_core::player::source_climbing(&game));
+        assert!(game.player.attack_timer > 0, "ordinary attack starts whip");
+        assert!(game.player.has("Cape"));
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oCape")
+        );
+
+        let quads = game_scene(&game, 1.0, false, &atlas);
+        let back = atlas.sprite("sCapeBack", game.player.animation).unwrap().uv;
+        let facing_pose = atlas.sprite("sCapeDR", game.player.animation).unwrap().uv;
+        assert!(!quads.iter().any(|quad| quad.uv == back));
+        assert!(quads.iter().any(|quad| quad.uv == facing_pose));
+    }
+
+    #[test]
+    fn ice_room_background_keeps_the_authored_abyss_fade_rows() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world.area = spelunky_core::Area::Ice;
+        game.world.name = "Ice Caves".into();
+        let view = Viewport {
+            width: 672.0,
+            height: 608.0,
+            scale: 1.0,
+            surface_width: 672,
+            surface_height: 608,
+        };
+        let mut quads = Vec::new();
+        background_in_view(&mut quads, &game, Vec2::default(), false, &atlas, view);
+
+        for (sprite_name, world_y) in [("sBlack", 592.0), ("sBlackFadeUp", 576.0)] {
+            let frame = atlas.sprite(sprite_name, 0.0).unwrap();
+            let row: Vec<_> = quads
+                .iter()
+                .filter(|quad| quad.uv == frame.uv)
+                .map(|quad| quad.rect)
+                .collect();
+            assert_eq!(row.len(), 42, "source {sprite_name} row width");
+            for (x, rect) in row.iter().enumerate() {
+                assert_eq!(
+                    *rect,
+                    [x as f32 * 16.0, world_y, frame.size[0], frame.size[1]],
+                    "source {sprite_name} instance {x}"
+                );
+            }
+        }
+        let black_first = quads
+            .iter()
+            .position(|quad| quad.uv == atlas.sprite("sBlack", 0.0).unwrap().uv)
+            .unwrap();
+        let fade_first = quads
+            .iter()
+            .position(|quad| quad.uv == atlas.sprite("sBlackFadeUp", 0.0).unwrap().uv)
+            .unwrap();
+        assert!(
+            black_first < fade_first,
+            "source depth draws oBlackBG first"
+        );
+
+        game.flags.insert("custom".into());
+        quads.clear();
+        background_in_view(&mut quads, &game, Vec2::default(), false, &atlas, view);
+        let black = atlas.sprite("sBlack", 0.0).unwrap().uv;
+        let fade = atlas.sprite("sBlackFadeUp", 0.0).unwrap().uv;
+        assert!(!quads.iter().any(|quad| quad.uv == black || quad.uv == fade));
     }
 
     #[test]
