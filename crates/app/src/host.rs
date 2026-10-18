@@ -283,6 +283,14 @@ fn begin_source_message(
         .flatten()
 }
 
+fn clear_source_dialogue_on_transition(
+    source_message: &mut Option<spelunky_core::SourceMessage>,
+    drawn_source_message: &mut Option<spelunky_core::SourceMessage>,
+) {
+    *source_message = None;
+    *drawn_source_message = None;
+}
+
 /// A modern notice does not assign or clear either source global string.
 fn replace_host_toast(
     bare: &mut String,
@@ -1262,6 +1270,11 @@ impl App {
         true
     }
     fn transition(&mut self) {
+        // Classic's oTransition Create event clears both source message globals.
+        clear_source_dialogue_on_transition(
+            &mut self.source_message,
+            &mut self.drawn_source_message,
+        );
         if self.game.as_ref().is_some_and(|game| {
             capture_challenge_records(game, &mut self.store.data.challenge_records)
         }) {
@@ -7477,6 +7490,19 @@ mod moon_timeout_host_tests;
 mod source_message_lifecycle_tests {
     use super::*;
     use spelunky_core::{InputFrame, RulesPreset, SourceMessage, Vec2, World};
+    #[test]
+    fn room_transition_retires_live_and_captured_dialogue() {
+        let mut source = Some(SourceMessage {
+            first: "OLD SOURCE".into(),
+            second: "OLD SECOND".into(),
+            ticks: 200,
+        });
+        let mut drawn = source.clone();
+        clear_source_dialogue_on_transition(&mut source, &mut drawn);
+        assert!(source.is_none());
+        assert!(drawn.is_none());
+    }
+
     #[test]
     fn dialogue_permanently_retires_live_wall_clock_toast_and_both_old_lines() {
         let mut bare = "OLD MODERN TOAST".to_string();
