@@ -866,6 +866,7 @@ fn drop_held_weapon(game: &mut Game, id: u64) {
         );
     }
     game.player.held = None;
+    game.player.pickup_item_type.clear();
 }
 
 fn update_depth(game: &Game, entity: &mut Entity) {
