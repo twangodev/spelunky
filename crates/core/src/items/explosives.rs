@@ -908,26 +908,45 @@ fn explosion_solid_decoration(game: &mut Game, origin: Vec2) {
 
 fn explosion_solid_cleanup(game: &mut Game) {
     for entity in &mut game.world.entities {
-        if entity.alive && crate::catalog::is_a(&entity.object, "oTreasure") {
+        if entity.alive && entity.engine_active && crate::catalog::is_a(&entity.object, "oTreasure")
+        {
             entity.state = 1;
         }
     }
-    let unsupported: Vec<_> = game
-        .world
-        .entities
-        .iter()
-        .filter(|entity| {
-            entity.alive
-                && entity.object == "oSpikes"
-                && !game.world.solid_at(entity.pos.x, entity.pos.y + 16.0)
-        })
-        .map(|entity| entity.id)
-        .collect();
-    for id in unsupported {
-        if let Some(spikes) = game.world.entity_mut(id) {
-            spikes.alive = false;
+
+    let spikes = crate::dispatcher::descendant_instances(game, "oSpikes");
+    for spike in spikes {
+        if !crate::dispatcher::is_active(game, spike) {
+            continue;
+        }
+        let position = spike.position(game);
+        if active_solid_point(game, Vec2::new(position.x, position.y + 16.0)) {
+            continue;
+        }
+        match spike {
+            crate::dispatcher::Instance::Entity(id) => {
+                if let Some(entity) = game.world.entity_mut(id) {
+                    entity.alive = false;
+                }
+            }
+            crate::dispatcher::Instance::Terrain(index) => {
+                game.world
+                    .set_tile(index % game.world.width, index / game.world.width, "");
+            }
+            crate::dispatcher::Instance::Player => {}
         }
     }
+}
+
+/// Source collision_point(x, y, oSolid, 0, 0) queries active instances only.
+fn active_solid_point(game: &Game, point: Vec2) -> bool {
+    game.world.tiles_point_active(point, "oSolid")
+        || game.world.entities.iter().any(|entity| {
+            entity.alive
+                && entity.engine_active
+                && crate::catalog::is_a(&entity.object, "oSolid")
+                && entity.mask_contains(point, CollisionPrecision::BoundingBox)
+        })
 }
 
 pub(crate) fn animation_end(game: &mut Game, id: u64) {
@@ -3865,6 +3884,48 @@ mod tests {
                 assert_eq!(g.world.tile(5, 6).unwrap().object, "oHardBlock");
             }
         }
+    }
+
+    #[test]
+    fn game_step_explosion_cleanup_respects_active_treasure_and_spike_instances() {
+        let mut g = game();
+        let active_treasure = g.world.spawn("oGoldNugget", Vec2::new(112.0, 84.0));
+        let inactive_treasure = g.world.spawn("oGoldNugget", Vec2::new(544.0, 400.0));
+        for id in [active_treasure, inactive_treasure] {
+            let treasure = g.world.entity_mut(id).unwrap();
+            treasure.state = 0;
+            treasure.data.insert("collectibles_initialized".into(), 1.0);
+        }
+        g.world.entity_mut(inactive_treasure).unwrap().engine_active = false;
+
+        let active_entity_spike = g.world.spawn("oSpikes", Vec2::new(128.0, 80.0));
+        let inactive_entity_spike = g.world.spawn("oSpikes", Vec2::new(544.0, 400.0));
+        g.world
+            .entity_mut(inactive_entity_spike)
+            .unwrap()
+            .engine_active = false;
+
+        g.world.set_tile(9, 5, "oSpikes");
+        g.world.set_tile(34, 24, "oSpikes");
+        let inactive_terrain_index = 24 * g.world.width + 34;
+        g.world.tiles[inactive_terrain_index].engine_active = false;
+
+        let invincible_solid = g.world.spawn("oHardBlock", Vec2::new(88.0, 84.0));
+        g.world
+            .entity_mut(invincible_solid)
+            .unwrap()
+            .data
+            .insert("invincible".into(), 1.0);
+        g.world.spawn("oExplosion", Vec2::new(88.0, 84.0));
+
+        g.step(&InputFrame::default());
+
+        assert_eq!(g.world.entity(active_treasure).unwrap().state, 1);
+        assert_eq!(g.world.entity(inactive_treasure).unwrap().state, 0);
+        assert!(g.world.entity(active_entity_spike).is_none());
+        assert!(g.world.entity(inactive_entity_spike).is_some());
+        assert!(g.world.tile(9, 5).unwrap().object.is_empty());
+        assert_eq!(g.world.tile(34, 24).unwrap().object, "oSpikes");
     }
 
     #[test]
