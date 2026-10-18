@@ -33,7 +33,10 @@ fn source_ground_lush_all_literal_children_finish_before_next_glyph_and_no_late_
     assert_eq!(seeds.len(), 22);
     for has_spectacles in [false, true] {
         for (object, seed) in &seeds {
-            let context = GenerationContext { has_spectacles };
+            let context = GenerationContext {
+                has_spectacles,
+                ..GenerationContext::default()
+            };
             let mut expected_state = *seed;
             let (n, selected) = literal_lush_create(&mut expected_state);
             let (selected_object, dx, dy) = selected.unwrap();

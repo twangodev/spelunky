@@ -559,6 +559,7 @@ impl Game {
     fn generate_campaign_room(&mut self, level: u32) {
         let context = generation::GenerationContext {
             has_spectacles: self.player.has("Spectacles"),
+            has_cemetery: false,
         };
         let historical = self.generation_revision == GenerationRevision::HistoricalV1;
         let market = if historical {

@@ -158,6 +158,7 @@ fn check_caller(caller: Caller, seed: u32, spectacles: bool, start: bool) {
     let mut rng = Rng::new(seed);
     let context = GenerationContext {
         has_spectacles: spectacles,
+        ..GenerationContext::default()
     };
     TRACES.with(|traces| *traces.borrow_mut() = Some(Vec::new()));
     crate::creation::begin_generated_create_trace();

@@ -798,7 +798,14 @@ fn jungle(
             r.range(2);
             spawn(w, r, "oFakeBones", p);
         }
-        b'T' => tree(w, r, x, y, p),
+        b'T' => tree(
+            w,
+            r,
+            x,
+            y,
+            p,
+            source_context.is_some_and(|context| context.has_cemetery),
+        ),
         _ => {}
     }
 }
@@ -1037,7 +1044,7 @@ fn temple(
         b'w' => room_lava(w, r, p, source_context),
         b'd' => room_terrain(w, r, x, y, "oLush", source_context),
         b'e' if r.chance(1, 2) => room_terrain(w, r, x, y, "oLush", source_context),
-        b'T' => tree(w, r, x, y, p),
+        b'T' => tree(w, r, x, y, p, false),
         _ => {}
     }
 }
@@ -1238,7 +1245,7 @@ fn ship(w: &mut World, r: &mut Rng, x: usize, y: usize, p: Vec2, sprite: &str) {
     decoration(w, r, "bgAlienShip3", p);
 }
 
-fn tree(w: &mut World, r: &mut Rng, x: usize, y: usize, p: Vec2) {
+fn tree(w: &mut World, r: &mut Rng, x: usize, y: usize, p: Vec2, cemetery: bool) {
     w.set_tile(x, y, "oTree");
     crate::world_events::initialize_tree(w, x, y);
     let mut ty = y as i32 - 1;
@@ -1263,13 +1270,19 @@ fn tree(w: &mut World, r: &mut Rng, x: usize, y: usize, p: Vec2) {
         crate::world_events::initialize_tree(w, x, ty as usize);
         if m < 4 {
             if r.range(5) < 3 && !right {
-                spawn(w, r, "oTreeBranch", Vec2::new(p.x + 16.0, ty as f64 * 16.0));
+                let id = spawn(w, r, "oTreeBranch", Vec2::new(p.x + 16.0, ty as f64 * 16.0));
+                if cemetery {
+                    w.entity_mut(id).unwrap().set_sprite("sTreeBranchDeadR");
+                }
                 right = true;
             } else if right {
                 right = false;
             }
             if r.range(5) < 3 && !left {
-                spawn(w, r, "oTreeBranch", Vec2::new(p.x - 16.0, ty as f64 * 16.0));
+                let id = spawn(w, r, "oTreeBranch", Vec2::new(p.x - 16.0, ty as f64 * 16.0));
+                if cemetery {
+                    w.entity_mut(id).unwrap().set_sprite("sTreeBranchDeadR");
+                }
                 left = true;
             } else if left {
                 left = false;
@@ -1472,6 +1485,7 @@ mod tests {
             10,
             10,
             Vec2::new(160.0, 160.0),
+            false,
         );
         let trunks: Vec<_> = world
             .entities
@@ -1524,6 +1538,105 @@ mod tests {
     }
 
     #[test]
+    fn source_cemetery_tree_branch_create_suppresses_covered_destroy_leaf_and_rng() {
+        let mut world = World::new(20, 20, Area::Jungle, 5);
+        world.name = "Cemetery".into();
+        let mut rng = Rng::new(3);
+        jungle(
+            &mut world,
+            &mut rng,
+            b'T',
+            10,
+            10,
+            Vec2::new(160.0, 160.0),
+            false,
+            false,
+            Some(super::super::GenerationContext {
+                has_spectacles: false,
+                has_cemetery: true,
+            }),
+        );
+
+        assert_eq!(rng.state_bits(), 1_638_206_372);
+        let covered = world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oTreeBranch" && entity.pos == Vec2::new(176.0, 96.0))
+            .expect("seed 3 grows the source branch below the top-right leaf");
+        let covered_id = covered.id;
+        assert_eq!(covered.sprite, "sTreeBranchDeadR");
+        let source_leaves = world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive && entity.object == "oLeaves")
+            .count();
+        assert_eq!(source_leaves, 2);
+
+        super::super::canopy::trees_and_branches(&mut world, &mut rng, true);
+
+        assert!(world.entity(covered_id).is_none());
+        assert_eq!(
+            world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.object == "oLeaves")
+                .count(),
+            source_leaves,
+            "dead branch Destroy emits no leaf"
+        );
+        assert_eq!(rng.state_bits(), 1_638_206_372);
+    }
+
+    #[test]
+    fn source_living_tree_branch_destroy_keeps_its_leaf_and_rng_draws() {
+        let mut world = World::new(20, 20, Area::Jungle, 5);
+        let mut rng = Rng::new(3);
+        jungle(
+            &mut world,
+            &mut rng,
+            b'T',
+            10,
+            10,
+            Vec2::new(160.0, 160.0),
+            false,
+            false,
+            Some(super::super::GenerationContext::default()),
+        );
+        let covered = world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oTreeBranch" && entity.pos == Vec2::new(176.0, 96.0))
+            .expect("seed 3 grows the source branch below the top-right leaf");
+        let covered_id = covered.id;
+        assert_eq!(covered.sprite, "sTreeBranchRight");
+        let source_leaves = world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive && entity.object == "oLeaves")
+            .count();
+        assert_eq!(source_leaves, 2);
+
+        super::super::canopy::trees_and_branches(&mut world, &mut rng, false);
+
+        assert!(world.entity(covered_id).is_none());
+        let destroy_leaf = world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oLeaf")
+            .expect("living branch Destroy births one leaf");
+        assert_eq!(destroy_leaf.pos, Vec2::new(182.0, 103.0));
+        assert_eq!(
+            world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.object == "oLeaves")
+                .count(),
+            source_leaves
+        );
+        assert_eq!(rng.state_bits(), 1_155_990_528);
+    }
+
+    #[test]
     fn tree_creation_reuses_cell_metadata_without_losing_fields_or_identity() {
         let mut world = World::new(42, 34, Area::Jungle, 5);
         let reused = world.spawn("oTerrainMetadata", Vec2::new(168.0, 168.0));
@@ -1539,6 +1652,7 @@ mod tests {
             10,
             10,
             Vec2::new(160.0, 160.0),
+            false,
         );
         assert_eq!(world.entities[0].id, prior);
         assert_eq!(

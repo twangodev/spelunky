@@ -674,6 +674,8 @@ fn expand(script: &Script, rng: &mut Rng, template: &str) -> String {
 #[derive(Clone, Copy, Default)]
 pub(crate) struct GenerationContext {
     pub has_spectacles: bool,
+    /// The source `oTreeBranch` Create body reads global.cemetary directly.
+    pub has_cemetery: bool,
 }
 
 /// Persistent campaign input/output for the versioned Jungle producer.
@@ -860,6 +862,10 @@ pub(crate) fn generate_campaign_result(
     if select_cemetery(rng, area, has(&selected, "cemetery"), source_classic) {
         selected.insert("cemetery".into());
     }
+    let context = GenerationContext {
+        has_cemetery: has(&selected, "cemetery"),
+        ..context
+    };
     if !source_classic {
         // Explicit HistoricalV1 retains its old construction order and draws.
         world = World::new(42, height, area, level);

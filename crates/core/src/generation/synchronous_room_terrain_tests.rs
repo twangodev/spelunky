@@ -253,6 +253,7 @@ fn direct(
         y,
         super::super::GenerationContext {
             has_spectacles: spectacles,
+            ..super::super::GenerationContext::default()
         },
     );
     let traces = TRACES.with(|t| t.borrow_mut().take().unwrap());
@@ -296,6 +297,7 @@ fn all_three_room_parent_families_birth_all_literal_gems_and_set2_items_before_l
                     &mut rng,
                     super::super::GenerationContext {
                         has_spectacles: spectacles,
+                        ..super::super::GenerationContext::default()
                     },
                 );
                 assert_eq!(rng.state_bits(), rng_before);
@@ -499,6 +501,7 @@ fn all_literal_remaining_terrain_call_sites_are_observed_and_caller_order_is_pre
                     false,
                     super::super::GenerationContext {
                         has_spectacles: true,
+                        ..super::super::GenerationContext::default()
                     },
                 );
                 let traces = TRACES.with(|t| t.borrow_mut().take().unwrap());
