@@ -500,11 +500,7 @@ impl Tile {
             || crate::catalog::is_a(&self.object, "oLadderTop")
     }
     pub fn is_destructible(&self) -> bool {
-        self.is_solid()
-            && !matches!(
-                self.object.as_str(),
-                "oSolid" | "oHardBlock" | "oLavaSolid"
-            )
+        self.is_solid() && !matches!(self.object.as_str(), "oSolid" | "oHardBlock" | "oLavaSolid")
     }
 }
 
