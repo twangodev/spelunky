@@ -19,7 +19,7 @@ mod arrow_player_blood_source_tests {
                 for bloodless in [false, true] {
                     for prior_dead in [false, true] {
                         for held in [false, true] {
-                            for health in [8, 0] {
+                            for health in [8.0, 0.0] {
                                 let mut game = Game::shell(7, rules);
                                 game.world.name = "rLevel".into();
                                 game.player.pos = Vec2::new(104.0, 120.0);
@@ -72,7 +72,7 @@ mod arrow_player_blood_source_tests {
 
                                 assert_eq!(
                                     game.player.health,
-                                    if health > 0 { health - 2 } else { health }
+                                    if health > 0.0 { health - 2.0 } else { health }
                                 );
                                 assert_eq!(game.player.vel, Vec2::new(12.0, -4.0));
                                 assert_eq!(game.player.stun, 20);
@@ -110,7 +110,7 @@ mod arrow_player_blood_source_tests {
                                         .iter()
                                         .filter(|e| matches!(e, GameEvent::Damage { amount: 2 }))
                                         .count(),
-                                    usize::from(health > 0)
+                                    usize::from(health > 0.0)
                                 );
                                 assert_eq!(game.rng.clone().next_u64(), literal.next_u64());
                             }
@@ -132,7 +132,7 @@ mod arrow_player_blood_source_tests {
                 let rng = game.rng.clone().next_u64();
                 hit_player(&mut game, &mut arrow, 2);
                 assert!(arrow.alive);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert_eq!(game.player.stun, 0);
                 assert!(game.events.is_empty());
                 assert!(!game.world.entities.iter().any(|e| e.object == "oBlood"));
@@ -141,7 +141,7 @@ mod arrow_player_blood_source_tests {
             for health in [-100, -99, 0, 4] {
                 for hidden in [false, true] {
                     let mut game = Game::shell(7, rules);
-                    game.player.health = health;
+                    game.player.health = f64::from(health);
                     game.player.state = PlayerState::Dead;
                     game.state = RunState::Dead;
                     game.player.stun = 9;

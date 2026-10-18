@@ -56,7 +56,7 @@ fn room(rules: RulesPreset, object: &str, cost: u32, money: u32) -> (Game, u64, 
     item.data.insert("forSale".into(), 1.0);
     for _ in 0..8 {
         game.step(&InputFrame::default());
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.world.entity(keeper).unwrap().health, 20);
         assert_eq!(
             game.world.entity(stock).unwrap().value("cost"),
@@ -84,7 +84,7 @@ fn pickup(game: &mut Game, stock: u64, source_type: &str) {
     );
     assert_eq!(game.player.pickup_item_type, source_type);
     assert!(game.world.entity(stock).unwrap().held);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.attack_timer, 0);
     assert!(!game.events.iter().any(|event| matches!(event, GameEvent::Dialogue(message) if message.first.starts_with("YOU GOT"))), "picking up a priced weapon is not payment");
 }
@@ -126,7 +126,7 @@ fn natural_positive_price_weapon_purchases_emit_literal_acquisition_and_keep_act
             assert_eq!(weapon.value("cost"), 0.0);
             assert_eq!(weapon.value("forSale"), 0.0);
             assert_eq!(game.lifetime_stats.items_bought, 1);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(game.world.entity(keeper).unwrap().health, 20);
             assert_eq!(game.data.get("thiefLevel").copied().unwrap_or(0.0), 0.0);
             assert_eq!(game.player.equipment, equipment);

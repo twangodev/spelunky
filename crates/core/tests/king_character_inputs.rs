@@ -125,7 +125,7 @@ fn stomp(mut g: Game, k: u64, item: Option<u64>) -> (Game, u64, Rng) {
             ..Default::default()
         });
         let king = g.world.entity(k).unwrap();
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         if king.health != 30 {
             assert!(falling);
             assert_eq!(before.state, PlayerState::Falling);
@@ -255,7 +255,7 @@ fn ordinary_ground_contact_hurts_twice_with_or_without_low_roof_and_has_no_stomp
                     right: true,
                     ..Default::default()
                 });
-                if g.player.health == 4 {
+                if g.player.health == 4.0 {
                     continue;
                 }
                 assert!(matches!(
@@ -267,7 +267,7 @@ fn ordinary_ground_contact_hurts_twice_with_or_without_low_roof_and_has_no_stomp
                     g.world.solid_at(actor.pos.x + 16.0, actor.pos.y - 4.0),
                     roof
                 );
-                assert_eq!(g.player.health, 2);
+                assert_eq!(g.player.health, 2.0);
                 assert_eq!(g.player.invincible, 30);
                 assert_eq!(g.player.data.get("blink").copied(), Some(30.0));
                 assert_eq!(g.player.stun, 0);
@@ -296,7 +296,7 @@ fn ordinary_ground_contact_hurts_twice_with_or_without_low_roof_and_has_no_stomp
                         right: true,
                         ..Default::default()
                     });
-                    assert_eq!(g.player.health, 2);
+                    assert_eq!(g.player.health, 2.0);
                 }
                 contacted = true;
                 break;
@@ -325,7 +325,7 @@ fn authored_custom_room_contact_keeps_knockback_and_hurt_sound_without_life_subt
                 continue;
             }
             assert_eq!(g.player.invincible, 30);
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
             assert_eq!(g.world.entity(k).unwrap().health, 30);
             assert_eq!(g.player.vel, Vec2::new(6.0, 0.0));
             assert!(

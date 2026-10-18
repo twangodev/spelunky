@@ -34,7 +34,7 @@ fn default_idle_vampire_preserves_random_facing_when_player_is_exactly_above() {
                 assert_eq!(game.player.pos.x, actor.pos.x + 8.0);
                 assert_eq!(actor.state, 2, "default IDLE selects ATTACK");
                 assert_eq!(actor.facing, expected, "SOURCE_VAMPIRE_EQUAL_X_FACING");
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert_eq!(game.rng.clone().next_u64(), source_rng.next_u64());
                 game.step(&InputFrame::default());
                 let actor = game.world.entity(id).unwrap();

@@ -71,7 +71,7 @@ fn room(rules: RulesPreset, damsel_x: f64, trap_x: f64, hero_tile: usize) -> (Ga
 fn safe_step(game: &mut Game, input: &InputFrame) {
     game.step(input);
     assert_eq!(
-        game.player.health, 4,
+        game.player.health, 4.0,
         "Hero remains healthy after every ordinary input Step"
     );
     assert_eq!(
@@ -172,7 +172,7 @@ fn assert_hit(game: &Game, damsel: u64, trap_x: f64, serial_before: u64, before_
         game.player.pos.x + 3.0 < b.x,
         "Hero is outside spear edge while attached Damsel reaches it"
     );
-    assert_eq!(game.player.health, 4, "no player hurt/RNG contamination");
+    assert_eq!(game.player.health, 4.0, "no player hurt/RNG contamination");
     let blood: Vec<_> = view
         .world
         .entities
@@ -332,7 +332,7 @@ fn default_public_damsel_earns_run_then_held_run_is_hit_by_stock_spear() {
                 break;
             }
             assert!(
-                game.player.pos.x <= 291.0 && game.player.health == 4,
+                game.player.pos.x <= 291.0 && game.player.health == 4.0,
                 "legal carry target must leave Hero clear and healthy"
             );
             assert_eq!(d.health, 4, "no unrelated hazard damage");

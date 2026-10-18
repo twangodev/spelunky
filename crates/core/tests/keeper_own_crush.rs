@@ -62,7 +62,7 @@ fn proposed_natural_dice_theft_then_falling_block_keeps_first_attack_prices() {
             let mut armed = false;
             for _ in 0..20 {
                 game.step(&InputFrame::default());
-                assert!(game.player.health > 0, "CONTROLLER_SURVIVES_TO_THEFT");
+                assert!(game.player.health > 0.0, "CONTROLLER_SURVIVES_TO_THEFT");
                 let actor = game
                     .world
                     .entity(keeper)

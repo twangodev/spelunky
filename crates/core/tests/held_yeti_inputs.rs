@@ -53,7 +53,7 @@ fn pickup_rock_and_pause(g: &mut Game, yeti: u64, rock: u64) {
     for _ in 0..100 {
         let e = g.world.entity(yeti).unwrap();
         assert_eq!(e.health, 5);
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         walked |= e.state == 1;
         if e.state == 0 && e.value("counter") >= 20.0 {
             assert!(walked);
@@ -72,7 +72,7 @@ fn throw_rock_and_stun(g: &mut Game, yeti: u64, rock: u64) {
         let actor = g.world.entity(yeti).unwrap();
         let gap = actor.pos.x + 8.0 - g.player.pos.x;
         assert_eq!(actor.health, 5);
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         if gap <= 28.0 {
             assert!(gap > 16.0);
             near = true;
@@ -95,7 +95,7 @@ fn throw_rock_and_stun(g: &mut Game, yeti: u64, rock: u64) {
     let mut hit = false;
     for _ in 0..64 {
         let e = g.world.entity(yeti).unwrap();
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         if e.health == 4 {
             assert_eq!(e.state, 98);
             assert!(e.timer >= 190);
@@ -130,7 +130,7 @@ fn ordinary_rock_stun_then_enemy_pickup_carry_and_release_applies_gravity_only_u
                     e.state, 98,
                     "stun must remain positive until ordinary pickup"
                 );
-                assert_eq!(g.player.health, 4);
+                assert_eq!(g.player.health, 4.0);
                 let dx = e.pos.x + 8.0 - g.player.pos.x;
                 let near = dx.abs() <= 7.0 && (g.player.pos.y - (e.pos.y + 8.0)).abs() <= 10.0;
                 let input = if near {
@@ -217,7 +217,7 @@ fn ordinary_rock_stun_then_enemy_pickup_carry_and_release_applies_gravity_only_u
                         g.player.pos.y - 12.0
                     )
                 );
-                assert_eq!(g.player.health, 4);
+                assert_eq!(g.player.health, 4.0);
             }
             assert!(
                 g.player.vel.y < 0.0,

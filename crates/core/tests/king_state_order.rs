@@ -41,7 +41,7 @@ fn default_idle_lead_survives_until_walk_assigns_its_speed() {
             assert_eq!(king.state, 1, "NATURAL_IDLE_TO_WALK");
             let idle_exit_vx = king.vel.x;
             assert_eq!(king.health, 30);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
 
             game.step(&InputFrame::default());
             assert_eq!(game.engine_time(), 3);
@@ -55,7 +55,7 @@ fn default_idle_lead_survives_until_walk_assigns_its_speed() {
             let king = game.world.entity(id).unwrap();
             assert_eq!(king.pos, Vec2::new(86.0, 128.0), "WALK_NEXT_MOVE_IS1");
             assert_eq!((king.health, king.state, king.vel.x), (30, 1, 1.0));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(game.rng.state_bits(), rng, "NO_SOURCE_RANDOM_PRODUCER");
         }
     }
@@ -95,7 +95,7 @@ fn naturally_entered_attack_and_turn_keep_their_own_velocity_writes() {
                 }
                 assert_eq!((king.health, king.state, king.vel.x), (30, state, 0.0));
                 assert_eq!(king.sprite, sprite);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 if state == 3 {
                     assert_eq!(king.value("attack_timer"), 100.0);
                     assert_eq!(king.image_speed(), 0.5);
@@ -129,7 +129,10 @@ fn source_tomb_lord_fly_hit_preserves_the_kings_attack_sprite() {
         for _ in 0..28 {
             let before = game.world.entity(id).unwrap().clone();
             game.step(&InputFrame::default());
-            assert_eq!(game.player.health, 4, "NO_PLAYER_CONTACT_HIDING_ENEMY_HIT");
+            assert_eq!(
+                game.player.health, 4.0,
+                "NO_PLAYER_CONTACT_HIDING_ENEMY_HIT"
+            );
             if first_fly.is_none() {
                 if let Some(fly) = game
                     .world
@@ -179,7 +182,7 @@ fn source_tomb_lord_fly_hit_preserves_the_kings_attack_sprite() {
                     king.sprite, "sYetiKingYellR",
                     "STUNNED_HAS_NO_OWN_SPRITE_WRITE"
                 );
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 hit = true;
                 break;
             }
@@ -221,7 +224,7 @@ fn configured_initial_negative_and_fractional_counters_keep_literal_source_value
                         "NEGATIVE_VALUES_ARE_NOT_NORMALIZED"
                     );
                 }
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
             }
         }
     }
@@ -254,7 +257,7 @@ fn natural_walk_checks_the_wall_beside_its_final_position() {
             assert_eq!(king.pos, Vec2::new(86.0, 128.0), "WALL_BLOCKS_INCOMING1");
             assert_eq!((king.health, king.state, king.vel.x), (30, 2, 0.0));
             assert_eq!(king.sprite, "sYetiKingTurnL");
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(game.rng.state_bits(), rng);
         }
     }

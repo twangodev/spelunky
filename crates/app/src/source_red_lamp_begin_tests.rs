@@ -78,7 +78,7 @@ fn room(rules: RulesPreset, carried_x: Option<f64>) -> (Game, u64, Option<u64>) 
     for _ in 0..2 {
         game.step(&InputFrame::default());
     }
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(game.player.engine_active && game.player.grounded);
     assert_eq!(game.player.pos, Vec2::new(88.0, 152.0));
     assert_eq!(source_lamp_distance(&game, static_lamp), 67.0);
@@ -101,7 +101,7 @@ fn ordinary_motion_uses_begin_tint(rules: RulesPreset, carried_x: Option<f64>) {
             right: true,
             ..Default::default()
         });
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(game.player.engine_active && game.player.grounded);
         assert!(game.player.held.is_none());
         let after_static = source_lamp_distance(&game, static_lamp);

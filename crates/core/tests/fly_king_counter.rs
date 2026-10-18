@@ -42,7 +42,10 @@ fn natural_tomb_fly_writes_the_kings_source_counter() {
         for _ in 0..28 {
             let before = game.world.entity(id).unwrap().clone();
             game.step(&InputFrame::default());
-            assert_eq!(game.player.health, 4, "NO_PLAYER_CONTACT_HIDING_ENEMY_HIT");
+            assert_eq!(
+                game.player.health, 4.0,
+                "NO_PLAYER_CONTACT_HIDING_ENEMY_HIT"
+            );
             if first_fly.is_none() {
                 if let Some(fly) = game
                     .world
@@ -98,7 +101,7 @@ fn natural_tomb_fly_writes_the_kings_source_counter() {
                     king.sprite, "sYetiKingYellR",
                     "STUNNED_HAS_NO_OWN_SPRITE_WRITE"
                 );
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 hit = true;
                 break;
             }
@@ -139,7 +142,7 @@ fn initial_turn_animation_end_retains_fly_counter_and_unhit_counter() {
                 }
                 game.step(&InputFrame::default());
                 let king = game.world.entity(id).unwrap();
-                assert_eq!(game.player.health, 4, "NO_PLAYER_CONTACT");
+                assert_eq!(game.player.health, 4.0, "NO_PLAYER_CONTACT");
                 assert_eq!(
                     king.health,
                     if hit { 28 } else { 30 },

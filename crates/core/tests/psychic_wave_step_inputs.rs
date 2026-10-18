@@ -18,7 +18,7 @@ fn scene(preset: RulesPreset, wave_x: f64) -> (Game, u64) {
     game.player.sprite = "sStunL".into();
     game.player.grounded = true;
     assert_eq!(game.player.vel, Vec2::default());
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(game.player.held.is_none());
     assert!(game.player.equipment.is_empty());
     let id = game.spawn("oPsychicWave", Vec2::new(wave_x, 104.0));
@@ -32,7 +32,7 @@ fn scene(preset: RulesPreset, wave_x: f64) -> (Game, u64) {
 
 fn assert_player_and_wave_prefix(game: &Game, id: u64, pos: Vec2) {
     assert_eq!(game.player.pos, Vec2::new(104.0, 104.0));
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(game.player.is_stunned() && game.player.stun > 0);
     assert_eq!(game.player.sprite, "sStunL");
     assert_eq!(game.player.vel, Vec2::default());
@@ -64,7 +64,7 @@ fn configured_stunned_wave_reaches_character_then_moves_past_coincidence() {
         assert_eq!(before_animation, 0.25);
         game.step(&InputFrame::default());
         assert_eq!(game.player.pos, Vec2::new(104.0, 104.0));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(game.player.is_stunned() && game.player.stun > 0);
         let wave = game
             .world
@@ -89,7 +89,7 @@ fn configured_stunned_wave_at_coincidence_moves_on_its_first_step() {
         let (mut game, id) = scene(preset, 104.0);
         game.step(&InputFrame::default());
         assert_eq!(game.player.pos, Vec2::new(104.0, 104.0));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(game.player.is_stunned() && game.player.stun > 0);
         let wave = game.world.entity(id).unwrap();
         assert!(wave.engine_active);
@@ -131,7 +131,7 @@ fn configured_level_reactivation_keeps_existing_character_before_player() {
         game.player.previous_pos = game.player.pos;
         game.player.engine_active = false;
         assert_eq!(game.player.vel, Vec2::default());
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         let character = game.spawn("oCharacter", Vec2::new(104.0, 104.0));
         let wave = game.spawn("oPsychicWave", Vec2::new(104.0, 72.0));
         let rng = game.rng.clone();
@@ -146,7 +146,7 @@ fn configured_level_reactivation_keeps_existing_character_before_player() {
         );
         assert!(game.player.engine_active);
         assert_eq!(game.player.pos, Vec2::new(200.0, 104.0));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         let target = game.world.entity(character).unwrap();
         assert!(target.engine_active);
         assert_eq!(target.pos, Vec2::new(104.0, 104.0));

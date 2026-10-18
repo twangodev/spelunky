@@ -196,7 +196,7 @@ fn run_case(rules: RulesPreset, canonical: bool, top: bool) {
             .any(|tile| catalog::is_a(&tile.object, "oLava")),
         "no duplicate tile can conceal dynamic query gap"
     );
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.stun, 0);
     assert_eq!(game.player.state, PlayerState::Standing);
     assert!(game.player.grounded && game.player.held.is_none());
@@ -277,7 +277,7 @@ fn run_case(rules: RulesPreset, canonical: bool, top: bool) {
         "no competing Blood/Burn/Splash/exit producer"
     );
     assert!(!game.events.iter().any(|e| matches!(e, GameEvent::Sound { name, .. } if ["sndDamsel", "sndHit", "sndHurt", "sndSplash"].contains(&name.as_str()))));
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.stun, 0);
     let shown = game.presentation();
     let draw = shown

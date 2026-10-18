@@ -40,7 +40,7 @@ fn pickup_and_walk_to_exit(g: &mut Game, id: u64, exit: u64, dead: bool) {
     });
     assert_eq!(g.player.held, Some(id), "real pickup prerequisite");
     assert!(g.world.entity(id).unwrap().held);
-    assert_eq!(g.player.health, 4, "Hero raw lava probe remains dry");
+    assert_eq!(g.player.health, 4.0, "Hero raw lava probe remains dry");
     // Release Down so a large held Damsel returns from Hero.y+2 to Hero.y.
     // LEFT attachment is Hero.x-4; at x156,y152 its own y+6 Lava probe hits,
     // while Hero's x160,y+6 point is outside the cell's inclusive 144..159.
@@ -52,7 +52,7 @@ fn pickup_and_walk_to_exit(g: &mut Game, id: u64, exit: u64, dead: bool) {
     assert_eq!(actor.pos, Vec2::new(156.0, 152.0));
     assert!(actor.held);
     assert_eq!(g.player.held, Some(id));
-    assert_eq!(g.player.health, 4);
+    assert_eq!(g.player.health, 4.0);
     if dead {
         assert_eq!(
             actor.health, 0,
@@ -73,7 +73,7 @@ fn pickup_and_walk_to_exit(g: &mut Game, id: u64, exit: u64, dead: bool) {
             right: true,
             ..Default::default()
         });
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         if g.world
             .entity(exit)
             .unwrap()
@@ -118,7 +118,7 @@ fn real_held_lava_death_then_dry_exit_release_runs_thrown_startled_and_corpse_ta
                 ..Default::default()
             });
             assert!(g.player.is_exiting(), "real exit input prerequisite");
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
             assert_eq!(g.player.held, None);
             assert!(g.player.pickup_item_type.is_empty());
             let actor = g
@@ -153,7 +153,7 @@ fn real_healthy_pickup_walk_and_exit_preserves_live_damsel_rescue_control() {
                 ..Default::default()
             });
             assert!(g.player.is_exiting());
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
             assert_eq!(g.player.held, None);
             assert_eq!(g.lifetime_stats.damsels_saved_total, 1);
             assert_eq!(g.lifetime_stats.damsels_grabbed, 0);

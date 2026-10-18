@@ -43,8 +43,8 @@ fn recovery(rules: RulesPreset, historical: bool, keep_down: bool) {
         game.step(&held);
         saw_arrow |= game.world.entities.iter().any(|e| e.object == "oArrow");
         assert_eq!(game.state, RunState::Playing, "{}", description(&game));
-        if game.player.health < 4 {
-            assert_eq!(game.player.health, 2, "actual trap Arrow damage");
+        if game.player.health < 4.0 {
+            assert_eq!(game.player.health, 2.0, "actual trap Arrow damage");
             assert!(
                 saw_arrow,
                 "observed original Arrow birth before the hurt branch"
@@ -69,7 +69,7 @@ fn recovery(rules: RulesPreset, historical: bool, keep_down: bool) {
     let mut recovered = false;
     for _ in 0..240 {
         if game.player.stun == 1 && game.player.sprite == "sStunL" {
-            assert_eq!(game.player.health, 2);
+            assert_eq!(game.player.health, 2.0);
             assert!(game.player.is_stunned());
             assert_eq!(
                 game.player.vel,
@@ -104,7 +104,7 @@ fn recovery(rules: RulesPreset, historical: bool, keep_down: bool) {
                 down: keep_down,
                 ..Default::default()
             });
-            assert_eq!(game.player.health, 2);
+            assert_eq!(game.player.health, 2.0);
             assert!(!game.player.is_stunned());
             assert_eq!(game.player.stun, 0);
             assert_eq!(
@@ -141,7 +141,7 @@ fn recovery(rules: RulesPreset, historical: bool, keep_down: bool) {
         game.step(&held);
         assert_eq!(
             game.player.health,
-            2,
+            2.0,
             "healthy real physical stun: {}",
             description(&game)
         );

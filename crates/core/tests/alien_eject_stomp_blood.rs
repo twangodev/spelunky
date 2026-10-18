@@ -66,7 +66,7 @@ fn prefix(rules: RulesPreset) -> (Game, u64) {
         };
         game.step(&input(bits));
         assert_eq!(
-            game.player.health, 4,
+            game.player.health, 4.0,
             "ORDINARY_ROUTE_NO_DAMAGE tick={tick}"
         );
         if tick == 1 {
@@ -156,7 +156,7 @@ fn ordinary_ufo_eject_stomp_creates_three_player_offset_blood_and_twelve_rng_dra
             .collect();
         game.step(&input(TAPE[56]));
         assert!(game.world.entity(id).is_none(), "REAL_EJECT_STOMP_DESTROY");
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.player.pos, Vec2::new(119.0, 136.0));
         assert_eq!(game.player.vel, Vec2::new(3.0, -6.7));
         assert_eq!(game.player.data.get("fall_timer"), Some(&0.0));
@@ -202,7 +202,7 @@ fn ordinary_ufo_eject_stomp_creates_three_player_offset_blood_and_twelve_rng_dra
         assert_eq!(game.data.get("kills"), Some(&2.0));
         assert_eq!(game.data.get("aliens"), Some(&1.0));
         assert_eq!(game.lifetime_stats.enemy_kills[15], 1);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 #[test]
@@ -229,7 +229,7 @@ fn same_real_ufo_birth_without_jump_avoids_contact_and_emits_no_blood() {
             game.world.entity(born.unwrap()).is_some(),
             "NO_STOMP_EJECT_SURVIVES"
         );
-        assert_eq!(game.player.health, 4, "SOURCE_NO_CONTACT_WITHOUT_JUMP");
+        assert_eq!(game.player.health, 4.0, "SOURCE_NO_CONTACT_WITHOUT_JUMP");
         assert!(
             matches!(
                 game.player.state,
@@ -317,12 +317,12 @@ fn real_ufo_eject_grounded_contact_hurts_once_without_stomp_blood_or_credit() {
                 "SOURCE_GROUNDED_CONTACT_HAS_NO_BLOOD tick={tick}"
             );
             assert_eq!(game.data.get("aliens"), None);
-            if game.player.health < 4 {
+            if game.player.health < 4.0 {
                 let e = game
                     .world
                     .entity(born.unwrap())
                     .expect("SOURCE_HURT_BRANCH_RETAINS_EJECT");
-                assert_eq!(game.player.health, 3, "SOURCE_CONTACT_MINUS_ONE");
+                assert_eq!(game.player.health, 3.0, "SOURCE_CONTACT_MINUS_ONE");
                 assert_eq!(game.player.invincible, 30);
                 assert_eq!(game.player.stun, 0);
                 assert!(!game.player.is_stunned());

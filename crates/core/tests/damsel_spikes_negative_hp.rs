@@ -37,7 +37,7 @@ fn modes() -> impl Iterator<Item = (RulesPreset, RngAlgorithm)> {
         })
 }
 fn unharmed(g: &Game) {
-    assert_eq!(g.player.health, 4, "FIXTURE_NO_DAMAGE");
+    assert_eq!(g.player.health, 4.0, "FIXTURE_NO_DAMAGE");
     assert_eq!(g.player.stun, 0, "FIXTURE_NO_STUN");
     assert!(!g.player.is_stunned(), "FIXTURE_NO_STUN_LATCH");
     assert!(
@@ -245,7 +245,7 @@ fn real_machete_negative_hp_then_released_spikes_preserves_nonpositive_source_hp
                 .world
                 .entity(damsel)
                 .expect("Machete does not retire Damsel");
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
             assert!(e.health <= hp - 2, "each actual attack must hit");
             assert_eq!((hp - e.health) % 2, 0, "only native Machete damage2");
             assert!(e.pos.x >= 160.0, "dry initial target");
@@ -276,7 +276,7 @@ fn real_machete_negative_hp_then_released_spikes_preserves_nonpositive_source_hp
             },
         );
         assert_eq!(g.player.facing, -1);
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         safe_step(
             &mut g,
             &InputFrame {
@@ -288,7 +288,7 @@ fn real_machete_negative_hp_then_released_spikes_preserves_nonpositive_source_hp
         assert_eq!(g.player.held, None, "real Down weapon drop");
         for _ in 0..8 {
             safe_step(&mut g, &InputFrame::default());
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
         }
         let mut near = false;
         for _ in 0..12 {
@@ -303,7 +303,7 @@ fn real_machete_negative_hp_then_released_spikes_preserves_nonpositive_source_hp
                     ..Default::default()
                 },
             );
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
         }
         assert!(near, "real walking must reach a nearer Damsel pickup pose");
         assert!(g.player.pos.x <= 184.0);

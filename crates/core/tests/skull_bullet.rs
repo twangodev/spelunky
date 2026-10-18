@@ -84,7 +84,7 @@ fn natural_pistol_pickup_and_shot_breaks_skull_both_facings_and_presets() {
                 "source Skull Bullet callback must destroy it after actual contact, left={left}"
             );
             assert!(observed_bones);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -119,6 +119,6 @@ fn natural_shot_away_from_skull_leaves_it_intact() {
         }
         assert!(observed_bullet);
         assert!(!game.world.entities.iter().any(|e| e.object == "oBone"));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }

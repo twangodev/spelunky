@@ -37,7 +37,7 @@ fn dark_debris_keeps_exact_right_boundary_and_deletes_strictly_outside() {
             assert!(game.presentation().world.entity(touching).is_some());
             assert!(game.world.entity(beyond).is_none());
             assert!(game.presentation().world.entity(beyond).is_none());
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -63,7 +63,7 @@ fn dark_debris_left_boundary_and_source_step_collisions_remain_literal() {
             for killed in [beyond, brick, block] {
                 assert!(game.world.entity(killed).is_none(), "{object}/{killed}");
             }
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -125,6 +125,6 @@ fn alien_ship_destroy_born_debris_at_right_boundary_survives_its_first_step() {
             assert_eq!(kept.pos.x, 643.0);
             assert!(game.presentation().world.entity(large).is_some());
         }
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }

@@ -59,7 +59,7 @@ fn active_and_healthy(game: &Game, id: u64) {
     assert_ne!(e.state, 7, "ordinary route must never become GRAB");
     assert_eq!(e.value("swimming"), 0.0);
     assert_eq!(e.value("burning"), 0.0);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.stun, 0);
     assert!(game.player.held.is_none());
     let view = game.simulation_view_rect();

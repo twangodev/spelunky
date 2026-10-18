@@ -574,7 +574,7 @@ pub(crate) fn player_pay_step(game: &mut Game, input: &InputFrame) {
                 return;
             }
             game.player.money -= cost;
-            game.player.health += 1;
+            game.player.health += 1.0;
             count(game, "kissesBought", LifetimeCounter::KissesBought);
             let damsel_character = game.flags.contains("character_damsel");
             let damsel = game.world.entity_mut(id).expect("kiss target");
@@ -920,7 +920,7 @@ mod tests {
             },
         );
         assert_eq!(game.player.money, 500);
-        assert_eq!(game.player.bombs, 7);
+        assert_eq!(game.player.bombs, 7.0);
         assert!(game.world.entity(id).is_none());
         assert!(!game.flags.contains("wanted"));
     }
@@ -936,7 +936,7 @@ mod tests {
             },
         );
         assert_eq!(game.player.money, 2499);
-        assert_eq!(game.player.bombs, 4);
+        assert_eq!(game.player.bombs, 4.0);
         assert_eq!(game.player.held, None);
         assert_eq!(game.world.entity(id).unwrap().value("forSale"), 1.);
     }
@@ -949,7 +949,7 @@ mod tests {
         assert_eq!(game.data["thiefLevel"], 2.);
         assert_eq!(game.data["itemsStolen"], 1.);
         assert!(game.world.entity(id).is_none());
-        assert_eq!(game.player.bombs, 7);
+        assert_eq!(game.player.bombs, 7.0);
     }
     #[test]
     fn ordinary_pickup_price_is_not_sale() {
@@ -1068,7 +1068,7 @@ mod tests {
         g.step(&InputFrame::default());
         assert!(g.flags.contains("wanted"));
         assert_eq!(g.data["thiefLevel"], 2.);
-        assert_eq!(g.player.bombs, 7);
+        assert_eq!(g.player.bombs, 7.0);
         assert!(g.world.entity(id).is_none());
     }
     #[test]
@@ -1125,7 +1125,7 @@ mod tests {
 
     #[test]
     fn actual_step_kiss_requires_kissing_shop_and_starts_npc_animation() {
-        for (style, expected_health) in [("Bomb", 4), ("Kissing", 5)] {
+        for (style, expected_health) in [("Bomb", 4.0), ("Kissing", 5.0)] {
             let (mut g, id) = stepping_shop("oDamsel", style);
             g.player.held = None;
             g.world.entity_mut(id).unwrap().held = false;
@@ -1158,7 +1158,7 @@ mod tests {
             pay_pressed: true,
             ..Default::default()
         });
-        assert_eq!(g.player.bombs, 7);
+        assert_eq!(g.player.bombs, 7.0);
         assert!(!g.data.contains_key("itemsBought"));
         assert_eq!(g.lifetime_stats.items_bought, 0);
     }
@@ -1225,13 +1225,13 @@ mod tests {
             },
         );
         assert_eq!(g.player.money, 100000);
-        assert_eq!(g.player.bombs, 4);
+        assert_eq!(g.player.bombs, 4.0);
         assert_eq!(g.world.entity(id).unwrap().value("forSale"), 1.);
     }
     #[test]
     fn healed_latched_dead_player_cannot_pay_for_shop_item() {
         let (mut g, id) = stepping_shop("oBombBag", "Bomb");
-        g.player.health = 1;
+        g.player.health = 1.0;
         g.player.state = crate::model::PlayerState::Dead;
         g.state = RunState::Dead;
         tick(

@@ -89,7 +89,7 @@ fn jump(game: &mut Game) {
         ..Default::default()
     });
     assert_eq!(game.state, RunState::Playing);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.stun, 0);
     assert!(!game.player.is_stunned());
     assert_eq!(game.player.state, PlayerState::Jumping);

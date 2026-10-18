@@ -24,7 +24,7 @@ fn actual_level_step_reactivates_the_only_character_before_wave_qualified_reads(
         game.step(&crate::InputFrame::default());
         assert!(game.player.engine_active);
         assert_eq!(game.player.pos, Vec2::new(200.0, 104.0));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         let wave = game.world.entity(wave).unwrap();
         assert_eq!(wave.pos, Vec2::new(106.0, 104.0));
         assert_eq!(wave.value("dir"), 0.0);

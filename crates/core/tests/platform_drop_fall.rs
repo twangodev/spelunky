@@ -88,7 +88,7 @@ fn first_contact(game: &mut Game, platform_top: u32) {
         game.step(&InputFrame::default());
         assert_eq!(
             game.player.health,
-            4,
+            4.0,
             "BEFORE_CONTACT: {}",
             diagnostic(game)
         );
@@ -116,7 +116,7 @@ fn first_contact(game: &mut Game, platform_top: u32) {
         "FIRST_CONTACT: {}",
         diagnostic(game)
     );
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(!game.player.is_stunned());
     assert!(fall(game) > 0.0);
     if platform_top == 288 {
@@ -147,7 +147,7 @@ fn fresh_down(game: &mut Game, platform_top: u32) {
         diagnostic(game)
     );
     assert!(game.player.vel.y > 0.0);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(!game.player.is_stunned());
 }
 
@@ -155,7 +155,7 @@ fn lower_landing(game: &mut Game, platform_top: u32) {
     let lower_top = f64::from(platform_top + 64);
     for _ in 0..60 {
         game.step(&InputFrame::default());
-        if game.player.health < 4 || game.player.is_stunned() {
+        if game.player.health < 4.0 || game.player.is_stunned() {
             break;
         }
         if game.player.grounded && game.player.vel.y == 0.0 && fall(game) == 0.0 {
@@ -164,7 +164,7 @@ fn lower_landing(game: &mut Game, platform_top: u32) {
     }
     assert_eq!(
         game.player.health,
-        4,
+        4.0,
         "SHORT_DROP_HEALTH: {}",
         diagnostic(game)
     );
@@ -192,7 +192,7 @@ fn lower_landing(game: &mut Game, platform_top: u32) {
         "FRESH_JUMP: {}",
         diagnostic(game)
     );
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
 }
 
 #[test]
@@ -230,7 +230,7 @@ fn natural_short_platform_drop_does_not_inherit_the_previous_long_fall_injury() 
         control.step(&InputFrame::default());
         assert_eq!(
             control.player.health,
-            4,
+            4.0,
             "LANDING_CONTROL: {}",
             diagnostic(&control)
         );
@@ -243,7 +243,7 @@ fn natural_short_platform_drop_does_not_inherit_the_previous_long_fall_injury() 
         control.step(&InputFrame::default());
         assert_eq!(
             control.player.health,
-            3,
+            3.0,
             "LONG_FALL_CONTROL: {}",
             diagnostic(&control)
         );

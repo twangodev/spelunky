@@ -7,7 +7,7 @@ use spelunky_core::{
 fn healthy(game: &Game, origin: Vec2) {
     assert_eq!(game.player.pos, origin);
     assert_eq!(game.player.vel, Vec2::default());
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.invincible, 0);
     assert_eq!(game.player.stun, 0);
     assert!(!game.player.is_stunned());
@@ -137,8 +137,8 @@ fn pickup_and_flat_throw(object: &str, x: f64, rules: RulesPreset, expect_destro
         assert!(!game.world.entities.iter().any(|e| e.id >= first_birth
             && matches!(e.object.as_str(), "oSmokePuff" | "oRubbleSmall" | "oBone")));
     }
-    assert_eq!(game.player.bombs, 4);
-    assert_eq!(game.player.ropes, 4);
+    assert_eq!(game.player.bombs, 4.0);
+    assert_eq!(game.player.ropes, 4.0);
 }
 
 #[test]

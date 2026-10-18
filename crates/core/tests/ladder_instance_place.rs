@@ -108,7 +108,7 @@ fn approach(game: &mut Game, side: i8, placement: Placement) {
         diagnostic(game)
     );
     assert!(game.player.grounded);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     let toward = InputFrame {
         left: side < 0,
         right: side > 0,
@@ -125,7 +125,7 @@ fn approach(game: &mut Game, side: i8, placement: Placement) {
             game.step(&toward);
             assert!(game.player.grounded, "{}", diagnostic(game));
             assert_eq!(game.player.pos.y, 88.0, "{}", diagnostic(game));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             let delta = (game.player.pos.x - 152.0) * f64::from(side);
             if (5.0..=7.0).contains(&delta) {
                 reached = true;
@@ -160,7 +160,7 @@ fn down(game: &mut Game, side: i8) {
         right_released: side > 0,
         ..Default::default()
     });
-    assert_eq!(game.player.health, 4, "{}", diagnostic(game));
+    assert_eq!(game.player.health, 4.0, "{}", diagnostic(game));
     assert!(!game.player.is_stunned());
     assert!(!game.world.solid_at(game.player.pos.x, game.player.pos.y));
 }

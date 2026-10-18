@@ -117,7 +117,7 @@ fn fall_stomp(rules: RulesPreset, algorithm: RngAlgorithm, shoes: bool) -> (Game
             ..Default::default()
         });
         let after = game.world.entity(yeti).unwrap();
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         if after.state == 98 {
             assert!(falling, "actual ledge fall precedes source stomp");
             let fall = before.data.get("fall_timer").copied().unwrap_or(0.0);
@@ -213,7 +213,7 @@ fn walk_contact(rules: RulesPreset, algorithm: RngAlgorithm, roof: bool) -> (Gam
         });
         let after = game.world.entity(yeti).unwrap();
         assert_eq!(after.health, 5);
-        if game.player.health != 4 || after.state == 3 {
+        if game.player.health != 4.0 || after.state == 3 {
             assert_eq!(actor.state, 0);
             assert!(actor.value("counter") > 1.0);
             return (game, yeti, birth, expected);
@@ -240,7 +240,7 @@ fn ordinary_low_ceiling_yeti_contact_creates_direct_player_blood() {
         assert_eq!(drops[0].value("gravity"), gravity);
         assert_eq!(&drops[0].alarms[..3], &[1, 1, 5]);
         assert_eq!(game.rng.clone().next_u64(), expected.next_u64());
-        assert_eq!(game.player.health, 3);
+        assert_eq!(game.player.health, 3.0);
         assert_eq!(game.player.invincible, 30);
         assert_eq!(game.player.stun, 0);
         assert_ne!(game.player.state, PlayerState::Stunned);
@@ -253,7 +253,7 @@ fn ordinary_low_ceiling_yeti_contact_creates_direct_player_blood() {
 fn ordinary_clear_headroom_yeti_contact_throws_without_damage_or_blood() {
     for (rules, algorithm) in modes() {
         let (game, yeti, birth, mut expected) = walk_contact(rules, algorithm, false);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.player.state, PlayerState::Stunned);
         assert_eq!(game.world.entity(yeti).unwrap().state, 3);
         assert!(

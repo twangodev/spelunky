@@ -84,7 +84,7 @@ fn check(object: &str, roof: Roof) {
             assert_eq!(e.value("burning"), 0.0);
             assert_eq!(e.image_speed(), 0.4);
             assert_eq!(e.value("inherited_gravity"), if monkey { 0.6 } else { 0.2 });
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(game.player.pos, Vec2::new(136.0, 152.0));
             assert!(game.player.grounded && game.player.held.is_none());
             assert_eq!(game.player.stun, 0);

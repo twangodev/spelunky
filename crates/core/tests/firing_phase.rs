@@ -37,7 +37,7 @@ fn pickup_weapon(rules: RulesPreset, facing: i8, object: &str) -> (Game, u64) {
     });
     assert_eq!(game.player.held, Some(weapon));
     assert_eq!(game.player.facing, facing);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.attack_timer, 0);
     assert_eq!(
         game.player
@@ -115,7 +115,7 @@ fn ordinary_bow_redraw_observes_early_cooldown_boundary_and_controls() {
                 );
                 assert_eq!(game.data["arrows"], 5.0);
                 assert_eq!(game.player.held, Some(bow));
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
             }
         }
     }

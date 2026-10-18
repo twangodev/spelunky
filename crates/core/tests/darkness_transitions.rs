@@ -33,7 +33,7 @@ fn leave_with_inputs(game: &mut Game, neutral_ticks: usize, disabled: bool, mark
     for _ in 0..neutral_ticks {
         game.step(&InputFrame::default());
         assert_eq!(game.state, RunState::Playing);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(!game.player.is_stunned());
     }
     assert!(

@@ -28,7 +28,7 @@ fn controlled_rock(rules: RulesPreset, vx: f64, safe: bool) -> (Game, u64) {
     game.player.previous_pos = game.player.pos;
     game.player.state = PlayerState::Falling;
     game.player.grounded = false;
-    game.player.health = 6;
+    game.player.health = 6.0;
     let rock = game.spawn("oRock", game.player.pos);
     let entity = game.world.entity_mut(rock).unwrap();
     entity.vel.x = vx;
@@ -57,7 +57,7 @@ fn rock_authoritative_own_step_contact_births_three_and_keeps_rock_in_both_direc
                     .insert("bloodless".into(), if bloodless { 1.0 } else { 0.0 });
                 game.player.invincible = 60; // Source Rock ignores contact invulnerability.
                 game.step(&InputFrame::default());
-                assert_eq!(game.player.health, 4, "actual Rock own-Step damage");
+                assert_eq!(game.player.health, 4.0, "actual Rock own-Step damage");
                 assert_eq!(game.player.stun, 20);
                 assert_eq!(game.player.vel, Vec2::new(vx, -4.0));
                 assert_eq!(blood_count(&game), if bloodless { 0 } else { 3 });
@@ -85,7 +85,7 @@ fn rock_actual_step_safe_speed_existing_stun_and_dead_controls_do_not_emit_blood
             game.player.state = PlayerState::Stunned;
         }
         if control == "dead" {
-            game.player.health = 0;
+            game.player.health = 0.0;
             game.player.state = PlayerState::Dead;
             game.state = RunState::Dead;
         }
@@ -117,11 +117,11 @@ fn rock_mitt_catch_suppresses_hurt_only_with_empty_hands() {
         }
         game.step(&InputFrame::default());
         if occupied {
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(game.player.stun, 20);
             assert_eq!(blood_count(&game), 3);
         } else {
-            assert_eq!(game.player.health, 6);
+            assert_eq!(game.player.health, 6.0);
             assert_eq!(game.player.stun, 0);
             assert_eq!(blood_count(&game), 0);
             assert_eq!(game.player.held, Some(rock));

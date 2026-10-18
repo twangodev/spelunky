@@ -23,7 +23,7 @@ impl Cheats {
             game.flags.insert("cheats_used".into());
         }
         if self.infinite_health && game.state == RunState::Playing {
-            game.player.health = 99;
+            game.player.health = 99.0;
             // A bottomless pit has no landing to recover on. Return to the
             // actual room entrance without replaying room creation.
             if game.player.pos.y > game.world.height as f64 * 16.0 + 16.0 {
@@ -37,10 +37,10 @@ impl Cheats {
             }
         }
         if self.infinite_bombs {
-            game.player.bombs = 99;
+            game.player.bombs = 99.0;
         }
         if self.infinite_ropes {
-            game.player.ropes = 99;
+            game.player.ropes = 99.0;
         }
         if self.infinite_money {
             game.player.money = 999_999;
@@ -57,9 +57,9 @@ impl Cheats {
 
     pub fn refill(game: &mut Game) {
         game.flags.insert("cheats_used".into());
-        game.player.health = 99;
-        game.player.bombs = 99;
-        game.player.ropes = 99;
+        game.player.health = 99.0;
+        game.player.bombs = 99.0;
+        game.player.ropes = 99.0;
         game.player.money = 999_999;
     }
 
@@ -95,7 +95,7 @@ mod tests {
         Cheats::default().apply(&mut game);
         assert_eq!(serde_json::to_value(&game).unwrap(), before);
         game.damage_player(1);
-        assert_eq!(game.player.health, 3);
+        assert_eq!(game.player.health, 3.0);
     }
 
     #[test]
@@ -108,12 +108,12 @@ mod tests {
         cheats.apply(&mut game);
         game.damage_player(1000);
         game.player.lose_health(99);
-        assert_eq!(game.player.health, 99);
+        assert_eq!(game.player.health, 99.0);
         assert_eq!(game.player.stun, 0);
         cheats.infinite_health = false;
         cheats.apply(&mut game);
         game.damage_player(1);
-        assert_eq!(game.player.health, 98);
+        assert_eq!(game.player.health, 98.0);
         assert!(game.flags.contains("cheats_used"));
     }
 
@@ -132,13 +132,13 @@ mod tests {
         });
         assert!(game.world.entities.iter().any(|e| e.object == "oBomb"));
         cheats.apply(&mut game);
-        assert_eq!(game.player.bombs, 99);
+        assert_eq!(game.player.bombs, 99.0);
         game.step(&InputFrame {
             rope_pressed: true,
             ..Default::default()
         });
         cheats.apply(&mut game);
-        assert_eq!(game.player.ropes, 99);
+        assert_eq!(game.player.ropes, 99.0);
     }
 
     #[test]

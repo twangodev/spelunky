@@ -57,7 +57,7 @@ fn first_walk(
     );
     assert_eq!(game.player.state, PlayerState::Running);
     assert!(game.player.grounded && !game.player.is_stunned());
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     if let Some(id) = id {
         let support = game.world.entity(id).unwrap();
         assert!(support.alive && support.engine_active);

@@ -259,7 +259,7 @@ fn item_damsel_query_observes_enemy_nested_create_birth_and_per_birth_blood_cap(
                     assert_eq!(blood[0].pos, Vec2::new(166.0, 168.0));
                 }
                 assert_eq!(g.rng.state_bits(), rng.state_bits());
-                assert_eq!(g.player.health, 4);
+                assert_eq!(g.player.health, 4.0);
             }
         }
     }

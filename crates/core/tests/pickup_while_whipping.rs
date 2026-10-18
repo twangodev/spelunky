@@ -81,8 +81,8 @@ fn down_attack_repress_picks_up_while_whipping_without_restarting_attack() {
                 assert!(game.player.animation > phase);
                 assert_eq!(game.player.state, PlayerState::Standing);
                 assert_eq!(game.rng.clone().next_u64(), next_random);
-                assert_eq!(game.player.health, 4);
-                assert_eq!((game.player.bombs, game.player.ropes), (4, 4));
+                assert_eq!(game.player.health, 4.0);
+                assert_eq!((game.player.bombs, game.player.ropes), (4.0, 4.0));
 
                 for step in 0..16 {
                     if game.player.attack_timer == 0 {
@@ -215,7 +215,7 @@ fn natural_arrow_trap_hit_cancels_whipping_and_keeps_stunned_pickup_blocked() {
                 approaching,
                 "FIXTURE_TIMING: natural incoming Arrow required"
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             start_then_release(&mut game);
             let mut hit = false;
             for step in 0..16 {
@@ -235,7 +235,7 @@ fn natural_arrow_trap_hit_cancels_whipping_and_keeps_stunned_pickup_blocked() {
                 }
             }
             assert!(hit, "FIXTURE_TIMING: real Arrow hurt required");
-            assert_eq!(game.player.health, 2);
+            assert_eq!(game.player.health, 2.0);
             assert_eq!(game.player.attack_timer, 0);
             assert!(game.player.held.is_none());
             game.step(&release());

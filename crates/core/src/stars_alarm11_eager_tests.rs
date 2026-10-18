@@ -25,7 +25,7 @@ fn raw_lcg_step(state: u64) -> u64 {
 }
 fn dead_alarm_fixture(game: &mut Game) {
     // Explicit initial callback boundary, not a claimed earned challenge death.
-    game.player.health = 0;
+    game.player.health = 0.0;
     game.player.state = PlayerState::Dead;
     game.state = RunState::Dead;
     game.data.insert("stars_kills".into(), 99.0);
@@ -138,7 +138,7 @@ fn natural_stars_hazard_death_leaves_a_pending_eager_alarm_callback() {
         );
         assert_eq!(game.state, RunState::Dead);
         assert_eq!(game.player.state, PlayerState::Dead);
-        assert_eq!(game.player.health, 0);
+        assert_eq!(game.player.health, 0.0);
         assert!((1.0..=20.0).contains(&game.data["hub_alarm11"]));
         while game.data["hub_alarm11"] > 1.0 {
             game.step(&InputFrame::default());

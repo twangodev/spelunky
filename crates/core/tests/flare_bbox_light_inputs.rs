@@ -121,7 +121,7 @@ fn open(game: &mut Game, crate_id: u64) -> Vec<u64> {
     });
     assert!(game.world.entity(crate_id).is_none());
     assert_eq!(game.player.held, None);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.rng.clone().next_u64(), expected_rng.next_u64());
     let ids = flare_ids(game);
     assert_eq!(ids.len(), 3, "real Up+Attack births three source flares");
@@ -251,7 +251,7 @@ fn ordinary_flare_crate_darkness_consumes_prior_cache_selected_before_flare_moti
             );
             stale_cache_witness |= (fresh / 160.0).min(0.9) != expected_darkness;
             assert_eq!(scalar(&game.data, "darkness_lerp", 0.0), 0.0);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
         assert!(
             stale_cache_witness,

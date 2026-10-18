@@ -25,7 +25,7 @@ fn natural_ghost_hidden_corpse_ignores_later_blast_while_visible_player_is_hit()
                 game.step(&InputFrame::default());
                 let visible = game.player.data.get("visible").copied().unwrap_or(1.0) != 0.0;
                 if ghost && !hidden && !visible {
-                    assert_eq!(game.player.health, -99, "natural Ghost own Collision");
+                    assert_eq!(game.player.health, -99.0, "natural Ghost own Collision");
                     assert_eq!(game.player.invincible, 9999);
                     assert_eq!(game.player.data.get("hidden").copied().unwrap_or(0.0), 0.0);
                     assert!(game.events.iter().any(|event| matches!(event,
@@ -38,7 +38,7 @@ fn natural_ghost_hidden_corpse_ignores_later_blast_while_visible_player_is_hit()
                     first_death = true;
                     assert!(!visible);
                     assert_eq!(
-                        game.player.health, 0,
+                        game.player.health, 0.0,
                         "invisible corpse skips source own-hurt block"
                     );
                     assert!(!game.events.contains(&GameEvent::Damage { amount: 10 }));
@@ -72,7 +72,7 @@ fn natural_ghost_hidden_corpse_ignores_later_blast_while_visible_player_is_hit()
             assert!(game.world.entity(bomb).is_none(), "natural fuse completed");
             if ghost {
                 assert!(hidden && first_death);
-                assert_eq!(game.player.health, 0);
+                assert_eq!(game.player.health, 0.0);
                 assert!(!live_hit);
             } else {
                 assert!(live_hit, "visible control takes the same natural explosion");

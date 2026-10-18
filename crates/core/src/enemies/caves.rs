@@ -370,10 +370,10 @@ fn cave_contact_damage(
     } else {
         6.0
     };
-    if game.player.health > 0 {
+    if game.player.health > 0.0 {
         game.player.lose_health(amount);
         game.events.push(crate::GameEvent::Damage { amount });
-        if game.player.health <= 0 && crate::statistics::is_real_level(game) {
+        if game.player.health <= 0.0 && crate::statistics::is_real_level(game) {
             game.lifetime_stats.enemy_death(cause);
         }
     }
@@ -1278,7 +1278,7 @@ mod tests {
         assert_eq!(game.world.entity(hawkman).unwrap().state, 2);
         assert_eq!(game.world.entity(stunned).unwrap().state, 98);
         assert_eq!(game.world.entity(ray).unwrap().pos.x, 74.0);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 
     #[test]
@@ -1334,7 +1334,7 @@ mod tests {
                     "only the unobstructed sight can alert its owner"
                 );
                 assert_eq!(game.world.entity(caveman).unwrap().state == 2, !wall);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
             }
         }
     }

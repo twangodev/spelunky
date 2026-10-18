@@ -79,7 +79,7 @@ fn pickup(game: &mut Game) -> u64 {
         });
         assert_eq!(
             game.player.health,
-            4,
+            4.0,
             "pickup precedes trap range: {}",
             diagnostic(game)
         );
@@ -115,7 +115,7 @@ fn pickup(game: &mut Game) -> u64 {
     );
     game.step(&InputFrame::default());
     assert_eq!(game.player.held, Some(bow));
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     bow
 }
 
@@ -129,7 +129,7 @@ fn face(game: &mut Game, facing: i8, attack: bool) {
         });
         assert_eq!(
             game.player.health,
-            4,
+            4.0,
             "FIXTURE_FACE_BEFORE_HIT: {}",
             diagnostic(game)
         );
@@ -163,7 +163,7 @@ fn enter_detector(game: &mut Game, attack: bool) -> u64 {
     for tick in 0..8 {
         assert_eq!(
             game.player.health,
-            4,
+            4.0,
             "FIXTURE_NO_PRIOR_HIT: {}",
             diagnostic(game)
         );
@@ -185,7 +185,7 @@ fn enter_detector(game: &mut Game, attack: bool) -> u64 {
             assert_eq!(sound(game, "sndJump"), 1);
         }
         if let Some(id) = unsafe_arrow(game) {
-            assert_eq!(game.player.health, 4, "trap birth follows Player Hurt");
+            assert_eq!(game.player.health, 4.0, "trap birth follows Player Hurt");
             assert_eq!(
                 sound(game, "sndArrowTrap"),
                 1,
@@ -216,10 +216,10 @@ fn wait_hit(game: &mut Game, trap_arrow: u64, attack: bool) {
             attack,
             ..Default::default()
         });
-        if game.player.health < 4 {
+        if game.player.health < 4.0 {
             assert_eq!(
                 game.player.health,
-                2,
+                2.0,
                 "real first Arrow hit: {}",
                 diagnostic(game)
             );
@@ -356,7 +356,7 @@ fn natural_exhausted_six_shots_then_trap_hurt_spends_zero_to_negative_one() {
                         attack: true,
                         ..Default::default()
                     });
-                    assert_eq!(game.player.health, 4, "trap not yet triggered");
+                    assert_eq!(game.player.health, 4.0, "trap not yet triggered");
                 }
                 assert!(game.player.data["bow_strength"] >= 9.0);
                 game.step(&InputFrame {
@@ -371,7 +371,7 @@ fn natural_exhausted_six_shots_then_trap_hurt_spends_zero_to_negative_one() {
                 assert_eq!(sound(&game, "sndArrowTrap"), 1);
                 for _ in 0..20 {
                     game.step(&InputFrame::default());
-                    assert_eq!(game.player.health, 4);
+                    assert_eq!(game.player.health, 4.0);
                     assert_eq!(
                         game.data["arrows"],
                         f64::from(remaining),
@@ -438,7 +438,7 @@ fn natural_uncharged_supported_bow_has_no_hurt_and_no_spontaneous_shot() {
             face(&mut game, facing, false);
             for _ in 0..40 {
                 game.step(&InputFrame::default());
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert_eq!(game.data["arrows"], 6.0);
                 assert_eq!(game.player.held, Some(bow));
                 assert_eq!(sound(&game, "sndArrowTrap"), 0);

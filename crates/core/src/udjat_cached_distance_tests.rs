@@ -50,7 +50,7 @@ fn udjat_market_query_uses_player_cached_envelope_and_only_shortens_the_alarm() 
                 assert_eq!(g.alarms[2], literal_alarm);
                 assert!(g.flags.contains("udjat_blink"));
                 assert_eq!(g.rng.state_bits(), rng);
-                assert_eq!(g.player.health, 4);
+                assert_eq!(g.player.health, 4.0);
                 assert!(g.events.is_empty());
             }
         }

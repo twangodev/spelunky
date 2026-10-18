@@ -65,7 +65,7 @@ fn recover_naturally(g: &mut Game, id: u64, boss_x: f64) {
             (0, 0, 0),
             "source positive countdown prevents early cast"
         );
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
     }
     assert_eq!(g.player.pos, Vec2::new(111.0, 152.0));
     assert_eq!(g.player.state, PlayerState::Standing);
@@ -107,7 +107,7 @@ fn ordinary_left_then_wait_does_not_cast_at_native_inclusive_gap_96() {
             expected.next_u64(),
             "false distance branch consumes no attack RNG"
         );
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
     }
 }
 
@@ -131,7 +131,7 @@ fn ordinary_left_then_wait_nearer_boss_positive_control_preserves_six_creates_wa
             expected.next_u64(),
             "six source births each draw four rand(0,32); child Create consumes no RNG"
         );
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
     }
 }
 
@@ -147,6 +147,6 @@ fn ordinary_left_then_wait_farther_boss_negative_control_preserves_no_cast_and_r
         assert_eq!(boss.value("psychic_recover"), 0.0);
         assert_eq!(attack_counts(&g), (0, 0, 0));
         assert_eq!(g.rng.clone().next_u64(), expected.next_u64());
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
     }
 }

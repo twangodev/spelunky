@@ -28,7 +28,7 @@ fn authored_room(symbol: char, target_x: usize, rules: RulesPreset) -> (Game, u6
         game.step(&InputFrame::default());
     }
     assert!(game.player.grounded);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.facing, 1);
     (game, target)
 }
@@ -83,7 +83,10 @@ fn authored_flying_bat_is_hit_by_normal_delayed_forward_whip() {
             game.world.entity(bat).is_none(),
             "bat own next Step finishes death"
         );
-        assert_eq!(game.player.health, 4, "stationary strike precedes contact");
+        assert_eq!(
+            game.player.health, 4.0,
+            "stationary strike precedes contact"
+        );
         assert_eq!(game.player.stun, 0);
     }
 }
@@ -104,7 +107,7 @@ fn authored_distant_flying_bat_survives_same_normal_whip_input() {
     }
     assert!(saw_forward);
     assert_eq!(game.world.entity(bat).unwrap().health, 1);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(!game.world.entities.iter().any(|e| e.object == "oBlood"));
 }
 
@@ -144,6 +147,6 @@ fn authored_bomb_bag_and_rope_pile_have_no_source_whip_collision() {
             "Item-family bags do not break on whip"
         );
         assert_eq!((game.player.bombs, game.player.ropes), inventory);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }

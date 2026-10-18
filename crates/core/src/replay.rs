@@ -498,7 +498,7 @@ fn run(
         ticks: game.tick,
         hash: format!("{:016x}", game.state_hash()),
         score: game.player.money,
-        health: game.player.health,
+        health: game.player.health as i32,
         level: game.world.level,
         entities: game.world.entities.len(),
         state: game.state,

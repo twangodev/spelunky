@@ -592,8 +592,8 @@ impl App {
         };
         hydrate_run(&mut game, &self.store.data);
         if tutorial {
-            game.player.bombs = 0;
-            game.player.ropes = 2;
+            game.player.bombs = 0.0;
+            game.player.ropes = 2.0;
         }
         self.game = Some(game);
         self.editor_play = false;
@@ -1132,7 +1132,7 @@ impl App {
                 Ok(()) => self.editor.message(format!("EXPORTED {name}")),
                 Err(error) => self.editor.message(error),
             },
-            EditorCommand::Play(level) => {
+            EditorCommand::Play(test) => {
                 self.flush_source_music();
                 self.snapshot_lifetime_stats();
                 self.source_message = None;
@@ -1144,7 +1144,12 @@ impl App {
                 );
                 hydrate_run(&mut game, &self.store.data);
                 game.rng = self.editor.source_rng().clone();
-                load_custom(&mut game, &level, self.editor.level_name(), "");
+                game.load_custom_editor_test(
+                    &test.level,
+                    &runtime_level_name(self.editor.level_name()),
+                    &runtime_level_name(""),
+                    test.starting_inventory,
+                );
                 game.flags.insert("editor_test".into());
                 self.game = Some(game);
                 self.editor_play = true;
@@ -2589,7 +2594,7 @@ fn source_host_control(
 ) -> Option<SourceHostControl> {
     if screen == Screen::Pause {
         return match key {
-            KeyCode::F1 if game.is_some_and(|game| game.player.health > 0 && game.is_level()) => {
+            KeyCode::F1 if game.is_some_and(|game| game.player.health > 0.0 && game.is_level()) => {
                 Some(SourceHostControl::Suicide)
             }
             KeyCode::F10 => Some(SourceHostControl::Quit),
@@ -2660,7 +2665,7 @@ fn source_paused_control(
 ) -> Option<SourcePausedControl> {
     if input.bomb_pressed {
         Some(
-            if game.is_some_and(|game| game.player.health > 0 && game.is_level()) {
+            if game.is_some_and(|game| game.player.health > 0.0 && game.is_level()) {
                 SourcePausedControl::Suicide
             } else {
                 SourcePausedControl::Blocked
@@ -2676,7 +2681,7 @@ fn source_paused_control(
 }
 fn apply_source_pause_suicide(game: &mut Game) -> bool {
     game.player.vel = spelunky_core::Vec2::new(if game.player.facing < 0 { -3. } else { 3. }, -6.);
-    game.player.health = -99;
+    game.player.health = -99.0;
     let stop_music = !game.player.equipment.contains("Ankh");
     if stop_music {
         game.flags.insert("source_music_stopped".into());
@@ -2685,7 +2690,7 @@ fn apply_source_pause_suicide(game: &mut Game) -> bool {
 }
 fn apply_source_suicide(game: &mut Game) {
     game.player.vel = spelunky_core::Vec2::new(if game.player.facing < 0 { -3. } else { 3. }, -6.);
-    game.player.health = -99;
+    game.player.health = -99.0;
     game.flags.insert("source_music_stopped".into());
 }
 fn source_music_input_active(screen: Screen, game: Option<&Game>) -> bool {
@@ -4329,7 +4334,7 @@ mod tests {
             assert_eq!(game_music(&game), "cave");
             assert!(!stop_music_immediately(&game, game_music(&game)));
             game.step(&spelunky_core::InputFrame::default());
-            assert_eq!(game.player.health, 0);
+            assert_eq!(game.player.health, 0.0);
             assert_eq!(game.state, RunState::Playing);
             assert_eq!(game_music(&game), "cave");
             assert!(
@@ -4339,7 +4344,7 @@ mod tests {
             game.step(&spelunky_core::InputFrame::default());
             if has_ankh {
                 assert_eq!(game.state, RunState::Playing);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert!(!game.player.has("Ankh"));
                 assert_eq!(game_music(&game), "cave");
                 assert!(!stop_music_immediately(&game, game_music(&game)));
@@ -4395,12 +4400,12 @@ mod tests {
             source_paused_control(Some(&game), &all, true),
             Some(SourcePausedControl::Suicide)
         );
-        game.player.health = 0;
+        game.player.health = 0.0;
         assert_eq!(
             source_paused_control(Some(&game), &all, true),
             Some(SourcePausedControl::Blocked)
         );
-        game.player.health = 4;
+        game.player.health = 4.0;
         for room in [
             "rTitle",
             "rHighscores",
@@ -4464,7 +4469,7 @@ mod tests {
                 game.flags.insert("source_music_stopped".into());
             }
             assert!(!apply_source_pause_suicide(&mut game));
-            assert_eq!(game.player.health, -99);
+            assert_eq!(game.player.health, -99.0);
             assert_eq!(game.player.invincible, 77);
             assert!(game.player.has("Ankh"));
             assert!(game.events.is_empty());
@@ -4478,7 +4483,7 @@ mod tests {
                 "nonpositive life blocks the player Bomb action before Ankh revival"
             );
             assert_eq!(game.state, RunState::Playing);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert!(!game.player.has("Ankh"));
             assert_eq!(game_music(&game), if already_stopped { "" } else { "cave" });
             assert!(
@@ -4543,7 +4548,7 @@ mod tests {
             source_host_control(Screen::Pause, Some(&game), KeyCode::F1),
             Some(SourceHostControl::Suicide)
         );
-        game.player.health = 0;
+        game.player.health = 0.0;
         assert_eq!(
             source_host_control(Screen::Pause, Some(&game), KeyCode::F1),
             None
@@ -4713,7 +4718,7 @@ mod tests {
             game.player.invincible = 77;
             game.player.equipment.insert("Ankh".into());
             apply_source_suicide(&mut game);
-            assert_eq!(game.player.health, -99);
+            assert_eq!(game.player.health, -99.0);
             assert_eq!(
                 game.player.vel,
                 spelunky_core::Vec2::new(f64::from(facing) * 3., -6.)
@@ -4724,7 +4729,7 @@ mod tests {
             assert!(game.events.is_empty());
             assert_eq!(game_music(&game), "");
             game.step(&spelunky_core::InputFrame::default());
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert!(!game.player.has("Ankh"));
             assert_eq!(game.state, RunState::Playing);
             assert!(
@@ -4752,7 +4757,7 @@ mod tests {
         apply_source_suicide(&mut game);
         game.step(&spelunky_core::InputFrame::default());
         assert_eq!(game.state, RunState::Dead);
-        assert_eq!(game.player.health, 0);
+        assert_eq!(game.player.health, 0.0);
         assert!(
             game.events
                 .iter()
@@ -5654,8 +5659,8 @@ mod tests {
         game.player.pos = spelunky_core::Vec2::new(100., 100.);
         game.previous_camera = spelunky_core::Vec2::new(80., 80.);
         game.camera = spelunky_core::Vec2::new(84., 82.);
-        game.player.bombs = 2;
-        game.player.ropes = 3;
+        game.player.bombs = 2.0;
+        game.player.ropes = 3.0;
         game.player.money = 1234;
         let hash = game.state_hash();
         let mut timing = HostTiming {
@@ -6007,7 +6012,7 @@ mod tests {
         }
         game.player.pos = Vec2::new(80., 64.);
         game.player.vel = Vec2::new(3., -4.);
-        game.player.health = 0;
+        game.player.health = 0.0;
         let rock = game.world.spawn("oRock", Vec2::new(200., 64.));
         game.step(&InputFrame::default());
         let lethal_tick = game.tick;
@@ -6055,7 +6060,7 @@ mod tests {
     #[test]
     fn source_game_over_return_cannot_consume_the_same_presentation_frame_twice() {
         let mut game = Game::shell(42, spelunky_core::RulesPreset::Classic);
-        game.player.health = 0;
+        game.player.health = 0.0;
         game.step(&spelunky_core::InputFrame::default());
         let tick_before_return = game.tick;
         let mut timing = HostTiming::default();
@@ -6080,7 +6085,7 @@ mod tests {
     fn source_start_acknowledges_game_over_after_hastening_without_a_death_aggregate() {
         let mut game = Game::shell(42, spelunky_core::RulesPreset::Classic);
         let mut save = crate::storage::SaveData::default();
-        game.player.health = 0;
+        game.player.health = 0.0;
         game.step(&spelunky_core::InputFrame::default());
         capture_lifetime_stats(&game, &mut save);
         assert_eq!(save.lifetime_stats.level_deaths[0], 0);
@@ -6153,9 +6158,9 @@ mod tests {
             spelunky_core::characters::Character::TunnelMan,
         );
         game.flags.insert("unlock_tunnel_man".into());
-        game.player.health = 1;
-        game.player.bombs = 7;
-        game.player.ropes = 8;
+        game.player.health = 1.0;
+        game.player.bombs = 7.0;
+        game.player.ropes = 8.0;
         game.player.money = 42_000;
         game.player.equipment.insert("Jetpack".into());
         for _ in 0..5 {
@@ -6176,7 +6181,7 @@ mod tests {
         assert_eq!(game.player.pos, spelunky_core::Vec2::new(344., 184.));
         assert_eq!(
             (game.player.health, game.player.bombs, game.player.ropes),
-            (2, 0, 0)
+            (2.0, 0.0, 0.0)
         );
         assert_eq!(game.player.money, 0);
         assert!(game.player.equipment.is_empty());
@@ -6357,7 +6362,7 @@ mod tests {
             assert_eq!(spelunky_core::characters::selected(&game), expected);
             assert_eq!(
                 (game.player.health, game.player.bombs, game.player.ropes),
-                (7, 8, 9)
+                (7.0, 8.0, 9.0)
             );
         }
         let mut save = crate::storage::SaveData::default();
@@ -6524,9 +6529,9 @@ mod tests {
         let original = second.clone();
         let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
         load_custom(&mut game, &first, "first.lvl", "");
-        game.player.health = 3;
-        game.player.bombs = 2;
-        game.player.ropes = 1;
+        game.player.health = 3.0;
+        game.player.bombs = 2.0;
+        game.player.ropes = 1.0;
         game.player.money = 12_345;
         game.player.equipment.insert("cape".into());
         let gun = game.world.spawn("oPistol", game.player.pos);
@@ -6539,7 +6544,7 @@ mod tests {
         assert_eq!(game.player.pos, spelunky_core::Vec2::new(264., 184.));
         assert_eq!(
             (game.player.health, game.player.bombs, game.player.ropes),
-            (3, 2, 1)
+            (3.0, 2.0, 1.0)
         );
         assert_eq!(game.player.money, 12_345);
         assert!(game.player.equipment.contains("cape"));
@@ -6557,7 +6562,7 @@ mod tests {
         continue_custom(&mut game, &first, "first.lvl", "second.lvl");
         assert_eq!(
             (game.player.health, game.player.bombs, game.player.ropes),
-            (3, 2, 1)
+            (3.0, 2.0, 1.0)
         );
         assert_eq!(game.player.money, 12_345);
     }
@@ -6568,14 +6573,29 @@ mod tests {
         // this test verifies rather than relying on the old seeded template.
         let mut authored = spelunky_core::level::Level::default();
         authored.set_tile(2, 30, '@').unwrap();
-        editor.load("custom.lvl", &authored.to_text()).unwrap();
-        let EditorCommand::Play(level) = editor.key(KeyCode::F5, None, false) else {
+        let mut lines: Vec<String> = authored.to_text().lines().map(str::to_owned).collect();
+        lines[34] = "0.75".into();
+        lines[35] = "12.9".into();
+        lines[36] = "1000.25".into();
+        editor.load("custom.lvl", &lines.join("\n")).unwrap();
+        let EditorCommand::Play(test) = editor.key(KeyCode::F5, None, false) else {
             panic!("F5 must play the current document");
         };
         let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
-        load_custom(&mut game, &level, editor.level_name(), "");
+        let name = runtime_level_name(editor.level_name());
+        game.load_custom_editor_test(
+            &test.level,
+            &name,
+            &runtime_level_name(""),
+            test.starting_inventory,
+        );
         assert_eq!(game.world.name, "custom");
         assert_eq!(game.player.pos, spelunky_core::Vec2::new(56., 504.));
+        assert_eq!(
+            (game.player.health, game.player.bombs, game.player.ropes),
+            (0.75, 12.9, 1000.25),
+            "editor test play uses source real(raw inventory)"
+        );
         assert_eq!(game.player.previous_pos, game.player.pos);
         assert_eq!(game.previous_camera, game.camera);
     }
@@ -6605,17 +6625,22 @@ mod tests {
                 .any(|q| q.uv == mega && q.rect[0] < 240.0 && q.rect[1] >= 36.0)
         };
         assert!(!has_mega(&editor), "off-anchor erase removed live preview");
-        let EditorCommand::Play(document) = editor.key(KeyCode::F5, None, false) else {
+        let EditorCommand::Play(test) = editor.key(KeyCode::F5, None, false) else {
             panic!("F5");
         };
         assert_eq!(
-            document.get_tile(8, 12),
+            test.level.get_tile(8, 12),
             Some('{'),
             "serialized anchor was preserved"
         );
         let mut game = Game::shell(937, spelunky_core::RulesPreset::Classic);
         game.rng = editor.source_rng().clone();
-        load_custom(&mut game, &document, editor.level_name(), "");
+        game.load_custom_editor_test(
+            &test.level,
+            editor.level_name(),
+            "",
+            test.starting_inventory,
+        );
         game.flags.insert("editor_test".into());
         for _ in 0..160 {
             game.step(&spelunky_core::InputFrame {
@@ -6657,7 +6682,7 @@ mod tests {
             load_custom(&mut game, &level, "edited.lvl", "");
             game.flags.insert(format!("custom_level:{target}"));
             game.state = RunState::Transition;
-            game.player.health = 2;
+            game.player.health = 2.0;
             let original = game.state_hash();
             assert_eq!(custom_exit(&mut game, &levels, true), CustomExit::Editor);
             assert_eq!(game.world.name, "edited");
@@ -6671,15 +6696,15 @@ mod tests {
         let levels = std::collections::BTreeMap::from([("Next".into(), level.to_text())]);
         let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
         load_custom(&mut game, &level, "first.lvl", "");
-        game.player.health = 2;
-        game.player.bombs = 1;
+        game.player.health = 2.0;
+        game.player.bombs = 1.0;
         game.flags.insert("custom_level:NEXT.LVL".into());
         assert_eq!(
             custom_exit(&mut game, &levels, false),
             CustomExit::Continued
         );
         assert_eq!(game.world.name, "next");
-        assert_eq!((game.player.health, game.player.bombs), (2, 1));
+        assert_eq!((game.player.health, game.player.bombs), (2.0, 1.0));
         game.flags.insert("custom_level:missing.lvl".into());
         assert_eq!(custom_exit(&mut game, &levels, false), CustomExit::Finished);
         assert_eq!(game.state, RunState::Ending);
@@ -6759,7 +6784,7 @@ mod tests {
         let mut game = Game::tutorial(7, spelunky_core::RulesPreset::Classic);
         game.player.money = 50_000;
         game.data.insert("time".into(), 549_000.);
-        game.player.health = 0;
+        game.player.health = 0.0;
         game.step(&InputFrame::default());
         assert_eq!(game.state, RunState::Dead);
 
@@ -6910,12 +6935,12 @@ mod tests {
             editor.pointer(logical_x, logical_y, true, false);
             editor.cancel_pointer();
         }
-        let EditorCommand::Play(level) = editor.key(KeyCode::F5, None, false) else {
+        let EditorCommand::Play(test) = editor.key(KeyCode::F5, None, false) else {
             panic!("Editor did not produce its painted level");
         };
-        assert_eq!(level.get_tile(1, 1), Some('1'));
-        assert_eq!(level.get_tile(12, 4), Some('1'));
-        assert_eq!(level.get_tile(6, 2), Some('0'));
+        assert_eq!(test.level.get_tile(1, 1), Some('1'));
+        assert_eq!(test.level.get_tile(12, 4), Some('1'));
+        assert_eq!(test.level.get_tile(6, 2), Some('0'));
     }
     #[test]
     fn viewport_diagnostics_match_actual_player_projection_without_mutating_core() {
@@ -7129,7 +7154,7 @@ mod tests {
         // The existing Finished branch still advances only the Dead world and
         // deliberately masks gameplay actions; its extent matches Playing.
         game.state = RunState::Dead;
-        game.player.health = 0;
+        game.player.health = 0.0;
         let mut expected = game.clone();
         input.key(KeyCode::KeyB, true, false);
         let admitted = adaptive_tick_boundary(

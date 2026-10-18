@@ -28,9 +28,9 @@ pub fn apply(game: &mut Game, character: Character) {
         }
     }
     let tunnel = character == Character::TunnelMan;
-    game.player.health = if tunnel { 2 } else { 4 };
-    game.player.bombs = if tunnel { 0 } else { 4 };
-    game.player.ropes = if tunnel { 0 } else { 4 };
+    game.player.health = if tunnel { 2.0 } else { 4.0 };
+    game.player.bombs = if tunnel { 0.0 } else { 4.0 };
+    game.player.ropes = if tunnel { 0.0 } else { 4.0 };
     game.player.data.remove("character_attack_active");
     game.player.data.remove("character_attack_elapsed");
     game.player.attack_timer = 0;
@@ -182,9 +182,9 @@ mod tests {
     fn original_starting_stats_have_no_invented_equipment() {
         let mut game = Game::shell(1, RulesPreset::Classic);
         for (character, health, bombs, ropes, sprite) in [
-            (Character::TunnelMan, 2, 0, 0, "sTunnelLeft"),
-            (Character::Damsel, 4, 4, 4, "sDamselLeft"),
-            (Character::Explorer, 4, 4, 4, "sStandLeft"),
+            (Character::TunnelMan, 2.0, 0.0, 0.0, "sTunnelLeft"),
+            (Character::Damsel, 4.0, 4.0, 4.0, "sDamselLeft"),
+            (Character::Explorer, 4.0, 4.0, 4.0, "sStandLeft"),
         ] {
             apply(&mut game, character);
             assert_eq!(selected(&game), character);
@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(game.player.attack_timer, 0);
         assert!(!game.player.data.contains_key("character_attack_active"));
         assert!((game.player.animation - 0.6).abs() < 1e-9);
-        assert_eq!(game.player.health, 2);
+        assert_eq!(game.player.health, 2.0);
         assert!(game.player.equipment.is_empty());
     }
 
@@ -323,7 +323,7 @@ mod tests {
             game.step(&InputFrame::default());
         }
         assert!(game.player.grounded);
-        assert_eq!(game.player.health, 2);
+        assert_eq!(game.player.health, 2.0);
         let attack = InputFrame {
             attack: true,
             attack_pressed: true,
@@ -366,7 +366,7 @@ mod tests {
             );
         }
         assert!(recovered, "the live Yeti throw must naturally recover");
-        assert!(game.player.health > 0);
+        assert!(game.player.health > 0.0);
         for _ in 0..60 {
             if game.player.grounded
                 && game.player.vel.y == 0.

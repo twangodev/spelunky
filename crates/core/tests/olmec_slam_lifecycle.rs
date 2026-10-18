@@ -74,7 +74,7 @@ fn source_slam_create_keeps_live_invisible_mask_and_alarm_retires_before_next_co
             "Create cannot replay at bootstrap/Alarm"
         );
         assert_eq!(game.rng.state_bits(), prior_rng);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 
@@ -154,7 +154,7 @@ fn own_step_slam_destroys_invincible_solids_with_clean_override_and_literal_rubb
                     expected.push((object.to_owned(), sprite.to_owned(), Vec2::new(px, py)));
                 }
             }
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(game.player.invincible, 0);
             assert_eq!(game.player.stun, 0);
             game.step(&InputFrame::default());
@@ -214,7 +214,7 @@ fn own_step_slam_destroys_invincible_solids_with_clean_override_and_literal_rubb
                 "local producer cannot double emit Create sound"
             );
             literal_mask_edges(game.world.entity(slam_id).unwrap());
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             let after_rng = game.rng.state_bits();
             game.step(&InputFrame::default());
             assert!(game.world.entity(slam_id).is_none());
@@ -224,7 +224,7 @@ fn own_step_slam_destroys_invincible_solids_with_clean_override_and_literal_rubb
                 after_rng,
                 "Alarm cannot repeat target destruction"
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -244,7 +244,7 @@ fn unchanged_generated_intro_right_input_reaches_slam_that_removes_literal_templ
             .unwrap()
             .id;
         assert_eq!(game.player.pos, Vec2::new(24.0, 552.0));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         let mut saw_prepare = false;
         let mut saw_slam = false;
         let mut qualified = false;
@@ -256,7 +256,7 @@ fn unchanged_generated_intro_right_input_reaches_slam_that_removes_literal_templ
                 right: true,
                 ..Default::default()
             });
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             saw_prepare |= game.world.entity(boss).unwrap().state == 5;
             saw_slam |= game.world.entity(boss).unwrap().state == 6;
             let slams = game

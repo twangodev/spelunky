@@ -22,7 +22,7 @@ fn matrix(mut run: impl FnMut(RulesPreset, characters::Character, f64)) {
 
 fn quiet(game: &Game) {
     assert_eq!(game.state, RunState::Playing);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(!game.player.is_stunned());
 }
 

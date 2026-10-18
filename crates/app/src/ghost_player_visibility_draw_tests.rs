@@ -34,7 +34,7 @@ fn ordinary_ghost_collision_hides_player_draw_and_keeps_bones_and_skull() {
         // No forced health, invulnerability, visibility or death state: the
         // source Collision receiver performs all of these writes itself.
         game.step(&InputFrame::default());
-        assert_eq!(game.player.health, -99);
+        assert_eq!(game.player.health, -99.0);
         assert_eq!(game.player.data.get("visible"), Some(&0.0));
         assert_eq!(game.state, RunState::Playing);
         assert_eq!(

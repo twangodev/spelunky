@@ -61,7 +61,7 @@ fn active_player_normal_steps_follow_first_boss_after_initial_activation() {
         let second = game.spawn("oOlmec", Vec2::new(16.0, 96.0));
         let trap = game.spawn("oArrowTrapLeft", Vec2::new(48.0, 16.0));
         game.step(&InputFrame::default());
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.player.data.get("active"), Some(&1.0));
         // Adaptive activation derives Y144 from canonical400, so this trap
         // lies above its Y48 lower halo and outside Player/first-boss halos.
@@ -97,7 +97,7 @@ fn active_player_normal_steps_follow_first_boss_after_initial_activation() {
             assert_eq!(boss.state, -2, "SOURCE_START1_ARMS_ALARM_AFTER_FOLLOW");
             assert_eq!(boss.alarms[1], 100);
         }
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     });
 }
 

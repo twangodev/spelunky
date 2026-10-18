@@ -103,7 +103,7 @@ fn acquired_before_natural_drop(rules: RulesPreset, exits: bool) -> Game {
     assert!(game.player.vel.y > 0.0);
     assert!(game.player.has("Parachute"));
     assert!(!game.player.is_stunned());
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(count(&game, "oParachute"), 0);
     assert!(
         !game
@@ -119,7 +119,7 @@ fn deploy(game: &mut Game) {
     assert_eq!(count(game, "oParachute"), 1, "DEPLOY: {}", diagnostic(game));
     assert_eq!(count(game, "oParaUsed"), 0);
     assert_eq!(field(game, "fall_timer"), 0.0);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
 }
 
 #[test]
@@ -138,7 +138,7 @@ fn natural_acquisition_fall_landing_and_fresh_jump_leave_used_canopy_at_pre_move
             "NATURAL_LANDING: {}",
             diagnostic(&game)
         );
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(count(&game, "oParachute"), 1);
         // Movement first reaches the floor after the controller's landing
         // query. On the next Step the source prelude still sees positive
@@ -154,7 +154,7 @@ fn natural_acquisition_fall_landing_and_fresh_jump_leave_used_canopy_at_pre_move
         assert_eq!(game.player.state, PlayerState::Standing);
         assert!(game.player.grounded);
         assert_eq!(game.player.vel, Vec2::default());
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(count(&game, "oParachute"), 1);
         assert_eq!(count(&game, "oParaUsed"), 0);
         let origin = game.player.pos;
@@ -178,7 +178,7 @@ fn natural_acquisition_fall_landing_and_fresh_jump_leave_used_canopy_at_pre_move
             .find(|entity| entity.alive && entity.object == "oParaUsed")
             .unwrap();
         assert_eq!(used.pos, Vec2::new(origin.x - 8.0, origin.y - 24.0));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 
@@ -196,7 +196,7 @@ fn natural_deployment_with_controlled_arriving_arrow_creates_one_used_in_the_sam
         projectile.vel = Vec2::new(6.0, 0.0);
         projectile.data.insert("safe".into(), 0.0);
         game.step(&InputFrame::default());
-        assert_eq!(game.player.health, 2, "OWN_HURT: {}", diagnostic(&game));
+        assert_eq!(game.player.health, 2.0, "OWN_HURT: {}", diagnostic(&game));
         assert!(game.player.is_stunned());
         assert_eq!(game.player.stun, 20);
         assert!(!game.player.has("Parachute"));
@@ -296,7 +296,7 @@ fn natural_deployment_with_controlled_arriving_lava_preserves_canopy_until_prior
             Vec2::new(game.player.pos.x - 8.0, game.player.pos.y + 5.0),
         );
         game.step(&InputFrame::default());
-        assert_eq!(game.player.health, 0);
+        assert_eq!(game.player.health, 0.0);
         assert_eq!(game.state, RunState::Dead);
         assert!(!game.player.has("Parachute"));
         assert_eq!(
@@ -343,7 +343,7 @@ fn natural_deployment_landing_and_actual_exit_keep_canopy_while_controller_inact
         assert!(game.player.is_exiting());
         assert_eq!(count(&game, "oParachute"), 1);
         assert_eq!(count(&game, "oParaUsed"), 0);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 
@@ -358,7 +358,7 @@ fn naturally_open_parachute_preserves_prelude_fall_one_on_each_descending_step()
         assert!(!game.player.grounded);
         assert_eq!(game.player.state, PlayerState::Falling);
         assert!(game.player.vel.y > 0.0);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(!game.player.is_stunned());
         assert_eq!(game.state, RunState::Playing);
         assert_eq!(count(&game, "oBall"), 0);
@@ -382,7 +382,7 @@ fn naturally_open_parachute_preserves_prelude_fall_one_on_each_descending_step()
             assert_eq!(game.player.state, PlayerState::Falling);
             assert!(game.player.vel.y > 0.0);
             assert!(game.player.pos.y > before.y);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert!(!game.player.is_stunned());
             assert_eq!(game.state, RunState::Playing);
         }

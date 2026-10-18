@@ -88,7 +88,7 @@ fn fixture(legacy: bool, rules: RulesPreset, weapon: &str, facing: i8) -> (Game,
         ..Default::default()
     });
     assert_eq!(game.player.facing, facing);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(game.player.grounded);
     assert_eq!(
         game.world.entity(bat).unwrap().state,
@@ -124,7 +124,7 @@ fn natural_front_case(legacy: bool) {
                         right: facing > 0,
                         ..Default::default()
                     });
-                    assert_eq!(game.player.health, 4, "approach cannot damage player");
+                    assert_eq!(game.player.health, 4.0, "approach cannot damage player");
                 }
                 assert!(
                     reached,
@@ -140,7 +140,7 @@ fn natural_front_case(legacy: bool) {
                         ..Default::default()
                     });
                     assert_eq!(
-                        game.player.health, 4,
+                        game.player.health, 4.0,
                         "natural fixture must avoid Bat contact"
                     );
                     let bat = game
@@ -238,7 +238,7 @@ fn normal_descendant_swing_away_keeps_default_bat_healthy_and_blood_absent() {
                     });
                     let target = game.world.entity(bat).unwrap();
                     assert_eq!(target.health, 1);
-                    assert_eq!(game.player.health, 4);
+                    assert_eq!(game.player.health, 4.0);
                     assert!(!game.world.entities.iter().any(|e| e.object == "oBlood"));
                     let draw = game
                         .draw_view

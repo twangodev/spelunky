@@ -61,7 +61,7 @@ fn pickup_and_wait_for_idle(game: &mut Game, yeti: u64, pistol: u64) {
         let actor = game.world.entity(yeti).unwrap();
         saw_walk |= actor.state == 1;
         assert_eq!(actor.health, 5);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(!game.world.entities.iter().any(|e| e.object == "oBlood"));
         if actor.state == 0 && actor.value("counter") >= 20.0 {
             assert!(saw_walk);
@@ -194,7 +194,7 @@ fn ordinary_pistol_stun_recovers_to_source_normal_art_and_velocity_before_follow
                 // movement have no RNG. Literal Blood Create is the complete frame tape.
                 assert_eq!(game.rng.clone().next_u64(), expected.next_u64());
                 assert_eq!(actor.health, 1);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 if actor.state == 0 {
                     assert_eq!(
                         actor.sprite,
@@ -250,7 +250,7 @@ fn ordinary_pistol_stun_recovers_to_source_normal_art_and_velocity_before_follow
             assert_eq!(actor.value("bounced"), 0.0);
             assert_eq!(actor.facing, facing);
             assert_eq!(game.rng.clone().next_u64(), expected.next_u64());
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(game.player.held, Some(pistol));
         }
     }
@@ -316,7 +316,7 @@ fn controlled_initial_recovery_skips_stun_damping_while_positive_timer_still_set
                 }
                 assert_eq!(game.rng.clone().next_u64(), expected.next_u64());
                 assert!(!game.world.entities.iter().any(|e| e.object == "oBlood"));
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
             }
         }
     }

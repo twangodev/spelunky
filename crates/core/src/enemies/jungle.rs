@@ -517,11 +517,11 @@ fn monkey_steal(game: &mut Game, e: &Entity) {
     } else if game.rng.chance(8, 10) && game.player.money >= money {
         game.player.money -= money;
         object = "oGoldNugget";
-    } else if game.rng.chance(1, 2) && game.player.ropes > 0 {
-        game.player.ropes -= 1;
+    } else if game.rng.chance(1, 2) && game.player.ropes > 0.0 {
+        game.player.ropes -= 1.0;
         object = "oRopeThrow";
-    } else if game.player.bombs > 0 {
-        game.player.bombs -= 1;
+    } else if game.player.bombs > 0.0 {
+        game.player.bombs -= 1.0;
         object = "oBomb";
     } else {
         return;
@@ -1210,7 +1210,7 @@ fn mantrap_collision(game: &mut Game, e: &mut Entity, other: crate::dispatcher::
                 "sManTrapEatL"
             };
             eat(e, sprite, game.player.pos.x);
-            game.player.health = -99;
+            game.player.health = -99.0;
             game.player.invincible = 9999;
             game.player.data.insert("hidden".into(), 1.0);
             game.player.data.insert("bounced".into(), 1.0);
@@ -1443,7 +1443,7 @@ mod tests {
         collision(&mut game, &mut e, crate::dispatcher::Instance::Player);
         assert_eq!(e.state, 7);
         assert!((40..=80).contains(&e.timer));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 
     #[test]
@@ -1481,7 +1481,7 @@ mod tests {
             let actor = game.world.entity(monkey).unwrap();
             assert_eq!(actor.state, 7, "real collision must acquire GRAB");
             assert!((40..=80).contains(&actor.timer));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             (game, monkey)
         }
 
@@ -1557,7 +1557,7 @@ mod tests {
             let actor = game.world.entity(monkey).unwrap();
             assert_eq!(actor.state, 1, "{case:?}: expired GRAB must release");
             assert_eq!(actor.vel.y, bounce_y, "{case:?}: release RNG");
-            assert_eq!(game.player.health, 4, "{case:?}");
+            assert_eq!(game.player.health, 4.0, "{case:?}");
             assert_eq!(game.player.money, money - if took_money { 500 } else { 0 });
             assert_eq!(game.player.is_stunned(), trip, "{case:?}");
             let nuggets: Vec<_> = game
@@ -1590,7 +1590,7 @@ mod tests {
         game.world.entity_mut(id).unwrap().vel = Vec2::default();
         game.step(&crate::InputFrame::default());
         assert_eq!(game.world.entity(id).unwrap().state, 97);
-        assert_eq!(game.player.health, -99);
+        assert_eq!(game.player.health, -99.0);
         // Automatic collision follows the player's Normal Step. Its dead
         // latch is observed on the following frame; animation still advances.
         let eat_ticks = crate::catalog::sprite_frame_count("sManTrapEatL") * 2;
@@ -1657,7 +1657,7 @@ mod tests {
         assert!(event_bounds(&e).intersects(game.player.bounds()));
         collision(&mut game, &mut e, crate::dispatcher::Instance::Player);
         assert_ne!(e.state, 7);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 
     #[test]
@@ -1671,7 +1671,7 @@ mod tests {
         collision(&mut game, &mut e, crate::dispatcher::Instance::Player);
         assert_ne!(e.state, 7);
         assert_eq!(e.health, 0);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.player.vel.y, -5.8);
     }
 
@@ -1694,7 +1694,8 @@ mod tests {
 
     #[test]
     fn mantrap_source_stomp_runs_before_eating_and_stun_prevents_it() {
-        for (spikes, stun, expected_health) in [(false, 0, -99), (true, 0, 4), (true, 1, -99)] {
+        for (spikes, stun, expected_health) in [(false, 0, -99.0), (true, 0, 4.0), (true, 1, -99.0)]
+        {
             let mut game = Game::shell(12, RulesPreset::Classic);
             for x in 0..10 {
                 game.world.set_tile(x, 4, "oBlock");
@@ -1950,7 +1951,7 @@ mod tests {
         let trap = game.world.spawn("oManTrap", Vec2::new(370.0, 144.0));
         assert!(370.0 >= game.camera.x + crate::VIEW_WIDTH + 4.0);
         game.step(&crate::InputFrame::default());
-        assert_eq!(game.player.health, -99);
+        assert_eq!(game.player.health, -99.0);
         let trap = game.world.entity(trap).unwrap();
         assert_eq!(trap.state, 97);
         assert_eq!(trap.pos, Vec2::new(370.0, 144.0));
@@ -2168,7 +2169,7 @@ mod tests {
         game.player.equipment.insert("SpikeShoes".into());
         collision(&mut game, &mut trap, crate::dispatcher::Instance::Player);
         assert_eq!(trap.health, 0);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(trap.alive, "death belongs to the next child Step");
         assert_eq!(game.lifetime_stats.enemy_kills[10], 0);
     }
@@ -2199,7 +2200,7 @@ mod tests {
             let mut trap = entity("oManTrap", Vec2::new(56.0, 56.0));
             game.player.pos = Vec2::new(56.0, 56.0);
             collision(&mut game, &mut trap, crate::dispatcher::Instance::Player);
-            assert_eq!(game.player.health, -99);
+            assert_eq!(game.player.health, -99.0);
             assert_eq!(game.lifetime_stats.enemy_deaths[10], u64::from(!custom));
         }
     }
@@ -2923,7 +2924,7 @@ mod tests {
             3
         );
         assert_eq!(game.lifetime_stats.enemy_kills[10], 1);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.rng.next_u64(), expected.next_u64());
     }
 
@@ -2963,7 +2964,7 @@ mod tests {
                     mantrap_detritus_oracle(&mut expected);
                 }
                 game.step(&crate::InputFrame::default());
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert_eq!(
                     game.world
                         .entities
@@ -3040,7 +3041,7 @@ mod tests {
             }
         }
         assert!(observed_blood_phase && observed_sleep && observed_stun && recovered);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.state, crate::RunState::Playing);
     }
 

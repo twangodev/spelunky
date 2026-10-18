@@ -5,7 +5,7 @@ use spelunky_core::{
 
 fn healthy_step(game: &mut Game, input: InputFrame) {
     game.step(&input);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(!game.player.is_stunned());
 }
 

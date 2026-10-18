@@ -15,7 +15,10 @@ fn supply_room(rules: RulesPreset, symbol: char, initial: i32) -> Game {
     }
     let mut game = Game::shell(17, rules);
     game.load_custom(&level, "source-99-cap", "");
-    assert_eq!((game.player.bombs, game.player.ropes), (initial, initial));
+    assert_eq!(
+        (game.player.bombs, game.player.ropes),
+        (f64::from(initial), f64::from(initial))
+    );
     game
 }
 
@@ -53,7 +56,7 @@ fn bomb_box_grant_precedes_next_player_cap_and_real_bomb_use() {
             acquire_supply(&mut game, "oBombBox");
             assert_eq!(
                 game.player.bombs,
-                initial + 12,
+                f64::from(initial) + 12.0,
                 "CAP_GRANT_MUST_NOT_BE_EARLY"
             );
             let first_birth = game.world.next_id;
@@ -63,10 +66,10 @@ fn bomb_box_grant_precedes_next_player_cap_and_real_bomb_use() {
             });
             assert_eq!(
                 game.player.bombs,
-                (initial + 12).min(99) - 1,
+                (f64::from(initial) + 12.0).min(99.0) - 1.0,
                 "CAP_BOMB_BEFORE_NEXT_USE"
             );
-            assert_eq!(game.player.ropes, initial);
+            assert_eq!(game.player.ropes, f64::from(initial));
             assert!(
                 game.world
                     .entities
@@ -86,7 +89,7 @@ fn rope_pile_grant_precedes_next_player_cap_and_real_rope_use() {
             acquire_supply(&mut game, "oRopePile");
             assert_eq!(
                 game.player.ropes,
-                initial + 3,
+                f64::from(initial) + 3.0,
                 "CAP_ROPE_GRANT_MUST_NOT_BE_EARLY"
             );
             let first_birth = game.world.next_id;
@@ -96,10 +99,10 @@ fn rope_pile_grant_precedes_next_player_cap_and_real_rope_use() {
             });
             assert_eq!(
                 game.player.ropes,
-                (initial + 3).min(99) - 1,
+                (f64::from(initial) + 3.0).min(99.0) - 1.0,
                 "CAP_ROPE_BEFORE_NEXT_USE"
             );
-            assert_eq!(game.player.bombs, initial);
+            assert_eq!(game.player.bombs, f64::from(initial));
             assert!(
                 game.world.entities.iter().any(|e| e.id >= first_birth
                     && matches!(e.object.as_str(), "oRopeThrow" | "oRope" | "oRopeTop")),
@@ -114,14 +117,14 @@ fn source_cap_health_and_inventory_upper_boundary_does_not_cap_arrows() {
     // Initial upper-boundary control supplements real tile-grant/use cases.
     for rules in PRESETS {
         let mut game = supply_room(rules, '0', 4);
-        game.player.health = 101;
-        game.player.bombs = 101;
-        game.player.ropes = 101;
+        game.player.health = 101.0;
+        game.player.bombs = 101.0;
+        game.player.ropes = 101.0;
         game.data.insert("arrows".into(), 123.0);
         game.step(&InputFrame::default());
         assert_eq!(
             (game.player.health, game.player.bombs, game.player.ropes),
-            (99, 99, 99),
+            (99.0, 99.0, 99.0),
             "CAP_UPPER_BOUNDARY"
         );
         assert_eq!(game.data["arrows"], 123.0);
@@ -134,18 +137,41 @@ fn source_cap_preserves_negative_corpse_health_inventory_and_arrows() {
     // authored state avoids the unrelated first-death health=0 assignment.
     for rules in PRESETS {
         let mut game = supply_room(rules, '0', 4);
-        game.player.health = -7;
-        game.player.bombs = -3;
-        game.player.ropes = -9;
+        game.player.health = -7.0;
+        game.player.bombs = -3.0;
+        game.player.ropes = -9.0;
         game.data.insert("arrows".into(), 123.0);
         game.state = RunState::Dead;
         game.player.state = PlayerState::Dead;
         game.step(&InputFrame::default());
         assert_eq!(
             (game.player.health, game.player.bombs, game.player.ropes),
-            (-7, -3, -9),
+            (-7.0, -3.0, -9.0),
             "CAP_LOWER_VALUES_UNCHANGED"
         );
         assert_eq!(game.data["arrows"], 123.0);
     }
+}
+
+#[test]
+fn fractional_editor_bombs_are_consumed_as_real_inventory_values() {
+    let mut game = supply_room(RulesPreset::Classic, '0', 4);
+    game.player.bombs = 1.5;
+
+    for expected in [0.5, -0.5] {
+        game.step(&InputFrame {
+            bomb_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.bombs, expected);
+    }
+    assert_eq!(
+        game.world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive && entity.object == "oBomb")
+            .count(),
+        2,
+        "source use guard accepts any positive real inventory"
+    );
 }

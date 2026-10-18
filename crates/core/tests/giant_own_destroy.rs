@@ -84,7 +84,7 @@ fn assert_prefix(game: &Game, giant: u64, gems: &[(&str, f64)]) {
         assert_eq!(drop.pos, Vec2::new(80.0, 80.0));
         assert_eq!(drop.value("life"), 60.0, "BLOOD370_PRECEDES_GIANT749");
     }
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
 }
 #[test]
 fn fresh_giant_source_crush_continues_idle_alarm_after_death_prefix() {

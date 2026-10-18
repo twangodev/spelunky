@@ -65,7 +65,7 @@ fn attack_until_hit(game: &mut Game, id: u64, hp: i32) -> (Rng, bool) {
             assert_eq!(actor.state, 98);
             assert_eq!(actor.timer, 200);
             assert_eq!(actor.vel.y, -3.0);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(sound_count(game, "sndHit"), 1);
             return (before, saw_slash);
         }

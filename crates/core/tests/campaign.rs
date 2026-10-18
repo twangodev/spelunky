@@ -10,7 +10,7 @@ fn position_player(game: &mut Game, pos: Vec2) {
     game.player.pos = pos;
     game.player.previous_pos = pos;
     game.player.vel = Vec2::default();
-    game.player.health = 99;
+    game.player.health = 99.0;
     game.player.invincible = 999;
     game.player.grounded = true;
     // This fixture teleports the owner between distant generated interactions.
@@ -274,7 +274,7 @@ fn actual_pickups_and_walking_open_gold_door_without_entering_its_solid() {
                 ..Default::default()
             });
             assert_eq!(game.state, RunState::Playing);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             if game.world.entity(door).is_none() {
                 break;
             }
@@ -364,7 +364,7 @@ fn generated_market_ankh_moai_chain_to_temple(seed: u32) -> Game {
     // instances. Stage the death beside the discovered Moai, rather than back
     // at a distant entrance whose activation region excludes the monument.
     position_player(&mut game, Vec2::new(revival_pos.x, revival_pos.y - 32.0));
-    game.player.health = 0;
+    game.player.health = 0.0;
     game.step(&InputFrame::default());
     assert_eq!(game.state, RunState::Playing);
     assert_eq!(game.player.pos, revival_pos);
@@ -450,7 +450,7 @@ fn exposed_generated_market_ankh_moai_and_gold_door_form_a_reachable_state_chain
     game.world.entity_mut(tomb).unwrap().health = 0;
     game.step(&InputFrame::default());
     assert_eq!(game.state, RunState::Playing);
-    assert!(game.player.health > 0);
+    assert!(game.player.health > 0.0);
     let sceptre_id = game
         .world
         .entities
@@ -501,7 +501,7 @@ fn exposed_generated_market_ankh_moai_and_gold_door_form_a_reachable_state_chain
             ..Default::default()
         });
         assert_eq!(game.state, RunState::Playing);
-        assert!(game.player.health > 0);
+        assert!(game.player.health > 0.0);
         if game.world.entity(door_id).is_none() {
             break;
         }

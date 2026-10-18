@@ -38,7 +38,10 @@ fn room(canonical: bool, rules: RulesPreset) -> (Game, u64) {
 fn step_healthy(game: &mut Game, lord: u64) {
     game.step(&InputFrame::default());
     assert_eq!(game.state, RunState::Playing);
-    assert_eq!(game.player.health, 4, "authored cover keeps player healthy");
+    assert_eq!(
+        game.player.health, 4.0,
+        "authored cover keeps player healthy"
+    );
     assert_eq!(game.world.entity(lord).unwrap().health, 20);
 }
 

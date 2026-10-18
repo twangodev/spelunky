@@ -38,7 +38,7 @@ fn spring_does_not_launch_naturally_rescued_damsel_on_collidable_exit_frame() {
         assert_eq!((spring.state, spring.timer), (0, 0));
         assert!(!game.events.iter().any(|event| matches!(event,
             GameEvent::Sound { name, .. } if name == "sndBoing")));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
 
         // Only ordinary endframe animation makes this rescued actor collidable.
         // Stop before the next Collision pass once its native mask overlaps.
@@ -56,7 +56,7 @@ fn spring_does_not_launch_naturally_rescued_damsel_on_collidable_exit_frame() {
             assert_eq!((spring.state, spring.timer), (0, 0));
             assert!(!game.events.iter().any(|event| matches!(event,
                 GameEvent::Sound { name, .. } if name == "sndBoing")));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             game.step(&InputFrame::default());
         }
         assert!(
@@ -81,7 +81,7 @@ fn spring_does_not_launch_naturally_rescued_damsel_on_collidable_exit_frame() {
         assert_eq!((spring.state, spring.timer), (0, 0));
         assert!(!game.events.iter().any(|event| matches!(event,
             GameEvent::Sound { name, .. } if name == "sndBoing")));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 
@@ -115,6 +115,6 @@ fn spring_still_launches_a_default_active_unheld_item() {
                 .count(),
             1
         );
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }

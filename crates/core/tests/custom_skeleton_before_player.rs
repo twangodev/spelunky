@@ -42,7 +42,7 @@ fn custom_skeleton_create_before_later_player_keeps_right_on_first_step() {
                 Vec2::new(24.0 + entrance_x as f64 * 16.0, 152.0)
             );
             assert!(g.player.engine_active);
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
             // No writes after setup; the first real Step decrements counter,
             // but source IDLE has no facing assignment. The constructor's
             // no-Player RIGHT result must survive the later Player birth.
@@ -52,7 +52,7 @@ fn custom_skeleton_create_before_later_player_keeps_right_on_first_step() {
             assert_eq!(e.pos, expected_pos);
             assert_eq!((e.health, e.state, e.timer), (1, 0, 19));
             assert_eq!(g.state, RunState::Playing);
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
         }
     }
 }

@@ -352,7 +352,7 @@ fn rope_bag_deliberate_pickup_grants_bombs_with_source_display() {
             attack_pressed: true,
             ..InputFrame::default()
         });
-        assert_eq!(game.player.bombs, bombs + 3, "ROPE_BAG_SELECTED_PICKUP");
+        assert_eq!(game.player.bombs, bombs + 3.0, "ROPE_BAG_SELECTED_PICKUP");
         assert_eq!(game.player.ropes, ropes);
         assert!(game.world.entity(id).is_none());
         assert_eq!(game.player.held, None);

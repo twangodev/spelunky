@@ -125,7 +125,7 @@ fn fresh_teleporter_during_gun_cooldown(
         game.player.data["weapon_cooldown"] > 4.0,
         "FIXTURE_TIMING: remaining real gun cooldown"
     );
-    assert_eq!(game.player.health, healthy(&game));
+    assert_eq!(game.player.health, f64::from(healthy(&game)));
     assert_eq!(
         game.player.data.get("bow_armed").copied().unwrap_or(0.0),
         0.0
@@ -182,7 +182,7 @@ fn assert_blocked_assignment_tail(game: &mut Game, teleporter: u64, target: Opti
     );
     assert_eq!(game.player.held, Some(teleporter));
     assert_eq!(game.player.pickup_item_type, "Teleporter");
-    assert_eq!(game.player.health, healthy(&game));
+    assert_eq!(game.player.health, f64::from(healthy(&game)));
     assert_eq!(game.player.money, money);
     assert_eq!((game.player.bombs, game.player.ropes), resources);
     assert_eq!(
@@ -282,7 +282,7 @@ fn natural_unblocked_teleporter_replaces_pay_scratch_with_distance_target() {
             assert_eq!(births(&game, "oFlareSpark", first), 3);
             assert_eq!(game.rng.clone().next_u64(), expected.next_u64());
             assert_eq!(game.player.held, Some(teleporter));
-            assert_eq!(game.player.health, healthy(&game));
+            assert_eq!(game.player.health, f64::from(healthy(&game)));
         }
     }
 }
@@ -343,7 +343,7 @@ fn natural_bomb_arrow_shop_prefix_updates_scratch_and_angers_only_local_keeper()
             );
             assert_eq!((game.player.bombs, game.player.ropes), resources);
             assert_eq!(game.player.held, Some(bow));
-            assert_eq!(game.player.health, healthy(&game));
+            assert_eq!(game.player.health, f64::from(healthy(&game)));
             if let Some(id) = keeper_id {
                 assert_eq!(game.data["thiefLevel"], 2.0);
                 assert_eq!(game.world.entity(id).unwrap().health, 20);

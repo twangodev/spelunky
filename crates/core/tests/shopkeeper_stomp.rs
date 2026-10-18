@@ -126,7 +126,10 @@ fn source_stomp(rules: RulesPreset, rng: RngAlgorithm, boots: bool, bones: usize
                 game.player.state,
                 PlayerState::Jumping | PlayerState::Falling
             ));
-            assert_eq!(game.player.health, 4, "no unrelated throw or pellet damage");
+            assert_eq!(
+                game.player.health, 4.0,
+                "no unrelated throw or pellet damage"
+            );
             assert_eq!(game.player.stun, 0);
             assert!(
                 incoming_fall > 0.0,
@@ -277,7 +280,7 @@ fn ordinary_jump_into_idle_keeper_is_ignored_by_own_guard() {
                 let actor = game.world.entity(id).unwrap();
                 assert_eq!((actor.state, actor.health), (0, 20));
                 assert_eq!(actor.value("animation_speed"), 0.5);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert_eq!(game.player.stun, 0);
                 assert!(
                     !game

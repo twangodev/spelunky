@@ -70,7 +70,10 @@ fn ordinary_fly_hit(rules: RulesPreset) -> (Game, u64) {
             })
         });
         game.step(&InputFrame::default());
-        assert_eq!(game.player.health, 4, "NO_PLAYER_CONTACT_HIDING_ENEMY_HIT");
+        assert_eq!(
+            game.player.health, 4.0,
+            "NO_PLAYER_CONTACT_HIDING_ENEMY_HIT"
+        );
         assert_eq!(game.player.stun, 0);
         assert_eq!(game.player.invincible, 0);
         assert!(
@@ -170,7 +173,7 @@ fn ordinary_tomb_fly_knockback_leaves_the_floor_while_alien_boss_is_stunned() {
         assert!(actor.pos.y < before.pos.y);
         // Supplemental stored-f64/source-clock integer displacement oracle.
         assert_eq!(actor.pos, expected);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(
             actor.value("psychic_recover"),
             before.value("psychic_recover") - 1.0
@@ -191,7 +194,7 @@ fn ordinary_healthy_alien_boss_still_settles_on_the_floor_without_a_fly() {
             assert_eq!(actor.vel, Vec2::default());
             assert_eq!(actor.sprite, "sAlienBoss");
             assert_eq!(actor.value("psychic_recover"), 100.0 - f64::from(tick));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert!(!game.world.entities.iter().any(|e| matches!(
                 e.object.as_str(),
                 "oFly" | "oPsychicCreate" | "oPsychicWave"

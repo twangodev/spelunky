@@ -3,7 +3,7 @@
 use spelunky_core::*;
 
 fn healthy(g: &Game) {
-    assert_eq!(g.player.health, 4, "FIXTURE_HERO_HP4");
+    assert_eq!(g.player.health, 4.0, "FIXTURE_HERO_HP4");
     assert_eq!(g.player.stun, 0, "FIXTURE_HERO_STUN0");
     assert!(!g.player.is_stunned(), "FIXTURE_HERO_NO_STUN_LATCH");
     assert!(

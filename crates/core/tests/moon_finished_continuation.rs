@@ -49,7 +49,7 @@ fn real_spike_death(seed: u32, rules: RulesPreset) -> Game {
     let mut g = loaded(seed, rules);
     neutral(&mut g, 100);
     assert_eq!(g.state, RunState::Playing);
-    assert_eq!(g.player.health, 8);
+    assert_eq!(g.player.health, 8.0);
     assert_eq!(targets(&g).len(), 3, "real Alarm3 target producer");
     // All actor state remains source-produced. Walk across the authored left
     // steps/SpringTrap, then release Right above the actual spike field.
@@ -81,7 +81,7 @@ fn real_spike_death(seed: u32, rules: RulesPreset) -> Game {
         g.events.contains(&GameEvent::Died),
         "the fatal frame is retained"
     );
-    assert_eq!(g.player.health, 0);
+    assert_eq!(g.player.health, 0.0);
     assert_eq!(g.player.state, PlayerState::Dead);
     assert_eq!(
         g.player.data.get("my_gravity"),
@@ -249,7 +249,7 @@ fn configured(dead: bool) -> (Game, u64) {
     e.data.insert("dir".into(), 1.0);
     e.data.insert("xDiff".into(), 0.0);
     if dead {
-        g.player.health = 0;
+        g.player.health = 0.0;
         g.player.state = PlayerState::Dead;
         g.state = RunState::Dead;
         g.data.insert("timer".into(), -1.0);
@@ -388,7 +388,7 @@ fn configured_finished_moon_corpse_contact_keeps_invulnerability_and_source_zero
     for (life, invincible, bloodless) in [(0, 0, false), (1, 0, false), (0, 0, true), (0, 1, false)]
     {
         let (mut g, target) = configured(true);
-        g.player.health = life;
+        g.player.health = f64::from(life);
         g.player.invincible = invincible;
         g.player.pos = Vec2::new(168.0, 108.0);
         g.player.set_sprite("sDieL");
@@ -406,9 +406,9 @@ fn configured_finished_moon_corpse_contact_keeps_invulnerability_and_source_zero
         assert_eq!(
             g.player.health,
             if invincible == 0 {
-                life.max(1) - 1
+                f64::from(life.max(1)) - 1.0
             } else {
-                life
+                f64::from(life)
             }
         );
         assert_eq!(

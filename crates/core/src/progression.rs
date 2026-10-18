@@ -320,7 +320,7 @@ fn moai_revival_anchor(game: &Game) -> Option<Vec2> {
 
 fn revive(game: &mut Game) {
     if game.state == RunState::Dead
-        || game.player.health > 0
+        || game.player.health > 0.0
         || !game.player.equipment.remove("Ankh")
     {
         return;
@@ -364,7 +364,7 @@ fn revive(game: &mut Game) {
     game.player.pos = destination;
     game.player.previous_pos = destination;
     game.player.vel = Vec2::default();
-    game.player.health = 4;
+    game.player.health = 4.0;
     game.player.invincible = 60;
     game.player.data.insert("blink".into(), 60.);
     game.player.data.insert("active".into(), 1.);
@@ -807,7 +807,7 @@ fn complete(game: &mut Game, door_id: u64) {
             } else if object == "oBomb" {
                 reserved_carry = true;
                 if !armed {
-                    game.player.bombs += 1;
+                    game.player.bombs += 1.0;
                     if let Some(item) = game.world.entity_mut(id) {
                         item.alive = false;
                         item.held = false;
@@ -817,7 +817,7 @@ fn complete(game: &mut Game, door_id: u64) {
                 }
             } else if matches!(object.as_str(), "oRopeThrow" | "oRope") {
                 reserved_carry = true;
-                game.player.ropes += 1;
+                game.player.ropes += 1.0;
                 if let Some(item) = game.world.entity_mut(id) {
                     item.alive = false;
                     item.held = false;
@@ -1232,24 +1232,24 @@ mod tests {
     #[test]
     fn ankh_revives_once_inside_moai_and_resets_interpolation() {
         let mut g = game(10);
-        g.player.health = 0;
+        g.player.health = 0.0;
         g.player.equipment.insert("Ankh".into());
         let p = Vec2::new(100., 100.);
         g.world.spawn("oMoai", Vec2::new(p.x - 16., p.y - 16.));
         let id = g.world.spawn("oMoaiInside", p);
         tick(&mut g, &InputFrame::default());
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(g.player.pos, Vec2::new(p.x + 8., p.y + 8.));
         assert_eq!(g.player.previous_pos, g.player.pos);
         assert!(!g.player.has("Ankh"));
         assert!(g.world.entity(id).is_none());
-        g.player.health = 0;
+        g.player.health = 0.0;
         tick(&mut g, &InputFrame::default());
-        assert_eq!(g.player.health, 0);
+        assert_eq!(g.player.health, 0.0);
         g.player.equipment.insert("Ankh".into());
         g.player.pos = g.world.entrance;
         tick(&mut g, &InputFrame::default());
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(
             g.player.pos,
             Vec2::new(p.x + 8., p.y + 8.),
@@ -1672,7 +1672,7 @@ mod tests {
     }
     #[test]
     fn actual_step_refunds_unarmed_bomb_and_rope_but_leaves_armed_bomb() {
-        for (object, bombs, ropes) in [("oBomb", 5, 4), ("oRopeThrow", 4, 5)] {
+        for (object, bombs, ropes) in [("oBomb", 5.0, 4.0), ("oRopeThrow", 4.0, 5.0)] {
             let (mut g, id) = carried_exit(object);
             g.step(&InputFrame {
                 up: true,
@@ -1689,7 +1689,7 @@ mod tests {
             up: true,
             ..Default::default()
         });
-        assert_eq!(g.player.bombs, 4);
+        assert_eq!(g.player.bombs, 4.0);
         assert!(!g.world.entity(id).unwrap().held);
         assert!(!g.flags.contains("carry:oBomb"));
     }
@@ -1712,9 +1712,9 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(g.data["damsels"], 1.);
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         g.next_level();
-        assert_eq!(g.player.health, 5);
+        assert_eq!(g.player.health, 5.0);
     }
     #[test]
     fn actual_step_inventory_bomb_exit_recreates_remembered_weapon_type() {
@@ -1725,7 +1725,7 @@ mod tests {
         });
         assert_eq!(g.player.pickup_item_type, "Shotgun");
         assert!(g.world.entity(id).is_none());
-        assert_eq!(g.player.bombs, 3);
+        assert_eq!(g.player.bombs, 3.0);
         let bomb = g.player.held.unwrap();
         assert_eq!(g.world.entity(bomb).unwrap().object, "oBomb");
         g.step(&InputFrame {
@@ -1733,7 +1733,7 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(g.state, RunState::Ending);
-        assert_eq!(g.player.bombs, 4);
+        assert_eq!(g.player.bombs, 4.0);
         assert!(!g.player.data.contains_key("stash_id"));
         assert!(g.flags.contains("carry:oShotgun"));
         g.next_level();
@@ -2159,7 +2159,7 @@ mod tests {
         assert_eq!(g.data["damsels"], 2.);
         assert_eq!(g.data["pending_damsel_kisses"], 2.);
         g.next_level();
-        assert_eq!(g.player.health, 5);
+        assert_eq!(g.player.health, 5.0);
         assert!(!g.data.contains_key("pending_damsel_kisses"));
     }
 
@@ -2172,7 +2172,7 @@ mod tests {
         }
         g.player.pos = Vec2::new(240., 56.);
         g.player.previous_pos = g.player.pos;
-        g.player.health = 0;
+        g.player.health = 0.0;
         g.player.equipment.insert("Ankh".into());
         g.player.data.insert("fall_timer".into(), 80.);
         g.player.data.insert("fall_ticks".into(), 80.);
@@ -2180,7 +2180,7 @@ mod tests {
         let chain = g.world.spawn("oChain", Vec2::new(248., 48.));
         g.step(&InputFrame::default());
         assert_eq!(g.state, RunState::Playing);
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(g.player.pos, g.world.entrance);
         assert_eq!(g.player.data["blink"], 59.);
         assert_eq!(g.player.data["fall_timer"], 0.);
@@ -2194,7 +2194,7 @@ mod tests {
             g.step(&InputFrame::default());
         }
         assert_eq!(
-            g.player.health, 4,
+            g.player.health, 4.0,
             "old fall must not hurt the revived player"
         );
         assert!(
@@ -2233,10 +2233,10 @@ mod tests {
         );
         // Controlled fatal state isolates the source's current-array lookup;
         // the preceding depth sort and activation are actual engine phases.
-        g.player.health = 0;
+        g.player.health = 0.0;
         g.player.equipment.insert("Ankh".into());
         g.step(&InputFrame::default());
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(g.player.pos, Vec2::new(248., 56.));
         assert!(!g.player.has("Ankh"));
     }
@@ -2247,12 +2247,12 @@ mod tests {
         g.world.entrance = Vec2::new(88., 56.);
         g.player.pos = Vec2::new(240., 120.);
         g.player.previous_pos = g.player.pos;
-        g.player.health = 1;
+        g.player.health = 1.0;
         g.player.equipment.insert("Ankh".into());
         g.world.spawn("oExplosion", g.player.pos);
         g.step(&InputFrame::default());
         assert_eq!(g.state, RunState::Playing);
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(g.player.pos, g.world.entrance);
         assert_eq!(g.player.invincible, 59);
         assert_eq!(g.player.data["blink"], 59.);
@@ -2292,7 +2292,7 @@ mod tests {
         while g.world.level < 16 {
             g.next_level();
         }
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(g.player.data["active"], 0.);
         // Controlled hazard during the real generated intro, not a claim that
         // an explosion naturally occurs on arrival. The final blast frame
@@ -2303,7 +2303,7 @@ mod tests {
         g.world.entity_mut(blast).unwrap().animation = 9.6;
         g.step(&InputFrame::default());
         assert_eq!(g.state, RunState::Playing);
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert!(!g.player.has("Ankh"));
         assert_eq!(g.player.data["active"], 1.);
         assert_eq!(g.player.stun, 100);
@@ -2316,7 +2316,7 @@ mod tests {
             "intro alarm must not release the player"
         );
         assert_eq!(g.state, RunState::Playing);
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(g.player.data["active"], 1.);
         assert_eq!(g.player.stun, 0);
         assert!(!g.player.is_stunned());
@@ -2377,7 +2377,7 @@ mod tests {
             let age = g.world.entity(lava).unwrap().age;
             g.step(&InputFrame::default());
             assert_eq!(g.state, RunState::Ending, "{character:?}");
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
             assert!(!g.player.has("Ankh"));
             assert_eq!(g.player.data["active"], 1.);
             assert_eq!(g.player.data["blink"], 59.);
@@ -2410,13 +2410,13 @@ mod tests {
                     "source exit sprite still excludes character movement"
                 );
                 assert_eq!(g.player.sprite, sprite);
-                assert_eq!(g.player.health, 4);
+                assert_eq!(g.player.health, 4.0);
             }
             assert_eq!(
                 g.ending.as_ref().unwrap().stage,
                 crate::ending::EndingStage::Transition
             );
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
             assert!(!g.player.has("Ankh"));
         }
     }
@@ -2446,7 +2446,7 @@ mod tests {
             g.step(&InputFrame::default());
             if kind.challenge() {
                 assert_eq!(g.state, RunState::Playing, "{kind:?}");
-                assert_eq!(g.player.health, 4);
+                assert_eq!(g.player.health, 4.0);
                 assert!(!g.player.has("Ankh"));
                 assert_eq!(g.player.pos, g.world.entrance);
                 assert_eq!(g.player.invincible, 59);
@@ -2467,7 +2467,7 @@ mod tests {
                         // on frame 9. Source Lava damage ignores invincibility.
                         if frame < 9 {
                             assert_eq!(g.state, RunState::Playing);
-                            assert_eq!(g.player.health, 4);
+                            assert_eq!(g.player.health, 4.0);
                         } else {
                             assert_eq!(g.state, RunState::Dead);
                         }
@@ -2475,7 +2475,7 @@ mod tests {
                             assert!(g.player.invincible > 0);
                             assert!(g.events.contains(&GameEvent::Damage { amount: 99 }));
                             assert!(g.events.contains(&GameEvent::Died));
-                            assert_eq!(g.player.health, 0);
+                            assert_eq!(g.player.health, 0.0);
                         }
                     }
                 }
@@ -2483,14 +2483,14 @@ mod tests {
                     assert_eq!(g.state, RunState::Dead);
                 } else {
                     assert_eq!(g.state, RunState::Playing);
-                    assert_eq!(g.player.health, 4);
+                    assert_eq!(g.player.health, 4.0);
                 }
                 assert!(!g.player.has("Ankh"));
             } else {
                 assert_eq!(g.state, RunState::Playing, "{kind:?}");
                 assert!(g.player.has("Ankh"));
                 g.step(&InputFrame::default());
-                assert_eq!(g.player.health, 4);
+                assert_eq!(g.player.health, 4.0);
                 assert!(g.player.has("Ankh"));
             }
             assert_eq!(g.world.name, room);
@@ -2511,7 +2511,7 @@ mod tests {
         g.flags.insert("custom_level".into());
         g.player.pos = g.world.entrance;
         g.player.previous_pos = g.player.pos;
-        g.player.health = 0;
+        g.player.health = 0.0;
         g.player.equipment.insert("Ankh".into());
         g.update_camera();
         assert!(g.camera.x > 400.);
@@ -2523,7 +2523,7 @@ mod tests {
     #[test]
     fn healed_latched_dead_player_cannot_activate_level_exit() {
         let (mut g, _) = carried_exit("oRock");
-        g.player.health = 1;
+        g.player.health = 1.0;
         g.player.state = PlayerState::Dead;
         g.state = RunState::Dead;
         g.step(&InputFrame {
@@ -2568,10 +2568,10 @@ mod tests {
             assert!(!before.contains(&crate::dispatcher::Instance::Entity(pending)));
             assert_eq!(moai_revival_anchor(&g), Some(Vec2::new(472., 88.)));
             assert_eq!(g.dispatcher.registration_order, before);
-            g.player.health = 0;
+            g.player.health = 0.0;
             g.player.equipment.insert("Ankh".into());
             revive(&mut g);
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
             assert_eq!(g.player.pos, Vec2::new(472., 88.));
             assert!(!g.player.has("Ankh"));
             assert_eq!(g.dispatcher.registration_order, before);

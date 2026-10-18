@@ -27,7 +27,7 @@ fn quiet_step(game: &mut Game, input: InputFrame) {
     let rng = serde_json::to_value(&game.rng).unwrap();
     game.step(&input);
     assert_eq!(serde_json::to_value(&game.rng).unwrap(), rng);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
 }
 
 fn live(game: &Game, object: &str) -> usize {
@@ -61,7 +61,7 @@ fn reserve_rope(game: &mut Game) -> u64 {
     let rope = game.player.held.unwrap();
     assert_eq!(game.world.entity(rope).unwrap().object, "oRopeThrow");
     assert!(game.world.entity(rope).unwrap().held);
-    assert_eq!((game.player.bombs, game.player.ropes), (4, 3));
+    assert_eq!((game.player.bombs, game.player.ropes), (4.0, 3.0));
     quiet_step(game, InputFrame::default());
     rope
 }
@@ -88,7 +88,7 @@ fn natural_held_up_rope_lava_retirement_still_deploys_once() {
                 },
             );
             assert!(game.player.held.is_none());
-            assert_eq!((game.player.bombs, game.player.ropes), (4, 3));
+            assert_eq!((game.player.bombs, game.player.ropes), (4.0, 3.0));
             assert_eq!(
                 game.events
                     .iter()
@@ -160,7 +160,7 @@ fn natural_down_rope_lava_retirement_still_extends_existing_anchor() {
                     ..Default::default()
                 },
             );
-            assert_eq!((game.player.bombs, game.player.ropes), (4, 3));
+            assert_eq!((game.player.bombs, game.player.ropes), (4.0, 3.0));
             assert_eq!((live(&game, "oRopeTop"), live(&game, "oRope")), (1, 1));
             let top = game.world.entity(attempt_id + 1).unwrap();
             assert_eq!(top.object, "oRopeTop");

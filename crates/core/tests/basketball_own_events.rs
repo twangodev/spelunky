@@ -73,7 +73,7 @@ fn basketball_create_inherits_context_depth_once_and_preserves_producer_override
             assert_eq!(ball.value("bounceFactor"), 0.25);
             assert_eq!(ball.value("frictionFactor"), 0.9);
             assert_eq!(ball.value("bboxRight"), 5.0);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -131,7 +131,7 @@ fn raw_inclusive_deflection_gate_and_independent_nearest_family_keep_source_orde
                 }
             }
             assert_eq!(game.data["baskets"], 0.0);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -166,7 +166,7 @@ fn cached_wall_contact_wins_over_floor_contact_and_scores_once() {
                 "literal if left/right else-if bottom"
             );
             assert_eq!(game.data["baskets"], 0.0);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
         for (wall, expected) in [(false, 2.0), (true, 3.0)] {
             let mut game = room(rules);
@@ -197,7 +197,7 @@ fn cached_wall_contact_wins_over_floor_contact_and_scores_once() {
                 game.data["baskets"], expected,
                 "goingIn prevents repeated credit"
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -250,7 +250,7 @@ fn falling_held_dunk_clears_the_hand_without_requiring_a_matching_backlink() {
             assert_eq!(game.data["baskets"], 1.0);
             assert_eq!(game.data["hub_alarm0"], 20.0);
             assert_eq!(game.world.entity(basket).unwrap().sprite, "sBasketSwoosh");
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -281,7 +281,7 @@ fn basket_animation_end_restores_default_sprite_without_inheriting_item_body() {
         assert_eq!(depth, 99.0, "root object's builtin catalog depth");
         assert!(!basket.data.contains_key("gravity"));
         assert!(!basket.data.contains_key("bboxLeft"));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 
@@ -319,7 +319,7 @@ fn rim_and_nearest_basket_queries_exclude_inactive_and_other_families() {
             if active_rim {
                 assert_eq!(ball.value("obj"), basket as f64);
             }
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -360,7 +360,7 @@ fn inherited_held_attachment_precedes_own_dribble_point_query() {
                 "linked Item depth after Player EndStep"
             );
             assert_eq!(game.data["baskets"], 0.0);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }

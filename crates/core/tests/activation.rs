@@ -230,7 +230,7 @@ fn actual_inventory_cycle_idle_and_exit_recreate_the_remembered_weapon() {
     );
     let reserved_bomb = game.player.held.unwrap();
     assert_ne!(reserved_bomb, weapon);
-    assert_eq!(game.player.bombs, 3);
+    assert_eq!(game.player.bombs, 3.0);
     for _ in 0..10 {
         game.step(&InputFrame::default());
         assert_eq!(game.player.pickup_item_type, "Shotgun");
@@ -252,7 +252,7 @@ fn actual_inventory_cycle_idle_and_exit_recreate_the_remembered_weapon() {
     assert!(!game.player.data.contains_key("stash_id"));
     assert!(game.player.pickup_item_type.is_empty());
     assert!(game.player.held.is_none());
-    assert_eq!(game.player.bombs, 4);
+    assert_eq!(game.player.bombs, 4.0);
     assert!(
         !game
             .world

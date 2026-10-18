@@ -28,14 +28,14 @@ fn defile_with_bomb(g: &mut Game, altar: u64, expected: f64) {
         bomb_pressed: true,
         ..Default::default()
     });
-    assert_eq!(g.player.bombs, bombs - 1, "ORDINARY_BOMB_BUTTON_PRODUCER");
+    assert_eq!(g.player.bombs, bombs - 1.0, "ORDINARY_BOMB_BUTTON_PRODUCER");
     let mut destroyed = false;
     for tick in 0..180 {
         g.step(&InputFrame {
             left: tick < 45,
             ..Default::default()
         });
-        assert!(g.player.health > 0, "BOMB_RETREAT_SURVIVES");
+        assert!(g.player.health > 0.0, "BOMB_RETREAT_SURVIVES");
         if g.world.entity(altar).is_none() {
             destroyed = true;
             break;
@@ -90,7 +90,7 @@ fn ordinary_two_altar_bombs_then_right_walk_preserves_native_tether_threshold() 
                 right: true,
                 ..Default::default()
             });
-            assert!(g.player.health > 0);
+            assert!(g.player.health > 0.0);
         }
         assert!(
             (550. ..560.).contains(&g.player.pos.x),
@@ -155,7 +155,7 @@ fn ordinary_two_altar_bombs_then_right_walk_preserves_native_tether_threshold() 
                 witnessed = true;
                 break;
             }
-            assert!(g.player.health > 0);
+            assert!(g.player.health > 0.0);
         }
         assert!(
             witnessed,

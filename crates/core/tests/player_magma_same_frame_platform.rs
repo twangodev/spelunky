@@ -34,7 +34,7 @@ fn scenario(rules: RulesPreset, historical: bool, magma_present: bool) {
     game.player.previous_pos = game.player.pos;
     let boss = game.spawn("oTombLord", Vec2::new(88.0, 128.0));
     let magma = magma_present.then(|| game.spawn("oMagma", Vec2::new(104.0, 123.0)));
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.stun, 0);
     assert_eq!(game.player.vel, Vec2::default());
     assert!(game.player.equipment.is_empty());
@@ -95,7 +95,7 @@ fn scenario(rules: RulesPreset, historical: bool, magma_present: bool) {
         assert!(magma.pos.y + 5.0 < boss.pos.y);
         assert_eq!(boss.value("burning"), 0.0);
         assert_ne!(boss.state, 98);
-        assert_eq!(game.player.health, 2, "actual Magma Damage2");
+        assert_eq!(game.player.health, 2.0, "actual Magma Damage2");
         assert_eq!(game.player.stun, 20);
         assert_eq!(game.player.invincible, 30);
         assert_eq!(game.player.data.get("burning"), Some(&100.0));
@@ -105,7 +105,7 @@ fn scenario(rules: RulesPreset, historical: bool, magma_present: bool) {
                 .any(|event| matches!(event, GameEvent::Damage { amount: 2 }))
         );
     } else {
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.player.stun, 0);
     }
     let expected = if historical && magma_present { 20 } else { 19 };
@@ -129,7 +129,7 @@ fn scenario(rules: RulesPreset, historical: bool, magma_present: bool) {
         // Source Player Step338 assigns STANDING before its independent stun
         // motion. This is a logical state write, not a physical landing.
         game.step(&InputFrame::default());
-        assert_eq!(game.player.health, 2);
+        assert_eq!(game.player.health, 2.0);
         assert_eq!(game.state, RunState::Playing);
         assert_eq!(
             game.player.stun, 20,
@@ -183,7 +183,7 @@ fn magma_recovery(rules: RulesPreset) {
     game.player.pos = Vec2::new(160.0, 136.0);
     game.player.previous_pos = game.player.pos;
     let magma = game.spawn("oMagma", Vec2::new(160.0, 123.0));
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.stun, 0);
     assert_eq!(game.player.vel, Vec2::default());
     assert!(game.player.equipment.is_empty());
@@ -210,7 +210,7 @@ fn magma_recovery(rules: RulesPreset) {
         precise_overlap(&collision_player, magma),
         "actual Magma collision mask admission"
     );
-    assert_eq!(game.player.health, 2, "actual Magma Damage2");
+    assert_eq!(game.player.health, 2.0, "actual Magma Damage2");
     assert_eq!(game.player.stun, 20);
     assert_eq!(game.player.invincible, 30);
     assert_eq!(game.player.data.get("burning"), Some(&100.0));
@@ -229,7 +229,7 @@ fn magma_recovery(rules: RulesPreset) {
     assert_eq!(game.player.data.get("bounced").copied().unwrap_or(0.0), 0.0);
     let incoming_velocity = game.player.vel;
     game.step(&InputFrame::default());
-    assert_eq!(game.player.health, 2);
+    assert_eq!(game.player.health, 2.0);
     assert_eq!(game.state, RunState::Playing);
     assert_eq!(game.player.stun, 20);
     assert!(game.player.is_stunned());
@@ -277,7 +277,7 @@ fn magma_recovery(rules: RulesPreset) {
             RunState::Playing,
             "ordinary recovery stays alive"
         );
-        assert_eq!(game.player.health, 2, "no unrelated recovery injury");
+        assert_eq!(game.player.health, 2.0, "no unrelated recovery injury");
         assert_eq!(game.player.data.get("source_platform_state"), Some(&10.0));
         if !game.player.is_stunned() {
             assert_eq!(incoming.stun, 1, "actual stationary countdown reaches zero");
@@ -315,7 +315,7 @@ fn magma_recovery(rules: RulesPreset) {
             // accepts a fresh ordinary jump. No pose or counter is injected.
             game.step(&InputFrame::default());
             assert_eq!(game.state, RunState::Playing);
-            assert_eq!(game.player.health, 2);
+            assert_eq!(game.player.health, 2.0);
             assert!(!game.player.is_stunned());
             assert_eq!(game.player.stun, 0);
             assert_eq!(game.player.state, PlayerState::Standing);
@@ -329,7 +329,7 @@ fn magma_recovery(rules: RulesPreset) {
                 ..Default::default()
             });
             assert_eq!(game.state, RunState::Playing);
-            assert_eq!(game.player.health, 2);
+            assert_eq!(game.player.health, 2.0);
             assert!(!game.player.is_stunned());
             assert_eq!(game.player.stun, 0);
             assert_eq!(game.player.vel.x, 0.0);

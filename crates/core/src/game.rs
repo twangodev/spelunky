@@ -126,7 +126,25 @@ impl Game {
     }
 
     pub fn load_custom(&mut self, level: &level::Level, name: &str, previous: &str) {
-        self.load_custom_room(level, name, previous, true);
+        let starting_inventory = [
+            f64::from(level.starting_life.clamp(1, 99)),
+            f64::from(level.starting_bombs.clamp(0, 99)),
+            f64::from(level.starting_ropes.clamp(0, 99)),
+        ];
+        self.load_custom_room(level, name, previous, Some(starting_inventory));
+        traps::initialize_level(self);
+    }
+
+    /// Editor test play uses real(starting inventory text) directly, before
+    /// ordinary custom-level loading applies its floor and clamps.
+    pub fn load_custom_editor_test(
+        &mut self,
+        level: &level::Level,
+        name: &str,
+        previous: &str,
+        starting_inventory: [f64; 3],
+    ) {
+        self.load_custom_room(level, name, previous, Some(starting_inventory));
         traps::initialize_level(self);
     }
 
@@ -135,7 +153,7 @@ impl Game {
     pub fn continue_custom(&mut self, level: &level::Level, name: &str, previous: &str) {
         let carry = self.take_transition_carry();
         let kisses = self.take_pending_kisses();
-        self.load_custom_room(level, name, previous, false);
+        self.load_custom_room(level, name, previous, None);
         self.apply_kisses(kisses);
         self.restore_transition_carry(carry);
         traps::initialize_level(self);
@@ -146,7 +164,7 @@ impl Game {
         level: &level::Level,
         name: &str,
         previous: &str,
-        initialize_inventory: bool,
+        starting_inventory: Option<[f64; 3]>,
     ) {
         self.world = level.to_world();
         generation::initialize_custom_terrain(&mut self.world, &mut self.rng);
@@ -159,10 +177,10 @@ impl Game {
         self.flags.remove("tutorial");
         self.flags
             .retain(|f| !f.starts_with("custom_level:") && !f.starts_with("default_next_custom:"));
-        if initialize_inventory {
-            self.player.health = level.starting_life.clamp(1, 99);
-            self.player.bombs = level.starting_bombs.clamp(0, 99);
-            self.player.ropes = level.starting_ropes.clamp(0, 99);
+        if let Some([health, bombs, ropes]) = starting_inventory {
+            self.player.health = health;
+            self.player.bombs = bombs;
+            self.player.ropes = ropes;
         }
         self.world.entrance = self
             .world
@@ -377,9 +395,9 @@ impl Game {
         }
         if self.flags.contains("hub_title") || self.flags.contains("hub_scores") {
             self.player.health = if characters::selected(self) == characters::Character::TunnelMan {
-                2
+                2.0
             } else {
-                4
+                4.0
             };
             if self.state == RunState::Dead {
                 self.state = RunState::Playing;
@@ -411,9 +429,9 @@ impl Game {
     /// actor callbacks, selected character, profile, or random stream.
     pub(crate) fn clear_run_globals(&mut self) {
         let tunnel = characters::selected(self) == characters::Character::TunnelMan;
-        self.player.health = if tunnel { 2 } else { 4 };
-        self.player.bombs = if tunnel { 0 } else { 4 };
-        self.player.ropes = if tunnel { 0 } else { 4 };
+        self.player.health = if tunnel { 2.0 } else { 4.0 };
+        self.player.bombs = if tunnel { 0.0 } else { 4.0 };
+        self.player.ropes = if tunnel { 0.0 } else { 4.0 };
         self.player.money = 0;
         self.player.equipment.clear();
         for flag in [
@@ -566,8 +584,8 @@ impl Game {
         self.player.equipment.clear();
         if tutorial {
             self.flags.insert("tutorial".into());
-            self.player.bombs = 0;
-            self.player.ropes = 2;
+            self.player.bombs = 0.0;
+            self.player.ropes = 2.0;
             self.world = generation::tutorial();
         } else {
             if level > 1 {
@@ -711,7 +729,7 @@ impl Game {
         if kisses > 0 {
             // Transition Create spawns one kiss actor when xdamsels > 0,
             // independently of the number of rescue icons in its tally.
-            self.player.health = (self.player.health + 1).min(99);
+            self.player.health = (self.player.health + 1.0).min(99.0);
         }
     }
 
@@ -1047,7 +1065,7 @@ mod tests {
         game.player.pos.y = game.world.height as f64 * 16.0 + 32.0;
         game.step(&InputFrame::default());
         assert_eq!(game.state, RunState::Playing);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(!game.player.has("Ankh"));
         assert_eq!(game.player.pos, game.player.previous_pos);
     }
@@ -1064,9 +1082,9 @@ mod tests {
         game.player.held = Some(id);
         game.flags.insert("carry:oShotgun".into());
         game.flags.insert("damsel_rescued".into());
-        game.player.health = 2;
+        game.player.health = 2.0;
         game.next_level();
-        assert_eq!(game.player.health, 3);
+        assert_eq!(game.player.health, 3.0);
         let held = game.world.entity(game.player.held.unwrap()).unwrap();
         assert_eq!(held.object, "oShotgun");
         assert!(!held.data.contains_key("ammo"));
@@ -1086,9 +1104,9 @@ mod tests {
         let mut game = Game::shell(9, RulesPreset::Classic);
         game.load_custom(&level, "first", "");
         game.player.pos = Vec2::new(104.0, 72.0);
-        game.player.health = 2;
-        game.player.bombs = 1;
-        game.player.ropes = 0;
+        game.player.health = 2.0;
+        game.player.bombs = 1.0;
+        game.player.ropes = 0.0;
         game.player.money = 700;
         game.player.equipment.insert("Cape".into());
         let id = game.world.spawn("oShotgun", game.player.pos);
@@ -1111,7 +1129,7 @@ mod tests {
         game.continue_custom(&next, "second", "first");
         assert_eq!(
             (game.player.health, game.player.bombs, game.player.ropes),
-            (2, 1, 0)
+            (2.0, 1.0, 0.0)
         );
         assert_eq!(game.player.money, 700);
         assert!(game.player.has("Cape"));
@@ -1119,6 +1137,43 @@ mod tests {
         assert_eq!(carried.object, "oShotgun");
         assert!(!carried.data.contains_key("ammo"));
         assert!(!game.flags.contains("carry:oShotgun"));
+    }
+
+    #[test]
+    fn editor_test_load_preserves_real_inventory_while_regular_load_clamps() {
+        let mut level = level::Level::default();
+        level.starting_life = 0;
+        level.starting_bombs = 120;
+        level.starting_ropes = -3;
+
+        let mut regular = Game::shell(4, RulesPreset::Classic);
+        regular.load_custom(&level, "regular", "");
+        assert_eq!(
+            (
+                regular.player.health,
+                regular.player.bombs,
+                regular.player.ropes
+            ),
+            (1.0, 99.0, 0.0),
+            "ordinary loading applies scrLoadLevel inventory clamps"
+        );
+
+        let mut editor = Game::shell(4, RulesPreset::Classic);
+        editor.load_custom_editor_test(&level, "editor", "", [0.75, 12.9, 1000.25]);
+        assert_eq!(
+            (
+                editor.player.health,
+                editor.player.bombs,
+                editor.player.ropes
+            ),
+            (0.75, 12.9, 1000.25),
+            "editor test room assigns real(raw inventory text)"
+        );
+        editor.damage_player(1);
+        assert_eq!(
+            editor.player.health, -0.25,
+            "real health loses integer damage"
+        );
     }
 
     #[test]
@@ -1328,7 +1383,7 @@ mod tests {
         let mut game = Game::shell(11, RulesPreset::Classic);
         game.load_custom(&level, "first", "");
         game.player.pos = Vec2::new(104.0, 72.0);
-        game.player.health = 2;
+        game.player.health = 2.0;
         for _ in 0..2 {
             let damsel = game.world.spawn("oDamsel", game.player.pos);
             game.world.entity_mut(damsel).unwrap().held = true;
@@ -1342,16 +1397,16 @@ mod tests {
         });
         assert_eq!(game.state, RunState::Ending);
         game.continue_custom(&level, "second", "first");
-        assert_eq!(game.player.health, 3);
+        assert_eq!(game.player.health, 3.0);
         assert!(!game.data.contains_key("pending_damsel_kisses"));
         game.continue_custom(&level, "third", "second");
-        assert_eq!(game.player.health, 3);
+        assert_eq!(game.player.health, 3.0);
     }
 
     #[test]
     fn lethal_contact_keeps_corpse_physics_and_actor_clocks_running() {
         let mut game = flat_game();
-        game.player.health = 1;
+        game.player.health = 1.0;
         let arrow = game.world.spawn("oArrow", Vec2::new(24.0, 40.0));
         game.world.entity_mut(arrow).unwrap().vel.x = 8.0;
         let rock = game.world.spawn("oRock", Vec2::new(160.0, 24.0));
@@ -1411,7 +1466,7 @@ mod tests {
                 let mut game = Game::shell(7, RulesPreset::Classic);
                 characters::apply(&mut game, character);
                 game.load_hub(room);
-                game.player.health = 0;
+                game.player.health = 0.0;
                 game.player.state = PlayerState::Dead;
                 game.state = RunState::Dead;
                 game.player.equipment.insert("Ankh".into());
@@ -1421,9 +1476,9 @@ mod tests {
                 assert_eq!(
                     game.player.health,
                     if character == characters::Character::TunnelMan {
-                        2
+                        2.0
                     } else {
-                        4
+                        4.0
                     }
                 );
                 assert_ne!(game.player.state, PlayerState::Dead);
@@ -1510,7 +1565,7 @@ mod tests {
         }
         assert_eq!(game.source_elapsed_ms(), 1020);
         assert_eq!(game.source_elapsed_seconds(), 1);
-        game.player.health = 0;
+        game.player.health = 0.0;
         game.player.state = PlayerState::Dead;
         game.state = RunState::Dead;
         for _ in 0..8 {
@@ -1695,7 +1750,7 @@ mod tests {
             game.lifetime_stats.total_chests = 17;
             game.flags.insert("used_shortcut".into());
             game.flags.insert("low_graphics".into());
-            game.player.health = 1;
+            game.player.health = 1.0;
             game.player.money = 1234;
             game.player.equipment.insert("Jetpack".into());
             game.data.insert("kills".into(), 3.);
@@ -1739,9 +1794,9 @@ mod tests {
             assert_eq!(game.player.money, 0);
             assert!(game.player.equipment.is_empty());
             let inventory = if character == characters::Character::TunnelMan {
-                (2, 0, 0)
+                (2.0, 0.0, 0.0)
             } else {
-                (4, 4, 4)
+                (4.0, 4.0, 4.0)
             };
             assert_eq!(
                 (game.player.health, game.player.bombs, game.player.ropes),

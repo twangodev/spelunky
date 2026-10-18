@@ -212,7 +212,7 @@ fn shoot_until(game: &mut Game, king: u64, fatal: bool, yelling: bool) -> usize 
         }
         if (fatal && actor.health <= 0) || (!fatal && hits == 1) {
             assert!(
-                game.player.health > 0,
+                game.player.health > 0.0,
                 "ordinary player controller remains live"
             );
             assert!(
@@ -284,7 +284,7 @@ fn ordinary_fatal_pistol_hit_keeps_king_final_yell_and_thin_ice_after_complete_d
             let yelling = seed == 42;
             assert_eq!(actor.state, if yelling { 3 } else { 0 });
             assert_eq!(actor.animation, if yelling { 11.25 } else { 0.5 });
-            assert!(game.player.health > 0);
+            assert!(game.player.health > 0.0);
             assert!(!game.world.entities.iter().any(|e| e.object == "oBullet"));
             let count = game
                 .world

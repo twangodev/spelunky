@@ -106,7 +106,7 @@ fn fixed_stock_seed0_mines_floor_draws_after_non_solid_loot_create() {
             crate::GenerationRevision::SourceClassicV2
         );
         assert_eq!(game.rng.algorithm(), RngAlgorithm::Gm8Lcg32V1);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.level_tick, 0);
         let x = (trace.origin.x / 16.0) as i32;
         let y = (trace.origin.y / 16.0) as i32;

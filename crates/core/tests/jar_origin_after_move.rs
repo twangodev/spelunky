@@ -25,7 +25,7 @@ fn prepared(rules: RulesPreset, relative_x: f64, vx: f64) -> (Game, u64, u64) {
     assert_eq!(item.sprite, "sJar");
     assert!(!item.held);
     assert_eq!(item.value("gravity"), 0.6);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(game.player.engine_active);
     assert!(game.player.held.is_none());
     (game, boss, jar)
@@ -107,7 +107,7 @@ fn run_case_revision(
         Vec2::new(304.0, 496.0)
     );
     assert_eq!(game.world.entity(boss).unwrap().sprite, "sOlmecStart1");
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(
         (game.player.bombs, game.player.ropes, game.player.money),
         inventory

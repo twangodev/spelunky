@@ -26,7 +26,7 @@ fn ghost_actual_step_coincident_target_uses_zero_degrees_then_postmove_turns() {
             game.step(&InputFrame::default());
             assert_eq!(game.player.pos, target);
             assert_eq!(game.player.invincible, 1);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             let ghost = game.world.entity(id).unwrap();
             assert_eq!(ghost.pos, Vec2::new(81.0, 80.0));
             assert_eq!(ghost.state, 1, "invincible contact does not dismiss Ghost");

@@ -77,7 +77,7 @@ fn run_support(rules: RulesPreset, sinking: bool) {
             actor.pos
         );
         assert_eq!(actor.health, 3, "SOURCE_NO_LAVA_BODY {rules:?}/{age}");
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(
             actor.pos.y, expected_y,
             "SOURCE_ENEMY_AXIS_PLACEMENT {rules:?}/{age}"
@@ -131,7 +131,7 @@ fn natural_caveman_clamps_wall_jump_with_earlier_top_contact() {
             // requests a wall jump; cached colTop at y63 cancels it if roofed.
             assert_eq!(actor.pos, Vec2::new(114.0, 64.0));
             assert_eq!(actor.health, 3);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(
                 game.world.entity(block).unwrap().pos,
                 Vec2::new(112.0, 80.0)

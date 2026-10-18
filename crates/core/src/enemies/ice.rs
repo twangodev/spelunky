@@ -1056,7 +1056,7 @@ fn crash(_game: &mut Game, e: &mut Entity) {
 /// These two hazards explicitly subtract life in oPlayer1 Step. They bypass
 /// contact invincibility and do not grant a new invincibility interval.
 fn hurt_player(game: &mut Game, amount: i32) {
-    if game.player.health > 0 {
+    if game.player.health > 0.0 {
         game.player.lose_health(amount);
         game.events.push(GameEvent::Damage { amount });
     }
@@ -1159,11 +1159,11 @@ pub(super) fn player_hurt(game: &mut Game) {
         };
         let (id, pos) = (target.id, target.pos);
         if object == "oLaser" {
-            let had_life = game.player.health > 0;
+            let had_life = game.player.health > 0.0;
             if had_life {
                 game.player.lose_health(damage);
                 game.events.push(GameEvent::Damage { amount: damage });
-                if game.player.health <= 0 && crate::statistics::is_real_level(game) {
+                if game.player.health <= 0.0 && crate::statistics::is_real_level(game) {
                     game.lifetime_stats.enemy_death(cause);
                 }
             }
@@ -1183,11 +1183,11 @@ pub(super) fn player_hurt(game: &mut Game) {
             crate::player::enter_stunned(game);
         } else {
             // PsychicWave has no source blood call; retain its independent path.
-            let had_life = game.player.health > 0;
+            let had_life = game.player.health > 0.0;
             if had_life {
                 game.player.lose_health(damage);
                 game.events.push(GameEvent::Damage { amount: damage });
-                if game.player.health <= 0 && crate::statistics::is_real_level(game) {
+                if game.player.health <= 0.0 && crate::statistics::is_real_level(game) {
                     game.lifetime_stats.enemy_death(cause);
                 }
             }
@@ -1419,9 +1419,9 @@ fn crash_impact(game: &mut Game, e: &mut Entity) {
 }
 
 fn hurt_player_cause(game: &mut Game, amount: i32, cause: crate::statistics::EnemyDeath) {
-    let had_life = game.player.health > 0;
+    let had_life = game.player.health > 0.0;
     hurt_player(game, amount);
-    if had_life && game.player.health <= 0 && crate::statistics::is_real_level(game) {
+    if had_life && game.player.health <= 0.0 && crate::statistics::is_real_level(game) {
         game.lifetime_stats.enemy_death(cause);
     }
 }
@@ -1713,7 +1713,7 @@ mod tests {
         for tick in 1..=100 {
             game.step(&crate::InputFrame::default());
             assert_eq!(game.player.pos, Vec2::new(176.0, 152.0));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(game.player.stun, 0);
             assert_eq!(game.player.invincible, 0);
             assert!(!game.world.entities.iter().any(|entity| {
@@ -1779,7 +1779,7 @@ mod tests {
                 100.0
             );
         }
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.player.stun, 0);
         assert_eq!(game.rng.clone().next_u64(), expected_rng.next_u64());
     }
@@ -2267,7 +2267,7 @@ mod tests {
         player_hurt(&mut g);
         g.world.entities.clear();
         source_frame(&mut g, &mut e);
-        assert_eq!(g.player.health, 3);
+        assert_eq!(g.player.health, 3.0);
         assert_eq!(g.player.stun, 40);
         assert!(e.alive);
         for _ in 1..68 {
@@ -2435,7 +2435,7 @@ mod tests {
         assert_eq!(blood[0].pos, Vec2::new(136.0, 112.0));
         assert_eq!(blood[1].pos, Vec2::new(136.0, 113.0));
         assert_eq!(g.rng.clone().next_u64(), 213_719_968_000_392_126);
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
     }
 
     #[test]
@@ -2478,7 +2478,7 @@ mod tests {
             "natural animation-end callback must complete"
         );
         assert_eq!(g.world.entity(id).unwrap().sprite, "sAlienBossDead");
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
     }
 
     #[test]
@@ -2641,7 +2641,7 @@ mod tests {
         g.world.spawn("oLaser", pos);
         g.world.spawn("oLaser", Vec2::new(pos.x + 1.0, pos.y));
         g.step(&crate::InputFrame::default());
-        assert_eq!(g.player.health, 0);
+        assert_eq!(g.player.health, 0.0);
         assert_eq!(
             g.events
                 .iter()
@@ -2784,7 +2784,7 @@ mod tests {
         let mut g = boss_item_room();
         g.world.spawn("oGhost", Vec2::new(32.0, 144.0));
         g.step(&crate::InputFrame::default());
-        assert!(g.player.health < 1);
+        assert!(g.player.health < 1.0);
         // Ghost's automatic Collision happens after Player Step; the source
         // dead flag is established by the following character event.
         g.step(&crate::InputFrame::default());
@@ -2869,12 +2869,12 @@ mod tests {
                     } else {
                         assert_eq!(
                             target.player.health,
-                            (health - damage).max(0),
+                            (health - f64::from(damage)).max(0.0),
                             "{character:?}/{object}"
                         );
                         assert_eq!(
                             target.player.state,
-                            if health <= damage {
+                            if health <= f64::from(damage) {
                                 PlayerState::Dead
                             } else {
                                 PlayerState::Stunned
@@ -3084,7 +3084,7 @@ mod tests {
                 assert_eq!(yeti.vel.x, 0.0);
             }
             assert!((g.player.pos.x - thrown_x) * f64::from(facing) > 5.0);
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
         }
     }
 
@@ -3110,7 +3110,7 @@ mod tests {
                 dropped.vel, velocity,
                 "the zero belongs to Yeti, not the thrown pair"
             );
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
         }
     }
 
@@ -3138,7 +3138,7 @@ mod tests {
         g.player.pos = Vec2::new(85.0, 72.0);
         g.player.state = PlayerState::Standing;
         g.step(&crate::InputFrame::default());
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(g.player.stun, 0);
         assert_ne!(g.world.entity(id).unwrap().state, 3);
     }
@@ -3149,7 +3149,7 @@ mod tests {
         g.player.invincible = 20;
         let id = g.world.spawn("oLaser", Vec2::new(110.0, 100.0));
         g.step(&crate::InputFrame::default());
-        assert_eq!(g.player.health, 1);
+        assert_eq!(g.player.health, 1.0);
         assert_eq!(g.player.invincible, 19);
         assert_eq!(g.player.stun, 20);
         assert_eq!(g.player.vel, Vec2::new(-2.0, -4.0));
@@ -3162,10 +3162,10 @@ mod tests {
         g.player.invincible = 20;
         g.world.spawn("oPsychicWave", g.player.pos);
         g.step(&crate::InputFrame::default());
-        assert_eq!(g.player.health, 3);
+        assert_eq!(g.player.health, 3.0);
         assert_eq!(g.player.stun, 40);
         g.step(&crate::InputFrame::default());
-        assert_eq!(g.player.health, 3);
+        assert_eq!(g.player.health, 3.0);
     }
 
     #[test]
@@ -3199,7 +3199,7 @@ mod tests {
         g.player.pos = Vec2::new(72.0, 72.0);
         g.player.state = PlayerState::Standing;
         g.step(&crate::InputFrame::default());
-        assert_eq!(g.player.health, 3);
+        assert_eq!(g.player.health, 3.0);
         assert_eq!(g.player.invincible, 30);
         assert_eq!(g.player.stun, 0);
         assert_eq!(g.player.vel.x, 6.0);
@@ -3283,7 +3283,7 @@ mod tests {
         alien.state = 2;
         alien.vel = Vec2::default();
         g.step(&crate::InputFrame::default());
-        assert_eq!(g.player.health, 3);
+        assert_eq!(g.player.health, 3.0);
         assert_eq!(g.player.invincible, 30);
         assert_eq!(g.player.stun, 0);
     }

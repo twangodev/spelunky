@@ -101,14 +101,14 @@ fn default_birth_point_scene(object: &str, x: f64, rules: RulesPreset, expect_de
     // actor/state/velocity/held/RNG/timer or environmental writes during play.
     game.step(&InputFrame::default());
     assert_eq!(game.player.pos, Vec2::new(200.0, 119.0));
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.invincible, 0);
     assert_eq!(game.player.stun, 0);
     assert!(!game.player.is_stunned());
     assert_eq!(game.player.held, None);
     assert_eq!(game.player.money, 0);
-    assert_eq!(game.player.bombs, 4);
-    assert_eq!(game.player.ropes, 4);
+    assert_eq!(game.player.bombs, 4.0);
+    assert_eq!(game.player.ropes, 4.0);
     assert_eq!(game.data.get("collect").copied().unwrap_or(0.0), 0.0);
     assert_eq!(game.data.get("goldbar").copied().unwrap_or(0.0), 0.0);
     assert!(

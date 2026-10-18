@@ -54,7 +54,7 @@ fn natural_idle_wall_jump_cancels_upward_speed_at_touching_ceiling() {
         );
         assert!(e.alive);
         assert_eq!(e.health, 5);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(e.pos.y, 144.0, "SOURCE_MOVE_PRECEDES_IDLE_JUMP");
         assert_eq!(e.vel.y, 0.0, "SOURCE_IDLE_WALL_JUMP_CEILING_CLAMP");
     });
@@ -67,7 +67,7 @@ fn natural_idle_wall_jump_without_roof_keeps_upward_speed() {
         let e = game.world.entity(id).unwrap();
         assert!(e.alive);
         assert_eq!(e.health, 5);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(e.pos.y, 144.0);
         assert_eq!(e.vel.y, -6.0, "SOURCE_OPEN_CEILING_WALL_JUMP_CONTROL");
     });
@@ -80,7 +80,7 @@ fn natural_idle_touching_roof_without_wall_does_not_jump() {
         let e = game.world.entity(id).unwrap();
         assert!(e.alive);
         assert_eq!(e.health, 5);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(e.pos.y, 144.0);
         assert_eq!(e.vel.y, 0.0, "SOURCE_NO_WALL_NO_IDLE_JUMP_CONTROL");
     });

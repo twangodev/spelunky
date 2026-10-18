@@ -87,7 +87,7 @@ fn wet_entry(rules: RulesPreset, ceiling: bool, side: i8) -> (Game, u64) {
     assert_eq!(spider.alarms[1], 30);
     // Inherited Enemy and own Spider water entry each produce one Splash.
     assert_eq!(splash_count(&game), 2);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     (game, id)
 }
 
@@ -116,7 +116,7 @@ fn naturally_entered_drowned_spider_keeps_ceiling_probe_and_next_frame_motion() 
         assert_eq!(spider.pos, Vec2::new(original.x, original.y + 1.0));
         assert_eq!(spider.state, 4);
         assert_eq!(spider.alarms[1], 28);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 

@@ -47,7 +47,7 @@ fn pickup(game: &mut Game, object: &str) -> u64 {
         "{object}: pickup mask must overlap the source contact gate"
     );
     assert_eq!(game.state, RunState::Playing, "{object}: live fixture");
-    assert!(game.player.health > 0, "{object}: healthy fixture");
+    assert!(game.player.health > 0.0, "{object}: healthy fixture");
     assert!(!game.player.is_stunned(), "{object}: unstunned fixture");
     assert_eq!(game.player.attack_timer, 0, "{object}: idle attack fixture");
     game.step(&InputFrame {

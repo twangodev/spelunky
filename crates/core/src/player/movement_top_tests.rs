@@ -10,7 +10,7 @@ fn cell(level: &mut crate::level::Level, x: usize, y: usize, object: char) {
 
 fn live(game: &Game) {
     assert_eq!(game.state, RunState::Playing);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(!game.player.is_stunned());
 }
 

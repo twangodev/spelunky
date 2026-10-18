@@ -491,7 +491,7 @@ mod tests {
         g.world.spawn("oLava", g.player.pos);
         g.step(&crate::InputFrame::default());
         assert!(!g.player.has("Ankh"));
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(g.state, crate::RunState::Playing);
         let ball = g.world.entity(ball).unwrap();
         assert_eq!(

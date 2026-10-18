@@ -29,7 +29,7 @@ fn walk(rules: RulesPreset, ticks: u32, ladder: bool) -> Game {
             ..Default::default()
         });
     }
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(!game.player.is_stunned());
     assert!(game.player.grounded);
     assert_eq!(game.player.vel, Vec2::default());
@@ -79,7 +79,7 @@ fn natural_rest_beside_ladder_uses_cached_rectangle_before_looking_up() {
         );
         assert_eq!(game.player.vel, Vec2::default());
         assert!(game.player.grounded && !game.player.is_stunned());
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(
             game.player.state,
             PlayerState::Standing,
@@ -106,6 +106,6 @@ fn same_walk_without_ladder_retains_ordinary_looking_up() {
         assert_eq!(game.player.sprite, "sLookLeft");
         assert_eq!(game.player.vel, Vec2::default());
         assert!(game.player.grounded && !game.player.is_stunned());
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }

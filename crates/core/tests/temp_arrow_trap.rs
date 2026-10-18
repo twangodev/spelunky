@@ -137,7 +137,7 @@ fn temp_alarm_fires_minus_five_without_increment_or_sound() {
         trap.data.insert("fired".into(), 1.0);
         trap.alarms[0] = 1;
         game.step(&InputFrame::default());
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         let children = arrows(&game);
         assert_eq!(
             children.len(),

@@ -66,7 +66,7 @@ fn incoming_left_custom_and_linked_rooms_create_a_right_facing_player() {
                     assert_eq!(game.player.health, health);
                 } else {
                     game.load_custom(&room(), "fresh-right", "");
-                    assert_eq!(game.player.health, room().starting_life);
+                    assert_eq!(game.player.health, f64::from(room().starting_life));
                 }
                 assert_eq!(
                     game.world

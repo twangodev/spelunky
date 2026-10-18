@@ -72,7 +72,7 @@ fn point_receiver_guards(game: &Game, entity: u64, tile: usize, entity_first: bo
 
 fn healthy_step(game: &mut Game, input: InputFrame) {
     game.step(&input);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(!game.player.is_stunned());
 }
 

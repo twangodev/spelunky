@@ -114,7 +114,7 @@ fn natural_spike_contact_marks_only_the_first_native_mask_target() {
                     );
                 }
                 assert_eq!(game.state, RunState::Dead);
-                assert_eq!(game.player.health, 0);
+                assert_eq!(game.player.health, 0.0);
                 break;
             }
             assert!(

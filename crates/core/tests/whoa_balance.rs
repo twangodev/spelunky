@@ -21,8 +21,8 @@ fn scene(preset: RulesPreset, character: Character, facing: i8, edge: bool) -> G
     game.player.facing = facing;
     // Tunnel Man's authored resources are valid initial inventory, permitting
     // the same reserved-item controls as the other selected characters.
-    game.player.bombs = 4;
-    game.player.ropes = 4;
+    game.player.bombs = 4.0;
+    game.player.ropes = 4.0;
     game.world.entrance = game.player.pos;
     game
 }

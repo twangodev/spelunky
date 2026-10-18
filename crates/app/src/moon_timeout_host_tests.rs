@@ -17,7 +17,7 @@ fn real_living_moon_timeout_draw_and_music_use_source_reveal_boundaries() {
             }
         }
         assert_eq!(game.state, RunState::Playing);
-        assert_eq!(game.player.health, 8);
+        assert_eq!(game.player.health, 8.0);
         assert_eq!(game_music(&game), "boss");
         let hash = game.state_hash();
         let mut rng = game.rng.clone();

@@ -85,7 +85,7 @@ fn throw_at_damsel(preset: RulesPreset, facing: i8, for_sale: bool) -> (Game, u6
                 20,
                 "keeper was not struck"
             );
-            assert_eq!(game.player.health, 4, "no unrelated player hurt");
+            assert_eq!(game.player.health, 4.0, "no unrelated player hurt");
             assert!(!game.flags.contains("murderer"));
             assert!(
                 !game.flags.contains("shopkeepers_angry"),

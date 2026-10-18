@@ -81,7 +81,7 @@ fn check(object: &str, geometry: Geometry) {
             assert_eq!(first.value("sight_timer"), 5.0);
             assert_eq!(game.rng.state_bits(), oracle.state_bits());
             assert_eq!(game.player.pos, Vec2::new(48.0, 152.0));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
 
             assert_eq!(oracle.next_u64(), raw[1]);
             assert_eq!(oracle.next_u64(), raw[2]);
@@ -113,7 +113,7 @@ fn check(object: &str, geometry: Geometry) {
             assert_eq!(second.value("sight_timer"), 4.0);
             assert_eq!(game.rng.state_bits(), oracle.state_bits());
             assert_eq!(game.player.pos, Vec2::new(48.0, 152.0));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert!(game.player.held.is_none());
             assert!(!game.world.entities.iter().any(|e| e.object == "oBlood"));
 

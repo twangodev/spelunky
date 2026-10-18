@@ -71,7 +71,7 @@ fn controlled(rules: RulesPreset, rock_safe: Option<bool>, stuck: bool) -> (Game
         e.data.insert("safe".into(), f64::from(safe));
     }
     assert_eq!(game.player.held, None);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.data.get("arrows").copied().unwrap_or(0.0), 0.0);
     (game, bow, arrow)
 }
@@ -88,7 +88,7 @@ fn controlled_incoming_rock_stun_keeps_original_arrow_until_late_collection() {
             0.0,
             "FIXTURE_REAL_BOW_PICKUP"
         );
-        assert_eq!(game.player.health, 2, "FIXTURE_ROCK_HURT_REQUIRED");
+        assert_eq!(game.player.health, 2.0, "FIXTURE_ROCK_HURT_REQUIRED");
         assert!(game.player.is_stunned(), "FIXTURE_ROCK_STUN_REQUIRED");
         assert_eq!(game.player.held, None, "FIXTURE_LATE_BOW_RELEASE");
         assert!(
@@ -116,7 +116,7 @@ fn safe_incoming_rock_does_not_block_normal_late_arrow_recovery() {
             down: true,
             ..attack()
         });
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(!game.player.is_stunned());
         assert_eq!(game.player.held, Some(bow));
         assert!(game.world.entity(arrow).is_none());
@@ -134,7 +134,7 @@ fn first_bow_pickup_recovers_free_arrow_in_the_same_native_step() {
         assert_eq!(game.player.held, Some(bow));
         assert!(game.world.entity(arrow).is_none());
         assert_eq!(game.data["arrows"], 7.0);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 #[test]
@@ -176,7 +176,7 @@ fn ordinary_running_throw_wall_return_skips_recovery_on_the_rock_hurt_tick() {
             Vec2::new(96.0, 120.0),
             "FIXTURE_PREFIX_PLAYER_UNMOVED"
         );
-        assert_eq!(game.player.health, 4, "FIXTURE_PREFIX_NO_DAMAGE");
+        assert_eq!(game.player.health, 4.0, "FIXTURE_PREFIX_NO_DAMAGE");
         assert!(!game.player.is_stunned(), "FIXTURE_PREFIX_NOT_STUNNED");
         assert_eq!(game.player.held, None, "FIXTURE_PREFIX_EMPTY_HAND");
         assert_eq!(
@@ -298,7 +298,7 @@ fn ordinary_running_throw_wall_return_skips_recovery_on_the_rock_hurt_tick() {
                 ..Default::default()
             });
             if game.player.health < health {
-                assert_eq!(health - game.player.health, 2, "FIXTURE_ROCK_DAMAGE_TWO");
+                assert_eq!(health - game.player.health, 2.0, "FIXTURE_ROCK_DAMAGE_TWO");
                 assert!(
                     bounced && rock_before.vel.x < -4.0,
                     "FIXTURE_FAST_RETURNING_ROCK"
@@ -384,6 +384,9 @@ fn ordinary_running_throw_wall_return_skips_recovery_on_the_rock_hurt_tick() {
                 panic!("FIXTURE_ARROW_EARLY_RECOVERY_BEFORE_RETURN");
             }
         }
-        assert_eq!(game.player.health, 2, "FIXTURE_RETURN_MUST_REACH_ROCK_HURT");
+        assert_eq!(
+            game.player.health, 2.0,
+            "FIXTURE_RETURN_MUST_REACH_ROCK_HURT"
+        );
     }
 }

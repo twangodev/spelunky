@@ -104,7 +104,10 @@ fn free_resource_contact_creates_one_literal_icon_and_default_lifetime() {
                 let rng = game.rng.state_bits();
                 game.step(&InputFrame::default());
                 assert!(game.world.entity(stock).is_none());
-                assert_eq!((game.player.bombs, game.player.ropes), (bombs, ropes));
+                assert_eq!(
+                    (game.player.bombs, game.player.ropes),
+                    (f64::from(bombs), f64::from(ropes))
+                );
                 assert_eq!(game.player.held, None);
                 assert_eq!(pickup_sound_count(&game), 1);
                 let ids = popup_ids(&game);
@@ -130,7 +133,7 @@ fn free_resource_contact_creates_one_literal_icon_and_default_lifetime() {
                     "fortieth subsequent Alarm0 destroys display"
                 );
                 assert!(popup_ids(&game).is_empty());
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
             }
         }
     }
@@ -157,7 +160,7 @@ fn free_equipment_ordinary_pickup_uses_default_items_get_after_grant() {
                 assert_eq!(ids.len(), 1);
                 check_popup(&game, ids[0], pos, 14.0, "sItemGet");
                 assert_eq!(game.rng.state_bits(), rng);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
             }
         }
     }
@@ -183,7 +186,7 @@ fn dormant_rope_bag_alias_keeps_exactly_one_bomb_icon_control() {
             );
             pickup(&mut game);
             assert!(game.world.entity(stock).is_none());
-            assert_eq!((game.player.bombs, game.player.ropes), (7, 4));
+            assert_eq!((game.player.bombs, game.player.ropes), (7.0, 4.0));
             assert_eq!(game.player.held, None);
             let ids = popup_ids(&game);
             assert_eq!(
@@ -298,7 +301,7 @@ fn native_price_no_sale_prize_theft_creates_display_when_player_leaves_shop() {
                 "bounded ordinary walk must trigger existing held-price theft branch"
             );
             assert_eq!(game.player.money, 0);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(game.world.entity(keeper).unwrap().health, 20);
         }
     }
@@ -360,7 +363,7 @@ fn natural_back_slot_swaps_create_display_before_replacement_gear() {
                 assert_eq!(dropped[0].value("forSale"), 0.0);
                 assert!(!dropped[0].held);
                 assert_eq!(pickup_sound_count(&game), 1);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
             }
         }
     }
@@ -400,7 +403,7 @@ fn paid_weapon_and_damsel_branches_retain_hand_without_display_controls() {
                     "source weapon/Damsel popup lines are commented out"
                 );
                 assert_eq!(pickup_sound_count(&game), 1);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert_eq!(game.world.entity(keeper).unwrap().health, 20);
             }
         }
@@ -421,7 +424,7 @@ fn free_resource_auto_collection_preserves_a_naturally_held_rock() {
                 "SETUP: real Rock pickup before bag contact"
             );
             assert_eq!(game.player.pickup_item_type, "Rock");
-            assert_eq!(game.player.bombs, 4);
+            assert_eq!(game.player.bombs, 4.0);
             assert!(game.world.entity(bag).is_some());
             assert!(popup_ids(&game).is_empty());
             game.step(&InputFrame {
@@ -436,7 +439,7 @@ fn free_resource_auto_collection_preserves_a_naturally_held_rock() {
                     ..Default::default()
                 });
                 if game.world.entity(bag).is_none() {
-                    assert_eq!(game.player.bombs, 7);
+                    assert_eq!(game.player.bombs, 7.0);
                     assert_eq!(
                         game.player.held,
                         Some(rock),
@@ -458,7 +461,7 @@ fn free_resource_auto_collection_preserves_a_naturally_held_rock() {
                 witnessed,
                 "ordinary movement must enter adjacent free Bag contact"
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }

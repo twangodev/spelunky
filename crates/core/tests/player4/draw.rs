@@ -55,7 +55,7 @@ fn initial_stationary_bullet_uses_default_positive_scale_before_first_draw() {
         game.spawn("oBullet", bullet_position);
         game.step(&InputFrame::default());
         assert_eq!(
-            game.player.health, 4,
+            game.player.health, 4.0,
             "first Collision must use Create image_xscale=+1"
         );
         assert_eq!(
@@ -85,13 +85,13 @@ fn initial_stationary_bullet_hits_on_turn_using_preceding_draw_scale() {
         game.spawn("oBullet", bullet_position);
         game.step(&InputFrame::default());
         assert_eq!(
-            game.player.health, 4,
+            game.player.health, 4.0,
             "fixture must exclude the first-frame source mask"
         );
         game.step(&left);
         assert_eq!(game.player.facing, -1);
         assert_eq!(
-            game.player.health, 0,
+            game.player.health, 0.0,
             "turning Collision must retain preceding Draw's -1 scale"
         );
         assert_eq!(

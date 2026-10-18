@@ -19,7 +19,7 @@ fn setup(rules: RulesPreset, top: &str) -> Game {
 
 fn healthy_step(game: &mut Game, input: InputFrame) {
     game.step(&input);
-    assert_eq!(game.player.health, 4, "healthy ordinary authored route");
+    assert_eq!(game.player.health, 4.0, "healthy ordinary authored route");
     assert!(!game.player.is_stunned());
 }
 

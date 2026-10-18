@@ -44,7 +44,7 @@ fn ordinary_pistol_flash(rules: RulesPreset, left: bool) -> (Game, u64) {
         attack_pressed: true,
         ..Default::default()
     });
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.held, Some(gun));
     assert!(game.events.iter().any(|event| matches!(event,
         GameEvent::Sound { name, .. } if name == "sndShotgun")));

@@ -103,7 +103,7 @@ fn hit(game: &mut Game, down: bool) -> Vec<String> {
         if game.player.is_stunned() {
             assert_eq!(
                 game.player.health,
-                health - 2,
+                health - 2.0,
                 "real Arrow damage: {trace:#?}"
             );
             assert_eq!(game.player.stun, 20, "real Arrow stun: {trace:#?}");

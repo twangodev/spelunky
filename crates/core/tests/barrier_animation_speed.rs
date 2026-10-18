@@ -47,7 +47,7 @@ fn emitter_child_keeps_default_speed_and_source_draw_frames() {
             assert_eq!(child.image_speed(), 1.0);
             assert_eq!(game.world.entity(emitter).unwrap().image_speed(), 0.5);
             assert_eq!(game.state, RunState::Playing);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -81,6 +81,6 @@ fn normal_bullet_collision_still_destroys_emitter_and_child_once() {
                 .count(),
             1
         );
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }

@@ -351,7 +351,7 @@ pub fn arm_bomb_arrow(game: &mut Game) -> bool {
     {
         return true;
     }
-    if game.player.bombs <= 0 || super::player_dead(game) || game.player.is_stunned() {
+    if game.player.bombs <= 0.0 || super::player_dead(game) || game.player.is_stunned() {
         return true;
     }
     // Classic's bomb-arrow branch requires a bomb, but does not consume one.
@@ -647,13 +647,13 @@ fn hit_player(game: &mut Game, projectile: &mut Entity, damage: i32) {
         return;
     }
     // Classic projectile damage bypasses contact-damage invulnerability.
-    let damaged = game.player.health > 0;
+    let damaged = game.player.health > 0.0;
     if damaged {
         game.player.lose_health(damage);
     }
     if damaged
         && projectile.object == "oArrow"
-        && game.player.health <= 0
+        && game.player.health <= 0.0
         && crate::statistics::is_real_level(game)
     {
         game.lifetime_stats
@@ -661,7 +661,7 @@ fn hit_player(game: &mut Game, projectile: &mut Entity, damage: i32) {
     }
     if damaged
         && projectile.object == "oBullet"
-        && game.player.health <= 0
+        && game.player.health <= 0.0
         && crate::statistics::is_real_level(game)
     {
         game.lifetime_stats
@@ -750,11 +750,11 @@ fn rock_player_contact(game: &mut Game) {
         game.player.pickup_item_type = "Rock".into();
         game.world.entity_mut(id).unwrap().held = true;
     } else {
-        let damaged = game.player.health > 0;
+        let damaged = game.player.health > 0.0;
         if damaged {
             game.player.lose_health(2);
         }
-        if damaged && game.player.health <= 0 && crate::statistics::is_real_level(game) {
+        if damaged && game.player.health <= 0.0 && crate::statistics::is_real_level(game) {
             game.lifetime_stats
                 .misc_death(crate::statistics::MiscDeath::Rock);
         }
@@ -2118,11 +2118,11 @@ mod tests {
         let mut game = Game::shell(1, RulesPreset::Classic);
         game.player.pos = Vec2::new(88.0, 88.0);
         game.player.invincible = 50;
-        game.player.health = 8;
+        game.player.health = 8.0;
         let id = game.world.spawn("oBullet", Vec2::new(80.0, 88.0));
         game.world.entity_mut(id).unwrap().vel.x = 8.0;
         tick(&mut game);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.player.stun, 20);
         assert!(game.world.entity(id).is_none());
     }
@@ -2135,7 +2135,7 @@ mod tests {
         arrow.vel.x = 8.0;
         arrow.data.insert("safe".into(), 1.0);
         tick(&mut game);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.world.entity(id).unwrap().value("safe"), 1.0);
         assert_eq!(game.world.entity(id).unwrap().vel.y, 0.2);
     }
@@ -2231,7 +2231,7 @@ mod tests {
             game.step(&InputFrame::default());
             assert!(game.player.grounded);
             assert!(crate::player::source_grounded(&game.player));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
 
             let mut grounded = game.clone();
             grounded.step(&InputFrame {
@@ -2263,13 +2263,13 @@ mod tests {
                     assert!(crate::player::source_grounded(&game.player));
                     assert_eq!(game.player.attack_timer, 12);
                     assert_eq!(game.player.data["cantJump"], 20.0);
-                    assert_eq!(game.player.health, 4);
+                    assert_eq!(game.player.health, 4.0);
                     assert_eq!(game.world.entity(held).unwrap().value("hidden"), 1.0);
                     swung_at_edge = true;
                     break;
                 }
                 game = probe;
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
             }
             assert!(
                 swung_at_edge,
@@ -2370,7 +2370,7 @@ mod tests {
         assert!(game.player.data["bow_strength"] >= 12.0);
         assert!(arm_bomb_arrow(&mut game));
         assert!(arm_bomb_arrow(&mut game));
-        assert_eq!(game.player.bombs, 4);
+        assert_eq!(game.player.bombs, 4.0);
         for _ in 0..10 {
             pre_tick(&mut game);
             tick(&mut game);
@@ -2470,7 +2470,7 @@ mod tests {
             bomb_pressed: true,
             ..Default::default()
         });
-        assert_eq!(game.player.bombs, 4);
+        assert_eq!(game.player.bombs, 4.0);
         assert_eq!(game.player.data["bow_bomb_fuse"], 80.0);
         assert_eq!(
             game.player
@@ -2495,7 +2495,7 @@ mod tests {
             .unwrap();
         assert_eq!(arrow.alarms[1], 78);
         assert_eq!(game.player.data["bow_arrow_toggle"], 0.0);
-        assert_eq!(game.player.bombs, 4);
+        assert_eq!(game.player.bombs, 4.0);
     }
 
     #[test]
@@ -2804,7 +2804,7 @@ mod tests {
         let id = game.world.spawn("oArrow", Vec2::new(70.0, 88.0));
         game.world.entity_mut(id).unwrap().vel.x = 8.0;
         tick(&mut game);
-        assert_eq!(game.player.health, 2);
+        assert_eq!(game.player.health, 2.0);
         assert!(game.world.entity(id).is_none());
     }
     #[test]
@@ -3058,11 +3058,11 @@ mod tests {
         game.player.invincible = 60;
         for _ in 0..8 {
             game.step(&InputFrame::default());
-            if game.player.health < 4 {
+            if game.player.health < 4.0 {
                 break;
             }
         }
-        assert_eq!(game.player.health, 2);
+        assert_eq!(game.player.health, 2.0);
         assert_eq!(game.player.stun, 20);
         assert_eq!(game.player.vel.x, -8.0);
         assert_eq!(game.player.vel.y, -4.0);
@@ -3081,7 +3081,7 @@ mod tests {
                 break;
             }
         }
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.player.stun, 0);
         assert_eq!(game.player.held, Some(id));
         assert!(game.world.entity(id).unwrap().held);
@@ -3091,11 +3091,11 @@ mod tests {
         occupied.player.held = Some(held);
         for _ in 0..8 {
             occupied.step(&InputFrame::default());
-            if occupied.player.health < 4 {
+            if occupied.player.health < 4.0 {
                 break;
             }
         }
-        assert_eq!(occupied.player.health, 2);
+        assert_eq!(occupied.player.health, 2.0);
         assert!(occupied.player.held.is_none());
     }
 
@@ -3116,7 +3116,7 @@ mod tests {
                 for _ in 0..8 {
                     game.step(&InputFrame::default());
                 }
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert!(game.player.held.is_none());
             }
         }
@@ -3408,7 +3408,7 @@ mod tests {
                 let amount = if object == "oBullet" { 4 } else { 2 };
                 assert_eq!(
                     game.player.health,
-                    health - amount,
+                    health - f64::from(amount),
                     "{character:?} {object}"
                 );
                 assert_eq!(game.player.stun, 20, "{character:?} {object}");
@@ -3444,7 +3444,7 @@ mod tests {
         );
         game.world.entity_mut(rock).unwrap().vel.x = 8.0;
         game.step(&InputFrame::default());
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(game.player.held.is_none());
         assert!(!game.world.entity(rock).unwrap().held);
     }
@@ -3510,11 +3510,11 @@ mod tests {
     fn game_step_arrow_and_rock_statistics_only_record_lethal_real_level_damage() {
         for (object, index) in [("oArrow", 6), ("oRock", 0)] {
             for (room, health, exit, expected) in [
-                ("rLevel", 1, false, 1),
-                ("rLevel", 4, false, 0),
-                ("rTitle", 1, false, 0),
-                ("rLevel", 1, true, 0),
-                ("rLevel", 0, false, 0),
+                ("rLevel", 1.0, false, 1),
+                ("rLevel", 4.0, false, 0),
+                ("rTitle", 1.0, false, 0),
+                ("rLevel", 1.0, true, 0),
+                ("rLevel", 0.0, false, 0),
             ] {
                 let mut game = Game::shell(17, RulesPreset::Classic);
                 game.world.name = room.into();
@@ -3564,7 +3564,8 @@ mod tests {
 
     #[test]
     fn game_step_lethal_bullet_records_source_shopkeeper_death_without_misc_death() {
-        for (room, health, expected) in [("rLevel", 4, 1), ("rLevel", 8, 0), ("rTitle", 4, 0)] {
+        for (room, health, expected) in [("rLevel", 4.0, 1), ("rLevel", 8.0, 0), ("rTitle", 4.0, 0)]
+        {
             let mut game = Game::shell(19, RulesPreset::Classic);
             game.world.name = room.into();
             game.player.pos = Vec2::new(80.0, 80.0);
@@ -3590,17 +3591,17 @@ mod tests {
         game.step(&InputFrame::default());
         assert_eq!(game.world.entity(id).unwrap().pos.x, 68.0);
         assert_eq!(
-            game.player.health, 4,
+            game.player.health, 4.0,
             "entering the hurt query after Player Step waits until next Step"
         );
         game.step(&InputFrame::default());
         assert_eq!(game.world.entity(id).unwrap().pos.x, 76.0);
         assert_eq!(
-            game.player.health, 4,
+            game.player.health, 4.0,
             "source cached bbox ends at71; right+1 equals query min72, so it still misses"
         );
         game.step(&InputFrame::default());
-        assert_eq!(game.player.health, 2);
+        assert_eq!(game.player.health, 2.0);
         assert!(game.world.entity(id).is_none());
     }
 
@@ -3668,13 +3669,13 @@ mod bullet_character_source_tests {
     fn bullet_character_literal_health_exit_dead_flags_caps_rng_and_retirement() {
         for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
             for (health, dead, room) in [
-                (8, false, "rLevel"),
-                (4, false, "rLevel"),
-                (0, false, "rLevel"),
-                (-2, false, "rLevel"),
-                (8, true, "rLevel"),
-                (0, true, "rLevel"),
-                (4, false, "rTitle"),
+                (8.0, false, "rLevel"),
+                (4.0, false, "rLevel"),
+                (0.0, false, "rLevel"),
+                (-2.0, false, "rLevel"),
+                (8.0, true, "rLevel"),
+                (0.0, true, "rLevel"),
+                (4.0, false, "rTitle"),
             ] {
                 for sprite in ["sStandLeft", "sPExit", "sDamselExit", "sTunnelExit"] {
                     for count in [0, 15, 16, 31, 32] {
@@ -3748,10 +3749,10 @@ mod bullet_character_source_tests {
                                 assert_eq!(&blood.alarms[..3], &[1, 1, 5]);
                                 assert_eq!(blood.image_speed(), 0.3);
                             }
-                            let damaged = !exiting && health > 0;
+                            let damaged = !exiting && health > 0.0;
                             assert_eq!(
                                 game.player.health,
-                                if damaged { health - 4 } else { health }
+                                if damaged { health - 4.0 } else { health }
                             );
                             assert_eq!(
                                 game.player.vel,
@@ -3777,7 +3778,7 @@ mod bullet_character_source_tests {
                             );
                             assert_eq!(
                                 game.lifetime_stats.enemy_deaths[19],
-                                u64::from(damaged && health <= 4 && room == "rLevel")
+                                u64::from(damaged && health <= 4.0 && room == "rLevel")
                             );
                             assert_eq!(game.lifetime_stats.misc_deaths, [0; 12]);
                             assert_eq!(

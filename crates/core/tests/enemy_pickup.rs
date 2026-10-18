@@ -50,7 +50,7 @@ fn naturally_stunned(rules: RulesPreset) -> (Game, u64) {
         (2, 98),
         "ordinary whip must stun a living caveman"
     );
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.attack_timer, 0);
     assert_eq!(game.player.held, None);
     assert!(enemy.pos.distance(game.player.pos) < 12.0);
@@ -80,7 +80,7 @@ fn naturally_whipped_caveman_can_be_picked_up_carried_and_thrown() {
                 enemy.pos,
                 Vec2::new(game.player.pos.x - 4.0, game.player.pos.y - 12.0)
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
         assert!(game.player.pos.x > before + 12.0);
         let thrown_from = game.world.entity(id).unwrap().pos.x;
@@ -98,7 +98,7 @@ fn naturally_whipped_caveman_can_be_picked_up_carried_and_thrown() {
             game.step(&InputFrame::default());
         }
         assert!(game.world.entity(id).unwrap().pos.x > thrown_from + 20.0);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 

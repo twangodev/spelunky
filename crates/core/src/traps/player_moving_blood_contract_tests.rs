@@ -57,7 +57,7 @@ fn player_crush_callback_creates_blood_before_return_and_honors_nonzero_bloodles
                 assert_eq!(particle.value("world_effect_initialized"), 1.0);
             }
             assert_eq!(g.rng.clone().next_u64(), oracle.next_u64());
-            assert_eq!(g.player.health, -95);
+            assert_eq!(g.player.health, -95.0);
             assert_eq!(g.player.data.get("hidden"), Some(&1.0));
             assert!(
                 g.events
@@ -98,6 +98,6 @@ fn actual_default_smash_overlap_runs_crush_blood_before_smash_velocity_draw() {
         }
         assert_eq!(g.player.vel.x, speed);
         assert_eq!(g.rng.clone().next_u64(), oracle.next_u64());
-        assert_eq!(g.player.health, 0);
+        assert_eq!(g.player.health, 0.0);
     }
 }

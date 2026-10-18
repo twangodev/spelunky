@@ -81,7 +81,7 @@ fn naturally_fired_web_ball_expands_on_water_descendants_before_life_expiry() {
             }
             assert_eq!(expanded, !liquid.is_empty(), "{liquid}/{rules:?}");
             assert_eq!(
-                game.player.health, 4,
+                game.player.health, 4.0,
                 "player stays above the left retaining wall"
             );
             if expanded {

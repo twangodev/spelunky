@@ -117,7 +117,7 @@ fn ordinary_priced_pistol_pickup_then_jump_stops_following_keeper() {
             }
         }
         assert!(stopped, "ordinary jump must cross above the keeper origin");
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(g.player.held, Some(pistol));
         assert_eq!(g.world.entity(keeper).unwrap().health, 20);
         assert!(!g.flags.contains("wanted"));
@@ -159,6 +159,6 @@ fn ordinary_damsel_fall_stains_tile_spikes_without_run_kill_credit() {
         assert_eq!(g.world.tile(6, 8).unwrap().creation_serial, serial);
         assert_eq!(g.lifetime_stats.damsels_killed_total, 1);
         assert_eq!(g.data.get("kills").copied().unwrap_or(0.0), 0.0);
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
     }
 }

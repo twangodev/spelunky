@@ -31,7 +31,7 @@ fn healthy(game: &Game, boss: u64) {
     );
     assert_eq!(
         game.player.health,
-        4,
+        4.0,
         "NATURAL_HEALTH_PREREQUISITE player={:?}/{:?} boss={:?}/{:?}/{} carry={}",
         game.player.pos,
         game.player.vel,

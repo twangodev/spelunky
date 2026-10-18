@@ -86,7 +86,7 @@ fn check_first_step(roof: bool, wall: bool, expected_y_velocity: f64) {
             ));
             assert_eq!(game.world.solid_at(expected_x + 16.0, 144.0), wall);
             assert!(!game.world.solid_at(expected_x + 8.0, 152.0));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert!(game.player.held.is_none());
             assert!(!game.world.entities.iter().any(|e| e.object == "oBlood"));
             assert_eq!(game.rng.clone().next_u64(), expected_rng.next_u64());

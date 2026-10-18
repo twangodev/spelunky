@@ -175,7 +175,7 @@ fn drive_to_dig(s: &mut Scene) -> Rng {
                     >= catalog::sprite_frame_count(&hit.sprite) as f64
             );
             assert!(s.game.world.entity(hit.id).is_none());
-            assert_eq!(s.game.player.health, 4);
+            assert_eq!(s.game.player.health, 4.0);
             let inactive = s.game.world.entity(s.inactive).unwrap();
             assert!(!inactive.engine_active);
             assert_eq!(inactive.state, 0);

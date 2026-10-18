@@ -18,7 +18,7 @@ fn authored_moon_alarm_zero_starts_countdown_in_its_same_alarm_pass() {
         assert_eq!(game.level_tick, 100);
         assert_eq!(game.data["timer"], 59.0, "{rules:?}");
         assert_eq!(game.state, RunState::Playing);
-        assert_eq!(game.player.health, 8);
+        assert_eq!(game.player.health, 8.0);
     }
 }
 
@@ -32,7 +32,7 @@ fn authored_moon_living_timeout_reveals_then_returns_through_real_scores_portal(
         for _ in 0..1900 {
             game.step(&InputFrame::default());
             assert_eq!(game.state, RunState::Playing, "{rules:?}");
-            assert_eq!(game.player.health, 8);
+            assert_eq!(game.player.health, 8.0);
             if game.data["timer"] < 0.0 {
                 break;
             }

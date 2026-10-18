@@ -431,7 +431,7 @@ mod tests {
             assert!(!game.events.iter().any(|event|matches!(event,GameEvent::Dialogue(message) if message.first.starts_with("WELCOME"))));
         }
         assert!(game.player.pos.x < entry.x);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 
     #[test]

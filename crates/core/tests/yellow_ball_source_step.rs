@@ -22,7 +22,7 @@ fn room(rules: RulesPreset, velocity: Vec2) -> (Game, u64) {
 
 fn healthy(game: &Game) {
     assert_eq!(game.state, RunState::Playing);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(!game.player.is_stunned());
 }
 

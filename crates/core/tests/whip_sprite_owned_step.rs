@@ -60,7 +60,7 @@ fn sprite_owned_front_and_rear_hitboxes_ignore_default_facing_and_ground_jar_use
             );
             assert_eq!(target.sprite, sprite);
             assert!(game.player.attack_timer > 0);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             if let Some(jar) = jar {
                 assert!(
                     game.world.entity(jar).is_none(),
@@ -85,7 +85,7 @@ fn unrelated_sprite_keeps_position_because_neither_source_alignment_branch_match
             let target = game.world.entity(whip).unwrap();
             assert_eq!(target.pos, Vec2::new(240.0, 100.0));
             assert_eq!(target.sprite, "sBasketball");
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -104,7 +104,7 @@ fn inactive_player_is_not_an_instance_exists_owner_for_an_active_whip_event() {
                 game.world.entity(whip).is_none(),
                 "source instance_exists owner gate retires hitbox"
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -147,7 +147,7 @@ fn ordinary_attack_producer_keeps_both_directions_source_consistent() {
                     forward |= entity.object == "oWhip";
                     rear |= entity.object == "oWhipPre";
                 }
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
             }
             assert!(
                 forward && rear,
@@ -171,7 +171,7 @@ fn inactive_controls_do_not_remove_an_engine_active_whip_owner() {
                 game.world.entity(whip).is_some(),
                 "input inactive is not instance_exists=false"
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }

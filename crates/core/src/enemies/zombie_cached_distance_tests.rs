@@ -92,7 +92,7 @@ fn zombie_distance_uses_active_player1_family_without_a_dead_receiver_gate() {
             // predicate: original distance_to_object still sees the corpse.
             let (mut g, mut e) = fixture(rules, legacy, 47.0, 5);
             e.alive = false;
-            g.player.health = -99;
+            g.player.health = -99.0;
             g.player.state = PlayerState::Dead;
             let rng = g.rng.state_bits();
             zombie(&mut g, &mut e);

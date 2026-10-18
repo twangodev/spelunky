@@ -9,7 +9,7 @@ fn value(game: &Game, key: &str) -> f64 {
 
 fn live_fall(game: &Game) {
     assert_eq!(game.state, RunState::Playing);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(!game.player.is_stunned());
     assert_eq!(game.player.state, PlayerState::Falling);
     assert!(!game.player.grounded);
@@ -42,7 +42,7 @@ fn acquire_grounded(game: &mut Game, cape: u64) {
         game.step(&InputFrame::default());
     }
     assert_eq!(game.state, RunState::Playing);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.pos, Vec2::new(136.0, 88.0));
     assert!(game.player.grounded);
     assert_eq!(game.world.entity(cape).unwrap().value("cost"), 0.0);
@@ -68,7 +68,7 @@ fn acquire_grounded(game: &mut Game, cape: u64) {
     assert!(game.player.grounded);
     game.step(&InputFrame::default());
     assert!(game.player.grounded);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
 }
 
 #[test]

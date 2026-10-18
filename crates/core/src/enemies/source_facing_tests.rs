@@ -44,7 +44,7 @@ fn natural_scarab_spring_uses_inherited_left() {
         let spring = game.world.entity(spring).unwrap();
         assert_eq!((spring.state, spring.timer), (1, 10));
         assert_eq!(boings(&game), 1);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 
@@ -71,7 +71,7 @@ fn natural_spider_spring_uses_inherited_left() {
             game.step(&crate::InputFrame::default());
             let spider = game.world.entity(spider).unwrap();
             assert_eq!(spider.health, 1);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             if let Some(spring) = spring {
                 assert_eq!(spider.pos, Vec2::new(96.0, 131.0));
                 assert_eq!(spider.vel, Vec2::new(-2.0, -8.0));
@@ -114,7 +114,7 @@ fn natural_snake_spring_uses_step_facing_after_its_right_create() {
             assert_eq!(snake.vel, Vec2::new(expected_x_vel, -8.0));
             assert_eq!(game.world.entity(spring).unwrap().state, 1);
             assert_eq!(boings(&game), 1);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             let next = first.wrapping_mul(0x0808_8405).wrapping_add(1);
             assert_eq!(game.rng.clone().next_u64(), u64::from(next));
         }
@@ -165,7 +165,7 @@ fn natural_fish_swimming_directions_remain_independent_of_inherited_left() {
             let fish = game.world.entity(fish).unwrap();
             assert_eq!(fish.pos, Vec2::new(96.0 + delta, 96.0), "{object}");
             assert_eq!(fish.state, 0, "{object}");
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }

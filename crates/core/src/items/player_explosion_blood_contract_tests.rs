@@ -60,7 +60,7 @@ fn actual_fire_frog_bomb_alarm_creates_player_blood_after_velocity_rng() {
                     .count(),
                 3
             );
-            assert_eq!(g.player.health, 0);
+            assert_eq!(g.player.health, 0.0);
             assert_eq!(g.player.data.get("bounced"), Some(&1.0));
             let mut oracle = before.rng.clone();
             // Literal own FireFrogBomb Alarm1: three Blood then three Flame;
@@ -111,7 +111,7 @@ fn naturally_explosion_killed_player_still_receives_source_explosion_callback() 
         }
         assert!(reached);
         assert_eq!(g.state, crate::RunState::Dead);
-        assert_eq!(g.player.health, 0);
+        assert_eq!(g.player.health, 0.0);
         // Supplemental callback-context witness preserves the naturally born,
         // still-overlapping blast and stops before later corpse movement.
         let mut callback = g.clone();
@@ -123,7 +123,7 @@ fn naturally_explosion_killed_player_still_receives_source_explosion_callback() 
         }
         super::player_explosion_hurt(&mut callback);
         assert_eq!(
-            callback.player.health, -10,
+            callback.player.health, -10.0,
             "source Explosion has no dead guard"
         );
         assert_eq!(callback.player.vel.x.abs(), speed);

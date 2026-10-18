@@ -70,7 +70,7 @@ fn source_admitted(game: &Game, id: u64, jaws: bool) {
         assert!(actor.pos.x > view.x - 48.0 && actor.pos.x < view.x + view.w + 48.0);
         assert!(actor.pos.y > view.y - 48.0 && actor.pos.y < view.y + view.h + 48.0);
     }
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.stun, 0);
     assert_eq!(game.player.state, PlayerState::Standing);
     assert_eq!(game.player.vel, Vec2::default());

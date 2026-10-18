@@ -134,7 +134,7 @@ fn admitted(game: &Game, lava: u64, bat: u64) {
     let view = game.simulation_view_rect();
     assert!(b.pos.x > view.x - 20.0 && b.pos.x < view.x + view.w + 4.0);
     assert!(b.pos.y > view.y - 20.0 && b.pos.y < view.y + view.h + 4.0);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.stun, 0);
     assert_eq!(game.player.state, PlayerState::Standing);
     assert_eq!(game.player.vel, Vec2::default());

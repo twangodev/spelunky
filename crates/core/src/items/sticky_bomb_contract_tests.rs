@@ -76,7 +76,7 @@ fn actual_bomb_input_enemy_contact_selects_nearest_all_enemy_before_damsel() {
                 bomb as f64
             );
             assert_eq!(g.world.entity(damsel).unwrap().value("bomb_id"), 0.0);
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
         }
     }
 }
@@ -162,7 +162,7 @@ fn actual_two_bomb_inputs_keep_both_attached_and_older_alarm_clears_latest_backl
             0.0,
             "older Bomb Destroy clears bombID unconditionally, despite newer backlink"
         );
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
     }
 }
 
@@ -219,7 +219,7 @@ fn actual_pistol_pickup_and_attack_destroys_attached_receiver_and_releases_bombs
         for bomb in [first, second] {
             assert_eq!(g.world.entity(bomb).unwrap().value("attached_id"), 0.0);
         }
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
     }
 }
 
@@ -296,7 +296,7 @@ fn actual_teleporter_pickup_and_activation_destroy_sticky_receiver() {
             });
         }
         assert!(g.player.pos.x <= 24.0);
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert!(g.world.entity(receiver).is_some());
         assert!(
             g.world.entity(bomb).is_some(),
@@ -352,6 +352,6 @@ fn actual_teleporter_pickup_and_activation_destroy_sticky_receiver() {
             "normal Teleporter activation telefrags the Bat"
         );
         assert_eq!(g.world.entity(bomb).unwrap().value("attached_id"), 0.0);
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
     }
 }

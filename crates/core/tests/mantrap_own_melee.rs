@@ -66,7 +66,7 @@ fn first_hit(rear: bool, weapon: Option<&str>, expected_attack: &str, damage: i3
             ..Default::default()
         });
         assert_eq!(
-            game.player.health, 4,
+            game.player.health, 4.0,
             "NO_BODY_CONTACT_HIDING_MELEE tick={tick}"
         );
         if pickup {
@@ -165,7 +165,7 @@ fn naturally_stunned_mantrap_ignores_remaining_plain_whip_collision_frames() {
                 leaves(&game).iter().map(|e| e.id).collect::<Vec<_>>(),
                 first_ids
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }

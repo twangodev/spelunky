@@ -139,7 +139,7 @@ fn admitted(game: &Game, lava: u64, frog: u64) {
     assert_eq!(f.value("burning"), 0.0);
     assert_eq!(f.value("swimming"), 0.0);
     assert_eq!(f.value("inactive"), 0.0);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.stun, 0);
     assert_eq!(game.player.state, PlayerState::Standing);
     assert!(game.player.held.is_none());
@@ -226,7 +226,7 @@ fn run_case(rules: RulesPreset, canonical: bool, top: bool) {
         })
         .collect();
     game.step(&InputFrame::default());
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.stun, 0);
     let born: Vec<_> = game
         .world

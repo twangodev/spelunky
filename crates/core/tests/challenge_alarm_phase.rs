@@ -196,7 +196,7 @@ fn pending_sun_score_fires_before_player_step_observes_fatal_life() {
     let mut game = unlocked_portal(83, RulesPreset::Classic, HubKind::Sun);
     // Source-valid boundary after damage wrote global life, before Player's
     // Step has set dead. The alarm predicate is dead, not global life > 0.
-    game.player.health = 0;
+    game.player.health = 0.0;
     game.data.insert("hub_alarm11".into(), 1.0);
     game.step(&InputFrame::default());
     assert_eq!(game.state, RunState::Dead);

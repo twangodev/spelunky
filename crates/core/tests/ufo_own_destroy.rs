@@ -71,7 +71,7 @@ fn alert_case(legacy: bool) {
         assert_eq!(births(&game, "oUFOCrash").len(), 1);
         assert_eq!(sounds(&game, "sndAlien"), 1, "POST_DESTROY_ALERT_SOUND");
         assert_eq!(game.rng.state_bits(), rng, "NO_UFO_OWN_TAIL_RNG");
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 fn charge_case(legacy: bool) {
@@ -90,7 +90,7 @@ fn charge_case(legacy: bool) {
             "DESTROY_TO_BLAST_IS_NOT_SAME_BRANCH"
         );
         assert_eq!(sounds(&game, "sndAlien"), 0);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 fn blast_case(legacy: bool, frame: f64, dead: bool) {
@@ -126,7 +126,7 @@ fn blast_case(legacy: bool, frame: f64, dead: bool) {
             assert_eq!(laser.alarms[0], 1, "NEWBORN_MISSED_ALARM_PASS");
             assert_eq!(laser.vel, Vec2::new(0.0, 0.6));
         }
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 fn ordinary_whip_case(legacy: bool) {
@@ -189,7 +189,7 @@ fn ordinary_whip_case(legacy: bool) {
         assert_eq!(ufo.health, 0, "ORDINARY_WHIP_FATAL_HP");
         assert_eq!(ufo.state, 2);
         assert_eq!(ufo.animation, 16.0, "LITERAL_IMAGE_INDEX_ELIGIBILITY");
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(births(&game, "oLaser").is_empty());
         assert!(births(&game, "oUFOCrash").is_empty());
         game.step(&InputFrame::default());
@@ -202,7 +202,7 @@ fn ordinary_whip_case(legacy: bool) {
             "ORDINARY_FATAL_WHIP_STILL_FIRES_FRAME16"
         );
         assert_eq!(births(&game, "oLaser").len(), 1);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(
             game.world
                 .tiles

@@ -733,10 +733,10 @@ fn player_actions(game: &mut Game, input: &InputFrame) {
             if input.cycle_pressed {
                 explosives::cycle_inventory(game);
                 true
-            } else if input.rope_pressed && game.player.ropes > 0 {
+            } else if input.rope_pressed && game.player.ropes > 0.0 {
                 explosives::use_rope(game, input);
                 true
-            } else if input.bomb_pressed && game.player.bombs > 0 {
+            } else if input.bomb_pressed && game.player.bombs > 0.0 {
                 if !weapons::arm_bomb_arrow(game) {
                     explosives::use_bomb(game, input);
                 }
@@ -1980,7 +1980,7 @@ mod tests {
         }
     }
 
-    fn reservation_fixture(bombs: i32) -> (Game, u64) {
+    fn reservation_fixture(bombs: f64) -> (Game, u64) {
         let mut game = game();
         game.world = World::new(30, 20, Area::Mines, 1);
         game.world.name = "rLevel".into();
@@ -1993,7 +1993,7 @@ mod tests {
         game.player.grounded = true;
         game.player.facing = 1;
         game.player.bombs = bombs;
-        game.player.ropes = 4;
+        game.player.ropes = 4.0;
         let rock = game.spawn("oRock", game.player.pos);
         game.step(&InputFrame {
             down: true,
@@ -2674,7 +2674,7 @@ mod tests {
         game.player.pos = Vec2::new(40.0, 56.0);
         game.player.state = PlayerState::Dead;
         game.state = RunState::Dead;
-        game.player.health = 1;
+        game.player.health = 1.0;
         game.world.spawn("oRock", Vec2::new(40.0, 60.0));
         game.world.spawn("oGoldNugget", Vec2::new(40.0, 56.0));
         let before = (game.player.bombs, game.player.ropes);
@@ -2999,7 +2999,7 @@ mod tests {
         assert_eq!(game.player.attack_timer, 0);
         assert!(!game.player.data.contains_key("character_attack_active"));
         assert!(game.player.held.is_none());
-        assert_eq!((game.player.bombs, game.player.ropes), (0, 0));
+        assert_eq!((game.player.bombs, game.player.ropes), (0.0, 0.0));
     }
 
     #[test]
@@ -3172,13 +3172,13 @@ mod tests {
         assert_eq!(fresh.value("new"), 0.0);
         assert_eq!(game.player.pickup_item_type, "Rock");
         assert!(!game.world.entity(bomb).unwrap().held);
-        assert_eq!(game.player.bombs, 3);
+        assert_eq!(game.player.bombs, 3.0);
         assert_eq!(fresh.value("stashed"), 0.0);
     }
 
     #[test]
     fn game_step_throwing_reserved_bomb_restores_the_picked_up_item() {
-        let (mut game, old_rock) = reservation_fixture(4);
+        let (mut game, old_rock) = reservation_fixture(4.0);
         game.step(&InputFrame {
             cycle_pressed: true,
             ..InputFrame::default()
@@ -3187,7 +3187,7 @@ mod tests {
         assert!(game.world.entity(old_rock).is_none());
         assert_eq!(game.world.entity(bomb).unwrap().object, "oBomb");
         assert_eq!(game.player.pickup_item_type, "Rock");
-        assert_eq!(game.player.bombs, 3);
+        assert_eq!(game.player.bombs, 3.0);
 
         game.step(&InputFrame {
             attack_pressed: true,
@@ -3209,13 +3209,13 @@ mod tests {
         assert_eq!(game.world.entity(restored).unwrap().object, "oRock");
         assert!(game.world.entity(restored).unwrap().held);
         assert_eq!(game.player.pickup_item_type, "Rock");
-        assert_eq!(game.player.bombs, 3);
+        assert_eq!(game.player.bombs, 3.0);
         assert!(game.world.entity(bomb).is_some_and(|entity| !entity.held));
     }
 
     #[test]
     fn game_step_using_reserved_rope_restores_the_picked_up_item_once() {
-        let (mut game, old_rock) = reservation_fixture(0);
+        let (mut game, old_rock) = reservation_fixture(0.0);
         game.step(&InputFrame {
             cycle_pressed: true,
             ..InputFrame::default()
@@ -3224,7 +3224,7 @@ mod tests {
         assert!(game.world.entity(old_rock).is_none());
         assert_eq!(game.world.entity(rope).unwrap().object, "oRopeThrow");
         assert_eq!(game.player.pickup_item_type, "Rock");
-        assert_eq!(game.player.ropes, 3);
+        assert_eq!(game.player.ropes, 3.0);
 
         game.step(&InputFrame {
             attack_pressed: true,
@@ -3239,7 +3239,10 @@ mod tests {
         assert_eq!(launched.value("armed"), 1.0);
         assert_eq!(launched.value("px"), game.player.pos.x);
         assert_eq!(launched.value("py"), game.player.pos.y);
-        assert_eq!(game.player.ropes, 3, "reservation spends exactly one rope");
+        assert_eq!(
+            game.player.ropes, 3.0,
+            "reservation spends exactly one rope"
+        );
         let restored = game.player.held.unwrap();
         assert_ne!(
             restored, old_rock,

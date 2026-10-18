@@ -221,7 +221,7 @@ fn ordinary_pistol_case(mode: Mode) {
                     attack_pressed: fire,
                     ..Default::default()
                 });
-                assert!(game.player.health > 0, "NATURAL_CONTROLLER_SURVIVES");
+                assert!(game.player.health > 0.0, "NATURAL_CONTROLLER_SURVIVES");
                 let actor = game
                     .world
                     .entity(id)
@@ -347,7 +347,10 @@ fn ordinary_lava_landing_case(mode: Mode) {
             0.0,
             "SOURCE_LAVA_DISALLOWS_KILL_CREDIT"
         );
-        assert_eq!(game.player.health, 4, "PLAYER_STAYS_CLEAR_OF_AUTHORED_LAVA");
+        assert_eq!(
+            game.player.health, 4.0,
+            "PLAYER_STAYS_CLEAR_OF_AUTHORED_LAVA"
+        );
     }
 }
 #[test]

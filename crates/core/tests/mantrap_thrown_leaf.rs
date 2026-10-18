@@ -68,7 +68,7 @@ fn first_hit(preset: RulesPreset, object: &str) {
             ..Default::default()
         });
         assert_eq!(game.player.held, None, "ORDINARY_THROW_RELEASED_ROCK");
-        assert_eq!(game.player.health, 4, "NO_UNRELATED_PLAYER_CONTACT");
+        assert_eq!(game.player.health, 4.0, "NO_UNRELATED_PLAYER_CONTACT");
         assert!(
             !game
                 .world

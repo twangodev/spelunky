@@ -210,7 +210,7 @@ fn shoot_until(game: &mut Game, king: u64, fatal: bool, yelling: bool) -> usize 
         }
         if (fatal && actor.health <= 0) || (!fatal && hits == 1) {
             assert!(
-                game.player.health > 0,
+                game.player.health > 0.0,
                 "ordinary player controller remains live"
             );
             assert!(

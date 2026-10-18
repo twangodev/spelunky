@@ -102,7 +102,7 @@ fn empty_hand_releases_parent_and_dice_after_attachment_without_unheld_motion() 
                 1.0,
                 "held branch retains this Step's depth"
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -132,7 +132,7 @@ fn linked_parent_and_replacement_fragile_held_branches_remain_held() {
                 // the item's own Step; orphan Jar/Skull keep their depth.
                 assert_eq!(item.value("depth"), if linked { 0.0 } else { 1.0 });
                 assert_eq!(game.player.held, linked.then_some(id));
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
             }
         }
     }

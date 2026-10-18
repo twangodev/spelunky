@@ -246,19 +246,19 @@ pub fn grant(game: &mut Game, id: u64) -> bool {
     }
     let message = match object.as_str() {
         "oBombBag" => {
-            game.player.bombs += 3;
+            game.player.bombs += 3.0;
             "YOU GOT 3 MORE BOMBS!"
         }
         "oRopeBag" => {
-            game.player.bombs += 3;
+            game.player.bombs += 3.0;
             "YOU GOT 3 MORE BOMBS!"
         }
         "oBombBox" => {
-            game.player.bombs += 12;
+            game.player.bombs += 12.0;
             "YOU GOT 12 MORE BOMBS!"
         }
         "oRopePile" => {
-            game.player.ropes += 3;
+            game.player.ropes += 3.0;
             "YOU GOT 3 MORE ROPES!"
         }
         _ => {
@@ -865,7 +865,7 @@ mod tests {
             .data
             .insert("forSale".into(), 1.);
         tick(&mut g);
-        assert_eq!(g.player.bombs, 4);
+        assert_eq!(g.player.bombs, 4.0);
         assert!(g.world.entity(stock).is_some());
         g.world
             .entity_mut(stock)
@@ -880,10 +880,10 @@ mod tests {
             .insert("cost".into(), 0.);
         g.world.set_tile(2, 2, "oBlock");
         tick(&mut g);
-        assert_eq!(g.player.bombs, 4);
+        assert_eq!(g.player.bombs, 4.0);
         g.world.set_tile(2, 2, "");
         tick(&mut g);
-        assert_eq!(g.player.bombs, 7);
+        assert_eq!(g.player.bombs, 7.0);
         assert!(g.world.entity(stock).is_none());
     }
 
@@ -1209,11 +1209,11 @@ mod tests {
         let block = g.spawn("oPushBlock", Vec2::new(48., 32.));
         let bag = g.spawn("oBombBag", Vec2::new(54., 40.));
         g.step(&InputFrame::default());
-        assert_eq!(g.player.bombs, 4);
+        assert_eq!(g.player.bombs, 4.0);
         assert!(g.world.entity(bag).is_some());
         g.world.entity_mut(block).unwrap().alive = false;
         g.step(&InputFrame::default());
-        assert_eq!(g.player.bombs, 7);
+        assert_eq!(g.player.bombs, 7.0);
         assert!(g.world.entity(bag).is_none());
     }
 
@@ -1392,7 +1392,7 @@ mod tests {
             .insert("forSale".into(), 1.);
         let second = g.spawn("oBombBag", g.player.pos);
         g.step(&InputFrame::default());
-        assert_eq!(g.player.bombs, 4);
+        assert_eq!(g.player.bombs, 4.0);
         assert!(g.world.entity(first).is_some());
         assert!(g.world.entity(second).is_some());
         g.world
@@ -1401,7 +1401,7 @@ mod tests {
             .data
             .insert("forSale".into(), 0.);
         g.step(&InputFrame::default());
-        assert_eq!(g.player.bombs, 7);
+        assert_eq!(g.player.bombs, 7.0);
         assert!(g.world.entity(first).is_none());
         assert!(g.world.entity(second).is_some());
     }

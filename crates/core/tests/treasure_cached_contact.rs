@@ -16,7 +16,7 @@ fn room(rules: RulesPreset) -> Game {
     }
     assert_eq!(game.player.pos, Vec2::new(104.0, 120.0));
     assert!(game.player.grounded);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(!game.player.is_stunned());
     game
 }
@@ -51,7 +51,7 @@ fn authored_fractional_gold_touch_uses_cached_integer_bbox_and_complete_accounti
             let before_rng = game.rng.state_bits();
             game.step(&InputFrame::default());
             assert_eq!(game.player.pos, Vec2::new(104.0, 120.0));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert!(!game.player.is_stunned());
             assert_eq!(game.rng.state_bits(), before_rng);
             assert_eq!(

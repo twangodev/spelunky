@@ -304,7 +304,7 @@ fn ordinary_pistol_pause_zero_case(mode: Mode) {
         assert_eq!(count(&game, "oFishBone"), 0);
         assert_eq!(game.data.get("deadfish"), Some(&1.0));
         assert_eq!(game.data.get("kills"), Some(&1.0));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(
             game.rng.state_bits(),
             expected.state,

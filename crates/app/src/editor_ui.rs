@@ -27,8 +27,13 @@ pub enum EditorCommand {
     Save { name: String, text: String },
     Export { name: String, text: String },
     Import,
-    Play(Level),
+    Play(EditorPlay),
     Back,
+}
+
+pub struct EditorPlay {
+    pub level: Level,
+    pub starting_inventory: [f64; 3],
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -91,7 +96,8 @@ pub struct EditorUi {
     new_pressed: bool,
     pointer_left: bool,
     status: String,
-    play_snapshot: Option<Level>,
+    play_snapshot: Option<(Level, [String; 3])>,
+    starting_inventory: [String; 3],
     pointer_sample: Option<(f32, f32, bool, bool)>,
 }
 
@@ -124,12 +130,14 @@ impl EditorUi {
             pointer_left: false,
             status: "PAINT: LEFT   ERASE: RIGHT   ARROWS: PAN".into(),
             play_snapshot: None,
+            starting_inventory: ["4".into(), "4".into(), "4".into()],
             pointer_sample: None,
         }
     }
 
     pub fn load(&mut self, name: &str, source: &str) -> Result<(), String> {
         let level = Level::parse(source)?;
+        let starting_inventory = raw_starting_inventory(source)?;
         let name = file_name(name)?;
         let mut state = EditorState::with_source_rng(
             level,
@@ -139,6 +147,7 @@ impl EditorUi {
         state.set_palette_progress(self.palette_progress);
         self.state = state;
         self.name = name;
+        self.starting_inventory = starting_inventory;
         self.entry = None;
         self.confirmation = None;
         self.new_pressed = false;
@@ -196,7 +205,7 @@ impl EditorUi {
             return match key {
                 KeyCode::KeyY => EditorCommand::Save {
                     name: self.name.clone(),
-                    text: self.state.document().to_text(),
+                    text: self.document_text(),
                 },
                 KeyCode::KeyN => self.complete_confirmation(),
                 KeyCode::Escape if confirmation == Confirmation::Exit => {
@@ -276,13 +285,13 @@ impl EditorUi {
                 KeyCode::KeyS => {
                     return EditorCommand::Save {
                         name: self.name.clone(),
-                        text: self.state.document().to_text(),
+                        text: self.document_text(),
                     };
                 }
                 KeyCode::KeyE => {
                     return EditorCommand::Export {
                         name: self.name.clone(),
-                        text: self.state.document().to_text(),
+                        text: self.document_text(),
                     };
                 }
                 KeyCode::KeyI | KeyCode::KeyO => return EditorCommand::Import,
@@ -395,8 +404,35 @@ impl EditorUi {
 
     fn playtest(&mut self) -> EditorCommand {
         let document = self.state.document();
-        self.play_snapshot = Some(document.clone());
-        EditorCommand::Play(document)
+        let starting_inventory = self.starting_inventory_values();
+        self.play_snapshot = Some((document.clone(), self.starting_inventory.clone()));
+        EditorCommand::Play(EditorPlay {
+            level: document,
+            starting_inventory,
+        })
+    }
+
+    fn document_text(&self) -> String {
+        let mut lines: Vec<String> = self
+            .state
+            .document()
+            .to_text()
+            .split('\n')
+            .map(str::to_owned)
+            .collect();
+        for (index, value) in self.starting_inventory.iter().enumerate() {
+            lines[34 + index] = value.clone();
+        }
+        lines.join("\n")
+    }
+
+    fn starting_inventory_values(&self) -> [f64; 3] {
+        std::array::from_fn(|index| {
+            self.starting_inventory[index]
+                .trim()
+                .parse::<f64>()
+                .expect("parsed custom level inventory is finite")
+        })
     }
 
     pub fn can_playtest_action(&self) -> bool {
@@ -455,9 +491,9 @@ impl EditorUi {
         let (field, value) = match self.metadata_index {
             0 => (Field::Author, level.author.clone()),
             1 => (Field::Music, level.music.clone()),
-            2 => (Field::Life, level.starting_life.to_string()),
-            3 => (Field::Bombs, level.starting_bombs.to_string()),
-            4 => (Field::Ropes, level.starting_ropes.to_string()),
+            2 => (Field::Life, self.starting_inventory[0].clone()),
+            3 => (Field::Bombs, self.starting_inventory[1].clone()),
+            4 => (Field::Ropes, self.starting_inventory[2].clone()),
             _ => (Field::Next, level.next_level.clone()),
         };
         self.begin(field, value);
@@ -494,7 +530,7 @@ impl EditorUi {
     /// The authored editor room is recreated from test.tmp on actual return.
     /// Focus changes only cancel input and must not recreate preview objects.
     pub fn return_from_playtest(&mut self) {
-        if let Some(document) = self.play_snapshot.take() {
+        if let Some((document, starting_inventory)) = self.play_snapshot.take() {
             let mut state = EditorState::with_source_rng(
                 document,
                 PreviewContext::default(),
@@ -502,6 +538,7 @@ impl EditorUi {
             );
             state.set_palette_progress(self.palette_progress);
             self.state = state;
+            self.starting_inventory = starting_inventory;
             self.entry = None;
             self.confirmation = None;
             self.cursor = None;
@@ -544,26 +581,33 @@ impl EditorUi {
                             Ok(())
                         }
                     }
-                    Field::Life | Field::Bombs | Field::Ropes => entry
-                        .value
-                        .trim()
-                        .parse::<f64>()
-                        .map_err(|_| "ENTER A NUMBER".to_owned())
-                        .and_then(|value| {
-                            if !value.is_finite() {
-                                return Err("ENTER A FINITE NUMBER".to_owned());
+                    Field::Life | Field::Bombs | Field::Ropes => {
+                        match entry.value.trim().parse::<f64>() {
+                            Err(_) => Err("ENTER A NUMBER".to_owned()),
+                            Ok(value) if !value.is_finite() => {
+                                Err("ENTER A FINITE NUMBER".to_owned())
                             }
-                            let minimum = if matches!(field, Field::Life) { 1 } else { 0 };
-                            // scrLoadLevel applies floor(real(text)) and then
-                            // clamps each inventory field to its source range.
-                            let value = value.floor().clamp(f64::from(minimum), 99.0) as i32;
-                            match field {
-                                Field::Life => next.starting_life = value,
-                                Field::Bombs => next.starting_bombs = value,
-                                _ => next.starting_ropes = value,
-                            };
-                            Ok(())
-                        }),
+                            Ok(value) => {
+                                // The editor retains this raw value for saving and
+                                // test play. Ordinary loading floors and clamps it.
+                                match field {
+                                    Field::Life => {
+                                        self.starting_inventory[0] = entry.value.clone();
+                                        next.starting_life = value.floor().clamp(1.0, 99.0) as i32;
+                                    }
+                                    Field::Bombs => {
+                                        self.starting_inventory[1] = entry.value.clone();
+                                        next.starting_bombs = value.floor().clamp(0.0, 99.0) as i32;
+                                    }
+                                    _ => {
+                                        self.starting_inventory[2] = entry.value.clone();
+                                        next.starting_ropes = value.floor().clamp(0.0, 99.0) as i32;
+                                    }
+                                }
+                                Ok(())
+                            }
+                        }
+                    }
                     _ => unreachable!(),
                 };
                 if result.is_ok() {
@@ -907,6 +951,22 @@ impl EditorUi {
             );
         }
     }
+}
+
+fn raw_starting_inventory(source: &str) -> Result<[String; 3], String> {
+    let lines: Vec<&str> = source
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .collect();
+    let values: Vec<String> = lines
+        .get(34..37)
+        .ok_or_else(|| "Expected starting inventory metadata".to_owned())?
+        .iter()
+        .map(|value| (*value).to_owned())
+        .collect();
+    values
+        .try_into()
+        .map_err(|_| "Expected three starting inventory values".to_owned())
 }
 
 fn file_name(name: &str) -> Result<String, String> {
@@ -1330,10 +1390,10 @@ mod tests {
                         .any(|quad| quad.rect == rect && quad.uv == water.uv)
                 );
             }
-            let EditorCommand::Play(level) = ui.key(KeyCode::F5, None, false) else {
+            let EditorCommand::Play(test) = ui.key(KeyCode::F5, None, false) else {
                 panic!("F5 must preserve the edited document");
             };
-            let world = level.to_world();
+            let world = test.level.to_world();
             let count = |object| {
                 world
                     .entities
@@ -1419,6 +1479,34 @@ mod tests {
         assert_eq!(Level::parse(&saved).unwrap().sign_message(0), "hello");
         ui.key(KeyCode::KeyZ, None, true);
         assert_eq!(ui.state.level.sign_message(0), "");
+    }
+
+    #[test]
+    fn editor_testplay_and_save_preserve_raw_inventory_values() {
+        let mut ui = EditorUi::new();
+        ui.begin(Field::Life, "0.75".into());
+        ui.commit_entry();
+        ui.begin(Field::Bombs, "12.9".into());
+        ui.commit_entry();
+        ui.begin(Field::Ropes, "1000.25".into());
+        ui.commit_entry();
+
+        assert_eq!(ui.state.level.starting_life, 1);
+        assert_eq!(ui.state.level.starting_bombs, 12);
+        assert_eq!(ui.state.level.starting_ropes, 99);
+        let saved: Vec<_> = ui.document_text().lines().map(str::to_owned).collect();
+        assert_eq!(&saved[34..37], &["0.75", "12.9", "1000.25"]);
+
+        let EditorCommand::Play(test) = ui.key(KeyCode::F5, None, false) else {
+            panic!("F5 must launch editor test play");
+        };
+        assert_eq!(test.starting_inventory, [0.75, 12.9, 1000.25]);
+        assert_eq!(test.level.starting_life, 1);
+        assert_eq!(test.level.starting_bombs, 12);
+        assert_eq!(test.level.starting_ropes, 99);
+
+        ui.return_from_playtest();
+        assert_eq!(ui.document_text(), saved.join("\n"));
     }
     #[test]
     fn import_failure_preserves_document_and_palette_is_complete() {
@@ -1729,12 +1817,12 @@ mod tests {
             !map_has(&quads, mega.uv),
             "focus/input reset must preserve the missing preview"
         );
-        let EditorCommand::Play(document) = ui.key(KeyCode::F5, None, false) else {
+        let EditorCommand::Play(test) = ui.key(KeyCode::F5, None, false) else {
             panic!("F5");
         };
-        assert_eq!(document.get_tile(2, 1), Some('{'));
+        assert_eq!(test.level.get_tile(2, 1), Some('{'));
         assert_eq!(
-            document
+            test.level
                 .to_world()
                 .entities
                 .iter()
@@ -1975,16 +2063,17 @@ mod tests {
                 "resolved{support} Destroy inheritance"
             );
             assert_eq!(ui.source_check_water(), inherited);
-            let EditorCommand::Play(document) = ui.key(KeyCode::F5, None, false) else {
+            let EditorCommand::Play(test) = ui.key(KeyCode::F5, None, false) else {
                 panic!("F5");
             };
             assert!(
-                document
+                test.level
                     .to_world()
                     .entities
                     .iter()
                     .any(|e| e.object == "oSpikes")
-                    || document
+                    || test
+                        .level
                         .to_world()
                         .tiles
                         .iter()
@@ -2009,10 +2098,10 @@ mod tests {
         quads.clear();
         ui.draw(&atlas, &mut quads);
         assert!(!map_has(&quads, mega.uv));
-        let EditorCommand::Play(document) = ui.key(KeyCode::F5, None, false) else {
+        let EditorCommand::Play(test) = ui.key(KeyCode::F5, None, false) else {
             panic!("F5");
         };
-        assert_eq!(document.get_tile(2, 1), Some('{'));
+        assert_eq!(test.level.get_tile(2, 1), Some('{'));
         ui.return_from_playtest();
         quads.clear();
         ui.draw(&atlas, &mut quads);

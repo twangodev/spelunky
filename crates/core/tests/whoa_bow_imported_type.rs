@@ -20,8 +20,8 @@ fn initial(preset: RulesPreset, facing: i8, object: &str, armed: f64) -> (Game, 
     game.player.data.insert("whoaTimerMax".into(), 30.0);
     game.player.data.insert("bow_armed".into(), armed);
     game.player.data.insert("bow_strength".into(), 3.0);
-    game.player.bombs = 4;
-    game.player.ropes = 4;
+    game.player.bombs = 4.0;
+    game.player.ropes = 4.0;
     game.data.insert("arrows".into(), 7.0);
     game.world.entrance = game.player.pos;
     let id = game.spawn(object, Vec2::new(321.0, 154.0));
@@ -74,7 +74,7 @@ fn imported_bow_type_uses_literal_boolean_threshold_for_whoa_fire_and_release() 
                     assert!(!game.world.entity(held).unwrap().held);
                     assert_eq!(sounds(&game, "sndArrowTrap"), usize::from(should_fire));
                     assert_eq!(sounds(&game, "sndThrow"), 0);
-                    assert_eq!((game.player.bombs, game.player.ropes), (4, 4));
+                    assert_eq!((game.player.bombs, game.player.ropes), (4.0, 4.0));
                     if should_fire {
                         let arrow = arrows[0];
                         assert_eq!(

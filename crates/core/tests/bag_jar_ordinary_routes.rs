@@ -91,7 +91,7 @@ fn whip_without_walking(game: &mut Game, target: u64, expected_contact: bool) {
             .iter()
             .any(|e| matches!(e.object.as_str(), "oRubbleSmall" | "oSmokePuff"))
     );
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
 }
 
 #[test]
@@ -120,8 +120,8 @@ fn source_free_supply_bags_survive_front_whip_then_collect_by_walking() {
                 });
             }
             assert!(game.world.entity(id).is_none());
-            assert_eq!(game.player.bombs, before.0 + bombs);
-            assert_eq!(game.player.ropes, before.1 + ropes);
+            assert_eq!(game.player.bombs, before.0 + f64::from(bombs));
+            assert_eq!(game.player.ropes, before.1 + f64::from(ropes));
             assert_eq!(game.player.held, None);
         }
     }

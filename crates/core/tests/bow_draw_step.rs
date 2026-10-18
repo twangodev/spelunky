@@ -250,8 +250,8 @@ fn natural_bow_cycle_fires_before_replacement_and_restores_a_zero_frame_fresh_bo
 fn natural_bow_no_reserves_cycle_still_refreshes_the_new_charge_frame() {
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         let mut game = room(rules);
-        game.player.bombs = 0;
-        game.player.ropes = 0;
+        game.player.bombs = 0.0;
+        game.player.ropes = 0.0;
         let bow = pickup(&mut game);
         charge(&mut game, 10);
         let before = game.player.data["bow_strength"];

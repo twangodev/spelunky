@@ -3,7 +3,7 @@
 //! events; the separate integration tests exercise authoritative Game.step.
 use super::*;
 
-fn rock_source_fixture(health: i32) -> (Game, u64) {
+fn rock_source_fixture(health: f64) -> (Game, u64) {
     let mut game = Game::shell(6001, RulesPreset::Classic);
     game.world = World::new(40, 30, Area::Mines, 1);
     game.player.pos = Vec2::new(184.0, 80.0);
@@ -27,7 +27,7 @@ fn rock_literal_script_cap_bloodless_and_four_create_draws_per_birth() {
         (0, 0, 20, false, 3),
         (0, 0, 0, true, 0),
     ] {
-        let (mut game, rock) = rock_source_fixture(6);
+        let (mut game, rock) = rock_source_fixture(6.0);
         for _ in 0..active {
             game.spawn("oBone", Vec2::new(400.0, 80.0));
         }
@@ -75,7 +75,7 @@ fn rock_literal_script_cap_bloodless_and_four_create_draws_per_birth() {
             oracle.next_u64(),
             "literal producer/Create RNG continuation"
         );
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.player.vel, Vec2::new(8.0, -4.0));
         assert_eq!(game.player.stun, 20);
         assert!(
@@ -94,9 +94,9 @@ fn rock_literal_script_cap_bloodless_and_four_create_draws_per_birth() {
 
 #[test]
 fn rock_zero_hp_without_prior_dead_still_creates_blood_but_does_not_subtract_again() {
-    let (mut game, rock) = rock_source_fixture(0);
+    let (mut game, rock) = rock_source_fixture(0.0);
     rock_player_contact(&mut game);
-    assert_eq!(game.player.health, 0);
+    assert_eq!(game.player.health, 0.0);
     assert_eq!(game.player.stun, 20);
     assert_eq!(
         game.world

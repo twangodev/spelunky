@@ -3,7 +3,7 @@ use crate::{Game, GameEvent, RulesPreset, Vec2};
 fn room() -> Game {
     let mut game = Game::shell(17, RulesPreset::Classic);
     game.player.pos = Vec2::new(80.0, 80.0);
-    game.player.health = 4;
+    game.player.health = 4.0;
     game
 }
 
@@ -34,7 +34,7 @@ fn player_spike_query_ignores_inactive_entity_and_terrain() {
 
         super::player_spikes(&mut game);
 
-        assert_eq!(game.player.health, 4, "terrain={terrain}");
+        assert_eq!(game.player.health, 4.0, "terrain={terrain}");
         assert!(!game.events.contains(&GameEvent::Damage { amount: 99 }));
     }
 }
@@ -51,7 +51,7 @@ fn spear_player_query_ignores_inactive_instances() {
 
     crate::traps::detectors::player_hurt(&mut game);
 
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(!game.events.contains(&GameEvent::Damage { amount: 4 }));
 }
 
@@ -76,7 +76,7 @@ fn spear_player_query_uses_first_overlapping_instance_in_source_order() {
 
     crate::traps::detectors::player_hurt(&mut game);
 
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(!game.events.contains(&GameEvent::Damage { amount: 4 }));
 }
 
@@ -92,7 +92,7 @@ fn ceiling_query_ignores_inactive_instances() {
 
     crate::traps::moving::player_hurt(&mut game);
 
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(!game.events.contains(&GameEvent::Damage { amount: 10 }));
 }
 
@@ -117,6 +117,6 @@ fn ceiling_query_uses_first_overlapping_instance_in_source_order() {
 
     crate::traps::moving::player_hurt(&mut game);
 
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(!game.events.contains(&GameEvent::Damage { amount: 10 }));
 }

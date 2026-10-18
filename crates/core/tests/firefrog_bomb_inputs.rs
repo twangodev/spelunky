@@ -53,7 +53,7 @@ fn pickup(game: &mut Game, bomb: u64) {
         "actual Down+Attack must pick up the source-created bomb"
     );
     assert!(game.world.entity(bomb).unwrap().held);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
 }
 
 #[test]
@@ -106,7 +106,7 @@ fn ordinary_pickup_and_throw_preserve_the_unarmed_fire_frog_shop_control() {
             |event| matches!(event, GameEvent::Dialogue(message) if message.first == "TERRORIST!")
         ));
         assert!(!game.world.entities.iter().any(|e| e.object == "oExplosion"));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 
@@ -209,7 +209,7 @@ fn ordinary_carry_enters_stays_exits_and_reenters_water_with_one_own_splash_per_
         assert!(saw_exit);
         assert!(stay_frames >= 3);
         assert_eq!(own_births, 2);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(!game.world.entities.iter().any(|e| e.object == "oExplosion"));
     }
 }
@@ -286,9 +286,9 @@ fn ordinary_carry_and_trap_hit_arm_the_forced_drop_before_its_shop_warning() {
                 .entities
                 .iter()
                 .any(|e| e.alive && e.object == "oArrow");
-            if game.player.health < 4 {
+            if game.player.health < 4.0 {
                 assert!(saw_arrow, "real trap birth must precede hurt");
-                assert_eq!(game.player.health, 2, "first ordinary Arrow hit only");
+                assert_eq!(game.player.health, 2.0, "first ordinary Arrow hit only");
                 assert!(game.player.is_stunned());
                 assert_eq!(game.player.held, None);
                 let actor = game.world.entity(bomb).unwrap();

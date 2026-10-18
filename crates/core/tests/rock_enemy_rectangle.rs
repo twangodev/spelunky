@@ -21,7 +21,7 @@ fn scene(rules: RulesPreset, bat_pos: Vec2) -> (Game, u64, u64) {
         game.step(&InputFrame::default());
     }
     assert!(game.player.grounded);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     game.step(&InputFrame {
         down: true,
         attack: true,

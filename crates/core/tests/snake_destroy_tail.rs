@@ -122,7 +122,7 @@ fn natural_whip_death_keeps_snake_walk_roll_after_blood_and_destroy() {
         assert!(!actor.held);
         assert_eq!(actor.value("bloodless"), 0.0);
         assert_eq!(actor.value("counts_as_kill"), 1.0);
-        assert!(game.player.health > 0 && !game.player.is_stunned());
+        assert!(game.player.health > 0.0 && !game.player.is_stunned());
         let prior_ids: std::collections::BTreeSet<_> =
             game.world.entities.iter().map(|entity| entity.id).collect();
         let detritus = game
@@ -206,7 +206,7 @@ fn natural_healthy_snake_keeps_idle_and_walk_roll_boundaries() {
                 .any(|entity| entity.object == "oBlood")
         );
         assert_eq!(game.data.get("snakes"), None);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 

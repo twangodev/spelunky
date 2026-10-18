@@ -1283,10 +1283,11 @@ fn base_character_collision(game: &mut Game, e: &mut Entity) {
         let damage = 1;
         let source_type = crate::items::explosives::source_type(e);
         let prior_health = game.player.health;
-        if prior_health > 0 {
+        if prior_health > 0.0 {
             game.player.lose_health(damage);
         }
-        if prior_health > 0 && game.player.health <= 0 && crate::statistics::is_real_level(game) {
+        if prior_health > 0.0 && game.player.health <= 0.0 && crate::statistics::is_real_level(game)
+        {
             use crate::statistics::EnemyDeath;
             // The source compares type, not object_index. Bat, Zombie and
             // hanging spiders retain inherited "None" until a caller writes it.
@@ -2120,7 +2121,7 @@ mod tests {
                         .any(|e| e.alive && e.object == hitbox),
                     "the input must create the expected source attack: {hitbox}"
                 );
-                assert_eq!(game.player.health, 4, "fixture must avoid body contact");
+                assert_eq!(game.player.health, 4.0, "fixture must avoid body contact");
                 return before;
             }
             assert!(
@@ -2437,7 +2438,10 @@ mod tests {
                             .any(|e| e.alive && e.object == "oWhipPre"),
                         "real input must create rear whip"
                     );
-                    assert_eq!(game.player.health, 4, "no body collision masks the fixture");
+                    assert_eq!(
+                        game.player.health, 4.0,
+                        "no body collision masks the fixture"
+                    );
                     let emits = left > 0.0 && !bloodless && detritus < 16;
                     let blood = source_contact_live_blood(&game);
                     assert_eq!(blood.len(), usize::from(emits));
@@ -2592,13 +2596,13 @@ mod tests {
         game.player.pos = Vec2::new(136., 144.);
         game.player.previous_pos = game.player.pos;
         game.player.state = PlayerState::Falling;
-        game.player.health = 1;
+        game.player.health = 1.0;
         game.spawn("oCaveman", Vec2::new(128., 136.));
         let snake = game.spawn("oSnake", Vec2::new(128., 144.));
         game.step(&InputFrame::default());
         // Caveman325 kills first; Snake552 still sees not-other.dead until
         // Player319 runs on the next frame, and accepts the falling stomp.
-        assert_eq!(game.player.health, 0);
+        assert_eq!(game.player.health, 0.0);
         assert_eq!(game.state, RunState::Playing);
         assert_eq!(game.world.entity(snake).unwrap().health, 0);
         assert_eq!(
@@ -2847,7 +2851,7 @@ mod tests {
                     assert_eq!(actor.health, 1, "{object}");
                     assert_eq!(
                         game.player.health,
-                        if invincible { 4 } else { 3 },
+                        if invincible { 4.0 } else { 3.0 },
                         "{object}"
                     );
                     let expected = usize::from(
@@ -2871,7 +2875,7 @@ mod tests {
         }
     }
 
-    fn fresh_type_contact_room(rules: RulesPreset, player_x: f64, health: i32) -> Game {
+    fn fresh_type_contact_room(rules: RulesPreset, player_x: f64, health: f64) -> Game {
         let mut game = Game::shell(42, rules);
         game.world = World::new(20, 16, Area::Mines, 1);
         game.world.name = "rLevel".into();
@@ -2890,7 +2894,7 @@ mod tests {
     #[test]
     fn actual_step_fresh_bat_none_contact_preserves_hurt_without_blood_rng() {
         for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
-            let mut game = fresh_type_contact_room(rules, 104.0, 4);
+            let mut game = fresh_type_contact_room(rules, 104.0, 4.0);
             let id = game.spawn("oBat", Vec2::new(96.0, 144.0));
             let expected_rng = game.rng.clone();
             game.step(&InputFrame::default());
@@ -2903,7 +2907,7 @@ mod tests {
                 bat.sprite, "sBatHang",
                 "wake does not change this image yet"
             );
-            assert_eq!(game.player.health, 3);
+            assert_eq!(game.player.health, 3.0);
             assert_eq!(game.player.invincible, 30);
             assert_eq!(game.player.data.get("blink"), Some(&30.0));
             assert_eq!(game.player.stun, 0);
@@ -2927,7 +2931,7 @@ mod tests {
                 ("oGiantSpiderHang", 104.0, None),
                 ("oSnake", 104.0, Some(crate::statistics::EnemyDeath::Snake)),
             ] {
-                let mut game = fresh_type_contact_room(rules, player_x, 1);
+                let mut game = fresh_type_contact_room(rules, player_x, 1.0);
                 if matches!(object, "oSpiderHang" | "oGiantSpiderHang") {
                     // Exact8px from the drop center fails the source's strict
                     // abs<8 condition; the real ceiling keeps this form hanging.
@@ -2943,7 +2947,7 @@ mod tests {
                     if typed_row.is_some() { "Snake" } else { "None" },
                     "{object}"
                 );
-                assert_eq!(game.player.health, 0, "{object}");
+                assert_eq!(game.player.health, 0.0, "{object}");
                 assert_eq!(game.player.invincible, 30, "{object}");
                 assert_eq!(game.player.data.get("blink"), Some(&30.0), "{object}");
                 assert!(game.events.contains(&GameEvent::Damage { amount: 1 }));
@@ -2968,7 +2972,7 @@ mod tests {
     #[test]
     fn actual_step_fresh_piranha_typed_contact_keeps_blood_create_rng() {
         for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
-            let mut game = fresh_type_contact_room(rules, 104.0, 4);
+            let mut game = fresh_type_contact_room(rules, 104.0, 4.0);
             for x in 5..=8 {
                 game.world.set_tile(x, 9, "oWaterSwim");
             }
@@ -2989,7 +2993,7 @@ mod tests {
             let fish = game.world.entity(id).unwrap();
             assert_eq!(crate::items::explosives::source_type(fish), "Piranha");
             assert_eq!(fish.health, 1);
-            assert_eq!(game.player.health, 3);
+            assert_eq!(game.player.health, 3.0);
             assert_eq!(game.player.invincible, 30);
             assert_eq!(game.player.data.get("blink"), Some(&30.0));
             let blood = source_contact_live_blood(&game);
@@ -3030,7 +3034,7 @@ mod tests {
                             .entity(id)
                             .expect("death waits for the animal's next Step");
                         assert_eq!(actor.health, if spiked { -2 } else { 0 }, "{object}");
-                        assert_eq!(game.player.health, 4);
+                        assert_eq!(game.player.health, 4.0);
                         assert!(game.player.vel.y < 0.0, "actual stomp bounces the player");
                         let blood = source_contact_live_blood(&game);
                         assert_eq!(blood.len(), usize::from(spiked && !bloodless), "{object}");
@@ -3067,10 +3071,10 @@ mod tests {
             }
             game.player.pos = Vec2::new(136., 152.);
             game.player.previous_pos = game.player.pos;
-            game.player.health = 1;
+            game.player.health = 1.0;
             game.spawn("oSnake", Vec2::new(128., 144.));
             game.step(&InputFrame::default());
-            assert_eq!(game.player.health, 0);
+            assert_eq!(game.player.health, 0.0);
             assert_eq!(
                 game.lifetime_stats.enemy_deaths[crate::statistics::EnemyDeath::Snake as usize],
                 u64::from(!custom)
@@ -3520,7 +3524,7 @@ mod tests {
             game.step(&InputFrame::default());
             assert_eq!(game.engine_time(), 4);
             assert_eq!(game.world.entity(id).unwrap().pos, Vec2::new(160.0, 65.0));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }

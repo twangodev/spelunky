@@ -47,7 +47,7 @@ fn step(game: &mut Game, lord: u64, input: InputFrame) {
     game.step(&input);
     assert_eq!(game.state, RunState::Playing);
     assert_eq!(
-        game.player.health, 4,
+        game.player.health, 4.0,
         "NATURAL_FLY_ROUTE_HEALTH_PREREQUISITE"
     );
     assert_eq!(game.world.entity(lord).unwrap().health, 20);

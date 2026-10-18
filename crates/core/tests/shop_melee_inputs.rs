@@ -17,7 +17,7 @@ fn neutral(game: &mut Game, count: usize) {
     for _ in 0..count {
         game.step(&InputFrame::default());
         assert_eq!(
-            game.player.health, 4,
+            game.player.health, 4.0,
             "ordinary route must avoid hostile body/projectile damage"
         );
     }
@@ -60,7 +60,7 @@ fn first_hit(game: &mut Game, keeper: u64, expected_weapon: &str) -> (Entity, En
             ..Default::default()
         });
         assert_eq!(
-            game.player.health, 4,
+            game.player.health, 4.0,
             "hit fixture must retain ordinary player health"
         );
         let actor = game

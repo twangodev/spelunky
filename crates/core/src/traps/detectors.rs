@@ -409,7 +409,7 @@ pub(super) fn player_hurt(game: &mut Game) {
     if !(20.0..24.0).contains(&phase) {
         return;
     }
-    if game.player.health > 0 && crate::statistics::is_real_level(game) {
+    if game.player.health > 0.0 && crate::statistics::is_real_level(game) {
         game.lifetime_stats
             .misc_death(crate::statistics::MiscDeath::SpearTrap);
     }
@@ -577,7 +577,7 @@ mod tests {
                 .collect();
             assert_eq!(arrows.len(), usize::from(moving));
             assert_eq!(
-                game.player.health, 4,
+                game.player.health, 4.0,
                 "the detector emits after the player's Hurt action"
             );
             if moving {
@@ -605,13 +605,13 @@ mod tests {
             for tick in 1..=20 {
                 game.step(&InputFrame::default());
                 assert_eq!(
-                    game.player.health, 4,
+                    game.player.health, 4.0,
                     "exposed={exposed}, tick={tick}: damage must wait until the next Player Step sees frame20"
                 );
             }
             game.step(&InputFrame::default());
             if exposed {
-                assert_eq!(game.player.health, 0);
+                assert_eq!(game.player.health, 0.0);
                 assert_eq!(
                     game.player.stun, 0,
                     "spears do not set the source stun flag"
@@ -619,7 +619,7 @@ mod tests {
                 assert_eq!(game.state, RunState::Dead);
                 assert_eq!(game.lifetime_stats.misc_deaths[7], 1);
             } else {
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 for _ in 21..31 {
                     game.step(&InputFrame::default());
                 }
@@ -654,7 +654,7 @@ mod tests {
                 game.step(&InputFrame::default());
             }
             assert!(game.player.grounded);
-            assert_eq!(game.player.health, 20);
+            assert_eq!(game.player.health, 20.0);
             // Only eligibility metadata changes: this is a controlled real-room
             // context comparison, not a claimed natural campaign route.
             if real_level {
@@ -664,10 +664,10 @@ mod tests {
             assert_eq!(crate::statistics::is_real_level(&game), real_level);
             for _ in 8..20 {
                 game.step(&InputFrame::default());
-                assert_eq!(game.player.health, 20);
+                assert_eq!(game.player.health, 20.0);
             }
             game.step(&InputFrame::default());
-            assert_eq!(game.player.health, 16);
+            assert_eq!(game.player.health, 16.0);
             assert_eq!(game.state, RunState::Playing);
             assert_eq!(game.player.stun, 0);
             assert_eq!(game.lifetime_stats.misc_deaths[7], u64::from(real_level));

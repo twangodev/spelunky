@@ -36,7 +36,10 @@ fn ghost_death(game: &mut Game) {
         Vec2::new(game.player.pos.x - 8.0, game.player.pos.y - 8.0),
     );
     game.step(&InputFrame::default());
-    assert_eq!(game.player.health, -99, "actual Ghost Collision must occur");
+    assert_eq!(
+        game.player.health, -99.0,
+        "actual Ghost Collision must occur"
+    );
     assert_eq!(game.player.data.get("visible"), Some(&0.0));
     assert_eq!(game.player.invincible, 9999);
     assert_eq!(game.state, RunState::Playing, "Collision does not run DIED");
@@ -46,7 +49,7 @@ fn ghost_death(game: &mut Game) {
     game.step(&InputFrame::default());
     assert_eq!(game.state, RunState::Dead);
     assert_eq!(game.player.state, PlayerState::Dead);
-    assert_eq!(game.player.health, 0);
+    assert_eq!(game.player.health, 0.0);
     if unsupported {
         assert_eq!(
             game.player.vel.y,

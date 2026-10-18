@@ -11,7 +11,7 @@ enum CreditPolicy {
 
 fn healthy(game: &Game) {
     assert_eq!(game.state, RunState::Playing);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.invincible, 0);
     assert_eq!(game.player.stun, 0);
     assert!(!game.player.is_stunned());
@@ -177,8 +177,8 @@ fn ordinary_rock_route(rules: RulesPreset, policy: CreditPolicy) {
             );
             assert_eq!(game.data.get("kills").copied().unwrap_or(0.0), 1.0);
             assert_eq!(game.lifetime_stats.enemy_kills[16], 1);
-            assert_eq!(game.player.bombs, 4);
-            assert_eq!(game.player.ropes, 4);
+            assert_eq!(game.player.bombs, 4.0);
+            assert_eq!(game.player.ropes, 4.0);
             println!(
                 "REAL_ITEM_UFO policy={policy:?} rules={rules:?} tick={} origin={birth_origin:?}",
                 game.tick

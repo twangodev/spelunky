@@ -182,7 +182,7 @@ fn query_geometry(scene: &Scene, hit: &Entity) {
         game.player.pos, scene.hero,
         "FIXTURE no Player displacement"
     );
-    assert_eq!(game.player.health, 4, "FIXTURE no unrelated hurt");
+    assert_eq!(game.player.health, 4.0, "FIXTURE no unrelated hurt");
     assert!(game.player.grounded);
     assert!(!game.player.is_stunned());
     assert!(
@@ -357,7 +357,7 @@ fn run(mut scene: Scene) {
                     scene.game.world.entity(hit.id).is_none(),
                     "FIXTURE real AnimationEnd retires hitbox"
                 );
-                assert_eq!(scene.game.player.health, 4);
+                assert_eq!(scene.game.player.health, 4.0);
                 let actor_gone = scene.game.world.entity(scene.actor).is_none();
                 let tile_gone = scene
                     .game

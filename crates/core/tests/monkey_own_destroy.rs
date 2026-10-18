@@ -267,7 +267,7 @@ fn ordinary_whip_kill_at_natural_grab_expiry_keeps_theft_and_release_tail() {
                 "NATURAL_GRAB_EXPIRY_DEATH_BRANCH"
             );
             assert_eq!(game.player.money, 0);
-            assert_eq!((game.player.ropes, game.player.bombs), (4, 4));
+            assert_eq!((game.player.ropes, game.player.bombs), (4.0, 4.0));
             assert!(!game.player.is_stunned());
             assert_eq!(game.player.held, None);
             let mut trip = false;
@@ -303,9 +303,9 @@ fn ordinary_whip_kill_at_natural_grab_expiry_keeps_theft_and_release_tail() {
             );
             assert_eq!(
                 game.player.ropes,
-                4 - i32::from(thrown == Some("oRopeThrow"))
+                4.0 - f64::from(thrown == Some("oRopeThrow"))
             );
-            assert_eq!(game.player.bombs, 4 - i32::from(thrown == Some("oBomb")));
+            assert_eq!(game.player.bombs, 4.0 - f64::from(thrown == Some("oBomb")));
             assert_eq!(game.player.money, 0);
             if let Some(object) = thrown {
                 assert_eq!(

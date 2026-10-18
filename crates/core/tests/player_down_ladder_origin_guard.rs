@@ -33,7 +33,7 @@ fn room(rules: RulesPreset, overhead: bool, origin_ladder: bool) -> Game {
 
 fn safe(game: &Game) {
     assert_eq!(game.state, RunState::Playing);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.stun, 0);
     assert!(!game.player.is_stunned());
     assert!(!game.world.solid_at(game.player.pos.x, game.player.pos.y));

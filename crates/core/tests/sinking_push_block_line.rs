@@ -38,7 +38,7 @@ fn assert_sinking_support(rules: RulesPreset) {
         assert_eq!(solid.value("push_gravity"), 0.0);
         assert_eq!(game.player.pos, Vec2::new(88.0, 72.0));
         assert!(game.player.grounded, "{rules:?}/sink{age}");
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
     // The eleven stored double increments give≈80.55, not an exact.5
     // literal. Original native line controls prove raw footy80 misses
@@ -51,7 +51,7 @@ fn assert_sinking_support(rules: RulesPreset) {
         "{rules:?}: source line must release false floating support",
     );
     assert_eq!(game.player.state, PlayerState::Falling);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!((game.world.entity(block).unwrap().pos.y - (source_y + 0.05)).abs() < 1e-10);
     // Re-grounding after the one-pixel fall is legitimate: footy81 now
     // meets the native pixel mask. Do not require !grounded after movement.
@@ -75,7 +75,7 @@ fn supported_integer_push_block_keeps_player_on_its_opaque_top() {
             assert_eq!(game.world.entity(block).unwrap().pos, Vec2::new(80.0, 80.0));
             assert_eq!(game.player.pos, Vec2::new(88.0, 72.0));
             assert!(game.player.grounded);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }

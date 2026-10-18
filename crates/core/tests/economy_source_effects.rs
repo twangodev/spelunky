@@ -102,7 +102,7 @@ fn kissing_ignores_inactive_nearer_damsels_and_keeps_current_source_order_on_tie
         let health = game.player.health;
         pay(&mut game);
         assert_eq!(game.player.money, 95000);
-        assert_eq!(game.player.health, health + 1);
+        assert_eq!(game.player.health, health + 1.0);
         assert_eq!(game.lifetime_stats.kisses_bought, 1);
         assert_eq!(game.world.entity(first).unwrap().state, 6);
         assert_eq!(game.world.entity(second).unwrap().state, 5);
@@ -120,7 +120,7 @@ fn kissing_selection_does_not_add_a_health_gate_absent_from_original_payment() {
         let health = game.player.health;
         pay(&mut game);
         assert_eq!(game.player.money, 95000);
-        assert_eq!(game.player.health, health + 1);
+        assert_eq!(game.player.health, health + 1.0);
         assert_eq!(game.world.entity(near).unwrap().state, 6);
         assert_eq!(game.world.entity(far).unwrap().state, 5);
     }

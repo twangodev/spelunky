@@ -61,7 +61,7 @@ fn fire_frog_water_point_uses_bbox_for_tile_and_dynamic_source_water() {
                 let bomb = game.spawn("oFireFrogBomb", point);
                 assert_eq!(game.world.entity(bomb).unwrap().vel, Vec2::default());
                 assert_eq!(game.world.entity(bomb).unwrap().value("swimming"), 0.0);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 game.step(&InputFrame::default());
                 let receiver = game
                     .world
@@ -97,7 +97,7 @@ fn fire_frog_water_point_uses_bbox_for_tile_and_dynamic_source_water() {
                     0,
                     "continuous immersion does not repeat entry sound"
                 );
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert!(!game.world.entities.iter().any(|e| e.object == "oExplosion"));
             }
         }

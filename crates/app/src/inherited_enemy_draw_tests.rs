@@ -100,7 +100,7 @@ fn default_magma_man_full_step_enters_mirrored_die_draw_in_authored_solid() {
         assert_eq!((actor.health, actor.state), (199, 99));
         assert_eq!(actor.sprite, "sMagmaManDie");
         assert_eq!(actor.facing, 1);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_source_body(&game, id, true, &atlas);
     }
 }
@@ -122,7 +122,7 @@ fn default_magma_man_natural_lifetime_keeps_source_draw_through_die_animation() 
                 .entity(id)
                 .expect("source seed0 patrol avoids transformation");
             assert_eq!(actor.health, 200 - tick);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
         let actor = game.presentation().world.entity(id).unwrap();
         assert_eq!((actor.health, actor.state), (0, 99));
@@ -366,7 +366,7 @@ fn ordinary_pistol_hit_reaches_shopkeeper_right_die_lr_draw() {
                     if keeper.sprite == "sShopDieLR" {
                         assert_eq!(keeper.state, 98);
                         assert!(keeper.vel.x > 0.0 && keeper.vel.y < 0.0);
-                        assert_eq!(game.player.health, 4);
+                        assert_eq!(game.player.health, 4.0);
                         assert_source_body(&game, id, true, &atlas);
                         witnessed = true;
                         break;

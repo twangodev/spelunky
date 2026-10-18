@@ -16,7 +16,7 @@ fn ordinary_rope_launch_keeps_rising_through_web_contact() {
             game.player.previous_pos = game.player.pos;
             game.player.state = PlayerState::Standing;
             game.player.grounded = true;
-            game.player.ropes = 4;
+            game.player.ropes = 4.0;
             let web = if web_present {
                 Some(game.spawn("oWeb", Vec2::new(144.0, 128.0)))
             } else {
@@ -27,8 +27,8 @@ fn ordinary_rope_launch_keeps_rising_through_web_contact() {
                 rope_pressed: true,
                 ..Default::default()
             });
-            assert_eq!(game.player.health, 4);
-            assert_eq!(game.player.ropes, 3);
+            assert_eq!(game.player.health, 4.0);
+            assert_eq!(game.player.ropes, 3.0);
             let rope = game
                 .world
                 .entity(rope)

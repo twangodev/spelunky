@@ -130,14 +130,14 @@ fn pickup(game: &mut Game, bomb: u64, hp: i32) {
     );
     assert_eq!(game.player.pickup_item_type, "Bomb");
     assert!(game.world.entity(bomb).unwrap().held);
-    assert_eq!(game.player.health, hp);
+    assert_eq!(game.player.health, f64::from(hp));
     assert_eq!(
         game.player.bombs, resources,
         "pickup is not a resource reservation"
     );
     game.step(&InputFrame::default());
     assert_eq!(game.player.state, PlayerState::Standing);
-    assert_eq!(game.player.health, hp);
+    assert_eq!(game.player.health, f64::from(hp));
     assert_eq!(game.player.held, Some(bomb));
     assert_inert(game, bomb);
 }
@@ -160,7 +160,7 @@ fn unsafe_arrow(game: &Game) -> Option<u64> {
 fn real_hurt(game: &mut Game, bomb: u64, facing: i8) {
     for _ in 0..3 {
         game.step(&InputFrame::default());
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.player.pos, Vec2::new(264.0, 152.0));
         assert_eq!(game.player.held, Some(bomb));
         assert_inert(game, bomb);
@@ -190,14 +190,14 @@ fn real_hurt(game: &mut Game, bomb: u64, facing: i8) {
             );
             assert_eq!(arrow.age, 0);
             assert_eq!(
-                game.player.health, 4,
+                game.player.health, 4.0,
                 "FIXTURE trap birth follows Player hurt query"
             );
             assert_eq!(sounds(game, "sndArrowTrap"), 1);
             launched = Some(id);
             break;
         }
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
     let arrow = launched.expect("FIXTURE native raised trap fired within8 Jump inputs");
     for _ in 0..100 {
@@ -205,8 +205,8 @@ fn real_hurt(game: &mut Game, bomb: u64, facing: i8) {
             jump: true,
             ..Default::default()
         });
-        if game.player.health < 4 {
-            assert_eq!(game.player.health, 2, "FIXTURE first real Arrow hurt");
+        if game.player.health < 4.0 {
+            assert_eq!(game.player.health, 2.0, "FIXTURE first real Arrow hurt");
             assert_eq!(game.player.stun, 20);
             assert!(game.player.is_stunned());
             assert!(game.world.entity(arrow).is_none());
@@ -238,7 +238,7 @@ fn recover_and_recollect(game: &mut Game, bomb: u64) {
     // Fixed recovery tape, no state/timer rewrites and no outcome-picked seed.
     for _ in 0..160 {
         game.step(&InputFrame::default());
-        assert_eq!(game.player.health, 2, "FIXTURE no second injury");
+        assert_eq!(game.player.health, 2.0, "FIXTURE no second injury");
         assert_eq!(game.state, RunState::Playing);
         assert_inert(game, bomb);
     }
@@ -265,12 +265,12 @@ fn recover_and_recollect(game: &mut Game, bomb: u64) {
                 right: dx > 0.0,
                 ..Default::default()
             });
-            assert_eq!(game.player.health, 2);
+            assert_eq!(game.player.health, 2.0);
             assert_inert(game, bomb);
         }
         for _ in 0..12 {
             game.step(&InputFrame::default());
-            assert_eq!(game.player.health, 2);
+            assert_eq!(game.player.health, 2.0);
             assert_inert(game, bomb);
         }
         assert_eq!(
@@ -320,7 +320,7 @@ fn source_same_bomb_can_ignite_after_real_hurt_recovery_and_pickup() {
             assert_eq!(game.world.entity(bomb).unwrap().alarms[1], -1);
             assert_eq!(game.world.entity(bomb).unwrap().image_speed(), 0.2);
             assert_eq!(game.player.bombs, resources);
-            assert_eq!(game.player.health, 2);
+            assert_eq!(game.player.health, 2.0);
             assert_eq!(sounds(&game, "sndThrow"), 0);
         }
     }
@@ -405,7 +405,7 @@ fn dedicated_bomb_button_keeps_its_existing_newborn_arming_contract() {
                     bomb.timer, 120,
                     "existing dedicated compatibility bookkeeping"
                 );
-                assert_eq!(game.player.bombs, resources - 1);
+                assert_eq!(game.player.bombs, resources - 1.0);
                 assert!(game.player.held.is_none());
                 assert_eq!(sounds(&game, "sndThrow"), 1);
             }
@@ -437,7 +437,7 @@ fn source_reignited_same_bomb_reaches_both_alarms_and_one_explosion() {
             assert_eq!(game.world.entity(bomb).unwrap().alarms[1], -1);
             assert_eq!(game.world.entity(bomb).unwrap().image_speed(), 0.2);
             assert_eq!(game.player.bombs, resources);
-            assert_eq!(game.player.health, 2);
+            assert_eq!(game.player.health, 2.0);
             assert_eq!(sounds(&game, "sndThrow"), 0);
             let armed_tick = game.tick;
             let mut explosion = None;
@@ -472,7 +472,7 @@ fn source_reignited_same_bomb_reaches_both_alarms_and_one_explosion() {
                 game.step(&input);
                 assert_eq!(game.tick, armed_tick + elapsed);
                 assert_eq!(
-                    game.player.health, 2,
+                    game.player.health, 2.0,
                     "FIXTURE safe fuse observation at {elapsed}"
                 );
                 assert_eq!(game.state, RunState::Playing);

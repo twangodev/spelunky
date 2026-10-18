@@ -24,7 +24,7 @@ fn actual_lava_first_death_clamps_once_and_next_corpse_step_keeps_damage() {
         game.step(&InputFrame::default());
         assert!(game.events.contains(&GameEvent::Damage { amount: 99 }));
         assert_eq!(
-            game.player.health, 0,
+            game.player.health, 0.0,
             "first DIED action still sets life zero"
         );
         assert_eq!(game.state, RunState::Dead);
@@ -40,7 +40,7 @@ fn actual_lava_first_death_clamps_once_and_next_corpse_step_keeps_damage() {
         game.step(&InputFrame::default());
         assert!(game.events.contains(&GameEvent::Damage { amount: 99 }));
         assert_eq!(
-            game.player.health, -99,
+            game.player.health, -99.0,
             "already-dead DIED action cannot erase Lava damage"
         );
         assert_eq!(game.state, RunState::Dead);
@@ -69,7 +69,7 @@ fn actual_first_fatal_lava_preserves_initial_carried_ankh_revival_before_dead_la
         game.world.entrance = Vec2::new(40.0, 152.0);
         game.step(&InputFrame::default());
         assert!(game.events.contains(&GameEvent::Damage { amount: 99 }));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.state, RunState::Playing);
         assert_eq!(game.player.pos, game.world.entrance);
         assert_eq!(game.player.vel, Vec2::default());

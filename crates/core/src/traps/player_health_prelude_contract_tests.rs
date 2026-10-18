@@ -47,9 +47,9 @@ fn actual_lava_corpse_crosses_visibility_threshold_once_and_floors_late_health()
                 .count();
             assert!(game.events.contains(&GameEvent::Damage { amount: 99 }));
             let expected = if step == 1 {
-                0
+                0.0
             } else {
-                (-99 * (step - 1)).max(-10000)
+                f64::from((-99 * (step - 1)).max(-10000))
             };
             assert_eq!(
                 game.player.health, expected,
@@ -83,7 +83,7 @@ fn natural_lava_threshold_callback_creates_capped_blood_synchronously_and_hides_
             let mut game = lava_room(rules);
             game.step(&InputFrame::default());
             game.step(&InputFrame::default());
-            assert_eq!(game.player.health, -99);
+            assert_eq!(game.player.health, -99.0);
             // Supplemental callback-context witness from a naturally reached
             // corpse; stop before inherited particle Steps can destroy Blood.
             for _ in 0..existing {
@@ -91,7 +91,7 @@ fn natural_lava_threshold_callback_creates_capped_blood_synchronously_and_hides_
             }
             game.player.data.insert("bloodless".into(), bloodless);
             super::player_lava(&mut game);
-            assert_eq!(game.player.health, -198);
+            assert_eq!(game.player.health, -198.0);
             let first = game.world.next_id;
             let admitted = if bloodless != 0.0 {
                 0
@@ -131,7 +131,7 @@ fn health_floor_is_independent_of_visibility_and_exiting_and_ankh_undoes_new_hid
         // Explicit numeric/phase controls, not natural-trajectory claims.
         for hidden in [false, true] {
             let mut game = lava_room(rules);
-            game.player.health = -10001;
+            game.player.health = -10001.0;
             game.player.set_sprite("sPExit");
             if hidden {
                 game.player.data.insert("hidden".into(), 1.0);
@@ -141,17 +141,17 @@ fn health_floor_is_independent_of_visibility_and_exiting_and_ankh_undoes_new_hid
             let first = game.world.next_id;
             let mut unchanged_rng = game.rng.clone();
             super::player_health_prelude(&mut game);
-            assert_eq!(game.player.health, -10000);
+            assert_eq!(game.player.health, -10000.0);
             assert_eq!(game.world.next_id, first);
             assert_eq!(game.rng.clone().next_u64(), unchanged_rng.next_u64());
         }
         let mut game = lava_room(rules);
         game.player.equipment.insert("Ankh".into());
-        game.player.health = -198;
+        game.player.health = -198.0;
         super::player_health_prelude(&mut game);
         assert_eq!(game.player.data.get("hidden"), Some(&1.0));
         crate::progression::player_revival(&mut game);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.player.data.get("hidden"), None);
         assert_ne!(game.player.data.get("visible"), Some(&0.0));
         assert_eq!(game.player.data.get("active"), Some(&1.0));

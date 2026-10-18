@@ -60,7 +60,7 @@ fn snake_create_keeps_declared_left_sprite_bounds_and_rng_until_ordinary_step() 
                     );
                     assert_eq!(e.animation, 0.4);
                     assert_eq!(e.health, 1);
-                    assert_eq!(g.player.health, 4);
+                    assert_eq!(g.player.health, 4.0);
                 }
             }
         }

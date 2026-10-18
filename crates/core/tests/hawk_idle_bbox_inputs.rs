@@ -69,7 +69,7 @@ fn assert_step(game: &mut Game, hawk: u64, obstacle: u64, jump: bool) {
         "source subtracts ten before the grounded decrement"
     );
     assert_eq!(actor.vel.x, if jump { 0.9 } else { 0.0 });
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(
         !game
             .events

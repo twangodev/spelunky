@@ -164,7 +164,7 @@ fn canonical_natural_pistol_kill_keeps_spider_idle_roll_after_blood_and_destroy(
             "REAL_BULLET_RETIRED_ON_HIT"
         );
         assert_eq!(game.player.held, Some(pistol));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(!game.player.is_stunned());
         let prior: std::collections::BTreeSet<_> =
             game.world.entities.iter().map(|e| e.id).collect();
@@ -212,7 +212,7 @@ fn canonical_natural_pistol_kill_keeps_spider_idle_roll_after_blood_and_destroy(
         }
         assert_eq!(game.data.get("spiders"), Some(&1.0));
         assert_eq!(game.data.get("kills"), Some(&1.0));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(
             LiteralRng::at(&game).0,
             expected.0,

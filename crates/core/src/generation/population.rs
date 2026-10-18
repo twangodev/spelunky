@@ -4665,7 +4665,7 @@ mod tests {
                 );
             }
             assert_eq!(game.world.area, Area::Ice);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
         assert!(non_dark > 0 && allowed > 0 && disallowed > 0);
         assert!(

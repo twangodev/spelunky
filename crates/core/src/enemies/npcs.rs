@@ -465,7 +465,7 @@ fn ghost_player_collision(game: &mut Game, e: &mut Entity) {
         game.lifetime_stats
             .enemy_death(crate::statistics::EnemyDeath::Ghost);
     }
-    game.player.health = -99;
+    game.player.health = -99.0;
     game.player.invincible = 9999;
     game.player.data.insert("visible".into(), 0.0);
     game.player.data.insert("bounced".into(), 1.0);
@@ -1527,9 +1527,9 @@ fn keeper_player_collision(game: &mut Game, e: &mut Entity) {
             6.0
         };
         crate::world_events::spawn_detritus(game, "oBlood", game.player.pos);
-        if game.player.health > 0 {
+        if game.player.health > 0.0 {
             game.player.lose_health(1);
-            if game.player.health <= 0 && crate::statistics::is_real_level(game) {
+            if game.player.health <= 0.0 && crate::statistics::is_real_level(game) {
                 game.lifetime_stats
                     .enemy_death(crate::statistics::EnemyDeath::Shopkeeper);
             }
@@ -1559,7 +1559,7 @@ fn barrier_player_collision(game: &mut Game, e: &Entity) {
     if game.player.invincible != 0 {
         return;
     }
-    if game.player.health > 0 {
+    if game.player.health > 0.0 {
         game.player.lose_health(1);
     }
     game.events.push(GameEvent::Damage { amount: 1 });
@@ -1962,7 +1962,7 @@ mod tests {
                 assert_eq!(ghost.sprite, "sGhostDisappear");
                 assert!(previous > 0.0, "contact followed natural chase animation");
                 assert!((ghost.animation - previous - 0.2).abs() < 1e-9);
-                assert_eq!(g.player.health, -99);
+                assert_eq!(g.player.health, -99.0);
                 return;
             }
             previous = ghost.animation;
@@ -2144,11 +2144,11 @@ mod tests {
         }
         g.world.set_tile(6, 4, "oBlock");
         g.player.pos = Vec2::new(104.0, 88.0);
-        g.player.health = 1;
+        g.player.health = 1.0;
         let id = g.world.spawn("oShopkeeper", Vec2::new(96.0, 80.0));
         g.world.entity_mut(id).unwrap().state = 2;
         g.step(&InputFrame::default());
-        assert_eq!(g.player.health, 0);
+        assert_eq!(g.player.health, 0.0);
         assert_eq!(g.lifetime_stats.enemy_deaths[19], 1);
         assert_eq!(g.player.stun, 0);
     }
@@ -2244,7 +2244,7 @@ mod tests {
             .insert("barrier_created".into(), 1.0);
         g.world.spawn("oBarrier", Vec2::new(96.0, 96.0));
         g.step(&InputFrame::default());
-        assert_eq!(g.player.health, 3);
+        assert_eq!(g.player.health, 3.0);
         assert_eq!(g.player.stun, 0);
         assert_eq!(g.player.invincible, 30);
         assert_ne!(g.player.state, PlayerState::Stunned);
@@ -2298,7 +2298,7 @@ mod tests {
         g.player.pos = Vec2::new(101.0, 96.0);
         g.world.spawn("oGhost", Vec2::new(80.0, 80.0));
         g.step(&InputFrame::default());
-        assert_eq!(g.player.health, -99);
+        assert_eq!(g.player.health, -99.0);
         assert_eq!(g.state, RunState::Playing);
         assert_eq!(g.lifetime_stats.enemy_deaths[23], 1);
         g.step(&InputFrame::default());
@@ -2325,7 +2325,7 @@ mod tests {
         let skull_vy = -f64::from(1 + source_rng.range(3));
         let skull_vx = f64::from(source_rng.range(4)) - f64::from(source_rng.range(4));
         g.step(&InputFrame::default());
-        assert_eq!(g.player.health, -99);
+        assert_eq!(g.player.health, -99.0);
         assert_eq!(g.state, RunState::Playing);
         let actual_bones = g
             .world
@@ -2650,7 +2650,7 @@ mod tests {
         let mut e = Entity::new(1, "oGhost", g.player.pos);
         init(&mut e);
         collision(&mut g, &mut e, crate::dispatcher::Instance::Player);
-        assert_eq!(g.player.health, -99);
+        assert_eq!(g.player.health, -99.0);
         assert_eq!(e.state, 0);
     }
     #[test]
@@ -2662,7 +2662,7 @@ mod tests {
         init(&mut e);
         damsel(&mut g, &mut e);
         assert!(g.flags.contains("damsel_rescued"));
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(e.state, 4);
     }
     #[test]
@@ -2718,7 +2718,7 @@ mod tests {
     #[test]
     fn actual_step_stars_keeper_stops_attacking_dead_player() {
         let mut g = actual_room();
-        g.player.health = 0;
+        g.player.health = 0.0;
         g.player.state = PlayerState::Dead;
         g.state = RunState::Dead;
         let id = g.world.spawn("oShopkeeper2", Vec2::new(128.0, 128.0));

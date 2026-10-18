@@ -73,7 +73,7 @@ fn first_throw_query(preset: RulesPreset, facing: i8, distance: f64) -> (Game, E
     let thrown = game.world.entity(rock).unwrap();
     assert!(!thrown.held);
     assert!(thrown.vel.x * f64::from(facing) > 2.0);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     (game, before, damsel, rock)
 }
 

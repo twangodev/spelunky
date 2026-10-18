@@ -146,7 +146,7 @@ fn movement_witness(
     configure(&mut adaptive, view); // Initial view setup, before any Game.step.
     warmup(&mut adaptive);
     assert_eq!(
-        adaptive.player.health, 4,
+        adaptive.player.health, 4.0,
         "distant actor does not damage Player during witness"
     );
     let e = actor(&adaptive, id).expect("live visible adaptive actor");
@@ -228,7 +228,7 @@ fn wide_spring(rules: RulesPreset, rng: RngAlgorithm) {
     let mut adaptive = initial;
     configure(&mut adaptive, view);
     warmup(&mut adaptive);
-    assert_eq!(adaptive.player.health, 4);
+    assert_eq!(adaptive.player.health, 4.0);
     assert!(
         actor(&adaptive, id).is_none(),
         "visible unsupported spring must run source support Destroy"

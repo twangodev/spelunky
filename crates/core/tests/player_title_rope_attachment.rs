@@ -29,7 +29,7 @@ fn run(rules: RulesPreset, historical: bool) {
     };
     game.load_hub(hub::HubKind::Title);
     assert_eq!(game.player.pos, Vec2::new(600.0, 184.0));
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     let mut first_attachment = false;
     for frame in 0..221 {
         let before = game.player.clone();
@@ -47,7 +47,7 @@ fn run(rules: RulesPreset, historical: bool) {
             jump_pressed: frame == 0,
             ..Default::default()
         });
-        assert_eq!(game.player.health, 4, "{rules:?} frame {frame}");
+        assert_eq!(game.player.health, 4.0, "{rules:?} frame {frame}");
         if !first_attachment && game.player.state == PlayerState::Climbing {
             first_attachment = true;
             if !historical {

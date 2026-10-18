@@ -36,7 +36,7 @@ fn natural_spike_death_sinks_only_when_its_source_point_is_unsupported() {
                         "first fatal frame is not yet source dead"
                     );
                     assert_eq!(game.state, RunState::Dead);
-                    assert_eq!(game.player.health, 0);
+                    assert_eq!(game.player.health, 0.0);
                     lethal_gravity = game.player.data.get("my_gravity").copied();
                     break;
                 }

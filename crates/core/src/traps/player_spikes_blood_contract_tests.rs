@@ -34,7 +34,7 @@ fn actual_fall_onto_authored_spikes_creates_three_blood_without_hurt_sound() {
                     .iter()
                     .any(|e| matches!(e, GameEvent::Sound { name, .. } if name == "sndHurt"))
             );
-            assert_eq!(g.player.health, 0);
+            assert_eq!(g.player.health, 0.0);
             let mut callback = before;
             crate::player::tick(&mut callback, &InputFrame::default());
             let first = callback.world.next_id;
@@ -56,7 +56,7 @@ fn actual_fall_onto_authored_spikes_creates_three_blood_without_hurt_sound() {
                     .all(|e| e.value("world_effect_initialized") == 1.0)
             );
             assert_eq!(callback.rng.clone().next_u64(), oracle.next_u64());
-            assert_eq!(callback.player.health, -95);
+            assert_eq!(callback.player.health, -95.0);
             break;
         }
         assert!(reached, "natural fall must reach spike activation");

@@ -57,7 +57,7 @@ fn traverse_legacy_steps(seed: u64, level: u32, actions: &[u8], full_steps: bool
                 input.jump_released = previous_input.jump && !input.jump;
                 game.step(&input);
                 assert_eq!(game.state, crate::RunState::Playing);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert!(!game.player.is_stunned());
             } else {
                 game.tick += 1;
@@ -200,7 +200,7 @@ fn traverse_loaded_collision_recording(mut game: Game, actions: &[u8]) {
                 game.player.pos
             );
             assert!(
-                game.player.health > 0 && game.player.state != crate::PlayerState::Dead,
+                game.player.health > 0.0 && game.player.state != crate::PlayerState::Dead,
                 "ordinary controller route must remain alive"
             );
         }

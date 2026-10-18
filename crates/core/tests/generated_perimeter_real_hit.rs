@@ -92,7 +92,7 @@ fn step(g: &mut Game, input: InputFrame, previous: &mut InputFrame, tiles: &[Str
 fn exercise(seed: u32, rules: RulesPreset, trap: bool) {
     let mut g = Game::new(seed, rules);
     assert!(eligible(&g));
-    assert_eq!(g.player.health, 4);
+    assert_eq!(g.player.health, 4.0);
     assert_eq!(g.player.invincible, 0);
     assert_eq!(g.player.stun, 0);
     assert!(!g.player.is_stunned());
@@ -129,7 +129,7 @@ fn exercise(seed: u32, rules: RulesPreset, trap: bool) {
     for _ in 0..4 {
         step(&mut g, InputFrame::default(), &mut previous, &tiles);
     }
-    assert_eq!(g.player.health, 4);
+    assert_eq!(g.player.health, 4.0);
     assert!(g.player.grounded && !g.player.is_stunned());
     assert_eq!(g.player.vel, Vec2::default());
     let mut saw_arrow = false;
@@ -151,12 +151,12 @@ fn exercise(seed: u32, rules: RulesPreset, trap: bool) {
             .entities
             .iter()
             .any(|e| e.alive && e.object == "oArrow" && e.vel.x < -3.0);
-        if g.player.health < 4 {
+        if g.player.health < 4.0 {
             assert!(
                 trap && saw_arrow,
                 "FIXTURE_HIT lacks a prior live trap Arrow"
             );
-            assert_eq!(g.player.health, 2);
+            assert_eq!(g.player.health, 2.0);
             assert!(g.player.is_stunned() && g.player.stun > 0);
             assert!(!g.player.grounded, "FIXTURE_HIT must occur airborne");
             hit = true;
@@ -173,7 +173,7 @@ fn exercise(seed: u32, rules: RulesPreset, trap: bool) {
     for _ in 0..160 {
         wall_contact |= g.player.bounds().x <= 16.0 && (!trap || g.player.is_stunned());
         step(&mut g, InputFrame::default(), &mut previous, &tiles);
-        assert_eq!(g.player.health, if trap { 2 } else { 4 });
+        assert_eq!(g.player.health, if trap { 2.0 } else { 4.0 });
         if !g.player.is_stunned() && g.player.grounded && g.player.vel == Vec2::default() {
             break;
         }
@@ -270,7 +270,7 @@ fn exercise(seed: u32, rules: RulesPreset, trap: bool) {
     for _ in 0..60 {
         step(&mut g, InputFrame::default(), &mut previous, &tiles);
     }
-    assert_eq!(g.player.health, if trap { 2 } else { 4 });
+    assert_eq!(g.player.health, if trap { 2.0 } else { 4.0 });
     assert!(g.player.grounded && !g.player.is_stunned());
 }
 
@@ -344,7 +344,7 @@ fn touches_right_perimeter(g: &Game) -> bool {
 fn exercise_right(seed: u32, rules: RulesPreset, trap: bool) {
     let mut g = Game::new(seed, rules);
     assert!(eligible_right(&g));
-    assert_eq!(g.player.health, 4);
+    assert_eq!(g.player.health, 4.0);
     assert_eq!(g.player.invincible, 0);
     assert_eq!(g.player.stun, 0);
     assert!(!g.player.is_stunned());
@@ -372,7 +372,7 @@ fn exercise_right(seed: u32, rules: RulesPreset, trap: bool) {
     for _ in 0..4 {
         step(&mut g, InputFrame::default(), &mut previous, &tiles);
     }
-    assert_eq!(g.player.health, 4);
+    assert_eq!(g.player.health, 4.0);
     assert!(g.player.grounded && !g.player.is_stunned());
     assert_eq!(g.player.vel, Vec2::default());
     // The source-generated entrance ceiling can sit over the spawn. Walk under
@@ -419,12 +419,12 @@ fn exercise_right(seed: u32, rules: RulesPreset, trap: bool) {
             .entities
             .iter()
             .any(|e| e.alive && e.object == "oArrow" && e.vel.x > 3.0);
-        if g.player.health < 4 {
+        if g.player.health < 4.0 {
             assert!(
                 trap && saw_arrow,
                 "FIXTURE_HIT lacks a prior live trap Arrow"
             );
-            assert_eq!(g.player.health, 2);
+            assert_eq!(g.player.health, 2.0);
             assert!(g.player.is_stunned() && g.player.stun > 0);
             assert!(!g.player.grounded, "FIXTURE_HIT must occur airborne");
             hit = true;
@@ -441,7 +441,7 @@ fn exercise_right(seed: u32, rules: RulesPreset, trap: bool) {
     for _ in 0..160 {
         wall_contact |= touches_right_perimeter(&g) && (!trap || g.player.is_stunned());
         step(&mut g, InputFrame::default(), &mut previous, &tiles);
-        assert_eq!(g.player.health, if trap { 2 } else { 4 });
+        assert_eq!(g.player.health, if trap { 2.0 } else { 4.0 });
         if !g.player.is_stunned() && g.player.grounded && g.player.vel == Vec2::default() {
             break;
         }
@@ -544,7 +544,7 @@ fn exercise_right(seed: u32, rules: RulesPreset, trap: bool) {
     for _ in 0..60 {
         step(&mut g, InputFrame::default(), &mut previous, &tiles);
     }
-    assert_eq!(g.player.health, if trap { 2 } else { 4 });
+    assert_eq!(g.player.health, if trap { 2.0 } else { 4.0 });
     assert!(g.player.grounded && !g.player.is_stunned());
 }
 

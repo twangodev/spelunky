@@ -8,7 +8,7 @@ use spelunky_core::{
 
 fn healthy(g: &Game) {
     assert_eq!(g.state, RunState::Playing);
-    assert_eq!(g.player.health, 4);
+    assert_eq!(g.player.health, 4.0);
     assert!(!g.player.is_stunned());
 }
 

@@ -93,7 +93,7 @@ fn natural_yeti_sight_moves_ten_pixels_at_birth_and_next_step_in_both_directions
             Vec2::new(origin.x + f64::from(facing) * 20.0, origin.y),
             "SOURCE_YETI_SIGHT_SECOND_BUILTIN_TEN_PIXELS"
         );
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     });
 }
 #[test]
@@ -109,7 +109,7 @@ fn natural_yeti_sight_retires_at_authored_wall_on_second_step() {
             "SOURCE_YETI_SIGHT_SECOND_TICK_WALL_RETIREMENT"
         );
         assert_eq!(game.world.entity(owner).unwrap().health, 5);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     });
 }
 #[test]
@@ -127,6 +127,6 @@ fn natural_yeti_sight_without_authored_wall_remains_alive() {
             "SOURCE_YETI_SIGHT_OPEN_PATH_SURVIVAL_CONTROL"
         );
         assert_eq!(game.world.entity(owner).unwrap().health, 5);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     });
 }

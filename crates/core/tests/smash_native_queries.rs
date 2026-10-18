@@ -46,7 +46,7 @@ fn prefix(game: &Game, x: f64, clock: u64, rng_state: u64) {
     assert_eq!(game.player.pos, Vec2::new(x, 152.0));
     assert_eq!(game.player.vel, Vec2::default());
     assert!(game.player.grounded);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.state, RunState::Playing);
     assert_eq!(
         game.rng.state_bits(),
@@ -122,7 +122,7 @@ fn neutral_default_smash_half_motion_uses_raw_inclusive_hurt_bbox_then_real_cont
         moving_left(actor(&game, ids[0]), 94.5, -1.0);
         assert_eq!(game.player.pos, Vec2::new(89.0, 152.0));
         assert_eq!(
-            game.player.health, 4,
+            game.player.health, 4.0,
             "half-integer false contact must not deal10 damage"
         );
         prefix(&game, 89.0, 3, born_rng);
@@ -130,7 +130,7 @@ fn neutral_default_smash_half_motion_uses_raw_inclusive_hurt_bbox_then_real_cont
         assert_eq!(actor(&game, ids[0]).pos.x.round_ties_even(), 94.0);
         game.step(&InputFrame::default());
         // Original Player Step1983 clamps the first fatal frame to0 without Ankh.
-        assert_eq!(game.player.health, 0);
+        assert_eq!(game.player.health, 0.0);
         assert_eq!(game.state, RunState::Dead);
         assert_eq!(
             game.events
@@ -210,7 +210,7 @@ fn historical_smash_hurt_and_peer_edge_routes_remain_unchanged() {
             hurt.step(&InputFrame::default());
         }
         // Preserve the historical hurt plus the source first-fatal final clamp.
-        assert_eq!(hurt.player.health, 0);
+        assert_eq!(hurt.player.health, 0.0);
         assert_eq!(hurt.state, RunState::Dead);
         assert_eq!(
             hurt.events

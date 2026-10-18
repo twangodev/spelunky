@@ -37,7 +37,7 @@ fn fresh_boss_backs_away_from_each_authored_wall_without_directional_input() {
                     "source post-move full-height contact retreats one pixel"
                 );
                 assert_eq!(boss.vel.x, 0.0);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert_eq!(game.world.tile(25, 6).unwrap().object, "oHardBlock");
             }
         }
@@ -56,7 +56,7 @@ fn fresh_boss_with_one_more_pixel_of_wall_clearance_is_not_corrected() {
                 let id = game.spawn("oOlmec", Vec2::new(start, 96.0));
                 game.step(&InputFrame::default());
                 assert_eq!(game.world.entity(id).unwrap().pos.x, start);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
             }
         }
     }
@@ -87,7 +87,7 @@ fn fresh_boss_at_rest_under_ceiling_emits_slam_before_downward_correction() {
             for x in 5..9 {
                 assert!(game.world.tile(x, 5).unwrap().object.is_empty());
             }
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }

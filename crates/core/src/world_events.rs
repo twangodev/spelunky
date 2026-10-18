@@ -1687,7 +1687,7 @@ pub(crate) fn sync_parachute(game: &mut Game) {
         .copied()
         .unwrap_or(0.0)
         != 0.0
-        && game.player.health > 0
+        && game.player.health > 0.0
         && game.player.state != crate::PlayerState::Dead
         && !game.player.is_stunned();
     let existing: Vec<_> = game
@@ -2325,7 +2325,7 @@ mod tests {
         g.player.equipment.insert("Crown".into());
         g.step(&InputFrame::default());
         assert_eq!(g.data["darkness"], 0.0);
-        g.player.health = 0;
+        g.player.health = 0.0;
         g.state = crate::RunState::Dead;
         g.step(&InputFrame::default());
         assert_eq!(g.data["darkness"], 0.0);
@@ -2333,7 +2333,7 @@ mod tests {
     #[test]
     fn canonical_darkness_keeps_source_explosion_flash_below_zero() {
         let mut g = dark_room();
-        g.player.health = 100;
+        g.player.health = 100.0;
         let id = g.world.spawn("oExplosion", g.player.pos);
         let explosion = g.world.entity_mut(id).unwrap();
         crate::items::init_entity(explosion);
@@ -2707,7 +2707,7 @@ mod tests {
             }
             g.step(&InputFrame::default());
             assert!(g.world.entity(id).is_none(), "{object} must finish once");
-            assert!(g.player.health > 0);
+            assert!(g.player.health > 0.0);
         }
     }
     #[test]
@@ -3452,7 +3452,7 @@ mod tests {
             assert_eq!(game.engine_time(), 10);
             assert_eq!(game.world.entity(id).unwrap().pos.y, 90.0);
             assert_eq!(game.world.entity(id).unwrap().value("life"), 52.0);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }

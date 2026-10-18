@@ -150,7 +150,7 @@ fn real_trap_stun_skips_look_until_the_normal_controller_recovers() {
                     ..Default::default()
                 });
                 arrow |= g.world.entities.iter().any(|e| e.object == "oArrow");
-                if g.player.health < 4 {
+                if g.player.health < 4.0 {
                     assert!(
                         hanging && was_hanging && arrow,
                         "real source trap must interrupt a natural hang"
@@ -159,13 +159,13 @@ fn real_trap_stun_skips_look_until_the_normal_controller_recovers() {
                 }
                 hanging |= g.player.state == PlayerState::Hanging;
             }
-            assert_eq!(g.player.health, 2);
+            assert_eq!(g.player.health, 2.0);
             assert!(g.player.is_stunned());
             assert_eq!(count(&g), 0.);
             let mut recovered = false;
             for _ in 0..240 {
                 g.step(&down());
-                assert_eq!(g.player.health, 2);
+                assert_eq!(g.player.health, 2.0);
                 if g.player.is_stunned() {
                     assert_eq!(
                         count(&g),

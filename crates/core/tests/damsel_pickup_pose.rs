@@ -58,7 +58,7 @@ fn prepared(rules: RulesPreset, avatar: Character, facing: i8, historical: bool)
         game.step(&InputFrame::default());
     }
     assert_eq!(game.state, RunState::Playing);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.state, PlayerState::Standing);
     assert!(game.player.grounded && !game.player.is_stunned());
     assert_eq!(game.player.vel, Vec2::default());
@@ -106,7 +106,7 @@ fn actual_pickup(game: &mut Game, id: u64) {
     assert_eq!(actor.state, 0);
     assert_eq!(actor.vel, Vec2::default());
     assert_eq!(game.player.pickup_item_type, "Damsel");
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.attack_timer, 0, "pickup does not start a whip");
     assert_eq!(game.state, RunState::Playing);
 }
@@ -165,7 +165,7 @@ fn ordinary_damsel_pickup_assigns_source_carried_pose_and_mask() {
                         (game.player.bombs, game.player.ropes, game.player.money),
                         resources
                     );
-                    assert_eq!(game.player.health, 4);
+                    assert_eq!(game.player.health, 4.0);
                 }
             }
         }

@@ -48,7 +48,7 @@ fn natural_mantrap_hidden_cleanup(rules: RulesPreset, revision: GenerationRevisi
     // override: Game.spawn runs the original default Create paths.
     let pack = game.spawn("oJetpack", Vec2::new(224.0, 152.0));
     let mantrap = game.spawn("oManTrap", Vec2::new(160.0, 144.0));
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(!game.player.has("Ankh"), "FIXTURE_NO_ANKH_REVIVAL");
     assert!(
         !game.player.has("SpikeShoes"),
@@ -64,7 +64,7 @@ fn natural_mantrap_hidden_cleanup(rules: RulesPreset, revision: GenerationRevisi
     assert_eq!(game.world.entity(mantrap).unwrap().vel.x, 2.5);
     loose_active(&game, pack);
     for _ in 0..96 {
-        assert_eq!(game.player.health, 4, "FIXTURE_HEALTHY_UNTIL_REAL_EAT");
+        assert_eq!(game.player.health, 4.0, "FIXTURE_HEALTHY_UNTIL_REAL_EAT");
         assert_eq!(
             game.player.invincible, 0,
             "FIXTURE_NOT_PREINJURED_OR_INVINCIBLE"
@@ -79,7 +79,7 @@ fn natural_mantrap_hidden_cleanup(rules: RulesPreset, revision: GenerationRevisi
         });
         if game.player.data.get("hidden") == Some(&1.0) {
             assert_eq!(
-                game.player.health, -99,
+                game.player.health, -99.0,
                 "FIXTURE_REAL_MANTRAP_FATAL_CONTACT"
             );
             assert_eq!(
@@ -126,7 +126,7 @@ fn natural_mantrap_hidden_cleanup(rules: RulesPreset, revision: GenerationRevisi
                 RunState::Dead,
                 "FIXTURE_NEXT_PLAYER_STEP_RECOGNIZED_DEATH"
             );
-            assert_eq!(game.player.health, 0);
+            assert_eq!(game.player.health, 0.0);
             assert!(!game.player.has("Jetpack"));
             assert!(game.player.held.is_none());
             if revision == GenerationRevision::SourceClassicV2 {

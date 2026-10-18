@@ -232,7 +232,7 @@ fn ordinary_bomb_button_still_arms_and_warns_only_with_nearby_shop_keeper() {
             assert_eq!(bomb.image_speed(), 0.2);
             assert_eq!(bomb.alarms[0], 80);
             assert_eq!(bomb.alarms[1], -1);
-            assert_eq!(game.player.bombs, inventory - 1);
+            assert_eq!(game.player.bombs, inventory - 1.0);
             assert!(
                 !game
                     .events

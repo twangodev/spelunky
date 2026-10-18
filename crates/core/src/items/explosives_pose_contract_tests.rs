@@ -28,7 +28,7 @@ fn ordinary_reserved_bomb_carry_uses_duck_and_standing_light_item_offsets() {
             });
             let id = game.player.held.expect("ordinary Cycle reserves Bomb");
             assert_eq!(game.world.entity(id).unwrap().object, "oBomb");
-            assert_eq!(game.player.bombs, 3);
+            assert_eq!(game.player.bombs, 3.0);
             assert_eq!(game.world.entity(id).unwrap().value("armed"), 0.0);
             game.step(&InputFrame {
                 down: true,
@@ -53,8 +53,8 @@ fn ordinary_reserved_bomb_carry_uses_duck_and_standing_light_item_offsets() {
                 game.world.entity(id).unwrap().pos.y,
                 game.player.pos.y + 2.0
             );
-            assert_eq!(game.player.health, 4);
-            assert_eq!(game.player.bombs, 3);
+            assert_eq!(game.player.health, 4.0);
+            assert_eq!(game.player.bombs, 3.0);
         }
     }
 }
@@ -112,7 +112,7 @@ fn configured_blast_result_pasted_bomb_stops_by_sprite_independently_of_armed() 
             assert_eq!(bomb.vel.y, 0.0);
             assert_eq!(bomb.value("armed"), armed);
             assert_eq!(bomb.value("attached_id"), 0.0);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -150,7 +150,7 @@ fn configured_down_bomb_action_reads_source_state_instead_of_geometric_support()
             assert_eq!(bomb.sprite, "sBombArmed");
             assert_eq!(bomb.alarms[0], 80);
             assert_eq!(bomb.alarms[2], 10);
-            assert_eq!(game.player.bombs, 3);
+            assert_eq!(game.player.bombs, 3.0);
         }
     }
 }

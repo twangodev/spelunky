@@ -110,7 +110,7 @@ fn no_reaction(game: &Game, keeper: Option<u64>) {
         "no invented global anger flag"
     );
     assert!(!reason_three(game));
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
 }
 
 fn reaction(game: &Game, keeper: u64) {
@@ -127,7 +127,7 @@ fn reaction(game: &Game, keeper: u64) {
         reason_three(game),
         "source cost-death Step must call reason3"
     );
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
 }
 
 fn acquire_blade(game: &mut Game, blade: u64, target: u64, keeper: Option<u64>, cost: f64) {

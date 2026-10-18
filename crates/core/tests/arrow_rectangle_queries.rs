@@ -41,7 +41,7 @@ fn walking_away_from_trap_waits_for_source_integer_arrow_bounds() {
             }
             game.step(&input);
             assert_eq!(
-                game.player.health, 4,
+                game.player.health, 4.0,
                 "{rules:?}/tick{tick}: no source bbox contact yet"
             );
         }
@@ -52,7 +52,7 @@ fn walking_away_from_trap_waits_for_source_integer_arrow_bounds() {
         // The next real frame closes that gap; genuine contact still hurts.
         game.step(&input);
         assert_eq!(
-            game.player.health, 2,
+            game.player.health, 2.0,
             "{rules:?}: next real arrow contact must hurt"
         );
         assert!(game.player.is_stunned());
@@ -78,7 +78,7 @@ fn triggered_arrow_still_hits_when_player_stops() {
                 ..Default::default()
             });
         }
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(
             game.world
                 .entities
@@ -88,7 +88,7 @@ fn triggered_arrow_still_hits_when_player_stops() {
         let mut hurt = false;
         for _ in 0..15 {
             game.step(&InputFrame::default());
-            if game.player.health == 2 {
+            if game.player.health == 2.0 {
                 hurt = true;
                 assert!(game.player.is_stunned());
                 break;

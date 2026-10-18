@@ -115,7 +115,7 @@ struct Fixture {
     fragile: u64,
     attack_held: bool,
     face: i8,
-    resources: (i32, i32, u32),
+    resources: (f64, f64, u32),
 }
 impl Fixture {
     fn step(&mut self, mut input: InputFrame) {
@@ -123,7 +123,10 @@ impl Fixture {
         input.attack_released = self.attack_held && !input.attack;
         self.attack_held = input.attack;
         self.game.step(&input);
-        assert_eq!(self.game.player.health, 4, "FIXTURE Player must avoid lava");
+        assert_eq!(
+            self.game.player.health, 4.0,
+            "FIXTURE Player must avoid lava"
+        );
         assert_eq!(self.game.player.pos, Vec2::new(96.0, 168.0));
         assert_eq!(self.game.player.facing, self.face);
         assert_eq!(

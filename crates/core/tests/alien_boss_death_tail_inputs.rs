@@ -57,7 +57,7 @@ fn approach_first_boss_step(game: &mut Game, boss: u64, boulder: Option<u64>, bi
         });
         assert_eq!(game.player.pos, Vec2::new(player_x[tick], 152.0));
         assert_eq!(game.camera.x, camera_x[tick]);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.player.stun, 0);
         assert_eq!(game.player.invincible, 0);
         let actor = game.world.entity(boss).unwrap();
@@ -127,7 +127,7 @@ fn ordinary_crush(rules: RulesPreset) -> (Game, u64) {
     });
     assert_eq!(game.engine_time(), 10);
     assert_eq!(game.player.pos, Vec2::new(228.0, 152.0));
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.stun, 0);
     assert_eq!(game.player.invincible, 0);
     let block = game.world.entity(boulder.unwrap()).unwrap();
@@ -199,7 +199,7 @@ fn ordinary_boulder_crush_continues_alien_boss_recovery_counter_while_dead() {
         assert_eq!(actor.state, 99);
         assert_eq!(actor.value("psychic_recover"), 98.0);
         assert_eq!(effective_depth(&game, boss), 101.0);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.data.get("alienbosses"), Some(&1.0));
         assert_eq!(game.data.get("kills"), Some(&1.0));
         assert!(
@@ -244,6 +244,6 @@ fn ordinary_healthy_alien_boss_retains_live_depth_and_positive_recovery_timing()
             98.0
         );
         assert_eq!(effective_depth(&game, boss), 60.0);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }

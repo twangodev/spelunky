@@ -78,7 +78,7 @@ fn fractional_head_route(rules: RulesPreset) {
         };
         game.step(&input);
         assert_eq!(
-            game.player.health, 4,
+            game.player.health, 4.0,
             "healthy ordinary route at frame {frame}"
         );
         assert!(!game.player.is_stunned());

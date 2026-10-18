@@ -170,12 +170,12 @@ pub struct Player {
     pub facing: i8,
     pub state: PlayerState,
     pub grounded: bool,
-    pub health: i32,
+    pub health: f64,
     /// Session-only opt-in cheat. Imported games always start without it.
     #[serde(skip)]
     pub cheat_invulnerable: bool,
-    pub bombs: i32,
-    pub ropes: i32,
+    pub bombs: f64,
+    pub ropes: f64,
     pub money: u32,
     pub equipment: BTreeSet<String>,
     pub held: Option<u64>,
@@ -205,10 +205,10 @@ impl Default for Player {
             facing: 1,
             state: PlayerState::Falling,
             grounded: false,
-            health: 4,
+            health: 4.0,
             cheat_invulnerable: false,
-            bombs: 4,
-            ropes: 4,
+            bombs: 4.0,
+            ropes: 4.0,
             money: 0,
             equipment: BTreeSet::new(),
             held: None,
@@ -230,7 +230,7 @@ impl Default for Player {
 impl Player {
     pub(crate) fn lose_health(&mut self, amount: i32) {
         if !self.cheat_invulnerable {
-            self.health -= amount;
+            self.health -= f64::from(amount);
         }
     }
 
@@ -1669,7 +1669,9 @@ impl Game {
         }
     }
     pub fn damage_player(&mut self, amount: i32) {
-        if !self.player.cheat_invulnerable && self.player.invincible == 0 && self.player.health > 0
+        if !self.player.cheat_invulnerable
+            && self.player.invincible == 0
+            && self.player.health > 0.0
         {
             self.player.lose_health(amount);
             self.player.invincible = 60;

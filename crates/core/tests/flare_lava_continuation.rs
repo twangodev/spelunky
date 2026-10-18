@@ -37,7 +37,7 @@ fn pickup_flare(rules: RulesPreset, facing: i8, fluid: Option<&str>) -> (Game, u
     });
     assert_eq!(game.player.state, PlayerState::Standing);
     assert_eq!(game.player.vel, Vec2::default());
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(
         !game.world.fluid_dirty,
         "authored quiet pool has no drain request"
@@ -75,7 +75,7 @@ fn throw_flare(game: &mut Game) {
     });
     assert_eq!(game.player.held, None);
     assert!(game.player.pickup_item_type.is_empty());
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
 }
 
 fn check_fluid(rules: RulesPreset, facing: i8, fluid: &str, expected_y: f64) {

@@ -30,7 +30,7 @@ fn scene(object: &str, rules: RulesPreset, algorithm: RngAlgorithm, rear: bool) 
             ..Default::default()
         });
         assert_eq!(game.player.facing, if rear { 1 } else { -1 });
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.world.entity(id).unwrap().facing, 1);
         return (game, id);
     }
@@ -67,7 +67,7 @@ fn accepted_hit(object: &str, rules: RulesPreset, algorithm: RngAlgorithm, rear:
         });
         armed |= fire;
         assert_eq!(
-            game.player.health, 4,
+            game.player.health, 4.0,
             "ordinary chase and weapon route must avoid contact injury"
         );
         let e = game
@@ -126,7 +126,7 @@ fn natural_caveman_and_hawkman_without_melee_keep_attack_animation_speed() {
         for _ in 0..64 {
             let before = game.world.entity(id).unwrap().state;
             game.step(&InputFrame::default());
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             let e = game.world.entity(id).unwrap();
             assert_eq!(e.health, hp);
             if before == 2 {

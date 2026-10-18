@@ -47,7 +47,7 @@ fn neutral_dark_room_lamp_uses_aggregate_bounds_at_integer_and_fractional_origin
             assert_eq!(gap(player, source), expected);
             let mut rng = g.rng.clone();
             g.step(&InputFrame::default());
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
             assert_eq!(g.player.pos.x, px);
             assert_eq!(g.player.data["dist_to_nearest_light_source"], expected);
             assert_eq!(g.data["darkness"], expected / 160.);
@@ -87,7 +87,7 @@ fn ordinary_contained_lava_surface_uses_aggregate_tile_bounds_before_player_moti
             surface.text.get("terrain_sprite").map(String::as_str),
             Some("sLavaTop")
         );
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(g.player.data["dist_to_nearest_light_source"], 9.);
         assert_eq!(g.data["darkness"], 9. / 160.);
         assert_eq!(

@@ -794,7 +794,7 @@ fn vampire_character_collision(game: &mut Game, e: &mut Entity) {
             6.0
         };
         game.spawn("oBlood", game.player.pos);
-        if game.player.health > 0 {
+        if game.player.health > 0.0 {
             game.player.lose_health(1);
             game.events.push(crate::GameEvent::Damage { amount: 1 });
         }
@@ -977,7 +977,7 @@ mod tests {
             game.step(&crate::InputFrame::default());
 
             let vampire = game.world.entity(id).unwrap();
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(game.player.invincible, 0);
             assert_eq!(vampire.state, 98);
             if stunned {
@@ -995,7 +995,7 @@ mod tests {
     }
     #[test]
     fn actual_vampire_contact_has_blink_and_knockback_without_stun_or_death_stat() {
-        for health in [4, 1] {
+        for health in [4.0, 1.0] {
             let mut game = Game::shell(42, RulesPreset::Classic);
             game.player.data.insert("active".into(), 0.0);
             game.player.pos = Vec2::new(88.0, 78.0);
@@ -1008,7 +1008,7 @@ mod tests {
 
             game.step(&crate::InputFrame::default());
 
-            assert_eq!(game.player.health, health - 1);
+            assert_eq!(game.player.health, health - 1.0);
             assert_eq!(game.player.invincible, 30);
             assert_eq!(game.player.data["blink"], 30.0);
             assert_eq!(game.player.stun, 0);

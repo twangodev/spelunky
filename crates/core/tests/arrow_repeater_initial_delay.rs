@@ -112,7 +112,7 @@ fn check(rules: RulesPreset, algorithm: RngAlgorithm, seed: u32, object: &str) {
     for tick in 1..=delay {
         game.step(&InputFrame::default());
         assert_eq!(
-            game.player.health, 4,
+            game.player.health, 4.0,
             "Hero remains safe below the arrow lane"
         );
         assert_eq!(game.player.pos, Vec2::new(64.0, 152.0));
@@ -143,7 +143,7 @@ fn check(rules: RulesPreset, algorithm: RngAlgorithm, seed: u32, object: &str) {
     }
     let next_delay = tape.later_delay();
     game.step(&InputFrame::default());
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.pos, Vec2::new(64.0, 152.0));
     assert_eq!(
         sounds(&game),

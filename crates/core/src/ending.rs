@@ -772,7 +772,7 @@ mod tests {
         until(&mut g, 100, |s| s.draw_loot == 2 && s.money_count == 350);
         assert!(g.ending.as_ref().unwrap().is_loot);
         assert!(g.ending.as_ref().unwrap().is_kills);
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(g.data["pending_damsel_kisses"], 3.);
         tick(
             &mut g,
@@ -789,7 +789,7 @@ mod tests {
                 .any(|e| e.object == "oDamselKiss" && e.value("kissed") == 0.)
         );
         g.next_level();
-        assert_eq!(g.player.health, 5);
+        assert_eq!(g.player.health, 5.0);
     }
     #[test]
     fn cinematic_particles_use_source_motion_and_event_lifetimes() {
@@ -1243,7 +1243,7 @@ mod tests {
                         g.step(&InputFrame::default());
                         assert!(g.events.contains(&GameEvent::Damage { amount: 99 }));
                         assert_eq!(g.player.sprite, exit_sprite);
-                        assert_eq!(g.player.health, if ankh { 4 } else { 0 });
+                        assert_eq!(g.player.health, if ankh { 4.0 } else { 0.0 });
                         assert_eq!(
                             g.state,
                             if ankh || last_exit_frame {
@@ -1267,7 +1267,7 @@ mod tests {
                             for corpse_step in 1..=40 {
                                 g.step(&InputFrame::default());
                                 assert!(g.events.contains(&GameEvent::Damage { amount: 99 }));
-                                assert_eq!(g.player.health, -99 * corpse_step);
+                                assert_eq!(g.player.health, -99.0 * f64::from(corpse_step));
                                 assert!(!g.events.contains(&GameEvent::Died));
                                 assert_eq!(
                                     g.player.data.get("hidden").copied().unwrap_or(0.0),
@@ -1276,7 +1276,7 @@ mod tests {
                             }
                             assert_eq!(g.world.name, "Mines");
                             assert_eq!(g.state, RunState::Dead);
-                            assert_eq!(g.player.health, -99 * 40);
+                            assert_eq!(g.player.health, -99.0 * 40.0);
                             assert!(!g.player.is_exiting());
                             assert_eq!(
                                 g.player.sprite,
@@ -1288,7 +1288,7 @@ mod tests {
                         }
                     }
                     let expected_health = if arriving_lava {
-                        if ankh { 4 } else { 0 }
+                        if ankh { 4.0 } else { 0.0 }
                     } else {
                         initial_health
                     };

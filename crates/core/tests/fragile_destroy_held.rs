@@ -29,7 +29,7 @@ fn inherited_fragile_destroy_reads_receiver_held_not_backlink_identity() {
                         let first_birth = game.world.next_id;
                         let unrelated_before =
                             serde_json::to_value(game.world.entity(unrelated).unwrap()).unwrap();
-                        assert_eq!(game.player.health, 4);
+                        assert_eq!(game.player.health, 4.0);
                         assert!(game.player.engine_active);
                         // From this point, invoke the complete real callback once;
                         // no actor/hand/HP/RNG writes are made by the fixture.
@@ -53,7 +53,7 @@ fn inherited_fragile_destroy_reads_receiver_held_not_backlink_identity() {
                             serde_json::to_value(game.world.entity(unrelated).unwrap()).unwrap(),
                             unrelated_before
                         );
-                        assert_eq!(game.player.health, 4);
+                        assert_eq!(game.player.health, 4.0);
                         assert_eq!(
                             game.events
                                 .iter()
@@ -103,7 +103,7 @@ fn ordinary_jar_skull_pickup_and_clean_inventory_cycle_keep_the_source_type() {
                 game.step(&InputFrame::default());
             }
             assert!(game.player.grounded);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(game.player.invincible, 0);
             assert!(!game.player.is_stunned());
             assert_eq!(game.player.pos, Vec2::new(64.0, 152.0));
@@ -140,7 +140,7 @@ fn ordinary_jar_skull_pickup_and_clean_inventory_cycle_keep_the_source_type() {
             let bomb = game.player.held.unwrap();
             assert_eq!(game.world.entity(bomb).unwrap().object, "oBomb");
             assert_eq!(game.player.pickup_item_type, item_type);
-            assert_eq!((game.player.bombs, game.player.ropes), (3, 4));
+            assert_eq!((game.player.bombs, game.player.ropes), (3.0, 4.0));
             assert_eq!(
                 game.rng.state_bits(),
                 rng,
@@ -166,8 +166,8 @@ fn ordinary_jar_skull_pickup_and_clean_inventory_cycle_keep_the_source_type() {
             assert!(item.held);
             assert_eq!(item.value("breakPieces"), 1.0);
             assert_eq!(game.player.pickup_item_type, item_type);
-            assert_eq!((game.player.bombs, game.player.ropes), (4, 4));
-            assert_eq!(game.player.health, 4);
+            assert_eq!((game.player.bombs, game.player.ropes), (4.0, 4.0));
+            assert_eq!(game.player.health, 4.0);
             assert!(!game.player.is_stunned());
         }
     }

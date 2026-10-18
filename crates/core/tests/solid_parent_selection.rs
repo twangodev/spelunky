@@ -19,7 +19,7 @@ fn collapse(g: &mut Game, ice: u64) {
     for frame in 1..=29 {
         g.step(&InputFrame::default());
         assert_eq!(g.player.pos, Vec2::new(88., 72.));
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(
             g.world.entity(ice).unwrap().value("thickness"),
             60. - 2. * f64::from(frame)
@@ -35,7 +35,7 @@ fn collapse(g: &mut Game, ice: u64) {
     g.step(&InputFrame::default());
     assert!(g.world.entity(ice).is_none());
     assert_eq!(g.player.pos, Vec2::new(88., 72.));
-    assert_eq!(g.player.health, 4);
+    assert_eq!(g.player.health, 4.0);
     assert!(
         g.world.fluid_dirty,
         "parent water invalidation follows attachments"

@@ -156,10 +156,10 @@ pub(super) fn animation_end(game: &mut Game, e: &mut Entity, sprite: &str) {
 }
 
 fn hurt_player(game: &mut Game, amount: i32, cause: Option<crate::statistics::EnemyDeath>) {
-    if game.player.health > 0 {
+    if game.player.health > 0.0 {
         game.player.lose_health(amount);
         game.events.push(GameEvent::Damage { amount });
-        if game.player.health <= 0 && crate::statistics::is_real_level(game) {
+        if game.player.health <= 0.0 && crate::statistics::is_real_level(game) {
             if let Some(cause) = cause {
                 game.lifetime_stats.enemy_death(cause);
             }
@@ -1893,7 +1893,7 @@ mod tests {
                 }
                 game.player.pos = Vec2::new(88.0, 152.0);
                 game.player.state = crate::PlayerState::Standing;
-                game.player.health = 1;
+                game.player.health = 1.0;
                 game.player.invincible = invincible;
                 // The low ceiling selects Hawkman's damaging event branch.
                 game.world.set_tile(5, 8, "oTemple");
@@ -1901,7 +1901,7 @@ mod tests {
                 init(&mut e);
                 assert!(collision(&mut game, &mut e, Instance::Player));
                 let hit = invincible == 0 || object == "oFly";
-                assert_eq!(game.player.health <= 0, hit, "{object}");
+                assert_eq!(game.player.health <= 0.0, hit, "{object}");
                 if let Some(cause) = cause {
                     assert_eq!(
                         game.lifetime_stats.enemy_deaths[cause as usize],
@@ -2159,7 +2159,7 @@ mod tests {
             game.step(&controls);
             assert_eq!(game.player.pos, start, "locked player, tick {tick}");
             assert_eq!((game.player.bombs, game.player.ropes), inventory);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             let boss = game.world.entity(boss_id).unwrap();
             match tick {
                 20 => assert_eq!(game.camera, Vec2::new(40.0, 400.0)),
@@ -2254,7 +2254,7 @@ mod tests {
                 break;
             }
             assert_eq!(game.player.pos, start, "locked player, tick {tick}");
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
         assert!(saw_prepare && saw_slam);
         assert_eq!(released_at, scheduled_at.map(|tick| tick + 50));
@@ -2266,7 +2266,7 @@ mod tests {
             });
         }
         assert!(game.player.pos.x > start.x + 20.0);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         game.step(&crate::InputFrame {
             jump: true,
             jump_pressed: true,
@@ -2574,7 +2574,7 @@ mod tests {
             game.player.invincible = invincible;
         };
         let assert_hit = |game: &Game| {
-            assert_eq!(game.player.health, 2);
+            assert_eq!(game.player.health, 2.0);
             assert_eq!(game.player.invincible, 30);
             assert_eq!(game.player.data.get("blink"), Some(&30.0));
             assert_eq!(game.player.stun, 20);
@@ -2613,7 +2613,7 @@ mod tests {
 
         touch(&mut immune, 2);
         immune.step(&crate::InputFrame::default());
-        assert_eq!(immune.player.health, 4);
+        assert_eq!(immune.player.health, 4.0);
         assert_eq!(immune.player.invincible, 1);
         assert_eq!(immune.player.stun, 0);
         assert_eq!(
@@ -2634,7 +2634,7 @@ mod tests {
         // completion frame still hurts; the following frame has no instance.
         last_visible.player.invincible = 0;
         last_visible.step(&crate::InputFrame::default());
-        assert_eq!(last_visible.player.health, 2);
+        assert_eq!(last_visible.player.health, 2.0);
         assert!(
             !last_visible
                 .events
@@ -2645,7 +2645,7 @@ mod tests {
         touch(&mut immune, 999);
         immune.step(&crate::InputFrame::default());
         assert!(immune.world.entity(id).is_none());
-        assert_eq!(immune.player.health, 4);
+        assert_eq!(immune.player.health, 4.0);
         assert_eq!(immune.player.stun, 0);
         assert!(
             !immune
@@ -2936,7 +2936,7 @@ mod tests {
             g.world.entity_mut(fly_id).unwrap().vel = Vec2::new(vx, 0.0);
             g.step(&crate::InputFrame::default());
             let damsel = g.world.entity(damsel_id).unwrap();
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
             if invincible {
                 assert_eq!(damsel.health, 4);
                 assert!(damsel.held);
@@ -2997,7 +2997,7 @@ mod tests {
         let id = g.world.spawn("oHawkman", Vec2::new(80.0, 144.0));
         g.world.entity_mut(id).unwrap().vel = Vec2::default();
         g.step(&crate::InputFrame::default());
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(g.world.entity(id).unwrap().health, 3);
         assert_eq!(g.world.entity(id).unwrap().state, 98);
     }
@@ -3012,7 +3012,7 @@ mod tests {
         let id = g.world.spawn("oHawkman", Vec2::new(80.0, 144.0));
         g.world.entity_mut(id).unwrap().vel = Vec2::default();
         g.step(&crate::InputFrame::default());
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(g.player.pos, Vec2::new(80.0, 144.0));
         assert_eq!(g.player.held, None);
         assert!(!g.world.entity(held).unwrap().held);
@@ -3060,7 +3060,7 @@ mod tests {
         let mut e = Entity::new(1, "oFly", g.player.pos);
         init(&mut e);
         assert!(collision(&mut g, &mut e, Instance::Player));
-        assert_eq!(g.player.health, 2);
+        assert_eq!(g.player.health, 2.0);
         assert_eq!(g.player.invincible, 27);
         assert!(!e.alive);
     }
@@ -3154,7 +3154,7 @@ mod tests {
                     }
                     assert_eq!(alerted, !wall, "{object}");
                     assert_eq!(game.world.entity(actor).unwrap().state == 2, !wall);
-                    assert_eq!(game.player.health, 4);
+                    assert_eq!(game.player.health, 4.0);
                 }
             }
         }
@@ -3903,7 +3903,7 @@ mod configured_olmec_raw_carry {
             olmec(&mut game, &mut boss);
             assert_eq!(game.player.pos.y, expected_player_y);
             assert_eq!(boss.value("carryPlayer"), expected_carry);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(game.player.vel, Vec2::new(0.0, 2.0));
         }
     }

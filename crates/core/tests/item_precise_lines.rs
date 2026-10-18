@@ -36,7 +36,7 @@ fn sinking_support(rules: RulesPreset) {
         assert_eq!(item.pos, Vec2::new(88.0, 76.0));
         assert_eq!(item.vel.y, 0.0);
         assert_eq!(item.value("colBot"), 1.0);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
     assert!(source_y > 80.5 && source_y < 80.6);
     game.step(&InputFrame::default());
@@ -52,7 +52,7 @@ fn sinking_support(rules: RulesPreset) {
     assert_eq!(item.vel.y, 0.6);
     assert_eq!(item.pos, Vec2::new(88.0, 76.0));
     assert!((game.world.entity(block).unwrap().pos.y - (source_y + 0.05)).abs() < 1e-10);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
 }
 #[test]
 fn natural_sinking_block_releases_classic_item_support() {
@@ -73,7 +73,7 @@ fn integer_supported_block_keeps_the_item_on_its_opaque_top() {
             assert_eq!(item.pos, Vec2::new(88.0, 76.0));
             assert_eq!(item.vel.y, 0.0);
             assert_eq!(item.value("colBot"), 1.0);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }

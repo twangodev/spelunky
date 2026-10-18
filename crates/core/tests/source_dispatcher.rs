@@ -37,7 +37,7 @@ fn fatal_automatic_collision_waits_for_next_player_step_to_latch_death() {
 
     // Bullet's automatic Collision follows Game318 and Player319 Normal Step.
     step(&mut game);
-    assert_eq!(game.player.health, 0);
+    assert_eq!(game.player.health, 0.0);
     assert_eq!(game.state, RunState::Playing);
     assert_ne!(game.player.state, PlayerState::Dead);
     assert_eq!(died_events(&game), 0);
@@ -66,14 +66,14 @@ fn fatal_collision_defers_ankh_consumption_and_teleport_to_next_player_step() {
     game.world.spawn("oBullet", Vec2::new(88.0, 149.0));
 
     step(&mut game);
-    assert_eq!(game.player.health, 0);
+    assert_eq!(game.player.health, 0.0);
     assert_eq!(game.player.pos.x, 88.0);
     assert!(game.player.has("Ankh"));
     assert_eq!(game.state, RunState::Playing);
     assert_eq!(died_events(&game), 0);
 
     step(&mut game);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.pos.x, 40.0);
     assert!(!game.player.has("Ankh"));
     assert_eq!(game.state, RunState::Playing);
@@ -404,7 +404,7 @@ fn nonpositive_life_blocks_fresh_bomb_and_rope_before_death_or_ankh_revival() {
         for ankh in [false, true] {
             for bomb in [false, true] {
                 let mut game = flat_room();
-                game.player.health = life;
+                game.player.health = f64::from(life);
                 if ankh {
                     game.player.equipment.insert("Ankh".into());
                 }
@@ -432,7 +432,7 @@ fn nonpositive_life_blocks_fresh_bomb_and_rope_before_death_or_ankh_revival() {
                         RunState::Dead
                     }
                 );
-                assert_eq!(game.player.health, if ankh { 4 } else { 0 });
+                assert_eq!(game.player.health, if ankh { 4.0 } else { 0.0 });
                 assert!(!game.player.has("Ankh"));
                 assert_eq!(died_events(&game), usize::from(!ankh));
                 assert_eq!(game.events.iter().filter(|event| matches!(event, GameEvent::Sound {name,..} if name == "sndTeleport")).count(), usize::from(ankh));
@@ -451,8 +451,8 @@ fn positive_life_keeps_fresh_bomb_and_rope_actions_and_their_source_births() {
             rope_pressed: !bomb,
             ..Default::default()
         });
-        assert_eq!(game.player.bombs, resources.0 - i32::from(bomb));
-        assert_eq!(game.player.ropes, resources.1 - i32::from(!bomb));
+        assert_eq!(game.player.bombs, resources.0 - f64::from(bomb));
+        assert_eq!(game.player.ropes, resources.1 - f64::from(!bomb));
         assert!(game.world.entities.iter().any(
             |entity| entity.alive && entity.object == if bomb { "oBomb" } else { "oRopeThrow" }
         ));
@@ -462,6 +462,6 @@ fn positive_life_keeps_fresh_bomb_and_rope_actions_and_their_source_births() {
                 .any(|event| matches!(event, GameEvent::Sound {name,..} if name == "sndThrow"))
         );
         assert_eq!(game.state, RunState::Playing);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }

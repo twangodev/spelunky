@@ -60,7 +60,10 @@ fn real_pickup_throw_and_grounded_recovery_reaches_source_run_wall_turns() {
                     .entity(id)
                     .expect("healthy recovered actor must survive");
                 assert_eq!(e.health, 4);
-                assert_eq!(g.player.health, 4, "route stays clear of unrelated damage");
+                assert_eq!(
+                    g.player.health, 4.0,
+                    "route stays clear of unrelated damage"
+                );
                 if before.state == 2 && e.timer < before.timer {
                     recovery_decrements += before.timer - e.timer;
                 }

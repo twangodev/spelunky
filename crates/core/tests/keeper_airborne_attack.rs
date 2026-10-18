@@ -14,7 +14,7 @@ fn sound(game: &Game, wanted: &str) -> bool {
 }
 
 fn untouched_player(game: &Game) {
-    assert_eq!(game.player.health, 4, "FIXTURE_NO_DAMAGE");
+    assert_eq!(game.player.health, 4.0, "FIXTURE_NO_DAMAGE");
     assert_eq!(game.player.stun, 0, "FIXTURE_NO_STUN");
     assert!(!game.player.is_stunned());
     assert!(

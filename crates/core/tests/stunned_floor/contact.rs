@@ -124,7 +124,7 @@ fn side(g: &Game, right: bool) -> Rect {
 fn isolated(g: &Game) -> bool {
     g.player.is_stunned()
         && g.player.stun > 1
-        && g.player.health == 2
+        && g.player.health == 2.0
         && !line_hit(g, top(g), "oSolid")
         && !line_hit(g, side(g, false), "oSolid")
         && !line_hit(g, side(g, true), "oSolid")
@@ -176,7 +176,7 @@ fn hit(g: &mut Game, down: bool) {
         {
             assert_eq!(
                 g.player.health,
-                4,
+                4.0,
                 "FIXTURE_TIMING injury before departure {}",
                 diagnostic(g)
             );
@@ -232,7 +232,7 @@ fn hit(g: &mut Game, down: bool) {
             );
             assert_eq!(
                 g.player.health,
-                2,
+                2.0,
                 "FIXTURE_TIMING must be real Arrow damage {}",
                 diagnostic(g)
             );
@@ -261,7 +261,7 @@ fn hit(g: &mut Game, down: bool) {
         }
         assert_eq!(
             g.player.health,
-            4,
+            4.0,
             "FIXTURE_TIMING injury without expected Arrow stun {}",
             diagnostic(g)
         );

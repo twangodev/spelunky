@@ -76,7 +76,7 @@ fn settle(game: &mut Game, trace: &mut Vec<String>) {
         trace.push(diagnostic(game));
     }
     assert_eq!(game.state, RunState::Playing, "FIXTURE_TIMING: {trace:#?}");
-    assert_eq!(game.player.health, 4, "FIXTURE_TIMING: {trace:#?}");
+    assert_eq!(game.player.health, 4.0, "FIXTURE_TIMING: {trace:#?}");
     assert_eq!(
         game.player.pos,
         Vec2::new(344., 152.),
@@ -110,7 +110,7 @@ fn hit(game: &mut Game, direction: i32, trace: &mut Vec<String>) {
             && game.player.bounds().y + game.player.bounds().h > 160.
         {
             assert_eq!(
-                game.player.health, 4,
+                game.player.health, 4.0,
                 "FIXTURE_TIMING injury before departure: {trace:#?}"
             );
             assert!(
@@ -159,7 +159,7 @@ fn hit(game: &mut Game, direction: i32, trace: &mut Vec<String>) {
                 "FIXTURE_TIMING pre-stun ordinary limit changed: {trace:#?}"
             );
             assert_eq!(
-                game.player.health, 2,
+                game.player.health, 2.0,
                 "FIXTURE_TIMING: natural Arrow damage2: {trace:#?}"
             );
             assert_eq!(
@@ -173,7 +173,7 @@ fn hit(game: &mut Game, direction: i32, trace: &mut Vec<String>) {
             return;
         }
         assert_eq!(
-            game.player.health, 4,
+            game.player.health, 4.0,
             "FIXTURE_TIMING injury without expected Arrow stun: {trace:#?}"
         );
     }
@@ -189,7 +189,7 @@ fn recover_and_land_without_ground_idle_reset(game: &mut Game, trace: &mut Vec<S
     for _ in 0..RECOVERY_BOUND {
         assert_eq!(game.state, RunState::Playing, "FIXTURE_TIMING: {trace:#?}");
         assert_eq!(
-            game.player.health, 2,
+            game.player.health, 2.0,
             "FIXTURE_TIMING: unexpected secondary injury: {trace:#?}"
         );
         if first_recovery_limit.is_none() {
@@ -212,7 +212,7 @@ fn recover_and_land_without_ground_idle_reset(game: &mut Game, trace: &mut Vec<S
         trace.push(diagnostic(game));
         assert_eq!(game.state, RunState::Playing, "FIXTURE_TIMING: {trace:#?}");
         assert_eq!(
-            game.player.health, 2,
+            game.player.health, 2.0,
             "FIXTURE_TIMING: unexpected injury: {trace:#?}"
         );
         if expires {
@@ -288,7 +288,7 @@ fn jump_and_observe(
     recovering: bool,
     trace: &mut Vec<String>,
 ) {
-    let expected_health = if recovering { 2 } else { game.player.health };
+    let expected_health = if recovering { 2.0 } else { game.player.health };
     let mut maximum = 0_f64;
     let mut first_limit = None;
     for step in 0..JUMP_STEPS {
@@ -390,7 +390,7 @@ fn neutral_ground_recovery_legitimately_replaces_ten_with_three_before_jump() {
                 trace.push(diagnostic(&game));
                 assert!(!game.player.is_stunned(), "{trace:#?}");
                 assert_eq!(game.player.stun, 0, "{trace:#?}");
-                assert_eq!(game.player.health, 2, "{trace:#?}");
+                assert_eq!(game.player.health, 2.0, "{trace:#?}");
                 assert!(game.player.grounded, "{trace:#?}");
                 assert_eq!(
                     value(&game, "velocity_limit_x"),

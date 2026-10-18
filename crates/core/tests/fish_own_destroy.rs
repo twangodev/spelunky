@@ -172,7 +172,7 @@ fn ordinary_whip_kill_keeps_piranha_attack_jitter_after_death() {
             assert_eq!(fish.vel, Vec2::default());
             assert!(fish.value("bubble_timer") > 0.0);
             assert!(game.player.data.get("swimming").copied().unwrap_or(0.0) != 0.0);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert!(!game.player.is_stunned());
             assert!(Vec2::new(fish.pos.x + 4.0, fish.pos.y + 4.0).distance(game.player.pos) < 90.0);
             let prior = prior_ids(&game);
@@ -195,7 +195,7 @@ fn ordinary_whip_kill_keeps_piranha_attack_jitter_after_death() {
             );
             assert!(born(&game, &prior, "oBubble").is_empty());
             assert!(born(&game, &prior, "oFishBone").is_empty());
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_rng(&game, &expected, "POST_DESTROY_PIRANHA_ATTACK_JITTER");
             game.step(&InputFrame::default());
             assert_credit(&game, "piranhas");
@@ -262,7 +262,7 @@ fn ordinary_drying_jaws_death_keeps_due_bubble_after_exact_loot_once() {
             assert!(actor.timer > 0);
             assert_eq!(actor.value("bubble_timer"), 0.0);
             assert_eq!(actor.pos, Vec2::new(244.0, 145.0));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             let prior = prior_ids(&game);
             let mut expected = LiteralRng::at(&game);
             let (blood_pos, blood, bones, crates) = jaws_death_oracle(&mut expected, actor.pos, 4);
@@ -336,7 +336,7 @@ fn configured_dead_dry_piranha_keeps_pause_bubble_and_fishbone_with_blood_cap_co
                 assert_eq!(bones[0].pos, Vec2::new(200.0, 96.0));
                 assert!(bubble_velocity < 0.0);
                 assert_rng(&game, &expected, "POST_DESTROY_PAUSE_BUBBLE_FISHBONE_RNG");
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 game.step(&InputFrame::default());
                 assert_credit(&game, "piranhas");
             }

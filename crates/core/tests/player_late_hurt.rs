@@ -103,7 +103,7 @@ fn natural_trap_hits_hanging_player(game: &mut Game) {
             );
             assert_eq!(
                 game.player.health,
-                health - 2,
+                health - 2.0,
                 "real Arrow hurt: {trace:#?}"
             );
             assert_eq!(game.player.stun, 20, "real Arrow stun: {trace:#?}");
@@ -132,9 +132,9 @@ fn trap_produced_arrow_changes_hanging_art_on_its_own_player_step_then_controls_
             characters::Character::Damsel,
         ] {
             let mut game = room(rules, character, true, true);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             natural_trap_hits_hanging_player(&mut game);
-            assert_eq!(game.player.health, 2);
+            assert_eq!(game.player.health, 2.0);
             for _ in 0..240 {
                 if !game.player.is_stunned() && game.player.grounded && game.player.vel.y == 0.0 {
                     break;
@@ -167,9 +167,9 @@ fn trap_produced_arrow_changes_hanging_art_on_its_own_player_step_then_controls_
 fn source_two_health_tunnelman_uses_late_hurt_art_before_fatal_dead_latch() {
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         let mut game = room(rules, characters::Character::TunnelMan, true, true);
-        assert_eq!(game.player.health, 2, "natural selected-character stats");
+        assert_eq!(game.player.health, 2.0, "natural selected-character stats");
         natural_trap_hits_hanging_player(&mut game);
-        assert_eq!(game.player.health, 0);
+        assert_eq!(game.player.health, 0.0);
         assert_eq!(game.state, RunState::Dead);
         assert_eq!(game.player.state, PlayerState::Dead);
     }
@@ -358,7 +358,7 @@ fn initial_grounded_arrow(health: i32, wall_hurt: f64, bloodless: bool, debris: 
     game.player.previous_pos = game.player.pos;
     game.player.state = PlayerState::Standing;
     game.player.grounded = true;
-    game.player.health = health;
+    game.player.health = f64::from(health);
     game.player.data.insert("bounced".into(), 0.0);
     game.player.data.insert("wall_hurt".into(), wall_hurt);
     game.player.data.insert("wallHurt".into(), wall_hurt);
@@ -388,7 +388,7 @@ fn first_late_floor_contact_runs_direct_wall_then_independent_script_bottom_inju
         game.player.vel = Vec2::new(1.0, 1.4);
         game.player.state = PlayerState::Stunned;
         game.player.stun = 20;
-        game.player.health = 10;
+        game.player.health = 10.0;
         game.player.grounded = false;
         game.player.set_sprite("sDieLR");
         game.player.data.insert("bounced".into(), 0.0);
@@ -418,7 +418,10 @@ fn first_late_floor_contact_runs_direct_wall_then_independent_script_bottom_inju
             game.player.stun, 20,
             "initial controlled tumble retains its counter"
         );
-        assert_eq!(game.player.health, 8, "direct wall1 + independent bottom1");
+        assert_eq!(
+            game.player.health, 8.0,
+            "direct wall1 + independent bottom1"
+        );
         assert_eq!(game.player.data["wall_hurt"], 0.0);
         assert_eq!(game.player.data["bounced"], 1.0);
         assert_eq!(
@@ -465,7 +468,7 @@ fn zero_health_stunned_player_uses_prior_dead_flag_for_stationary_art() {
         );
         game.player.pos = Vec2::new(184.0, 152.0);
         game.player.previous_pos = game.player.pos;
-        game.player.health = 0;
+        game.player.health = 0.0;
         game.player.stun = 20;
         game.player.state = if already_dead {
             PlayerState::Dead
@@ -515,7 +518,7 @@ fn fatal_own_step_hurt_consumes_all_live_parachutes_into_one_used_before_ankh_re
     assert!(game.player.vel.y > 0.0 && !game.player.grounded);
     assert_eq!(game.player.state, PlayerState::Falling);
     game.step(&InputFrame::default());
-    assert_eq!(game.player.health, 4, "actual fatal Arrow triggers Ankh");
+    assert_eq!(game.player.health, 4.0, "actual fatal Arrow triggers Ankh");
     assert!(!game.player.equipment.contains("Ankh"));
     assert!(game.world.entity(first).is_none() && game.world.entity(second).is_none());
     let used: Vec<_> = game

@@ -413,6 +413,6 @@ fn ordinary_bow_pickup_draw_and_release_hits_a_configured_target_through_real_co
         }
         assert!(hit, "ordinary released Arrow must hit configured target");
         assert_eq!(game.player.held, Some(bow));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }

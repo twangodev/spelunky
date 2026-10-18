@@ -25,7 +25,7 @@ fn ordinary_inventory_bomb_consumes_five_alternating_source_shake_ticks() {
             bomb_pressed: true,
             ..Default::default()
         });
-        assert_eq!(game.player.bombs, 3);
+        assert_eq!(game.player.bombs, 3.0);
         assert!(
             game.world
                 .entities
@@ -50,7 +50,7 @@ fn ordinary_inventory_bomb_consumes_five_alternating_source_shake_ticks() {
             }
         }
         assert!(exploded, "ordinary bomb must expire naturally");
-        assert_eq!(game.player.health, 4, "walk clear of the real explosion");
+        assert_eq!(game.player.health, 4.0, "walk clear of the real explosion");
         // Alarm creates Explosion before resource553; the first shake tick
         // occurs in the birth frame, with no RNG-bearing camera perturbation.
         for (index, (remaining, y)) in [(4., 3.), (3., 0.), (2., 3.), (1., 0.), (0., 3.), (0., 3.)]

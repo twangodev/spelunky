@@ -24,7 +24,7 @@ fn game(rules: RulesPreset, algorithm: RngAlgorithm) -> Game {
     game.player.pos = Vec2::new(160.0, 160.0);
     game.player.previous_pos = game.player.pos;
     game.player.state = PlayerState::Standing;
-    game.player.health = 40;
+    game.player.health = 40.0;
     game.player.data.insert("active".into(), 0.0);
     game.player.data.insert("bloodless".into(), 1.0);
     game.world.entrance = game.player.pos;
@@ -106,7 +106,7 @@ fn hurt_once(game: &mut Game, expected_x_sign: f64, expected_y: f64) {
         "active0 skips only controller motion"
     );
     assert_eq!(
-        game.player.health, 30,
+        game.player.health, 30.0,
         "one Smash hurt, no Crush or unrelated hit"
     );
     assert_eq!(
@@ -170,7 +170,7 @@ fn far_smash_without_any_rectangle_gate_does_not_hurt() {
         assert_eq!(active_family(&game), vec![Instance::Entity(far)]);
         game.step(&InputFrame::default());
         assert_eq!(game.player.pos, Vec2::new(160.0, 160.0));
-        assert_eq!(game.player.health, 40);
+        assert_eq!(game.player.health, 40.0);
         assert_eq!(game.player.vel, Vec2::default());
         assert!(
             !game

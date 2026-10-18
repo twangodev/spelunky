@@ -54,7 +54,7 @@ fn pickup_at(game: &mut Game, id: u64, expected: Vec2) {
         actor.pos, expected,
         "stationary ducking right-facing held placement"
     );
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
 }
 
 fn pickup(game: &mut Game, id: u64) {
@@ -240,7 +240,7 @@ fn natural_arrow_hit_then_ordinary_pickup_probes_the_previous_moving_body_image(
                     "sHawkDieLL"
                 }
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(actor.value("swimming"), 0.0);
             pickup_at(&mut game, id, Vec2::new(148.0, 142.0));
             let actor = game.world.entity(id).unwrap();
@@ -293,7 +293,7 @@ fn natural_vertical_arrow_stun_then_pickup_uses_twenty_four_pixel_image_immediat
                     "sHawkStunL"
                 }
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             pickup_at(&mut game, id, Vec2::new(148.0, 142.0));
             assert_eq!(
                 game.world.entity(id).unwrap().value("swimming"),

@@ -74,7 +74,7 @@ fn fresh_bat_source_crush_still_wakes_after_destroy_if_ceiling_absent() {
             "RETIRED_BAT_NEVER_STEPS_AGAIN"
         );
         assert_eq!(game.data.get("kills"), Some(&1.0));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 #[test]

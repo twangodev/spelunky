@@ -19,7 +19,7 @@ fn room(rules: RulesPreset, platform_y: Option<f64>) -> Game {
 }
 fn safe(g: &Game) {
     assert_eq!(g.state, RunState::Playing);
-    assert_eq!(g.player.health, 4);
+    assert_eq!(g.player.health, 4.0);
     assert_eq!(g.player.stun, 0);
     assert!(!g.player.is_stunned());
     assert!(!g.world.solid_at(g.player.pos.x, g.player.pos.y));

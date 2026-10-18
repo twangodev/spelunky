@@ -66,7 +66,7 @@ fn pickup(game: &mut Game, id: u64, price: f64, sale: bool) {
         "shop retains native price through pickup"
     );
     assert_eq!(item.value("forSale"), f64::from(sale));
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.data.get("thiefLevel").copied().unwrap_or(0.0), 0.0);
 }
 
@@ -112,14 +112,14 @@ fn resource_contact_requires_zero_cost_not_absent_sale_marker() {
                     item.data.insert("inDiceHouse".into(), 0.0);
                 }
                 game.step(&InputFrame::default());
-                assert_eq!(game.player.bombs, if awarded { 16 } else { 4 });
+                assert_eq!(game.player.bombs, if awarded { 16.0 } else { 4.0 });
                 assert_eq!(
                     game.world.entity(prize).is_some(),
                     !awarded,
                     "positive-price no-sale casino prize must not auto-collect"
                 );
                 assert_eq!(game.player.money, 7000);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert_eq!(game.world.entity(keeper).unwrap().health, 20);
                 assert_eq!(game.player.held, None);
                 if !awarded {
@@ -167,7 +167,7 @@ fn pay_positive_cost_stock_then_continues_craps_for_purchase_and_failure() {
                         last_dialogue(&game),
                         ("YOU BET $1500!", "NOW ROLL THE DICE!")
                     );
-                    assert_eq!(game.player.health, 4);
+                    assert_eq!(game.player.health, 4.0);
                     assert_eq!(game.world.entity(keeper).unwrap().health, 20);
                     assert_post_draw_ttl(&game, 200.0);
                     assert!(!game.player.has("Jetpack"));
@@ -213,7 +213,7 @@ fn pay_purchase_continues_kiss_and_failed_purchase_uses_damsel_price_without_hea
                     assert!(!game.world.entity(damsel).unwrap().held);
                     pay(&mut game);
                     assert_eq!(game.player.money, 10000);
-                    assert_eq!(game.player.health, if sufficient { 5 } else { 4 });
+                    assert_eq!(game.player.health, if sufficient { 5.0 } else { 4.0 });
                     assert_eq!(game.lifetime_stats.items_bought, u64::from(sufficient));
                     assert_eq!(game.lifetime_stats.kisses_bought, u64::from(sufficient));
                     assert_eq!(game.player.held, if sufficient { Some(item) } else { None });
@@ -257,7 +257,7 @@ fn free_held_rock_pay_continues_craps_unchanged_control() {
                 ("YOU BET $1500!", "NOW ROLL THE DICE!")
             );
             assert_post_draw_ttl(&game, 200.0);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(game.world.entity(keeper).unwrap().health, 20);
         }
     }
@@ -296,7 +296,7 @@ fn general_shop_purchase_and_drop_without_services_unchanged_controls() {
                     }
                 );
                 assert_post_draw_ttl(&game, 80.0);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert_eq!(game.world.entity(keeper).unwrap().health, 20);
             }
         }

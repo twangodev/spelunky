@@ -42,7 +42,7 @@ fn walk_held_into_lava(g: &mut Game, id: u64, expected_hp: i32) {
             left: true,
             ..Default::default()
         });
-        assert_eq!(g.player.health, 4, "Hero remains unharmed");
+        assert_eq!(g.player.health, 4.0, "Hero remains unharmed");
         assert_eq!(g.player.held, Some(id));
         let e = g
             .world
@@ -103,7 +103,7 @@ fn real_machete_negative_hp_then_held_lava_preserves_nonpositive_source_hp() {
                 .world
                 .entity(damsel)
                 .expect("Machete does not retire Damsel");
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
             assert!(e.health <= hp - 2, "each actual attack must hit");
             assert_eq!((hp - e.health) % 2, 0, "only native Machete damage2");
             assert!(e.pos.x >= 160.0, "dry initial target");
@@ -128,7 +128,7 @@ fn real_machete_negative_hp_then_held_lava_preserves_nonpositive_source_hp() {
             ..Default::default()
         });
         assert_eq!(g.player.facing, -1);
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         g.step(&InputFrame {
             down: true,
             attack_pressed: true,
@@ -137,7 +137,7 @@ fn real_machete_negative_hp_then_held_lava_preserves_nonpositive_source_hp() {
         assert_eq!(g.player.held, None, "real Down weapon drop");
         for _ in 0..8 {
             g.step(&InputFrame::default());
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
         }
         let mut near = false;
         for _ in 0..12 {
@@ -149,7 +149,7 @@ fn real_machete_negative_hp_then_held_lava_preserves_nonpositive_source_hp() {
                 right: true,
                 ..Default::default()
             });
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
         }
         assert!(near, "real walking must reach a nearer Damsel pickup pose");
         assert!(g.player.pos.x <= 184.0);

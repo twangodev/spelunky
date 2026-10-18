@@ -447,7 +447,7 @@ pub(super) fn player_crush(game: &mut Game) {
     {
         return;
     }
-    if game.player.health > 0 && crate::statistics::is_real_level(game) {
+    if game.player.health > 0.0 && crate::statistics::is_real_level(game) {
         if game.world.area == crate::Area::Boss {
             game.lifetime_stats
                 .enemy_death(crate::statistics::EnemyDeath::Olmec);
@@ -522,7 +522,7 @@ pub(super) fn player_hurt(game: &mut Game) {
     }) {
         // instance_nearest is independent of which instance intersects the query.
         let nearest = nearest_active_smash(game, pos).unwrap();
-        if game.player.health > 0 && crate::statistics::is_real_level(game) {
+        if game.player.health > 0.0 && crate::statistics::is_real_level(game) {
             game.lifetime_stats
                 .misc_death(crate::statistics::MiscDeath::SmashTrap);
         }
@@ -562,7 +562,7 @@ pub(super) fn player_hurt(game: &mut Game) {
             Instance::Terrain(_) | Instance::Player => None,
         });
     if ceiling_status.is_some_and(|status| status > 0) {
-        if game.player.health > 0 && crate::statistics::is_real_level(game) {
+        if game.player.health > 0.0 && crate::statistics::is_real_level(game) {
             game.lifetime_stats
                 .misc_death(crate::statistics::MiscDeath::CeilingTrap);
         }
@@ -1543,7 +1543,7 @@ mod tests {
                 game.step(&crate::InputFrame::default());
                 assert_eq!(
                     game.player.health,
-                    (health - damage).max(0),
+                    (health - f64::from(damage)).max(0.0),
                     "{object}/{real_level}"
                 );
                 assert_eq!(
@@ -1579,7 +1579,7 @@ mod tests {
             ceiling.state = 1;
             ceiling.timer = 3;
             game.step(&crate::InputFrame::default());
-            assert_eq!(game.player.health, (health - 10).max(0));
+            assert_eq!(game.player.health, (health - 10.0).max(0.0));
             assert_eq!(game.lifetime_stats.misc_deaths[9], u64::from(real_level));
             assert_eq!(game.lifetime_stats.misc_deaths[2], 0);
         }
@@ -1600,7 +1600,7 @@ mod tests {
             let health = game.player.health;
             game.world.spawn("oBoulder", game.player.pos);
             game.step(&crate::InputFrame::default());
-            assert_eq!(game.player.health, (health - 99).max(0));
+            assert_eq!(game.player.health, (health - 99.0).max(0.0));
             assert_eq!(game.player.data.get("hidden"), Some(&1.0));
             assert_eq!(
                 game.lifetime_stats.misc_deaths[2],
@@ -1633,7 +1633,7 @@ mod tests {
             game.player.pos.x + 6.0
         );
         game.step(&crate::InputFrame::default());
-        assert_eq!(game.player.health, (health - 10).max(0));
+        assert_eq!(game.player.health, (health - 10.0).max(0.0));
     }
 
     #[test]
@@ -1694,7 +1694,7 @@ mod tests {
             game.player.previous_pos = game.player.pos;
             game.player.state = PlayerState::Standing;
             game.player.grounded = true;
-            game.player.health = 99;
+            game.player.health = 99.0;
             let thwomp = game.spawn("oThwompTrap", Vec2::new(80.0, 79.0));
             let boulder = game.spawn("oBoulder", Vec2::new(112.0, 96.0));
             game.spawn("oPoof", Vec2::new(600.0, 64.0));
@@ -1706,7 +1706,7 @@ mod tests {
             game.player.pos = Vec2::new(96.0, 72.0);
             game.player.previous_pos = game.player.pos;
             game.player.vel = Vec2::default();
-            game.player.health = 99;
+            game.player.health = 99.0;
             game.player.stun = 0;
             game.player.grounded = true;
             game.player.state = PlayerState::Standing;
@@ -2056,7 +2056,7 @@ mod tests {
         game.player.pos = Vec2::new(88.0, 88.0);
         game.player.invincible = 60;
         player_hurt(&mut game);
-        assert_eq!(game.player.health, -6);
+        assert_eq!(game.player.health, -6.0);
         assert_eq!(game.player.state, PlayerState::Falling);
     }
 
@@ -2319,7 +2319,7 @@ mod tests {
         game.step(&crate::InputFrame::default());
         assert_eq!(game.world.entity(id).unwrap().pos.y, 48.0);
         assert_eq!(game.player.pos.y, 88.0);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
     #[test]
     fn source_boulder_gets_global_and_own_movement_with_room_local_fraction_phase() {
@@ -2348,7 +2348,7 @@ mod tests {
         game.step(&crate::InputFrame::default());
         assert_eq!(game.world.entity(id).unwrap().pos.y, 79.0);
         assert_eq!(game.player.pos.y, 72.0);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
     #[test]
     fn blocked_horizontal_rider_stays_while_boulder_moves_beneath_them() {
@@ -2362,7 +2362,7 @@ mod tests {
         game.step(&crate::InputFrame::default());
         assert_eq!(game.player.pos.x, 139.0);
         assert_eq!(game.world.entity(id).unwrap().pos.x, 130.0);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
     #[test]
     fn thin_ice_loses_sixty_thickness_over_thirty_standing_game_ticks() {
@@ -2476,7 +2476,7 @@ mod thwomp_cached_distance_tests {
     fn configured_thwomp_retains_dead_but_active_character_distance() {
         for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
             let (mut game, mut trap) = fixture(rules, 198.0);
-            game.player.health = 0;
+            game.player.health = 0.0;
             game.player.state = crate::PlayerState::Dead;
             assert!(game.player.engine_active);
             thwomp(&mut game, &mut trap);

@@ -39,7 +39,7 @@ fn room(
     let lava = lava.then(|| game.spawn("oLava", Vec2::new(160.0, 80.0)));
     let ball = game.spawn("oBasketball", Vec2::new(160.0 - speed, 100.0));
     game.world.entity_mut(ball).unwrap().vel.x = speed;
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.world.entity(snake).unwrap().health, 1);
     assert!(
         !game.world.fluid_dirty,
@@ -109,7 +109,7 @@ fn lava_destroyed_item_finishes_inherited_creature_impact_without_reviving() {
         );
         assert_eq!(game.world.entity(lava).unwrap().pos, Vec2::new(160.0, 80.0));
         assert_eq!(game.world.entity(lava).unwrap().value("spurt"), 0.0);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.player.held, None);
         assert_eq!(target.health, 0, "POST_LAVA_DESTROY_ITEM_IMPACT {rules:?}");
         assert!(
@@ -159,7 +159,7 @@ fn lava_continuation_preserves_velocity_threshold_invincibility_and_live_control
                     .count(),
                 usize::from(hit)
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }

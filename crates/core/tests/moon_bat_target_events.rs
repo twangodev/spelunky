@@ -28,7 +28,7 @@ fn untouched_moon_alarm_chain_creates_three_bats_before_their_first_own_steps() 
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         let mut game = Game::shell(42, rules);
         game.load_hub(HubKind::Moon);
-        assert_eq!(game.player.health, 8, "source Moon Create health");
+        assert_eq!(game.player.health, 8.0, "source Moon Create health");
         for tick in 1..=67 {
             game.step(&InputFrame::default());
             assert!(
@@ -68,7 +68,7 @@ fn untouched_moon_alarm_chain_creates_three_bats_before_their_first_own_steps() 
             );
             assert_eq!(bat.sprite, "sBatLeft");
         }
-        assert_eq!(game.player.health, 8);
+        assert_eq!(game.player.health, 8.0);
         assert_eq!(game.data.get("baskets"), Some(&0.0));
     }
 }
@@ -110,7 +110,7 @@ fn bat_target_create_and_own_step_use_source_timer_and_difficulty_without_rng() 
                 assert_eq!(bat.pos, Vec2::new(x, 100.0 + difficulty));
                 assert_eq!(bat.value("xDiff"), if timer <= 20.0 { 0.01 } else { 0.0 });
                 assert_eq!(game.data.get("baskets"), Some(&0.0));
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
             }
         }
     }
@@ -227,7 +227,7 @@ fn bat_target_arrow_collision_uses_current_precise_membership_and_source_rebirth
                     "FIXTURE: Arrow actually traversed unchanged input-free source path"
                 );
             }
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -257,7 +257,7 @@ fn bat_target_character_collision_executes_stomp_hurt_and_source_guards() {
                 game.world.set_tile(10, 6, "oWaterSwim");
             }
             if mode == "dead" {
-                game.player.health = 0;
+                game.player.health = 0.0;
                 game.player.state = PlayerState::Dead;
                 game.state = spelunky_core::RunState::Dead;
                 game.player.vel = Vec2::default();
@@ -275,7 +275,7 @@ fn bat_target_character_collision_executes_stomp_hurt_and_source_guards() {
                     (game.player.vel.y - (-6.0 - 0.2 * 2.0)).abs() < 1e-12,
                     "literal bounce uses post-controller downward velocity2"
                 );
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 let replacement = game
                     .world
                     .entities
@@ -310,11 +310,11 @@ fn bat_target_character_collision_executes_stomp_hurt_and_source_guards() {
                     ));
                 }
                 if mode == "invincible" {
-                    assert_eq!(game.player.health, 4);
+                    assert_eq!(game.player.health, 4.0);
                     assert_eq!(game.player.invincible, 1);
                     assert!(!game.world.entities.iter().any(|e| e.object == "oBlood"));
                 } else {
-                    assert_eq!(game.player.health, if mode == "dead" { 0 } else { 3 });
+                    assert_eq!(game.player.health, if mode == "dead" { 0.0 } else { 3.0 });
                     assert_eq!(game.player.invincible, 30);
                     assert_eq!(game.player.data.get("blink"), Some(&30.0));
                     assert_eq!(game.player.vel.x, 6.0);
@@ -396,7 +396,7 @@ fn existing_ufo_crash_create_step_and_alarm_follow_literal_three_draw_trails() {
             "Alarm birth precedes child own Normal Step"
         );
         assert_eq!(trail.image_speed(), 0.4);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 
@@ -454,7 +454,7 @@ fn existing_ufo_crash_gravity_threshold_adds_without_clamping_and_collision_crea
                 0,
                 "Crash is not Enemy death credit"
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }

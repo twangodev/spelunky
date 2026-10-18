@@ -57,7 +57,7 @@ fn approach_first_boss_step(game: &mut Game, boss: u64, boulder: Option<u64>, bi
         });
         assert_eq!(game.player.pos, Vec2::new(player_x[tick], 152.0));
         assert_eq!(game.camera.x, camera_x[tick]);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.player.stun, 0);
         assert_eq!(game.player.invincible, 0);
         let actor = game.world.entity(boss).unwrap();
@@ -118,7 +118,7 @@ fn default_alien_boss_incoming_velocity_survives_ordinary_boulder_crush_before_f
         });
         assert_eq!(game.engine_time(), 10);
         assert_eq!(game.player.pos, Vec2::new(228.0, 152.0));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         let block = game.world.entity(boulder.unwrap()).unwrap();
         assert_eq!(block.pos, Vec2::new(352.0, 140.0));
         assert_eq!(block.vel.x, 0.0);

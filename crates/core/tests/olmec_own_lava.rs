@@ -48,7 +48,7 @@ fn neutral_sink_to_death(g: &mut Game, boss: u64) {
     for _ in 0..900 {
         let before = g.world.entity(boss).unwrap().clone();
         g.step(&InputFrame::default());
-        assert_eq!(g.player.health, 4, "CONTROLLER_SURVIVES_ORDINARY_SINK");
+        assert_eq!(g.player.health, 4.0, "CONTROLLER_SURVIVES_ORDINARY_SINK");
         if let Some(e) = g.world.entity(boss) {
             if e.state == 4 {
                 entered = true;

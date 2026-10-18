@@ -63,7 +63,7 @@ fn direct_moai_family_inherits_defaults_and_survives_real_explosion_collision() 
             game.step(&InputFrame::default());
             assert_eq!(game.world.entity(id).unwrap().pos, pos);
             assert!(game.world.entity(blast).is_some());
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }

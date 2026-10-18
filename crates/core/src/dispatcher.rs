@@ -943,9 +943,9 @@ fn visit_resources(game: &mut Game, mut callback: impl FnMut(&mut Game, Instance
     }
 }
 fn player_step(game: &mut Game, input: &InputFrame) {
-    game.player.health = game.player.health.min(99);
-    game.player.bombs = game.player.bombs.min(99);
-    game.player.ropes = game.player.ropes.min(99);
+    game.player.health = game.player.health.min(99.0);
+    game.player.bombs = game.player.bombs.min(99.0);
+    game.player.ropes = game.player.ropes.min(99.0);
     crate::items::pre_player_tick(game);
     crate::world_events::sample_light_distances(game);
     crate::items::player_balance_step(game);
@@ -971,7 +971,7 @@ fn player_step(game: &mut Game, input: &InputFrame) {
     }
     // oPlayer1 Step448–452 explicitly clears these cached edges at nonpositive
     // life, before inventory actions and the later Ankh revival action.
-    if game.player.health <= 0 {
+    if game.player.health <= 0.0 {
         item_input.bomb_pressed = false;
         item_input.rope_pressed = false;
     }
@@ -999,10 +999,10 @@ fn player_step(game: &mut Game, input: &InputFrame) {
     crate::player::late_hurt_step(game);
     crate::progression::player_revival(game);
     let protected = game.flags.contains("hub_title") || game.flags.contains("hub_scores");
-    if game.player.health <= 0 && !protected {
+    if game.player.health <= 0.0 && !protected {
         let first = game.state != crate::RunState::Dead;
         if first {
-            game.player.health = 0;
+            game.player.health = 0.0;
         }
         crate::player::enter_dead(game);
         game.state = crate::RunState::Dead;

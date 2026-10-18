@@ -10,7 +10,7 @@ fn sound(g: &Game, wanted: &str) -> bool {
 }
 fn safe_step(g: &mut Game, input: &InputFrame) {
     g.step(input);
-    assert_eq!(g.player.health, 4, "FIXTURE_HEALTHY_HERO");
+    assert_eq!(g.player.health, 4.0, "FIXTURE_HEALTHY_HERO");
     assert_eq!(g.player.stun, 0, "FIXTURE_NO_STUN_COUNTDOWN");
     assert!(!g.player.is_stunned(), "FIXTURE_NO_STUN_LATCH");
     assert!(

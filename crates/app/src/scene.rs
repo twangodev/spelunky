@@ -1931,7 +1931,7 @@ fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas) 
             (
                 "DAMSEL",
                 "sHeart",
-                game.player.health.max(0) as f64,
+                game.player.health.max(0.0) as f64,
                 "sDamselIcon",
                 hub_value(game, "points"),
             )
@@ -1947,7 +1947,7 @@ fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas) 
             (
                 "SHOTGUN",
                 "sHeart",
-                game.player.health.max(0) as f64,
+                game.player.health.max(0.0) as f64,
                 "sShopkeeperIcon",
                 hub_value(game, "stars_kills"),
             )
@@ -2220,7 +2220,7 @@ fn hud_in_view(
     let player = &game.player;
     // Original Classic HUD positions and 16-pixel bitmap font.
     for (icon, value, x) in [
-        ("sHeart", player.health.max(0).to_string(), 8.0),
+        ("sHeart", player.health.max(0.0).to_string(), 8.0),
         (
             if player.has("Paste") {
                 "sStickyBombIcon"
@@ -3014,7 +3014,7 @@ mod tests {
             {
                 assert!(
                     game.data.get("bloodLevel").copied().unwrap_or(0.0) > 0.0
-                        || game.player.health > 4
+                        || game.player.health > 4.0
                 );
                 assert!(
                     game.world
@@ -4752,7 +4752,7 @@ mod tests {
     fn explosion_flash_retains_negative_source_darkness_and_expanded_player_radius() {
         let mut game = Game::shell(1, RulesPreset::Classic);
         game.world.dark = true;
-        game.player.health = 20;
+        game.player.health = 20.0;
         game.player.pos = Vec2::new(80.0, 120.0);
         game.player.previous_pos = game.player.pos;
         let id = game.world.spawn("oExplosion", game.player.pos);
@@ -4779,7 +4779,7 @@ mod tests {
         );
         game.state = spelunky_core::RunState::Dead;
         game.player.state = PlayerState::Dead;
-        game.player.health = 1;
+        game.player.health = 1.0;
         assert!(
             !game_scene(&game, 1.0, false, &atlas)
                 .iter()
@@ -5412,7 +5412,7 @@ mod tests {
         game.player.invincible = 0;
         let snake = game.world.spawn("oSnake", Vec2::new(80.0, 144.0));
         game.step(&spelunky_core::InputFrame::default());
-        assert_eq!(game.player.health, 3);
+        assert_eq!(game.player.health, 3.0);
         assert!(visible(&game));
         game.world.entity_mut(snake).unwrap().alive = false;
         for step in 1..=30 {

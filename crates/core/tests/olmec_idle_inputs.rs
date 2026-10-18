@@ -68,11 +68,11 @@ fn natural_intro(rules: RulesPreset, algorithm: RngAlgorithm) -> (Game, u64) {
                 (0, 99),
                 "Alarm5 sets100 before same-frame IDLE decrement"
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             return (game, boss);
         }
         assert_eq!(game.player.pos, Vec2::new(24.0, 552.0));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
     panic!("natural generated Olmec intro must release via Alarm5");
 }
@@ -90,7 +90,7 @@ fn natural_countdown_to_one(game: &mut Game, boss: u64) {
             Vec2::default(),
             "grounded IDLE retains no motion"
         );
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 fn big_jump(game: &Game) -> bool {
@@ -170,7 +170,7 @@ fn qualify_ascending_path_and_support(game: &Game, actor: &Entity) {
 }
 fn qualify_player_guard_phase(game: &Game) {
     assert_eq!(game.state, RunState::Playing);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.stun, 0);
     assert!(
         !game.player.is_stunned(),
@@ -252,7 +252,7 @@ fn natural_alarm5_idle_one_to_zero_selects_bounce_same_step() {
         assert!(!source_bottom(&game, actor));
         assert!(!source_body_overlap(&game, actor));
         assert!(big_jump(&game));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         let source_recover_x_vel = actor.vel.x;
         assert_eq!(source_recover_x_vel, 0.0);
         qualify_player_guard_phase(&game);

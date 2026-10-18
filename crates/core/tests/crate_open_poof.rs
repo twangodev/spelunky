@@ -24,7 +24,7 @@ fn ready(preset: RulesPreset, object: &str, x: f64, legacy: bool, seed: u32) -> 
     // Complete room initialization and initial container alarms naturally.
     game.step(&InputFrame::default());
     assert!(game.world.entity(id).is_some());
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.attack_timer, 0);
     assert!(game.world.entities.iter().all(|e| e.object != "oPoof"));
     (game, id)
@@ -183,7 +183,7 @@ fn actual_up_attack_opens_crates_with_source_stationary_poof_after_loot() {
             );
             assert_eq!(game.player.attack_timer, 0, "opening consumes attack edge");
             assert!(game.player.held.is_none());
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             let loot: Vec<_> = game
                 .world
                 .entities
@@ -288,7 +288,7 @@ fn closed_crates_emit_no_opening_poof_without_up_attack_contact() {
                     GameEvent::Sound { name, .. } if name == "sndPickup"
                 )));
                 assert_eq!(game.lifetime_stats.total_crates, 0);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
             }
         }
     }

@@ -64,7 +64,7 @@ fn natural_snake_walk_on_isolated_support_fixes_left_facing_without_extra_rng() 
         // it to LEFT because this fixture's upper-left point is clear.
         assert_eq!(snake.facing, -1, "BOTH_BLOCKED_CLEAR_LEFT_POINT");
         assert_eq!(game.rng.clone().next_u64(), expected.next_u64());
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 
@@ -151,7 +151,7 @@ fn naturally_swimming_player_crosses_bat_without_changing_its_flight_sprite() {
                 assert!(saw_live_chase, "DEFAULT_BAT_MUST_FIRST_CHASE_DRY_PLAYER");
                 assert!(!game.world.solid_at(after.pos.x + 8.0, after.pos.y - 1.0));
                 assert_eq!(after.health, 1);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert_eq!(after.vel, Vec2::new(0.0, -1.0));
                 assert_eq!(
                     after.sprite, before.sprite,
@@ -207,7 +207,7 @@ fn naturally_swimming_bat_returns_under_ceiling_then_keeps_hang_displacement() {
             "NEXT_HANG_USES_RETAINED_VELOCITY"
         );
         assert_eq!(after.vel, Vec2::new(0.0, -1.0));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 
@@ -249,7 +249,7 @@ fn configured_wet_bat_retains_incoming_velocity_after_blocked_vertical_move() {
                 after.sprite, "sBatRight",
                 "ELIGIBLE_PLAYER_STILL_SELECTS_FLIGHT_SPRITE"
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -293,6 +293,6 @@ fn configured_far_eligible_bat_returns_under_ceiling_without_zeroing_velocity() 
         assert_eq!(hang.pos, Vec2::new(97.0, 94.0));
         assert_eq!(hang.vel, Vec2::new(0.6, -0.8));
         assert_eq!(hang.sprite, "sBatHang");
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }

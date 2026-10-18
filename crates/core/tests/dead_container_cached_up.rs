@@ -20,7 +20,7 @@ fn ready(rules: RulesPreset, ghost: bool) -> (Game, u64) {
         game.spawn("oGhost", Vec2::new(128.0, 136.0));
     }
     assert_eq!(game.world.entity(chest).unwrap().sprite, "sChest");
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(game.player.engine_active);
     (game, chest)
 }
@@ -36,7 +36,7 @@ fn real_hidden_death(game: &mut Game, chest: u64, cached_up: bool) {
         assert_eq!(game.player.attack_timer, 0);
         let visible = game.player.data.get("visible").copied().unwrap_or(1.0) != 0.0;
         if !saw_ghost_kill && !visible {
-            assert_eq!(game.player.health, -99, "FIXTURE actual Ghost collision");
+            assert_eq!(game.player.health, -99.0, "FIXTURE actual Ghost collision");
             assert_eq!(game.player.invincible, 9999);
             assert!(game.events.iter().any(|event| matches!(event,
                 GameEvent::Sound { name, .. } if name == "sndGhost"
@@ -47,7 +47,7 @@ fn real_hidden_death(game: &mut Game, chest: u64, cached_up: bool) {
         if game.state == RunState::Dead {
             assert!(saw_ghost_kill, "FIXTURE Ghost caused the real death");
             assert!(!visible);
-            assert_eq!(game.player.health, 0);
+            assert_eq!(game.player.health, 0.0);
             assert_eq!(game.player.state, PlayerState::Dead);
             assert!(game.player.engine_active);
             assert_eq!(game.player.data.get("active").copied().unwrap_or(1.0), 1.0);
@@ -163,7 +163,7 @@ fn ordinary_live_up_attack_still_opens_the_same_default_chest() {
             attack_pressed: true,
             ..Default::default()
         });
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.state, RunState::Playing);
         assert_eq!(game.world.entity(chest).unwrap().sprite, "sChestOpen");
         assert_eq!(game.lifetime_stats.total_chests, 1);

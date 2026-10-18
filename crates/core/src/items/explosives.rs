@@ -326,9 +326,9 @@ fn equip_inventory_item(game: &mut Game, kind: &str) {
     entity.held = true;
     if kind == "oBomb" {
         entity.data.insert("sticky".into(), f64::from(paste));
-        game.player.bombs -= 1;
+        game.player.bombs -= 1.0;
     } else {
-        game.player.ropes -= 1;
+        game.player.ropes -= 1.0;
     }
     game.player.held = Some(id);
     pickup_pose(game);
@@ -354,21 +354,21 @@ pub fn cycle_inventory(game: &mut Game) {
             game.world.entity_mut(entity.id).unwrap().alive = false;
             game.player.held = None;
             if entity.sprite == "sBomb" {
-                game.player.bombs += 1;
-                if game.player.ropes > 0 {
+                game.player.bombs += 1.0;
+                if game.player.ropes > 0.0 {
                     equip_inventory_item(game, "oRopeThrow");
                 } else {
                     restore_stashed_item(game);
                 }
             } else {
-                game.player.ropes += 1;
+                game.player.ropes += 1.0;
                 restore_stashed_item(game);
             }
             return;
         }
         if entity.value("heavy") != 0.0
             || entity.value("cost") != 0.0
-            || (game.player.bombs <= 0 && game.player.ropes <= 0)
+            || (game.player.bombs <= 0.0 && game.player.ropes <= 0.0)
         {
             return;
         }
@@ -385,9 +385,9 @@ pub fn cycle_inventory(game: &mut Game) {
             .insert("breakPieces".into(), 0.0);
         super::break_item(game, entity.id);
     }
-    if game.player.bombs > 0 {
+    if game.player.bombs > 0.0 {
         equip_inventory_item(game, "oBomb");
-    } else if game.player.ropes > 0 {
+    } else if game.player.ropes > 0.0 {
         equip_inventory_item(game, "oRopeThrow");
     }
 }
@@ -489,7 +489,7 @@ pub fn use_held_rope(game: &mut Game, id: u64, input: &InputFrame) -> bool {
 
 /// Dedicated bomb button. The normal inventory item starts unarmed instead.
 pub fn use_bomb(game: &mut Game, input: &InputFrame) {
-    if !input.bomb_pressed || game.player.bombs <= 0 || !can_use(game) {
+    if !input.bomb_pressed || game.player.bombs <= 0.0 || !can_use(game) {
         return;
     }
     let pos = game.player.pos;
@@ -517,12 +517,12 @@ pub fn use_bomb(game: &mut Game, input: &InputFrame) {
     bomb.data.insert("safe_ticks".into(), 10.0);
     bomb.alarms[2] = 10;
     bomb.data.insert("safe".into(), 1.0);
-    game.player.bombs -= 1;
+    game.player.bombs -= 1.0;
     game.sound("sndThrow", pos);
 }
 
 pub fn use_rope(game: &mut Game, input: &InputFrame) {
-    if !input.rope_pressed || game.player.ropes <= 0 || !can_use(game) {
+    if !input.rope_pressed || game.player.ropes <= 0.0 || !can_use(game) {
         return;
     }
     let pos = game.player.pos;
@@ -594,7 +594,7 @@ pub fn use_rope(game: &mut Game, input: &InputFrame) {
         rope.data.insert("armed".into(), 0.0);
         rope.data.insert("falling".into(), 1.0);
         rope.vel = Vec2::default();
-        game.player.ropes -= 1;
+        game.player.ropes -= 1.0;
         game.sound("sndThrow", anchor);
     } else {
         let id = game.spawn("oRopeThrow", pos);
@@ -603,7 +603,7 @@ pub fn use_rope(game: &mut Game, input: &InputFrame) {
         rope.data.insert("px".into(), pos.x);
         rope.data.insert("py".into(), pos.y);
         rope.vel = Vec2::new(0.0, -12.0);
-        game.player.ropes -= 1;
+        game.player.ropes -= 1.0;
         game.sound("sndThrow", pos);
     }
 }
@@ -1834,7 +1834,7 @@ pub(crate) fn player_explosion_hurt(game: &mut Game) {
     // This source block bypasses ordinary contact invincibility.
     game.player.lose_health(10);
     // Literal source survivor quirk: this cause counter increments after subtraction.
-    if game.player.health > 0 && crate::statistics::is_real_level(game) {
+    if game.player.health > 0.0 && crate::statistics::is_real_level(game) {
         game.lifetime_stats
             .misc_death(crate::statistics::MiscDeath::Explosion);
     }
@@ -3402,10 +3402,10 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(g.player.bombs, 3);
+        assert_eq!(g.player.bombs, 3.0);
         assert_eq!(g.world.entities[0].vel, Vec2::new(10.0, -9.0));
         assert_eq!(g.world.entities[0].timer, 120);
-        g.player.bombs = 0;
+        g.player.bombs = 0.0;
         use_bomb(
             &mut g,
             &InputFrame {
@@ -3489,7 +3489,7 @@ mod tests {
         for _ in 0..17 {
             tick(&mut g);
         }
-        assert_eq!(g.player.ropes, 3);
+        assert_eq!(g.player.ropes, 3.0);
         assert_eq!(
             g.world
                 .entities
@@ -3530,7 +3530,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert_eq!(g.player.ropes, 4);
+        assert_eq!(g.player.ropes, 4.0);
         // Source creates before probing, then destroys the failed attempt.
         // Direct helper calls precede the dispatcher's dead-instance cleanup.
         assert_eq!(g.world.entities.len(), entity_count + 1);
@@ -3627,7 +3627,7 @@ mod tests {
         g.world.entity_mut(original).unwrap().held = true;
         g.player.held = Some(original);
         cycle_inventory(&mut g);
-        assert_eq!(g.player.bombs, 3);
+        assert_eq!(g.player.bombs, 3.0);
         assert_eq!(
             g.world.entity(g.player.held.unwrap()).unwrap().object,
             "oBomb"
@@ -3635,13 +3635,13 @@ mod tests {
         assert!(g.world.entity(original).is_none());
         assert_eq!(g.player.pickup_item_type, "Rock");
         cycle_inventory(&mut g);
-        assert_eq!((g.player.bombs, g.player.ropes), (4, 3));
+        assert_eq!((g.player.bombs, g.player.ropes), (4.0, 3.0));
         assert_eq!(
             g.world.entity(g.player.held.unwrap()).unwrap().object,
             "oRopeThrow"
         );
         cycle_inventory(&mut g);
-        assert_eq!((g.player.bombs, g.player.ropes), (4, 4));
+        assert_eq!((g.player.bombs, g.player.ropes), (4.0, 4.0));
         let fresh = g.player.held.unwrap();
         assert_ne!(fresh, original);
         assert_eq!(g.world.entity(fresh).unwrap().object, "oRock");
@@ -3651,12 +3651,12 @@ mod tests {
     #[test]
     fn using_reserved_rope_does_not_spend_a_second_rope() {
         let mut g = game();
-        g.player.bombs = 0;
+        g.player.bombs = 0.0;
         cycle_inventory(&mut g);
         let held = g.player.held.unwrap();
-        assert_eq!(g.player.ropes, 3);
+        assert_eq!(g.player.ropes, 3.0);
         assert!(use_held_rope(&mut g, held, &InputFrame::default()));
-        assert_eq!(g.player.ropes, 3);
+        assert_eq!(g.player.ropes, 3.0);
         assert!(g.player.held.is_none());
         assert!(
             g.world
@@ -3768,11 +3768,11 @@ mod tests {
     #[test]
     fn game_step_explosion_bypasses_contact_invincibility_and_knocks_player_back() {
         let mut g = game();
-        g.player.health = 30;
+        g.player.health = 30.0;
         g.player.invincible = 40;
         g.world.spawn("oExplosion", g.player.pos);
         g.step(&InputFrame::default());
-        assert_eq!(g.player.health, 20);
+        assert_eq!(g.player.health, 20.0);
         assert_eq!(g.player.stun, 100);
         assert_eq!(g.player.vel.y, -6.0);
         assert!((4.0..=6.0).contains(&g.player.vel.x.abs()));
@@ -3823,7 +3823,7 @@ mod tests {
         for x in 0..g.world.width {
             g.world.set_tile(x, 10, "oBlock");
         }
-        g.player.bombs = 0;
+        g.player.bombs = 0.0;
         cycle_inventory(&mut g);
         let reserved = g.player.held.unwrap();
         g.step(&InputFrame {
@@ -3832,7 +3832,7 @@ mod tests {
             ..Default::default()
         });
         assert!(g.player.held.is_none());
-        assert_eq!(g.player.ropes, 3);
+        assert_eq!(g.player.ropes, 3.0);
         assert!(g.world.entity(reserved).is_none());
         let rope = g
             .world
@@ -4420,7 +4420,7 @@ mod literal_dark_and_arrow_destroy_regressions {
             for exit in [false, true] {
                 let mut game = Game::shell(7, RulesPreset::Classic);
                 crate::characters::apply(&mut game, character);
-                game.player.health = 30;
+                game.player.health = 30.0;
                 game.player.pos = Vec2::new(88.0, 88.0);
                 game.player.grounded = true;
                 game.player.state = PlayerState::Standing;
@@ -4461,7 +4461,7 @@ mod literal_dark_and_arrow_destroy_regressions {
                 tick(&mut game);
                 assert_eq!(
                     game.player.health,
-                    if exit { 30 } else { 20 },
+                    if exit { 30.0 } else { 20.0 },
                     "{character:?}/{exit}"
                 );
                 assert_eq!(
@@ -5171,7 +5171,7 @@ mod source_player_explosion_step {
                 let mut game = Game::shell(7, RulesPreset::Classic);
                 game.player.pos = Vec2::new(160.0, 160.0);
                 game.player.previous_pos = game.player.pos;
-                game.player.health = hp;
+                game.player.health = f64::from(hp);
                 if !real_room {
                     game.flags.insert("tutorial".into());
                 }
@@ -5194,7 +5194,7 @@ mod source_player_explosion_step {
                 game.step(&InputFrame::default());
                 assert_eq!(
                     game.player.health,
-                    (hp - 10).max(0),
+                    (f64::from(hp) - 10.0).max(0.0),
                     "blasts={count} hp={hp} real={real_room}"
                 );
                 assert_eq!(
@@ -5298,7 +5298,7 @@ mod source_player_explosion_step {
     #[test]
     fn player_step_uses_bounding_box_query_and_nearest_across_all_explosions() {
         let mut game = Game::shell(7, RulesPreset::Classic);
-        game.player.health = 30;
+        game.player.health = 30.0;
         game.player.pos = Vec2::new(160.0, 160.0);
         // Initial controlled frames are intentionally different. The source
         // aggregate cache is frame independent: nearer misses vertically,
@@ -5342,7 +5342,7 @@ mod source_player_explosion_step {
         );
         assert!(31.0 < 24.0_f64.hypot(24.0));
         player_explosion_hurt(&mut game);
-        assert_eq!(game.player.health, 20);
+        assert_eq!(game.player.health, 20.0);
         assert!(
             game.player.vel.x < 0.0,
             "nearest query includes the nonoverlapping explosion at equal x"
@@ -5589,7 +5589,7 @@ mod runtime_clean_terrain_treasure {
                     .count(),
                 usize::from(!clean)
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -5738,7 +5738,7 @@ mod rope_action_time_source_companions {
         game.step(&InputFrame::default());
         assert!(game.world.entity(rock).is_none());
         assert_eq!(game.player.pickup_item_type, "Rock");
-        assert_eq!(game.player.ropes, 3);
+        assert_eq!(game.player.ropes, 3.0);
         let reserved = game.player.held.unwrap();
         let rope = game.world.entity(reserved).unwrap();
         assert_eq!(rope.object, "oRopeThrow");
@@ -5764,7 +5764,7 @@ mod rope_action_time_source_companions {
         assert_eq!(launched.value("px"), player_pos.x);
         assert_eq!(launched.value("py"), player_pos.y);
         assert_eq!(launched.value("falling"), 0.0);
-        assert_eq!(game.player.ropes, 3);
+        assert_eq!(game.player.ropes, 3.0);
         let restored = game.world.entity(game.player.held.unwrap()).unwrap();
         assert_eq!(restored.id, next_id);
         assert_eq!(restored.object, "oRock");
@@ -5808,7 +5808,7 @@ mod rope_action_time_source_companions {
                 .iter()
                 .any(|e| e.alive && e.object == "oRopeTop")
         );
-        assert_eq!(game.player.ropes, 3);
+        assert_eq!(game.player.ropes, 3.0);
         let restored = game.world.entity(game.player.held.unwrap()).unwrap();
         assert_eq!(restored.id, attempt + 2);
         assert_eq!(restored.object, "oRock");
@@ -5842,7 +5842,7 @@ mod rope_action_time_source_companions {
         assert_eq!(still_held.pos, before.pos);
         assert_eq!(still_held.vel, before.vel);
         assert_eq!(still_held.value("armed"), 0.0);
-        assert_eq!(game.player.ropes, 3);
+        assert_eq!(game.player.ropes, 3.0);
         assert_eq!(game.player.pickup_item_type, "Rock");
         assert!(
             !game

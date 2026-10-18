@@ -20,7 +20,7 @@ fn skeleton_no_active_player_keeps_source_default_right() {
 #[test]
 fn skeleton_existing_player_is_not_gated_by_health_or_input_active() {
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
-        for health in [0, 4] {
+        for health in [0.0, 4.0] {
             for active in [0.0, 1.0] {
                 let mut g = Game::shell(7, rules);
                 g.player.pos = Vec2::new(40.0, 152.0);

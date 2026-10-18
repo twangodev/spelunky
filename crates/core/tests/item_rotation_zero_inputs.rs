@@ -17,7 +17,7 @@ fn scene(rules: RulesPreset) -> Game {
     game
 }
 fn healthy(game: &Game) {
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.invincible, 0);
     assert_eq!(game.player.stun, 0);
     assert!(!game.player.is_stunned());

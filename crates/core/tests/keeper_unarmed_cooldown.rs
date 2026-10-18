@@ -8,7 +8,7 @@ fn sound(g: &Game, name: &str) -> bool {
         .any(|event| matches!(event, GameEvent::Sound{name:actual,..} if actual==name))
 }
 fn unharmed(g: &Game) {
-    assert_eq!(g.player.health, 4, "FIXTURE_HERO_HP4");
+    assert_eq!(g.player.health, 4.0, "FIXTURE_HERO_HP4");
     assert_eq!(g.player.stun, 0, "FIXTURE_HERO_STUN0");
     assert!(
         !g.player.is_stunned(),

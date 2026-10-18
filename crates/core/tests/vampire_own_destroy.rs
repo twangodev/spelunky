@@ -183,7 +183,7 @@ fn authored_healthy_crush_runs_idle_rng_without_inventing_death_loot_case(mode: 
         assert!(births(&game, "oCapePickup").is_empty());
         assert!(births(&game, "oBone").is_empty());
         assert_eq!(game.data.get("kills").copied().unwrap_or(0.0), 0.0);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(
             SourceTape::at(&game).state(),
             tape.state(),
@@ -315,7 +315,7 @@ fn ordinary_pistol_damage_reaches_vampire_death_without_actor_state_edits_case(m
                 attack_pressed: fire,
                 ..Default::default()
             });
-            assert!(game.player.health > 0, "NATURAL_CONTROLLER_SURVIVES");
+            assert!(game.player.health > 0.0, "NATURAL_CONTROLLER_SURVIVES");
             if let Some(actor) = game.world.entity(id) {
                 if actor.health != hp {
                     assert_eq!(actor.health, hp - 4, "TWO_ORDINARY_BULLET_HITS");

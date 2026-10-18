@@ -14,9 +14,9 @@ fn room() -> Game {
     g.player.grounded = true;
     g.player.state = PlayerState::Standing;
     g.player.facing = 1;
-    g.player.bombs = 4;
-    g.player.ropes = 4;
-    g.player.health = 20;
+    g.player.bombs = 4.0;
+    g.player.ropes = 4.0;
+    g.player.health = 20.0;
     g
 }
 fn live(g: &Game, object: &str) -> usize {
@@ -47,7 +47,7 @@ fn item_wins_simultaneous_bomb_and_rope() {
     for (rope, bomb) in [(false, true), (true, false), (true, true)] {
         let mut g = room();
         g.step(&input(true, rope, bomb, false));
-        assert_eq!((g.player.bombs, g.player.ropes), (3, 4));
+        assert_eq!((g.player.bombs, g.player.ropes), (3.0, 4.0));
         assert_eq!((live(&g, "oBomb"), live(&g, "oRopeThrow")), (1, 0));
         let e = g
             .world
@@ -61,7 +61,7 @@ fn item_wins_simultaneous_bomb_and_rope() {
 fn eligible_rope_wins_bomb_and_attack() {
     let mut g = room();
     g.step(&input(false, true, true, true));
-    assert_eq!((g.player.bombs, g.player.ropes), (4, 3));
+    assert_eq!((g.player.bombs, g.player.ropes), (4.0, 3.0));
     assert_eq!((live(&g, "oBomb"), live(&g, "oRopeThrow")), (0, 1));
     assert_eq!(g.player.attack_timer, 0);
     assert_eq!(live(&g, "oWhipPre"), 0);
@@ -72,7 +72,7 @@ fn armed_inventory_item_noop_consumes_lower_branches() {
     let id = held(&mut g, "oBomb");
     spelunky_core::items::explosives::arm_bomb(g.world.entity_mut(id).unwrap());
     g.step(&input(true, true, true, true));
-    assert_eq!((g.player.bombs, g.player.ropes), (4, 4));
+    assert_eq!((g.player.bombs, g.player.ropes), (4.0, 4.0));
     assert_eq!(g.player.held, Some(id));
     assert_eq!((live(&g, "oBomb"), live(&g, "oRopeThrow")), (1, 0));
 }
@@ -99,23 +99,23 @@ fn unpaid_inventory_item_noop_still_consumes_attack() {
     g.step(&input(true, false, false, true));
     assert_eq!(g.player.held, Some(id));
     assert!(g.world.entity(id).unwrap().held);
-    assert_eq!((g.player.bombs, g.player.ropes), (4, 4));
+    assert_eq!((g.player.bombs, g.player.ropes), (4.0, 4.0));
 }
 #[test]
 fn ceiling_blocked_rope_still_consumes_bomb_and_attack() {
     let mut g = room();
     g.world.set_tile(5, 8, "oHardBlock");
     g.step(&input(false, true, true, true));
-    assert_eq!((g.player.bombs, g.player.ropes), (4, 4));
+    assert_eq!((g.player.bombs, g.player.ropes), (4.0, 4.0));
     assert_eq!((live(&g, "oBomb"), live(&g, "oRopeThrow")), (0, 0));
     assert_eq!(g.player.attack_timer, 0);
 }
 #[test]
 fn ineligible_rope_falls_through_to_bomb_but_not_attack() {
     let mut g = room();
-    g.player.ropes = 0;
+    g.player.ropes = 0.0;
     g.step(&input(false, true, true, true));
-    assert_eq!(g.player.bombs, 3);
+    assert_eq!(g.player.bombs, 3.0);
     assert_eq!(live(&g, "oBomb"), 1);
     assert!(g.player.held.is_none());
     assert_eq!(g.player.attack_timer, 0);
@@ -124,8 +124,8 @@ fn ineligible_rope_falls_through_to_bomb_but_not_attack() {
 fn no_inventory_resources_allow_attack_but_item_still_selects_noop() {
     for item in [false, true] {
         let mut g = room();
-        g.player.bombs = 0;
-        g.player.ropes = 0;
+        g.player.bombs = 0.0;
+        g.player.ropes = 0.0;
         g.step(&input(item, true, true, true));
         assert_eq!(g.player.attack_timer > 0, !item);
         // oPlayer1's pre-whip work precedes the new attack onset in this tick.
@@ -158,7 +158,7 @@ fn chest_opens_before_item_selection_and_only_consumes_attack() {
             .iter()
             .any(|e| e.id > chest && e.id < reserved)
     );
-    assert_eq!(g.player.ropes, 4);
+    assert_eq!(g.player.ropes, 4.0);
     assert_eq!(g.player.attack_timer, 0);
 }
 #[test]
@@ -197,7 +197,7 @@ fn hub_inventory_is_ineligible_but_attack_is_not() {
     let mut g = room();
     g.flags.insert("hub".into());
     g.step(&input(true, true, true, true));
-    assert_eq!((g.player.bombs, g.player.ropes), (4, 4));
+    assert_eq!((g.player.bombs, g.player.ropes), (4.0, 4.0));
     assert_eq!((live(&g, "oBomb"), live(&g, "oRopeThrow")), (0, 0));
     assert!(g.player.attack_timer > 0);
 }

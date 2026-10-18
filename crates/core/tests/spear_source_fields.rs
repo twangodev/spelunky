@@ -37,7 +37,7 @@ fn spear_step_preserves_fractional_countdown_and_configured_proximity() {
                     .insert(field.into(), value);
                 game.step(&InputFrame::default());
                 assert_eq!(game.player.pos, Vec2::new(120.0, 104.0));
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert!(
                     spears(&game).is_empty(),
                     "{object}/{field}: source requires fired == 0 and a strict configured proximity"
@@ -65,7 +65,7 @@ fn spear_step_uses_fired_max_and_still_assigns_final_nearest_scratch() {
                 .insert("firedMax".into(), 3.0);
             game.step(&InputFrame::default());
             assert_eq!(game.player.pos, Vec2::new(120.0, 104.0));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(spears(&game).len(), 1);
             assert_eq!(spears(&game)[0].pos, Vec2::new(144.0, 96.0));
             let receiver = game.world.entity(trap).unwrap();
@@ -99,7 +99,7 @@ fn zero_fired_max_allows_independent_player_and_moveable_branches() {
                 .data
                 .insert("firedMax".into(), 0.0);
             game.step(&InputFrame::default());
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(
                 game.world.entity(block).unwrap().pos,
                 Vec2::new(144.0, 96.0)

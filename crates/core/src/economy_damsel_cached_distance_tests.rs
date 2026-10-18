@@ -67,7 +67,7 @@ fn source_kiss_range_uses_literal_cached_envelopes_and_strict_sixteen_threshold(
                 let rng = g.rng.state_bits();
                 pay(&mut g);
                 let bought = literal_gap < 16.0;
-                assert_eq!(g.player.health, if bought { 5 } else { 4 });
+                assert_eq!(g.player.health, if bought { 5.0 } else { 4.0 });
                 assert_eq!(g.player.money, if bought { 5000 } else { 10000 });
                 assert_eq!(
                     g.data.get("kissesBought").copied().unwrap_or(0.0),
@@ -91,7 +91,7 @@ fn inactive_nearest_damsel_does_not_gate_or_block_an_active_family_purchase() {
             let (mut g, far) = fixture(rules, legacy, 128.0);
             g.world.entity_mut(far).unwrap().engine_active = false;
             pay(&mut g);
-            assert_eq!((g.player.health, g.player.money), (4, 10000));
+            assert_eq!((g.player.health, g.player.money), (4.0, 10000));
             assert_eq!(g.world.entity(far).unwrap().animation, 3.0);
             // A separate initial fixture controls nearest-family eligibility:
             // a closer inactive/not-forSale actor must not block the active one.
@@ -104,7 +104,7 @@ fn inactive_nearest_damsel_does_not_gate_or_block_an_active_family_purchase() {
             }
             let rng = g.rng.state_bits();
             pay(&mut g);
-            assert_eq!((g.player.health, g.player.money), (5, 5000));
+            assert_eq!((g.player.health, g.player.money), (5.0, 5000));
             assert_eq!(g.world.entity(active).unwrap().animation, 0.0);
             assert_eq!(g.world.entity(near).unwrap().state, 0);
             assert_eq!(g.rng.state_bits(), rng);
@@ -119,7 +119,7 @@ fn inactive_nearest_damsel_does_not_gate_or_block_an_active_family_purchase() {
                 .insert("forSale".into(), 0.0);
             let rng = g.rng.state_bits();
             pay(&mut g);
-            assert_eq!((g.player.health, g.player.money), (4, 10000));
+            assert_eq!((g.player.health, g.player.money), (4.0, 10000));
             assert_eq!(g.world.entity(active).unwrap().animation, 3.0);
             assert_eq!(g.rng.state_bits(), rng);
         }

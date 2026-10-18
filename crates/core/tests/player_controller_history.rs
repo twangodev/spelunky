@@ -43,7 +43,7 @@ fn standing_art(character: characters::Character) -> &'static str {
     }
 }
 
-fn healthy(game: &Game, health: i32) {
+fn healthy(game: &Game, health: f64) {
     assert_eq!(game.state, RunState::Playing);
     assert_eq!(game.player.health, health);
     assert!(!game.player.is_stunned());

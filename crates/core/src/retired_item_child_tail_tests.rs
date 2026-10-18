@@ -75,7 +75,7 @@ fn configured_sticky_lava_destroy_finishes_attach_without_a_second_cleanup() {
                 game.world.entity(snake).unwrap().value("bomb_id"),
                 if linked { bomb as f64 } else { 0.0 }
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
         let mut game = scene(rules);
         let old = game.spawn("oSnake", Vec2::new(400.0, 96.0));
@@ -190,7 +190,7 @@ fn configured_default_idol_lava_retirement_keeps_unsupported_trigger_credit() {
             if !lava {
                 assert_eq!(game.world.entity(idol).unwrap().value("trigger"), 0.0);
             }
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             game.step(&InputFrame::default());
             assert_eq!(
                 game.data.get("idols_grabbed").copied().unwrap_or(0.0),

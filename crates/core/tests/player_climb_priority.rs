@@ -61,7 +61,7 @@ fn top(rules: RulesPreset, character: characters::Character) -> Game {
     panic!("ordinary Up never reached a settled ladder top");
 }
 
-fn quiet(game: &Game, health: i32) {
+fn quiet(game: &Game, health: f64) {
     assert_eq!(game.player.health, health);
     assert_eq!(game.state, RunState::Playing);
     assert!(!game.player.is_stunned());

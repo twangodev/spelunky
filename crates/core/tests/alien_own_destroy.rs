@@ -128,7 +128,7 @@ fn crush_blood_prefix_case(legacy: bool) {
         game.step(&InputFrame::default());
         assert_eq!(game.data.get("kills"), Some(&1.0));
         assert_eq!(game.data.get("aliens"), Some(&1.0));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 fn capped_tail_case(legacy: bool, walk: bool) {
@@ -151,7 +151,7 @@ fn capped_tail_case(legacy: bool, walk: bool) {
             "CAPPED_DEATH_STILL_RUNS_AI_DRAW"
         );
         assert_eq!(game.data.get("kills"), Some(&1.0));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 fn live_control_case(legacy: bool) {
@@ -165,7 +165,7 @@ fn live_control_case(legacy: bool) {
         assert_eq!(Tape::at(&game).state, tape.state);
         assert!(blood(&game).is_empty());
         assert_eq!(game.data.get("kills"), None);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 fn ordinary_pistol_case(legacy: bool) {
@@ -220,7 +220,7 @@ fn ordinary_pistol_case(legacy: bool) {
                 attack_pressed: fire,
                 ..Default::default()
             });
-            assert!(game.player.health > 0, "ORDINARY_CONTROLLER_SURVIVES");
+            assert!(game.player.health > 0.0, "ORDINARY_CONTROLLER_SURVIVES");
             if let Some(actor) = game.world.entity(id) {
                 if actor.health <= 0 {
                     lethal = true;

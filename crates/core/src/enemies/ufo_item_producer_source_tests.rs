@@ -40,7 +40,7 @@ fn ordinary_item_ufo_birth_prefix_and_literal_credit_ignore_counts_as_kill() {
                     g.world.entity_mut(rock).unwrap().vel = Vec2::new(4.0, 0.0);
                     assert_eq!(g.world.entity(ufo).unwrap().health, 1);
                     assert_eq!(g.world.entity(ufo).unwrap().value("invincible"), 0.0);
-                    assert_eq!(g.player.health, 4);
+                    assert_eq!(g.player.health, 4.0);
                     assert_eq!(g.world.entity(rock).unwrap().value("safe"), 0.0);
                     assert_eq!(item_impact_family(&g, "oEnemy", rock), vec![ufo]);
                     assert!(g.world.entity(ufo).unwrap().mask_intersects(
@@ -99,7 +99,7 @@ fn ordinary_item_ufo_birth_prefix_and_literal_credit_ignore_counts_as_kill() {
                     assert_eq!(g.lifetime_stats.enemy_kills[16], u64::from(real));
                     let retired = g.world.entities.iter().find(|e| e.id == ufo).unwrap();
                     assert_eq!(retired.health, 1, "source branch never writes hp");
-                    assert_eq!(g.player.health, 4);
+                    assert_eq!(g.player.health, 4.0);
                     assert!(g.world.entity(rock).is_some());
                 }
             }
@@ -138,7 +138,7 @@ fn ordinary_item_ufo_query_keeps_invincible_and_inactive_family_guards() {
             assert_eq!(g.data.get("ufos").copied().unwrap_or(0.0), 0.0);
             assert_eq!(g.data.get("kills").copied().unwrap_or(0.0), 0.0);
             assert_eq!(g.lifetime_stats.enemy_kills[16], 0);
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
         }
     }
 }

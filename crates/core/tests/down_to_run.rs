@@ -41,7 +41,7 @@ fn warm_walk(game: &mut Game, direction: f64, fast: bool) -> f64 {
         if (fast && (2.0..3.0).contains(&speed)) || (!fast && speed > 0.1 && speed < 2.0) {
             assert_eq!(game.player.state, PlayerState::Running);
             assert!(game.player.grounded);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             let steps = if direction < 0.0 {
                 "left_steps"
             } else {
@@ -76,7 +76,7 @@ fn natural_walk_then_down_runs_by_default_in_both_directions_and_rules() {
             assert!(game.player.vel.x.abs() > 3.0);
             assert!((game.player.pos.x - start.x) * direction > 0.0);
             assert!(game.player.grounded);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -93,7 +93,7 @@ fn disabled_down_run_keeps_literal_high_speed_fallback_including_left_asymmetry(
             let damped = if damped < 0.5 { 0.0 } else { damped };
             near(game.player.vel.x, (damped + direction * 3.0) * 0.2);
             assert!(game.player.vel.x.abs() < 2.0);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }

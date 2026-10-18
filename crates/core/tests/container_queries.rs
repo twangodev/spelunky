@@ -96,7 +96,7 @@ fn actual_step_container_point_gate_can_select_an_earlier_full_mask_receiver() {
                 game.step(&open_input(crouch));
 
                 assert_eq!(game.player.pos, Vec2::new(104.0, 120.0));
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert_eq!(game.player.attack_timer, 0, "opening consumes Attack");
                 if family == "oChest" {
                     assert_eq!(game.world.entity(earlier).unwrap().sprite, "sChestOpen");
@@ -130,7 +130,7 @@ fn actual_step_full_mask_contact_alone_does_not_open_a_container() {
             assert_ne!(item.sprite, "sChestOpen");
             assert_eq!(game.data.get("totalChests"), None);
             assert_eq!(game.data.get("totalCrates"), None);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -152,7 +152,7 @@ fn actual_step_open_chest_receiver_leaves_attack_for_the_crate_branch() {
         assert!(game.world.entity(crate_id).is_none());
         assert_eq!(game.world.entity(later).unwrap().sprite, "sChest");
         assert_eq!(game.player.attack_timer, 0);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 
@@ -170,7 +170,7 @@ fn actual_step_crate_branch_precedes_older_flare_crate() {
             assert!(game.world.entity(crate_id).is_none());
             assert!(game.world.entity(flare).is_some());
             assert_eq!(game.player.attack_timer, 0);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -272,7 +272,7 @@ fn actual_step_container_receiver_follows_natural_reactivation_order() {
                     } else {
                         assert!(game.world.entity(newer).is_none());
                     }
-                    assert_eq!(game.player.health, 4);
+                    assert_eq!(game.player.health, 4.0);
                     assert_eq!(game.player.attack_timer, 0);
                     opened = true;
                     break;

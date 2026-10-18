@@ -28,7 +28,7 @@ fn room(rules: RulesPreset, owned: bool, with_ghost: bool) -> (Game, u64, Option
             visible(&game),
             "fixture prerequisite: Ghost has not reached Player"
         );
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(game.world.entity(loose).is_some());
     }
     if let Some(pickup) = pickup {
@@ -46,7 +46,7 @@ fn room(rules: RulesPreset, owned: bool, with_ghost: bool) -> (Game, u64, Option
         assert!(game.world.entity(pickup).is_none());
         assert!(game.player.held.is_none());
         assert!(visible(&game));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
     assert_eq!(game.player.has("Jetpack"), owned);
     (game, loose, ghost)
@@ -55,7 +55,7 @@ fn room(rules: RulesPreset, owned: bool, with_ghost: bool) -> (Game, u64, Option
 fn chase_until_invisible(game: &mut Game, loose: u64, ghost: u64) {
     for _ in 0..240 {
         assert!(visible(game));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.player.invincible, 0);
         let pack = game
             .world
@@ -69,7 +69,7 @@ fn chase_until_invisible(game: &mut Game, loose: u64, ghost: u64) {
         assert_eq!(game.world.entity(ghost).unwrap().state, 1);
         game.step(&InputFrame::default());
         if !visible(game) {
-            assert_eq!(game.player.health, -99, "real Ghost fatal contact");
+            assert_eq!(game.player.health, -99.0, "real Ghost fatal contact");
             let ghost = game.world.entity(ghost).expect("fresh Ghost disappearance");
             assert_eq!(ghost.state, 0);
             assert_eq!(ghost.sprite, "sGhostDisappear");
@@ -135,7 +135,7 @@ fn visible_player_preserves_loose_jetpack_with_and_without_owned_equipment() {
             for _ in 0..260 {
                 game.step(&InputFrame::default());
                 assert!(visible(&game));
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert_eq!(game.player.has("Jetpack"), owned);
                 let pack = game
                     .world
@@ -172,7 +172,7 @@ fn initially_invisible_living_player_retires_only_loose_jetpack() {
         assert!(game.player.engine_active);
         assert!(game.world.entity(pack).unwrap().engine_active);
         game.step(&InputFrame::default());
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(!visible(&game));
         assert!(
             game.world.entity(pack).is_none(),

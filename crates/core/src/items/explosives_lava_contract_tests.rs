@@ -125,8 +125,8 @@ fn configured_lava_bomb_direct_flame_creates_ignore_graphics_and_script_cap() {
                     })
                     .collect();
                 assert_eq!(sound_positions, vec![origin, origin]);
-                assert_eq!(game.player.health, 4);
-                assert_eq!(game.player.bombs, 4);
+                assert_eq!(game.player.health, 4.0);
+                assert_eq!(game.player.bombs, 4.0);
                 assert_eq!(game.engine_time(), 2);
             }
         }
@@ -158,7 +158,7 @@ fn configured_lava_contact_rope_burn_keeps_the_source_sprite_and_animation() {
         assert_eq!(burning.animation, 0.8);
         assert!(burning.sprite_bounds().is_valid());
         assert!(crate::catalog::sprite_frame_count(&burning.sprite) > 1);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 
@@ -219,7 +219,7 @@ fn configured_lava_blast_deletes_two_upper_and_one_lower_graphical_crops_before_
                 assert!(game.world.entity(lower[1]).is_some());
                 assert!(game.world.entity(other_depth).is_some());
                 assert!(game.world.entity(remote).is_some());
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
             }
         }
     }

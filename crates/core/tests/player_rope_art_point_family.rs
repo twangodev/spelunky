@@ -24,7 +24,7 @@ fn room(rules: RulesPreset, extra: Option<&str>) -> (Game, Option<u64>) {
     });
     assert_eq!(game.player.pos, Vec2::new(104.0, 88.0));
     assert_eq!(game.player.vel, Vec2::default());
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(game.world.rectangle_family_except(
         Vec2::new(99.0, 96.0),
         Vec2::new(108.0, 96.0),
@@ -59,7 +59,7 @@ fn up(game: &mut Game) {
         ..Default::default()
     });
     assert_eq!(game.state, RunState::Playing);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.stun, 0);
     assert!(!game.player.is_stunned());
     assert_eq!(game.player.state, PlayerState::Climbing);

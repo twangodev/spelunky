@@ -103,7 +103,7 @@ fn natural_bomb_input_destroys_authored_door_with_two_small_tan_pieces() {
         bomb_pressed: true,
         ..Default::default()
     });
-    assert_eq!(game.player.bombs, 3);
+    assert_eq!(game.player.bombs, 3.0);
     assert!(
         game.world
             .entities

@@ -94,7 +94,7 @@ fn configured_skipped_player_callback_does_not_replay_the_previous_frames_releas
             };
             let origin = game.player.pos;
             assert_eq!(origin, Vec2::new(40., 40.));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             game.step(&InputFrame::default());
             assert_eq!(
                 game.player.pos, origin,
@@ -107,7 +107,7 @@ fn configured_skipped_player_callback_does_not_replay_the_previous_frames_releas
             );
             game.step(&InputFrame::default());
             assert_eq!(game.player.data.get(key), Some(&0.));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(game.state, RunState::Playing);
             assert!(game.player.grounded);
             assert_eq!(
@@ -158,7 +158,7 @@ fn real_trap_stun_consumes_a_release_without_inventing_a_recovery_impulse() {
                     input.jump_pressed = tick == 0;
                     game.step(&input);
                     arrow |= game.world.entities.iter().any(|e| e.object == "oArrow");
-                    if game.player.health < 4 {
+                    if game.player.health < 4.0 {
                         assert!(
                             hanging && was_hanging && arrow,
                             "source trap must hit a natural hanging player"
@@ -167,7 +167,7 @@ fn real_trap_stun_consumes_a_release_without_inventing_a_recovery_impulse() {
                     }
                     hanging |= game.player.state == PlayerState::Hanging;
                 }
-                assert_eq!(game.player.health, 2);
+                assert_eq!(game.player.health, 2.0);
                 assert!(game.player.is_stunned());
                 let key = if left {
                     "previous_left"
@@ -189,7 +189,7 @@ fn real_trap_stun_consumes_a_release_without_inventing_a_recovery_impulse() {
                 for _ in 0..240 {
                     let incoming = game.player.clone();
                     game.step(&InputFrame::default());
-                    assert_eq!(game.player.health, 2);
+                    assert_eq!(game.player.health, 2.0);
                     if game.player.data.get(key) == Some(&0.) {
                         // Source recovers from the stationary stun sprite and
                         // timer, even while its geometric bounce is airborne.

@@ -22,7 +22,7 @@ fn room(rules: RulesPreset, x: f64, wall: bool) -> Game {
     game.player.state = PlayerState::Standing;
     game.player.grounded = true;
     game.player.facing = 1;
-    game.player.health = 30; // Initial survivor fixture exposes recoil/stun too.
+    game.player.health = 30.0; // Initial survivor fixture exposes recoil/stun too.
     game
 }
 fn mask(e: &Entity) -> catalog::CollisionMask {
@@ -75,7 +75,7 @@ fn source_overlap(e: &Entity, p: Vec2) -> bool {
 }
 fn assert_hurt(game: &Game, marker: &str) {
     assert_eq!(
-        game.player.health, 20,
+        game.player.health, 20.0,
         "{marker}: pos={:?} vel={:?}",
         game.player.pos, game.player.vel
     );
@@ -128,7 +128,7 @@ fn outside_raw_envelope_stays_safe_through_natural_last_frame() {
                     saw_last |= e.animation.floor() == 9.0;
                 }
                 game.step(&InputFrame::default());
-                assert_eq!(game.player.health, 30);
+                assert_eq!(game.player.health, 30.0);
                 assert_eq!(game.player.pos, Vec2::new(160.0, 104.0));
                 assert!(
                     !game
@@ -148,7 +148,7 @@ fn ordinary_walk_into_late_explosion_uses_same_aggregate_bbox() {
         let id = game.spawn("oExplosion", Vec2::new(130.0, 104.0));
         for _ in 0..6 {
             game.step(&InputFrame::default());
-            assert_eq!(game.player.health, 30);
+            assert_eq!(game.player.health, 30.0);
         }
         let mut hit = false;
         for _ in 0..6 {
@@ -169,7 +169,7 @@ fn ordinary_walk_into_late_explosion_uses_same_aggregate_bbox() {
                     break;
                 }
             }
-            assert_eq!(game.player.health, 30);
+            assert_eq!(game.player.health, 30.0);
         }
         assert!(hit, "ordinary walking must reach the live aggregate margin");
     }
@@ -183,7 +183,7 @@ fn inventory_bomb_natural_fuse_hits_player_at_first_blast_margin() {
             bomb_pressed: true,
             ..Default::default()
         });
-        assert_eq!(game.player.bombs, 3);
+        assert_eq!(game.player.bombs, 3.0);
         let id = game
             .world
             .entities
@@ -231,7 +231,7 @@ fn inventory_bomb_natural_fuse_hits_player_at_first_blast_margin() {
                 burst = true;
                 break;
             }
-            assert_eq!(game.player.health, 30, "pre-burst health age={age}");
+            assert_eq!(game.player.health, 30.0, "pre-burst health age={age}");
             assert_eq!(game.state, RunState::Playing);
         }
         assert!(burst, "natural inventory bomb must reach Explosion Create");

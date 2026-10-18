@@ -24,7 +24,14 @@ fn actual_default_projectile_first_step_hits_inclusive_query_edge_only() {
                     .intersects_rectangle_bbox(Vec2::new(72.0, 96.0), Vec2::new(88.0, 112.0));
                 assert_eq!(source_gate, !outside);
                 g.step(&InputFrame::default());
-                assert_eq!(g.player.health, if outside { 4 } else { 4 - damage });
+                assert_eq!(
+                    g.player.health,
+                    if outside {
+                        4.0
+                    } else {
+                        4.0 - f64::from(damage)
+                    }
+                );
                 assert_eq!(
                     g.events.contains(&GameEvent::Damage { amount: damage }),
                     !outside

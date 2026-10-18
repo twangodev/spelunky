@@ -69,7 +69,7 @@ fn normal_forward_whip_breaks_authored_jar_both_facings_and_presets() {
                 saw_six_fragments,
                 "literal Whip collision then own Destroy each creates three fragments"
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }
@@ -96,7 +96,7 @@ fn rear_whip_pre_reaches_jar_without_its_forward_whip_event() {
         saw_rear_contact,
         "control must exercise actual rear mask contact"
     );
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(
         !game
             .world

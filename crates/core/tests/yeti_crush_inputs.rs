@@ -65,7 +65,7 @@ fn ordinary_falling_push_block_crushes_default_yeti_with_three_blood_and_no_cred
             assert_eq!(actor.health, 5, "natural live body, frame {frame}");
             assert!(actor.state < 98);
             game.step(&InputFrame::default());
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             if game.world.entity(yeti).is_none() {
                 let block_after = game.world.entity(block).unwrap();
                 assert!(

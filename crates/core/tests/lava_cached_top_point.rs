@@ -49,7 +49,7 @@ fn lava_top_point_uses_active_cached_aggregate_bounds() {
             assert_eq!(damage, usize::from(lethal));
             assert_eq!(game.state == RunState::Dead, lethal);
             if !lethal {
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
             }
         }
     }

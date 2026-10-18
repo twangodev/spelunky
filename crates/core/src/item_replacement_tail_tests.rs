@@ -93,7 +93,7 @@ fn configured_retired_dice_finishes_hit_blood_before_rolling_rng() {
             assert_eq!(raw(&game, dice).value("value"), value);
             assert_eq!(raw(&game, dice).sprite, "sDiceRoll");
             assert_eq!(sound_count(&game, "sndHit"), usize::from(hit));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
     }
 }

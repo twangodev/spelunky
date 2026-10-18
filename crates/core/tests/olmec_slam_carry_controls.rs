@@ -64,7 +64,7 @@ fn near(actual: f64, expected: f64, label: &str, game: &Game, id: u64) {
 
 fn healthy(game: &Game, id: u64) {
     assert_eq!(game.state, RunState::Playing, "{}", diagnostic(game, id));
-    assert_eq!(game.player.health, 4, "{}", diagnostic(game, id));
+    assert_eq!(game.player.health, 4.0, "{}", diagnostic(game, id));
     assert!(!game.player.is_stunned(), "{}", diagnostic(game, id));
 }
 

@@ -8,7 +8,7 @@ use spelunky_core::{
 
 fn quiet(game: &Game) {
     assert_eq!(game.state, RunState::Playing);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.invincible, 0);
     assert_eq!(game.player.stun, 0);
     assert!(!game.player.is_stunned());
@@ -42,7 +42,7 @@ fn scene(rules: RulesPreset, lava: bool, obstruction_y: f64) -> (Game, u64, u64)
     if lava {
         game.spawn("oLava", Vec2::new(64.0, 16.0));
     }
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.vel, Vec2::default());
     assert_eq!(game.player.state, PlayerState::Falling);
     assert!(!game.world.fluid_dirty);

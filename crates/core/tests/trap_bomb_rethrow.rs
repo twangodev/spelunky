@@ -29,7 +29,7 @@ fn scene(rules: RulesPreset, facing: i8) -> (Game, u64, u64) {
 }
 
 fn no_prior_warning(game: &Game, keeper: u64) {
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.state, RunState::Playing);
     assert!(!game.flags.contains("wanted"), "warning before the action");
     assert_eq!(game.data.get("thiefLevel").copied().unwrap_or(0.0), 0.0);
@@ -234,7 +234,7 @@ fn ordinary_button_bomb_still_warns_in_the_same_initial_shop() {
                 "source-explicit arming still warns"
             );
             assert!(game.data.get("thiefLevel").copied().unwrap_or(0.0) > 0.0);
-            assert_eq!(game.player.bombs, before - 1);
+            assert_eq!(game.player.bombs, before - 1.0);
             let actor = game
                 .world
                 .entities

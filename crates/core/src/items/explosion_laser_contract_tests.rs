@@ -174,7 +174,7 @@ fn actual_bomb_alarm_blast_runs_boulder_own_collision_then_parent_destroy() {
                 source.next_u64(),
                 "39+4*k draws, no rubble/rock Create RNG or cap"
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             break;
         }
         assert!(
@@ -331,7 +331,7 @@ fn actual_ufo_laser_runs_solid_own_destroy_and_unconditional_layer_three_continu
                     source.next_u64(),
                     "own Destroy precedes impact effect; fixed Creates add no draws"
                 );
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 break;
             }
             assert!(reached, "natural UFO blast must reach the authored solid");
@@ -393,7 +393,7 @@ fn actual_firearm_pickup_and_attack_barrier_hit_emits_bullet_only_fx() {
                     assert!(smoke.is_empty(), "WebBall source collision stays kill-only");
                     assert!(hit.is_empty());
                 }
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 break;
             }
             assert!(reached);
@@ -505,7 +505,7 @@ fn actual_bomb_alarm_emitter_destroy_removes_barrier_before_same_frame_fired_bul
             "six fixed uncapped Spark Creates preserve18draw source order"
         );
         assert_eq!(game.events.iter().filter(|event| matches!(event, GameEvent::Sound { name, .. } if name == "sndSmallExplode")).count(), 1);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         game.step(&InputFrame::default());
         assert!(
             !game.events.iter().any(
@@ -674,7 +674,7 @@ fn actual_ufo_laser_gold_own_destroy_precedes_solid_destroy_with_literal_loot_rn
                     source.next_u64(),
                     "21draw Gold;24/32draw GoldBig including failed condition; then12draw Solid"
                 );
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert_eq!(
                     game.world
                         .entities

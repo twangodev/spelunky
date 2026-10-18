@@ -21,7 +21,7 @@ fn healthy(game: &Game, monkey: u64) {
     assert_eq!(e.health, 1);
     assert_eq!(e.value("swimming"), 0.0);
     assert_eq!(e.value("burning"), 0.0);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.stun, 0);
     assert!(game.player.held.is_none());
     assert_eq!(game.player.pos, Vec2::new(136.0, 152.0));

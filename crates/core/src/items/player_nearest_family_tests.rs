@@ -12,7 +12,7 @@ fn scene(rules: RulesPreset) -> Game {
     g.world.name = "rLevel".into();
     g.player.pos = Vec2::new(160., 160.);
     g.player.previous_pos = g.player.pos;
-    g.player.health = 30;
+    g.player.health = 30.0;
     // Configured purity control: avoid legitimate Blood Create syncing pending
     // births. LaserExplode is the existing raw World-spawn deferred producer.
     g.player.data.insert("bloodless".into(), 1.);
@@ -110,10 +110,10 @@ fn hurt(g: &mut Game, obj: &str, chosen: u64, marker: &str) {
     assert_eq!(g.player.vel.y, if obj == "oExplosion" { -6. } else { -4. });
     assert_eq!(
         g.player.health,
-        30 - match obj {
-            "oExplosion" => 10,
-            "oLaser" => 3,
-            _ => 1,
+        30.0 - match obj {
+            "oExplosion" => 10.0,
+            "oLaser" => 3.0,
+            _ => 1.0,
         }
     );
     assert_eq!(

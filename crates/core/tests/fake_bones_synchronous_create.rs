@@ -14,7 +14,7 @@ fn first_birth(rules: RulesPreset, player_x: f64, expected_facing: i8) {
     game.player.previous_pos = game.player.pos;
     game.world.entrance = game.player.pos;
     let bones = game.spawn("oFakeBones", Vec2::new(112.0, 144.0));
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.vel, Vec2::default());
     assert_eq!(game.world.entity(bones).unwrap().sprite, "sFakeBonesLeft");
     assert_eq!(game.world.entity(bones).unwrap().animation, 0.0);
@@ -30,7 +30,7 @@ fn first_birth(rules: RulesPreset, player_x: f64, expected_facing: i8) {
         let before_rng = game.rng.state_bits();
         game.step(&InputFrame::default());
         assert_eq!(game.state, RunState::Playing);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.player.invincible, 0);
         assert_eq!(game.player.stun, 0);
         assert!(!game.player.is_stunned());
@@ -107,7 +107,7 @@ fn first_birth(rules: RulesPreset, player_x: f64, expected_facing: i8) {
     assert_eq!(enemies::source_facing(skeleton), expected_facing);
     assert_eq!(skeleton.value("source_facing_pending"), 0.0);
     assert_eq!(game.rng.state_bits(), before_rng);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(!game.player.is_stunned());
     assert_eq!(
         game.world

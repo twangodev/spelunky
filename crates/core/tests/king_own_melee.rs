@@ -105,7 +105,7 @@ fn attack(
             ..Default::default()
         });
         assert_eq!(
-            game.player.health, 4,
+            game.player.health, 4.0,
             "NO_KING_BODY_CONTACT_HIDING_MELEE tick={tick}"
         );
         if pickup {
@@ -204,5 +204,5 @@ fn naturally_armed_front_cooldown_ignores_remaining_slash_frames() {
     assert_eq!(game.world.entity(id).unwrap().health, 28);
     assert_eq!(game.world.entity(id).unwrap().value("hit_cooldown"), 9.0);
     assert_eq!(blood(&game).iter().map(|e| e.id).collect::<Vec<_>>(), ids);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
 }

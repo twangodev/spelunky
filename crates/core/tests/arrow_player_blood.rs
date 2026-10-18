@@ -58,7 +58,7 @@ fn natural_trap_arrow_hurts_hanging_player_with_three_prefix_blood_or_bloodless_
                 "FIXTURE_GROUND: {}",
                 diagnostic(&game)
             );
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(blood(&game), 0);
             let mut observed_arrow = false;
             let mut trace = Vec::new();
@@ -73,12 +73,12 @@ fn natural_trap_arrow_hurts_hanging_player_with_three_prefix_blood_or_bloodless_
                 });
                 trace.push(diagnostic(&game));
                 observed_arrow |= game.world.entities.iter().any(|e| e.object == "oArrow");
-                if game.player.health < 4 {
+                if game.player.health < 4.0 {
                     assert!(
                         observed_arrow && prior_hang,
                         "FIXTURE_TRAP_HANG: {trace:#?}"
                     );
-                    assert_eq!(game.player.health, 2, "first Arrow hit: {trace:#?}");
+                    assert_eq!(game.player.health, 2.0, "first Arrow hit: {trace:#?}");
                     assert_eq!(game.player.stun, 20);
                     assert_eq!(
                         game.player.data.get("bounced").copied().unwrap_or(0.0),
@@ -136,7 +136,7 @@ fn initial_arrow_room(
         PlayerState::Falling
     };
     game.player.grounded = floor;
-    game.player.health = if prior_dead { 0 } else { 4 };
+    game.player.health = if prior_dead { 0.0 } else { 4.0 };
     if prior_dead {
         game.state = RunState::Dead;
     }
@@ -176,7 +176,7 @@ fn initial_arrow_grounded_hurt_preserves_separate_prefix_and_late_bottom_script_
                     count
                 );
                 game.step(&InputFrame::default());
-                assert_eq!(game.player.health, 2, "{}", diagnostic(&game));
+                assert_eq!(game.player.health, 2.0, "{}", diagnostic(&game));
                 assert_eq!(game.player.stun, 20);
                 assert_eq!(
                     game.player.data.get("bounced").copied(),
@@ -219,7 +219,7 @@ fn initial_airborne_corpse_arrow_still_hurts_without_reducing_nonpositive_health
         for bloodless in [false, true] {
             let mut game = initial_arrow_room(rules, false, true, 0, bloodless);
             game.step(&InputFrame::default());
-            assert_eq!(game.player.health, 0);
+            assert_eq!(game.player.health, 0.0);
             assert_eq!(
                 game.player.stun,
                 20,

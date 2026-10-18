@@ -15,7 +15,7 @@ fn sound(game: &Game, wanted: &str) -> bool {
         .any(|event| matches!(event, GameEvent::Sound { name, .. } if name == wanted))
 }
 fn unharmed(game: &Game) {
-    assert_eq!(game.player.health, 4, "FIXTURE_NO_DAMAGE");
+    assert_eq!(game.player.health, 4.0, "FIXTURE_NO_DAMAGE");
     assert_eq!(game.player.stun, 0, "FIXTURE_NO_STUN");
     assert!(!game.player.is_stunned());
     assert!(

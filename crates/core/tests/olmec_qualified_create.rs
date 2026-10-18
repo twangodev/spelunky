@@ -388,11 +388,11 @@ fn natural_supported(c: bool, r: RulesPreset, support: bool) {
             flee -= 1;
         }
         g.step(&input);
-        if g.player.health != 4 {
+        if g.player.health != 4.0 {
             failed_natural_context(&g, c, r, frame, "first_step_health_change");
         }
         assert_eq!(
-            g.player.health, 4,
+            g.player.health, 4.0,
             "ORDINARY_CONTROLLER_SURVIVES_NO_HP_OR_STATE_INJECTION"
         );
         if create {

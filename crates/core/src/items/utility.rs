@@ -960,7 +960,7 @@ mod tests {
         use_utility(&mut game, id, &InputFrame::default());
         assert_eq!(game.player.pos, Vec2::new(160.0 + distance, 112.0));
         // Item use itself does not run the later Player Hurt block.
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(!game.events.contains(&GameEvent::Damage { amount: 99 }));
     }
 
@@ -992,7 +992,7 @@ mod tests {
             .set_tile(((target_x + 4.0) / 16.0) as usize, 10, "oBlock");
         use_utility(&mut game, id, &InputFrame::default());
         assert_eq!(game.player.pos, Vec2::new(target_x, 144.0));
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 
     #[test]
@@ -1001,7 +1001,7 @@ mod tests {
         game.player.pos.y = -8.0;
         use_utility(&mut game, id, &InputFrame::default());
         assert_eq!(game.player.pos.y, -8.0);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 
     #[test]
@@ -1059,7 +1059,7 @@ mod tests {
         });
         assert_eq!(game.player.pos, target);
         assert!(game.world.entity(snake).is_none());
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.player.pos, game.player.previous_pos);
         assert_eq!(game.camera, game.previous_camera);
         assert!(game.flags.contains("render_discontinuity"));
@@ -1094,7 +1094,7 @@ mod tests {
             ..InputFrame::default()
         });
         assert_eq!(game.state, RunState::Dead);
-        assert_eq!(game.player.health, 0);
+        assert_eq!(game.player.health, 0.0);
         assert!(game.events.contains(&GameEvent::Damage { amount: 99 }));
         assert!(game.events.contains(&GameEvent::Died));
         // The held teleporter remains an ordinary item until the next update;
@@ -1215,7 +1215,7 @@ mod telefrag_blood_source_tests {
             });
         }
         assert!(g.player.pos.x <= 24.0);
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(
             (g.rng.clone().next_u64() * 5) >> 32,
             0,
@@ -1354,7 +1354,7 @@ mod telefrag_blood_source_tests {
             );
             assert!(g.world.entity(receiver).is_none());
             assert_eq!(g.world.entity(bomb).unwrap().value("attached_id"), 0.0);
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
         }
     }
 

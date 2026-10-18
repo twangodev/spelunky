@@ -120,7 +120,7 @@ fn new_child_from_inactive_gate_has_real_supported_step_and_builtin_animation() 
                 g.world.entity(emitter).unwrap().animation,
                 (tick + 1) as f64 * 0.5
             );
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
             assert_eq!(g.rng.clone().next_u64(), expected_rng);
             let retained = g
                 .world

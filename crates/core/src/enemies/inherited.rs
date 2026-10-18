@@ -670,7 +670,7 @@ mod tests {
         game.spawn("oSpearTrapTop", Vec2::new(96.0, 144.0));
         for _ in 0..20 {
             game.step(&InputFrame::default());
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
         let spear = game
             .world
@@ -1259,7 +1259,7 @@ mod tests {
         let id = g.world.spawn("oHawkman", Vec2::new(96.0, 96.0));
         g.world.entity_mut(id).unwrap().vel = Vec2::default();
         g.step(&InputFrame::default());
-        assert_eq!(g.player.health, 3);
+        assert_eq!(g.player.health, 3.0);
         assert_eq!(g.player.invincible, 30);
         assert_eq!(g.player.stun, 0);
         assert_ne!(g.player.state, PlayerState::Stunned);
@@ -1437,7 +1437,7 @@ mod tests {
         for dead in [false, true] {
             let mut g = room();
             g.player.pos = Vec2::new(112.0, 112.0);
-            g.player.health = 1;
+            g.player.health = 1.0;
             g.player.state = if dead {
                 PlayerState::Dead
             } else {
@@ -1462,12 +1462,12 @@ mod tests {
             assert_eq!(count, if dead { 0 } else { 6 });
         }
         let mut g = room();
-        g.player.health = 1;
+        g.player.health = 1.0;
         g.player.state = PlayerState::Dead;
         g.state = RunState::Dead;
         g.world.spawn("oPsychicWave", g.player.pos);
         g.step(&InputFrame::default());
-        assert_eq!(g.player.health, 1);
+        assert_eq!(g.player.health, 1.0);
         assert_eq!(g.player.stun, 0);
     }
     #[test]
@@ -2172,7 +2172,7 @@ mod source_spear_query_tests {
                     .expect("ordinary constrained ManTrap lives");
                 assert_eq!(enemy.pos, Vec2::new(112.0, 128.0));
                 assert_eq!(enemy.health, 3);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
             }
             let enemy = game.world.entity(actor).unwrap();
             let spear_at = |pos: Vec2| {

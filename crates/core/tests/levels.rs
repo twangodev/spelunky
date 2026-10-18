@@ -610,9 +610,9 @@ fn custom_music_does_not_select_campaign_area_rules() {
         // the player at Olmec's (24,552), below this 544-pixel custom room.
         let entrance = game.world.entrance;
         game.player.equipment.insert("Ankh".into());
-        game.player.health = 0;
+        game.player.health = 0.0;
         game.step(&InputFrame::default());
-        assert_eq!(game.player.health, 4, "revive with {music}");
+        assert_eq!(game.player.health, 4.0, "revive with {music}");
         assert_eq!(game.player.pos, entrance, "revive position with {music}");
     }
 }

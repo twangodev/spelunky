@@ -434,7 +434,7 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
     // RunState before this hook, so health retains the evidence of that death.
     let reset_tutorial_run = kind == HubKind::Title && game.flags.remove("reset_run_on_title");
     let reset_dead_run = game.flags.remove("reset_run_on_hub");
-    if game.player.health <= 0 || reset_tutorial_run || reset_dead_run {
+    if game.player.health <= 0.0 || reset_tutorial_run || reset_dead_run {
         let selected = crate::characters::selected(game);
         crate::characters::apply(game, selected);
         game.player.money = 0;
@@ -634,7 +634,7 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
     if kind.challenge() {
         game.data.insert("source_hub_music_alarm".into(), 100.0);
         game.data.insert("challenge_highscore".into(), 0.);
-        game.player.health = 8;
+        game.player.health = 8.0;
         game.data.insert("points".into(), 0.0);
         game.data.insert("baskets".into(), 0.0);
         game.data.insert("stars_kills".into(), 0.0);
@@ -869,7 +869,7 @@ pub(crate) fn begin_title_exit(game: &mut Game) -> bool {
 
 fn activate_portal(game: &mut Game) {
     if !game.player.grounded
-        || game.player.health <= 0
+        || game.player.health <= 0.0
         || game.player.state == PlayerState::Dead
         || game.state == RunState::Dead
         || game.player.is_stunned()
@@ -1012,8 +1012,8 @@ pub fn complete_portal(game: &mut Game, portal: HubPortal) {
         // Both xSTART's first-use branch and xTUTORIAL use these inventory
         // values. Only the former consumes the firstTime sentinel.
         game.world.level = 0;
-        game.player.bombs = 0;
-        game.player.ropes = 2;
+        game.player.bombs = 0.0;
+        game.player.ropes = 2.0;
     }
     if destination == "scores" {
         let start = if game.flags.contains("hub_sun") {
@@ -1179,9 +1179,9 @@ fn sun(game: &mut Game) {
             .iter()
             .all(|e| e.object != "oDamsel" || !e.alive || e.health < 1)
     {
-        game.player.health = 0;
+        game.player.health = 0.0;
     }
-    if game.player.health <= 0
+    if game.player.health <= 0.0
         || game.player.state == PlayerState::Dead
         || game.state == RunState::Dead
     {
@@ -1235,7 +1235,7 @@ fn sun_alarm0(game: &mut Game) {
     game.data.insert("hub_alarm0".into(), f64::from(delay));
 }
 fn stars(game: &mut Game) {
-    if game.player.health <= 0
+    if game.player.health <= 0.0
         || game.player.state == PlayerState::Dead
         || game.state == RunState::Dead
     {
@@ -1389,7 +1389,7 @@ pub(crate) fn bat_target_collision(game: &mut Game, id: u64, other: crate::dispa
                 } else {
                     6.0
                 };
-                if game.player.health > 0 {
+                if game.player.health > 0.0 {
                     game.player.lose_health(1);
                     game.events.push(GameEvent::Damage { amount: 1 });
                 }
@@ -1453,7 +1453,7 @@ fn moon(game: &mut Game) {
             spawn_target(game, x, y);
         }
     }
-    let died = game.player.health <= 0
+    let died = game.player.health <= 0.0
         || game.player.state == PlayerState::Dead
         || game.state == RunState::Dead;
     // Player's first fatal Step records Moon and schedules its own 30-tick
@@ -1567,7 +1567,7 @@ fn moon(game: &mut Game) {
             } else {
                 6.0
             };
-            if game.player.health > 0 {
+            if game.player.health > 0.0 {
                 game.player.lose_health(1);
                 game.events.push(GameEvent::Damage { amount: 1 });
             }
@@ -2305,7 +2305,7 @@ mod tests {
             bomb_pressed: true,
             ..InputFrame::default()
         });
-        assert_eq!(g.player.bombs, 3);
+        assert_eq!(g.player.bombs, 3.0);
         assert!(
             g.world
                 .entities
@@ -2333,7 +2333,7 @@ mod tests {
                 "{kind:?} pos {:?}",
                 g.player.pos
             );
-            assert!(g.player.health > 0, "{kind:?}");
+            assert!(g.player.health > 0.0, "{kind:?}");
             assert!(g.player.grounded, "{kind:?} pos {:?}", g.player.pos);
             assert_eq!(g.player.pos, spawn, "{kind:?}");
         }
@@ -2342,7 +2342,7 @@ mod tests {
     fn dead_challenge_can_return_to_playable_title_and_scores() {
         for destination in [HubKind::Title, HubKind::Scores] {
             let mut g = loaded(HubKind::Stars);
-            g.player.health = 0;
+            g.player.health = 0.0;
             g.step(&InputFrame::default());
             assert_eq!(g.state, RunState::Dead);
             g.player.equipment.insert("Jetpack".into());
@@ -2353,7 +2353,7 @@ mod tests {
                 g.step(&InputFrame::default());
             }
             assert_eq!(g.state, RunState::Playing);
-            assert_eq!(g.player.health, 4);
+            assert_eq!(g.player.health, 4.0);
             assert!(g.player.equipment.is_empty());
             assert_eq!(g.player.money, 0);
             assert!(!g.flags.contains("murderer"));
@@ -2362,8 +2362,8 @@ mod tests {
     #[test]
     fn changing_doors_restore_source_standing_state_and_drop_held_items() {
         for (kind, flag, door, facing, health) in [
-            (HubKind::Scores, "unlock_damsel", "oXChange", -1, 4),
-            (HubKind::Title, "unlock_tunnel_man", "oXChange2", 1, 2),
+            (HubKind::Scores, "unlock_damsel", "oXChange", -1, 4.0),
+            (HubKind::Title, "unlock_tunnel_man", "oXChange2", 1, 2.0),
         ] {
             let mut g = Game::shell(7, RulesPreset::Classic);
             g.flags.insert(flag.into());
@@ -2406,7 +2406,7 @@ mod tests {
         for _ in 0..70 {
             g.step(&InputFrame::default());
         }
-        assert_eq!(g.player.health, 8);
+        assert_eq!(g.player.health, 8.0);
         let target = g
             .world
             .entities
@@ -2427,7 +2427,7 @@ mod tests {
         g.player.vel = Vec2::default();
         g.player.invincible = 0;
         g.step(&InputFrame::default());
-        assert_eq!(g.player.health, 7);
+        assert_eq!(g.player.health, 7.0);
         assert_eq!(g.player.stun, 0);
         assert_eq!(g.player.invincible, 30);
         assert_eq!(g.player.data["blink"], 30.);
@@ -2478,7 +2478,7 @@ mod tests {
             g.step(&InputFrame::default());
         }
         g.data.insert("baskets".into(), 23.0);
-        g.player.health = 0;
+        g.player.health = 0.0;
         g.step(&InputFrame::default());
         assert_eq!(g.state, RunState::Dead);
         assert_eq!(g.data["mini2"], 23.0);
@@ -2507,7 +2507,7 @@ mod tests {
         sun.step(&InputFrame::default());
         // The room controller follows Player Step in source object order.
         // Losing the damsel zeros health now; Player observes death next Step.
-        assert_eq!(sun.player.health, 0);
+        assert_eq!(sun.player.health, 0.0);
         assert_eq!(sun.state, RunState::Playing);
         sun.step(&InputFrame::default());
         assert_eq!(sun.state, RunState::Dead);
@@ -2727,7 +2727,7 @@ mod tests {
             }
         }
         tick_hub(&mut g);
-        assert_eq!(g.player.health, 0);
+        assert_eq!(g.player.health, 0.0);
         assert_eq!(g.data["mini1"], 42.0);
         assert!(g.flags.contains("hub_challenge_finished"));
     }
@@ -2746,7 +2746,7 @@ mod tests {
 
         g.step(&InputFrame::default());
 
-        assert!(g.player.health > 0);
+        assert!(g.player.health > 0.0);
         assert_eq!(g.state, RunState::Playing);
         assert!(!g.flags.contains("hub_challenge_finished"));
         assert!(!g.data.contains_key("mini1"));
@@ -2822,7 +2822,7 @@ mod tests {
             g.step(&InputFrame::default());
         }
         assert_eq!(g.data["points"], 1.0);
-        assert_eq!(g.player.health, 8);
+        assert_eq!(g.player.health, 8.0);
     }
     fn tick_hub(g: &mut Game) {
         tick(g, &InputFrame::default())
@@ -2893,7 +2893,7 @@ mod tests {
         g.data.insert("mini2".into(), 22.);
         g.data.insert("mini3".into(), 23.);
         g.data.insert("arrows".into(), 9.);
-        g.player.bombs = 33;
+        g.player.bombs = 33.0;
         g.player.equipment.insert("Jetpack".into());
         for _ in 0..5 {
             g.step(&InputFrame::default());
@@ -2909,7 +2909,10 @@ mod tests {
         assert!(g.flags.contains("title_start:3"));
         g.load_hub(HubKind::Title);
         assert_eq!(g.player.pos, Vec2::new(344., 184.));
-        assert_eq!((g.player.health, g.player.bombs, g.player.ropes), (4, 4, 4));
+        assert_eq!(
+            (g.player.health, g.player.bombs, g.player.ropes),
+            (4.0, 4.0, 4.0)
+        );
         assert_eq!(g.player.money, 0);
         assert!(g.player.equipment.is_empty());
         assert_eq!(g.data["currLevel"], 1.);
@@ -2977,7 +2980,7 @@ mod tests {
             .pos;
         g.player.pos = Vec2::new(portal.x + 8., portal.y + 8.);
         g.player.grounded = true;
-        g.player.health = 1;
+        g.player.health = 1.0;
         g.player.state = PlayerState::Dead;
         g.state = RunState::Dead;
         g.player.money = 10000;
@@ -2985,7 +2988,7 @@ mod tests {
         activate_portal(&mut g);
         assert!(!g.flags.iter().any(|f| f.starts_with("hub_destination:")));
         g.load_hub(HubKind::Scores);
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(g.player.money, 0);
         assert!(g.player.equipment.is_empty());
     }
@@ -3032,7 +3035,10 @@ mod tests {
         assert!(g.flags.contains("hub_destination:tutorial"));
         assert!(g.flags.contains("onboarding_consumed"));
         assert!(!g.flags.contains("first_time"));
-        assert_eq!((g.world.level, g.player.bombs, g.player.ropes), (0, 0, 2));
+        assert_eq!(
+            (g.world.level, g.player.bombs, g.player.ropes),
+            (0, 0.0, 2.0)
+        );
         g.load_hub(HubKind::Title);
         assert!(!g.world.entities.iter().any(|e| e.object == "oHintHand"));
         assert_eq!(g.world.tile(21, 11).unwrap().object, "");
@@ -3066,7 +3072,7 @@ mod tests {
         assert!(g.flags.contains("hub_destination:tutorial"));
         assert!(g.flags.contains("first_time"));
         assert!(!g.flags.contains("onboarding_consumed"));
-        assert_eq!((g.player.bombs, g.player.ropes), (0, 2));
+        assert_eq!((g.player.bombs, g.player.ropes), (0.0, 2.0));
     }
     #[test]
     fn explicit_unskipped_intro_has_barriers_but_no_early_hint_hand() {

@@ -19,7 +19,7 @@ fn room(rules: RulesPreset) -> (Game, u64) {
         game.step(&InputFrame::default());
     }
     assert_eq!(game.player.pos, Vec2::new(120.5, 136.0));
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert!(game.player.grounded);
     assert_eq!(game.player.held, None);
     let target = game.world.entity(rock).unwrap();
@@ -55,7 +55,7 @@ fn down_attack_does_not_pick_up_beyond_source_inclusive_rectangle() {
             "SOURCE_RAW_PICKUP_RECTANGLE {rules:?}"
         );
         assert!(!game.world.entity(rock).unwrap().held);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 
@@ -81,6 +81,6 @@ fn walking_into_source_rectangle_still_picks_up_the_same_rock() {
         assert_eq!(game.player.held, Some(rock));
         assert!(game.world.entity(rock).unwrap().held);
         assert_eq!(game.player.pickup_item_type, "Rock");
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }

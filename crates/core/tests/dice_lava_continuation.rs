@@ -74,7 +74,7 @@ fn step(table: &mut Table, mut input: InputFrame) {
     input.attack_released = table.attack_held && !input.attack;
     table.attack_held = input.attack;
     table.game.step(&input);
-    assert_eq!(table.game.player.health, 4);
+    assert_eq!(table.game.player.health, 4.0);
     assert_eq!(
         table.game.player.pos,
         Vec2::new(96.0, 168.0),

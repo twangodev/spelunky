@@ -135,7 +135,7 @@ fn stomp(mut g: Game, k: u64, item: Option<u64>) -> (Game, u64, Rng) {
             ..Default::default()
         });
         let boss = g.world.entity(k).unwrap();
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         if boss.health != 10 {
             assert!(falling);
             assert_eq!(before.state, PlayerState::Falling);
@@ -265,7 +265,7 @@ fn ordinary_ground_contact_hurts_once_with_or_without_low_roof_and_has_no_stomp_
                     right: true,
                     ..Default::default()
                 });
-                if g.player.health == 4 {
+                if g.player.health == 4.0 {
                     continue;
                 }
                 assert!(matches!(
@@ -277,7 +277,7 @@ fn ordinary_ground_contact_hurts_once_with_or_without_low_roof_and_has_no_stomp_
                     g.world.solid_at(actor.pos.x + 16.0, actor.pos.y - 4.0),
                     roof
                 );
-                assert_eq!(g.player.health, 3);
+                assert_eq!(g.player.health, 3.0);
                 assert_eq!(g.player.invincible, 30);
                 assert_eq!(g.player.data.get("blink").copied(), Some(30.0));
                 assert_eq!(g.player.stun, 0);
@@ -306,7 +306,7 @@ fn ordinary_ground_contact_hurts_once_with_or_without_low_roof_and_has_no_stomp_
                         right: true,
                         ..Default::default()
                     });
-                    assert_eq!(g.player.health, 3);
+                    assert_eq!(g.player.health, 3.0);
                 }
                 contacted = true;
                 break;
@@ -335,7 +335,7 @@ fn authored_custom_room_contact_still_subtracts_one_life_and_keeps_hurt_effects(
                 continue;
             }
             assert_eq!(g.player.invincible, 30);
-            assert_eq!(g.player.health, 3);
+            assert_eq!(g.player.health, 3.0);
             assert_eq!(g.world.entity(k).unwrap().health, 10);
             assert_eq!(g.player.vel, Vec2::new(-6.0, 0.0));
             assert!(
@@ -373,7 +373,7 @@ fn ordinary_ascending_jump_with_zero_fall_timer_still_deals_floor_plus_one_damag
                     ..Default::default()
                 });
                 let actor = game.world.entity(boss).unwrap();
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 if actor.health == 10 {
                     continue;
                 }

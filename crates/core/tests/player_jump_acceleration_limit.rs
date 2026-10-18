@@ -4,7 +4,7 @@ use spelunky_core::{Area, Game, InputFrame, PlayerState, RulesPreset, Vec2, Worl
 
 fn healthy_step(game: &mut Game, input: InputFrame) {
     game.step(&input);
-    assert_eq!(game.player.health, 4, "healthy ordinary ladder route");
+    assert_eq!(game.player.health, 4.0, "healthy ordinary ladder route");
     assert!(!game.player.is_stunned());
 }
 

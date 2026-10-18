@@ -12,14 +12,14 @@ fn room(rules: RulesPreset, lower_right: bool) -> Game {
     let mut game = Game::shell(1, rules);
     game.load_custom(&level, "bullet-blood-canvas", "");
     assert_eq!(game.player.pos, Vec2::new(104.0, 120.0));
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     game
 }
 
 fn neutral(game: &mut Game, ticks: usize) {
     for _ in 0..ticks {
         game.step(&InputFrame::default());
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 }
 
@@ -51,7 +51,7 @@ fn first_pistol_blood(game: &mut Game, target_id: u64) -> (Entity, Entity, usize
             attack_pressed: tick == 0,
             ..Default::default()
         });
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         if tick == 0 {
             assert!(
                 game.events

@@ -53,7 +53,7 @@ fn room(low_graphics: bool) -> Game {
     game.player.grounded = true;
     game.player.state = PlayerState::Standing;
     game.player.facing = 1;
-    game.player.health = 20;
+    game.player.health = 20.0;
     if low_graphics {
         game.flags.insert("low_graphics".into());
     }
@@ -151,7 +151,7 @@ fn drop_inventory_bomb(game: &mut Game) -> u64 {
     });
     let bomb = live(game, "oBomb")[0];
     assert_eq!(bomb.alarms[0], 80);
-    assert_eq!(game.player.bombs, 3);
+    assert_eq!(game.player.bombs, 3.0);
     bomb.id
 }
 
@@ -193,7 +193,7 @@ fn draw_and_arm_bow(game: &mut Game) -> u64 {
     assert_eq!(game.player.pos, Vec2::new(240.0, 152.0));
     assert_eq!(game.player.vel, Vec2::default());
     assert_eq!(game.player.facing, 1);
-    assert_eq!(game.player.health, 20);
+    assert_eq!(game.player.health, 20.0);
     assert_eq!(game.data["arrows"], 6.0);
     game.step(&InputFrame {
         attack: true,
@@ -201,7 +201,7 @@ fn draw_and_arm_bow(game: &mut Game) -> u64 {
         ..Default::default()
     });
     assert_eq!(game.player.data["bow_bomb_fuse"], 80.0);
-    assert_eq!(game.player.bombs, 4);
+    assert_eq!(game.player.bombs, 4.0);
     assert_eq!(game.player.data["bow_bomb_armed"], 1.0);
     bow
 }
@@ -220,7 +220,7 @@ fn natural_inventory_bomb_alarm_births_and_graphics_gate_match_literal_rng() {
         );
         assert!(game.world.entity(bomb).is_none());
         assert_eq!(
-            game.player.health, 20,
+            game.player.health, 20.0,
             "escape must avoid unrelated hurt RNG"
         );
         assert_flames(
@@ -251,7 +251,7 @@ fn natural_fired_bomb_arrow_alarm_births_and_graphics_gate_match_literal_rng() {
             },
         );
         assert!(game.world.entity(arrow).is_none());
-        assert_eq!(game.player.health, 20);
+        assert_eq!(game.player.health, 20.0);
         // Arrow465 creates Flame456 after that Alarm1 resource has been visited.
         assert_flames(
             &game,
@@ -278,7 +278,7 @@ fn natural_held_cooking_expiry_births_precede_player_knockback_rng() {
             },
         );
         assert_eq!(game.player.data["bow_bomb_armed"], 0.0);
-        assert_eq!(game.player.health, 10);
+        assert_eq!(game.player.health, 10.0);
         assert_flames(
             &game,
             explosion,

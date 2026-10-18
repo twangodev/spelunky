@@ -58,7 +58,7 @@ fn natural_drawn_bow_cycle_fires_before_replacing_the_bow_in_both_presets() {
         for reserve_bomb in [true, false] {
             let mut game = room(rules);
             if !reserve_bomb {
-                game.player.bombs = 0;
+                game.player.bombs = 0.0;
             }
             let old = pickup(&mut game, "oBow");
             assert_eq!(game.data["arrows"], 6.0);
@@ -105,7 +105,7 @@ fn natural_cycle_round_trip_creates_a_fresh_bow_without_regranting_arrows() {
         assert_eq!(bow.value("new"), 0.0);
         assert_eq!(bow.value("cost"), 0.0);
         assert_eq!(game.data["arrows"], 5.0);
-        assert_eq!((game.player.bombs, game.player.ropes), (4, 4));
+        assert_eq!((game.player.bombs, game.player.ropes), (4.0, 4.0));
         assert!(
             game.world
                 .entities
@@ -144,8 +144,8 @@ fn cycle_without_reserves_keeps_the_drawn_bow_and_continues_charging() {
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         let mut game = room(rules);
         let bow = pickup(&mut game, "oBow");
-        game.player.bombs = 0;
-        game.player.ropes = 0;
+        game.player.bombs = 0.0;
+        game.player.ropes = 0.0;
         draw(&mut game);
         let strength = game.player.data["bow_strength"];
         cycle(&mut game, true);
@@ -181,8 +181,8 @@ fn natural_bomb_arrow_cycle_transfers_the_running_fuse_once() {
         assert!(game.player.data["bow_strength"] >= 12.0);
         assert!(game.player.data["bow_strength"] < 12.21);
         assert_eq!(game.data["arrows"], 6.0);
-        assert_eq!(game.player.bombs, 4);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.bombs, 4.0);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.player.data["bow_armed"], 1.0);
         assert_eq!(game.player.data["bow_bomb_armed"], 0.0);
         game.step(&InputFrame {
@@ -209,7 +209,7 @@ fn natural_bomb_arrow_cycle_transfers_the_running_fuse_once() {
         );
         assert_eq!(game.data["arrows"], 5.0);
         assert_eq!(
-            game.player.bombs, 3,
+            game.player.bombs, 3.0,
             "bomb-arrow attachment does not consume a bomb; reservation does"
         );
         assert_eq!(game.player.data["bow_bomb_armed"], 0.0);
@@ -269,7 +269,7 @@ fn serialized_legacy_flare_stash_is_migrated_before_its_due_alarm() {
     let bomb = original.spawn("oBomb", original.player.pos);
     original.world.entity_mut(bomb).unwrap().held = true;
     original.player.held = Some(bomb);
-    original.player.bombs -= 1;
+    original.player.bombs -= 1.0;
     let mut saved = serde_json::to_value(&original).unwrap();
     saved["player"]
         .as_object_mut()
@@ -344,7 +344,7 @@ fn natural_cycle_recreates_every_literal_scr_hold_item_type() {
         assert!(game.world.entity(old).is_none());
         assert_eq!(fresh.value("new"), 0.0);
         assert_eq!(fresh.value("cost"), 0.0);
-        assert_eq!((game.player.bombs, game.player.ropes), (4, 4));
+        assert_eq!((game.player.bombs, game.player.ropes), (4.0, 4.0));
     }
 }
 
@@ -362,7 +362,7 @@ fn natural_armed_reserved_bomb_cannot_be_cycled_away() {
     assert_eq!(game.world.entity(bomb).unwrap().sprite, "sBombArmed");
     cycle(&mut game, false);
     assert_eq!(game.player.held, Some(bomb));
-    assert_eq!((game.player.bombs, game.player.ropes), (3, 4));
+    assert_eq!((game.player.bombs, game.player.ropes), (3.0, 4.0));
     assert!(game.world.entity(old).is_none());
     // Normal attack throws it and scrHoldItem recreates the original type.
     game.step(&InputFrame {
@@ -388,7 +388,7 @@ fn unsupported_light_basketball_type_is_destroyed_then_scr_hold_item_clears_the_
         game.player.held.is_none(),
         "Basketball is absent from scrHoldItem's literal whitelist"
     );
-    assert_eq!((game.player.bombs, game.player.ropes), (4, 4));
+    assert_eq!((game.player.bombs, game.player.ropes), (4.0, 4.0));
 }
 
 #[test]
@@ -603,7 +603,7 @@ fn legacy_empty_selection_never_infers_a_weapon_from_reserved_bomb_or_rope() {
     for reserve_bomb in [true, false] {
         let mut original = room(RulesPreset::Classic);
         if !reserve_bomb {
-            original.player.bombs = 0;
+            original.player.bombs = 0.0;
         }
         cycle(&mut original, false);
         let reserved = original.player.held.unwrap();

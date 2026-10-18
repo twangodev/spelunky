@@ -29,7 +29,7 @@ fn held_case(rules: RulesPreset, revision: GenerationRevision, bits: u64) {
     let next_id = game.world.next_id;
     // All authored setup ends here. No mutations after the first public input.
     game.step(&InputFrame::default());
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.invincible, 0);
     assert_eq!(game.player.stun, 0);
     assert!(!game.player.is_stunned());

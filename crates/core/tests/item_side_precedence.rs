@@ -56,7 +56,7 @@ fn corridor(kind: &str, left: bool, right: bool, rules: RulesPreset) {
     for (id, pos) in wall_poses {
         assert_eq!(game.world.entity(id).unwrap().pos, pos);
     }
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
 }
 #[test]
 fn authored_rock_keeps_center_between_two_solid_walls() {

@@ -24,7 +24,7 @@ fn perimeter_fixture(level: u32, right: bool) -> Game {
     game.player.vel = Vec2::default();
     game.player.state = PlayerState::Standing;
     game.player.grounded = true;
-    game.player.health = 99;
+    game.player.health = 99.0;
     game.player.invincible = 999;
     game
 }
@@ -141,7 +141,7 @@ fn explosions_preserve_concrete_generated_perimeter_tiles() {
                 bomb_pressed: true,
                 ..Default::default()
             });
-            assert_eq!(game.player.bombs, bombs_before - 1);
+            assert_eq!(game.player.bombs, bombs_before - 1.0);
             let bomb = game
                 .world
                 .entities

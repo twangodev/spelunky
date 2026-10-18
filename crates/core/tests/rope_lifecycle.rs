@@ -23,8 +23,8 @@ fn room(rules: RulesPreset, facing: i8) -> Game {
     game.player.state = PlayerState::Standing;
     game.player.grounded = true;
     game.player.facing = facing;
-    game.player.bombs = 4;
-    game.player.ropes = 4;
+    game.player.bombs = 4.0;
+    game.player.ropes = 4.0;
     game.world.entrance = game.player.pos;
     game
 }
@@ -68,7 +68,7 @@ fn reserve_rope(game: &mut Game) -> u64 {
     assert_eq!(entity.object, "oBomb");
     assert!(entity.held);
     assert_eq!(entity.value("armed"), 0.0);
-    assert_eq!((game.player.bombs, game.player.ropes), (3, 4));
+    assert_eq!((game.player.bombs, game.player.ropes), (3.0, 4.0));
     quiet_step(game, InputFrame::default());
     quiet_step(
         game,
@@ -84,7 +84,7 @@ fn reserve_rope(game: &mut Game) -> u64 {
     assert_eq!(entity.object, "oRopeThrow");
     assert!(entity.held);
     assert_eq!(entity.value("armed"), 0.0);
-    assert_eq!((game.player.bombs, game.player.ropes), (4, 3));
+    assert_eq!((game.player.bombs, game.player.ropes), (4.0, 3.0));
     quiet_step(game, InputFrame::default());
     rope
 }
@@ -146,7 +146,7 @@ fn natural_held_up_launch_keeps_the_reserved_actor_and_origin_without_second_cha
         let next_id = game.world.next_id;
         quiet_step(&mut game, held_use(false));
         assert!(game.player.held.is_none());
-        assert_eq!((game.player.bombs, game.player.ropes), (4, 3));
+        assert_eq!((game.player.bombs, game.player.ropes), (4.0, 3.0));
         assert_eq!(game.world.next_id, next_id, "up launches the SAME actor");
         let rope = game
             .world
@@ -198,7 +198,7 @@ fn natural_held_down_blocked_retires_old_and_attempt_before_fresh_fallback_survi
         assert_eq!(live(&game, "oRopeThrow"), 1);
         assert_eq!(live(&game, "oRopeTop"), 0);
         assert!(game.player.held.is_none());
-        assert_eq!((game.player.bombs, game.player.ropes), (4, 3));
+        assert_eq!((game.player.bombs, game.player.ropes), (4.0, 3.0));
         assert_eq!(throw_sounds(&game), 1);
     }
 }
@@ -223,7 +223,7 @@ fn natural_held_down_clear_creates_fresh_attempt_then_top_without_second_charge(
         assert_eq!(live(&game, "oRopeThrow"), 1);
         assert_eq!(live(&game, "oRopeTop"), 1);
         assert!(game.player.held.is_none());
-        assert_eq!((game.player.bombs, game.player.ropes), (4, 3));
+        assert_eq!((game.player.bombs, game.player.ropes), (4.0, 3.0));
         assert_eq!(throw_sounds(&game), 1);
     }
 }
@@ -263,7 +263,7 @@ fn naturally_picked_rock_is_recreated_once_after_each_held_rope_use() {
             assert_eq!(game.player.pickup_item_type, "Rock");
             assert_eq!(live(&game, "oRock"), 1);
             assert_eq!(game.world.entity(reserved).is_some(), !down);
-            assert_eq!((game.player.bombs, game.player.ropes), (4, 3));
+            assert_eq!((game.player.bombs, game.player.ropes), (4.0, 3.0));
             assert_eq!(throw_sounds(&game), 1);
         }
     }
@@ -281,7 +281,7 @@ fn settled_ceiling_keeps_held_rope_upward_but_allows_downward_use() {
         assert_eq!(game.world.next_id, next_id);
         assert!(game.world.entity(reserved).unwrap().held);
         assert_eq!(game.world.entity(reserved).unwrap().value("armed"), 0.0);
-        assert_eq!((game.player.bombs, game.player.ropes), (4, 3));
+        assert_eq!((game.player.bombs, game.player.ropes), (4.0, 3.0));
         assert_eq!(throw_sounds(&game), 0);
         quiet_step(&mut game, InputFrame::default());
         let attempt = game.world.next_id;
@@ -291,7 +291,7 @@ fn settled_ceiling_keeps_held_rope_upward_but_allows_downward_use() {
         assert_eq!(game.world.next_id, attempt + 2);
         source_fresh_rope_defaults(&game, attempt + 1);
         assert!(game.player.held.is_none());
-        assert_eq!((game.player.bombs, game.player.ropes), (4, 3));
+        assert_eq!((game.player.bombs, game.player.ropes), (4.0, 3.0));
         assert_eq!(throw_sounds(&game), 1);
     }
 }
@@ -316,16 +316,16 @@ fn dedicated_rope_creates_fresh_up_and_down_but_blocked_down_only_consumes_attem
             let attempt = game.world.next_id;
             quiet_step(&mut game, dedicated_use(down));
             assert!(game.player.held.is_none());
-            assert_eq!(game.player.bombs, 4);
+            assert_eq!(game.player.bombs, 4.0);
             if ceiling {
                 assert_eq!(game.world.next_id, attempt);
-                assert_eq!(game.player.ropes, 4);
+                assert_eq!(game.player.ropes, 4.0);
                 assert_eq!(live(&game, "oRopeThrow"), 0);
                 assert_eq!(throw_sounds(&game), 0);
             } else if down && !clear {
                 assert_eq!(game.world.next_id, attempt + 1);
                 assert!(game.world.entity(attempt).is_none());
-                assert_eq!(game.player.ropes, 4);
+                assert_eq!(game.player.ropes, 4.0);
                 assert_eq!(live(&game, "oRopeThrow"), 0);
                 assert_eq!(live(&game, "oRopeTop"), 0);
                 assert_eq!(throw_sounds(&game), 0);
@@ -333,7 +333,7 @@ fn dedicated_rope_creates_fresh_up_and_down_but_blocked_down_only_consumes_attem
                 source_fresh_rope_defaults(&game, attempt);
                 assert_eq!(game.world.entity(attempt).unwrap().value("falling"), 1.0);
                 assert_eq!(game.world.entity(attempt + 1).unwrap().object, "oRopeTop");
-                assert_eq!(game.player.ropes, 3);
+                assert_eq!(game.player.ropes, 3.0);
                 assert_eq!(throw_sounds(&game), 1);
             } else {
                 assert_eq!(game.world.next_id, attempt + 1);
@@ -343,7 +343,7 @@ fn dedicated_rope_creates_fresh_up_and_down_but_blocked_down_only_consumes_attem
                 assert_eq!(rope.value("falling"), 0.0);
                 assert_eq!(rope.value("px"), origin.x);
                 assert_eq!(rope.value("py"), origin.y);
-                assert_eq!(game.player.ropes, 3);
+                assert_eq!(game.player.ropes, 3.0);
                 assert_eq!(throw_sounds(&game), 1);
             }
         }
@@ -389,7 +389,7 @@ fn dedicated_up_uses_cached_ceiling_contact_when_player_crosses_either_edge() {
                     game.world.next_id, next_id,
                     "earlier colTop still blocks launch"
                 );
-                assert_eq!(game.player.ropes, 4);
+                assert_eq!(game.player.ropes, 4.0);
                 assert_eq!(live(&game, "oRopeThrow"), 0);
                 assert_eq!(throw_sounds(&game), 0);
             } else {
@@ -397,10 +397,10 @@ fn dedicated_up_uses_cached_ceiling_contact_when_player_crosses_either_edge() {
                     game.world.next_id > next_id,
                     "earlier clear colTop permits launch"
                 );
-                assert_eq!(game.player.ropes, 3);
+                assert_eq!(game.player.ropes, 3.0);
                 assert_eq!(throw_sounds(&game), 1);
             }
-            assert_eq!(game.player.bombs, 4);
+            assert_eq!(game.player.bombs, 4.0);
             assert_eq!(game.player.data["colTop"], f64::from(leaving));
         }
     }
@@ -435,13 +435,13 @@ fn held_down_uses_two_pixel_clearance_while_dedicated_uses_eight() {
                     .expect("held alternate strip succeeds");
                 assert_eq!(top.object, "oRopeTop");
                 assert_eq!(top.pos.x, if facing > 0 { 184.0 } else { 120.0 });
-                assert_eq!(game.player.ropes, 3);
+                assert_eq!(game.player.ropes, 3.0);
                 assert_eq!(throw_sounds(&game), 1);
             } else {
                 assert_eq!(game.world.next_id, attempt + 1);
                 assert!(game.world.entity(attempt).is_none());
                 assert_eq!(live(&game, "oRopeTop"), 0);
-                assert_eq!(game.player.ropes, 4);
+                assert_eq!(game.player.ropes, 4.0);
                 assert_eq!(throw_sounds(&game), 0);
             }
         }

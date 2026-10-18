@@ -89,7 +89,7 @@ fn step(game: &mut Game, input: InputFrame) {
     game.step(&input);
     assert_eq!(game.state, RunState::Playing);
     assert_eq!(
-        game.player.health, 4,
+        game.player.health, 4.0,
         "NATURAL_VAMPIRE_MELEE_HEALTH_PREREQUISITE"
     );
 }

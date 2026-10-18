@@ -85,7 +85,7 @@ fn natural_fall(legacy: bool) {
         assert_eq!(actor.pos, Vec2::new(126.0, 147.0));
         assert_eq!((actor.state, actor.value("dead")), (98, 1.0));
         assert!(g.world.tiles_point(actor.pos, "oSpikes"));
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         let newborn: Vec<_> = blood(&g).into_iter().filter(|e| e.id >= serial).collect();
         assert_eq!(newborn.len(), 1, "NATURAL_DEAD_BODY_SPIKE_DIRECT_BLOOD");
         assert_eq!(
@@ -235,7 +235,7 @@ fn controlled(
             .world
             .entity(id)
             .expect("CONTROLLED_BODY_SURVIVES_OWN_STEP");
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         assert_eq!(actor.health, 0);
         assert_eq!(actor.pos.x, start.pos.x);
         assert_eq!(

@@ -78,7 +78,7 @@ fn run_support(rules: RulesPreset, sinking: bool) {
             actor.pos
         );
         assert_eq!(actor.health, 1, "SOURCE_NO_LAVA_BODY {rules:?}/{age}");
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(
             actor.pos.y, expected_y,
             "SOURCE_SOLID_RAW_RECTANGLE_PLACEMENT {rules:?}/{age}"
@@ -134,7 +134,7 @@ fn monkey_ladder_recovery(rules: RulesPreset, centered: bool) {
     assert_eq!(monkey.vel, Vec2::default());
     assert_eq!(monkey.bounds(), Rect::new(180.0, 70.0, 8.0, 10.0));
     assert_eq!(game.player.pos, Vec2::new(152.0, 88.0));
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     let contact_tick = if centered { 32 } else { 36 };
     for age in 1..=contact_tick {
         let before = game.world.entity(id).expect("default Monkey survives");
@@ -180,7 +180,7 @@ fn monkey_ladder_recovery(rules: RulesPreset, centered: bool) {
         assert_eq!(monkey.health, 1);
         assert!(monkey.alive && monkey.engine_active);
         assert!(!monkey.held);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.state, RunState::Playing);
         assert_eq!(game.engine_time(), age as u64 + 1);
         if age == 1 {

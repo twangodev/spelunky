@@ -61,7 +61,7 @@ fn pickup_and_wait_for_idle(game: &mut Game, yeti: u64, pistol: u64) {
         let actor = game.world.entity(yeti).unwrap();
         saw_walk |= actor.state == 1;
         assert_eq!(actor.health, 5);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(!game.world.entities.iter().any(|e| e.object == "oBlood"));
         if actor.state == 0 && actor.value("counter") >= 20.0 {
             assert!(saw_walk);
@@ -193,7 +193,7 @@ fn ordinary_pistol_hit_yeti_bleeds_once_on_landing_and_recovers_without_stale_id
             // movement have no RNG. Literal Blood Create is the complete frame tape.
             assert_eq!(game.rng.clone().next_u64(), expected.next_u64());
             assert_eq!(actor.health, 1);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             if actor.state == 0 {
                 assert_eq!(
                     before.timer, 0,
@@ -223,7 +223,7 @@ fn ordinary_pistol_hit_yeti_bleeds_once_on_landing_and_recovers_without_stale_id
         assert_eq!(actor.value("bounced"), 0.0);
         assert_eq!(actor.facing, facing);
         assert_eq!(game.rng.clone().next_u64(), expected.next_u64());
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert_eq!(game.player.held, Some(pistol));
     }
 }
@@ -255,7 +255,7 @@ fn ordinary_pistol_fired_away_from_yeti_does_not_stun_or_create_landing_blood() 
             assert_eq!(actor.health, 5);
             assert_ne!(actor.state, 98);
             assert!(!game.world.entities.iter().any(|e| e.object == "oBlood"));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(game.player.held, Some(pistol));
         }
     }
@@ -273,7 +273,7 @@ fn ordinary_pistol_hit_yeti_exhausts_idle_counter_before_recovery() {
             game.step(&InputFrame::default());
             let actor = game.world.entity(yeti).unwrap();
             assert_eq!(actor.health, 1);
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             if actor.state == 0 {
                 assert_eq!(before.timer, 0);
                 assert_eq!(actor.timer, 0);
@@ -459,7 +459,7 @@ fn ordinary_pistol_yeti_wall_impact_uses_full_cached_side_and_one_pixel_nudge() 
                 wall_contact = true;
                 break;
             }
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
         assert!(
             wall_contact,
@@ -497,7 +497,7 @@ fn ordinary_pistol_yeti_ceiling_impact_uses_full_cached_top_and_one_pixel_nudge(
                 ceiling_contact = true;
                 break;
             }
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
         }
         assert!(
             ceiling_contact,

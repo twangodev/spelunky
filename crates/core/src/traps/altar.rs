@@ -366,12 +366,12 @@ fn reward(game: &mut Game, _altar: Vec2, offering_y: f64) -> RewardOutcome {
     } else if favor >= 32.0 {
         if gift >= 3.0 && favor < 32.0 + (gift - 2.0) * 16.0 {
             "SHE SEEMS ECSTATIC WITH YOU!"
-        } else if gift < 3.0 && game.player.bombs < 80 {
-            game.player.bombs = 99;
+        } else if gift < 3.0 && game.player.bombs < 80.0 {
+            game.player.bombs = 99.0;
             game.data.insert("kali_gift".into(), 3.0);
             "YOUR SATCHEL FEELS VERY FULL NOW!"
         } else {
-            game.player.health += 4 + game.rng.range(5) as i32;
+            game.player.health += 4.0 + f64::from(game.rng.range(5));
             game.data.insert("kali_gift".into(), gift + 1.0);
             "YOU FEEL INVIGORATED!"
         }
@@ -1676,14 +1676,14 @@ mod tests {
     #[test]
     fn later_kali_reward_thresholds_do_not_create_favor8_poofs_or_extra_rolls() {
         for (favor, gift, bombs, expected_gift, heal) in [
-            (4., 0., 4, 0., false),
-            (8., 1., 4, 1., false),
-            (16., 0., 4, 2., false),
-            (16., 2., 4, 2., false),
-            (32., 0., 79, 3., false),
-            (32., 0., 80, 1., true),
-            (47., 3., 4, 3., false),
-            (48., 3., 4, 4., true),
+            (4., 0., 4.0, 0., false),
+            (8., 1., 4.0, 1., false),
+            (16., 0., 4.0, 2., false),
+            (16., 2., 4.0, 2., false),
+            (32., 0., 79.0, 3., false),
+            (32., 0., 80.0, 1., true),
+            (47., 3., 4.0, 3., false),
+            (48., 3., 4.0, 4., true),
         ] {
             let mut game = altar_room();
             game.data.insert("favor".into(), favor);
@@ -1693,17 +1693,17 @@ mod tests {
             let mut expected_rng = game.rng.clone();
             let expected_health = health
                 + if heal {
-                    4 + expected_rng.range(5) as i32
+                    4.0 + f64::from(expected_rng.range(5))
                 } else {
-                    0
+                    0.0
                 };
             reward(&mut game, Vec2::new(64., 64.), 56.);
             assert_eq!(game.data["kali_gift"], expected_gift);
             assert_eq!(game.player.health, expected_health);
             assert_eq!(
                 game.player.bombs,
-                if favor == 32. && bombs == 79 {
-                    99
+                if favor == 32. && bombs == 79.0 {
+                    99.0
                 } else {
                     bombs
                 }

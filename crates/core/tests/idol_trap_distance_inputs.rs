@@ -167,7 +167,7 @@ fn neutral_then_pickup(s: &mut Scene) {
         "actual Down+Attack selects the default GoldIdol"
     );
     assert_eq!(s.game.player.pickup_item_type, "Gold Idol");
-    assert_eq!(s.game.player.health, 4);
+    assert_eq!(s.game.player.health, 4.0);
     let idol = s.game.world.entity(s.idol).unwrap();
     assert!(idol.held);
     assert_eq!(idol.value("cost"), 0.0);

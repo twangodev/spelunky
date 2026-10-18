@@ -18,7 +18,7 @@ struct Fixture {
     player: Vec2,
     face: i8,
     attack_held: bool,
-    resources: (i32, i32, u32),
+    resources: (f64, f64, u32),
 }
 impl Fixture {
     fn step(&mut self, mut input: InputFrame) {
@@ -27,7 +27,7 @@ impl Fixture {
         self.attack_held = input.attack;
         self.game.step(&input);
         assert_eq!(
-            self.game.player.health, 4,
+            self.game.player.health, 4.0,
             "FIXTURE Player remains outside pool"
         );
         assert_eq!(self.game.player.stun, 0);

@@ -72,7 +72,10 @@ fn ordinary_fly_hit(rules: RulesPreset) -> (Game, u64) {
             })
         });
         game.step(&InputFrame::default());
-        assert_eq!(game.player.health, 4, "NO_PLAYER_CONTACT_HIDING_ENEMY_HIT");
+        assert_eq!(
+            game.player.health, 4.0,
+            "NO_PLAYER_CONTACT_HIDING_ENEMY_HIT"
+        );
         assert_eq!(game.player.stun, 0);
         assert_eq!(game.player.invincible, 0);
         assert!(
@@ -244,7 +247,7 @@ fn ordinary_tomb_fly_roof_collision_preserves_velocity_then_boss_rises_past_roof
             at_roof.value("psychic_recover"),
             before.value("psychic_recover") - 1.0
         );
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         let before_escape = at_roof.clone();
         assert!(before_escape.alive && before_escape.engine_active);
         assert!(
@@ -287,7 +290,7 @@ fn ordinary_tomb_fly_roof_collision_preserves_velocity_then_boss_rises_past_roof
             escaped.value("psychic_recover"),
             before_escape.value("psychic_recover") - 1.0
         );
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(game.world.tile(7, 7).unwrap().engine_active);
     }
 }
@@ -305,7 +308,7 @@ fn ordinary_healthy_alien_boss_still_settles_below_the_authored_roof_without_a_f
             assert_eq!(actor.vel, Vec2::default());
             assert_eq!(actor.sprite, "sAlienBoss");
             assert_eq!(actor.value("psychic_recover"), 100.0 - f64::from(tick));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert!(!game.world.entities.iter().any(|e| matches!(
                 e.object.as_str(),
                 "oFly" | "oPsychicCreate" | "oPsychicWave"

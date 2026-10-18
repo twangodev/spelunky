@@ -19,7 +19,7 @@ fn room(rules: RulesPreset) -> Game {
     }
     assert_eq!(game.player.pos, Vec2::new(104.0, 120.0));
     assert!(game.player.grounded);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     game
 }
 
@@ -107,7 +107,7 @@ fn configured_registered_supply_reentry_selects_first_family_hit_before_eligibil
                 let before_rng = game.rng.state_bits();
                 game.step(&InputFrame::default());
                 assert_eq!(game.player.pos, Vec2::new(104.0, 120.0));
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert!(!game.player.is_stunned());
                 assert_eq!(game.rng.state_bits(), before_rng);
                 assert!(game.world.entity(paid).is_some());
@@ -119,8 +119,8 @@ fn configured_registered_supply_reentry_selects_first_family_hit_before_eligibil
                 assert_eq!(
                     (game.player.bombs, game.player.ropes, game.player.money),
                     (
-                        before.0 + if reentered { bombs } else { 0 },
-                        before.1 + if reentered { ropes } else { 0 },
+                        before.0 + if reentered { f64::from(bombs) } else { 0.0 },
+                        before.1 + if reentered { f64::from(ropes) } else { 0.0 },
                         before.2
                     )
                 );
@@ -224,13 +224,13 @@ fn authored_fractional_supply_uses_cached_bbox_touch_with_positive_control() {
             let before = game.player.bombs;
             game.step(&InputFrame::default());
             assert_eq!(game.player.pos, Vec2::new(104.0, 120.0));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(
                 game.world.entity(id).is_none(),
                 touches,
                 "SOURCE_CACHED_SUPPLY_TOUCH {rules:?} x{x}"
             );
-            assert_eq!(game.player.bombs, before + if touches { 3 } else { 0 });
+            assert_eq!(game.player.bombs, before + if touches { 3.0 } else { 0.0 });
             assert_eq!(
                 game.events
                     .iter()
@@ -307,7 +307,7 @@ fn configured_supply_origin_uses_object_family_not_port_movement_flag() {
                 game.step(&InputFrame::default());
                 let collect = context != "solid";
                 assert_eq!(game.player.pos, Vec2::new(104.0, 120.0));
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert!(!game.player.is_stunned());
                 assert_eq!(
                     game.world.entity(id).is_none(),
@@ -319,21 +319,21 @@ fn configured_supply_origin_uses_object_family_not_port_movement_flag() {
                     before.0
                         + if collect {
                             match object {
-                                "oBombBag" => 3,
-                                "oBombBox" => 12,
-                                _ => 0,
+                                "oBombBag" => 3.0,
+                                "oBombBox" => 12.0,
+                                _ => 0.0,
                             }
                         } else {
-                            0
+                            0.0
                         }
                 );
                 assert_eq!(
                     game.player.ropes,
                     before.1
                         + if collect && object == "oRopePile" {
-                            3
+                            3.0
                         } else {
-                            0
+                            0.0
                         }
                 );
                 assert_eq!(game.player.money, before.2);

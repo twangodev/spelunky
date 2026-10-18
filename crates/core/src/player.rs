@@ -559,7 +559,7 @@ fn active_prelude(game: &mut Game) {
         // invulnerability check and does not invent its hurt sound or flash.
         game.player.lose_health(injury);
         game.events.push(GameEvent::Damage { amount: injury });
-        if game.player.health < 1 {
+        if game.player.health < 1.0 {
             for _ in 0..3 {
                 if value(&game.player, "bloodless", 0.0) == 0.0
                     && game
@@ -786,7 +786,7 @@ pub fn collision(game: &mut Game, other: crate::dispatcher::Instance) {
     }
     if heal {
         game.data.insert("bloodLevel".into(), 0.0);
-        game.player.health += 1;
+        game.player.health += 1.0;
         crate::world_events::spawn_effect(
             game,
             "oHeart",
@@ -2565,7 +2565,7 @@ mod tests {
             tick(&mut game, &InputFrame::default());
 
             assert_eq!(
-                game.player.health, 3,
+                game.player.health, 3.0,
                 "inactive spring trap terrain={terrain} must not suppress long-fall injury"
             );
             assert_eq!(game.player.stun, 60);
@@ -2597,7 +2597,7 @@ mod tests {
         assert_eq!(game.player.pos, Vec2::new(11.0, 88.0));
         assert_eq!(game.player.previous_pos, game.player.pos);
         assert!((game.world.entity(id).unwrap().pos.y - 83.25).abs() < 1e-10);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
     }
 
     #[test]
@@ -2710,7 +2710,10 @@ mod tests {
                 }
                 observed = true;
                 // The later source death checkpoint clamps lethal life to zero.
-                assert_eq!(game.player.health, (before.player.health - injury).max(0));
+                assert_eq!(
+                    game.player.health,
+                    (before.player.health - f64::from(injury)).max(0.0)
+                );
                 assert_eq!(game.player.stun, 60);
                 assert_eq!(game.player.invincible, 0);
                 assert!(
@@ -2781,7 +2784,7 @@ mod tests {
             }
             game.step(&InputFrame::default());
         }
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         assert!(value(&game.player, "fall_timer", 0.0) > 48.0);
         // Add an ordinary water instance at the natural landing, before the
         // next Player Step recognizes the landing injury. Player position,
@@ -2799,7 +2802,7 @@ mod tests {
             expected_rng.range(6);
         }
         game.step(&InputFrame::default());
-        assert_eq!(game.player.health, 0);
+        assert_eq!(game.player.health, 0.0);
         assert_eq!(value(&game.player, "fall_timer", -1.0), 0.0);
         // Dry Player Steps keep bubbleTimer at its maximum. Water entry ticks
         // it down after the injury; it does not create an immediate bubble.
@@ -3011,7 +3014,7 @@ mod tests {
                 let lava = game.world.spawn("oLava", Vec2::new(pos.x - 8., pos.y - 8.));
                 game.step(&InputFrame::default());
                 assert!(game.events.contains(&GameEvent::Damage { amount: 99 }));
-                assert_eq!(game.player.health, 4, "{rules:?}/{character:?}");
+                assert_eq!(game.player.health, 4.0, "{rules:?}/{character:?}");
                 assert!(!game.player.has("Ankh"));
                 assert_eq!(value(&game.player, "active", 0.), 1.);
                 assert_eq!(game.player.pos, entrance);
@@ -3039,7 +3042,7 @@ mod tests {
                     game.step(&InputFrame::default());
                 }
                 assert_eq!(game.ending.as_ref().unwrap().stage, EndingStage::Transition);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
             }
         }
     }
@@ -3136,13 +3139,13 @@ mod tests {
         for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
             let mut g = room(RulesPreset::Classic);
             characters::apply(&mut g, character);
-            g.player.health = 4;
+            g.player.health = 4.0;
             g.player.equipment.insert("Kapala".into());
             let bullet = g.world.spawn("oBullet", Vec2::new(80.0, 152.0));
             g.world.entity_mut(bullet).unwrap().vel.x = 8.0;
             g.step(&InputFrame::default());
             assert_eq!(g.state, RunState::Playing);
-            assert!(g.player.health <= 0);
+            assert!(g.player.health <= 0.0);
             // Automatic Bullet collision follows Player Step; its independent
             // death flag is latched during the next Player Step checkpoint.
             for _ in 0..40 {
@@ -3158,11 +3161,11 @@ mod tests {
             }
             for _ in 0..40 {
                 g.step(&InputFrame::default());
-                if g.player.health > 0 {
+                if g.player.health > 0.0 {
                     break;
                 }
             }
-            assert_eq!(g.player.health, 1, "legitimate Kapala heal {character:?}");
+            assert_eq!(g.player.health, 1.0, "legitimate Kapala heal {character:?}");
             assert_eq!(g.state, RunState::Dead);
             let mut neutral = g.clone();
             for _ in 0..5 {
@@ -3179,7 +3182,7 @@ mod tests {
                 );
                 assert_eq!(g.player.vel, neutral.player.vel);
                 assert_eq!(g.player.state, PlayerState::Dead);
-                assert_eq!(g.player.health, 1);
+                assert_eq!(g.player.health, 1.0);
             }
         }
     }
@@ -3250,7 +3253,7 @@ mod tests {
     fn actual_projectile_knockback_into_water_runs_effects_before_stunned_return() {
         let mut g = room(RulesPreset::Classic);
         g.player.pos.x = 95.0;
-        g.player.health = 20;
+        g.player.health = 20.0;
         fill_bath(&mut g, 6);
         let bullet = g.world.spawn("oBullet", Vec2::new(87.0, 152.0));
         g.world.entity_mut(bullet).unwrap().vel.x = 8.0;
@@ -3311,10 +3314,10 @@ mod tests {
         for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
             let mut g = room(RulesPreset::Classic);
             characters::apply(&mut g, character);
-            g.player.health = 20;
+            g.player.health = 20.0;
             let snake = g.world.spawn("oSnake", Vec2::new(80.0, 144.0));
             g.step(&InputFrame::default());
-            assert_eq!(g.player.health, 19, "real contact {character:?}");
+            assert_eq!(g.player.health, 19.0, "real contact {character:?}");
             assert_eq!(value(&g.player, "blink", -1.0), 30.0);
             assert_eq!(value(&g.player, "blink_toggle", 0.0), -1.0);
             g.world.entity_mut(snake).unwrap().alive = false;
@@ -3343,7 +3346,7 @@ mod tests {
         g.world.entity_mut(bullet).unwrap().vel.x = 8.0;
         g.step(&InputFrame::default());
         assert_eq!(g.state, RunState::Playing);
-        assert!(g.player.health <= 0);
+        assert!(g.player.health <= 0.0);
         g.step(&InputFrame::default());
         assert_eq!(g.state, RunState::Dead);
         let remaining = g.player.invincible;
@@ -3486,7 +3489,7 @@ mod tests {
                 for environment in ["", "oWaterSwim", "oWeb", "oLadder"] {
                     let mut g = room(RulesPreset::Classic);
                     characters::apply(&mut g, character);
-                    g.player.health = 20;
+                    g.player.health = 20.0;
                     for x in 0..20 {
                         g.world.set_tile(x, 10, "");
                         g.world.set_tile(x, 11, "oBlock");
@@ -3548,7 +3551,7 @@ mod tests {
         g.player.pos = Vec2::new(136.0, 136.0);
         g.player.state = PlayerState::Standing;
         g.player.grounded = true;
-        g.player.health = 20;
+        g.player.health = 20.0;
         g.world.spawn("oYeti", Vec2::new(128.0, 128.0));
         g.step(&InputFrame::default());
         assert_eq!(g.player.stun, 0, "Classic throws do not add a stun timer");
@@ -3562,7 +3565,7 @@ mod tests {
         }
         assert!(value(&g.player, "fall_timer", 0.0) > 16.0);
         assert_eq!(value(&g.player, "wall_hurt", -1.0), 0.0);
-        assert_eq!(g.player.health, 20);
+        assert_eq!(g.player.health, 20.0);
     }
     #[test]
     fn zero_timer_throws_remain_stunned_in_flight_then_recover_for_all_characters() {
@@ -3571,7 +3574,7 @@ mod tests {
             for actor in ["oYeti", "oHawkman", "oShopkeeper"] {
                 let mut g = room(RulesPreset::Classic);
                 characters::apply(&mut g, character);
-                g.player.health = 20;
+                g.player.health = 20.0;
                 g.player.pos = Vec2::new(264.0, 136.0);
                 g.world.set_tile(16, 9, "oIce");
                 let id = g.world.spawn(actor, Vec2::new(256.0, 128.0));
@@ -3609,7 +3612,7 @@ mod tests {
                     "eventual recovery {character:?}/{actor}"
                 );
                 assert!(
-                    g.player.health > 0,
+                    g.player.health > 0.0,
                     "survive {character:?}/{actor} pos={:?} state={:?}",
                     g.player.pos,
                     g.player.state
@@ -3647,7 +3650,7 @@ mod tests {
             for bow in [false, true] {
                 let mut g = room(RulesPreset::Classic);
                 characters::apply(&mut g, character);
-                g.player.health = 20;
+                g.player.health = 20.0;
                 if bow {
                     let id = g.world.spawn("oBow", g.player.pos);
                     g.player.held = Some(id);
@@ -3723,7 +3726,7 @@ mod tests {
             for facing in [-1, 1] {
                 let mut g = room(RulesPreset::Classic);
                 characters::apply(&mut g, character);
-                g.player.health = 20;
+                g.player.health = 20.0;
                 for x in 10..14 {
                     for y in 5..10 {
                         g.world.set_tile(x, y, "oBlock");
@@ -3785,7 +3788,7 @@ mod tests {
         for character in [Character::Explorer, Character::Damsel, Character::TunnelMan] {
             let mut g = room(RulesPreset::Classic);
             characters::apply(&mut g, character);
-            g.player.health = 20;
+            g.player.health = 20.0;
             for y in 5..10 {
                 g.world.set_tile(5, y, "oLadderOrange");
             }
@@ -4061,11 +4064,15 @@ mod tests {
             (49.0, 10),
         ] {
             let mut g = room(RulesPreset::Classic);
-            g.player.health = 20;
+            g.player.health = 20.0;
             g.player.invincible = 30;
             set(&mut g.player, "fall_timer", ticks);
             step(&mut g, InputFrame::default());
-            assert_eq!(g.player.health, 20 - damage, "descending ticks={ticks}");
+            assert_eq!(
+                g.player.health,
+                20.0 - f64::from(damage),
+                "descending ticks={ticks}"
+            );
             if damage > 0 {
                 assert_eq!(g.player.stun, 60);
             }
@@ -4512,11 +4519,11 @@ mod tests {
         g.player.sprite = "sDieLR".into();
         set(&mut g.player, "wall_hurt", 1.0);
         g.step(&InputFrame::default());
-        assert_eq!(g.player.health, 3);
+        assert_eq!(g.player.health, 3.0);
         assert_eq!(value(&g.player, "wall_hurt", -1.0), 0.0);
         assert!(g.events.contains(&GameEvent::Damage { amount: 1 }));
         g.step(&InputFrame::default());
-        assert_eq!(g.player.health, 3);
+        assert_eq!(g.player.health, 3.0);
     }
     #[test]
     fn attack_animation_does_not_leave_falling_collision_mask_shrunk_next_tick() {

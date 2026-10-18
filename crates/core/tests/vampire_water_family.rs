@@ -77,7 +77,7 @@ fn healthy(game: &Game, id: u64, pit: Pit) {
             && e.pos.y > v.y - 20.0
             && e.pos.y < v.y + v.h + 4.0
     );
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(game.player.stun, 0);
     assert_eq!(game.player.pos, Vec2::new(184.0, 152.0));
     assert!(game.player.engine_active && game.player.held.is_none());

@@ -35,7 +35,7 @@ fn fresh_monkey_step_replaces_inherited_depth_and_grab_uses_its_own_layer() {
             let monkey = game.world.entity(id).unwrap();
             assert_eq!(monkey.state, 7, "ordinary collision must acquire GRAB");
             assert!((40..=80).contains(&monkey.timer));
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert_eq!(monkey.value("depth"), 40.0, "MONKEY_OWN_STEP_DEPTH");
             let mut released = false;
             for _ in 0..82 {

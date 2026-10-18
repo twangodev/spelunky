@@ -130,7 +130,7 @@ fn ordinary_pistol_shots_kill_authored_tomb_with_interleaved_bone_creates_and_la
                 "authored combat must reach fatal ordinary shot"
             );
             assert!(
-                game.player.health > 0,
+                game.player.health > 0.0,
                 "ordinary input controller remains live"
             );
             assert_eq!(
@@ -332,7 +332,7 @@ fn lethal_ordinary_pistol_during_attack_still_emits_source_post_destroy_fly() {
             }
         }
         let target = fatal_attack.expect("ordinary final input shot reaches fatal ATTACK");
-        assert!(fired_final && game.player.health > 0);
+        assert!(fired_final && game.player.health > 0.0);
         assert_eq!(hits, 5);
         assert_eq!(target.state, 3, "Bullet must preserve real ATTACK status");
         assert!(

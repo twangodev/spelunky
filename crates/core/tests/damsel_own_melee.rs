@@ -193,7 +193,7 @@ fn first_hit(game: &mut Game, target: u64, expected_attack: &str) -> (Rng, Vec2,
                 overlap,
                 "ordinary attack must present the selected contacting producer {expected_attack}"
             );
-            assert_eq!(game.player.health, 4, "no unrelated player contact");
+            assert_eq!(game.player.health, 4.0, "no unrelated player contact");
             return (before, center, old_blood);
         }
         assert_eq!(

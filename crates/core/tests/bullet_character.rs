@@ -12,7 +12,7 @@ fn room(rules: RulesPreset, keeper_left: Option<bool>) -> Game {
     }
     let mut game = Game::shell(42, rules);
     game.load_custom(&level, "bullet-character", "");
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     game
 }
 
@@ -57,9 +57,9 @@ fn authored_patrol_keeper_fires_and_first_actual_hit_creates_character_blood() {
                     .events
                     .iter()
                     .any(|e| matches!(e,GameEvent::Sound{name,..} if name=="sndShotgun"));
-                if game.player.health < 4 {
+                if game.player.health < 4.0 {
                     assert_eq!(
-                        game.player.health, 0,
+                        game.player.health, 0.0,
                         "first ordinary Bullet hit deals source4damage"
                     );
                     let retired = bullets
@@ -112,7 +112,7 @@ fn initial_safe_owned_bullet_contact_still_hurts_and_creates_blood() {
         projectile.data.insert("owner_player".into(), 1.0);
         game.step(&InputFrame::default());
         assert_eq!(
-            game.player.health, 0,
+            game.player.health, 0.0,
             "source Character callback ignores projectile safe/owner flags and contact invincibility"
         );
         assert!(game.world.entity(bullet).is_none());
@@ -173,7 +173,7 @@ fn ordinary_player_pistol_muzzle_shot_does_not_hit_its_shooter() {
                 .entities
                 .iter()
                 .any(|e| e.alive && e.object == "oBullet");
-            assert_eq!(game.player.health, 4);
+            assert_eq!(game.player.health, 4.0);
             assert!(!game.world.entities.iter().any(|e| e.object == "oBlood"));
         }
         assert!(fired);

@@ -27,7 +27,7 @@ mod projectile_query_contract {
     }
 
     fn assert_hurt(game: &Game, expected: bool) {
-        assert_eq!(game.player.health, if expected { 2 } else { 4 });
+        assert_eq!(game.player.health, if expected { 2.0 } else { 4.0 });
         assert_eq!(game.player.stun, if expected { 20 } else { 0 });
         assert_eq!(hurt_sounds(game), usize::from(expected));
     }

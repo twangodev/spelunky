@@ -33,7 +33,7 @@ fn picked_up(rules: RulesPreset, facing: i8, glyph: char, object: &str) -> (Game
     }
     assert!(game.player.grounded, "SETUP: ordinary floor settlement");
     assert_eq!(game.player.facing, facing);
-    assert_eq!(game.player.health, 4);
+    assert_eq!(game.player.health, 4.0);
     assert_eq!(
         game.world.entity(id).unwrap().pos,
         Vec2::new(152.0, if object == "oDamsel" { 152.0 } else { 156.0 })

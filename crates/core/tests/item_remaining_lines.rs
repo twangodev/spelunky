@@ -54,7 +54,7 @@ fn projectile_support(sinking: bool, kinds: &[(&str, f64)]) {
                     assert_eq!(item.value("colBot"), 1.0);
                     assert_eq!(item.vel.y, 0.0);
                 }
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
             }
         }
     }

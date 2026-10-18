@@ -421,12 +421,12 @@ fn lethal(game: &mut Game) {
 /// Visibility uses the existing inverse adapter so first-fatal Ankh revival
 /// removes this hide in its later source action.
 pub(crate) fn player_health_prelude(game: &mut Game) {
-    if game.player.health < -10000 {
-        game.player.health = -10000;
+    if game.player.health < -10000.0 {
+        game.player.health = -10000.0;
     }
     let visible = game.player.data.get("hidden").copied().unwrap_or(0.0) == 0.0
         && game.player.data.get("visible").copied().unwrap_or(1.0) != 0.0;
-    if game.player.health < -99 && visible {
+    if game.player.health < -99.0 && visible {
         crate::player::script_player_blood(game, 3);
         game.player.data.insert("hidden".into(), 1.0);
     }
@@ -434,7 +434,7 @@ pub(crate) fn player_health_prelude(game: &mut Game) {
 
 pub(crate) fn player_hurt_enabled(game: &Game) -> bool {
     !game.player.cheat_invulnerable
-        && game.player.health >= -99
+        && game.player.health >= -99.0
         && game.player.data.get("hidden").copied().unwrap_or(0.) == 0.
         && game.player.data.get("visible").copied().unwrap_or(1.) != 0.
         && !game.player.is_exiting()
@@ -852,7 +852,7 @@ fn detectors(game: &mut Game) {
                         .world
                         .entity(id)
                         .is_some_and(|e| e.animation >= 20.0 && e.animation < 24.0 && overlaps);
-                    if damaging && game.player.health > 0 && !game.player.is_exiting() {
+                    if damaging && game.player.health > 0.0 && !game.player.is_exiting() {
                         // oPlayer1 Step intentionally bypasses both ordinary
                         // damage immunity and stun. Every active frame can hit.
                         game.player.lose_health(4);
@@ -1106,10 +1106,10 @@ mod tests {
         g.player.vel.y = 1.0;
         g.player.data.insert("fall_ticks".into(), 4.0);
         tick(&mut g);
-        assert_eq!(g.player.health, 4);
+        assert_eq!(g.player.health, 4.0);
         g.player.data.insert("fall_ticks".into(), 5.0);
         tick(&mut g);
-        assert!(g.player.health <= 0);
+        assert!(g.player.health <= 0.0);
     }
     #[test]
     fn actual_yeti_zero_timer_throw_is_impaled_on_its_first_descending_overlap() {
@@ -1126,7 +1126,7 @@ mod tests {
             game.step(&crate::InputFrame::default());
         }
         assert!(game.player.grounded);
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         let spikes = game.spawn("oSpikes", Vec2::new(288.0, 96.0));
         let pos = game.player.pos;
         let yeti = game.spawn("oYeti", Vec2::new(pos.x - 8.0, pos.y - 8.0));
@@ -1136,7 +1136,7 @@ mod tests {
             game.player.is_stunned(),
             "the live Yeti must actually throw"
         );
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         for _ in 0..12 {
             game.step(&crate::InputFrame::default());
             if game.state == crate::RunState::Dead {
@@ -1169,7 +1169,7 @@ mod tests {
             let fall = game.player.data["fall_ticks"];
             if fall <= 4.0 {
                 assert_eq!(game.state, crate::RunState::Playing);
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert!(!game.player.is_stunned());
                 survived_four |= fall == 4.0;
             } else {
@@ -1188,7 +1188,7 @@ mod tests {
         crate::dispatcher::register_instances(&mut g);
         g.player.invincible = 60;
         tick(&mut g);
-        assert!(g.player.health <= 0);
+        assert!(g.player.health <= 0.0);
     }
     #[test]
     fn lava_applies_the_source_ninety_nine_damage_once_per_character_step() {
@@ -1197,10 +1197,10 @@ mod tests {
         game.spawn("oLava", Vec2::new(32.0, 32.0));
         // Source Player Step caps transient overhealing to 99 before hurt.
         // One point query then subtracts 99 despite overlapping lava and immunity.
-        game.player.health = 200;
+        game.player.health = 200.0;
         game.player.invincible = 60;
         game.step(&crate::InputFrame::default());
-        assert_eq!(game.player.health, 0);
+        assert_eq!(game.player.health, 0.0);
         assert_eq!(game.state, crate::RunState::Dead);
         assert_eq!(game.player.invincible, 60);
         assert_eq!(
@@ -1294,7 +1294,7 @@ mod tests {
         game.player.pos = Vec2::new(player_x, 152.0);
         game.player.state = PlayerState::Standing;
         game.player.grounded = true;
-        game.player.health = 16;
+        game.player.health = 16.0;
         (game, spear)
     }
 
@@ -1303,7 +1303,7 @@ mod tests {
         let (mut game, spear) = spear_room(false, 90.0);
         game.player.invincible = 60;
         game.step(&crate::InputFrame::default());
-        assert_eq!(game.player.health, 12);
+        assert_eq!(game.player.health, 12.0);
         assert_eq!(game.player.stun, 0);
         assert_eq!(game.player.invincible, 59);
         assert_eq!(game.player.pos.y, 151.0);
@@ -1339,7 +1339,7 @@ mod tests {
             assert_eq!(game.state, crate::RunState::Ending);
             assert!(game.player.is_exiting());
         }
-        assert_eq!(game.player.health, 4);
+        assert_eq!(game.player.health, 4.0);
         game
     }
 
@@ -1367,13 +1367,13 @@ mod tests {
                     "exit protection must leave the trap controller running"
                 );
                 if exit {
-                    assert_eq!(game.player.health, 4, "{character:?}");
+                    assert_eq!(game.player.health, 4.0, "{character:?}");
                     assert_eq!(game.player.pos, player_pos);
                     assert!(game.player.is_exiting());
                     assert_eq!(game.state, crate::RunState::Ending);
                     assert!(!game.events.contains(&GameEvent::Damage { amount: 4 }));
                 } else {
-                    assert_eq!(game.player.health, 0, "ordinary player {character:?}");
+                    assert_eq!(game.player.health, 0.0, "ordinary player {character:?}");
                     assert!(game.events.contains(&GameEvent::Damage { amount: 4 }));
                     assert_eq!(game.state, crate::RunState::Dead);
                 }
@@ -1417,7 +1417,7 @@ mod tests {
                 1
             );
             if ankh {
-                assert_eq!(game.player.health, 4);
+                assert_eq!(game.player.health, 4.0);
                 assert!(!game.player.has("Ankh"));
                 assert_ne!(game.state, crate::RunState::Dead);
             } else {
@@ -1437,7 +1437,7 @@ mod tests {
         let pos = game.player.pos;
         game.spawn("oLava", Vec2::new(pos.x - 8.0, pos.y - 8.0));
         game.step(&crate::InputFrame::default());
-        assert_eq!(game.player.health, 0);
+        assert_eq!(game.player.health, 0.0);
         assert_eq!(game.state, crate::RunState::Dead);
         assert!(game.events.contains(&GameEvent::Damage { amount: 99 }));
     }
@@ -1448,19 +1448,19 @@ mod tests {
         // x87..95. A player probe x93..105 therefore hits only the left one.
         let (mut right, _) = spear_room(true, 99.0);
         right.step(&crate::InputFrame::default());
-        assert_eq!(right.player.health, 16);
+        assert_eq!(right.player.health, 16.0);
         let (mut left, spear) = spear_room(false, 90.0);
         left.world.entity_mut(spear).unwrap().animation = 19.0;
         left.step(&crate::InputFrame::default());
-        assert_eq!(left.player.health, 16);
+        assert_eq!(left.player.health, 16.0);
         left.step(&crate::InputFrame::default());
-        assert_eq!(left.player.health, 12);
+        assert_eq!(left.player.health, 12.0);
     }
 
     #[test]
     fn spear_animation_finishes_during_the_death_reveal() {
         let (mut game, spear) = spear_room(false, 40.0);
-        game.player.health = 0;
+        game.player.health = 0.0;
         game.player.state = PlayerState::Dead;
         game.state = crate::RunState::Dead;
         for _ in 0..35 {
@@ -1483,7 +1483,7 @@ mod tests {
         game.step(&crate::InputFrame::default());
         assert!(game.world.entity(spear).is_none());
         // Player319 observes the active spear before Spear528 destroys it.
-        assert_eq!(game.player.health, 12);
+        assert_eq!(game.player.health, 12.0);
         assert!(game.events.contains(&GameEvent::Damage { amount: 4 }));
         let mut game = room();
         let trap = game.spawn("oSpearTrapTop", Vec2::new(80.0, 80.0));

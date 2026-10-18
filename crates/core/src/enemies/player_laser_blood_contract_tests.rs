@@ -63,7 +63,7 @@ fn actual_default_ufo_laser_creates_player_blood_before_impact_then_hurt_sound()
                 .position(|e| matches!(e, GameEvent::Sound { name, .. } if name == "sndHurt"))
                 .unwrap();
             assert!(impact < hurt);
-            assert_eq!(g.player.health, 1);
+            assert_eq!(g.player.health, 1.0);
             assert_eq!(g.player.stun, 20);
             // Supplemental source callback-context witness from naturally
             // reached state: stop before later object/Blood Normal Steps.
