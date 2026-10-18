@@ -77,19 +77,13 @@ fn solid_point(world: &World, pos: Vec2) -> bool {
 /// Literal precision-zero Solid rectangle/point query used by the two Rope
 /// actions. Source endpoints are inclusive and may form a zero-area point.
 fn rope_solid_rectangle(world: &World, first: Vec2, second: Vec2) -> bool {
-    world.tiles.iter().enumerate().any(|(index, tile)| {
-        crate::catalog::is_a(&tile.object, "oSolid")
-            && world
-                .tile_collision_mask((index % world.width) as i32, (index / world.width) as i32)
-                .intersects_rectangle_bbox(first, second)
-    }) || world.entities.iter().any(|entity| {
-        entity.alive
-            && entity.engine_active
-            && crate::catalog::is_a(&entity.object, "oSolid")
-            && entity
-                .collision_mask()
-                .intersects_rectangle_bbox(first, second)
-    })
+    world.rectangle_family_except(
+        first,
+        second,
+        "oSolid",
+        None,
+        CollisionPrecision::BoundingBox,
+    )
 }
 
 /// First use arms a carried bomb; subsequent use can throw it normally.
@@ -6271,5 +6265,25 @@ mod rope_create_source_state_tests {
                 has_burn_timer.then_some(0.0)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod rope_collision_query_tests {
+    use super::*;
+
+    #[test]
+    fn rope_solid_rectangle_uses_only_active_solid_tiles() {
+        let mut world = World::new(8, 8, Area::Mines, 7);
+        world.set_tile(1, 1, "oBlock");
+        let point = Vec2::new(24.0, 24.0);
+        let first = Vec2::new(21.0, 21.0);
+        let second = Vec2::new(27.0, 27.0);
+        assert!(solid_point(&world, point));
+        assert!(rope_solid_rectangle(&world, first, second));
+
+        world.tiles[world.width + 1].engine_active = false;
+        assert!(!solid_point(&world, point));
+        assert!(!rope_solid_rectangle(&world, first, second));
     }
 }
