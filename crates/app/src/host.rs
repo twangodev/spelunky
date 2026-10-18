@@ -14,7 +14,9 @@ use crate::{
     timing::FixedClock,
     viewport::Viewport,
 };
-use spelunky_core::{Area, Game, GameEvent, RunState, SourceMusicCommand, SourceMusicState};
+#[cfg(test)]
+use spelunky_core::Area;
+use spelunky_core::{Game, GameEvent, RunState, SourceMusicCommand, SourceMusicState};
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use winit::window::Fullscreen;
@@ -28,6 +30,7 @@ use winit::{
 
 const WHITE: [f32; 4] = [1.0, 0.95, 0.85, 1.0];
 const GOLD: [f32; 4] = [1.0, 0.78, 0.30, 1.0];
+const ABOUT_CONTROL_HINT: &str = "C CYCLE, A BOMB, S ROPE, F FLARE";
 #[cfg(target_arch = "wasm32")]
 const AUDIO_UNLOCK_EVENT: &str = "spelunky-audio-gesture";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -315,6 +318,13 @@ fn reset_gameplay_input(input: &mut InputState, game: Option<&mut Game>) {
 impl App {
     fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
         let store = Store::load();
+        let mut audio = Audio::new();
+        // Classic applies the saved effects level to every loaded sound once
+        // during initialization. Live slider changes are resource-specific.
+        audio.set_volumes(
+            store.data.settings.music_volume,
+            store.data.settings.effects_volume,
+        );
         let mut input = InputState::default();
         input.set_bindings(&store.data.settings.bindings);
         input.set_controller_bindings(&store.data.settings.controller_bindings);
@@ -335,7 +345,7 @@ impl App {
             renderer: None,
             atlas: None,
             input,
-            audio: Audio::new(),
+            audio,
             source_music,
             store,
             timing: HostTiming::default(),
@@ -535,8 +545,9 @@ impl App {
             .set_controller_bindings(&settings.controller_bindings);
         self.input
             .set_controller_enabled(settings.controller_enabled);
+        self.audio.set_music_volume(settings.music_volume);
         self.audio
-            .set_volumes(settings.music_volume, settings.effects_volume);
+            .set_effect_volume("sndJump", settings.effects_volume);
         if let Some(renderer) = &mut self.renderer {
             renderer.set_vsync(settings.vsync);
         }
@@ -560,10 +571,6 @@ impl App {
         }
     }
     fn flush_source_music(&mut self) {
-        self.audio.set_volumes(
-            self.store.data.settings.music_volume,
-            self.store.data.settings.effects_volume,
-        );
         if let Some(game) = &mut self.game {
             consume_source_music(&mut self.audio, &mut self.source_music, game);
         }
@@ -1713,10 +1720,6 @@ impl App {
                 }
             }
         }
-        self.audio.set_volumes(
-            self.store.data.settings.music_volume,
-            self.store.data.settings.effects_volume,
-        );
         // Only actual source producers authorize a new play/stop. Presentation
         // polling must not replace literal M selection or restart after OFF.
         self.flush_source_music();
@@ -2112,7 +2115,7 @@ impl App {
                     "NATIVE LINUX + WEBGL 2 / WASM",
                     "",
                     "ARROWS MOVE, Z JUMP, X ATTACK",
-                    "C CYCLE, B BOMB, R ROPE, F FLARE",
+                    ABOUT_CONTROL_HINT,
                     "SHIFT RUN, UP EXIT, P PAY",
                 ]
                 .iter()
@@ -3844,6 +3847,11 @@ fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn about_controls_hint_shows_default_bomb_and_rope_bindings() {
+        assert_eq!(ABOUT_CONTROL_HINT, "C CYCLE, A BOMB, S ROPE, F FLARE");
+    }
+
     #[test]
     fn menu_music_mute_and_focus_audio_pause_are_independent_policies() {
         assert_eq!(

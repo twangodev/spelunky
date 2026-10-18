@@ -639,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn bindings_can_capture_navigation_keys_cancel_and_unbind() {
+    fn bindings_can_capture_extended_and_navigation_keys_cancel_and_unbind() {
         let mut menu = SettingsUi::new();
         let mut settings = Settings::default();
         for (index, (action, _)) in ACTIONS.iter().enumerate() {
@@ -649,9 +649,16 @@ mod tests {
                 SettingsCommand::None
             );
             assert!(menu.awaiting_binding());
-            assert_eq!(menu.key(KeyCode::F35, &mut settings), SettingsCommand::None);
-            assert!(menu.awaiting_binding());
-            assert!(menu.unsupported_key);
+            assert_eq!(
+                menu.key(KeyCode::F35, &mut settings),
+                SettingsCommand::Changed
+            );
+            assert!(!menu.awaiting_binding());
+            assert_eq!(settings.bindings[*action], "F35");
+            menu.key(KeyCode::Enter, &mut settings);
+            menu.key(KeyCode::Escape, &mut settings);
+            assert_eq!(settings.bindings[*action], "F35");
+            menu.key(KeyCode::Enter, &mut settings);
             assert_eq!(
                 menu.key(KeyCode::ArrowUp, &mut settings),
                 SettingsCommand::Changed

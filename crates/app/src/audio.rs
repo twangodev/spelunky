@@ -176,11 +176,22 @@ fn is_music_resource(name: &str) -> bool {
 fn effective_music_volume(music: f32, music_muted: bool) -> f32 {
     if music_muted { 0.0 } else { music }
 }
+#[cfg(test)]
 fn resource_volume(name: &str, music: f32, effects: f32, music_muted: bool) -> f32 {
+    resource_volume_with_override(name, music, effects, music_muted, None)
+}
+
+fn resource_volume_with_override(
+    name: &str,
+    music: f32,
+    effects: f32,
+    music_muted: bool,
+    effect_override: Option<f32>,
+) -> f32 {
     if is_music_resource(name) {
         effective_music_volume(music, music_muted)
     } else {
-        effects
+        effect_override.unwrap_or(effects)
     }
 }
 
@@ -198,6 +209,23 @@ mod policy_tests {
         assert_eq!(resource_volume("flame", 0.4, 0.7, false), 0.7);
         assert_eq!(resource_volume("title", 0.4, 0.7, true), 0.0);
         assert_eq!(resource_volume("flame", 0.4, 0.7, true), 0.7);
+    }
+
+    #[test]
+    fn source_effect_slider_override_changes_only_the_named_effect() {
+        assert_eq!(
+            resource_volume_with_override("jump", 0.4, 0.8, false, Some(0.2)),
+            0.2
+        );
+        assert_eq!(
+            resource_volume_with_override("flame", 0.4, 0.8, false, None),
+            0.8
+        );
+        assert_eq!(
+            resource_volume_with_override("title", 0.4, 0.8, true, Some(0.2)),
+            0.0,
+            "a named sound override cannot unmute a music resource"
+        );
     }
 
     #[test]
@@ -252,6 +280,7 @@ mod backend {
         effects_volume: f32,
         music_muted: bool,
         sound_pans: HashMap<&'static str, f32>,
+        effect_volume_overrides: HashMap<&'static str, f32>,
         music_frequencies: HashMap<&'static str, u32>,
         paused: bool,
         last_update: Instant,
@@ -278,6 +307,7 @@ mod backend {
                 effects_volume: 0.8,
                 music_muted: false,
                 sound_pans: HashMap::new(),
+                effect_volume_overrides: HashMap::new(),
                 music_frequencies: HashMap::new(),
                 paused: false,
                 last_update: Instant::now(),
@@ -334,11 +364,12 @@ mod backend {
                 [-1.0, 0.0, 0.0],
                 [1.0, 0.0, 0.0],
             );
-            sink.set_volume(resource_volume(
+            sink.set_volume(resource_volume_with_override(
                 name,
                 self.music_volume,
                 self.effects_volume,
                 self.music_muted,
+                self.effect_volume_overrides.get(name).copied(),
             ));
             if is_music_resource(name) {
                 sink.set_speed(
@@ -528,13 +559,54 @@ mod backend {
                 );
             }
             for effect in &self.effects {
-                effect.sink.set_volume(resource_volume(
+                effect.sink.set_volume(resource_volume_with_override(
                     effect.name,
                     self.music_volume,
                     self.effects_volume,
                     self.music_muted,
+                    self.effect_volume_overrides.get(effect.name).copied(),
                 ));
             }
+        }
+        pub fn set_music_volume(&mut self, music: f32) {
+            self.music_volume = volume(music);
+            for track in &self.tracks {
+                track.sink.set_volume(
+                    track.gain * effective_music_volume(self.music_volume, self.music_muted),
+                );
+            }
+            for effect in &self.effects {
+                if is_music_resource(effect.name) {
+                    effect
+                        .sink
+                        .set_volume(self.music_volume_for_resource(effect.name));
+                }
+            }
+        }
+        /// Classic's live effects slider changes the named sound resource only.
+        pub fn set_effect_volume(&mut self, name: &str, effects: f32) {
+            let Some((name, _)) = asset(name) else {
+                return;
+            };
+            if is_music_resource(name) {
+                return;
+            }
+            let effects = volume(effects);
+            self.effect_volume_overrides.insert(name, effects);
+            for effect in &self.effects {
+                if effect.name == name {
+                    effect.sink.set_volume(effects);
+                }
+            }
+        }
+        fn music_volume_for_resource(&self, name: &str) -> f32 {
+            resource_volume_with_override(
+                name,
+                self.music_volume,
+                self.effects_volume,
+                self.music_muted,
+                self.effect_volume_overrides.get(name).copied(),
+            )
         }
         /// Mute only music resources while preserving their playback clocks and
         /// leaving ordinary sound effects audible. Used by the in-game menu.
@@ -549,11 +621,12 @@ mod backend {
                     .set_volume(track.gain * effective_music_volume(self.music_volume, muted));
             }
             for effect in &self.effects {
-                effect.sink.set_volume(resource_volume(
+                effect.sink.set_volume(resource_volume_with_override(
                     effect.name,
                     self.music_volume,
                     self.effects_volume,
                     muted,
+                    self.effect_volume_overrides.get(effect.name).copied(),
                 ));
             }
         }
@@ -618,6 +691,7 @@ mod backend {
                 effects_volume: 0.8,
                 music_muted: false,
                 sound_pans: HashMap::new(),
+                effect_volume_overrides: HashMap::new(),
                 music_frequencies: HashMap::new(),
                 paused: false,
                 last_update: Instant::now(),
@@ -642,6 +716,24 @@ mod backend {
                 vec![0.25; 4096],
             ));
             Effect { name, sink }
+        }
+
+        #[test]
+        fn source_effect_slider_changes_only_jump_for_active_and_future_voices() {
+            let (mixer, _output) = rodio::mixer::mixer(2, 44_100);
+            let mut audio = headless_audio();
+            audio.effects.push(infinite_effect(&mixer, "jump"));
+            audio.effects.push(infinite_effect(&mixer, "flame"));
+            audio.set_volumes(0.4, 0.8);
+            audio.set_effect_volume("global.sndJump", 0.2);
+
+            assert_eq!(audio.effects[0].sink.volume(), 0.2);
+            assert_eq!(audio.effects[1].sink.volume(), 0.8);
+
+            audio.play_with_mixer(&mixer, "jump.wav", 0.0, false);
+            audio.play_with_mixer(&mixer, "sndFlame", 0.0, false);
+            assert_eq!(audio.effects[2].sink.volume(), 0.2);
+            assert_eq!(audio.effects[3].sink.volume(), 0.8);
         }
 
         #[test]
@@ -930,6 +1022,7 @@ mod backend {
                     effects_volume: 0.7,
                     music_muted: false,
                     sound_pans: HashMap::new(),
+                    effect_volume_overrides: HashMap::new(),
                     music_frequencies: HashMap::new(),
                     paused: false,
                     last_update: Instant::now(),
@@ -989,6 +1082,7 @@ mod backend {
                     effects_volume: 0.8,
                     music_muted: false,
                     sound_pans: HashMap::new(),
+                    effect_volume_overrides: HashMap::new(),
                     music_frequencies: HashMap::new(),
                     paused: false,
                     last_update: Instant::now(),
@@ -1059,6 +1153,7 @@ mod backend {
                 effects_volume: 0.8,
                 music_muted: false,
                 sound_pans: HashMap::new(),
+                effect_volume_overrides: HashMap::new(),
                 music_frequencies: HashMap::new(),
                 paused: false,
                 last_update: Instant::now(),
@@ -1137,6 +1232,7 @@ mod backend {
         effects_volume: f32,
         music_muted: bool,
         sound_pans: HashMap<&'static str, f32>,
+        effect_volume_overrides: HashMap<&'static str, f32>,
         music_frequencies: HashMap<&'static str, u32>,
         unlocked: Rc<Cell<bool>>,
         paused: bool,
@@ -1161,6 +1257,7 @@ mod backend {
                 effects_volume: 0.8,
                 music_muted: false,
                 sound_pans: HashMap::new(),
+                effect_volume_overrides: HashMap::new(),
                 music_frequencies: HashMap::new(),
                 unlocked: Rc::new(Cell::new(false)),
                 paused: false,
@@ -1394,13 +1491,55 @@ mod backend {
                 );
             }
             for effect in &self.effects {
-                effect.gain.gain().set_value(resource_volume(
+                effect.gain.gain().set_value(resource_volume_with_override(
                     effect.name,
                     self.music_volume,
                     self.effects_volume,
                     self.music_muted,
+                    self.effect_volume_overrides.get(effect.name).copied(),
                 ));
             }
+        }
+        pub fn set_music_volume(&mut self, music: f32) {
+            self.music_volume = volume(music);
+            for track in &self.tracks {
+                track.gain_node.gain().set_value(
+                    track.gain * effective_music_volume(self.music_volume, self.music_muted),
+                );
+            }
+            for effect in &self.effects {
+                if is_music_resource(effect.name) {
+                    effect
+                        .gain
+                        .gain()
+                        .set_value(self.music_volume_for_resource(effect.name));
+                }
+            }
+        }
+        /// Classic's live effects slider changes the named sound resource only.
+        pub fn set_effect_volume(&mut self, name: &str, effects: f32) {
+            let Some((name, _)) = asset(name) else {
+                return;
+            };
+            if is_music_resource(name) {
+                return;
+            }
+            let effects = volume(effects);
+            self.effect_volume_overrides.insert(name, effects);
+            for effect in &self.effects {
+                if effect.name == name {
+                    effect.gain.gain().set_value(effects);
+                }
+            }
+        }
+        fn music_volume_for_resource(&self, name: &str) -> f32 {
+            resource_volume_with_override(
+                name,
+                self.music_volume,
+                self.effects_volume,
+                self.music_muted,
+                self.effect_volume_overrides.get(name).copied(),
+            )
         }
         /// Mute only music resources while preserving their playback clocks and
         /// leaving ordinary sound effects audible. Used by the in-game menu.
@@ -1416,11 +1555,12 @@ mod backend {
                     .set_value(track.gain * effective_music_volume(self.music_volume, muted));
             }
             for effect in &self.effects {
-                effect.gain.gain().set_value(resource_volume(
+                effect.gain.gain().set_value(resource_volume_with_override(
                     effect.name,
                     self.music_volume,
                     self.effects_volume,
                     muted,
+                    self.effect_volume_overrides.get(effect.name).copied(),
                 ));
             }
         }
@@ -1460,11 +1600,12 @@ mod backend {
                 return;
             };
             source.set_buffer(Some(&buffer));
-            gain.gain().set_value(resource_volume(
+            gain.gain().set_value(resource_volume_with_override(
                 name,
                 self.music_volume,
                 self.effects_volume,
                 self.music_muted,
+                self.effect_volume_overrides.get(name).copied(),
             ));
             let rate = if is_music_resource(name) {
                 self.music_frequencies.get(name).copied().unwrap_or(44_100) as f32 / 44_100.0
@@ -1623,6 +1764,7 @@ mod backend {
                 effects_volume: 0.8,
                 music_muted: false,
                 sound_pans: HashMap::new(),
+                effect_volume_overrides: HashMap::new(),
                 music_frequencies: HashMap::new(),
                 unlocked: Rc::new(Cell::new(false)),
                 paused: false,

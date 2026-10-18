@@ -11,7 +11,7 @@ spelunky-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 wgpu = { version = "=24.0.5", default-features = false, features = ["wgsl"] }
-winit = { version = "=0.30.13", default-features = false, features = ["x11", "wayland", "wayland-dlopen", "rwh_06"] }
+winit = { version = "=0.30.13", default-features = false, features = ["x11", "wayland", "wayland-dlopen", "rwh_06", "serde"] }
 bytemuck = { version = "1", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 

@@ -725,107 +725,7 @@ fn native_controller_button(button: ControllerButton) -> gilrs::Button {
 }
 
 fn parse_key(name: &str) -> Option<KeyCode> {
-    use KeyCode::*;
-    let keys = [
-        KeyA,
-        KeyB,
-        KeyC,
-        KeyD,
-        KeyE,
-        KeyF,
-        KeyG,
-        KeyH,
-        KeyI,
-        KeyJ,
-        KeyK,
-        KeyL,
-        KeyM,
-        KeyN,
-        KeyO,
-        KeyP,
-        KeyQ,
-        KeyR,
-        KeyS,
-        KeyT,
-        KeyU,
-        KeyV,
-        KeyW,
-        KeyX,
-        KeyY,
-        KeyZ,
-        Digit0,
-        Digit1,
-        Digit2,
-        Digit3,
-        Digit4,
-        Digit5,
-        Digit6,
-        Digit7,
-        Digit8,
-        Digit9,
-        ArrowLeft,
-        ArrowRight,
-        ArrowUp,
-        ArrowDown,
-        Space,
-        Enter,
-        Escape,
-        ShiftLeft,
-        ShiftRight,
-        ControlLeft,
-        ControlRight,
-        AltLeft,
-        AltRight,
-        Tab,
-        Backspace,
-        CapsLock,
-        Minus,
-        Equal,
-        BracketLeft,
-        BracketRight,
-        Backslash,
-        Semicolon,
-        Quote,
-        Backquote,
-        Comma,
-        Period,
-        Slash,
-        Insert,
-        Delete,
-        Home,
-        End,
-        PageUp,
-        PageDown,
-        Numpad0,
-        Numpad1,
-        Numpad2,
-        Numpad3,
-        Numpad4,
-        Numpad5,
-        Numpad6,
-        Numpad7,
-        Numpad8,
-        Numpad9,
-        NumpadEnter,
-        NumpadAdd,
-        NumpadSubtract,
-        NumpadMultiply,
-        NumpadDivide,
-        NumpadDecimal,
-        F1,
-        F2,
-        F3,
-        F4,
-        F5,
-        F6,
-        F7,
-        F8,
-        F9,
-        F10,
-        F11,
-        F12,
-    ];
-    keys.into_iter().find(|key| format!("{key:?}") == name)
+    serde_json::from_value(serde_json::Value::String(name.to_owned())).ok()
 }
 
 #[cfg(test)]
@@ -1665,6 +1565,23 @@ mod tests {
         assert!(input.take_tick().jump_pressed);
         input.key(KeyCode::KeyX, true, false);
         assert!(input.take_tick().attack_pressed);
+    }
+
+    #[test]
+    fn extended_physical_keys_round_trip_through_settings_bindings() {
+        for key in [
+            KeyCode::F13,
+            KeyCode::F35,
+            KeyCode::IntlYen,
+            KeyCode::NumpadHash,
+        ] {
+            assert!(supported_key(key), "{key:?}");
+            let value = format!("{key:?}");
+            let mut input = InputState::default();
+            input.set_bindings(&BTreeMap::from([("jump".into(), value)]));
+            input.key(key, true, false);
+            assert!(input.take_tick().jump_pressed, "{key:?}");
+        }
     }
 
     #[test]
