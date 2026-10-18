@@ -360,11 +360,22 @@ fn replace_host_toast(
 }
 
 /// The host retires blocked physical input without advancing the simulation.
-fn reset_gameplay_input(input: &mut InputState, game: Option<&mut Game>) {
-    input.clear_gameplay();
+fn reset_gameplay_input(input: &mut InputState, game: Option<&mut Game>, preserve_keyboard: bool) {
+    if preserve_keyboard {
+        input.clear_gameplay_preserving_keyboard();
+    } else {
+        input.clear_gameplay();
+    }
     if let Some(game) = game {
         game.clear_direction_input_history();
     }
+}
+
+fn pause_transition_preserves_keyboard(previous: Screen, next: Screen) -> bool {
+    matches!(
+        (previous, next),
+        (Screen::Playing, Screen::Pause) | (Screen::Pause, Screen::Playing)
+    )
 }
 
 impl App {
@@ -490,12 +501,15 @@ impl App {
         }
     }
     fn reset_timing(&mut self) {
+        self.reset_timing_with_keyboard(false);
+    }
+    fn reset_timing_with_keyboard(&mut self, preserve_keyboard: bool) {
         self.cinematic_action = false;
         self.credits_keyboard_skip = false;
         self.pause_start_requested = false;
         self.donation_confirm = false;
         self.timing.reset(self.now());
-        reset_gameplay_input(&mut self.input, self.game.as_mut());
+        reset_gameplay_input(&mut self.input, self.game.as_mut(), preserve_keyboard);
         self.mouse_left = false;
         self.mouse_right = false;
         self.settings_ui.cancel_pointer();
@@ -512,6 +526,7 @@ impl App {
         self.input.clear_edges();
     }
     fn screen(&mut self, screen: Screen) {
+        let previous_screen = self.screen;
         let entering_settings = screen == Screen::Settings && self.screen != Screen::Settings;
         if screen == Screen::Pause {
             self.pause_summary = self
@@ -548,7 +563,10 @@ impl App {
         } else {
             0
         };
-        self.reset_timing();
+        self.reset_timing_with_keyboard(pause_transition_preserves_keyboard(
+            previous_screen,
+            screen,
+        ));
         if entering_settings {
             // Classic oSlider1's idle Step branch calls stopAllMusic while
             // rInit is open; the host stops the prior screen's track on entry.
@@ -4248,6 +4266,28 @@ fn startup_fullscreen_attribute(browser_requires_gesture: bool) -> Option<Fullsc
 #[cfg(test)]
 mod tests {
     #[test]
+    fn pause_reactivation_transitions_keep_keyboard_levels() {
+        use super::{Screen, pause_transition_preserves_keyboard};
+
+        assert!(pause_transition_preserves_keyboard(
+            Screen::Playing,
+            Screen::Pause
+        ));
+        assert!(pause_transition_preserves_keyboard(
+            Screen::Pause,
+            Screen::Playing
+        ));
+        assert!(!pause_transition_preserves_keyboard(
+            Screen::Title,
+            Screen::Playing
+        ));
+        assert!(!pause_transition_preserves_keyboard(
+            Screen::Pause,
+            Screen::Settings
+        ));
+    }
+
+    #[test]
     fn lifetime_stats_panel_shows_every_source_scalar_in_order_and_table_totals() {
         let stats = spelunky_core::statistics::LifetimeStats {
             enemy_kills: [4; 22],
@@ -6516,7 +6556,7 @@ mod tests {
         assert_eq!(game.player.data.get("previous_right"), Some(&1.0));
         let before = game.clone();
         let rng = game.rng.clone().next_u64();
-        reset_gameplay_input(&mut input, Some(&mut game));
+        reset_gameplay_input(&mut input, Some(&mut game), false);
         assert_eq!(
             serde_json::to_value(&game.player).unwrap(),
             serde_json::to_value(&before.player).unwrap(),
