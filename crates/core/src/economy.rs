@@ -190,7 +190,7 @@ fn settle_dice(game: &mut Game) {
         .world
         .entities
         .iter()
-        .filter(|e| e.alive && e.object == "oDice")
+        .filter(|e| e.alive && e.engine_active && e.object == "oDice")
         .map(|e| (e.id, e.value("rolled"), e.value("value")))
         .collect();
     if dice.len() != 2 || dice.iter().any(|(_, rolled, _)| *rolled == 0.) {
@@ -1003,6 +1003,100 @@ mod tests {
         tick(&mut g, &InputFrame::default());
         assert_eq!(g.lifetime_stats.dice_games_won, 1);
     }
+
+    fn craps_with_inactive_extra_die() -> (Game, u64, [u64; 2], u64) {
+        let mut game = Game::shell(9, RulesPreset::Classic);
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        let mut shop_path = [[0; 4]; 5];
+        shop_path[1][0] = 4;
+        shop_path[1][3] = 4;
+        game.world.source_room_path = Some(shop_path);
+        // Keep the keeper inside its source Step camera gate while a custom
+        // room's extra die lies outside Level's 96-pixel activation margin.
+        game.player.pos = Vec2::new(40.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        let keeper = game.spawn("oShopkeeper", Vec2::new(96.0, 144.0));
+        game.world
+            .entity_mut(keeper)
+            .unwrap()
+            .text
+            .insert("style".into(), "Craps".into());
+        let visible = game.spawn("oDice", Vec2::new(120.0, 152.0));
+        let second_visible = game.spawn("oDice", Vec2::new(144.0, 152.0));
+        let deactivated = game.spawn("oDice", Vec2::new(500.0, 152.0));
+
+        // Establish the source Level Step's camera-based active set before
+        // placing the wager. The active keeper and two dice stay in range.
+        game.step(&InputFrame::default());
+        assert!(game.world.entity(keeper).unwrap().engine_active);
+        assert_eq!(game.world.entity(keeper).unwrap().state, 0);
+        assert!(game.world.entity(visible).unwrap().engine_active);
+        assert!(game.world.entity(second_visible).unwrap().engine_active);
+        assert!(!game.world.entity(deactivated).unwrap().engine_active);
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oDice")
+                .count(),
+            3
+        );
+
+        for (id, value) in [(visible, 4.0), (second_visible, 5.0), (deactivated, 6.0)] {
+            let die = game.world.entity_mut(id).unwrap();
+            die.data.insert("rolled".into(), 1.0);
+            die.data.insert("rolling".into(), 0.0);
+            die.data.insert("value".into(), value);
+        }
+
+        (game, keeper, [visible, second_visible], deactivated)
+    }
+
+    #[test]
+    fn keeper_callback_counts_only_active_dice_in_full_world_storage() {
+        let (mut game, keeper_id, _, deactivated) = craps_with_inactive_extra_die();
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oDice")
+                .count(),
+            3
+        );
+        assert!(game.world.entity(deactivated).unwrap().alive);
+        assert!(!game.world.entity(deactivated).unwrap().engine_active);
+
+        game.player.data.insert("bet".into(), 1000.0);
+        let keeper = game.world.entity(keeper_id).unwrap().clone();
+        keeper_step(&mut game, &keeper);
+
+        assert_eq!(game.player.data["bet"], 0.0);
+        assert_eq!(game.data["collect"], 2000.0);
+        assert_eq!(game.data["diceGamesWon"], 1.0);
+        let extra = game.world.entity(deactivated).unwrap();
+        assert!(extra.alive);
+        assert!(!extra.engine_active);
+        assert_eq!(extra.value("rolled"), 1.0);
+    }
+
+    #[test]
+    fn actual_step_craps_settles_two_active_dice_despite_deactivated_extra() {
+        let (mut game, _, _, deactivated) = craps_with_inactive_extra_die();
+        game.player.data.insert("bet".into(), 1000.0);
+        game.step(&InputFrame::default());
+
+        assert_eq!(game.player.data["bet"], 0.0);
+        assert_eq!(game.data["collect"], 2000.0);
+        assert_eq!(game.data["diceGamesWon"], 1.0);
+        assert!(!game.data.contains_key("diceGamesLost"));
+        let extra = game.world.entity(deactivated).unwrap();
+        assert!(extra.alive);
+        assert!(!extra.engine_active);
+        assert_eq!(extra.value("rolled"), 1.0);
+    }
+
     #[test]
     fn dice_seven_releases_prize_and_replenishes_display() {
         let (mut g, id) = shop();
