@@ -245,6 +245,12 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
                 npcs::tick(game, e);
             }
         }
+        // oShopkeeper2's child Step runs after the inherited Shopkeeper Step,
+        // outside its parent event's viewport guard. Keep the parent AI gated
+        // above, but always execute this independent corpse timer tail.
+        if e.object == "oShopkeeper2" {
+            npcs::shopkeeper2_child_step(game, e);
+        }
         // Spider's second own-Step code action is outside its viewport
         // guard and also runs after Destroy in the first code action.
         if e.alive || e.object == "oSpider" {

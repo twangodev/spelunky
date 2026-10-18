@@ -120,22 +120,26 @@ pub fn tick(game: &mut Game, e: &mut Entity) {
         "oGhost" => ghost(game, e),
         "oDamsel" => damsel(game, e),
         "oShopkeeper" => shopkeeper(game, e),
-        "oShopkeeper2" => {
-            shopkeeper(game, e);
-            if e.state == 99 {
-                let timer = e.value("death_timer");
-                if timer > 0.0 {
-                    e.data.insert("death_timer".into(), timer - 1.0);
-                } else {
-                    create_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 3);
-                    e.alive = false;
-                }
-            }
-        }
+        "oShopkeeper2" => shopkeeper(game, e),
         "oScarab" => scarab(game, e),
         "oDeadFish" => dead_fish(game, e),
         "oBarrier" | "oBarrierEmitter" => barrier(game, e),
         _ => {}
+    }
+}
+
+/// `oShopkeeper2.events/Step.xml` runs this own action after inherited
+/// `oShopkeeper` Step, outside the parent's active viewport condition.
+pub(super) fn shopkeeper2_child_step(game: &mut Game, e: &mut Entity) {
+    if e.object != "oShopkeeper2" || e.state != 99 {
+        return;
+    }
+    let timer = e.value("death_timer");
+    if timer > 0.0 {
+        e.data.insert("death_timer".into(), timer - 1.0);
+    } else {
+        create_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 3);
+        e.alive = false;
     }
 }
 
@@ -2844,6 +2848,49 @@ mod tests {
         assert_eq!(g.world.entity(id).unwrap().state, 1);
     }
     #[test]
+    fn actual_step_shopkeeper2_dead_timer_continues_outside_parent_viewport() {
+        let mut g = actual_room();
+        g.player.pos = Vec2::new(40.0, 136.0);
+        for x in 4..=15 {
+            g.world.set_tile(x, 9, "oBlock");
+        }
+        let id = g.spawn("oShopkeeper2", Vec2::new(128.0, 128.0));
+        let keeper = g.world.entity_mut(id).unwrap();
+        keeper.health = 0;
+        keeper.state = 2;
+
+        // Enter DEAD through the real parent Shopkeeper Step while in view.
+        g.step(&InputFrame::default());
+        let keeper = g.world.entity(id).unwrap();
+        assert_eq!(keeper.state, 99);
+        assert_eq!(keeper.value("death_timer"), 199.0);
+        assert_eq!(g.data["shopkeepers"], 1.0);
+        assert_eq!(g.data["kills"], 1.0);
+        assert_eq!(g.lifetime_stats.enemy_kills[19], 1);
+
+        // Moving the corpse beyond the player's view disables only the parent
+        // AI. The child's own Step action still counts down and destroys it.
+        let keeper = g.world.entity_mut(id).unwrap();
+        keeper.pos = Vec2::new(370.0, 128.0);
+        keeper.previous_pos = keeper.pos;
+        keeper.data.insert("death_timer".into(), 1.0);
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().value("death_timer"), 0.0);
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(id).is_none());
+        assert_eq!(g.data["shopkeepers"], 1.0);
+        assert_eq!(g.data["kills"], 1.0);
+        assert_eq!(g.lifetime_stats.enemy_kills[19], 1);
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.object == "oBlood")
+                .count(),
+            3
+        );
+    }
+    #[test]
     fn actual_step_damsel_yell_uses_ten_frames_and_frame_four_help() {
         let mut g = actual_room();
         for x in 0..30 {
@@ -3200,10 +3247,12 @@ mod tests {
         e.health = 0;
         for _ in 0..200 {
             tick(&mut game, &mut e);
+            shopkeeper2_child_step(&mut game, &mut e);
             assert!(e.alive);
         }
         assert_eq!(e.value("death_timer"), 0.0);
         tick(&mut game, &mut e);
+        shopkeeper2_child_step(&mut game, &mut e);
         assert!(!e.alive);
         assert_eq!(
             game.world
