@@ -475,6 +475,11 @@ pub(crate) fn init_entity(e: &mut Entity) {
             e.vel.y = 0.4;
             e.data.insert("gravity".into(), 0.01);
         }
+        "oParaUsed" => {
+            // oParaUsed Create sets yVel and yAcc for its fallen decoration Step.
+            e.vel.y = 0.0;
+            e.data.insert("gravity".into(), 0.2);
+        }
         _ => {}
     }
     if catalog::is_a(&e.object, "oRubblePiece") {
@@ -1743,7 +1748,7 @@ fn fallen_decoration(game: &mut Game, e: &mut Entity) {
     }
     if !point_family(game, Vec2::new(e.pos.x + 8.0, e.pos.y + 16.0), "oSolid") {
         e.pos.y += e.vel.y;
-        e.vel.y += 0.2;
+        e.vel.y += e.data.get("gravity").copied().unwrap_or(0.2);
     }
     if point_family(game, Vec2::new(e.pos.x + 8.0, e.pos.y + 15.0), "oSolid") {
         e.pos.y -= 1.0;

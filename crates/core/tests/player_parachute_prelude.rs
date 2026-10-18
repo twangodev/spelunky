@@ -179,6 +179,7 @@ fn natural_acquisition_fall_landing_and_fresh_jump_leave_used_canopy_at_pre_move
             .unwrap();
         assert_eq!(used.pos, Vec2::new(origin.x - 8.0, origin.y - 24.0));
         assert_eq!(game.player.health, 4.0);
+        assert!((used.value("gravity") - 0.2).abs() < 1e-12);
     }
 }
 
