@@ -2073,7 +2073,8 @@ fn destroy_terrain_impl(game: &mut Game, x: usize, y: usize, respect_invincibili
         return false;
     };
     if !crate::catalog::is_a(&tile.object, "oSolid")
-        || (respect_invincibility && tile.object == "oHardBlock")
+        || (respect_invincibility
+            && matches!(tile.object.as_str(), "oHardBlock" | "oLavaSolid"))
     {
         return false;
     }

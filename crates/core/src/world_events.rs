@@ -432,6 +432,10 @@ pub(crate) fn init_entity(e: &mut Entity) {
         e.data.insert("bounce".into(), 1.0);
     }
     match e.object.as_str() {
+        "oHardBlock" | "oLavaSolid" => {
+            // Both concrete source Creates override oSolid's false default.
+            e.data.insert("invincible".into(), 1.0);
+        }
         "oGrave" => {
             // Grave inherits DrawnSprite then Solid Create before its own roll.
             e.data.insert("blinkToggle".into(), 0.0);

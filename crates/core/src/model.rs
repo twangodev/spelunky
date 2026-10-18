@@ -500,7 +500,11 @@ impl Tile {
             || crate::catalog::is_a(&self.object, "oLadderTop")
     }
     pub fn is_destructible(&self) -> bool {
-        self.is_solid() && !matches!(self.object.as_str(), "oSolid" | "oHardBlock")
+        self.is_solid()
+            && !matches!(
+                self.object.as_str(),
+                "oSolid" | "oHardBlock" | "oLavaSolid"
+            )
     }
 }
 
@@ -1912,6 +1916,7 @@ mod geometry_tests {
         assert!(!world.solid_at(probe.x, probe.y));
         assert!(Tile::new("oDark").is_destructible());
         assert!(!Tile::new("oHardBlock").is_destructible());
+        assert!(!Tile::new("oLavaSolid").is_destructible());
     }
 
     #[test]
