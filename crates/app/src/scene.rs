@@ -5347,6 +5347,9 @@ mod tests {
         game.player.previous_pos = game.player.pos;
         game.player.state = PlayerState::Standing;
         game.player.grounded = true;
+        // Keep the expiry blast from interrupting the armed-bow state this
+        // renderer regression is measuring.
+        game.player.cheat_invulnerable = true;
         let bow = game.world.spawn("oBow", game.player.pos);
         game.world.entity_mut(bow).unwrap().held = true;
         game.player.held = Some(bow);
