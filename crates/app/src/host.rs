@@ -870,13 +870,29 @@ impl App {
             }
             Screen::Editor => {
                 let control = shortcut_control.unwrap_or(self.control);
-                let command = self.editor.key(key, text_value, control);
+                // Classic's N key event is a no-op while editing; the Step
+                // still checks Attack afterward. M/L are port shortcuts with
+                // no matching Classic editor event, so a rebound Attack must
+                // reach that same check before those conveniences run.
+                let editor_key = source_editor_key_before_port_shortcut(
+                    &self.input,
+                    &self.editor,
+                    key,
+                    control,
+                    self.cursor,
+                );
+                let command = if editor_key == key {
+                    self.editor.key(key, text_value, control)
+                } else {
+                    self.editor.key(editor_key, None, false)
+                };
                 self.editor_command(command);
                 // Classic dispatches keyboard events before the editor Step.
                 // E can enter sign/door editing and Escape can change status;
                 // in either case the Step no longer sees an editable room.
                 if self.screen == Screen::Editor {
-                    let step_key = source_editor_key(&self.input, &self.editor, key, control);
+                    let step_key =
+                        source_editor_key(&self.input, &self.editor, key, control, self.cursor);
                     if step_key != key {
                         let command = self.editor.key(step_key, None, false);
                         self.editor_command(command);
@@ -1590,6 +1606,14 @@ impl App {
                 continue;
             }
             if self.screen != Screen::Playing {
+                if self.screen == Screen::Editor
+                    && button == UiButton::Confirm
+                    && !source_editor_controller_edge_allowed(button, self.cursor)
+                {
+                    // Editor Confirm is the configured controller Attack
+                    // edge in Classic, which only plays inside the view.
+                    continue;
+                }
                 let capturing =
                     self.screen == Screen::Settings && self.settings_ui.awaiting_binding();
                 if let Some(key) = controller_menu_key(self.screen, button, capturing) {
@@ -3253,13 +3277,54 @@ fn source_editor_key(
     editor: &EditorUi,
     key: KeyCode,
     control: bool,
+    cursor: [f32; 2],
 ) -> KeyCode {
-    if !control && editor.can_playtest_action() && input.action_key("attack", key) {
+    if !control
+        && editor.can_playtest_action()
+        && source_editor_pointer_in_view(cursor)
+        && input.action_key("attack", key)
+    {
         // Classic's editor Step checks the configured Attack edge.
         KeyCode::F5
     } else {
         key
     }
+}
+
+fn source_editor_key_before_port_shortcut(
+    input: &InputState,
+    editor: &EditorUi,
+    key: KeyCode,
+    control: bool,
+    cursor: [f32; 2],
+) -> KeyCode {
+    if matches!(key, KeyCode::KeyN | KeyCode::KeyM | KeyCode::KeyL)
+        && !control
+        && editor.can_playtest_action()
+        && source_editor_pointer_in_view(cursor)
+        && input.action_key("attack", key)
+    {
+        // These port-only shortcuts correspond to no-op Classic editor key
+        // events in EDIT, so the configured Attack check wins before them.
+        KeyCode::F5
+    } else {
+        key
+    }
+}
+
+fn source_editor_pointer_in_view(cursor: [f32; 2]) -> bool {
+    // The inverse viewport projection stores coordinates as f32. Ignore one
+    // logical-view ULP at its edges so an exact physical boundary cannot round
+    // a few millionths into the source's strict interior test.
+    const EDGE_EPSILON: f32 = f32::EPSILON * 320.0;
+    cursor[0] > EDGE_EPSILON
+        && cursor[0] < 320.0 - EDGE_EPSILON
+        && cursor[1] > EDGE_EPSILON
+        && cursor[1] < 240.0 - EDGE_EPSILON
+}
+
+fn source_editor_controller_edge_allowed(button: UiButton, cursor: [f32; 2]) -> bool {
+    button != UiButton::Confirm || source_editor_pointer_in_view(cursor)
 }
 
 fn settings_controller_frame(
@@ -5595,6 +5660,18 @@ mod tests {
             controller_menu_key(Screen::Editor, UiButton::Confirm, false),
             Some(KeyCode::F5)
         );
+        assert!(source_editor_controller_edge_allowed(
+            UiButton::Confirm,
+            [160.0, 120.0]
+        ));
+        assert!(!source_editor_controller_edge_allowed(
+            UiButton::Confirm,
+            [0.0, 120.0]
+        ));
+        assert!(source_editor_controller_edge_allowed(
+            UiButton::Left,
+            [0.0, 120.0]
+        ));
         assert_eq!(
             controller_menu_key(Screen::Title, UiButton::Pause, false),
             Some(KeyCode::Enter)
@@ -5605,16 +5682,17 @@ mod tests {
     fn configured_attack_runs_after_the_physical_editor_key_event() {
         let input = InputState::default();
         let mut editor = EditorUi::new();
+        let cursor = [160.0, 120.0];
         assert!(matches!(
             editor.key(KeyCode::KeyX, None, false),
             EditorCommand::None
         ));
         assert_eq!(
-            source_editor_key(&input, &editor, KeyCode::KeyX, false),
+            source_editor_key(&input, &editor, KeyCode::KeyX, false, cursor),
             KeyCode::F5
         );
         assert_eq!(
-            source_editor_key(&input, &editor, KeyCode::KeyX, true),
+            source_editor_key(&input, &editor, KeyCode::KeyX, true, cursor),
             KeyCode::KeyX,
             "control shortcuts keep their existing precedence"
         );
@@ -5622,6 +5700,88 @@ mod tests {
             editor.key(KeyCode::F5, None, false),
             EditorCommand::Play(_)
         ));
+    }
+
+    #[test]
+    fn configured_attack_preempts_port_only_editor_shortcuts() {
+        for (key, binding) in [
+            (KeyCode::KeyN, "KeyN"),
+            (KeyCode::KeyM, "KeyM"),
+            (KeyCode::KeyL, "KeyL"),
+        ] {
+            let mut input = InputState::default();
+            input.set_bindings(&std::collections::BTreeMap::from([(
+                "attack".into(),
+                binding.into(),
+            )]));
+            let mut editor = EditorUi::new();
+
+            let routed_key =
+                source_editor_key_before_port_shortcut(&input, &editor, key, false, [160.0, 120.0]);
+            assert_eq!(routed_key, KeyCode::F5, "{binding}");
+            assert!(matches!(
+                editor.key(routed_key, None, false),
+                EditorCommand::Play(_)
+            ));
+            assert!(
+                editor.can_playtest_action(),
+                "{binding} must not open a port shortcut"
+            );
+        }
+    }
+
+    #[test]
+    fn configured_editor_attack_uses_strict_centered_logical_view_bounds() {
+        for cursor in [
+            [0.0, 120.0],
+            [320.0, 120.0],
+            [160.0, 0.0],
+            [160.0, 240.0],
+            [-0.01, 120.0],
+            [320.01, 120.0],
+        ] {
+            assert!(
+                !source_editor_pointer_in_view(cursor),
+                "logical edge/outside pointer {cursor:?} must be excluded"
+            );
+        }
+        assert!(source_editor_pointer_in_view([0.01, 0.01]));
+        assert!(source_editor_pointer_in_view([319.99, 239.99]));
+
+        // A 16:9 surface expands the logical viewport horizontally. Its
+        // centered editor still occupies the authored 320x240 region.
+        let left_edge = logical_pointer(240.0, 540.0, 1920, 1080);
+        let center = logical_pointer(960.0, 540.0, 1920, 1080);
+        let right_edge = logical_pointer(1680.0, 540.0, 1920, 1080);
+        let expanded_margin = logical_pointer(0.0, 540.0, 1920, 1080);
+        assert!(left_edge[0].abs() < f32::EPSILON * 320.0);
+        assert_eq!(left_edge[1], 120.0);
+        assert_eq!(center, [160.0, 120.0]);
+        assert!((320.0 - right_edge[0]).abs() < f32::EPSILON * 320.0);
+        assert_eq!(right_edge[1], 120.0);
+        assert!(!source_editor_pointer_in_view(left_edge));
+        assert!(source_editor_pointer_in_view(center));
+        assert!(!source_editor_pointer_in_view(right_edge));
+        assert!(!source_editor_pointer_in_view(expanded_margin));
+
+        let mut input = InputState::default();
+        input.set_bindings(&std::collections::BTreeMap::from([(
+            "attack".into(),
+            "KeyX".into(),
+        )]));
+        let editor = EditorUi::new();
+        assert_eq!(
+            source_editor_key(&input, &editor, KeyCode::KeyX, false, left_edge),
+            KeyCode::KeyX
+        );
+        assert_eq!(
+            source_editor_key(&input, &editor, KeyCode::KeyX, false, center),
+            KeyCode::F5
+        );
+        assert_eq!(
+            source_editor_key(&input, &editor, KeyCode::KeyX, false, right_edge),
+            KeyCode::KeyX
+        );
     }
 
     #[test]
@@ -5642,7 +5802,7 @@ mod tests {
             "Escape opens the save/exit confirmation"
         );
         assert_eq!(
-            source_editor_key(&input, &editor, KeyCode::Escape, false),
+            source_editor_key(&input, &editor, KeyCode::Escape, false, [160.0, 120.0]),
             KeyCode::Escape,
             "the source Step no longer sees an editable room"
         );
@@ -5678,7 +5838,7 @@ mod tests {
                 "E opens {label} text editing"
             );
             assert_eq!(
-                source_editor_key(&input, &editor, KeyCode::KeyE, false),
+                source_editor_key(&input, &editor, KeyCode::KeyE, false, [160.0, 120.0]),
                 KeyCode::KeyE,
                 "after E opens {label} editing, the source Step no longer sees an editable room"
             );
