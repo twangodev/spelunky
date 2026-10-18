@@ -929,6 +929,14 @@ mod tests {
         }
         assert_eq!(game.world.name, "rTitle");
         assert_eq!(game.opening.as_ref().unwrap().kind, OpeningKind::Title);
+        let title_opening = game.opening.as_ref().unwrap();
+        assert_eq!(title_opening.stage, 0);
+        assert_eq!(title_opening.alarms[0], 50);
+        assert!(!title_opening.player_present);
+        assert!(
+            !game.world.entities.iter().any(|e| e.object == "oFlare"),
+            "titleStart 0 begins with the authored alarm entrance"
+        );
         assert_eq!(
             game.opening.as_ref().unwrap().previous_darkness,
             game.opening.as_ref().unwrap().darkness
@@ -941,6 +949,15 @@ mod tests {
         assert_eq!(bats, 4);
         assert_eq!(throws, 1);
         assert!(game.flags.contains("first_time"));
+
+        for _ in 0..49 {
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(game.opening.as_ref().unwrap().stage, 0);
+        assert_eq!(game.opening.as_ref().unwrap().alarms[0], 1);
+        game.step(&InputFrame::default());
+        assert_eq!(game.opening.as_ref().unwrap().stage, 1);
+        assert_eq!(game.opening.as_ref().unwrap().alarms[1], 100);
     }
     #[test]
     fn intro_skip_first_reveals_scene_then_second_edge_fades_to_title() {
