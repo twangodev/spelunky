@@ -643,7 +643,10 @@ pub fn interact(game: &mut Game, input: &InputFrame) -> bool {
 }
 
 fn crate_loot(game: &mut Game) -> &'static str {
-    if game.flags.contains("tutorial") {
+    // Classic branches on isRoom("rTutorial"), which reads the current room
+    // asset name. The runtime tutorial flag is a separate session marker and
+    // may be absent in a directly loaded/authored tutorial room.
+    if game.world.name == "rTutorial" || game.flags.contains("tutorial") {
         return "oBombBag";
     }
     for (odds, item) in [
