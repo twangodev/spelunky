@@ -38,6 +38,7 @@ pub(super) fn create_instance(game: &mut Game, instance: crate::dispatcher::Inst
     };
     if matches!(entity.object.as_str(), "oBall" | "oBall2") {
         crate::items::init_entity(entity);
+        crate::items::initialize_inherited_depth(entity, game.player.has("Spectacles"));
     }
     init_entity(entity);
 }

@@ -101,6 +101,11 @@ pub(super) fn create(game: &mut Game, e: &mut Entity) {
         },
         e,
     );
+    if e.object == "oDamsel" {
+        // oDamsel's Create starts with action_inherited(), so this is the
+        // oItem Create depth before any producer-side overrides.
+        crate::items::initialize_inherited_depth(e, game.player.has("Spectacles"));
+    }
     if e.value("npc_created") != 0.0 {
         return;
     }
@@ -1843,6 +1848,84 @@ mod tests {
             .insert("cost".into(), 0.0);
         g.step(&InputFrame::default());
         assert_eq!(g.world.entity(id).unwrap().value("cost"), 0.0);
+    }
+
+    #[test]
+    fn inherited_item_depth_reaches_actual_draw_snapshot_for_npc_and_curse_routes() {
+        let item_step =
+            include_str!("../../../../references/classic-1.1/Objects/Basis/oItem.events/Step.xml");
+        assert!(item_step.contains("if (global.hasSpectacles) depth = 51;"));
+        assert!(item_step.contains("else depth = 101;"));
+        assert!(item_step.contains("depth = 1;"));
+        let item_alarm = include_str!(
+            "../../../../references/classic-1.1/Objects/Basis/oItem.events/Alarm 2.xml"
+        );
+        assert!(item_alarm.contains("safe = false;"));
+        for object in ["oDamsel", "oBall", "oBall2"] {
+            let create = match object {
+                "oDamsel" => include_str!(
+                    "../../../../references/classic-1.1/Objects/Characters/oDamsel.events/Create.xml"
+                ),
+                "oBall" => include_str!(
+                    "../../../../references/classic-1.1/Objects/Items/oBall.events/Create.xml"
+                ),
+                _ => include_str!(
+                    "../../../../references/classic-1.1/Objects/Items/oBall2.events/Create.xml"
+                ),
+            };
+            let step = match object {
+                "oDamsel" => include_str!(
+                    "../../../../references/classic-1.1/Objects/Characters/oDamsel.events/Step.xml"
+                ),
+                "oBall" => include_str!(
+                    "../../../../references/classic-1.1/Objects/Items/oBall.events/Step.xml"
+                ),
+                _ => include_str!(
+                    "../../../../references/classic-1.1/Objects/Items/oBall2.events/Step.xml"
+                ),
+            };
+            assert!(create.contains("action_inherited"), "{object} Create");
+            assert!(step.contains("action_inherited"), "{object} Step");
+
+            for (has_spectacles, expected_depth) in [(false, 101.0), (true, 51.0)] {
+                let mut game = actual_room();
+                if has_spectacles {
+                    game.player.equipment.insert("Spectacles".into());
+                }
+                let id = game.spawn(object, Vec2::new(104.0, 88.0));
+                {
+                    let item = game.world.entity_mut(id).unwrap();
+                    item.data.insert("safe".into(), 1.0);
+                    item.alarms[2] = 1;
+                }
+                assert_eq!(
+                    game.world.entity(id).unwrap().value("depth"),
+                    expected_depth,
+                    "{object} inherited Create depth with Spectacles={has_spectacles}"
+                );
+
+                game.step(&InputFrame::default());
+
+                let presentation = game.presentation();
+                let drawn = presentation.world.entity(id).unwrap();
+                assert_eq!(
+                    drawn.value("depth"),
+                    expected_depth,
+                    "{object} inherited Step depth reaches Draw with Spectacles={has_spectacles}"
+                );
+                assert_eq!(
+                    drawn.value("safe"),
+                    0.0,
+                    "{object} inherited Alarm 2 clears safety through its family route"
+                );
+                assert!(
+                    presentation
+                        .dispatcher
+                        .active_order
+                        .contains(&crate::dispatcher::Instance::Entity(id))
+                );
+            }
+        }
     }
 
     #[test]

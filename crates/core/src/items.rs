@@ -143,6 +143,17 @@ pub fn init_entity(entity: &mut Entity) {
     utility::init_entity(entity);
 }
 
+/// Apply the inherited oItem Create depth without replacing later producer
+/// overrides. Every Classic oItem descendant's Create calls inherited.
+pub(crate) fn initialize_inherited_depth(entity: &mut Entity, has_spectacles: bool) {
+    if crate::catalog::is_a(&entity.object, "oItem") {
+        entity
+            .data
+            .entry("depth".into())
+            .or_insert(if has_spectacles { 51.0 } else { 101.0 });
+    }
+}
+
 /// Early oPlayer1 Step work runs before its light-distance sampling and
 /// character movement. Item use and ordinary item updates remain later.
 pub(crate) fn pre_player_tick(game: &mut Game) {
@@ -235,6 +246,7 @@ pub(crate) fn create_instance(game: &mut Game, id: u64) {
         return;
     };
     init_entity(&mut entity);
+    initialize_inherited_depth(&mut entity, game.player.has("Spectacles"));
     if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
         initialize_source_jungle_child(&mut entity, game.player.has("Spectacles"));
         // These own Creates inherit oItem depth and do not override it.
@@ -1498,6 +1510,18 @@ pub(crate) fn tick_inherited_ball_body(game: &mut Game, entity: &mut Entity) {
     }
     crate::economy::item_step(game, entity);
     let held_branch = entity.held;
+    // oItem Step rewrites this every active frame. Damsel's child Step
+    // inherits that parent body before applying its own state/depth changes.
+    entity.data.insert(
+        "depth".into(),
+        if held_branch {
+            1.0
+        } else if game.player.has("Spectacles") {
+            51.0
+        } else {
+            101.0
+        },
+    );
     if held_branch {
         align_held(game, entity);
     }

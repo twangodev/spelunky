@@ -1066,6 +1066,11 @@ fn alarm(game: &mut Game, i: Instance, index: u8) {
                 crate::items::alarm(game, id, index);
             } else if crate::traps::handles(&object) {
                 crate::traps::alarm(game, i, index);
+                // oBall/oBall2 use the curse adapter but retain their oItem
+                // Alarm events through their source parent relationship.
+                if catalog::is_a(&object, "oItem") {
+                    crate::items::alarm(game, id, index);
+                }
             } else {
                 crate::world_events::alarm(game, id, index);
             }
