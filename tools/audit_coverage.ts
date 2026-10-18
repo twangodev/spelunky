@@ -196,7 +196,9 @@ for (const [module,names] of Object.entries(equivalents)) {
   const match=new RegExp('"'+(tokens[name]??name)+'"').exec(text);if (match) add(name,{module,line:lineAt(text,match.index),kind:'manually_reviewed_shared_behavior'});
  }
 }
-const stateAdapters: [string,string,string[]][] = [['crates/core/src/opening.rs','begin_intro',['oIntro']],['crates/core/src/opening.rs','begin_title',['oTitle']],['crates/core/src/opening.rs','actor_step',['oPDummy3','oPDummy4']],['crates/core/src/hub.rs','activate_portal',['oXStart']],['crates/core/src/hub.rs','scores_step',['oHighscores']]];
+// Title portal descendants are mapped through activate_portal's ordered
+// subtype table rather than object match arms, then resolve in Ending Animation End.
+const stateAdapters: [string,string,string[]][] = [['crates/core/src/opening.rs','begin_intro',['oIntro']],['crates/core/src/opening.rs','begin_title',['oTitle']],['crates/core/src/opening.rs','actor_step',['oPDummy3','oPDummy4']],['crates/core/src/hub.rs','activate_portal',['oXStart','oXScores','oXTutorial','oXTitle','oXEnd','oXShortcut5','oXShortcut9','oXShortcut13','oXSun','oXMoon','oXStars','oXChange','oXChange2']],['crates/core/src/hub.rs','scores_step',['oHighscores']]];
 for (const [module, fn, names] of stateAdapters) { const line = functionLine(sources.get(join(root, module))!, fn); for (const name of names) add(name, { module, line, kind:'manually_reviewed_state_adapter' }); }
 const objects = new Map<string, any>(index.objects.map((o: any) => [o.name, o]));
 function isa(name: string, parent: string): boolean { for (let i = 0; i < 453; i++) { if (name === parent) return true; if (!objects.has(name)) return false; name = objects.get(name).parent; } return false; }

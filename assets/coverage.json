@@ -8,9 +8,9 @@
     },
     "by_status": {
       "asset_only_unverified": 18,
-      "host_replacement_unverified": 120,
+      "host_replacement_unverified": 119,
       "no_direct_handler_found": 1,
-      "partial_handler_present": 295,
+      "partial_handler_present": 296,
       "partial_static_tile_adapter": 7,
       "source_abstraction": 12
     },
@@ -464,12 +464,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1334,
+          "line": 1342,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 1308,
+          "line": 1316,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -763,7 +763,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2400,
+          "line": 2406,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -836,7 +836,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2279,
+          "line": 2285,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -961,7 +961,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1651,
+          "line": 1682,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -1105,7 +1105,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1237,
+          "line": 1268,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -1191,7 +1191,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2278,
+          "line": 2284,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -1931,12 +1931,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1330,
-          "module": "crates/core/src/items/weapons.rs"
-        },
-        {
-          "kind": "explicit_object_match_arm",
-          "line": 1513,
+          "line": 1338,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -1946,12 +1941,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1522,
+          "line": 1529,
+          "module": "crates/core/src/items/weapons.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 1530,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 1307,
+          "line": 1315,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -1981,7 +1981,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2440,
+          "line": 2446,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -2057,7 +2057,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2378,
+          "line": 2384,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -2077,12 +2077,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2461,
+          "line": 2467,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1029,
+          "line": 1030,
           "module": "crates/core/src/player.rs"
         }
       ],
@@ -2168,7 +2168,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2378,
+          "line": 2384,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -2445,7 +2445,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2487,
+          "line": 2493,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -2970,7 +2970,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2364,
+          "line": 2370,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3198,7 +3198,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2425,
+          "line": 2431,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3223,7 +3223,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2425,
+          "line": 2431,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3267,7 +3267,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2425,
+          "line": 2431,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3704,7 +3704,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2350,
+          "line": 2356,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -4203,12 +4203,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1385,
+          "line": 1393,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 1309,
+          "line": 1317,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -5053,7 +5053,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 363,
+          "line": 404,
           "module": "crates/core/src/progression.rs"
         }
       ],
@@ -5342,12 +5342,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2248,
+          "line": 2254,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2435,
+          "line": 2441,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -5383,7 +5383,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 776,
+          "line": 777,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -5584,7 +5584,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2409,
+          "line": 2415,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -6110,7 +6110,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1828,
+          "line": 1829,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -6183,7 +6183,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1828,
+          "line": 1829,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -6476,12 +6476,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2247,
+          "line": 2253,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2324,
+          "line": 2330,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -6855,7 +6855,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1078,
+          "line": 1082,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -6890,12 +6890,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1463,
+          "line": 1471,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 1312,
+          "line": 1320,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -7240,7 +7240,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1079,
+          "line": 1083,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -7294,17 +7294,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1463,
+          "line": 1471,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1567,
+          "line": 1575,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 1315,
+          "line": 1323,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -7335,12 +7335,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1463,
+          "line": 1471,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 1313,
+          "line": 1321,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -7696,7 +7696,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 316,
+          "line": 357,
           "module": "crates/core/src/progression.rs"
         }
       ],
@@ -8128,12 +8128,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2170,
+          "line": 2176,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2269,
+          "line": 2275,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8166,12 +8166,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2225,
+          "line": 2231,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2270,
+          "line": 2276,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8239,7 +8239,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2271,
+          "line": 2277,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8350,7 +8350,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2426,
+          "line": 2432,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8654,7 +8654,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1075,
+          "line": 1079,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -8713,7 +8713,7 @@
       "handlers": [
         {
           "kind": "player_tick_replacement",
-          "line": 1018,
+          "line": 1019,
           "module": "crates/core/src/player.rs"
         },
         {
@@ -8756,7 +8756,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2351,
+          "line": 2357,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8781,7 +8781,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2436,
+          "line": 2442,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -9005,22 +9005,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1408,
+          "line": 1416,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1513,
+          "line": 1521,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1568,
+          "line": 1576,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 1310,
+          "line": 1318,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -9140,7 +9140,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1569,
+          "line": 1600,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -9157,7 +9157,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1576,
+          "line": 1607,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -9871,7 +9871,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1077,
+          "line": 1081,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -10188,7 +10188,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1076,
+          "line": 1080,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -10218,12 +10218,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1568,
+          "line": 1576,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 1316,
+          "line": 1324,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -10253,12 +10253,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1568,
+          "line": 1576,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 1317,
+          "line": 1325,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -10327,7 +10327,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2425,
+          "line": 2431,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -10465,17 +10465,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1463,
+          "line": 1471,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1568,
+          "line": 1576,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 1314,
+          "line": 1322,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -11520,7 +11520,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1781,
+          "line": 1812,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -11834,7 +11834,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1830,
+          "line": 1831,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -12110,7 +12110,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2351,
+          "line": 2357,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -12197,7 +12197,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 807,
+          "line": 808,
           "module": "crates/core/src/player.rs"
         }
       ],
@@ -12254,12 +12254,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2434,
+          "line": 2440,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 547,
+          "line": 588,
           "module": "crates/core/src/progression.rs"
         }
       ],
@@ -12611,7 +12611,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2446,
+          "line": 2452,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -12638,7 +12638,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2370,
+          "line": 2376,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -12755,22 +12755,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1438,
+          "line": 1446,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1527,
+          "line": 1535,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1559,
+          "line": 1567,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 1311,
+          "line": 1319,
           "module": "crates/core/src/items/weapons.rs"
         }
       ],
@@ -12829,7 +12829,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1080,
+          "line": 1084,
           "module": "crates/core/src/items/weapons.rs"
         },
         {
@@ -12953,8 +12953,8 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "explicit_object_match_arm",
-          "line": 921,
+          "kind": "manually_reviewed_state_adapter",
+          "line": 870,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -12970,8 +12970,8 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "explicit_object_match_arm",
-          "line": 922,
+          "kind": "manually_reviewed_state_adapter",
+          "line": 870,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -12987,25 +12987,25 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "host_equivalent_requires_behavior_acceptance",
-          "line": 1,
-          "module": "crates/app/src/host.rs"
+          "kind": "manually_reviewed_state_adapter",
+          "line": 870,
+          "module": "crates/core/src/hub.rs"
         }
       ],
-      "note": "Original object is not directly dispatched; host editor/menu/profile behavior needs separate acceptance.",
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oXEnd",
       "parity_verified": false,
       "source_events": [],
       "source_id": 581,
       "source_path": "Objects/Other/Title/oXEnd.xml",
-      "status": "host_replacement_unverified"
+      "status": "partial_handler_present"
     },
     {
       "category": "gameplay",
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 711,
+          "line": 752,
           "module": "crates/core/src/progression.rs"
         }
       ],
@@ -13045,8 +13045,8 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "explicit_object_match_arm",
-          "line": 919,
+          "kind": "manually_reviewed_state_adapter",
+          "line": 870,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13062,8 +13062,8 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "explicit_object_match_arm",
-          "line": 912,
+          "kind": "manually_reviewed_state_adapter",
+          "line": 870,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13079,8 +13079,8 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "explicit_object_match_arm",
-          "line": 917,
+          "kind": "manually_reviewed_state_adapter",
+          "line": 870,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13096,8 +13096,8 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "explicit_object_match_arm",
-          "line": 915,
+          "kind": "manually_reviewed_state_adapter",
+          "line": 870,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13113,8 +13113,8 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "explicit_object_match_arm",
-          "line": 916,
+          "kind": "manually_reviewed_state_adapter",
+          "line": 870,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13130,8 +13130,8 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "explicit_object_match_arm",
-          "line": 920,
+          "kind": "manually_reviewed_state_adapter",
+          "line": 870,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13148,7 +13148,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 869,
+          "line": 870,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13164,8 +13164,8 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "explicit_object_match_arm",
-          "line": 918,
+          "kind": "manually_reviewed_state_adapter",
+          "line": 870,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13181,8 +13181,8 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "explicit_object_match_arm",
-          "line": 914,
+          "kind": "manually_reviewed_state_adapter",
+          "line": 870,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13198,8 +13198,8 @@
       "category": "ui",
       "handlers": [
         {
-          "kind": "explicit_object_match_arm",
-          "line": 913,
+          "kind": "manually_reviewed_state_adapter",
+          "line": 870,
           "module": "crates/core/src/hub.rs"
         }
       ],
