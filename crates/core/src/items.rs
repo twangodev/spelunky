@@ -3371,7 +3371,7 @@ mod tests {
     }
 
     #[test]
-    fn game_step_duck_dropped_weapon_restores_after_reserved_bomb_cycle() {
+    fn game_step_duck_dropped_weapon_clears_stash_before_reserved_bomb_cycle() {
         let mut game = game();
         game.world = World::new(30, 20, Area::Mines, 1);
         game.world.name = "rLevel".into();
@@ -3398,7 +3398,10 @@ mod tests {
         assert_eq!(game.player.state, PlayerState::Ducking);
         assert_eq!(game.player.held, None);
         assert!(!game.world.entity(machete).unwrap().held);
-        assert_eq!(game.player.pickup_item_type, "Machete");
+        assert!(
+            game.player.pickup_item_type.is_empty(),
+            "scrUseItem clears pickupItemType after a specialized drop"
+        );
 
         game.step(&InputFrame {
             cycle_pressed: true,
@@ -3406,20 +3409,22 @@ mod tests {
         });
         let bomb = game.player.held.unwrap();
         assert_eq!(game.world.entity(bomb).unwrap().object, "oBomb");
-        assert_eq!(game.player.pickup_item_type, "Machete");
+        assert!(game.player.pickup_item_type.is_empty());
         assert_eq!(game.player.bombs, 0.0);
 
         game.step(&InputFrame {
             cycle_pressed: true,
             ..InputFrame::default()
         });
-        let restored = game.player.held.unwrap();
-        assert_ne!(restored, machete, "scrHoldItem creates a fresh instance");
-        assert_eq!(game.world.entity(restored).unwrap().object, "oMachete");
-        assert!(game.world.entity(restored).unwrap().held);
-        assert_eq!(game.player.pickup_item_type, "Machete");
+        assert!(game.player.held.is_none());
+        assert!(game.player.pickup_item_type.is_empty());
         assert_eq!(game.player.bombs, 1.0);
         assert!(game.world.entity(bomb).is_none_or(|entity| !entity.held));
+        assert!(
+            game.world
+                .entity(machete)
+                .is_some_and(|entity| entity.alive && !entity.held)
+        );
     }
 
     #[test]
