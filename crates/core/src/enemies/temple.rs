@@ -3077,6 +3077,46 @@ mod tests {
         assert!(g.world.entities.iter().any(|e| e.object == "oSmokePuff"));
     }
     #[test]
+    fn actual_step_magma_enemy_uses_its_local_collision_after_reverse_pair_dispatch() {
+        // oMagma alone declares Collision with oEnemy. Collision pairs visit
+        // the lower resource ID first, so the Tomb Lord side is empty before
+        // the reverse Magma callback applies its damage and burn.
+        assert_eq!(
+            crate::dispatcher::collision_owner("oTombLord", "oMagma"),
+            None
+        );
+        assert_eq!(
+            crate::dispatcher::collision_owner("oMagma", "oTombLord"),
+            Some("oMagma")
+        );
+        let mut g = room();
+        let enemy = g.spawn("oTombLord", Vec2::new(80.0, 128.0));
+        let magma = g.spawn("oMagma", Vec2::new(96.0, 140.0));
+        assert_eq!(g.world.entity(enemy).unwrap().health, 20);
+        assert_eq!(g.world.entity(magma).unwrap().health, 200);
+
+        g.step(&crate::InputFrame::default());
+
+        let enemy = g.world.entity(enemy).unwrap();
+        assert_eq!(enemy.health, 18, "source Magma deals two damage");
+        assert_eq!(enemy.state, 98, "source Magma forces the stun state");
+        assert_eq!(enemy.timer, 50);
+        assert_eq!(enemy.data.get("burning"), Some(&100.0));
+        assert_eq!(enemy.vel.y, -4.0);
+        assert_eq!(
+            enemy.vel.x,
+            if g.world.entity(magma).unwrap().pos.x < enemy.pos.x {
+                -3.0
+            } else {
+                3.0
+            }
+        );
+        assert!(
+            g.world.entity(magma).is_some(),
+            "Magma survives enemy contact"
+        );
+    }
+    #[test]
     fn hawk_sight_uses_source_six_tick_counter_and_moving_instances() {
         // oHawkman Step decrements a positive sightCounter, else creates and sets 5.
         let mut g = room();
