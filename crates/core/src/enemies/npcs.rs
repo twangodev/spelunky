@@ -322,17 +322,9 @@ fn damsel_melee(game: &mut Game, damsel: &mut Entity, attack: &Entity) {
 }
 
 fn collect_scarab(game: &mut Game, e: &mut Entity) {
-    // Literal source Create values; unsupported-area fallback is unchanged.
-    let value = e
-        .data
-        .get("value")
-        .copied()
-        .unwrap_or(match game.world.area {
-            Area::Mines => 4000.0,
-            Area::Jungle => 8000.0,
-            _ => 12000.0,
-        })
-        .max(0.0) as u32;
+    // oScarab Create assigns a value only in Mines, Jungle, and Temple. The
+    // inherited oEnemy Create leaves Ice's unassigned instance value at zero.
+    let value = e.value("value").max(0.0) as u32;
     *game.data.entry("collect".into()).or_default() += f64::from(value);
     let counter = game.data.entry("collectCounter".into()).or_default();
     *counter = (*counter + 20.0).min(100.0);
@@ -2959,6 +2951,29 @@ mod tests {
             assert_eq!(g.data["scarabs"], 1.0);
         }
     }
+
+    #[test]
+    fn actual_step_ice_scarab_keeps_unassigned_source_value_at_zero() {
+        let mut game = actual_room();
+        game.world.area = Area::Ice;
+        for x in 0..30 {
+            game.world.set_tile(x, 9, "oBlock");
+        }
+        game.player.pos = Vec2::new(104.0, 128.0);
+        let id = game.spawn("oScarab", Vec2::new(96.0, 120.0));
+        assert_eq!(game.world.entity(id).unwrap().value("value"), 0.0);
+
+        game.step(&InputFrame::default());
+
+        assert!(game.world.entity(id).is_none());
+        assert_eq!(game.data["collect"], 0.0);
+        assert_eq!(game.data["collectCounter"], 20.0);
+        assert_eq!(game.data["scarabs"], 1.0);
+        assert!(game.events.iter().any(|event| matches!(event,
+            GameEvent::Collected { object, value: 0 } if object == "oScarab"
+        )));
+    }
+
     #[test]
     fn actual_step_scarab_queue_adds_to_existing_collection_and_caps_delay() {
         let mut g = actual_room();
