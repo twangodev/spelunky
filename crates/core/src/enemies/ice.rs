@@ -2723,18 +2723,22 @@ mod tests {
             let damsel = g.world.spawn("oDamsel", Vec2::new(136.0, 136.0));
             g.world.spawn("oExit", Vec2::new(128.0, 128.0));
             // Let the normal rescue enter its visible exit frames before the
-            // incoming projectile arrives. No NPC flags or state are injected.
+            // incoming projectile arrives. The inherited oItem Step continues
+            // the source gravity while she exits, so aim at her live position.
             for _ in 0..7 {
                 g.step(&crate::InputFrame::default());
             }
-            let projectile = g.world.spawn(object, Vec2::new(138.0, 136.0));
+            let target_pos = g.world.entity(damsel).unwrap().pos;
+            let projectile = g
+                .world
+                .spawn(object, Vec2::new(target_pos.x + 2.0, target_pos.y));
             assert!(
                 g.world
                     .entity(projectile)
                     .unwrap()
                     .sprite_bounds()
                     .intersects(g.world.entity(damsel).unwrap().sprite_bounds()),
-                "{object} must overlap the exit sprite"
+                "{object} must overlap the rescued Damsel"
             );
             g.step(&crate::InputFrame::default());
             let target = g.world.entity(damsel).unwrap();

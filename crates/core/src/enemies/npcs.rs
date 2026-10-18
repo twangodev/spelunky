@@ -504,6 +504,15 @@ fn damsel_death_anger(game: &mut Game, damsel: &Entity) {
 }
 
 fn damsel(game: &mut Game, e: &mut Entity) {
+    // Damsel's Step starts with action_inherited, so oItem runs on every tick
+    // before any child status handling, including the saved EXIT state.
+    let inherited_active = crate::items::item_body_active(game, e);
+    crate::items::tick_inherited_ball_body(game, e);
+    if inherited_active && e.held && game.player.held.is_none() {
+        // Parent clears held after attachment; movement resumes next Step.
+        e.held = false;
+    }
+
     if e.state == 4 {
         if e.value("hit_cooldown") > 0.0 {
             e.data
@@ -514,15 +523,9 @@ fn damsel(game: &mut Game, e: &mut Entity) {
         damsel_death_anger(game, e);
         return;
     }
-    // The inherited oItem Step owns held attachment, movement, bouncing,
+    // The inherited oItem Step above owns held attachment, movement, bouncing,
     // lava sinking, economics and its explicit impact queries. Only that
     // parent event is viewport-gated; child Damsel events continue outside it.
-    let inherited_active = crate::items::item_body_active(game, e);
-    crate::items::tick_inherited_ball_body(game, e);
-    if inherited_active && e.held && game.player.held.is_none() {
-        // Parent clears held after attachment; movement resumes next Step.
-        e.held = false;
-    }
     let body = e.bounds();
     let grounded = super::solid_mask(
         &game.world,

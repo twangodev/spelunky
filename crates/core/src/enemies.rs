@@ -3416,6 +3416,25 @@ mod tests {
     }
 
     #[test]
+    fn actual_step_damsel_exit_continues_inherited_item_gravity() {
+        let mut game = psychic_room();
+        let damsel = game.world.spawn("oDamsel", Vec2::new(136.0, 136.0));
+        game.world.spawn("oExit", Vec2::new(128.0, 128.0));
+
+        // Natural exit contact enters the saved state and zeroes velocity.
+        game.step(&InputFrame::default());
+        let saved = game.world.entity(damsel).unwrap();
+        assert_eq!(saved.state, 4);
+        assert_eq!(saved.vel.y, 0.0);
+
+        // oDamsel's source Step still runs inherited oItem on the next tick,
+        // even though rescue set active=false. With no floor below, gravity
+        // must therefore be applied once by the parent Step.
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(damsel).unwrap().vel.y, 0.6);
+    }
+
+    #[test]
     fn actual_step_psychic_wave_preserves_alien_boss_and_invincible_enemy() {
         for object in ["oAlienBoss", "oTombLord"] {
             let mut game = psychic_room();
