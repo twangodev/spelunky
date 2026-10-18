@@ -1,6 +1,6 @@
 //! oGame's market branch executes within with oPlayer1, not from oGame's mask.
 use super::*;
-use crate::RulesPreset;
+use crate::{Rect, RulesPreset};
 fn fixture(rules: RulesPreset, legacy: bool, player_x: f64, alarm: i32) -> (Game, u64) {
     let mut g = if legacy {
         Game::legacy_shell(123, rules)
