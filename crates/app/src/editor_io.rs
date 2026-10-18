@@ -1,4 +1,4 @@
-//! Browser level import/export, kept separate from platform-independent editing.
+//! User-selected text import/export for native and browser hosts.
 
 /// Explicit user-requested export; native exports never overwrite an existing file.
 pub fn export(name: &str, text: &str) -> Result<(), String> {
@@ -24,6 +24,25 @@ pub fn export(name: &str, text: &str) -> Result<(), String> {
         file.write_all(text.as_bytes())
             .map_err(|error| format!("Cannot write {filename}: {error}"))?;
         Ok(())
+    }
+}
+
+/// Write the Classic stats report to the source-compatible `stats.txt` path.
+/// Native shutdown uses this directly; the Web build exports only by gesture.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn write_classic_stats_file(text: &str) -> Result<(), String> {
+    std::fs::write("stats.txt", text).map_err(|error| format!("Cannot write stats.txt: {error}"))
+}
+
+/// Explicit report export shared by the Extended Stats screen on both hosts.
+pub fn export_classic_stats_report(text: &str) -> Result<(), String> {
+    #[cfg(target_arch = "wasm32")]
+    {
+        download("stats.txt", text)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        write_classic_stats_file(text)
     }
 }
 
@@ -126,6 +145,23 @@ mod tests {
 pub fn choose_level(
     callback: impl FnOnce(Result<(String, String), String>) + 'static,
 ) -> Result<(), String> {
+    choose_text_file(".lvl,text/plain", "Level", 4 * 1024 * 1024, callback)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn choose_stats(
+    callback: impl FnOnce(Result<(String, String), String>) + 'static,
+) -> Result<(), String> {
+    choose_text_file(".txt,text/plain", "Stats report", 1024 * 1024, callback)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn choose_text_file(
+    accept: &'static str,
+    description: &'static str,
+    max_bytes: usize,
+    callback: impl FnOnce(Result<(String, String), String>) + 'static,
+) -> Result<(), String> {
     use wasm_bindgen::{JsCast, closure::Closure};
     let document = web_sys::window()
         .and_then(|window| window.document())
@@ -136,7 +172,8 @@ pub fn choose_level(
         .dyn_into()
         .map_err(|_| "Cannot create file picker")?;
     input.set_type("file");
-    input.set_accept(".lvl,text/plain");
+    input.set_accept(accept);
+    let description = description.to_owned();
     let picker = input.clone();
     let handler = Closure::once_into_js(move |_event: web_sys::Event| {
         // Break the DOM callback reference as soon as selection completes.
@@ -146,18 +183,24 @@ pub fn choose_level(
         picker.set_onchange(None);
         let file = picker.files().and_then(|files| files.get(0));
         let Some(file) = file else {
-            callback(Err("No level selected".into()));
+            callback(Err("No file selected".into()));
             return;
         };
-        if file.size() > 4.0 * 1024.0 * 1024.0 {
-            callback(Err("Level exceeds the 4 MiB import limit".into()));
+        if file.size() > max_bytes as f64 {
+            callback(Err(format!(
+                "{description} exceeds the {} KiB import limit",
+                max_bytes / 1024
+            )));
             return;
         }
         wasm_bindgen_futures::spawn_local(async move {
             let result = wasm_bindgen_futures::JsFuture::from(file.text())
                 .await
-                .map_err(|error| format!("Cannot read level: {error:?}"))
-                .and_then(|text| text.as_string().ok_or("Level is not text".into()))
+                .map_err(|error| format!("Cannot read {description}: {error:?}"))
+                .and_then(|text| {
+                    text.as_string()
+                        .ok_or_else(|| format!("{description} is not text"))
+                })
                 .map(|text| (file.name(), text));
             callback(result);
         });

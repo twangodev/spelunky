@@ -129,6 +129,10 @@ pub struct SaveData {
     /// Original lifetime counters are independent of run records and unlocks.
     #[serde(default)]
     pub lifetime_stats: spelunky_core::statistics::LifetimeStats,
+    /// A Classic `stats.txt` report can be imported once; remember the choice so
+    /// a later user action cannot replace newer Rust-session counters.
+    #[serde(default)]
+    pub classic_stats_imported: bool,
     /// Source minigame bests: mini1 = Sun survival seconds, mini2 = Moon archery
     /// hits, mini3 = Stars shopkeeper kills. Unknown keys remain compatible.
     #[serde(default)]
@@ -150,6 +154,7 @@ impl Default for SaveData {
             settings: Settings::default(),
             records: Vec::new(),
             lifetime_stats: Default::default(),
+            classic_stats_imported: false,
             challenge_records: BTreeMap::new(),
             tunnel_remaining: BTreeMap::new(),
             unlocks: BTreeSet::new(),
@@ -159,6 +164,18 @@ impl Default for SaveData {
 }
 
 impl SaveData {
+    /// Apply one Classic `stats.txt` import, replacing rather than adding the
+    /// source lifetime counters.
+    pub fn import_classic_stats_report(&mut self, report: &str) -> Result<(), String> {
+        if self.classic_stats_imported {
+            return Err("Classic stats have already been imported".into());
+        }
+        let stats = spelunky_core::statistics::LifetimeStats::from_classic_report(report)?;
+        self.lifetime_stats = stats;
+        self.classic_stats_imported = true;
+        Ok(())
+    }
+
     pub fn from_json(json: &str) -> Result<Self, String> {
         // Inspect the version before deserializing, so a future schema gets a
         // useful message even when its fields are incompatible with this one.
@@ -254,7 +271,23 @@ pub struct Store {
 
 impl Store {
     pub fn load() -> Self {
-        Self::from_read(read())
+        let stored = read();
+        #[cfg(not(target_arch = "wasm32"))]
+        let should_check_classic_stats = matches!(&stored, Ok(None));
+        #[cfg(not(target_arch = "wasm32"))]
+        let legacy = if should_check_classic_stats {
+            read_classic_stats_file()
+        } else {
+            Ok(None)
+        };
+        #[cfg(target_arch = "wasm32")]
+        let legacy: Result<Option<String>, String> = Ok(None);
+
+        let (mut store, imported) = Self::from_read_and_classic_stats(stored, legacy);
+        if imported {
+            let _ = store.save();
+        }
+        store
     }
 
     fn from_read(result: Result<Option<String>, String>) -> Self {
@@ -275,6 +308,36 @@ impl Store {
                 overwrite_blocked: true,
             },
         }
+    }
+
+    fn from_read_and_classic_stats(
+        stored: Result<Option<String>, String>,
+        legacy: Result<Option<String>, String>,
+    ) -> (Self, bool) {
+        let stored_is_missing = matches!(&stored, Ok(None));
+        let mut store = Self::from_read(stored);
+        if !stored_is_missing || store.overwrite_blocked {
+            return (store, false);
+        }
+        let Ok(Some(report)) = legacy else {
+            return (store, false);
+        };
+        match store.import_classic_stats(&report) {
+            Ok(()) => (store, true),
+            Err(_) => (store, false),
+        }
+    }
+
+    /// Imports a Classic report without adding it to the current counters.
+    /// The one-time marker prevents a later import from erasing Rust progress.
+    pub fn import_classic_stats(&mut self, report: &str) -> Result<(), String> {
+        if self.overwrite_blocked {
+            return Err(self
+                .warning
+                .clone()
+                .unwrap_or_else(|| "Save overwrite blocked".into()));
+        }
+        self.data.import_classic_stats_report(report)
     }
 
     pub fn save(&mut self) -> Result<(), String> {
@@ -304,6 +367,15 @@ impl Store {
         self.data = SaveData::default();
         self.overwrite_blocked = false;
         self.save()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_classic_stats_file() -> Result<Option<String>, String> {
+    match std::fs::read_to_string("stats.txt") {
+        Ok(report) => Ok(Some(report)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("Cannot read classic stats.txt: {error}")),
     }
 }
 
@@ -884,6 +956,43 @@ mod tests {
         let partial = SaveData::from_json(r#"{"lifetime_stats":{"total_crates":17}}"#).unwrap();
         assert_eq!(partial.lifetime_stats.total_crates, 17);
         assert_eq!(partial.lifetime_stats.level_deaths, [0; 16]);
+    }
+
+    #[test]
+    fn classic_stats_migrate_only_without_a_rust_save_and_then_remain_one_time() {
+        let mut legacy_stats = spelunky_core::statistics::LifetimeStats::default();
+        legacy_stats.total_crates = 41;
+        legacy_stats.enemy_kills[8] = 3;
+        legacy_stats.total_monkey_kills = 2;
+        let legacy_report = legacy_stats.to_classic_report();
+
+        let (first, imported) =
+            Store::from_read_and_classic_stats(Ok(None), Ok(Some(legacy_report.clone())));
+        assert!(imported);
+        assert!(first.data.classic_stats_imported);
+        assert_eq!(first.data.lifetime_stats, legacy_stats);
+        let saved_json = first.data.to_json().unwrap();
+        assert!(saved_json.contains("classic_stats_imported"));
+        let newer_legacy = spelunky_core::statistics::LifetimeStats::default().to_classic_report();
+        let (reopened, imported_again) =
+            Store::from_read_and_classic_stats(Ok(Some(saved_json)), Ok(Some(newer_legacy)));
+        assert!(!imported_again);
+        assert_eq!(reopened.data.lifetime_stats, legacy_stats);
+
+        let mut reopened = reopened;
+        assert!(reopened.import_classic_stats(&legacy_report).is_err());
+        assert_eq!(reopened.data.lifetime_stats, legacy_stats);
+    }
+
+    #[test]
+    fn malformed_classic_stats_do_not_mark_or_replace_a_fresh_save() {
+        let (mut store, imported) =
+            Store::from_read_and_classic_stats(Ok(None), Ok(Some("not stats.txt".into())));
+        assert!(!imported);
+        assert!(!store.data.classic_stats_imported);
+        assert_eq!(store.data.lifetime_stats.total_crates, 0);
+        assert!(store.import_classic_stats("not stats.txt").is_err());
+        assert!(!store.data.classic_stats_imported);
     }
 
     #[test]

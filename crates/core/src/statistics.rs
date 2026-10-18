@@ -1,6 +1,7 @@
 //! Original extended statistics. Eligibility and timing remain at source producers.
 use crate::Game;
 use serde::{Deserialize, Serialize};
+use std::fmt::Write as _;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -162,6 +163,241 @@ impl LifetimeStats {
             .iter()
             .fold(self.total_monkey_kills, |sum, n| sum.saturating_add(*n))
     }
+
+    /// Parse the fixed-order text report written by Classic's scrWriteStats.
+    ///
+    /// The source reader treats each table row's position as its identity,
+    /// because rows with a zero count are printed as `???`. We preserve that
+    /// behavior and validate the report's headings, row counts, and integers.
+    pub fn from_classic_report(report: &str) -> Result<Self, String> {
+        let lines: Vec<_> = report.lines().collect();
+        if lines.get(1).map(|line| line.trim()) != Some("|  SPELUNKY EXTENDED STATS  |") {
+            return Err("Not a Classic extended stats report".into());
+        }
+
+        let mut stats = Self {
+            total_crates: parse_source_scalar(&lines, "CRATES OPENED:")?,
+            total_chests: parse_source_scalar(&lines, "CHESTS OPENED:")?,
+            idols_grabbed: parse_source_scalar(&lines, "IDOLS GRABBED:")?,
+            idols_converted: parse_source_scalar(&lines, "IDOLS CONVERTED:")?,
+            damsels_grabbed: parse_source_scalar(&lines, "DAMSELS GRABBED:")?,
+            kisses_bought: parse_source_scalar(&lines, "KISSES BOUGHT:")?,
+            damsels_bought: parse_source_scalar(&lines, "DAMSELS BOUGHT:")?,
+            damsels_saved_total: parse_source_scalar(&lines, "DAMSELS SAVED:")?,
+            damsels_killed_total: parse_source_scalar(&lines, "DAMSELS KILLED:")?,
+            items_bought: parse_source_scalar(&lines, "ITEMS BOUGHT:")?,
+            items_stolen: parse_source_scalar(&lines, "ITEMS STOLEN:")?,
+            dice_games_played: parse_source_scalar(&lines, "DICE GAMES PLAYED:")?,
+            dice_games_won: parse_source_scalar(&lines, "DICE GAMES WON:")?,
+            dice_games_lost: parse_source_scalar(&lines, "DICE GAMES LOST:")?,
+            ..Self::default()
+        };
+        stats.level_deaths = parse_source_table(&lines, "LEVEL        DEATHS", 16)?
+            .try_into()
+            .map_err(|_| "Classic level-death table has the wrong size")?;
+        stats.enemy_deaths = parse_source_table(&lines, "ENEMY        DEATHS", 24)?
+            .try_into()
+            .map_err(|_| "Classic enemy-death table has the wrong size")?;
+        stats.misc_deaths = parse_source_table(&lines, "MISC         DEATHS", 12)?
+            .try_into()
+            .map_err(|_| "Classic miscellaneous-death table has the wrong size")?;
+        let kills = parse_source_table(&lines, "ENEMY        KILLS", 23)?;
+        stats.enemy_kills[..9].copy_from_slice(&kills[..9]);
+        stats.total_monkey_kills = kills[9];
+        stats.enemy_kills[9..].copy_from_slice(&kills[10..]);
+        Ok(stats)
+    }
+
+    /// Recreate the readable `stats.txt` report produced by scrWriteStats.
+    pub fn to_classic_report(&self) -> String {
+        const ENEMIES: [&str; 24] = [
+            " BAT        | ",
+            " SNAKE      | ",
+            " SPIDER     | ",
+            " G. SPIDER  | ",
+            " CAVEMAN    | ",
+            " SKELETON   | ",
+            " ZOMBIE     | ",
+            " VAMPIRE    | ",
+            " FROG       | ",
+            " FIRE FROG  | ",
+            " MANTRAP    | ",
+            " PIRANHA    | ",
+            " MEGAMOUTH  | ",
+            " YETI       | ",
+            " YETI KING  | ",
+            " ALIEN      | ",
+            " UFO        | ",
+            " ALIEN BOSS | ",
+            " HAWKMAN    | ",
+            " SHOPKEEPER | ",
+            " TOMB LORD  | ",
+            " MAGMA MAN  | ",
+            " OLMEC      | ",
+            " GHOST      | ",
+        ];
+        const MISC: [&str; 12] = [
+            " ROCK       | ",
+            " EXPLOSION  | ",
+            " CRUSHED    | ",
+            " LONG FALL  | ",
+            " SPIKES     | ",
+            " BOULDER    | ",
+            " ARROW TRAP | ",
+            " SPEAR TRAP | ",
+            " SMASH TRAP | ",
+            " CEILING T. | ",
+            " PIT        | ",
+            " LAVA       | ",
+        ];
+        const KILLERS: [&str; 22] = [
+            " BAT        | ",
+            " SNAKE      | ",
+            " SPIDER     | ",
+            " G. SPIDER  | ",
+            " CAVEMAN    | ",
+            " SKELETON   | ",
+            " ZOMBIE     | ",
+            " VAMPIRE    | ",
+            " FROG       | ",
+            " FIRE FROG  | ",
+            " MANTRAP    | ",
+            " PIRANHA    | ",
+            " MEGAMOUTH  | ",
+            " YETI       | ",
+            " YETI KING  | ",
+            " ALIEN      | ",
+            " UFO        | ",
+            " ALIEN BOSS | ",
+            " HAWKMAN    | ",
+            " SHOPKEEPER | ",
+            " TOMB LORD  | ",
+            " OLMEC      | ",
+        ];
+
+        let mut report = String::new();
+        report.push_str(
+            "+---------------------------+\n\
+             |  SPELUNKY EXTENDED STATS  |\n\
+             +---------------------------+\n\n",
+        );
+        for (label, value) in [
+            ("CRATES OPENED:      ", self.total_crates),
+            ("CHESTS OPENED:      ", self.total_chests),
+            ("IDOLS GRABBED:      ", self.idols_grabbed),
+            ("IDOLS CONVERTED:    ", self.idols_converted),
+            ("DAMSELS GRABBED:    ", self.damsels_grabbed),
+            ("KISSES BOUGHT:      ", self.kisses_bought),
+            ("DAMSELS BOUGHT:     ", self.damsels_bought),
+            ("DAMSELS SAVED:      ", self.damsels_saved_total),
+            ("DAMSELS KILLED:     ", self.damsels_killed_total),
+            ("ITEMS BOUGHT:       ", self.items_bought),
+            ("ITEMS STOLEN:       ", self.items_stolen),
+            ("DICE GAMES PLAYED:  ", self.dice_games_played),
+            ("DICE GAMES WON:     ", self.dice_games_won),
+            ("DICE GAMES LOST:    ", self.dice_games_lost),
+        ] {
+            let _ = writeln!(report, "{label}{value}");
+            if matches!(
+                label,
+                "CHESTS OPENED:      "
+                    | "IDOLS CONVERTED:    "
+                    | "DAMSELS KILLED:     "
+                    | "ITEMS STOLEN:       "
+            ) {
+                report.push('\n');
+            }
+        }
+        report.push('\n');
+
+        report.push_str("LEVEL        DEATHS\n------------+------------\n");
+        for (index, value) in self.level_deaths.iter().enumerate() {
+            let _ = writeln!(report, " {:<11}| {value}", index + 1);
+        }
+        report.push_str("------------+------------\n");
+        let level_deaths = self
+            .level_deaths
+            .iter()
+            .fold(0_u64, |sum, n| sum.saturating_add(*n));
+        let _ = writeln!(report, " TOTAL      | {level_deaths}\n");
+
+        write_classic_table(
+            &mut report,
+            "ENEMY        DEATHS",
+            &ENEMIES,
+            &self.enemy_deaths,
+        );
+        write_classic_table(&mut report, "MISC         DEATHS", &MISC, &self.misc_deaths);
+
+        report.push_str("ENEMY        KILLS\n------------+------------\n");
+        let mut total_kills = 0_u64;
+        for (index, (label, value)) in KILLERS.iter().zip(self.enemy_kills.iter()).enumerate() {
+            let label = if *value == 0 { " ???        | " } else { label };
+            let _ = writeln!(report, "{label}{value}");
+            total_kills = total_kills.saturating_add(*value);
+            if index == 8 {
+                let monkey_label = if self.total_monkey_kills == 0 {
+                    " ???        | "
+                } else {
+                    " MONKEY     | "
+                };
+                let _ = writeln!(report, "{monkey_label}{}", self.total_monkey_kills);
+                total_kills = total_kills.saturating_add(self.total_monkey_kills);
+            }
+        }
+        report.push_str("------------+------------\n");
+        let _ = writeln!(report, " TOTAL      | {total_kills}");
+        report
+    }
+}
+
+fn parse_source_scalar(lines: &[&str], label: &str) -> Result<u64, String> {
+    let line = lines
+        .iter()
+        .find(|line| line.starts_with(label))
+        .ok_or_else(|| format!("Classic stats report is missing {label}"))?;
+    parse_source_count(line[label.len()..].trim(), label)
+}
+
+fn parse_source_table(lines: &[&str], heading: &str, count: usize) -> Result<Vec<u64>, String> {
+    let heading_index = lines
+        .iter()
+        .position(|line| *line == heading)
+        .ok_or_else(|| format!("Classic stats report is missing {heading} table"))?;
+    if lines.get(heading_index + 1) != Some(&"------------+------------") {
+        return Err(format!("Classic {heading} table has an invalid divider"));
+    }
+    (0..count)
+        .map(|index| {
+            let line = lines
+                .get(heading_index + 2 + index)
+                .ok_or_else(|| format!("Classic {heading} table is truncated"))?;
+            let (_, value) = line
+                .split_once('|')
+                .ok_or_else(|| format!("Classic {heading} row {} is invalid", index + 1))?;
+            parse_source_count(value.trim(), heading)
+        })
+        .collect()
+}
+
+fn parse_source_count(value: &str, label: &str) -> Result<u64, String> {
+    value
+        .parse::<u64>()
+        .map_err(|_| format!("Classic stats value for {label} is not an unsigned integer"))
+}
+
+fn write_classic_table<const N: usize>(
+    report: &mut String,
+    heading: &str,
+    labels: &[&str; N],
+    counts: &[u64; N],
+) {
+    let _ = writeln!(report, "{heading}\n------------+------------");
+    for (label, value) in labels.iter().zip(counts) {
+        let label = if *value == 0 { " ???        | " } else { label };
+        let _ = writeln!(report, "{label}{value}");
+    }
+    report.push('\n');
 }
 
 /// Source isRealLevel is a room-resource check. World.name is user-facing in
@@ -199,6 +435,138 @@ mod tests {
                 .unwrap(),
             partial
         );
+    }
+
+    fn source_report_fixture() -> String {
+        let mut report = String::from(
+            "+---------------------------+\n\
+             |  SPELUNKY EXTENDED STATS  |\n\
+             +---------------------------+\n\n\
+             CRATES OPENED:      7\n\
+             CHESTS OPENED:      8\n\
+             \n\
+             IDOLS GRABBED:      9\n\
+             IDOLS CONVERTED:    10\n\
+             \n\
+             DAMSELS GRABBED:    11\n\
+             KISSES BOUGHT:      12\n\
+             DAMSELS BOUGHT:     13\n\
+             DAMSELS SAVED:      14\n\
+             DAMSELS KILLED:     15\n\
+             \n\
+             ITEMS BOUGHT:       16\n\
+             ITEMS STOLEN:       17\n\
+             \n\
+             DICE GAMES PLAYED:  18\n\
+             DICE GAMES WON:     19\n\
+             DICE GAMES LOST:    20\n\
+             \n\
+             LEVEL        DEATHS\n\
+             ------------+------------\n",
+        );
+        for index in 0..16 {
+            let _ = writeln!(report, " {:<11}| {}", index + 1, u64::from(index == 0));
+        }
+        report.push_str("------------+------------\n TOTAL      | 1\n\nENEMY        DEATHS\n------------+------------\n");
+        for index in 0..24 {
+            let value = u64::from(index == 23);
+            let label = if value == 0 {
+                " ???        | "
+            } else {
+                " GHOST      | "
+            };
+            let _ = writeln!(report, "{label}{value}");
+        }
+        report.push_str("\nMISC         DEATHS\n------------+------------\n");
+        for index in 0..12 {
+            let value = u64::from(index == 11);
+            let label = if value == 0 {
+                " ???        | "
+            } else {
+                " LAVA       | "
+            };
+            let _ = writeln!(report, "{label}{value}");
+        }
+        report.push_str("\nENEMY        KILLS\n------------+------------\n");
+        for index in 0..22 {
+            let value = u64::from(index == 21);
+            let label = if value == 0 {
+                " ???        | "
+            } else {
+                " OLMEC      | "
+            };
+            let _ = writeln!(report, "{label}{value}");
+            if index == 8 {
+                report.push_str(" MONKEY     | 2\n");
+            }
+        }
+        report.push_str("------------+------------\n TOTAL      | 3\n");
+        report
+    }
+
+    #[test]
+    fn imports_actual_classic_report_order_including_zero_rows_and_monkey_row() {
+        let stats = LifetimeStats::from_classic_report(&source_report_fixture()).unwrap();
+
+        assert_eq!(stats.total_crates, 7);
+        assert_eq!(stats.dice_games_lost, 20);
+        assert_eq!(stats.level_deaths[0], 1);
+        assert_eq!(stats.enemy_deaths[23], 1);
+        assert_eq!(stats.misc_deaths[11], 1);
+        assert_eq!(stats.enemy_kills[8], 0);
+        assert_eq!(stats.total_monkey_kills, 2);
+        assert_eq!(stats.enemy_kills[21], 1);
+        assert_eq!(stats.total_enemy_kills(), 3);
+    }
+
+    #[test]
+    fn classic_report_formatter_matches_source_layout_and_round_trips() {
+        let mut expected = LifetimeStats {
+            total_crates: 7,
+            total_chests: 8,
+            idols_grabbed: 9,
+            idols_converted: 10,
+            damsels_grabbed: 11,
+            kisses_bought: 12,
+            damsels_bought: 13,
+            damsels_saved_total: 14,
+            damsels_killed_total: 15,
+            items_bought: 16,
+            items_stolen: 17,
+            dice_games_played: 18,
+            dice_games_won: 19,
+            dice_games_lost: 20,
+            ..LifetimeStats::default()
+        };
+        expected.level_deaths[0] = 1;
+        expected.enemy_deaths[23] = 1;
+        expected.misc_deaths[11] = 1;
+        expected.total_monkey_kills = 2;
+        expected.enemy_kills[21] = 1;
+
+        let report = expected.to_classic_report();
+        assert!(report.starts_with(
+            "+---------------------------+\n|  SPELUNKY EXTENDED STATS  |\n+---------------------------+\n\n"
+        ));
+        assert!(report.contains("CRATES OPENED:      7\nCHESTS OPENED:      8\n\n"));
+        assert!(report.contains(" 1          | 1\n"));
+        assert!(report.contains(" ???        | 0\n"));
+        assert!(report.contains(" MONKEY     | 2\n"));
+        assert!(report.ends_with("------------+------------\n TOTAL      | 3\n"));
+        assert_eq!(
+            LifetimeStats::from_classic_report(&report).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn classic_stats_parser_rejects_invalid_and_truncated_reports() {
+        assert!(LifetimeStats::from_classic_report("not a stats file").is_err());
+        let report = source_report_fixture();
+        let truncated = report.lines().take(35).collect::<Vec<_>>().join("\n");
+        assert!(LifetimeStats::from_classic_report(&truncated).is_err());
+        let invalid = report.replacen("CRATES OPENED:      7", "CRATES OPENED:      -7", 1);
+        assert!(LifetimeStats::from_classic_report(&invalid).is_err());
     }
     #[test]
     fn real_room_eligibility_excludes_noncampaign_contexts() {

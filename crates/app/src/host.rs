@@ -42,6 +42,7 @@ enum Screen {
     Custom,
     Shortcuts,
     Records,
+    Stats,
     About,
     Finished,
     Donation,
@@ -54,6 +55,10 @@ enum UserEvent {
     Imported(String, String),
     #[cfg(target_arch = "wasm32")]
     ImportError(String),
+    #[cfg(target_arch = "wasm32")]
+    StatsImported(String),
+    #[cfg(target_arch = "wasm32")]
+    StatsImportError(String),
 }
 
 /// Presentation history becomes usable only after a tick in the current room.
@@ -534,6 +539,12 @@ impl App {
     fn persist_exit_state(&mut self) {
         snapshot_exit_stats(self.game.as_ref(), &mut self.store.data);
         let _ = self.store.save();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Err(error) = crate::editor_io::write_classic_stats_file(
+            &self.store.data.lifetime_stats.to_classic_report(),
+        ) {
+            eprintln!("Cannot write Classic stats report: {error}");
+        }
     }
     fn settings_changed(&mut self) {
         let graphics_high = self.store.data.settings.graphics_high;
@@ -878,7 +889,8 @@ impl App {
             return;
         }
         let count = match self.screen {
-            Screen::Title => 10,
+            Screen::Title => 11,
+            Screen::Stats => 3,
             Screen::Shortcuts => self.shortcuts().len() + 1,
             Screen::Pause => {
                 if self.editor_play {
@@ -943,8 +955,14 @@ impl App {
                     self.screen(Screen::Settings)
                 }
                 7 => self.screen(Screen::Records),
-                8 => self.screen(Screen::About),
+                8 => self.screen(Screen::Stats),
+                9 => self.screen(Screen::About),
                 _ => self.fullscreen(),
+            },
+            Screen::Stats => match self.selection {
+                0 => self.import_classic_stats_dialog(),
+                1 => self.export_classic_stats_report(),
+                _ => self.screen(Screen::Title),
             },
             Screen::Pause => match self.selection {
                 0 => self.screen(Screen::Playing),
@@ -1045,6 +1063,48 @@ impl App {
                 self.recorded = false;
                 self.screen(Screen::Playing)
             }
+            Err(error) => self.toast(error),
+        }
+    }
+    fn import_classic_stats_dialog(&mut self) {
+        if self.store.data.classic_stats_imported {
+            self.toast("CLASSIC STATS HAVE ALREADY BEEN IMPORTED");
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let proxy = self.proxy.clone();
+            if let Err(error) = crate::editor_io::choose_stats(move |result| {
+                let event = match result {
+                    Ok((_name, text)) => UserEvent::StatsImported(text),
+                    Err(error) => UserEvent::StatsImportError(error),
+                };
+                let _ = proxy.send_event(event);
+            }) {
+                self.toast(error);
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.toast("DROP stats.txt ON THIS WINDOW TO IMPORT");
+    }
+    fn import_classic_stats(&mut self, report: &str) {
+        match apply_classic_stats_import(&mut self.store.data, self.game.as_mut(), report) {
+            Ok(()) => match self.store.save() {
+                Ok(()) => self.toast("IMPORTED CLASSIC LIFETIME STATS"),
+                Err(error) => self.toast(error),
+            },
+            Err(error) => self.toast(error),
+        }
+    }
+    fn export_classic_stats_report(&mut self) {
+        self.snapshot_lifetime_stats();
+        if let Err(error) = self.store.save() {
+            self.toast(error);
+            return;
+        }
+        let report = self.store.data.lifetime_stats.to_classic_report();
+        match crate::editor_io::export_classic_stats_report(&report) {
+            Ok(()) => self.toast("EXPORTED stats.txt"),
             Err(error) => self.toast(error),
         }
     }
@@ -1879,6 +1939,7 @@ impl App {
                         "SHORTCUTS",
                         "SETTINGS / CONTROLS",
                         "RECORDS",
+                        "EXTENDED STATS",
                         "ABOUT / LICENSE",
                         "FULLSCREEN",
                     ],
@@ -2108,6 +2169,95 @@ impl App {
                     );
                 }
                 text(quads, atlas, "ESC / ENTER BACK", 102., 220., 0.8, WHITE);
+            }
+            Screen::Stats => {
+                let stats = &self.store.data.lifetime_stats;
+                let sum = |values: &[u64]| {
+                    values
+                        .iter()
+                        .fold(0_u64, |total, value| total.saturating_add(*value))
+                };
+                text(
+                    quads,
+                    atlas,
+                    "EXTENDED LIFETIME STATS",
+                    57.,
+                    12.,
+                    1.35,
+                    GOLD,
+                );
+                for (index, line) in [
+                    format!(
+                        "CRATES OPENED: {}   CHESTS OPENED: {}",
+                        stats.total_crates, stats.total_chests
+                    ),
+                    format!(
+                        "IDOLS GRABBED: {}   CONVERTED: {}",
+                        stats.idols_grabbed, stats.idols_converted
+                    ),
+                    format!(
+                        "DAMSELS GRABBED: {}   SAVED: {}",
+                        stats.damsels_grabbed, stats.damsels_saved_total
+                    ),
+                    format!(
+                        "DAMSELS KILLED: {}   KISSES BOUGHT: {}",
+                        stats.damsels_killed_total, stats.kisses_bought
+                    ),
+                    format!(
+                        "ITEMS BOUGHT: {}   STOLEN: {}",
+                        stats.items_bought, stats.items_stolen
+                    ),
+                    format!(
+                        "DICE PLAYED: {}   WON: {}   LOST: {}",
+                        stats.dice_games_played, stats.dice_games_won, stats.dice_games_lost
+                    ),
+                    format!(
+                        "LEVEL DEATHS: {}   ENEMY DEATHS: {}",
+                        sum(&stats.level_deaths),
+                        sum(&stats.enemy_deaths)
+                    ),
+                    format!(
+                        "MISC DEATHS: {}   ENEMY KILLS: {}",
+                        sum(&stats.misc_deaths),
+                        stats.total_enemy_kills()
+                    ),
+                ]
+                .iter()
+                .enumerate()
+                {
+                    text(
+                        quads,
+                        atlas,
+                        line,
+                        8.,
+                        38. + index as f32 * 11.,
+                        0.72,
+                        WHITE,
+                    );
+                }
+                self.menu(
+                    quads,
+                    atlas,
+                    &[
+                        if self.store.data.classic_stats_imported {
+                            "CLASSIC STATS ALREADY IMPORTED"
+                        } else {
+                            "IMPORT CLASSIC STATS.TXT"
+                        },
+                        "EXPORT STATS.TXT",
+                        "BACK",
+                    ],
+                    63.,
+                    137.,
+                    17.,
+                );
+                let io_help = if cfg!(target_arch = "wasm32") {
+                    "BROWSER: IMPORT WITH PICKER / EXPORT DOWNLOADS"
+                } else {
+                    "NATIVE: DROP stats.txt TO IMPORT / WRITES ON EXIT"
+                };
+                text(quads, atlas, io_help, 17., 211., 0.62, WHITE);
+                text(quads, atlas, "ESC BACK", 132., 223., 0.75, WHITE);
             }
             Screen::About => {
                 text(quads, atlas, "SPELUNKY CLASSIC", 50., 20., 1.6, GOLD);
@@ -2739,7 +2889,12 @@ fn apply_source_suicide(game: &mut Game) {
 fn source_music_input_active(screen: Screen, game: Option<&Game>) -> bool {
     matches!(
         screen,
-        Screen::Playing | Screen::Finished | Screen::Title | Screen::Records | Screen::Donation
+        Screen::Playing
+            | Screen::Finished
+            | Screen::Title
+            | Screen::Records
+            | Screen::Stats
+            | Screen::Donation
     ) && game.is_some_and(spelunky_core::music::has_active_game)
 }
 fn take_source_music(game: &mut Game, session: &mut SourceMusicState) -> Vec<SourceMusicCommand> {
@@ -2954,6 +3109,17 @@ fn capture_lifetime_stats(game: &Game, data: &mut crate::storage::SaveData) -> b
 }
 fn snapshot_exit_stats(game: Option<&Game>, data: &mut crate::storage::SaveData) -> bool {
     game.is_some_and(|game| capture_lifetime_stats(game, data))
+}
+fn apply_classic_stats_import(
+    data: &mut crate::storage::SaveData,
+    game: Option<&mut Game>,
+    report: &str,
+) -> Result<(), String> {
+    data.import_classic_stats_report(report)?;
+    if let Some(game) = game {
+        game.lifetime_stats = data.lifetime_stats.clone();
+    }
+    Ok(())
 }
 fn consume_highscores_reset(game: &mut Game, data: &mut crate::storage::SaveData) -> bool {
     if !game.flags.remove("highscores_clear_requested") {
@@ -3455,6 +3621,10 @@ impl ApplicationHandler<UserEvent> for App {
                 self.editor.message(error.clone());
                 self.toast(error)
             }
+            #[cfg(target_arch = "wasm32")]
+            UserEvent::StatsImported(report) => self.import_classic_stats(&report),
+            #[cfg(target_arch = "wasm32")]
+            UserEvent::StatsImportError(error) => self.toast(error),
         }
     }
     fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
@@ -3609,6 +3779,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
             #[cfg(not(target_arch = "wasm32"))]
             WindowEvent::DroppedFile(path) => match std::fs::read_to_string(&path) {
+                Ok(text) if self.screen == Screen::Stats => self.import_classic_stats(&text),
                 Ok(text) => self.import_level(path.to_string_lossy().into_owned(), text),
                 Err(error) => self.toast(format!("IMPORT FAILED: {error}")),
             },
@@ -5557,6 +5728,30 @@ mod tests {
         let reopened = crate::storage::SaveData::from_json(&save.to_json().unwrap()).unwrap();
         assert_eq!(reopened.lifetime_stats, game.lifetime_stats);
         assert_eq!(reopened.lifetime_stats.total_chests, 1);
+    }
+    #[test]
+    fn host_classic_stats_import_replaces_once_and_persists_the_legacy_marker() {
+        let mut legacy = spelunky_core::statistics::LifetimeStats::default();
+        legacy.total_crates = 23;
+        legacy.enemy_kills[8] = 4;
+        legacy.total_monkey_kills = 5;
+        let report = legacy.to_classic_report();
+
+        let mut save = crate::storage::SaveData::default();
+        save.lifetime_stats.total_crates = 99;
+        let mut current_game = Game::shell(3, save.settings.rules);
+        current_game.lifetime_stats = save.lifetime_stats.clone();
+        apply_classic_stats_import(&mut save, Some(&mut current_game), &report).unwrap();
+        assert_eq!(save.lifetime_stats, legacy);
+        assert_eq!(current_game.lifetime_stats, legacy);
+        assert!(save.classic_stats_imported);
+
+        let reopened = crate::storage::SaveData::from_json(&save.to_json().unwrap()).unwrap();
+        assert_eq!(reopened.lifetime_stats, legacy);
+        assert!(reopened.classic_stats_imported);
+        assert!(apply_classic_stats_import(&mut save, Some(&mut current_game), &report).is_err());
+        assert_eq!(save.lifetime_stats, legacy);
+        assert_eq!(current_game.lifetime_stats, legacy);
     }
     #[test]
     fn browser_snapshot_reports_cinematic_gates_without_advancing_them() {
