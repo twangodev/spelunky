@@ -6452,7 +6452,9 @@ mod tests {
         level.exit_targets = vec!["NONE".into(), "NONE".into()];
         let mut editor = EditorUi::new();
         editor.load("roundtrip.lvl", &level.to_text()).unwrap();
-        editor.pointer(76.0, 48.0, false, true);
+        // The source editor opens at the room origin. Erase beside the
+        // anchored door in row 12, then verify the serialized anchor survives.
+        editor.pointer(76.0, 136.0, false, true);
         editor.pointer(0.0, 0.0, false, false);
         let atlas = Atlas::load().unwrap();
         let mega = atlas.sprite("sMegaMouthTile", 0.0).unwrap().uv;
@@ -6772,9 +6774,9 @@ mod tests {
         let EditorCommand::Play(level) = editor.key(KeyCode::F5, None, false) else {
             panic!("Editor did not produce its painted level");
         };
-        assert_eq!(level.get_tile(1, 12), Some('1'));
-        assert_eq!(level.get_tile(12, 15), Some('1'));
-        assert_eq!(level.get_tile(6, 13), Some('0'));
+        assert_eq!(level.get_tile(1, 1), Some('1'));
+        assert_eq!(level.get_tile(12, 4), Some('1'));
+        assert_eq!(level.get_tile(6, 2), Some('0'));
     }
     #[test]
     fn viewport_diagnostics_match_actual_player_projection_without_mutating_core() {
@@ -7076,8 +7078,9 @@ mod tests {
         editor.key(KeyCode::KeyA, Some("saved-room"), false);
         editor.key(KeyCode::Enter, None, false);
         // A genuine pointer edit, followed by ordinary source Escape/Y input.
-        editor.pointer(4., 40., true, false);
-        editor.pointer(4., 40., false, false);
+        // Keep the same global source tile after the editor starts at (0, 0).
+        editor.pointer(4., 128., true, false);
+        editor.pointer(4., 128., false, false);
         assert!(matches!(
             editor.key(KeyCode::Escape, None, false),
             EditorCommand::None
