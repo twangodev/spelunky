@@ -94,8 +94,7 @@ fn precise_line(w: &World, r: Rect, group: &str) -> bool {
         || w.entities.iter().any(|e| {
             e.alive
                 && e.engine_active
-                && !e.held
-                && (crate::catalog::is_a(&e.object, group) || (group == "oSolid" && e.solid))
+                && crate::catalog::is_a(&e.object, group)
                 && e.collision_mask().intersects_axis_line(
                     first,
                     second,
@@ -149,8 +148,7 @@ fn collision_rect_precision(
         || w.entities.iter().any(|e| {
             e.alive
                 && e.engine_active
-                && !e.held
-                && (crate::catalog::is_a(&e.object, group) || (group == "oSolid" && e.solid))
+                && crate::catalog::is_a(&e.object, group)
                 && e.mask_intersects(r, precision)
         })
 }
@@ -193,13 +191,14 @@ fn edge(w: &World, p: &Player, side: Side, distance: f64) -> bool {
 
 fn solid_point(w: &World, pos: Vec2) -> bool {
     // A literal collision_point has no area: a point just left of a wall must
-    // stay outside, even when a tiny rectangle would overlap the wall.
+    // stay outside, even when a tiny rectangle would overlap the wall. The
+    // oSolid object argument selects family members, not every instance with
+    // its GM solid flag; held family members remain query-visible.
     w.tiles_point_active(pos, "oSolid")
         || w.entities.iter().any(|e| {
             e.alive
                 && e.engine_active
-                && !e.held
-                && (crate::catalog::is_a(&e.object, "oSolid") || e.solid)
+                && crate::catalog::is_a(&e.object, "oSolid")
                 && e.mask_contains(pos, CollisionPrecision::BoundingBox)
         })
 }

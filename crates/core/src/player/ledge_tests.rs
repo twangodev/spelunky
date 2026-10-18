@@ -20,6 +20,79 @@ fn quiet(game: &Game) {
 }
 
 #[test]
+fn game_step_parachute_probe_matches_literal_active_solid_family_query() {
+    for (object, held, deploys) in [("oGoldNugget", false, true), ("oBlock", true, false)] {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.player.pos = Vec2::new(80.0, 80.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Falling;
+        game.player.grounded = false;
+        game.player.vel.y = 1.0;
+        game.player.equipment.insert("Parachute".into());
+        game.player.data.insert("fall_timer".into(), 14.0);
+
+        // Player's source prelude queries collision_point(x,y+32,oSolid,0,0).
+        // The 8x8 gold-nugget mask covers that point but is only oTreasure;
+        // the held oBlock is a family member and remains query-visible.
+        let target_pos = if object == "oGoldNugget" {
+            Vec2::new(84.0, 116.0) // sGoldNugget origin is (4,4).
+        } else {
+            Vec2::new(80.0, 112.0) // sBlock origin is (0,0).
+        };
+        let target = game.spawn(object, target_pos);
+        let target = game.world.entity_mut(target).unwrap();
+        target.held = held;
+        target.solid = true;
+        if object == "oGoldNugget" {
+            assert!(!crate::catalog::is_a(object, "oSolid"));
+        }
+        assert_eq!(
+            super::solid_point(&game.world, Vec2::new(80.0, 112.0)),
+            object == "oBlock",
+            "target={object}, held={held}"
+        );
+
+        game.step(&InputFrame::default());
+
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .any(|entity| entity.alive && entity.object == "oParachute"),
+            deploys,
+            "target={object}, held={held}"
+        );
+    }
+}
+
+#[test]
+fn player_solid_line_and_rectangle_queries_use_family_members_not_solid_flags() {
+    let mut world = World::new(16, 16, Area::Mines, 1);
+    let nugget = world.spawn("oGoldNugget", Vec2::new(84.0, 116.0));
+    world.entity_mut(nugget).unwrap().solid = true;
+    let point = Rect::new(80.0, 112.0, 1.0, 1.0);
+    assert!(!crate::catalog::is_a("oGoldNugget", "oSolid"));
+    assert!(!super::precise_line(&world, point, "oSolid"));
+    assert!(!super::collision_rect_precision(
+        &world,
+        point,
+        "oSolid",
+        CollisionPrecision::BoundingBox,
+    ));
+
+    let mut world = World::new(16, 16, Area::Mines, 1);
+    let block = world.spawn("oBlock", Vec2::new(80.0, 112.0));
+    world.entity_mut(block).unwrap().held = true;
+    assert!(super::precise_line(&world, point, "oSolid"));
+    assert!(super::collision_rect_precision(
+        &world,
+        point,
+        "oSolid",
+        CollisionPrecision::BoundingBox,
+    ));
+}
+
+#[test]
 fn generated_campaign_side_boundary_blocks_full_game_steps() {
     let mut game = Game::shell(0, RulesPreset::Classic);
     game.start_from_hub(false, 1);
