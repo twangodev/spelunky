@@ -649,10 +649,23 @@ fn edge_blocked(game: &Game, entity: &Entity, direction: u8, distance: f64) -> b
 }
 
 /// Explicit `prec=1` source edge probes are axis-aligned `collision_line`
-/// calls. Keep implicit event/placement and explicit `prec=0` callers on their
-/// separate bounding-box path below; using a smooth Rect here loses the
-/// source's rounded integer mask pixels at fractional instance origins.
+/// calls in SourceClassicV2. HistoricalV1 keeps its previous precise-Rect
+/// behavior so this collision-kernel refinement does not change old runs.
 fn precise_collides_except(game: &Game, rect: Rect, excluded: u64) -> bool {
+    if game.generation_revision != crate::GenerationRevision::SourceClassicV2 {
+        return game.world.tiles_collide_active_precision(
+            rect,
+            "oSolid",
+            CollisionPrecision::Precise,
+        ) || game.world.entities.iter().any(|entity| {
+            entity.id != excluded
+                && entity.alive
+                && entity.engine_active
+                && entity.solid
+                && !entity.held
+                && entity.mask_intersects(rect, CollisionPrecision::Precise)
+        });
+    }
     debug_assert!(rect.w == 1.0 || rect.h == 1.0);
     let first = Vec2::new(rect.x, rect.y);
     let last = Vec2::new(rect.x + rect.w - 1.0, rect.y + rect.h - 1.0);
