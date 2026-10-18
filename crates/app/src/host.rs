@@ -149,6 +149,25 @@ fn render_clock_running(
                 && game.is_some_and(|game| game.state == RunState::Dead)))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AudioPolicy {
+    pause_all: bool,
+    mute_music: bool,
+}
+
+fn audio_policy(
+    screen: Screen,
+    settings_return: Screen,
+    focused: bool,
+    occluded: bool,
+) -> AudioPolicy {
+    AudioPolicy {
+        pause_all: !focused || occluded,
+        mute_music: matches!(screen, Screen::Pause | Screen::Cheats)
+            || (screen == Screen::Settings && settings_return == Screen::Pause),
+    }
+}
+
 pub fn run() -> Result<(), String> {
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()
@@ -388,9 +407,17 @@ impl App {
             0
         };
         self.reset_timing();
-        self.audio.pause(
-            !self.focused || self.occluded || matches!(screen, Screen::Pause | Screen::Cheats),
+        self.apply_audio_policy();
+    }
+    fn apply_audio_policy(&mut self) {
+        let policy = audio_policy(
+            self.screen,
+            self.settings_return,
+            self.focused,
+            self.occluded,
         );
+        self.audio.pause(policy.pause_all);
+        self.audio.set_music_muted(policy.mute_music);
     }
     fn toast(&mut self, message: impl Into<String>) {
         let expiry = self.now() + 6.;
@@ -3100,11 +3127,7 @@ impl ApplicationHandler<UserEvent> for App {
                 if !focused {
                     self.input.clear();
                 }
-                self.audio.pause(
-                    !focused
-                        || self.occluded
-                        || matches!(self.screen, Screen::Pause | Screen::Cheats),
-                )
+                self.apply_audio_policy()
             }
             WindowEvent::Occluded(occluded) => {
                 self.occluded = occluded;
@@ -3112,11 +3135,7 @@ impl ApplicationHandler<UserEvent> for App {
                 if occluded {
                     self.input.clear();
                 }
-                self.audio.pause(
-                    occluded
-                        || !self.focused
-                        || matches!(self.screen, Screen::Pause | Screen::Cheats),
-                );
+                self.apply_audio_policy();
             }
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.control = modifiers.state().control_key()
@@ -3444,6 +3463,66 @@ fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn menu_music_mute_and_focus_audio_pause_are_independent_policies() {
+        assert_eq!(
+            audio_policy(Screen::Playing, Screen::Title, true, false),
+            AudioPolicy {
+                pause_all: false,
+                mute_music: false,
+            }
+        );
+        assert_eq!(
+            audio_policy(Screen::Pause, Screen::Title, true, false),
+            AudioPolicy {
+                pause_all: false,
+                mute_music: true,
+            }
+        );
+        assert_eq!(
+            audio_policy(Screen::Cheats, Screen::Title, true, false),
+            AudioPolicy {
+                pause_all: false,
+                mute_music: true,
+            }
+        );
+        assert_eq!(
+            audio_policy(Screen::Playing, Screen::Title, false, false),
+            AudioPolicy {
+                pause_all: true,
+                mute_music: false,
+            }
+        );
+        assert_eq!(
+            audio_policy(Screen::Pause, Screen::Title, false, false),
+            AudioPolicy {
+                pause_all: true,
+                mute_music: true,
+            }
+        );
+        assert_eq!(
+            audio_policy(Screen::Playing, Screen::Title, true, true),
+            AudioPolicy {
+                pause_all: true,
+                mute_music: false,
+            }
+        );
+        assert_eq!(
+            audio_policy(Screen::Settings, Screen::Pause, true, false),
+            AudioPolicy {
+                pause_all: false,
+                mute_music: true,
+            }
+        );
+        assert_eq!(
+            audio_policy(Screen::Settings, Screen::Title, true, false),
+            AudioPolicy {
+                pause_all: false,
+                mute_music: false,
+            }
+        );
+    }
+
     #[test]
     fn editor_import_keeps_fresh_control_when_focus_returns() {
         let mut editor = EditorUi::new();

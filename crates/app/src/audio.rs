@@ -173,11 +173,27 @@ const MUSIC_RESOURCES: [&str; 8] = [
 fn is_music_resource(name: &str) -> bool {
     MUSIC_RESOURCES.contains(&name)
 }
-fn resource_volume(name: &str, music: f32, effects: f32) -> f32 {
+fn effective_music_volume(music: f32, music_muted: bool) -> f32 {
+    if music_muted { 0.0 } else { music }
+}
+fn resource_volume(name: &str, music: f32, effects: f32, music_muted: bool) -> f32 {
     if is_music_resource(name) {
-        music
+        effective_music_volume(music, music_muted)
     } else {
         effects
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+
+    #[test]
+    fn music_mute_only_silences_music_resource_routes() {
+        assert_eq!(resource_volume("title", 0.4, 0.7, false), 0.4);
+        assert_eq!(resource_volume("flame", 0.4, 0.7, false), 0.7);
+        assert_eq!(resource_volume("title", 0.4, 0.7, true), 0.0);
+        assert_eq!(resource_volume("flame", 0.4, 0.7, true), 0.7);
     }
 }
 
@@ -216,6 +232,7 @@ mod backend {
         current: Option<&'static str>,
         music_volume: f32,
         effects_volume: f32,
+        music_muted: bool,
         sound_pans: HashMap<&'static str, f32>,
         music_frequencies: HashMap<&'static str, u32>,
         paused: bool,
@@ -241,6 +258,7 @@ mod backend {
                 current: None,
                 music_volume: 0.65,
                 effects_volume: 0.8,
+                music_muted: false,
                 sound_pans: HashMap::new(),
                 music_frequencies: HashMap::new(),
                 paused: false,
@@ -302,6 +320,7 @@ mod backend {
                 name,
                 self.music_volume,
                 self.effects_volume,
+                self.music_muted,
             ));
             if is_music_resource(name) {
                 sink.set_speed(
@@ -486,13 +505,37 @@ mod backend {
             self.music_volume = volume(music);
             self.effects_volume = volume(effects);
             for track in &self.tracks {
-                track.sink.set_volume(track.gain * self.music_volume);
+                track.sink.set_volume(
+                    track.gain * effective_music_volume(self.music_volume, self.music_muted),
+                );
             }
             for effect in &self.effects {
                 effect.sink.set_volume(resource_volume(
                     effect.name,
                     self.music_volume,
                     self.effects_volume,
+                    self.music_muted,
+                ));
+            }
+        }
+        /// Mute only music resources while preserving their playback clocks and
+        /// leaving ordinary sound effects audible. Used by the in-game menu.
+        pub fn set_music_muted(&mut self, muted: bool) {
+            if self.music_muted == muted {
+                return;
+            }
+            self.music_muted = muted;
+            for track in &self.tracks {
+                track
+                    .sink
+                    .set_volume(track.gain * effective_music_volume(self.music_volume, muted));
+            }
+            for effect in &self.effects {
+                effect.sink.set_volume(resource_volume(
+                    effect.name,
+                    self.music_volume,
+                    self.effects_volume,
+                    muted,
                 ));
             }
         }
@@ -529,7 +572,9 @@ mod backend {
                 } else {
                     (track.gain - step).max(track.target)
                 };
-                track.sink.set_volume(track.gain * self.music_volume);
+                track.sink.set_volume(
+                    track.gain * effective_music_volume(self.music_volume, self.music_muted),
+                );
             }
             self.tracks.retain(|track| {
                 let keep = track.target > 0.0 || track.gain > 0.0;
@@ -553,6 +598,7 @@ mod backend {
                 current: None,
                 music_volume: 0.65,
                 effects_volume: 0.8,
+                music_muted: false,
                 sound_pans: HashMap::new(),
                 music_frequencies: HashMap::new(),
                 paused: false,
@@ -567,6 +613,74 @@ mod backend {
                 rodio::buffer::SamplesBuffer::new(2, 44_100, vec![0.25; 1024]).repeat_infinite(),
             );
             Effect { name, sink }
+        }
+
+        fn finite_effect(mixer: &rodio::mixer::Mixer, name: &'static str) -> Effect {
+            let sink =
+                SpatialSink::connect_new(mixer, [0.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+            sink.append(rodio::buffer::SamplesBuffer::new(
+                2,
+                44_100,
+                vec![0.25; 4096],
+            ));
+            Effect { name, sink }
+        }
+
+        #[test]
+        fn music_mute_keeps_playback_and_effects_running_and_full_pause_is_separate() {
+            let (music_mixer, mut music_output) = rodio::mixer::mixer(1, 44_100);
+            let (effects_mixer, mut effects_output) = rodio::mixer::mixer(2, 44_100);
+            let mut audio = headless_audio();
+            audio.set_volumes(0.2, 0.8);
+            audio.start_music_source(
+                &music_mixer,
+                "cave",
+                rodio::buffer::SamplesBuffer::new(1, 44_100, vec![0.25; 2048]),
+            );
+            audio.tracks[0].gain = 1.0;
+            audio.tracks[0].sink.set_volume(0.2);
+            audio.effects.push(finite_effect(&effects_mixer, "cave"));
+            audio.effects.push(infinite_effect(&effects_mixer, "flame"));
+            audio.set_volumes(0.2, 0.8);
+            assert_eq!(audio.tracks[0].sink.volume(), 0.2);
+            assert_eq!(audio.effects[0].sink.volume(), 0.2);
+            assert_eq!(audio.effects[1].sink.volume(), 0.8);
+
+            audio.set_music_muted(true);
+            assert_eq!(audio.tracks[0].sink.volume(), 0.0);
+            assert_eq!(audio.effects[0].sink.volume(), 0.0);
+            assert_eq!(audio.effects[1].sink.volume(), 0.8);
+            assert!(!audio.tracks[0].sink.is_paused());
+            assert!(!audio.effects[0].sink.is_paused());
+            assert!(!audio.effects[1].sink.is_paused());
+
+            // Consuming the device-free mixer proves both silent music routes
+            // still advance to EOF, while the ordinary effect remains audible.
+            let _ = music_output.by_ref().take(4096).count();
+            let _ = effects_output.by_ref().take(8192).count();
+            assert!(audio.tracks[0].sink.empty());
+            assert!(audio.effects[0].sink.empty());
+            assert!((0..8192).any(|_| effects_output.next().unwrap_or(0.0).abs() > 1e-8));
+
+            audio.pause(true);
+            assert!(audio.tracks[0].sink.is_paused());
+            assert!(audio.effects.iter().all(|effect| effect.sink.is_paused()));
+            audio.pause(false);
+            assert!(!audio.paused);
+            assert!(audio.music_muted);
+            assert!(!audio.tracks[0].sink.is_paused());
+            assert!(audio.effects.iter().all(|effect| !effect.sink.is_paused()));
+
+            // While the menu remains open, settings changes affect effects but
+            // cannot leak music back in. Resume restores the configured gains.
+            audio.set_volumes(0.6, 0.3);
+            assert_eq!(audio.tracks[0].sink.volume(), 0.0);
+            assert_eq!(audio.effects[0].sink.volume(), 0.0);
+            assert_eq!(audio.effects[1].sink.volume(), 0.3);
+            audio.set_music_muted(false);
+            assert_eq!(audio.tracks[0].sink.volume(), 0.6);
+            assert_eq!(audio.effects[0].sink.volume(), 0.6);
+            assert_eq!(audio.effects[1].sink.volume(), 0.3);
         }
 
         #[test]
@@ -796,6 +910,7 @@ mod backend {
                     current: Some("title"),
                     music_volume: 0.4,
                     effects_volume: 0.7,
+                    music_muted: false,
                     sound_pans: HashMap::new(),
                     music_frequencies: HashMap::new(),
                     paused: false,
@@ -854,6 +969,7 @@ mod backend {
                     current: None,
                     music_volume: 0.65,
                     effects_volume: 0.8,
+                    music_muted: false,
                     sound_pans: HashMap::new(),
                     music_frequencies: HashMap::new(),
                     paused: false,
@@ -923,6 +1039,7 @@ mod backend {
                 current: None,
                 music_volume: 0.65,
                 effects_volume: 0.8,
+                music_muted: false,
                 sound_pans: HashMap::new(),
                 music_frequencies: HashMap::new(),
                 paused: false,
@@ -1000,6 +1117,7 @@ mod backend {
         current_music: Option<&'static str>,
         music_volume: f32,
         effects_volume: f32,
+        music_muted: bool,
         sound_pans: HashMap<&'static str, f32>,
         music_frequencies: HashMap<&'static str, u32>,
         unlocked: bool,
@@ -1023,6 +1141,7 @@ mod backend {
                 current_music: None,
                 music_volume: 0.65,
                 effects_volume: 0.8,
+                music_muted: false,
                 sound_pans: HashMap::new(),
                 music_frequencies: HashMap::new(),
                 unlocked: false,
@@ -1250,13 +1369,39 @@ mod backend {
             self.music_volume = volume(music);
             self.effects_volume = volume(effects);
             for track in &self.tracks {
+                track.gain_node.gain().set_value(
+                    track.gain * effective_music_volume(self.music_volume, self.music_muted),
+                );
+            }
+            for effect in &self.effects {
+                effect.gain.gain().set_value(resource_volume(
+                    effect.name,
+                    self.music_volume,
+                    self.effects_volume,
+                    self.music_muted,
+                ));
+            }
+        }
+        /// Mute only music resources while preserving their playback clocks and
+        /// leaving ordinary sound effects audible. Used by the in-game menu.
+        pub fn set_music_muted(&mut self, muted: bool) {
+            if self.music_muted == muted {
+                return;
+            }
+            self.music_muted = muted;
+            for track in &self.tracks {
                 track
                     .gain_node
                     .gain()
-                    .set_value(track.gain * self.music_volume);
+                    .set_value(track.gain * effective_music_volume(self.music_volume, muted));
             }
             for effect in &self.effects {
-                effect.gain.gain().set_value(self.effects_volume);
+                effect.gain.gain().set_value(resource_volume(
+                    effect.name,
+                    self.music_volume,
+                    self.effects_volume,
+                    muted,
+                ));
             }
         }
         pub fn pause(&mut self, paused: bool) {
@@ -1299,6 +1444,7 @@ mod backend {
                 name,
                 self.music_volume,
                 self.effects_volume,
+                self.music_muted,
             ));
             let rate = if is_music_resource(name) {
                 self.music_frequencies.get(name).copied().unwrap_or(44_100) as f32 / 44_100.0
@@ -1426,10 +1572,9 @@ mod backend {
                 } else {
                     (track.gain - step).max(track.target)
                 };
-                track
-                    .gain_node
-                    .gain()
-                    .set_value(track.gain * self.music_volume);
+                track.gain_node.gain().set_value(
+                    track.gain * effective_music_volume(self.music_volume, self.music_muted),
+                );
             }
             self.tracks.retain(|track| {
                 let keep = track.target > 0.0 || track.gain > 0.0;
@@ -1456,6 +1601,7 @@ mod backend {
                 current_music: None,
                 music_volume: 0.65,
                 effects_volume: 0.8,
+                music_muted: false,
                 sound_pans: HashMap::new(),
                 music_frequencies: HashMap::new(),
                 unlocked: false,
@@ -1484,11 +1630,21 @@ mod backend {
             assert_eq!(audio.requested_music, None);
             assert_eq!(audio.music_frequencies["title"], 34_100);
             assert_eq!(
-                resource_volume("title", audio.music_volume, audio.effects_volume),
+                resource_volume(
+                    "title",
+                    audio.music_volume,
+                    audio.effects_volume,
+                    audio.music_muted
+                ),
                 0.2
             );
             assert_eq!(
-                resource_volume("flame", audio.music_volume, audio.effects_volume),
+                resource_volume(
+                    "flame",
+                    audio.music_volume,
+                    audio.effects_volume,
+                    audio.music_muted
+                ),
                 0.8
             );
             // Decode completion caches only; explicit later bypass rearms Title.
@@ -1497,7 +1653,12 @@ mod backend {
             assert_eq!(audio.requested_music, None);
             audio.set_volumes(0.8, 0.2);
             assert_eq!(
-                resource_volume("title", audio.music_volume, audio.effects_volume),
+                resource_volume(
+                    "title",
+                    audio.music_volume,
+                    audio.effects_volume,
+                    audio.music_muted
+                ),
                 0.8
             );
             assert_eq!(audio.music_frequencies["title"], 34_100);
