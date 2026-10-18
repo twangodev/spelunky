@@ -9,15 +9,15 @@ export function installFullscreenControls(
   feedback: HTMLParagraphElement,
   onStateChange: (state: FullscreenState) => void,
 ): { toggle: () => void; dispose: () => void } {
-  const available = document.fullscreenEnabled
+  const available = Boolean(document.fullscreenEnabled
     && typeof document.documentElement.requestFullscreen === 'function'
-    && typeof document.exitFullscreen === 'function';
+    && typeof document.exitFullscreen === 'function');
   let pending = false;
   let disposed = false;
 
   function publishState(): void {
     if (!disposed) {
-      onStateChange({ available, active: document.fullscreenElement !== null, pending });
+      onStateChange({ available, active: Boolean(document.fullscreenElement), pending });
     }
   }
 
