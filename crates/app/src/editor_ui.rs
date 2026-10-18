@@ -7,7 +7,8 @@ use crate::{
 use spelunky_core::{
     Vec2, catalog,
     editor::{
-        EditorPaletteProgress, EditorState,
+        BLOCK_PALETTE, ENEMY_PALETTE, EditorPaletteProgress, EditorState, ITEM_PALETTE,
+        TRAP_PALETTE,
         preview::{self, PreviewContext},
     },
     level::{LEVEL_HEIGHT, LEVEL_WIDTH, Level},
@@ -34,6 +35,14 @@ pub enum EditorCommand {
 enum Confirmation {
     Exit,
     New,
+}
+
+#[derive(Clone, Copy)]
+enum PaletteGroup {
+    Blocks,
+    Enemies,
+    Traps,
+    Items,
 }
 
 #[derive(Clone, Copy)]
@@ -73,7 +82,7 @@ pub struct EditorUi {
     state: EditorState,
     palette_progress: EditorPaletteProgress,
     name: String,
-    pan: [usize; 2],
+    pan: [f32; 2],
     cursor: Option<(usize, usize)>,
     stroke: Option<(usize, usize, bool)>,
     entry: Option<Entry>,
@@ -105,7 +114,7 @@ impl EditorUi {
             state: EditorState::with_source_rng(Level::default(), context, rng),
             palette_progress: EditorPaletteProgress::all_unlocked(),
             name: "custom.lvl".into(),
-            pan: [0, LEVEL_HEIGHT - ROWS],
+            pan: [0.0, 0.0],
             cursor: None,
             stroke: None,
             entry: None,
@@ -235,7 +244,11 @@ impl EditorUi {
                             entry.replace = false;
                         }
                         for ch in value.chars().filter(|ch| !ch.is_control()) {
-                            if entry.value.len() < 1024 {
+                            let max_chars = match entry.field {
+                                Field::Sign(_) | Field::Link(_) => 38,
+                                _ => 1024,
+                            };
+                            if entry.value.chars().count() < max_chars {
                                 entry.value.push(ch);
                             }
                         }
@@ -272,22 +285,27 @@ impl EditorUi {
         } else {
             match key {
                 KeyCode::Escape => self.confirm(Confirmation::Exit),
-                KeyCode::F5 => {
-                    let document = self.state.document();
-                    self.play_snapshot = Some(document.clone());
-                    return EditorCommand::Play(document);
+                KeyCode::F5 => return self.playtest(),
+                KeyCode::ArrowLeft => self.pan[0] = (self.pan[0] - 1.0).max(0.0),
+                KeyCode::ArrowRight => {
+                    self.pan[0] = (self.pan[0] + 1.0).min((LEVEL_WIDTH - COLS) as f32)
                 }
-                KeyCode::ArrowLeft => self.pan[0] = self.pan[0].saturating_sub(1),
-                KeyCode::ArrowRight => self.pan[0] = (self.pan[0] + 1).min(LEVEL_WIDTH - COLS),
-                KeyCode::ArrowUp => self.pan[1] = self.pan[1].saturating_sub(1),
-                KeyCode::ArrowDown => self.pan[1] = (self.pan[1] + 1).min(LEVEL_HEIGHT - ROWS),
+                KeyCode::ArrowUp => self.pan[1] = (self.pan[1] - 1.0).max(0.0),
+                KeyCode::ArrowDown => {
+                    self.pan[1] = (self.pan[1] + 1.0).min((LEVEL_HEIGHT - ROWS) as f32)
+                }
                 KeyCode::KeyM => {
                     self.metadata_index = 0;
                     self.metadata();
                 }
                 KeyCode::KeyN => self.begin(Field::Name, self.name.clone()),
                 KeyCode::KeyE => self.record_at_cursor(None),
-                KeyCode::KeyS => self.record(false),
+                KeyCode::Digit1 => self.select_palette_group(PaletteGroup::Blocks),
+                KeyCode::Digit2 => self.select_palette_group(PaletteGroup::Enemies),
+                KeyCode::Digit3 => self.select_palette_group(PaletteGroup::Traps),
+                KeyCode::Digit4 => self.select_palette_group(PaletteGroup::Items),
+                KeyCode::KeyA => self.cycle_palette(-1),
+                KeyCode::KeyS => self.cycle_palette(1),
                 KeyCode::KeyL => self.record(true),
                 KeyCode::PageUp | KeyCode::PageDown => {
                     self.cycle_palette(if key == KeyCode::PageUp { -1 } else { 1 });
@@ -299,8 +317,8 @@ impl EditorUi {
     }
 
     /// Classic's mouse wheel steps the selected tile just like its A/S
-    /// shortcuts. Positive values follow wheel-up/PageDown; negative values
-    /// follow wheel-down/PageUp.
+    /// shortcuts within the selected category. Positive values follow
+    /// wheel-up/PageDown; negative values follow wheel-down/PageUp.
     pub fn wheel(&mut self, vertical: f32) {
         if self.entry.is_some() || self.confirmation.is_some() || !vertical.is_finite() {
             return;
@@ -313,18 +331,64 @@ impl EditorUi {
     }
 
     fn cycle_palette(&mut self, delta: isize) {
-        let len = self.state.palette.len();
+        let group = self.selected_palette_group();
+        let tiles = self.palette_group_tiles(group);
+        let len = tiles.len();
         if len == 0 {
             return;
         }
-        let index = self
-            .state
-            .palette
+        let index = tiles
             .iter()
             .position(|&tile| tile == self.state.selected_tile)
             .unwrap_or(0);
         self.state.selected_tile =
-            self.state.palette[(index as isize + delta).rem_euclid(len as isize) as usize];
+            tiles[(index as isize + delta).rem_euclid(len as isize) as usize];
+    }
+
+    fn selected_palette_group(&self) -> PaletteGroup {
+        let selected = self.state.selected_tile;
+        if BLOCK_PALETTE.contains(selected) {
+            PaletteGroup::Blocks
+        } else if ENEMY_PALETTE.contains(selected) {
+            PaletteGroup::Enemies
+        } else if TRAP_PALETTE.contains(selected) {
+            PaletteGroup::Traps
+        } else if ITEM_PALETTE.contains(selected) {
+            PaletteGroup::Items
+        } else {
+            PaletteGroup::Blocks
+        }
+    }
+
+    fn palette_group_tiles(&self, group: PaletteGroup) -> Vec<char> {
+        let source = match group {
+            PaletteGroup::Blocks => BLOCK_PALETTE,
+            PaletteGroup::Enemies => ENEMY_PALETTE,
+            PaletteGroup::Traps => TRAP_PALETTE,
+            PaletteGroup::Items => ITEM_PALETTE,
+        };
+        self.state
+            .palette
+            .iter()
+            .copied()
+            .filter(|tile| source.contains(*tile))
+            .collect()
+    }
+
+    fn select_palette_group(&mut self, group: PaletteGroup) {
+        if let Some(tile) = self.palette_group_tiles(group).first().copied() {
+            self.state.selected_tile = tile;
+        }
+    }
+
+    fn playtest(&mut self) -> EditorCommand {
+        let document = self.state.document();
+        self.play_snapshot = Some(document.clone());
+        EditorCommand::Play(document)
+    }
+
+    pub fn can_playtest_action(&self) -> bool {
+        self.entry.is_none() && self.confirmation.is_none()
     }
 
     fn confirm(&mut self, confirmation: Confirmation) {
@@ -489,9 +553,10 @@ impl EditorUi {
     /// Sampled source Step plus cleanup/Draw-order boundary. CPU interactions
     /// call this directly; the host stages OS events and calls source_tick at30Hz.
     pub fn pointer(&mut self, x: f32, y: f32, left: bool, right: bool) -> EditorCommand {
+        self.pan_to_pointer_edge(x, y);
         self.state.previews.step_effects(Vec2::new(
-            16.0 + self.pan[0] as f64 * 16.0,
-            16.0 + self.pan[1] as f64 * 16.0,
+            16.0 + f64::from(self.pan[0]) * 16.0,
+            16.0 + f64::from(self.pan[1]) * 16.0,
         ));
         let command = self.pointer_step(x, y, left, right);
         self.state.previews.finish_source_frame();
@@ -508,9 +573,12 @@ impl EditorUi {
         }
     }
     pub fn source_tick(&mut self) -> EditorCommand {
+        if let Some((x, y, _, _)) = self.pointer_sample {
+            self.pan_to_pointer_edge(x, y);
+        }
         self.state.previews.step_effects(Vec2::new(
-            16.0 + self.pan[0] as f64 * 16.0,
-            16.0 + self.pan[1] as f64 * 16.0,
+            16.0 + f64::from(self.pan[0]) * 16.0,
+            16.0 + f64::from(self.pan[1]) * 16.0,
         ));
         let command = self
             .pointer_sample
@@ -522,6 +590,31 @@ impl EditorUi {
             self.status = "SOURCE ERROR: oGame.time IS UNAVAILABLE".into();
         }
         command
+    }
+    fn pan_to_pointer_edge(&mut self, x: f32, y: f32) {
+        if self.confirmation.is_some()
+            || self.entry.is_some()
+            || !x.is_finite()
+            || !y.is_finite()
+            || !(0.0..COLS as f32 * CELL).contains(&x)
+            || !(MAP_Y..MAP_Y + ROWS as f32 * CELL).contains(&y)
+        {
+            return;
+        }
+        // Classic moves the room camera four source pixels per 30 Hz editor
+        // step when the cursor enters the outer 16-pixel band. The editor
+        // preview is half size, so that is a quarter tile.
+        const CAMERA_STEP_TILES: f32 = 0.25;
+        if x > COLS as f32 * CELL - CELL {
+            self.pan[0] = (self.pan[0] + CAMERA_STEP_TILES).min((LEVEL_WIDTH - COLS) as f32);
+        } else if x < CELL {
+            self.pan[0] = (self.pan[0] - CAMERA_STEP_TILES).max(0.0);
+        }
+        if y > MAP_Y + ROWS as f32 * CELL - CELL {
+            self.pan[1] = (self.pan[1] + CAMERA_STEP_TILES).min((LEVEL_HEIGHT - ROWS) as f32);
+        } else if y < MAP_Y + CELL {
+            self.pan[1] = (self.pan[1] - CAMERA_STEP_TILES).max(0.0);
+        }
     }
     fn pointer_step(&mut self, x: f32, y: f32, left: bool, right: bool) -> EditorCommand {
         let pressed = left && !self.pointer_left;
@@ -546,8 +639,8 @@ impl EditorUi {
         }
         if (0.0..240.0).contains(&x) && (MAP_Y..204.0).contains(&y) {
             let cell = (
-                (x / CELL) as usize + self.pan[0],
-                ((y - MAP_Y) / CELL) as usize + self.pan[1],
+                (x / CELL + self.pan[0]).floor() as usize,
+                ((y - MAP_Y) / CELL + self.pan[1]).floor() as usize,
             );
             self.cursor = Some(cell);
             let result = if left || right {
@@ -602,7 +695,7 @@ impl EditorUi {
         text(
             quads,
             atlas,
-            "F5 PLAY  M METADATA  N NAME  S SIGN  L LINK",
+            "ACTION/F5 PLAY  1-4 GROUP  A/S TILE  E TEXT  L LINK",
             3.0,
             21.0,
             0.5,
@@ -611,11 +704,13 @@ impl EditorUi {
         text(quads, atlas, "CTRL N NEW", 224.0, 13.0, 0.5, WHITE);
         rect(quads, [280.0, 10.0, 37.0, 13.0], [0.15, 0.15, 0.16, 1.0]);
         text(quads, atlas, "NEW", 289.0, 13.0, 0.75, GOLD);
-        for sy in 0..ROWS {
-            for sx in 0..COLS {
-                let x = sx as f32 * CELL;
-                let y = MAP_Y + sy as f32 * CELL;
-                rect(
+        let fractional_x = self.pan[0].fract() * CELL;
+        let fractional_y = self.pan[1].fract() * CELL;
+        for sy in 0..=ROWS {
+            for sx in 0..=COLS {
+                let x = sx as f32 * CELL - fractional_x;
+                let y = MAP_Y + sy as f32 * CELL - fractional_y;
+                map_rect(
                     quads,
                     [x, y, CELL - 0.25, CELL - 0.25],
                     [0.12, 0.11, 0.10, 1.0],
@@ -630,8 +725,8 @@ impl EditorUi {
                 atlas,
                 instance.sprite,
                 instance.animation(),
-                ((instance.pos.x - 16.0) / 16.0 - self.pan[0] as f64) as f32 * CELL,
-                MAP_Y + ((instance.pos.y - 16.0) / 16.0 - self.pan[1] as f64) as f32 * CELL,
+                ((instance.pos.x - 16.0) / 16.0 - f64::from(self.pan[0])) as f32 * CELL,
+                MAP_Y + ((instance.pos.y - 16.0) / 16.0 - f64::from(self.pan[1])) as f32 * CELL,
             );
             if !instance.text.is_empty() {
                 let start = quads.len();
@@ -639,8 +734,8 @@ impl EditorUi {
                     quads,
                     atlas,
                     &instance.text,
-                    ((instance.pos.x - 16.0) / 16.0 - self.pan[0] as f64) as f32 * CELL,
-                    MAP_Y + ((instance.pos.y - 16.0) / 16.0 - self.pan[1] as f64) as f32 * CELL,
+                    ((instance.pos.x - 16.0) / 16.0 - f64::from(self.pan[0])) as f32 * CELL,
+                    MAP_Y + ((instance.pos.y - 16.0) / 16.0 - f64::from(self.pan[1])) as f32 * CELL,
                     CELL / 16.0,
                     WHITE,
                 );
@@ -650,18 +745,22 @@ impl EditorUi {
         }
         if self.entry.is_none() && self.confirmation.is_none() {
             if let Some((x, y)) = self.cursor {
-                if (self.pan[0]..self.pan[0] + COLS).contains(&x)
-                    && (self.pan[1]..self.pan[1] + ROWS).contains(&y)
+                let world_x = x as f32;
+                let world_y = y as f32;
+                if world_x + 1.0 > self.pan[0]
+                    && world_x < self.pan[0] + COLS as f32
+                    && world_y + 1.0 > self.pan[1]
+                    && world_y < self.pan[1] + ROWS as f32
                 {
-                    let x = (x - self.pan[0]) as f32 * CELL;
-                    let y = MAP_Y + (y - self.pan[1]) as f32 * CELL;
+                    let x = (world_x - self.pan[0]) * CELL;
+                    let y = MAP_Y + (world_y - self.pan[1]) * CELL;
                     if let Some(sprite) = editor_icon(self.state.selected_tile) {
                         draw_map_sprite(quads, atlas, sprite, 0.0, x, y);
                     }
-                    rect(quads, [x, y, CELL, 0.5], GOLD);
-                    rect(quads, [x, y, 0.5, CELL], GOLD);
-                    rect(quads, [x, y + CELL - 0.5, CELL, 0.5], GOLD);
-                    rect(quads, [x + CELL - 0.5, y, 0.5, CELL], GOLD);
+                    map_rect(quads, [x, y, CELL, 0.5], GOLD);
+                    map_rect(quads, [x, y, 0.5, CELL], GOLD);
+                    map_rect(quads, [x, y + CELL - 0.5, CELL, 0.5], GOLD);
+                    map_rect(quads, [x + CELL - 0.5, y, 0.5, CELL], GOLD);
                 }
             }
         }
@@ -680,7 +779,7 @@ impl EditorUi {
         text(
             quads,
             atlas,
-            &format!("{}  PAN {},{}", label, self.pan[0], self.pan[1]),
+            &format!("{}  PAN {:.2},{:.2}", label, self.pan[0], self.pan[1]),
             3.0,
             207.0,
             0.5,
@@ -826,6 +925,16 @@ fn draw_map_sprite(
         quads.push(quad);
     }
 }
+fn map_rect(quads: &mut Vec<DrawQuad>, rect: [f32; 4], color: [f32; 4]) {
+    if let Some(quad) = clip_map_quad(DrawQuad {
+        rect,
+        uv: [0.0; 4],
+        color,
+        ..DrawQuad::default()
+    }) {
+        quads.push(quad);
+    }
+}
 fn clip_map_quad(mut quad: DrawQuad) -> Option<DrawQuad> {
     let original = quad.rect;
     let left = original[0].max(0.0);
@@ -875,26 +984,47 @@ mod tests {
 
     fn editor_with_block_selected() -> EditorUi {
         let mut ui = EditorUi::new();
+        // Keep pointer-cell tests on a deliberately scrolled source view.
+        ui.pan[1] = 11.0;
         ui.state.select('1').unwrap();
         ui
     }
 
     #[test]
+    fn editor_opens_at_classic_origin_and_edge_pans_quarter_tile_per_source_step() {
+        let mut ui = EditorUi::new();
+        assert_eq!(ui.pan, [0.0, 0.0]);
+        ui.stage_pointer(236.0, 200.0, true, false);
+        ui.source_tick();
+        assert_eq!(ui.pan, [0.25, 0.25]);
+        assert_eq!(ui.state.level.get_tile(29, 20), Some('@'));
+
+        ui.source_tick();
+        assert_eq!(ui.pan, [0.5, 0.5]);
+        assert_eq!(ui.state.level.get_tile(30, 21), Some('@'));
+
+        ui.stage_pointer(4.0, 40.0, false, false);
+        ui.source_tick();
+        ui.source_tick();
+        assert_eq!(ui.pan, [0.0, 0.0], "top and left camera edges clamp");
+    }
+
+    #[test]
     fn simultaneous_mouse_buttons_paint_before_right_only_erase() {
         let mut ui = editor_with_block_selected();
-        ui.pointer(4.0, 40.0, true, true);
-        assert_eq!(ui.state.level.get_tile(0, 11), Some('1'));
-        ui.pointer(20.0, 40.0, true, true);
-        assert_eq!(ui.state.level.get_tile(0, 11), Some('1'));
-        assert_eq!(ui.state.level.get_tile(1, 11), Some('0'));
-        assert_eq!(ui.state.level.get_tile(2, 11), Some('1'));
+        ui.pointer(4.0, 48.0, true, true);
+        assert_eq!(ui.state.level.get_tile(0, 12), Some('1'));
+        ui.pointer(20.0, 48.0, true, true);
+        assert_eq!(ui.state.level.get_tile(0, 12), Some('1'));
+        assert_eq!(ui.state.level.get_tile(1, 12), Some('0'));
+        assert_eq!(ui.state.level.get_tile(2, 12), Some('1'));
         // Switching to right-only starts a new erasing stroke at that cell.
-        ui.pointer(28.0, 40.0, false, true);
-        assert_eq!(ui.state.level.get_tile(2, 11), Some('1'));
-        assert_eq!(ui.state.level.get_tile(3, 11), Some('0'));
-        ui.pointer(20.0, 40.0, false, true);
-        assert_eq!(ui.state.level.get_tile(2, 11), Some('0'));
-        assert_eq!(ui.state.level.get_tile(1, 11), Some('0'));
+        ui.pointer(28.0, 48.0, false, true);
+        assert_eq!(ui.state.level.get_tile(2, 12), Some('1'));
+        assert_eq!(ui.state.level.get_tile(3, 12), Some('0'));
+        ui.pointer(20.0, 48.0, false, true);
+        assert_eq!(ui.state.level.get_tile(2, 12), Some('0'));
+        assert_eq!(ui.state.level.get_tile(1, 12), Some('0'));
     }
 
     #[test]
@@ -910,9 +1040,45 @@ mod tests {
 
         ui.state.select('0').unwrap();
         ui.wheel(-1.0);
-        assert_eq!(ui.state.selected_tile, 'J');
+        assert_eq!(ui.state.selected_tile, 'l');
         ui.wheel(1.0);
-        assert_eq!(ui.state.selected_tile, '0');
+        assert_eq!(ui.state.selected_tile, '@');
+    }
+
+    #[test]
+    fn source_palette_keys_select_categories_and_cycle_only_that_category() {
+        let mut ui = EditorUi::new();
+        ui.key(KeyCode::Digit2, None, false);
+        assert_eq!(ui.state.selected_tile, 'b');
+        ui.key(KeyCode::KeyA, None, false);
+        assert_eq!(ui.state.selected_tile, 'T');
+        ui.key(KeyCode::KeyS, None, false);
+        assert_eq!(ui.state.selected_tile, 'b');
+
+        ui.key(KeyCode::Digit3, None, false);
+        assert_eq!(ui.state.selected_tile, '^');
+        ui.key(KeyCode::Digit4, None, false);
+        assert_eq!(ui.state.selected_tile, '$');
+        ui.key(KeyCode::Digit1, None, false);
+        assert_eq!(ui.state.selected_tile, '@');
+    }
+
+    #[test]
+    fn source_playtest_shortcut_is_f5_and_enter_remains_an_editing_key() {
+        let mut ui = EditorUi::new();
+        assert!(ui.can_playtest_action());
+        assert!(matches!(
+            ui.key(KeyCode::F5, None, false),
+            EditorCommand::Play(_)
+        ));
+        assert!(matches!(
+            ui.key(KeyCode::Enter, None, false),
+            EditorCommand::None
+        ));
+        assert!(matches!(
+            ui.key(KeyCode::NumpadEnter, None, false),
+            EditorCommand::None
+        ));
     }
 
     #[test]
@@ -925,7 +1091,7 @@ mod tests {
             // Customize through the ordinary editor text-entry keys.
             ui.key(
                 if tile == 'I' {
-                    KeyCode::KeyS
+                    KeyCode::KeyE
                 } else {
                     KeyCode::KeyL
                 },
@@ -966,10 +1132,10 @@ mod tests {
     #[test]
     fn repainting_one_imported_record_preserves_other_cells_and_extra_records() {
         let mut authored = Level::default();
-        authored.set_tile(0, 11, '@').unwrap();
-        authored.set_tile(1, 11, 'X').unwrap();
-        authored.set_tile(2, 11, 'I').unwrap();
-        authored.set_tile(3, 11, 'I').unwrap();
+        authored.set_tile(0, 0, '@').unwrap();
+        authored.set_tile(1, 0, 'X').unwrap();
+        authored.set_tile(2, 0, 'I').unwrap();
+        authored.set_tile(3, 0, 'I').unwrap();
         authored.exit_targets = vec!["first.lvl".into(), "other.lvl".into(), "extra-door".into()];
         authored.signs = vec![
             "first sign".into(),
@@ -1196,7 +1362,7 @@ mod tests {
         assert!(ui.entry.is_some());
         assert_eq!(ui.state.level.starting_life, 4);
         ui.entry = None;
-        ui.state.set_tile(0, 11, 'I').unwrap();
+        ui.state.set_tile(0, 0, 'I').unwrap();
         ui.pointer(4.0, 40.0, false, false);
         ui.record(false);
         ui.key(KeyCode::KeyH, Some("hello"), false);
@@ -1222,7 +1388,7 @@ mod tests {
     #[test]
     fn keyboard_shortcuts_save_export_import_and_edit_links() {
         let mut ui = EditorUi::new();
-        ui.state.set_tile(0, 11, 'X').unwrap();
+        ui.state.set_tile(0, 0, 'X').unwrap();
         ui.pointer(4.0, 40.0, false, false);
         ui.key(KeyCode::KeyL, Some("l"), false);
         ui.key(KeyCode::KeyN, Some("next.lvl"), false);
@@ -1269,7 +1435,7 @@ mod tests {
             EditorCommand::None
         ));
         assert_eq!(ui.state.level, original);
-        assert_eq!(ui.pan[0], 0);
+        assert_eq!(ui.pan[0], 0.0);
         ui.key(KeyCode::Escape, None, false);
         ui.pointer(4., 40., true, false);
         ui.pointer(4., 40., false, false);
@@ -1333,14 +1499,14 @@ mod tests {
         ui.key(KeyCode::Delete, None, false);
         ui.key(KeyCode::Enter, None, false);
         assert_eq!(ui.state.level.author, "Ada");
-        ui.state.set_tile(0, 11, 'I').unwrap();
+        ui.state.set_tile(0, 0, 'I').unwrap();
         ui.pointer(4., 40., false, false);
-        ui.key(KeyCode::KeyS, None, false);
+        ui.key(KeyCode::KeyE, None, false);
         ui.key(KeyCode::KeyH, Some("hello!"), false);
         ui.key(KeyCode::Delete, None, false);
         ui.key(KeyCode::Enter, None, false);
         assert_eq!(ui.state.level.sign_message(0), "hello");
-        ui.state.set_tile(0, 11, 'X').unwrap();
+        ui.state.set_tile(0, 0, 'X').unwrap();
         ui.key(KeyCode::KeyL, None, false);
         ui.key(KeyCode::KeyN, Some("next.lvl!"), false);
         ui.key(KeyCode::Delete, None, false);
@@ -1353,6 +1519,27 @@ mod tests {
         ui.key(KeyCode::KeyN, Some("new"), false);
         ui.key(KeyCode::Enter, None, false);
         assert_eq!(ui.level_name(), "new.lvl");
+    }
+
+    #[test]
+    fn sign_and_door_text_match_classics_38_character_limit() {
+        for (tile, edit_key) in [('I', KeyCode::KeyE), ('X', KeyCode::KeyL)] {
+            let mut ui = EditorUi::new();
+            ui.state.select(tile).unwrap();
+            ui.pointer(4.0, 40.0, true, false);
+            ui.pointer(4.0, 40.0, false, false);
+            ui.key(edit_key, None, false);
+            assert!(ui.entry.is_some(), "{tile} text entry opens");
+            ui.key(KeyCode::KeyA, Some(&"x".repeat(50)), false);
+            assert_eq!(ui.entry.as_ref().unwrap().value.chars().count(), 38);
+            ui.key(KeyCode::Enter, None, false);
+            let text = if tile == 'I' {
+                ui.state.level.sign_message(0)
+            } else {
+                ui.state.level.exit_target(0)
+            };
+            assert_eq!(text.chars().count(), 38);
+        }
     }
     fn choose_palette(ui: &mut EditorUi, tile: char) {
         let index = ui.state.palette.iter().position(|&c| c == tile).unwrap();
@@ -1430,11 +1617,11 @@ mod tests {
         quads.clear();
         ui.draw(&atlas, &mut quads);
         assert_eq!(
-            ui.state.level.get_tile(2, 12),
+            ui.state.level.get_tile(2, 1),
             Some('{'),
             "saved neighbor anchor survives"
         );
-        assert_eq!(ui.state.level.get_tile(3, 12), Some('0'));
+        assert_eq!(ui.state.level.get_tile(3, 1), Some('0'));
         assert!(
             !map_has(&quads, mega.uv),
             "right erase destroys the overlapping Mega Mouth preview"
@@ -1449,7 +1636,7 @@ mod tests {
         let EditorCommand::Play(document) = ui.key(KeyCode::F5, None, false) else {
             panic!("F5");
         };
-        assert_eq!(document.get_tile(2, 12), Some('{'));
+        assert_eq!(document.get_tile(2, 1), Some('{'));
         assert_eq!(
             document
                 .to_world()
@@ -1482,8 +1669,8 @@ mod tests {
         choose_palette(&mut ui, '0');
         quads.clear();
         ui.draw(&atlas, &mut quads);
-        assert_eq!(ui.state.level.get_tile(2, 12), Some('{'));
-        assert_eq!(ui.state.level.get_tile(3, 12), Some('0'));
+        assert_eq!(ui.state.level.get_tile(2, 1), Some('{'));
+        assert_eq!(ui.state.level.get_tile(3, 1), Some('0'));
         assert!(!map_has(&quads, mega.uv));
         assert!(
             quads
@@ -1580,7 +1767,7 @@ mod tests {
         paint_at(&mut ui, '0', 36.0, 48.0);
         quads.clear();
         ui.draw(&atlas, &mut quads);
-        assert_eq!(ui.state.level.get_tile(4, 12), Some('0'));
+        assert_eq!(ui.state.level.get_tile(4, 1), Some('0'));
         assert!(
             map_has(&quads, bow.uv),
             "precise point misses preserve the Bow preview"
@@ -1684,8 +1871,8 @@ mod tests {
             ui.pointer(0.0, 0.0, false, false);
             let mut quads = Vec::new();
             ui.draw(&atlas, &mut quads);
-            assert_eq!(ui.state.level.get_tile(4, 12), Some('^'));
-            assert_eq!(ui.state.level.get_tile(4, 13), Some('0'));
+            assert_eq!(ui.state.level.get_tile(4, 1), Some('^'));
+            assert_eq!(ui.state.level.get_tile(4, 2), Some('0'));
             assert_eq!(
                 map_has(&quads, spike.uv),
                 !inherited,
@@ -1729,7 +1916,7 @@ mod tests {
         let EditorCommand::Play(document) = ui.key(KeyCode::F5, None, false) else {
             panic!("F5");
         };
-        assert_eq!(document.get_tile(2, 12), Some('{'));
+        assert_eq!(document.get_tile(2, 1), Some('{'));
         ui.return_from_playtest();
         quads.clear();
         ui.draw(&atlas, &mut quads);
@@ -1801,7 +1988,7 @@ mod tests {
         // S is first in the query array, so use the ordinary metadata adapter
         // before arranging the overlap in a loaded fixture.
         let mut authored = Level::default();
-        authored.set_tile(2, 12, '@').unwrap();
+        authored.set_tile(2, 1, '@').unwrap();
         authored.exit_targets = vec!["NEXT".into()];
         ui.load("label.lvl", &authored.to_text()).unwrap();
         paint_at(&mut ui, 'S', 12.0, 48.0);
@@ -1812,7 +1999,7 @@ mod tests {
         choose_palette(&mut ui, '0');
         ui.pointer(20.0, 48.0, false, true);
         ui.pointer(0.0, 0.0, false, false);
-        assert_eq!(ui.state.level.get_tile(2, 12), Some('0'));
+        assert_eq!(ui.state.level.get_tile(2, 1), Some('0'));
         let mut quads = Vec::new();
         ui.draw(&atlas, &mut quads);
         let glyph = atlas
@@ -1861,6 +2048,6 @@ mod tests {
             Some(preview::PreviewSourceError::MissingGameClock)
         );
         assert_eq!(ui.status, "SOURCE ERROR: oGame.time IS UNAVAILABLE");
-        assert_eq!(ui.state.level.get_tile(4, 12), Some('0'));
+        assert_eq!(ui.state.level.get_tile(4, 1), Some('0'));
     }
 }

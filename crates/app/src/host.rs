@@ -831,9 +831,9 @@ impl App {
                 self.apply_settings_command(command);
             }
             Screen::Editor => {
-                let command =
-                    self.editor
-                        .key(key, text_value, shortcut_control.unwrap_or(self.control));
+                let control = shortcut_control.unwrap_or(self.control);
+                let key = source_editor_key(&self.input, &self.editor, key, control);
+                let command = self.editor.key(key, text_value, control);
                 self.editor_command(command);
             }
             _ => self.menu_key(key),
@@ -868,7 +868,7 @@ impl App {
                 }
             }
             Screen::Finished => 2,
-            Screen::Custom => self.store.data.custom_levels.len() + 2,
+            Screen::Custom => visible_custom_level_names(&self.store.data.custom_levels).len() + 2,
             _ => 1,
         };
         if key == KeyCode::ArrowUp {
@@ -880,14 +880,8 @@ impl App {
             return;
         }
         if self.screen == Screen::Custom && key == KeyCode::KeyE {
-            if let Some(name) = self
-                .store
-                .data
-                .custom_levels
-                .keys()
-                .nth(self.selection)
-                .cloned()
-            {
+            let names = visible_custom_level_names(&self.store.data.custom_levels);
+            if let Some(name) = names.get(self.selection).cloned() {
                 let contents = self.store.data.custom_levels[&name].clone();
                 if let Some(game) = &self.game {
                     self.editor.set_source_rng(game.rng.clone());
@@ -966,7 +960,7 @@ impl App {
                 }
             }
             Screen::Custom => {
-                let names: Vec<String> = self.store.data.custom_levels.keys().cloned().collect();
+                let names = visible_custom_level_names(&self.store.data.custom_levels);
                 if self.selection < names.len() {
                     self.play_custom(&names[self.selection], false)
                 } else if self.selection == names.len() {
@@ -1467,7 +1461,7 @@ impl App {
             if self.screen != Screen::Playing {
                 let capturing =
                     self.screen == Screen::Settings && self.settings_ui.awaiting_binding();
-                if let Some(key) = controller_menu_key(button, capturing) {
+                if let Some(key) = controller_menu_key(self.screen, button, capturing) {
                     if self.screen == Screen::Pause {
                         // These are menu edges, not physical keyboard presses.
                         // Source action edges were resolved above; keyboard aliases
@@ -1963,8 +1957,7 @@ impl App {
             }
             Screen::Custom => {
                 text(quads, atlas, "CUSTOM LEVELS", 74., 12., 1.5, GOLD);
-                let mut names: Vec<String> =
-                    self.store.data.custom_levels.keys().cloned().collect();
+                let mut names = visible_custom_level_names(&self.store.data.custom_levels);
                 names.extend(["IMPORT .LVL".into(), "BACK".into()]);
                 let start = self.selection.saturating_sub(9);
                 for (index, name) in names.iter().enumerate().skip(start).take(11) {
@@ -2247,7 +2240,7 @@ impl App {
         if self.screen != Screen::Custom {
             return;
         }
-        let count = self.store.data.custom_levels.len() + 2;
+        let count = visible_custom_level_names(&self.store.data.custom_levels).len() + 2;
         let Some(action) =
             custom_menu_pointer_action(self.selection, count, self.cursor[0], self.cursor[1])
         else {
@@ -2283,6 +2276,14 @@ enum CustomPointerAction {
 
 fn custom_menu_start(selection: usize) -> usize {
     selection.saturating_sub(9)
+}
+
+fn visible_custom_level_names(levels: &std::collections::BTreeMap<String, String>) -> Vec<String> {
+    levels
+        .keys()
+        .filter(|name| !name.starts_with('!'))
+        .cloned()
+        .collect()
 }
 
 fn custom_menu_row_at(selection: usize, count: usize, x: f32, y: f32) -> Option<usize> {
@@ -2875,9 +2876,17 @@ fn source_elapsed_ms(game: &Game) -> u64 {
     game.source_elapsed_ms()
 }
 
-fn controller_menu_key(button: UiButton, capturing: bool) -> Option<KeyCode> {
+fn controller_menu_key(screen: Screen, button: UiButton, capturing: bool) -> Option<KeyCode> {
     if capturing {
         return None;
+    }
+    if screen == Screen::Custom && button == UiButton::Pause {
+        // Classic's custom-level load button accepts both Start and Attack.
+        return Some(KeyCode::Enter);
+    }
+    if screen == Screen::Editor && button == UiButton::Confirm {
+        // Classic starts its editor test level from checkAttackPressed().
+        return Some(KeyCode::F5);
     }
     Some(match button {
         UiButton::Up => KeyCode::ArrowUp,
@@ -2887,6 +2896,20 @@ fn controller_menu_key(button: UiButton, capturing: bool) -> Option<KeyCode> {
         UiButton::Confirm => KeyCode::Enter,
         UiButton::Cancel | UiButton::Pause => KeyCode::Escape,
     })
+}
+
+fn source_editor_key(
+    input: &InputState,
+    editor: &EditorUi,
+    key: KeyCode,
+    control: bool,
+) -> KeyCode {
+    if !control && editor.can_playtest_action() && input.action_key("attack", key) {
+        // Classic's editor Step checks the configured Attack edge.
+        KeyCode::F5
+    } else {
+        key
+    }
 }
 
 fn settings_controller_frame(
@@ -4042,7 +4065,9 @@ mod tests {
                 UiButton::Up,
                 UiButton::Confirm,
             ] {
-                if let Some(key) = controller_menu_key(button, ui.awaiting_binding()) {
+                if let Some(key) =
+                    controller_menu_key(Screen::Settings, button, ui.awaiting_binding())
+                {
                     ui.key(key, &mut settings);
                 }
             }
@@ -4532,6 +4557,21 @@ mod tests {
         assert_eq!(custom_menu_pointer_action(0, 2, 30.0, 77.0), None);
         assert_eq!(custom_menu_pointer_action(0, total_rows, 30.0, 223.0), None);
     }
+
+    #[test]
+    fn custom_selector_hides_exclamation_prefixed_source_files() {
+        let levels = std::collections::BTreeMap::from([
+            ("!internal.lvl".into(), "hidden".into()),
+            ("alpha.lvl".into(), "visible".into()),
+            ("!backup.lvl".into(), "hidden".into()),
+            ("beta.lvl".into(), "visible".into()),
+        ]);
+        assert_eq!(
+            visible_custom_level_names(&levels),
+            ["alpha.lvl", "beta.lvl"]
+        );
+    }
+
     #[test]
     fn source_f1_sets_raw_health_and_knockback_before_ordinary_ankh_processing() {
         for facing in [-1, 1] {
@@ -5111,6 +5151,40 @@ mod tests {
         assert_eq!(actual, snapped);
     }
     use super::*;
+    #[test]
+    fn custom_selector_controller_start_confirms_the_selected_level() {
+        assert_eq!(
+            controller_menu_key(Screen::Custom, UiButton::Pause, false),
+            Some(KeyCode::Enter)
+        );
+        assert_eq!(
+            controller_menu_key(Screen::Custom, UiButton::Confirm, false),
+            Some(KeyCode::Enter)
+        );
+        assert_eq!(
+            controller_menu_key(Screen::Editor, UiButton::Confirm, false),
+            Some(KeyCode::F5)
+        );
+        assert_eq!(
+            controller_menu_key(Screen::Title, UiButton::Pause, false),
+            Some(KeyCode::Escape)
+        );
+    }
+
+    #[test]
+    fn configured_keyboard_attack_starts_editor_playtest_only_outside_modals() {
+        let input = InputState::default();
+        let editor = EditorUi::new();
+        assert_eq!(
+            source_editor_key(&input, &editor, KeyCode::KeyX, false),
+            KeyCode::F5
+        );
+        assert_eq!(
+            source_editor_key(&input, &editor, KeyCode::KeyX, true),
+            KeyCode::KeyX
+        );
+    }
+
     #[test]
     fn editor_palette_progress_comes_from_persisted_shortcut_unlocks() {
         let cases: &[(&[&str], (bool, bool, bool))] = &[
