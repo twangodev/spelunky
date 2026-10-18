@@ -775,7 +775,7 @@ impl App {
         configured_pause_key(&self.store.data.settings.bindings, key)
     }
     fn menu_key(&mut self, key: KeyCode) {
-        let key = finished_menu_key(self.screen, &self.input, key);
+        let key = source_confirm_key(self.screen, &self.input, key);
         if key == KeyCode::Escape {
             if self.screen == Screen::Custom {
                 self.return_from_custom_selector();
@@ -2383,8 +2383,9 @@ fn configured_pause_key(
         })
 }
 
-fn finished_menu_key(screen: Screen, input: &InputState, key: KeyCode) -> KeyCode {
-    if screen == Screen::Finished && input.action_key("attack", key) {
+fn source_confirm_key(screen: Screen, input: &InputState, key: KeyCode) -> KeyCode {
+    // oTitle/oEnd* accept checkAttackPressed() as well as Enter/Escape.
+    if matches!(screen, Screen::Title | Screen::Finished) && input.action_key("attack", key) {
         KeyCode::Enter
     } else {
         key
@@ -3602,7 +3603,7 @@ mod tests {
     }
 
     #[test]
-    fn host_input_audit_finished_action_matches_loaded_validated_prompt_and_binding() {
+    fn host_input_audit_attack_binding_reaches_title_and_finished_confirm() {
         for (binding, key, label) in [
             ("unsupported", KeyCode::KeyX, "X"),
             ("unsupported, KeyJ", KeyCode::KeyJ, "J"),
@@ -3620,11 +3621,10 @@ mod tests {
             input.key(key, true, false);
             let active = binding != "";
             assert_eq!(input.take_tick().attack_pressed, active);
-            assert_eq!(
-                finished_menu_key(Screen::Finished, &input, key),
-                if active { KeyCode::Enter } else { key }
-            );
-            assert_eq!(finished_menu_key(Screen::Title, &input, key), key);
+            let expected = if active { KeyCode::Enter } else { key };
+            assert_eq!(source_confirm_key(Screen::Finished, &input, key), expected);
+            assert_eq!(source_confirm_key(Screen::Title, &input, key), expected);
+            assert_eq!(source_confirm_key(Screen::Pause, &input, key), key);
         }
     }
 

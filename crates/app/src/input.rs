@@ -239,14 +239,22 @@ impl InputState {
         actions.set(Action::Right, right);
         actions.set(Action::Up, up);
         actions.set(Action::Down, down);
+        let attack_button = self.controller_binding("attack");
+        // Classic menus call checkAttackPressed(), so the controller's
+        // confirmation edge follows the configured ACTION binding.
+        let confirm = held & attack_button.mask() != 0;
+        // East is a conventional extra cancel affordance in this port. When
+        // it is rebound as ACTION, keep the source confirmation meaning only.
+        let cancel =
+            held & ControllerButton::East.mask() != 0 && attack_button != ControllerButton::East;
         let mut ui = 0;
         for (index, pressed) in [
             up,
             down,
             left,
             right,
-            held & ControllerButton::South.mask() != 0,
-            held & ControllerButton::East.mask() != 0,
+            confirm,
+            cancel,
             held & self.controller_binding("start").mask() != 0,
         ]
         .into_iter()
@@ -886,35 +894,52 @@ mod tests {
     }
 
     #[test]
-    fn controller_remap_changes_gameplay_and_start_without_changing_fixed_menu_confirm() {
+    fn controller_remapped_attack_routes_menu_confirm_and_start_remains_remappable() {
         let mut input = InputState::default();
         input.set_controller_bindings(&BTreeMap::from([
             ("jump".into(), "East".into()),
-            ("attack".into(), "South".into()),
+            ("attack".into(), "West".into()),
             ("start".into(), "Mode".into()),
         ]));
         remap_sample(&mut input, 0);
+        remap_sample(&mut input, ControllerButton::West.mask());
+        let tick = input.take_tick();
+        assert!(tick.attack && tick.attack_pressed && !tick.jump);
+        assert_eq!(input.ui_pressed(), vec![UiButton::Confirm]);
+        remap_sample(&mut input, 0);
+        input.take_tick();
+        remap_sample(&mut input, ControllerButton::South.mask());
+        let tick = input.take_tick();
+        assert!(!tick.attack && !tick.jump);
+        assert!(input.ui_pressed().is_empty());
+        remap_sample(&mut input, 0);
+        input.take_tick();
         remap_sample(&mut input, ControllerButton::East.mask());
         let tick = input.take_tick();
         assert!(tick.jump && tick.jump_pressed && !tick.attack);
         assert_eq!(input.ui_pressed(), vec![UiButton::Cancel]);
         remap_sample(&mut input, 0);
         input.take_tick();
-        remap_sample(&mut input, ControllerButton::South.mask());
-        let tick = input.take_tick();
-        assert!(tick.attack && tick.attack_pressed && !tick.jump);
-        assert_eq!(input.ui_pressed(), vec![UiButton::Confirm]);
-        remap_sample(&mut input, 0);
         remap_sample(&mut input, ControllerButton::Start.mask());
         assert!(input.ui_pressed().is_empty());
         remap_sample(&mut input, 0);
         remap_sample(&mut input, ControllerButton::Mode.mask());
         assert_eq!(input.ui_pressed(), vec![UiButton::Pause]);
         input.gamepad_connected = true;
-        assert_eq!(input.action_label("attack"), "SOUTH BUTTON");
+        assert_eq!(input.action_label("attack"), "WEST BUTTON");
         assert_eq!(input.action_label("pause"), "MODE");
         input.gamepad_connected = false;
         assert_eq!(input.action_label("attack"), "X");
+    }
+
+    #[test]
+    fn remapped_attack_on_east_does_not_also_emit_the_port_cancel_edge() {
+        let mut input = InputState::default();
+        input.set_controller_bindings(&BTreeMap::from([("attack".into(), "East".into())]));
+        remap_sample(&mut input, 0);
+        remap_sample(&mut input, ControllerButton::East.mask());
+        assert!(input.take_tick().attack_pressed);
+        assert_eq!(input.ui_pressed(), vec![UiButton::Confirm]);
     }
 
     #[test]
