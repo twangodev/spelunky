@@ -101,6 +101,10 @@ fn eligible_legacy_record() -> bool {
     true
 }
 
+fn existing_save_first_time() -> bool {
+    false
+}
+
 fn legacy_record_algorithm() -> RngAlgorithm {
     RngAlgorithm::LegacySplitMix64V1
 }
@@ -120,9 +124,10 @@ impl Record {
 #[serde(default)]
 pub struct SaveData {
     pub version: u32,
-    /// Source firstTime is a runtime sentinel for newly initialized storage.
-    /// An existing save starts with it false, even before a completed run.
-    #[serde(skip)]
+    /// Keep first-run onboarding alive across saves made before the player
+    /// enters the Start portal. Older saves without this field are established
+    /// profiles and must not replay onboarding.
+    #[serde(default = "existing_save_first_time")]
     pub first_time: bool,
     pub settings: Settings,
     pub records: Vec<Record>,
@@ -196,9 +201,6 @@ impl SaveData {
         data.custom_levels = crate::editor_io::canonical_level_sources(data.custom_levels);
         // Version zero used the same fields without a required schema marker.
         data.version = SAVE_VERSION;
-        // Classic initializes storage on its first launch. Later launches do
-        // not repeat the firstTime tutorial gate, regardless of score values.
-        data.first_time = false;
         // Newly introduced actions receive defaults; existing remaps and
         // deliberately empty (unbound) actions remain intact.
         for (action, keys) in Settings::default().bindings {
@@ -481,22 +483,32 @@ mod tests {
     }
 
     #[test]
-    fn only_missing_storage_initializes_the_runtime_first_time_sentinel() {
+    fn first_time_onboarding_survives_settings_saves_until_consumed() {
         let fresh = Store::from_read(Ok(None));
         assert!(fresh.data.first_time);
         let json = fresh.data.to_json().unwrap();
-        assert!(!json.contains("first_time"));
+        assert!(json.contains("\"first_time\": true"));
         let restarted = Store::from_read(Ok(Some(json)));
-        assert!(!restarted.data.first_time);
+        assert!(restarted.data.first_time);
         assert!(restarted.data.records.is_empty());
         assert!(restarted.data.unlocks.is_empty());
-        for existing in [
-            "{}",
-            r#"{"version":0}"#,
-            r#"{"version":1,"first_time":true}"#,
-        ] {
-            assert!(!SaveData::from_json(existing).unwrap().first_time);
+
+        let mut consumed = restarted.data;
+        consumed.first_time = false;
+        let consumed_json = consumed.to_json().unwrap();
+        assert!(!Store::from_read(Ok(Some(consumed_json))).data.first_time);
+
+        for legacy in ["{}", r#"{"version":0}"#, r#"{"version":1}"#] {
+            assert!(
+                !SaveData::from_json(legacy).unwrap().first_time,
+                "legacy save without a first_time field must not be treated as new"
+            );
         }
+        assert!(
+            SaveData::from_json(r#"{"version":1,"first_time":true}"#)
+                .unwrap()
+                .first_time
+        );
     }
 
     #[test]
