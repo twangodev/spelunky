@@ -971,7 +971,7 @@ impl App {
             }
             return;
         }
-        if !matches!(key, KeyCode::Enter | KeyCode::Space | KeyCode::KeyZ) {
+        if !menu_confirm_requested(self.screen, key) {
             return;
         }
         match self.screen {
@@ -2907,6 +2907,18 @@ fn source_confirm_key(screen: Screen, input: &InputState, key: KeyCode) -> KeyCo
         key
     }
 }
+
+fn menu_confirm_requested(screen: Screen, key: KeyCode) -> bool {
+    // The port title menu fronts Classic's oTitle room. That room's Step accepts
+    // Enter, Escape, the configured Attack edge, or Start; source mapping turns
+    // Attack/Start into Enter before this point. Z and Space are Jump defaults,
+    // not title-menu confirmation keys.
+    if screen == Screen::Title {
+        key == KeyCode::Enter
+    } else {
+        matches!(key, KeyCode::Enter | KeyCode::Space | KeyCode::KeyZ)
+    }
+}
 fn source_paused_control(
     game: Option<&Game>,
     input: &spelunky_core::InputFrame,
@@ -4296,6 +4308,34 @@ mod tests {
             assert_eq!(source_confirm_key(Screen::Finished, &input, key), expected);
             assert_eq!(source_confirm_key(Screen::Title, &input, key), expected);
             assert_eq!(source_confirm_key(Screen::Pause, &input, key), key);
+        }
+    }
+
+    #[test]
+    fn title_menu_confirmation_matches_classic_enter_attack_and_start_routes() {
+        // Classic oTitle Step accepts Enter, Escape, checkAttackPressed(), and
+        // checkStartPressed(); the app maps Attack and controller Start to Enter.
+        let mut input = InputState::default();
+        input.set_bindings(&crate::storage::Settings::default().bindings);
+
+        for jump_key in [KeyCode::KeyZ, KeyCode::Space] {
+            input.key(jump_key, true, false);
+            assert!(input.take_tick().jump_pressed, "{jump_key:?} is a jump key");
+            let mapped = source_confirm_key(Screen::Title, &input, jump_key);
+            assert!(!menu_confirm_requested(Screen::Title, mapped));
+            input.key(jump_key, false, false);
+            input.take_tick();
+        }
+
+        assert!(menu_confirm_requested(Screen::Title, KeyCode::Enter));
+        input.key(KeyCode::KeyX, true, false);
+        let mapped_attack = source_confirm_key(Screen::Title, &input, KeyCode::KeyX);
+        assert_eq!(mapped_attack, KeyCode::Enter);
+        assert!(menu_confirm_requested(Screen::Title, mapped_attack));
+        for button in [UiButton::Confirm, UiButton::Pause] {
+            let mapped = controller_menu_key(Screen::Title, button, false).unwrap();
+            assert_eq!(mapped, KeyCode::Enter);
+            assert!(menu_confirm_requested(Screen::Title, mapped));
         }
     }
 
