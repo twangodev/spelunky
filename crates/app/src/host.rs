@@ -870,9 +870,18 @@ impl App {
             }
             Screen::Editor => {
                 let control = shortcut_control.unwrap_or(self.control);
-                let key = source_editor_key(&self.input, &self.editor, key, control);
                 let command = self.editor.key(key, text_value, control);
                 self.editor_command(command);
+                // Classic dispatches keyboard events before the editor Step.
+                // E can enter sign/door editing and Escape can change status;
+                // in either case the Step no longer sees an editable room.
+                if self.screen == Screen::Editor {
+                    let step_key = source_editor_key(&self.input, &self.editor, key, control);
+                    if step_key != key {
+                        let command = self.editor.key(step_key, None, false);
+                        self.editor_command(command);
+                    }
+                }
             }
             _ => self.menu_key(key),
         }
@@ -5593,17 +5602,87 @@ mod tests {
     }
 
     #[test]
-    fn configured_keyboard_attack_starts_editor_playtest_only_outside_modals() {
+    fn configured_attack_runs_after_the_physical_editor_key_event() {
         let input = InputState::default();
-        let editor = EditorUi::new();
+        let mut editor = EditorUi::new();
+        assert!(matches!(
+            editor.key(KeyCode::KeyX, None, false),
+            EditorCommand::None
+        ));
         assert_eq!(
             source_editor_key(&input, &editor, KeyCode::KeyX, false),
             KeyCode::F5
         );
         assert_eq!(
             source_editor_key(&input, &editor, KeyCode::KeyX, true),
-            KeyCode::KeyX
+            KeyCode::KeyX,
+            "control shortcuts keep their existing precedence"
         );
+        assert!(matches!(
+            editor.key(KeyCode::F5, None, false),
+            EditorCommand::Play(_)
+        ));
+    }
+
+    #[test]
+    fn attack_rebound_to_escape_opens_exit_confirmation_before_editor_step() {
+        let mut input = InputState::default();
+        input.set_bindings(&std::collections::BTreeMap::from([(
+            "attack".into(),
+            "Escape".into(),
+        )]));
+        let mut editor = EditorUi::new();
+
+        assert!(matches!(
+            editor.key(KeyCode::Escape, None, false),
+            EditorCommand::None
+        ));
+        assert!(
+            !editor.can_playtest_action(),
+            "Escape opens the save/exit confirmation"
+        );
+        assert_eq!(
+            source_editor_key(&input, &editor, KeyCode::Escape, false),
+            KeyCode::Escape,
+            "the source Step no longer sees an editable room"
+        );
+    }
+
+    #[test]
+    fn attack_rebound_to_e_enters_sign_or_door_editing_before_editor_step() {
+        let mut input = InputState::default();
+        input.set_bindings(&std::collections::BTreeMap::from([(
+            "attack".into(),
+            "KeyE".into(),
+        )]));
+        for (tile, label) in [('I', "sign"), ('X', "door")] {
+            let mut level = spelunky_core::level::Level::default();
+            level.set_tile(0, 0, tile).unwrap();
+            if tile == 'I' {
+                level.signs.push("hello".into());
+            } else {
+                level.exit_targets.push("next".into());
+            }
+            let mut editor = EditorUi::new();
+            editor
+                .load(&format!("{label}.lvl"), &level.to_text())
+                .unwrap();
+            editor.pointer(4.0, 40.0, false, false);
+
+            assert!(matches!(
+                editor.key(KeyCode::KeyE, None, false),
+                EditorCommand::None
+            ));
+            assert!(
+                !editor.can_playtest_action(),
+                "E opens {label} text editing"
+            );
+            assert_eq!(
+                source_editor_key(&input, &editor, KeyCode::KeyE, false),
+                KeyCode::KeyE,
+                "after E opens {label} editing, the source Step no longer sees an editable room"
+            );
+        }
     }
 
     #[test]
