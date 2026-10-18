@@ -2090,15 +2090,85 @@ mod tests {
     }
 
     #[test]
-    fn mattock_cannot_dig_invincible_terrain() {
+    fn mattock_cannot_dig_hard_block_but_digs_regular_block() {
         let mut game = Game::shell(3, RulesPreset::Classic);
-        game.world.set_tile(5, 5, "oSolid");
+        game.world.set_tile(5, 5, "oHardBlock");
         let e = Entity::new(1, "oMattockHit", Vec2::new(88.0, 88.0));
         mattock_dig(&mut game, &e);
-        assert_eq!(game.world.tile(5, 5).unwrap().object, "oSolid");
+        assert_eq!(game.world.tile(5, 5).unwrap().object, "oHardBlock");
         game.world.set_tile(5, 5, "oBlock");
         mattock_dig(&mut game, &e);
         assert_eq!(game.world.tile(5, 5).unwrap().object, "");
+    }
+
+    #[test]
+    fn mattock_game_step_digs_source_shop_ice_wall_stored_as_noninvincible_o_solid() {
+        let (mut game, _) = flat_room("oMattock");
+        let tile = (6_i32, 9_i32);
+        let center = Vec2::new(104.0, 152.0);
+        game.world
+            .set_tile(tile.0 as usize, tile.1 as usize, "oSolid");
+        let metadata = game.world.spawn("oTerrainMetadata", center);
+        let metadata = game.world.entity_mut(metadata).unwrap();
+        metadata.data.insert("shopWall".into(), 1.0);
+        metadata
+            .text
+            .insert("terrain_sprite".into(), "sIceBlock".into());
+
+        game.step(&InputFrame {
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        for _ in 0..9 {
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(game.world.tile(tile.0, tile.1).unwrap().object, "oSolid");
+        game.step(&InputFrame::default());
+
+        assert_eq!(game.world.tile(tile.0, tile.1).unwrap().object, "");
+        assert!(game.world.fluid_dirty);
+        assert!(!game.world.entities.iter().any(|entity| {
+            entity.alive && entity.object == "oTerrainMetadata" && entity.pos == center
+        }));
+    }
+
+    #[test]
+    fn mattock_game_step_preserves_invincible_o_solid_and_hard_blocks() {
+        for (object, invincible_metadata) in [("oSolid", true), ("oHardBlock", false)] {
+            let (mut game, _) = flat_room("oMattock");
+            let tile = (6_i32, 9_i32);
+            let center = Vec2::new(104.0, 152.0);
+            game.world
+                .set_tile(tile.0 as usize, tile.1 as usize, object);
+            if invincible_metadata {
+                let metadata = game.world.spawn("oTerrainMetadata", center);
+                game.world
+                    .entity_mut(metadata)
+                    .unwrap()
+                    .data
+                    .insert("invincible".into(), 1.0);
+            }
+
+            game.step(&InputFrame {
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            for _ in 0..10 {
+                game.step(&InputFrame::default());
+            }
+
+            assert_eq!(game.world.tile(tile.0, tile.1).unwrap().object, object);
+            if invincible_metadata {
+                assert!(game.world.entities.iter().any(|entity| {
+                    entity.alive
+                        && entity.object == "oTerrainMetadata"
+                        && entity.pos == center
+                        && entity.value("invincible") == 1.0
+                }));
+            }
+        }
     }
     #[test]
     fn held_and_innate_mattocks_preserve_invincible_boss_floor_metadata() {
