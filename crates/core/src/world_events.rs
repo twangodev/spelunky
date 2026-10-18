@@ -380,6 +380,7 @@ pub(crate) fn handles(object: &str) -> bool {
             | "oFrozenCaveman"
             | "oBlood"
             | "oBone"
+            | "oDetritus"
             | "oFlame"
             | "oLava"
             | "oPoof"
@@ -624,7 +625,7 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
             // its retirement before the synchronous Caveman Create.
             return;
         }
-        "oBlood" | "oBone" => detritus(game, &mut e),
+        "oDetritus" | "oBlood" | "oBone" => detritus(game, &mut e),
         "oFlame" => flame(game, &mut e),
         "oLava" => {
             let terrain = e.object == "oTerrainMetadata";
@@ -3304,6 +3305,29 @@ mod tests {
         alarm(&mut g, id, 0);
         assert_eq!(g.world.entity(id).unwrap().alarms[0], 0);
         assert!(!g.world.entities.iter().any(|e| e.object == "oBloodTrail"));
+    }
+
+    #[test]
+    fn graphics_setting_controls_classic_blood_trail_alarm_and_can_change_live() {
+        for graphics_high in [true, false] {
+            let mut g = room();
+            g.set_graphics_high(graphics_high);
+            let id = spawn_detritus(&mut g, "oBlood", Vec2::new(80.0, 80.0));
+            g.world.entity_mut(id).unwrap().alarms[0] = 0;
+            alarm(&mut g, id, 0);
+            assert_eq!(
+                g.world.entity(id).unwrap().alarms[0],
+                if graphics_high { 4 } else { 0 }
+            );
+            assert_eq!(
+                g.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oBloodTrail")
+                    .count(),
+                usize::from(graphics_high)
+            );
+        }
     }
     #[test]
     fn fluid_with_reloads_live_parent_array_after_activation_rebuild() {

@@ -300,3 +300,19 @@ fn source_bare_detritus_cap_has_no_child_draw_or_flame_destroy_effect() {
     assert!(smokes(&g).is_empty(), "only Flame owns Smoke on Destroy");
     assert!(ids.iter().all(|id| stored(&g, *id).alive));
 }
+
+#[test]
+fn direct_detritus_parent_birth_runs_its_source_step() {
+    let mut g = room(23);
+    let id = g.spawn("oDetritus", Vec2::new(88.0, 72.0));
+    let e = g.world.entity_mut(id).unwrap();
+    e.vel = Vec2::new(2.0, 1.0);
+
+    g.step(&InputFrame::default());
+
+    let e = stored(&g, id);
+    assert_eq!(e.value("life"), 59.0);
+    assert_eq!(e.pos, Vec2::new(90.0, 73.0));
+    assert_eq!(e.vel, Vec2::new(2.0, 1.6));
+    assert_eq!(e.value("bounce"), 1.0);
+}
