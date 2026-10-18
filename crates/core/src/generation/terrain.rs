@@ -1974,21 +1974,22 @@ mod tests {
                 .filter(|entity| entity.pos.y == 768.0)
                 .any(|entity| entity.value("spurt") == 1.0)
         );
-        // rOlmec.xml creates (640,768) before (640,784). scrSetupWalls
-        // immediately changes the first instance to sLavaTop; its frame-0
-        // separate bbox starts at y+1, so the later collision_point at the
-        // second instance's above origin misses and that lower lava can spurt.
+        // rOlmec.xml creates (640,768) before (640,784). scrSetupWalls changes
+        // the first instance to sLavaTop, whose cached aggregate bbox still
+        // contains the collision_point at y=768. The lower lava therefore sees
+        // that water-family instance above it and remains covered.
         let at = |x, y| {
             lava.iter()
                 .find(|entity| entity.pos == Vec2::new(x, y))
                 .unwrap()
         };
-        assert_eq!(at(640.0, 784.0).sprite, "sLavaTop");
-        assert_eq!(at(624.0, 784.0).sprite, "sLavaTop");
+        assert_eq!(at(640.0, 784.0).sprite, "sLava");
+        assert_eq!(at(640.0, 784.0).value("spurt"), 0.0);
+        assert_eq!(at(624.0, 784.0).sprite, "sLava");
 
         // scrCheckWaterTop later propagates the surface horizontally. It can
-        // turn covered lava into sLavaTop, but does not roll another spurt.
-        assert_eq!(at(16.0, 784.0).sprite, "sLavaTop");
+        // spread across a row, but does not propagate into this covered row.
+        assert_eq!(at(16.0, 784.0).sprite, "sLava");
         for entity in lava {
             assert_eq!(entity.value("lava_initialized"), 1.0);
             if entity.value("spurt") == 1.0 {

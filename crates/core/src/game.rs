@@ -648,6 +648,17 @@ impl Game {
         if generated.dark_roll_selected {
             self.flags.insert("had_dark_level".into());
         }
+        if !historical {
+            // scrInitLevel resets global.cemetary for the new room, then sets
+            // it when the Jungle cemetery roll wins. Runtime Create callbacks
+            // (leaves, branches, and idol traps) read this global after level
+            // generation, so project the selected result out of the generator.
+            self.flags.remove("cemetary");
+            self.flags.remove("cemetery");
+            if generated.cemetery_selected {
+                self.flags.insert("cemetary".into());
+            }
+        }
         self.world = generated.world;
         // scrLevelGen sets global.madeMoai as soon as it schedules a Moai
         // room. Persist that source side effect with the generated room so a
@@ -872,6 +883,38 @@ impl Game {
 
     pub fn source_elapsed_seconds(&self) -> u64 {
         self.source_elapsed_ms() / 1000
+    }
+}
+
+#[cfg(test)]
+mod campaign_cemetery_runtime_flag_tests {
+    use crate::{Game, RulesPreset, Vec2};
+
+    #[test]
+    fn naturally_selected_cemetery_reaches_runtime_create_and_idol_callbacks() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.data.insert("next_level".into(), 5.0);
+        game.next_level();
+
+        assert_eq!(game.world.name, "Cemetery");
+        assert!(game.flags.contains("cemetary"));
+        assert!(!game.flags.contains("cemetery"));
+
+        // oLeaves Create reads global.cemetary directly. At the left boundary,
+        // no tree/leaf neighbor changes the right-facing sprite variant.
+        let leaves = game.spawn("oLeaves", Vec2::new(16.0, 16.0));
+        assert_eq!(game.world.entity(leaves).unwrap().sprite, "sLeavesDead");
+
+        // The Jungle idol callback also reads the same global to choose its
+        // cemetery ghost response.
+        let idol = game.spawn("oGoldIdol", Vec2::new(320.0, 320.0));
+        crate::traps::altar::idol_pickup(&mut game, idol);
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .any(|entity| { entity.alive && entity.object == "oGhost" })
+        );
     }
 }
 

@@ -1383,21 +1383,25 @@ pub fn animate_entities(game: &mut Game) {
         .filter(|e| e.alive)
         .map(|e| e.id)
         .collect();
-    let removed = game
+    let removed: Vec<_> = game
         .dispatcher
         .active_order
         .iter()
-        .any(|i| matches!(i,Instance::Entity(id) if !live.contains(id)));
-    game.dispatcher
-        .active_order
-        .retain(|i| !matches!(i,Instance::Entity(id) if !live.contains(id)));
-    game.dispatcher
-        .inactive_order
-        .retain(|i| !matches!(i,Instance::Entity(id) if !live.contains(id)));
-    if removed {
-        rebuild_resources(game);
+        .chain(&game.dispatcher.inactive_order)
+        .filter_map(|instance| match instance {
+            Instance::Entity(id) if !live.contains(id) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    for id in &removed {
+        remove_registration(game, Instance::Entity(*id));
     }
     sync_newborns(game);
+    // Opening callers normally discard dead storage before reaching Draw, but
+    // keep this boundary correct for any instance already registered as dead.
+    for id in removed {
+        remove_registration(game, Instance::Entity(id));
+    }
     sort_draw_order(game);
     for i in game.dispatcher.active_order.clone() {
         if matches!(i, Instance::Entity(_)) {
@@ -1725,13 +1729,16 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
         Instance::Terrain(_) => {}
     });
     crate::enemies::finish_destroy_events(game);
-    let destroyed = game.world.entities.iter().any(|e| !e.alive);
+    let destroyed: Vec<_> = game
+        .world
+        .entities
+        .iter()
+        .filter(|entity| !entity.alive)
+        .map(|entity| entity.id)
+        .collect();
     game.world.entities.retain(|e| e.alive);
-    game.dispatcher.active_order.retain(
-        |i| !matches!(i,Instance::Entity(id) if !game.world.entities.iter().any(|e|e.id==*id)),
-    );
-    if destroyed {
-        rebuild_resources(game);
+    for id in destroyed {
+        remove_registration(game, Instance::Entity(id));
     }
     sync_newborns(game);
     sort_draw_order(game);
@@ -1847,5 +1854,66 @@ mod automatic_collision_tests {
             .find(|entity| entity.alive && entity.object == "oDiamond")
             .unwrap();
         assert_eq!(diamond.pos.x, 129.0, "source event uses moved receiver x");
+    }
+}
+
+#[cfg(test)]
+mod destroyed_resource_order_tests {
+    use super::*;
+    use crate::{Area, RulesPreset, World};
+
+    fn depth_sorted_scarabs() -> (Game, u64, u64, u64, i32) {
+        let mut game = Game::shell(31, RulesPreset::Classic);
+        game.world = World::new(42, 34, Area::Mines, 1);
+        game.player.pos = Vec2::new(320.0, 240.0);
+        let first = game.spawn("oScarab", Vec2::new(352.0, 240.0));
+        let second = game.spawn("oScarab", Vec2::new(384.0, 240.0));
+        let unrelated = game.spawn("oBackdrop", Vec2::new(416.0, 240.0));
+        game.world
+            .entity_mut(first)
+            .unwrap()
+            .data
+            .insert("depth".into(), 10.0);
+        game.world
+            .entity_mut(second)
+            .unwrap()
+            .data
+            .insert("depth".into(), 100.0);
+        let resource = resource(&game, Instance::Entity(first));
+
+        game.step(&InputFrame::default());
+        assert_eq!(
+            game.dispatcher.resource_order[&resource],
+            vec![Instance::Entity(first), Instance::Entity(second)],
+            "depth sorting must not reorder the source oScarab resource list"
+        );
+        (game, first, second, unrelated, resource)
+    }
+
+    fn assert_scarab_order(game: &Game, first: u64, second: u64, resource: i32) {
+        assert_eq!(
+            game.dispatcher.resource_order[&resource],
+            vec![Instance::Entity(first), Instance::Entity(second)]
+        );
+    }
+
+    #[test]
+    fn unrelated_destroy_prunes_only_that_identity_from_resource_events() {
+        let (mut game, first, second, unrelated, resource) = depth_sorted_scarabs();
+        game.world.entity_mut(unrelated).unwrap().alive = false;
+
+        game.step(&InputFrame::default());
+
+        assert_scarab_order(&game, first, second, resource);
+    }
+
+    #[test]
+    fn animation_cleanup_prunes_dead_identity_without_rebuilding_resource_order() {
+        let (mut game, first, second, unrelated, resource) = depth_sorted_scarabs();
+        game.world.entities.retain(|entity| entity.id != unrelated);
+
+        animate_entities(&mut game);
+
+        assert_scarab_order(&game, first, second, resource);
     }
 }

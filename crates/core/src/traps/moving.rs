@@ -1236,7 +1236,11 @@ fn thin_ice(game: &mut Game, entity: &mut Entity) {
         thickness -= 2.0;
         if game.rng.range(100) == 0 {
             let x = entity.pos.x + f64::from(game.rng.range(17));
-            game.world.spawn("oDrip", Vec2::new(x, entity.pos.y + 9.0));
+            crate::world_events::spawn_runtime_object(
+                game,
+                "oDrip",
+                Vec2::new(x, entity.pos.y + 9.0),
+            );
         }
     }
     entity.data.insert("thickness".into(), thickness);

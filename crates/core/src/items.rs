@@ -497,7 +497,14 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
     {
         crate::enemies::inherited_item_step_impacts(game, id);
     }
-    utility::step_instance(game, id);
+    let flare_crate = game
+        .world
+        .entities
+        .iter()
+        .any(|entity| entity.id == id && entity.object == "oFlareCrate");
+    if !flare_crate {
+        utility::step_instance(game, id);
+    }
     collectibles::step_instance(game, id);
     if game
         .world
@@ -518,6 +525,12 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         })
     {
         crate::enemies::inherited_item_step_impacts(game, id);
+    }
+    // oFlareCrate's Step begins with action_inherited(). Its water splash
+    // therefore follows the complete Item collision response, even when that
+    // response already ran the crate's inherited Destroy callback.
+    if flare_crate {
+        utility::step_instance(game, id);
     }
     // oBomb Step calls action_inherited() first; its own shopkeeper warning
     // therefore follows the complete inherited item impact block.

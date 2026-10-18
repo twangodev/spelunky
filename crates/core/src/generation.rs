@@ -720,6 +720,10 @@ pub(crate) fn reset_dark_history(flags: &mut BTreeSet<String>, level: u32) {
 pub(crate) struct GeneratedLevel {
     pub world: World,
     pub dark_roll_selected: bool,
+    /// `scrInitLevel` publishes its selected cemetery roll to the live global
+    /// before gameplay Create callbacks run. Keep it alongside the room so
+    /// Game can project that runtime state after generation returns.
+    pub cemetery_selected: bool,
 }
 
 fn select_dark_level(
@@ -824,6 +828,7 @@ pub(crate) fn generate_campaign_result(
         return GeneratedLevel {
             world,
             dark_roll_selected: false,
+            cemetery_selected: false,
         };
     }
     let source_classic = state.revision == crate::GenerationRevision::SourceClassicV2;
@@ -1095,6 +1100,7 @@ pub(crate) fn generate_campaign_result(
     GeneratedLevel {
         world,
         dark_roll_selected,
+        cemetery_selected: has(&selected, "cemetery"),
     }
 }
 

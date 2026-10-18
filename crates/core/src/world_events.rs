@@ -155,7 +155,8 @@ pub(crate) fn fluid_tick(game: &mut Game) {
                     origin.x + f64::from(game.rng.range(17)),
                     origin.y + f64::from(game.rng.range(17)),
                 );
-                game.world.spawn(
+                spawn_runtime_object(
+                    game,
                     if object == "oLava" {
                         "oLavaDrip"
                     } else {
@@ -165,9 +166,8 @@ pub(crate) fn fluid_tick(game: &mut Game) {
                 );
             }
             if object == "oLava" && game.rng.chance(1, 6) {
-                let id = game
-                    .world
-                    .spawn("oFlame", Vec2::new(origin.x + 8.0, origin.y + 8.0));
+                let id =
+                    spawn_runtime_object(game, "oFlame", Vec2::new(origin.x + 8.0, origin.y + 8.0));
                 let mut flame = game.world.entity(id).unwrap().clone();
                 initialize_detritus(game, &mut flame);
                 flame.vel.y = 4.0;
@@ -549,12 +549,46 @@ pub(crate) fn create_instance(game: &mut Game, id: u64) {
     } else if handles(&e.object) {
         initialize_effect(game, &mut e);
     }
+    if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+        // Parent initialization may set inherited defaults first (for example
+        // oDetritus sets type=""), then the concrete Create callback assigns
+        // its own type. Apply the explicit source values after that chain.
+        source_create_variables(&mut e);
+    }
     game.world.entities[index] = e;
+}
+
+/// Runtime `instance_create` runs synchronously in the source revision. Keep
+/// the historical adapter's raw birth behavior for saved V1 replays.
+pub(crate) fn spawn_runtime_object(game: &mut Game, object: &str, pos: Vec2) -> u64 {
+    if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+        game.spawn(object, pos)
+    } else {
+        game.world.spawn(object, pos)
+    }
+}
+
+/// Explicit dynamic variables assigned by Classic Create events. Keep these
+/// on the source revision so historical snapshots retain their old projection.
+fn source_create_variables(entity: &mut Entity) {
+    if entity.object == "oLava" {
+        entity.text.insert("type".into(), "Lava".into());
+    } else if catalog::is_a(&entity.object, "oWater") {
+        entity.text.insert("type".into(), "Water".into());
+        entity.data.insert("checked".into(), 0.0);
+    } else if catalog::is_a(&entity.object, "oRubblePiece") {
+        let kind = match entity.object.as_str() {
+            "oDrip" => "Drip",
+            "oLeaf" => "Leaf",
+            _ => "None",
+        };
+        entity.text.insert("type".into(), kind.into());
+    }
 }
 
 /// Create callbacks requiring the game's RNG or event queue.
 pub(crate) fn spawn_effect(game: &mut Game, object: &str, pos: Vec2) -> u64 {
-    let id = game.world.spawn(object, pos);
+    let id = spawn_runtime_object(game, object, pos);
     let mut e = game.world.entity(id).unwrap().clone();
     initialize_effect(game, &mut e);
     let index = game.world.entities.iter().position(|e| e.id == id).unwrap();
@@ -1089,7 +1123,7 @@ fn canopy(game: &mut Game, e: &mut Entity) {
     for _ in 0..if branch { 1 } else { 2 } {
         let x = e.pos.x + 8.0 + f64::from(game.rng.range(9)) - f64::from(game.rng.range(9));
         let y = e.pos.y + 8.0 + f64::from(game.rng.range(9)) - f64::from(game.rng.range(9));
-        game.world.spawn("oLeaf", Vec2::new(x, y));
+        spawn_runtime_object(game, "oLeaf", Vec2::new(x, y));
     }
 }
 
@@ -2012,6 +2046,13 @@ mod tests {
                 .filter(|e| e.object == "oLeaf")
                 .count(),
             4
+        );
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oLeaf")
+                .all(|leaf| leaf.text.get("type").map(String::as_str) == Some("Leaf"))
         );
         g.player.pos = Vec2::new(72.0, 64.0);
         g.player.vel = Vec2::new(0.0, 2.0);
@@ -3935,3 +3976,66 @@ mod bubble_raw_point_tests;
 #[cfg(test)]
 #[path = "world_events/world_point_source_tests.rs"]
 mod world_point_source_tests;
+
+#[cfg(test)]
+mod source_create_variable_tests {
+    use crate::{Game, RulesPreset, Vec2};
+
+    #[test]
+    fn source_create_assignments_cover_water_lava_and_rubble_families() {
+        let mut game = Game::shell(13, RulesPreset::Classic);
+        for object in ["oWater", "oWaterSwim"] {
+            let id = game.spawn(object, Vec2::new(80.0, 80.0));
+            let entity = game.world.entity(id).unwrap();
+            assert_eq!(entity.text.get("type").map(String::as_str), Some("Water"));
+            assert_eq!(entity.value("checked"), 0.0);
+        }
+
+        let lava = game.spawn("oLava", Vec2::new(96.0, 80.0));
+        let lava = game.world.entity(lava).unwrap();
+        assert_eq!(lava.text.get("type").map(String::as_str), Some("Lava"));
+        assert!(!lava.data.contains_key("checked"));
+        assert!((100.0..=300.0).contains(&lava.value("spurt_time")));
+
+        for (object, kind) in [
+            ("oRubble", "None"),
+            ("oRubbleSmall", "None"),
+            ("oLavaDrip", "None"),
+            ("oDrip", "Drip"),
+            ("oLeaf", "Leaf"),
+        ] {
+            let id = game.spawn(object, Vec2::new(112.0, 80.0));
+            assert_eq!(
+                game.world
+                    .entity(id)
+                    .unwrap()
+                    .text
+                    .get("type")
+                    .map(String::as_str),
+                Some(kind),
+                "{object}"
+            );
+        }
+        let drip = super::spawn_runtime_object(&mut game, "oDrip", Vec2::new(128.0, 80.0));
+        assert_eq!(
+            game.world
+                .entity(drip)
+                .unwrap()
+                .text
+                .get("type")
+                .map(String::as_str),
+            Some("Drip")
+        );
+    }
+
+    #[test]
+    fn historical_create_projection_does_not_gain_source_only_variables() {
+        let mut game = Game::legacy_shell(13, RulesPreset::Classic);
+        for object in ["oWaterSwim", "oLava", "oRubble", "oDrip", "oLeaf"] {
+            let id = game.spawn(object, Vec2::new(80.0, 80.0));
+            let entity = game.world.entity(id).unwrap();
+            assert!(!entity.text.contains_key("type"), "{object}");
+            assert!(!entity.data.contains_key("checked"), "{object}");
+        }
+    }
+}

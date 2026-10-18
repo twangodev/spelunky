@@ -533,8 +533,9 @@ mod tests {
             tape.temple_creates[78].treasure,
             Some(BossTempleTreasure::Underground(6))
         );
-        let state_after_source_creates = rng.state_bits();
         let mut world = World::new(42, 55, Area::Boss, 16);
+        super::create_source_boss_temples(&mut world, &mut rng, &tape);
+        let state_after_source_creates = rng.state_bits();
         boss_arena(
             &mut world,
             &mut rng,

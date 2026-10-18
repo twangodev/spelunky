@@ -866,6 +866,47 @@ mod tests {
     }
 
     #[test]
+    fn flare_crate_water_step_follows_inherited_hit_callback() {
+        let mut game = Game::shell(11, RulesPreset::Classic);
+        game.player.pos = Vec2::new(320.0, 300.0);
+        game.player.previous_pos = game.player.pos;
+        game.world.set_tile(6, 4, "oWaterSwim");
+        let caveman = game.spawn("oCaveman", Vec2::new(97.0, 64.0));
+        let initial_health = game.world.entity(caveman).unwrap().health;
+        let crate_id = game.spawn("oFlareCrate", Vec2::new(96.0, 64.0));
+        game.world.entity_mut(crate_id).unwrap().vel.x = 4.0;
+
+        game.step(&InputFrame::default());
+
+        assert!(game.world.entity(caveman).unwrap().health < initial_health);
+        assert!(game.world.entity(crate_id).is_none());
+        let hit = game
+            .events
+            .iter()
+            .position(|event| {
+                matches!(event,
+                    GameEvent::Sound { name, pos }
+                        if name == "sndHit" && *pos == Vec2::new(100.0, 64.0)
+                )
+            })
+            .expect("inherited Item collision should hit the Caveman");
+        let splash = game
+            .events
+            .iter()
+            .position(|event| {
+                matches!(event,
+                    GameEvent::Sound { name, pos }
+                        if name == "sndSplash" && *pos == Vec2::new(100.0, 64.0)
+                )
+            })
+            .expect("FlareCrate's own water callback should splash");
+        assert!(
+            hit < splash,
+            "FlareCrate Step must inherit before splashing"
+        );
+    }
+
+    #[test]
     fn utility_items_settle_using_create_event_bounds() {
         for object in ["oTeleporter", "oLampItem", "oLampRedItem", "oBasketball"] {
             let mut game = Game::shell(7, RulesPreset::Classic);
