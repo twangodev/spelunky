@@ -1147,8 +1147,9 @@ pub fn game_scene_in_view_into(
             player.facing > 0,
             color,
         );
-        if player.data.get("bow_armed").copied().unwrap_or(0.0) > 0.0 {
-            let bomb = player.data.get("bow_bomb_armed").copied().unwrap_or(0.0) > 0.0;
+        let held_arrow = player.data.get("hold_arrow").copied().unwrap_or(0.0);
+        if held_arrow > 0.0 {
+            let bomb = held_arrow == 2.0;
             let right = player.facing > 0;
             let name = match (bomb, right) {
                 (false, false) => "sArrowLeft",
@@ -5332,6 +5333,48 @@ mod tests {
             game.step(&spelunky_core::InputFrame::default());
             assert_eq!(game.player.data.get("bow_armed"), Some(&0.0));
         }
+    }
+
+    #[test]
+    fn expired_bomb_arrow_is_not_rendered_while_fully_charged_bow_stays_armed() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(42, spelunky_core::RulesPreset::Classic);
+        game.world = spelunky_core::World::new(20, 20, Area::Mines, 1);
+        for x in 0..20 {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+        game.player.pos = Vec2::new(80.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        let bow = game.world.spawn("oBow", game.player.pos);
+        game.world.entity_mut(bow).unwrap().held = true;
+        game.player.held = Some(bow);
+        game.player.data.insert("bow_armed".into(), 1.0);
+        game.player.data.insert("bow_strength".into(), 12.0);
+        game.player.data.insert("bow_bomb_armed".into(), 1.0);
+        game.player.data.insert("bow_bomb_fuse".into(), 0.0);
+        game.player.data.insert("hold_arrow".into(), 2.0);
+        game.player.data.insert("bow_arrow_toggle".into(), 0.0);
+        game.player.alarms[11] = 1;
+
+        game.step(&spelunky_core::InputFrame::default());
+
+        assert_eq!(game.player.data.get("bow_armed"), Some(&1.0));
+        assert_eq!(game.player.data.get("hold_arrow"), Some(&0.0));
+        let arrow_uvs = [
+            atlas.sprite("sArrowLeft", 0.0).unwrap().uv,
+            atlas.sprite("sArrowRight", 0.0).unwrap().uv,
+            atlas.sprite("sBombArrowLeft", 0.0).unwrap().uv,
+            atlas.sprite("sBombArrowRight", 0.0).unwrap().uv,
+            atlas.sprite("sBombArrowLeft", 1.0).unwrap().uv,
+            atlas.sprite("sBombArrowRight", 1.0).unwrap().uv,
+        ];
+        let quads = game_scene(&game, 1.0, false, &atlas);
+        assert!(
+            quads.iter().all(|quad| !arrow_uvs.contains(&quad.uv)),
+            "Classic clears holdArrow when the bomb-arrow fuse expires"
+        );
     }
 
     #[test]

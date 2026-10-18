@@ -357,7 +357,13 @@ pub fn arm_bomb_arrow(game: &mut Game) -> bool {
     // Classic's bomb-arrow branch requires a bomb, but does not consume one.
     // The decrement belongs to the separate dedicated bomb-throw branch.
     game.player.data.insert("bow_bomb_armed".into(), 1.0);
-    game.player.data.insert("bow_bomb_fuse".into(), 80.0);
+    // `bombArrowCounter` survives while a normal arrow is held and resumes if
+    // Bomb is pressed again; only a fired or expired bomb arrow resets it.
+    game.player
+        .data
+        .entry("bow_bomb_fuse".into())
+        .or_insert(80.0);
+    game.player.data.insert("hold_arrow".into(), 2.0);
     game.player.alarms[11] = 1;
     true
 }
@@ -404,13 +410,9 @@ pub(crate) fn fire_bow_on_balance(game: &mut Game) {
 
 fn fire_bow(game: &mut Game) {
     let strength = game.player.data.get("bow_strength").copied().unwrap_or(0.0);
-    let bomb_arrow = game
-        .player
-        .data
-        .get("bow_bomb_armed")
-        .copied()
-        .unwrap_or(0.0)
-        != 0.0;
+    // scrFireBow branches on `holdArrow == ARROW_BOMB`; the fuse-active flag
+    // is separate because the arrow can expire while the bow stays drawn.
+    let bomb_arrow = game.player.data.get("hold_arrow").copied().unwrap_or(0.0) == 2.0;
     let bomb_fuse = game
         .player
         .data
@@ -448,7 +450,7 @@ fn fire_bow(game: &mut Game) {
         e.data.insert("bomb_arrow".into(), 1.0);
         e.alarms[1] = bomb_fuse as i32;
         game.player.data.insert("bow_bomb_armed".into(), 0.0);
-        game.player.data.remove("bow_bomb_fuse");
+        game.player.data.insert("bow_bomb_fuse".into(), 80.0);
     }
     if let Some(ammo) = game.data.get_mut("arrows") {
         // scrFireBow decrements even a zero resource balance on late hurt.
@@ -457,6 +459,7 @@ fn fire_bow(game: &mut Game) {
     game.player.data.insert("weapon_cooldown".into(), 10.0);
     game.player.data.insert("bow_armed".into(), 0.0);
     game.player.data.insert("bow_strength".into(), 0.0);
+    game.player.data.insert("hold_arrow".into(), 0.0);
     game.sound("sndArrowTrap", pos);
     game.stop_sound("sndBowPull");
 }
@@ -1041,7 +1044,8 @@ pub fn pre_tick(game: &mut Game) {
             crate::world_events::create_flames(game, game.player.pos, 3);
         }
         game.player.data.insert("bow_bomb_armed".into(), 0.0);
-        game.player.data.remove("bow_bomb_fuse");
+        game.player.data.insert("bow_bomb_fuse".into(), 80.0);
+        game.player.data.insert("hold_arrow".into(), 0.0);
     }
     // oPlayer1 Step57–60 queries even on the detonation tick. The script
     // assigns Player tx/ty before the nearest-keeper anger callback.
@@ -1112,9 +1116,13 @@ pub(crate) fn player_step_with_release(game: &mut Game, attack_released: bool) {
                 game.player.data.insert("bow_strength".into(), 0.0);
                 game.stop_sound("sndBowPull");
             }
-            // This flag projects holdArrow == ARROW_BOMB. Assigning normal
-            // clears it without resetting the separate bombArrowCounter.
+            // Classic assigns `holdArrow = ARROW_NORM` on every charge Step
+            // inside this strict gate, replacing any bomb arrow but leaving
+            // the independent fuse counter running.
             game.player.data.insert("bow_bomb_armed".into(), 0.0);
+        }
+        if held && bow_strength < 12.0 {
+            game.player.data.insert("hold_arrow".into(), 1.0);
         }
         // Player Step1518 and scrFireBow independently guard release and the
         // actual held receiver's type. A different item is not cancellation.
@@ -2489,6 +2497,59 @@ mod tests {
         assert_eq!(game.player.data["bow_arrow_toggle"], 0.0);
         assert_eq!(game.player.bombs, 4);
     }
+
+    #[test]
+    fn game_step_bomb_arrow_fuse_pauses_on_normal_arrow_and_resumes_without_reset() {
+        let (mut game, _) = flat_room("oBow");
+        game.data.insert("arrows".into(), 6.0);
+        game.player.data.insert("bow_armed".into(), 1.0);
+        game.player.data.insert("bow_strength".into(), 4.0);
+        game.player.data.insert("hold_arrow".into(), 1.0);
+
+        game.step(&InputFrame {
+            bomb_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.data["bow_bomb_fuse"], 80.0);
+        assert_eq!(game.player.data["hold_arrow"], 2.0);
+
+        // The source decrements the bomb counter at the start of Player Step,
+        // then the held attack assigns a normal arrow and pauses that counter.
+        game.step(&InputFrame {
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.data["bow_bomb_fuse"], 79.0);
+        assert_eq!(game.player.data["bow_bomb_armed"], 0.0);
+        assert_eq!(game.player.data["hold_arrow"], 1.0);
+
+        for _ in 0..80 {
+            if game.player.data["bow_strength"] >= 12.0 {
+                break;
+            }
+            game.step(&InputFrame {
+                attack: true,
+                ..Default::default()
+            });
+        }
+        assert!(game.player.data["bow_strength"] >= 12.0);
+        assert_eq!(game.player.data["bow_bomb_fuse"], 79.0);
+
+        game.step(&InputFrame {
+            attack: true,
+            bomb_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.data["bow_bomb_fuse"], 79.0);
+        assert_eq!(game.player.data["hold_arrow"], 2.0);
+        game.step(&InputFrame {
+            attack: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.data["bow_bomb_fuse"], 78.0);
+    }
+
     #[test]
     fn bullets_collide_with_dynamic_solids_and_mattock_digs_them() {
         let mut game = Game::shell(1, RulesPreset::Classic);

@@ -748,9 +748,10 @@ pub fn alarm(game: &mut Game, number: u8) {
             game.sound("sndJetpack", game.player.pos);
         }
         11 => {
-            if value(&game.player, "bow_armed", 0.0) != 0.0
-                || value(&game.player, "bow_bomb_armed", 0.0) != 0.0
-            {
+            // Classic Alarm 11 is keyed to `holdArrow`, not `bowArmed`: a
+            // bomb-arrow fuse can clear the held visual while a fully charged
+            // bow remains armed.
+            if value(&game.player, "hold_arrow", 0.0) > 0.0 {
                 let toggle = value(&game.player, "bow_arrow_toggle", 0.0) == 0.0;
                 set(&mut game.player, "bow_arrow_toggle", f64::from(toggle));
                 game.player.alarms[11] = 1;
@@ -4709,6 +4710,10 @@ mod native_ball_tether_boundary_tests {
 #[cfg(test)]
 #[path = "player/source_animation_callback_tests.rs"]
 mod source_animation_callback_tests;
+
+#[cfg(test)]
+#[path = "player/held_arrow_callback_tests.rs"]
+mod held_arrow_callback_tests;
 
 #[cfg(test)]
 #[path = "player/swimming_raw_point_tests.rs"]
