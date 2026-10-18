@@ -539,6 +539,22 @@ mod tests {
             Some(&tape),
         );
         assert_eq!(rng.state_bits(), state_after_source_creates);
+        let entities_before_terrain = world.entities.len();
+        super::super::terrain::create_generated_with_context(
+            &mut world,
+            &mut rng,
+            super::super::GenerationContext::default(),
+        );
+        assert_eq!(
+            rng.state_bits(),
+            state_after_source_creates,
+            "the later terrain pass must not rerun authored Temple or Lava Create draws"
+        );
+        assert_eq!(
+            world.entities.len(),
+            entities_before_terrain,
+            "the later terrain pass must not duplicate authored Temple treasure"
+        );
         let spectacles = world
             .entities
             .iter()
