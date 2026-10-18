@@ -3,10 +3,12 @@
   import { startGame } from './start-game';
   import { installFullscreenControls } from './fullscreen';
   import { requestAudioUnlock } from './audio-unlock';
+  import { installPauseMenuState } from './pause-menu-state';
 
   let canvas: HTMLCanvasElement;
   let status: HTMLParagraphElement;
   let fullscreenStatus: HTMLParagraphElement;
+  let pauseMenuOpen = $state(false);
   let fullscreenAvailable = $state(false);
   let fullscreenActive = $state(false);
   let fullscreenPending = $state(false);
@@ -18,6 +20,16 @@
   }
 
   onMount(() => {
+    const pauseMenu = installPauseMenuState(
+      window as Window & { __spelunkyPauseMenuOpen?: unknown },
+      (open) => {
+        pauseMenuOpen = open;
+        if (!open && fullscreenStatus) {
+          fullscreenStatus.hidden = true;
+          fullscreenStatus.textContent = '';
+        }
+      },
+    );
     const fullscreen = installFullscreenControls(canvas, fullscreenStatus, (state) => {
       fullscreenAvailable = state.available;
       fullscreenActive = state.active;
@@ -25,28 +37,36 @@
     });
     toggleFullscreen = fullscreen.toggle;
     void startGame(canvas, status);
-    return fullscreen.dispose;
+    return () => {
+      pauseMenu();
+      fullscreen.dispose();
+    };
   });
 </script>
 
 <canvas bind:this={canvas} id="spelunky-canvas" tabindex="0" aria-label="Spelunky Classic game"></canvas>
-<button
-  id="fullscreen-toggle"
-  type="button"
-  disabled={!fullscreenAvailable || fullscreenPending}
-  aria-controls="spelunky-canvas"
-  aria-describedby="fullscreen-status"
-  title={fullscreenAvailable ? (fullscreenActive ? 'Exit fullscreen (Esc)' : 'Enter fullscreen') : 'Fullscreen is unavailable in this browser'}
-  onpointerdown={(event) => event.preventDefault()}
-  onclick={() => toggleFullscreen()}
->{fullscreenActive ? 'Exit fullscreen' : 'Fullscreen'}</button>
-<button
-  id="audio-unlock"
-  type="button"
-  aria-controls="spelunky-canvas"
-  title="Enable sound when playing with a controller"
-  onclick={enableAudio}
->Enable sound</button>
+{#if pauseMenuOpen}
+  <div id="pause-browser-controls" role="group" aria-label="Pause menu browser controls">
+    <button
+      type="button"
+      disabled={!fullscreenAvailable || fullscreenPending}
+      aria-controls="spelunky-canvas"
+      aria-describedby="fullscreen-status"
+      aria-pressed={fullscreenActive}
+      aria-label={fullscreenActive ? 'Exit fullscreen' : 'Enter fullscreen'}
+      title={fullscreenAvailable ? (fullscreenActive ? 'Exit fullscreen' : 'Enter fullscreen') : 'Fullscreen is unavailable in this browser'}
+      onpointerdown={(event) => event.preventDefault()}
+      onclick={() => toggleFullscreen()}
+    >{fullscreenActive ? 'Exit fullscreen' : 'Fullscreen'}</button>
+    <button
+      type="button"
+      aria-controls="spelunky-canvas"
+      aria-label="Enable sound for controller play"
+      title="Enable sound when playing with a controller"
+      onclick={enableAudio}
+    >Enable sound</button>
+  </div>
+{/if}
 <p bind:this={fullscreenStatus} id="fullscreen-status" role="status" hidden></p>
 <p bind:this={status} id="status" role="status">Loading Spelunky Classic…</p>
 <p id="attribution">Unofficial modified port · Derek Yu / Mossmouth · <a href="assets/LICENSE" data-sveltekit-reload>License</a></p>
@@ -56,12 +76,11 @@
   :global(html), :global(body) { width: 100%; height: 100%; margin: 0; background: #111; }
   :global(body) { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); place-items: center; overflow: hidden; }
   canvas { display: block; position: fixed; inset: 0; width: 100vw; height: 100vh; width: 100dvw; height: 100dvh; min-width: 0; min-height: 0; outline: none; touch-action: none; }
-  #fullscreen-toggle { position: fixed; bottom: max(.5rem, env(safe-area-inset-bottom)); left: max(.5rem, env(safe-area-inset-left)); z-index: 1; padding: .4rem .65rem; border: 1px solid #777; border-radius: .25rem; background: #111d; color: #eee; font: inherit; font-size: .8rem; cursor: pointer; }
-  #fullscreen-toggle:focus-visible { outline: 2px solid #e8b34e; outline-offset: 2px; }
-  #fullscreen-toggle:disabled { opacity: .55; cursor: default; }
-  #audio-unlock { position: fixed; bottom: calc(max(.5rem, env(safe-area-inset-bottom)) + 2.5rem); left: max(.5rem, env(safe-area-inset-left)); z-index: 1; padding: .4rem .65rem; border: 1px solid #777; border-radius: .25rem; background: #111d; color: #eee; font: inherit; font-size: .8rem; cursor: pointer; }
-  #audio-unlock:focus-visible { outline: 2px solid #e8b34e; outline-offset: 2px; }
-  #fullscreen-status { position: fixed; bottom: calc(max(.5rem, env(safe-area-inset-bottom)) + 5rem); left: max(.5rem, env(safe-area-inset-left)); z-index: 1; max-width: min(24rem, calc(100vw - 1rem)); margin: 0; padding: .5rem .65rem; background: #211813; border: 1px solid #b67d4a; color: #eee; font-size: .8rem; }
+  #pause-browser-controls { position: fixed; top: max(.75rem, env(safe-area-inset-top)); right: max(.75rem, env(safe-area-inset-right)); z-index: 2; display: flex; gap: .4rem; }
+  #pause-browser-controls button { padding: .4rem .65rem; border: 1px solid #777; border-radius: .25rem; background: #111d; color: #eee; font: inherit; font-size: .8rem; cursor: pointer; }
+  #pause-browser-controls button:focus-visible { outline: 2px solid #e8b34e; outline-offset: 2px; }
+  #pause-browser-controls button:disabled { opacity: .55; cursor: default; }
+  #fullscreen-status { position: fixed; top: calc(max(.75rem, env(safe-area-inset-top)) + 2.75rem); right: max(.75rem, env(safe-area-inset-right)); z-index: 2; max-width: min(24rem, calc(100vw - 1rem)); margin: 0; padding: .5rem .65rem; background: #211813; border: 1px solid #b67d4a; color: #eee; font-size: .8rem; }
   #status { position: absolute; max-width: 36rem; padding: 1.25rem; text-align: center; }
   :global(#status.error) { background: #211813; border: 1px solid #b67d4a; }
   #attribution { position: absolute; right: .5rem; bottom: .3rem; margin: 0; font-size: .7rem; color: #ccc; }

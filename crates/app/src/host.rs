@@ -31,6 +31,8 @@ const GOLD: [f32; 4] = [1.0, 0.78, 0.30, 1.0];
 const ABOUT_CONTROL_HINT: &str = "C CYCLE, A BOMB, S ROPE, F FLARE";
 #[cfg(target_arch = "wasm32")]
 const AUDIO_UNLOCK_EVENT: &str = "spelunky-audio-gesture";
+#[cfg(target_arch = "wasm32")]
+const PAUSE_MENU_STATE_EVENT: &str = "spelunky-pause-menu-state";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Screen {
     Title,
@@ -563,6 +565,8 @@ impl App {
                 .set_palette_progress(editor_palette_progress(&self.store.data.unlocks));
         }
         self.screen = screen;
+        #[cfg(target_arch = "wasm32")]
+        publish_browser_pause_menu_state(self.screen, self.settings_return);
         self.selection = if screen == Screen::Finished && self.is_hub() {
             1
         } else {
@@ -2609,6 +2613,23 @@ impl App {
                 self.return_from_custom_selector();
             }
         }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn publish_browser_pause_menu_state(screen: Screen, settings_return: Screen) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let open =
+        screen == Screen::Pause || (screen == Screen::Settings && settings_return == Screen::Pause);
+    let _ = js_sys::Reflect::set(
+        &window,
+        &wasm_bindgen::JsValue::from_str("__spelunkyPauseMenuOpen"),
+        &wasm_bindgen::JsValue::from_bool(open),
+    );
+    if let Ok(event) = web_sys::Event::new(PAUSE_MENU_STATE_EVENT) {
+        let _ = window.dispatch_event(&event);
     }
 }
 
