@@ -52,9 +52,9 @@ pub(super) struct BossTempleCreate {
     pub treasure: Option<BossTempleTreasure>,
 }
 
-/// The source Create results captured before any route or room draws. Lava
-/// timers and Temple variants/contents stay in their authored instance order
-/// until their final births.
+/// The source Create results captured before any route or room draws. Temple
+/// outcomes are attached at their source phase, before oGame.Create starts the
+/// generated level.
 pub(super) struct BossCreateTape {
     city_of_gold: bool,
     has_spectacles: bool,
@@ -95,6 +95,27 @@ pub(super) fn create_source_boss_tape(
         temple_creates,
         olmec_facing,
         lava_spurt_times,
+    }
+}
+
+/// Birth rOlmec's authored Temple instances at the source room-entry boundary.
+/// rOlmec.xml lists these before oGame, so their parent serials precede
+/// scrInitLevel's boundaries and generated rooms.
+pub(super) fn create_source_boss_temples(world: &mut World, rng: &mut Rng, tape: &BossCreateTape) {
+    assert_eq!(world.area, Area::Boss);
+    for (&position, create) in BOSS_TEMPLE_CREATE_ORDER.iter().zip(tape.temple_creates) {
+        let position = usize::from(position);
+        let x = 1 + position % 40;
+        let y = 35 + position / 40;
+        super::terrain::create_authored_boss_temple(
+            world,
+            rng,
+            x,
+            y,
+            create,
+            tape.city_of_gold,
+            tape.has_spectacles,
+        );
     }
 }
 
@@ -311,25 +332,7 @@ fn boss_arena(
                 | "oLavaSolid"
         )
     });
-    if let Some(tape) = boss_create_tape {
-        // The source Create order is intentionally retained instead of using
-        // the tile grid's row-major order. Temple outcomes (including nested
-        // treasure births) were already drawn before route generation.
-        for (&position, create) in BOSS_TEMPLE_CREATE_ORDER.iter().zip(tape.temple_creates) {
-            let position = usize::from(position);
-            let x = 1 + position % 40;
-            let y = 35 + position / 40;
-            super::terrain::create_authored_boss_temple(
-                world,
-                rng,
-                x,
-                y,
-                create,
-                tape.city_of_gold,
-                tape.has_spectacles,
-            );
-        }
-    } else {
+    if boss_create_tape.is_none() {
         for y in [35, 36] {
             for x in 1..41 {
                 world.set_tile(x, y, "oTemple");

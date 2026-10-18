@@ -50,10 +50,9 @@ pub(super) fn metadata(world: &mut World, x: usize, y: usize) -> u64 {
     id
 }
 
-/// Reconstruct one of rOlmec's already-created Temple instances after the
-/// generated route is overlaid. Its random outcome was captured before
-/// oGame.Create, so this only applies the recorded sprite/content and must not
-/// draw again.
+/// Apply one of rOlmec's authored Temple Create outcomes at its source birth
+/// phase. Its random result was captured before oGame.Create, so this applies
+/// the recorded sprite/content without drawing again.
 pub(super) fn create_authored_boss_temple(
     world: &mut World,
     rng: &mut Rng,

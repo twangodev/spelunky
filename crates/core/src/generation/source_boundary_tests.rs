@@ -18,6 +18,8 @@ struct Birth {
 struct Observation {
     births: Vec<Birth>,
     before_path: Option<(World, u64)>,
+    capture_before_setup: bool,
+    before_setup: Option<(World, Rng)>,
 }
 thread_local! {
     static OBSERVATION: RefCell<Option<Observation>> = const { RefCell::new(None) };
@@ -55,6 +57,22 @@ fn begin() {
     OBSERVATION.with(|slot| {
         assert!(slot.borrow().is_none());
         *slot.borrow_mut() = Some(Observation::default());
+    });
+}
+fn begin_setup_capture() {
+    begin();
+    OBSERVATION.with(|slot| {
+        slot.borrow_mut().as_mut().unwrap().capture_before_setup = true;
+    });
+}
+pub(super) fn observe_before_setup(world: &World, rng: &Rng) {
+    OBSERVATION.with(|slot| {
+        if let Some(probe) = slot.borrow_mut().as_mut()
+            && probe.capture_before_setup
+        {
+            assert!(probe.before_setup.is_none());
+            probe.before_setup = Some((world.clone(), rng.clone()));
+        }
     });
 }
 fn finish() -> Observation {
@@ -98,18 +116,21 @@ fn verify(
     ice: bool,
     object: &str,
     city: bool,
+    preexisting_parents: usize,
+    preexisting_tiles: usize,
 ) -> u64 {
     let expected = literal_origins(k, closed_bottom, ice);
     assert_eq!(births.len(), expected.len());
     // Real parents exist; a draw-only compensation or discarded exterior
     // birth cannot satisfy identities, ordered serials and this census.
-    assert_eq!(world.entities.len(), expected.len());
+    assert_eq!(world.entities.len(), expected.len() + preexisting_parents);
     assert_eq!(
         world.tiles.iter().filter(|t| !t.object.is_empty()).count(),
         expected
             .iter()
             .filter(|(x, y, _)| *x < 42 && *y < world.height)
             .count()
+            + preexisting_tiles
     );
     let mut state = seed;
     let mut prior_serial = 0;
@@ -192,7 +213,18 @@ fn literal_boundary_births_complete_create_then_caller_overrides_in_order() {
         source_boundaries(&mut world, &mut rng, height == 42, false);
         let observed = finish();
         assert_eq!(observed.births.len(), expected_births);
-        let state = verify(&world, &observed.births, 0, k, bottom, ice, object, false);
+        let state = verify(
+            &world,
+            &observed.births,
+            0,
+            k,
+            bottom,
+            ice,
+            object,
+            false,
+            0,
+            0,
+        );
         assert_eq!(rng.state_bits(), state);
         let mut count_state = 0;
         for _ in 0..draws {
@@ -232,7 +264,9 @@ fn city_gold_boundary_still_draws_and_retains_create_gold_after_invincibility_ov
             true,
             false,
             "oTemple",
-            true
+            true,
+            0,
+            0,
         ),
         2_892_300_850
     );
@@ -262,7 +296,9 @@ fn generated_source_boundary_rng_and_real_world_exist_before_path_selection() {
                 bottom,
                 ice,
                 object,
-                false
+                false,
+                0,
+                0,
             ),
             state
         );
@@ -387,6 +423,8 @@ fn olmec_create_tape_precedes_boundaries_and_route_and_is_reused_by_authored_ins
             false,
             "oTemple",
             false,
+            82,
+            80,
         ),
         u64::from(EXPECTED_BEFORE_ROUTE)
     );
@@ -455,6 +493,144 @@ fn olmec_create_tape_precedes_boundaries_and_route_and_is_reused_by_authored_ins
         );
         assert_eq!(entity.value("lava_initialized"), 1.0);
     }
+}
+
+#[test]
+fn olmec_setup_walls_begins_in_authored_room_temple_creation_order() {
+    // rOlmec.xml lists these 80 authored oTemple instances before oGame.
+    // Their Create events therefore finish before scrInitLevel creates the
+    // controller boundaries and generated room terrain; scrSetupWalls runs
+    // afterward and visits the same-family parents in birth order.
+    const SOURCE_TEMPLE_ORDER: [u8; 80] = [
+        0, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+        32, 33, 34, 35, 36, 37, 38, 39, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65,
+        64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 5, 6, 7, 9, 8, 49, 48, 47, 46,
+        45, 4, 3, 2, 1, 40, 41, 42, 43, 44,
+    ];
+    let expected: Vec<_> = SOURCE_TEMPLE_ORDER
+        .iter()
+        .map(|position| {
+            let position = usize::from(*position);
+            (1 + position % 40, 35 + position / 40)
+        })
+        .collect();
+
+    let mut rng = Rng::new(0);
+    let mut state = GenerationState::fresh(&rng);
+    begin_setup_capture();
+    let generated = generate_campaign_result(
+        &mut rng,
+        16,
+        &BTreeSet::from(["no_dark_level".into()]),
+        GenerationContext::default(),
+        &mut state,
+    );
+    let observed = finish();
+    let mut temples: Vec<_> = generated
+        .world
+        .tiles
+        .iter()
+        .enumerate()
+        .filter(|(_, tile)| tile.object == "oTemple")
+        .map(|(index, tile)| {
+            (
+                tile.creation_serial,
+                (index % generated.world.width, index / generated.world.width),
+            )
+        })
+        .collect();
+    temples.sort_by_key(|(serial, _)| *serial);
+
+    assert_eq!(
+        temples
+            .iter()
+            .take(SOURCE_TEMPLE_ORDER.len())
+            .map(|(_, position)| *position)
+            .collect::<Vec<_>>(),
+        expected,
+        "scrSetupWalls must visit rOlmec's authored Temple parents before generated Temple walls"
+    );
+
+    // Replay SetupWalls from its captured real-generation input after assigning
+    // the authored parents their literal earlier source order. This pins the
+    // resulting RNG continuation, including later setup and background draws.
+    let (source_input_world, source_input_rng) = observed
+        .before_setup
+        .expect("real Boss generation captures its pre-SetupWalls state");
+    let authored: std::collections::BTreeSet<_> = expected.iter().copied().collect();
+    let first_later_temple = source_input_world
+        .tiles
+        .iter()
+        .enumerate()
+        .filter(|(index, tile)| {
+            tile.object == "oTemple"
+                && !authored.contains(&(
+                    index % source_input_world.width,
+                    index / source_input_world.width,
+                ))
+        })
+        .map(|(_, tile)| tile.creation_serial)
+        .chain(
+            source_input_world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.object == "oTemple")
+                .map(|entity| entity.creation_serial),
+        )
+        .min()
+        .expect("controller and generated Temple parents follow the authored arena");
+    assert!(first_later_temple > SOURCE_TEMPLE_ORDER.len() as u64);
+
+    let mut late_order_world = source_input_world.clone();
+    let mut late_order_rng = source_input_rng.clone();
+    let latest_parent = late_order_world
+        .tiles
+        .iter()
+        .map(|tile| tile.creation_serial)
+        .chain(
+            late_order_world
+                .entities
+                .iter()
+                .map(|entity| entity.creation_serial),
+        )
+        .max()
+        .unwrap();
+    for (serial, &(x, y)) in expected.iter().enumerate() {
+        late_order_world.tiles[y * late_order_world.width + x].creation_serial =
+            latest_parent + serial as u64 + 1;
+    }
+    terrain::setup_generated_with_revision(
+        &mut late_order_world,
+        &mut late_order_rng,
+        true,
+        crate::GenerationRevision::SourceClassicV2,
+        false,
+    );
+    background_extras(&mut late_order_world, &mut late_order_rng, true);
+
+    let mut source_order_world = source_input_world;
+    let mut source_order_rng = source_input_rng;
+    for (serial, &(x, y)) in expected.iter().enumerate() {
+        let tile = &mut source_order_world.tiles[y * source_order_world.width + x];
+        assert_eq!(tile.object, "oTemple");
+        tile.creation_serial =
+            first_later_temple - SOURCE_TEMPLE_ORDER.len() as u64 + serial as u64;
+    }
+    terrain::setup_generated_with_revision(
+        &mut source_order_world,
+        &mut source_order_rng,
+        true,
+        crate::GenerationRevision::SourceClassicV2,
+        false,
+    );
+    background_extras(&mut source_order_world, &mut source_order_rng, true);
+    assert_eq!(rng.state_bits(), source_order_rng.state_bits());
+    assert_eq!(rng.next_u64(), source_order_rng.next_u64());
+    assert_ne!(
+        source_order_rng.state_bits(),
+        late_order_rng.state_bits(),
+        "seed 0 must expose the source-order SetupWalls RNG shift"
+    );
 }
 
 #[test]

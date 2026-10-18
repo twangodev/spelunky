@@ -853,6 +853,19 @@ pub(crate) fn generate_campaign_result(
     };
     if source_classic {
         world = World::new(42, height, area, level);
+        if area == Area::Boss {
+            // rOlmec's authored Temple instances and their child Creates run
+            // before oGame.Create starts scrInitLevel. Keep their birth serials
+            // ahead of controller boundaries and generated room terrain, so
+            // the later SetupWalls family pass sees the source receiver order.
+            special::create_source_boss_temples(
+                &mut world,
+                rng,
+                boss_create_tape
+                    .as_ref()
+                    .expect("SourceClassic Boss captures authored Temple Creates"),
+            );
+        }
         // scrInitLevel completes real boundary Create calls and producer
         // overrides before scrLevelGen, including out-of-storage instances.
         source_boundaries(
@@ -1061,6 +1074,8 @@ pub(crate) fn generate_campaign_result(
     // Population does; preserve any real parent checkWater request it emits.
     world.fluid_dirty = false;
     population::populate_with_campaign(&mut world, rng, &selected, context, state, &path.rooms);
+    #[cfg(test)]
+    source_boundary_tests::observe_before_setup(&world, rng);
     terrain::setup_generated_with_revision(
         &mut world,
         rng,
