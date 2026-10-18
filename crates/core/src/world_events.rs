@@ -434,6 +434,14 @@ pub(crate) fn init_entity(e: &mut Entity) {
         e.data.insert("bounce".into(), 1.0);
     }
     match e.object.as_str() {
+        "oBackdrop" => {
+            // Classic Create puts authored backdrops behind the full scene.
+            e.data.insert("depth".into(), 1_000_000_000.0);
+        }
+        "oForeground" => {
+            // Classic Create places foreground overlays just above ordinary actors.
+            e.data.insert("depth".into(), 1.0);
+        }
         "oCape" => {
             // oCape Create assigns open=false; its default image_speed stays 1.
             e.data.insert("open".into(), 0.0);
@@ -3405,6 +3413,25 @@ mod tests {
         assert!(g.world.entity(id).is_some());
         alarm(&mut g, id, 0);
         assert!(g.world.entity(id).is_none());
+    }
+
+    #[test]
+    fn source_backdrop_and_foreground_create_depths_are_applied_on_spawn() {
+        let mut g = Game::shell(1, RulesPreset::Classic);
+        let backdrop = g.spawn("oBackdrop", Vec2::new(80.0, 80.0));
+        let foreground = g.spawn("oForeground", Vec2::new(96.0, 80.0));
+        assert_eq!(
+            g.world.entity(backdrop).unwrap().value("depth"),
+            1_000_000_000.0
+        );
+        assert_eq!(g.world.entity(foreground).unwrap().value("depth"), 1.0);
+
+        g.step(&crate::InputFrame::default());
+        assert_eq!(
+            g.world.entity(backdrop).unwrap().value("depth"),
+            1_000_000_000.0
+        );
+        assert_eq!(g.world.entity(foreground).unwrap().value("depth"), 1.0);
     }
 
     #[test]
