@@ -946,6 +946,18 @@ fn player_step(game: &mut Game, input: &InputFrame) {
     game.player.health = game.player.health.min(99.0);
     game.player.bombs = game.player.bombs.min(99.0);
     game.player.ropes = game.player.ropes.min(99.0);
+    // oPlayer1 Step creates its independent Cape actor before the controller
+    // runs. Its resource (741) follows Player (319), so the newborn receives
+    // its own Step later in this same resource-ordered pass.
+    if (game.player.has("Cape") || game.player.has("cape"))
+        && !game
+            .world
+            .entities
+            .iter()
+            .any(|entity| entity.alive && entity.object == "oCape")
+    {
+        game.spawn("oCape", game.player.pos);
+    }
     crate::items::pre_player_tick(game);
     crate::world_events::sample_light_distances(game);
     crate::items::player_balance_step(game);

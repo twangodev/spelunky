@@ -366,6 +366,7 @@ pub(crate) fn handles(object: &str) -> bool {
             | "oGrave"
             | "oTempleFake"
             | "oTemple"
+            | "oCape"
             | "oLamp"
             | "oLampRed"
             | "oTikiTorch"
@@ -433,6 +434,10 @@ pub(crate) fn init_entity(e: &mut Entity) {
         e.data.insert("bounce".into(), 1.0);
     }
     match e.object.as_str() {
+        "oCape" => {
+            // oCape Create assigns open=false; its default image_speed stays 1.
+            e.data.insert("open".into(), 0.0);
+        }
         "oHardBlock" | "oLavaSolid" => {
             // Both concrete source Creates override oSolid's false default.
             e.data.insert("invincible".into(), 1.0);
@@ -574,6 +579,79 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         return;
     };
     match object.as_str() {
+        "oCape" => {
+            let dummy = game
+                .world
+                .entities
+                .iter()
+                .find(|actor| actor.alive && actor.object == "oPDummy")
+                .cloned();
+            let transition = game
+                .world
+                .entities
+                .iter()
+                .any(|actor| actor.alive && actor.object == "oTransition");
+            if transition && dummy.is_none() {
+                e.alive = false;
+            } else if let Some(dummy) = dummy {
+                let exit = matches!(
+                    dummy.sprite.as_str(),
+                    "sPExit" | "sDamselExit" | "sTunnelExit"
+                );
+                e.pos = Vec2::new(
+                    dummy.pos.x + if exit { 0.0 } else { -4.0 },
+                    dummy.pos.y + if exit { 4.0 } else { -2.0 },
+                );
+                e.set_sprite(if exit {
+                    "sCapeBack"
+                } else if matches!(
+                    dummy.sprite.as_str(),
+                    "sRunLeft" | "sDamselRunL" | "sTunnelRunL"
+                ) {
+                    "sCapeRight"
+                } else {
+                    "sCapeDR"
+                });
+                e.data
+                    .insert("depth".into(), if exit { 0.0 } else { 100.0 });
+            } else {
+                let player_sprite = game.player.sprite.as_str();
+                let exit = matches!(player_sprite, "sPExit" | "sDamselExit" | "sTunnelExit");
+                let back =
+                    (crate::player::source_climbing(game) || exit) && game.player.attack_timer == 0;
+                let right = game.player.facing > 0;
+                let open = game.player.data.get("cape_open").copied().unwrap_or(0.0) > 0.0;
+                e.data.insert("open".into(), f64::from(open));
+                if back {
+                    e.pos = Vec2::new(game.player.pos.x, game.player.pos.y + 4.0);
+                    e.set_sprite("sCapeBack");
+                    e.data.insert("depth".into(), 0.0);
+                } else if right {
+                    e.pos = Vec2::new(game.player.pos.x - 4.0, game.player.pos.y - 2.0);
+                    e.set_sprite(if open {
+                        "sCapeUR"
+                    } else if game.player.vel.x.abs() > 0.0 {
+                        "sCapeRight"
+                    } else {
+                        "sCapeDR"
+                    });
+                    e.data.insert("depth".into(), 100.0);
+                } else {
+                    e.pos = Vec2::new(game.player.pos.x + 4.0, game.player.pos.y - 2.0);
+                    e.set_sprite(if open {
+                        "sCapeUL"
+                    } else if game.player.vel.x.abs() > 0.0 {
+                        "sCapeLeft"
+                    } else {
+                        "sCapeDL"
+                    });
+                    e.data.insert("depth".into(), 100.0);
+                }
+                if game.player.data.get("visible").copied().unwrap_or(1.0) == 0.0 {
+                    e.alive = false;
+                }
+            }
+        }
         "oEntranceCheck" => {
             // This parentless object has no Create default for dir.
             let Some(dir) = e.data.get("dir") else {

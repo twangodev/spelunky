@@ -4507,12 +4507,22 @@ mod tests {
         assert!(spelunky_core::player::source_climbing(&game));
         assert!(game.player.attack_timer > 0, "ordinary attack starts whip");
         assert!(game.player.has("Cape"));
+        let cape = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oCape")
+            .expect("Player Step creates a separate Cape actor");
+        assert_eq!(
+            cape.sprite, "sCapeDR",
+            "whipping makes the source Cape Step use the facing pose"
+        );
         assert!(
             !game
                 .world
                 .entities
                 .iter()
-                .any(|e| e.alive && e.object == "oCape")
+                .any(|entity| entity.alive && entity.object == "oCape" && entity.id != cape.id)
         );
 
         let quads = game_scene(&game, 1.0, false, &atlas);

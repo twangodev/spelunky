@@ -3087,10 +3087,25 @@ mod tests {
                 ..Default::default()
             });
             assert!(g.player.has("Cape"));
+            assert!(
+                !g.world
+                    .entities
+                    .iter()
+                    .any(|entity| entity.alive && entity.object == "oCape"),
+                "pickup occurs after Player Step, so source creates Cape next tick"
+            );
             g.step(&InputFrame {
                 jump_released: true,
                 ..Default::default()
             });
+            let capes: Vec<_> = g
+                .world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.object == "oCape")
+                .collect();
+            assert_eq!(capes.len(), 1, "next Player Step creates one Cape actor");
+            assert_eq!(capes[0].image_speed(), 1.0);
             let falling_before_open = g.player.vel.y;
             assert!(falling_before_open > 0.0);
             g.step(&InputFrame {
@@ -3114,6 +3129,66 @@ mod tests {
             g.step(&InputFrame::default());
             assert_eq!(g.player.vel.y, cape_drag + 2.0);
         }
+    }
+    #[test]
+    fn source_cape_uses_its_own_step_pose_and_animation_clock() {
+        let mut g = room(RulesPreset::Classic);
+        g.player.equipment.insert("Cape".into());
+        let right = InputFrame {
+            right: true,
+            ..Default::default()
+        };
+        for _ in 0..3 {
+            g.step(&right);
+        }
+
+        let cape = g
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oCape")
+            .expect("Player Step creates the independent Cape actor");
+        assert_eq!(cape.sprite, "sCapeRight");
+        assert_eq!(
+            cape.pos,
+            Vec2::new(g.player.pos.x - 4.0, g.player.pos.y - 2.0)
+        );
+        assert_eq!(cape.data.get("depth"), Some(&100.0));
+        assert_eq!(crate::catalog::sprite_frame_count("sCapeRight"), 5);
+        assert_eq!(cape.image_speed(), 1.0);
+        assert_eq!(
+            cape.animation, 1.0,
+            "Cape advances one source frame per tick"
+        );
+
+        let draw_cape = g
+            .presentation()
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oCape")
+            .expect("Cape is in the Draw snapshot before automatic animation");
+        assert_eq!(draw_cape.sprite, "sCapeRight");
+        assert_eq!(draw_cape.animation, 0.0);
+        assert_ne!(cape.animation, g.player.animation);
+
+        let left = InputFrame {
+            left: true,
+            ..Default::default()
+        };
+        g.step(&left);
+        let cape = g
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oCape")
+            .unwrap();
+        assert_eq!(cape.sprite, "sCapeLeft");
+        assert_eq!(
+            cape.pos,
+            Vec2::new(g.player.pos.x + 4.0, g.player.pos.y - 2.0)
+        );
+        assert_eq!(cape.animation, 2.0, "sprite changes preserve image_index");
     }
     #[test]
     fn source_precise_floor_probe_rejects_only_dark_fall_transparent_corner() {
