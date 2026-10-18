@@ -1008,25 +1008,22 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
             if left || right {
                 e.facing *= -1;
             }
-            let left_top = game.world.solid_point_active(
-                Vec2::new(e.pos.x - 1.0, e.pos.y),
-                CollisionPrecision::Precise,
-                Some(e.id),
-            );
-            let left_floor = game.world.solid_point_active(
+            // Classic's registered collision_point handler at 0x55C044
+            // compares both flags with 0.5, so the source -1,-1 probes use
+            // bbox masks and do not exclude the calling instance.
+            let left_top =
+                super::inherited::point(&game.world, Vec2::new(e.pos.x - 1.0, e.pos.y), "oSolid");
+            let left_floor = super::inherited::point(
+                &game.world,
                 Vec2::new(e.pos.x - 1.0, e.pos.y + 16.0),
-                CollisionPrecision::Precise,
-                Some(e.id),
+                "oSolid",
             );
-            let right_top = game.world.solid_point_active(
-                Vec2::new(e.pos.x + 16.0, e.pos.y),
-                CollisionPrecision::Precise,
-                Some(e.id),
-            );
-            let right_floor = game.world.solid_point_active(
+            let right_top =
+                super::inherited::point(&game.world, Vec2::new(e.pos.x + 16.0, e.pos.y), "oSolid");
+            let right_floor = super::inherited::point(
+                &game.world,
                 Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0),
-                CollisionPrecision::Precise,
-                Some(e.id),
+                "oSolid",
             );
             if e.facing < 0 && !left_top && !left_floor {
                 e.facing = 1;
@@ -1814,6 +1811,33 @@ mod tests {
         e.facing = 1;
         tick(&mut game, &mut e);
         assert_eq!(e.vel.x, 0.3);
+    }
+
+    #[test]
+    fn mantrap_walk_minus_one_solid_probes_use_bbox_flags() {
+        let mut game = Game::shell(14, RulesPreset::Classic);
+        game.world = World::new(20, 16, Area::Jungle, 1);
+        game.world.set_tile(3, 10, "oBlock");
+        let mut trap = Entity::new(999, "oManTrap", Vec2::new(48.0, 144.0));
+        super::super::init_entity(&mut trap);
+        trap.state = 1;
+        trap.facing = 1;
+        trap.vel = Vec2::default();
+
+        // The source's left-floor collision_point(-1,-1) sees DarkFall's
+        // bbox corner despite that sprite's transparent local pixel (0,0).
+        let dark_fall = game.world.spawn("oDarkFall", Vec2::new(47.0, 160.0));
+        let point = Vec2::new(47.0, 160.0);
+        let mask = game.world.entity(dark_fall).unwrap();
+        assert!(mask.mask_contains(point, CollisionPrecision::BoundingBox));
+        assert!(!mask.mask_contains(point, CollisionPrecision::Precise));
+
+        game.rng = crate::model::Rng::new(14);
+        tick(&mut game, &mut trap);
+
+        assert_eq!(trap.state, 1);
+        assert_eq!(trap.facing, -1);
+        assert_eq!(trap.vel.x, -0.3, "bbox support keeps ManTrap walking left");
     }
 
     #[test]

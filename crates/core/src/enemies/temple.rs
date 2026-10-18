@@ -530,18 +530,11 @@ fn spawn(game: &mut Game, object: &str, pos: Vec2) -> u64 {
 }
 
 fn hawk_idle_wall(world: &World, e: &Entity) -> bool {
-    let point_is_solid = |point| {
-        world.tiles_point_active_precision(point, "oSolid", crate::CollisionPrecision::BoundingBox)
-            || world.entities.iter().any(|other| {
-                other.id != e.id
-                    && other.alive
-                    && other.engine_active
-                    && crate::catalog::is_a(&other.object, "oSolid")
-                    && other.mask_contains(point, crate::CollisionPrecision::BoundingBox)
-            })
-    };
-    point_is_solid(Vec2::new(e.pos.x - 1.0, e.pos.y))
-        || point_is_solid(Vec2::new(e.pos.x + 16.0, e.pos.y))
+    // The preserved Classic 1.1 EXE registers collision_point to 0x55C044;
+    // it compares `prec` and `notme` with 0.5, so source -1,-1 means bbox and
+    // no caller exclusion.
+    super::inherited::point(world, Vec2::new(e.pos.x - 1.0, e.pos.y), "oSolid")
+        || super::inherited::point(world, Vec2::new(e.pos.x + 16.0, e.pos.y), "oSolid")
 }
 
 fn hawk(game: &mut Game, e: &mut Entity) {
@@ -676,13 +669,13 @@ fn hawk(game: &mut Game, e: &mut Entity) {
                 e.facing = -e.facing;
             }
             e.vel.x = 1.5 * e.facing as f64;
-            if !game.world.solid_point_active(
+            if !super::inherited::point(
+                &game.world,
                 Vec2::new(
                     e.pos.x + if e.facing < 0 { -1.0 } else { 16.0 },
                     e.pos.y + 16.0,
                 ),
-                CollisionPrecision::Precise,
-                Some(e.id),
+                "oSolid",
             ) {
                 e.state = 0;
                 e.timer = 20 + game.rng.range(31);
@@ -1587,13 +1580,13 @@ fn magma_man(game: &mut Game, e: &mut Entity) {
             e.facing = -e.facing;
         }
         e.vel.x = 1.5 * e.facing as f64;
-        if !game.world.solid_point_active(
+        if !super::inherited::point(
+            &game.world,
             Vec2::new(
                 e.pos.x + if e.facing < 0 { -1.0 } else { 16.0 },
                 e.pos.y + 16.0,
             ),
-            CollisionPrecision::Precise,
-            Some(e.id),
+            "oSolid",
         ) {
             e.state = 0;
             e.timer = 20 + game.rng.range(31);
@@ -1818,6 +1811,44 @@ mod tests {
     #[test]
     fn actual_magma_man_step_temple_walk_ledge_rng() {
         assert_temple_walk_actor_step("oMagmaMan");
+    }
+
+    #[test]
+    fn temple_walk_minus_one_solid_probes_use_bbox_flags() {
+        for (object, seed) in [("oHawkman", 1), ("oMagmaMan", 0)] {
+            let (mut game, id) = temple_walk_fixture(object, 1, true);
+            let dark_fall = game.spawn("oDarkFall", Vec2::new(96.0, 160.0));
+            let point = Vec2::new(96.0, 160.0);
+            let mask = game.world.entity(dark_fall).unwrap();
+            assert!(mask.mask_contains(point, crate::CollisionPrecision::BoundingBox));
+            assert!(!mask.mask_contains(point, crate::CollisionPrecision::Precise));
+
+            game.rng = crate::model::Rng::new(seed);
+            let mut expected_rng = CanonicalOracle::checkpoint(&game.rng);
+            if object == "oMagmaMan" {
+                literal_magma_burn_prefix(&mut expected_rng);
+            }
+            let (state, counter, mut x_vel, idle_success) =
+                literal_temple_walk(&mut expected_rng, false, 1);
+            assert!(!idle_success, "fixture seed must keep the actor walking");
+            if object == "oHawkman" {
+                x_vel = (x_vel.abs() - 0.1).max(0.0) * x_vel.signum();
+            }
+
+            super::super::step_instance(&mut game, id);
+
+            let actor = game.world.entity(id).unwrap();
+            assert_eq!(
+                actor.state, state,
+                "{object} treats bbox-only forward support as solid"
+            );
+            assert_eq!(actor.timer, counter, "{object}");
+            assert_eq!(actor.facing, 1, "{object}");
+            assert!((actor.vel.x - x_vel).abs() < 1e-12, "{object}");
+            for _ in 0..8 {
+                assert_eq!(game.rng.next_u64(), expected_rng.next_u64(), "{object}");
+            }
+        }
     }
 
     #[test]
