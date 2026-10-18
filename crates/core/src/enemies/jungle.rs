@@ -2394,6 +2394,67 @@ mod tests {
     }
 
     #[test]
+    fn natural_frog_whip_kill_keeps_blood_in_low_graphics_without_trails() {
+        for graphics_high in [true, false] {
+            let mut game = Game::shell(42, RulesPreset::Classic);
+            game.world = World::new(20, 16, Area::Jungle, 5);
+            game.world.name = "rLevel".into();
+            for x in 0..20 {
+                game.world.set_tile(x, 10, "oBlock");
+            }
+            game.player.pos = Vec2::new(80.0, 152.0);
+            game.player.previous_pos = game.player.pos;
+            game.player.facing = 1;
+            game.set_graphics_high(graphics_high);
+            let frog = game.spawn("oFrog", Vec2::new(104.0, 144.0));
+            game.world.entity_mut(frog).unwrap().timer = 1000;
+
+            game.step(&crate::InputFrame {
+                right: true,
+                attack: true,
+                attack_pressed: true,
+                ..Default::default()
+            });
+            for _ in 0..30 {
+                if game.world.entity(frog).is_none() {
+                    break;
+                }
+                game.step(&crate::InputFrame {
+                    right: true,
+                    ..Default::default()
+                });
+            }
+
+            assert!(
+                game.world.entity(frog).is_none(),
+                "real input kills the frog"
+            );
+            let blood: Vec<_> = game
+                .world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oBlood")
+                .collect();
+            // The inherited Enemy Whip event emits one impact droplet; the
+            // Frog's next Step emits its own three-droplet death burst.
+            assert_eq!(blood.len(), 4, "hit plus Frog death blood");
+            assert!(blood.iter().all(|drop| {
+                drop.sprite == "sBlood" && drop.value("world_effect_initialized") == 1.0
+            }));
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .filter(|e| e.alive && e.object == "oBloodTrail")
+                    .count()
+                    > 0,
+                graphics_high,
+                "only recurring blood trails are controlled by graphics detail"
+            );
+        }
+    }
+
+    #[test]
     fn game_step_mantrap_stomp_credits_death_on_next_normal_step() {
         let mut game = collision_room();
         game.player.pos = Vec2::new(56.0, 139.0);
