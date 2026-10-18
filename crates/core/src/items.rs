@@ -879,6 +879,8 @@ fn drop_held_weapon(game: &mut Game, id: u64) {
         );
     }
     game.player.held = None;
+    // scrUseItem's common tail clears pickupItemType whenever holdItem is zero,
+    // including the specialized weapon-drop branches.
     game.player.pickup_item_type.clear();
 }
 
@@ -3431,6 +3433,16 @@ mod tests {
         });
         assert!(game.player.held.is_none());
         assert!(game.player.pickup_item_type.is_empty());
+        assert!(!game.world.entity(machete).unwrap().held);
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oMachete")
+                .count(),
+            1,
+            "cycling must not recreate the weapon that was dropped"
+        );
         assert_eq!(game.player.bombs, 1.0);
         assert!(game.world.entity(bomb).is_none_or(|entity| !entity.held));
         assert!(
