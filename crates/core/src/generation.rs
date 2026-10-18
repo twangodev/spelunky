@@ -61,7 +61,13 @@ fn rand(rng: &mut Rng, low: u32, high: u32) -> u32 {
 fn has(flags: &BTreeSet<String>, name: &str) -> bool {
     flags.contains(name)
         || match name {
-            "black_market" => flags.contains("blackMarket") || flags.contains("genBlackMarket"),
+            // `genBlackMarket` is a run-persistent request. Classic consumes
+            // it for a layout only until `madeBlackMarket` has been set, but
+            // keeps it alive to suppress Lake routes later in the Jungle.
+            "black_market" => {
+                flags.contains("blackMarket")
+                    || (flags.contains("genBlackMarket") && !flags.contains("made_black_market"))
+            }
             "city_of_gold" => flags.contains("cityOfGold"),
             "snake_pit" => flags.contains("snakePit"),
             "alien_ship" => flags.contains("alienCraft"),
@@ -805,6 +811,9 @@ pub(crate) fn generate_campaign_result(
     if area == Area::Jungle
         && !has(&selected, "black_market")
         && !has(&selected, "lake")
+        // oTransition's Lake route checks genBlackMarket independently of
+        // madeBlackMarket, so a spent Market request still suppresses Lakes.
+        && !selected.contains("genBlackMarket")
         && rng.chance(1, 10)
     {
         selected.insert("lake".into());
@@ -1640,6 +1649,34 @@ mod tests {
             assert_eq!((path.start, path.end), (0, 3));
             assert_eq!(actual.next_u64(), expected.next_u64(), "seed{seed}");
         }
+    }
+
+    #[test]
+    fn spent_black_market_request_suppresses_lake_without_repeating_market() {
+        // Seed zero's first canonical draw selects the source Lake branch.
+        let mut lake_rng = Rng::new(0);
+        assert!(lake_rng.chance(1, 10));
+        let ordinary = generate_campaign_result(
+            &mut Rng::new(0),
+            7,
+            &BTreeSet::from(["made_black_market".into()]),
+            GenerationContext::default(),
+            &mut GenerationState::fresh(&Rng::new(0)),
+        );
+        assert_eq!(ordinary.world.name, "Lake");
+
+        // Classic leaves genBlackMarket set for the run after its one Market
+        // layout. It prevents later Jungle Lake routes even though
+        // madeBlackMarket prevents the special layout from repeating.
+        let flags = BTreeSet::from(["genBlackMarket".into(), "made_black_market".into()]);
+        let persisted = generate_campaign_result(
+            &mut Rng::new(0),
+            7,
+            &flags,
+            GenerationContext::default(),
+            &mut GenerationState::fresh(&Rng::new(0)),
+        );
+        assert_eq!(persisted.world.name, "Jungle");
     }
 
     #[test]

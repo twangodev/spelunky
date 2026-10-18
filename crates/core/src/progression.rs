@@ -1600,6 +1600,70 @@ mod tests {
         assert_eq!(held.value("stashed"), 0.);
         assert!(held.pos.distance(g.player.pos) < 1.);
     }
+
+    #[test]
+    fn actual_market_exits_consume_the_forced_market_once() {
+        let mut game = Game::shell(0, RulesPreset::Classic);
+        game.start_from_hub(false, 5);
+        game.player.pos = game.world.entrance;
+        game.player.previous_pos = game.player.pos;
+        game.player.grounded = true;
+        game.player.state = PlayerState::Standing;
+        let market_exit = game.world.spawn("oXMarket", game.player.pos);
+        game.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        assert_eq!(game.state, RunState::Ending);
+        assert_eq!(game.data["next_level"], 6.);
+        assert!(game.flags.contains("genBlackMarket"));
+
+        game.next_level();
+        assert_eq!(game.world.level, 6);
+        assert_eq!(game.world.name, "Black Market");
+        assert!(game.flags.contains("genBlackMarket"));
+        assert!(game.flags.contains("made_black_market"));
+        game.step(&InputFrame::default());
+        assert!(game.flags.contains("made_black_market"));
+
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 4, "oLush");
+        }
+        let ordinary_exit = game.world.spawn("oExit", Vec2::new(80., 48.));
+        game.player.pos = Vec2::new(85., 56.);
+        game.player.previous_pos = game.player.pos;
+        game.player.grounded = true;
+        game.player.state = PlayerState::Standing;
+        game.player.attack_timer = 0;
+        game.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        let market_exit_query = exit_query(&mut game, "oExit");
+        assert_eq!(
+            game.state,
+            RunState::Ending,
+            "market exit interaction failed at {:?}; door {:?}, state {:?}, grounded {}, stun {}, attack {}, exiting {}, sprite {}, health {}, query {:?}",
+            game.player.pos,
+            game.world.entity(ordinary_exit).map(|door| door.pos),
+            game.player.state,
+            game.player.grounded,
+            game.player.stun,
+            game.player.attack_timer,
+            game.player.is_exiting(),
+            game.player.sprite,
+            game.player.health,
+            market_exit_query
+        );
+        assert_eq!(game.data["next_level"], 7.);
+        assert!(game.world.entity(market_exit).is_none());
+
+        game.next_level();
+        assert_eq!(game.world.level, 7);
+        assert_ne!(game.world.name, "Black Market");
+        assert!(game.flags.contains("genBlackMarket"));
+    }
+
     #[test]
     fn actual_step_udjat_alarm_holds_blink_and_alternates_source_sounds() {
         let (mut g, _) = carried_exit("oRock");

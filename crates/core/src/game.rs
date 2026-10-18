@@ -604,6 +604,12 @@ impl Game {
                 self.flags.insert("made_market_entrance".into());
             }
         }
+        // scrLevelGen sets madeBlackMarket before returning from the forced
+        // layout. Keep that lifecycle edge synchronous with generation so a
+        // persistent genBlackMarket cannot select the room again.
+        if self.world.name == "Black Market" {
+            self.flags.insert("made_black_market".into());
+        }
     }
 
     pub fn next_level(&mut self) {
@@ -623,7 +629,6 @@ impl Game {
             !matches!(
                 f.as_str(),
                 "black_market"
-                    | "genBlackMarket"
                     | "blackMarket"
                     | "snake_pit"
                     | "snakePit"
