@@ -1567,7 +1567,10 @@ pub(crate) fn initialize_detritus(game: &mut Game, e: &mut Entity) {
         return;
     }
     e.data.insert("world_effect_initialized".into(), 1.0);
-    // Parent Create, before the child's image_speed/random/alarms action.
+    // oDrawnSprite Create, then oDetritus Create, before the child's
+    // image_speed/random/alarms action.
+    e.text.insert("type".into(), String::new());
+    e.data.insert("blinkToggle".into(), 0.0);
     for (key, value) in [
         ("collision_left", -4.0),
         ("collision_top", -4.0),

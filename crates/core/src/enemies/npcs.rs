@@ -57,9 +57,6 @@ pub fn init(e: &mut Entity) {
             e.data.insert("dir".into(), 0.0);
             e.data.insert("bloodless".into(), 1.0);
         }
-        "oBarrier" | "oBarrierEmitter" => {
-            e.data.insert("invincible".into(), 1.0);
-        }
         _ => {}
     }
 }

@@ -29,6 +29,11 @@ pub fn matches(object: &str) -> bool {
 }
 
 pub fn init(e: &mut Entity) {
+    if e.object == "oMagmaTrail" {
+        // Its inherited oDrawnSprite Create runs before the child's Create.
+        e.text.insert("type".into(), String::new());
+        e.data.insert("blinkToggle".into(), 0.0);
+    }
     e.set_image_speed(match e.object.as_str() {
         "oHawkman" | "oMagmaMan" => 0.5,
         "oTombLord" => 0.25,
