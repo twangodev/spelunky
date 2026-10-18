@@ -857,7 +857,6 @@ fn drop_held_weapon(game: &mut Game, id: u64) {
         );
     }
     game.player.held = None;
-    game.player.pickup_item_type.clear();
 }
 
 fn update_depth(game: &Game, entity: &mut Entity) {
@@ -3281,6 +3280,58 @@ mod tests {
         assert_eq!(game.world.entity(restored).unwrap().object, "oRock");
         assert!(game.world.entity(restored).unwrap().held);
         assert_eq!(game.player.pickup_item_type, "Rock");
+    }
+
+    #[test]
+    fn game_step_duck_dropped_weapon_restores_after_reserved_bomb_cycle() {
+        let mut game = game();
+        game.world = World::new(30, 20, Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oHardBlock");
+        }
+        game.player.pos = Vec2::new(88.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        game.player.bombs = 1.0;
+        game.player.ropes = 0.0;
+        let machete = game.spawn("oMachete", game.player.pos);
+        game.world.entity_mut(machete).unwrap().held = true;
+        game.player.held = Some(machete);
+        game.player.pickup_item_type = "Machete".into();
+
+        game.step(&InputFrame {
+            down: true,
+            attack: true,
+            attack_pressed: true,
+            ..InputFrame::default()
+        });
+        assert_eq!(game.player.state, PlayerState::Ducking);
+        assert_eq!(game.player.held, None);
+        assert!(!game.world.entity(machete).unwrap().held);
+        assert_eq!(game.player.pickup_item_type, "Machete");
+
+        game.step(&InputFrame {
+            cycle_pressed: true,
+            ..InputFrame::default()
+        });
+        let bomb = game.player.held.unwrap();
+        assert_eq!(game.world.entity(bomb).unwrap().object, "oBomb");
+        assert_eq!(game.player.pickup_item_type, "Machete");
+        assert_eq!(game.player.bombs, 0.0);
+
+        game.step(&InputFrame {
+            cycle_pressed: true,
+            ..InputFrame::default()
+        });
+        let restored = game.player.held.unwrap();
+        assert_ne!(restored, machete, "scrHoldItem creates a fresh instance");
+        assert_eq!(game.world.entity(restored).unwrap().object, "oMachete");
+        assert!(game.world.entity(restored).unwrap().held);
+        assert_eq!(game.player.pickup_item_type, "Machete");
+        assert_eq!(game.player.bombs, 1.0);
+        assert!(game.world.entity(bomb).is_none_or(|entity| !entity.held));
     }
 
     #[test]
