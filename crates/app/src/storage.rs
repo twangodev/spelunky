@@ -418,30 +418,144 @@ fn read_classic_stats_file() -> Result<Option<String>, String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn path() -> Result<std::path::PathBuf, String> {
-    use std::path::PathBuf;
-    let base =
-        if let Some(config) = std::env::var_os("XDG_CONFIG_HOME").filter(|path| !path.is_empty()) {
-            let path = PathBuf::from(config);
-            if !path.is_absolute() {
-                return Err("XDG_CONFIG_HOME must be an absolute path".into());
+    let env_path = |name: &str| std::env::var_os(name).map(std::path::PathBuf::from);
+    let environment = NativeDataEnvironment {
+        xdg_data_home: env_path("XDG_DATA_HOME"),
+        home: env_path("HOME"),
+        appdata: env_path("APPDATA"),
+        local_appdata: env_path("LOCALAPPDATA"),
+        user_profile: env_path("USERPROFILE"),
+    };
+    let platform = if cfg!(target_os = "windows") {
+        NativePlatform::Windows
+    } else if cfg!(target_os = "macos") {
+        NativePlatform::MacOs
+    } else {
+        NativePlatform::Unix
+    };
+    Ok(native_data_directory(platform, &environment)?.join("spelunky-rust/save.json"))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy)]
+enum NativePlatform {
+    Windows,
+    MacOs,
+    Unix,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Default)]
+struct NativeDataEnvironment {
+    xdg_data_home: Option<std::path::PathBuf>,
+    home: Option<std::path::PathBuf>,
+    appdata: Option<std::path::PathBuf>,
+    local_appdata: Option<std::path::PathBuf>,
+    user_profile: Option<std::path::PathBuf>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn native_data_directory(
+    platform: NativePlatform,
+    environment: &NativeDataEnvironment,
+) -> Result<std::path::PathBuf, String> {
+    use std::path::{Path, PathBuf};
+
+    fn require_absolute(path: &Path, name: &str) -> Result<PathBuf, String> {
+        if !path.is_absolute() {
+            return Err(format!("{name} must be an absolute path"));
+        }
+        Ok(path.to_owned())
+    }
+
+    fn present(path: &Option<PathBuf>) -> Option<&Path> {
+        path.as_deref().filter(|path| !path.as_os_str().is_empty())
+    }
+
+    match platform {
+        NativePlatform::Windows => {
+            if let Some(path) = present(&environment.appdata) {
+                return require_absolute(path, "APPDATA");
             }
-            path
-        } else {
-            let home = std::env::var_os("HOME")
-                .filter(|path| !path.is_empty())
-                .ok_or("No home directory available for save data")?;
-            PathBuf::from(home).join(".local/share")
-        };
-    Ok(base.join("spelunky-rust/save.json"))
+            if let Some(path) = present(&environment.local_appdata) {
+                return require_absolute(path, "LOCALAPPDATA");
+            }
+            if let Some(path) = present(&environment.user_profile) {
+                return Ok(require_absolute(path, "USERPROFILE")?
+                    .join("AppData")
+                    .join("Roaming"));
+            }
+            if let Some(path) = present(&environment.home) {
+                return Ok(require_absolute(path, "HOME")?.join(".local/share"));
+            }
+            Err("No Windows user data directory available for save data".into())
+        }
+        NativePlatform::MacOs => {
+            let home =
+                present(&environment.home).ok_or("No home directory available for save data")?;
+            Ok(require_absolute(home, "HOME")?
+                .join("Library")
+                .join("Application Support"))
+        }
+        NativePlatform::Unix => {
+            if let Some(path) = present(&environment.xdg_data_home) {
+                return require_absolute(path, "XDG_DATA_HOME");
+            }
+            let home =
+                present(&environment.home).ok_or("No home directory available for save data")?;
+            Ok(require_absolute(home, "HOME")?.join(".local/share"))
+        }
+    }
+}
+
+/// Before this host used OS-specific user data directories it wrote to
+/// `XDG_CONFIG_HOME` or `$HOME/.local/share`. Read that location only when the
+/// new path is absent, then the next normal save migrates it atomically.
+#[cfg(not(target_arch = "wasm32"))]
+fn legacy_path() -> Result<std::path::PathBuf, String> {
+    use std::path::PathBuf;
+    if let Some(config) = std::env::var_os("XDG_CONFIG_HOME").filter(|path| !path.is_empty()) {
+        let path = PathBuf::from(config);
+        if !path.is_absolute() {
+            return Err("XDG_CONFIG_HOME must be an absolute path".into());
+        }
+        Ok(path.join("spelunky-rust/save.json"))
+    } else {
+        let home = std::env::var_os("HOME")
+            .filter(|path| !path.is_empty())
+            .ok_or("No home directory available for save data")?;
+        Ok(PathBuf::from(home).join(".local/share/spelunky-rust/save.json"))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_native_save(
+    primary: &std::path::Path,
+    legacy: Option<&std::path::Path>,
+) -> Result<Option<String>, String> {
+    fn read_one(path: &std::path::Path) -> Result<Option<String>, std::io::Error> {
+        match std::fs::read_to_string(path) {
+            Ok(json) => Ok(Some(json)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    match read_one(primary) {
+        Ok(Some(json)) => Ok(Some(json)),
+        Ok(None) => match legacy.filter(|path| *path != primary) {
+            Some(path) => read_one(path).map_err(|error| format!("Cannot read save data: {error}")),
+            None => Ok(None),
+        },
+        Err(error) => Err(format!("Cannot read save data: {error}")),
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn read() -> Result<Option<String>, String> {
-    match std::fs::read_to_string(path()?) {
-        Ok(json) => Ok(Some(json)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!("Cannot read save data: {error}")),
-    }
+    let primary = path()?;
+    let legacy = legacy_path().ok();
+    read_native_save(&primary, legacy.as_deref())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -515,6 +629,89 @@ mod tests {
         assert_eq!(data.custom_levels.len(), 2);
         assert_eq!(data.custom_levels["example"], "canonical file");
         assert_eq!(data.custom_levels["!hidden"], "hidden");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_save_directory_uses_each_platforms_user_data_location() {
+        let env = NativeDataEnvironment {
+            xdg_data_home: Some("/home/player/game-data".into()),
+            home: Some("/home/player".into()),
+            appdata: Some("/users/player/AppData/Roaming".into()),
+            local_appdata: Some("/users/player/AppData/Local".into()),
+            user_profile: Some("/users/player".into()),
+        };
+        assert_eq!(
+            native_data_directory(NativePlatform::Unix, &env).unwrap(),
+            std::path::PathBuf::from("/home/player/game-data")
+        );
+        assert_eq!(
+            native_data_directory(NativePlatform::MacOs, &env).unwrap(),
+            std::path::PathBuf::from("/home/player/Library/Application Support")
+        );
+        assert_eq!(
+            native_data_directory(NativePlatform::Windows, &env).unwrap(),
+            std::path::PathBuf::from("/users/player/AppData/Roaming")
+        );
+
+        let mut windows_without_appdata = env.clone();
+        windows_without_appdata.appdata = None;
+        windows_without_appdata.local_appdata = None;
+        assert_eq!(
+            native_data_directory(NativePlatform::Windows, &windows_without_appdata).unwrap(),
+            std::path::PathBuf::from("/users/player/AppData/Roaming")
+        );
+        windows_without_appdata.user_profile = None;
+        assert_eq!(
+            native_data_directory(NativePlatform::Windows, &windows_without_appdata).unwrap(),
+            std::path::PathBuf::from("/home/player/.local/share")
+        );
+
+        let unix_without_xdg = NativeDataEnvironment {
+            xdg_data_home: None,
+            ..env
+        };
+        assert_eq!(
+            native_data_directory(NativePlatform::Unix, &unix_without_xdg).unwrap(),
+            std::path::PathBuf::from("/home/player/.local/share")
+        );
+        let relative_xdg = NativeDataEnvironment {
+            xdg_data_home: Some("relative-data".into()),
+            ..unix_without_xdg
+        };
+        assert!(native_data_directory(NativePlatform::Unix, &relative_xdg).is_err());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_save_reads_the_new_location_first_then_falls_back_to_the_old_path() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "spelunky-storage-migration-{}-{stamp}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let primary = directory.join("current/save.json");
+        let legacy = directory.join("legacy/save.json");
+        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        std::fs::write(&legacy, "legacy profile").unwrap();
+
+        assert_eq!(
+            read_native_save(&primary, Some(&legacy)).unwrap(),
+            Some("legacy profile".into())
+        );
+        std::fs::create_dir_all(primary.parent().unwrap()).unwrap();
+        std::fs::write(&primary, "current profile").unwrap();
+        assert_eq!(
+            read_native_save(&primary, Some(&legacy)).unwrap(),
+            Some("current profile".into())
+        );
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
