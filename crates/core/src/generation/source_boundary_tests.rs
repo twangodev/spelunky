@@ -272,6 +272,113 @@ fn generated_source_boundary_rng_and_real_world_exist_before_path_selection() {
 }
 
 #[test]
+fn olmec_create_tape_precedes_boundaries_and_route_and_is_reused_by_authored_instances() {
+    const SEED: u32 = 0;
+    const EXPECTED_AFTER_STATIC_CREATE: u32 = 1_549_976_401;
+    const EXPECTED_BEFORE_ROUTE: u32 = 952_404_984;
+    const EXPECTED_ROUTE_START: usize = 2;
+    const EXPECTED_TIMER_DIGEST: u64 = 3_330_284_806_749_926_215;
+
+    // Independent literal GM8 draws for the authored room's pre-oGame Create
+    // prefix: Olmec first, then all Lava instances in rOlmec resource order.
+    let mut source_state = SEED;
+    let olmec_roll = literal_rand(&mut source_state, 2) - 1;
+    let expected_facing = if olmec_roll == 0 { -1 } else { 1 };
+    let expected_timers: Vec<u16> = (0..240)
+        .map(|_| (100 + literal_rand(&mut source_state, 201) - 1) as u16)
+        .collect();
+    assert_eq!(source_state, EXPECTED_AFTER_STATIC_CREATE);
+    let mut timer_digest = 0xcbf2_9ce4_8422_2325_u64;
+    for (birth, timer) in expected_timers.iter().copied().enumerate() {
+        for byte in [birth as u8, timer as u8, (timer >> 8) as u8] {
+            timer_digest ^= u64::from(byte);
+            timer_digest = timer_digest.wrapping_mul(0x100_0000_01b3);
+        }
+    }
+    assert_eq!(timer_digest, EXPECTED_TIMER_DIGEST);
+
+    // oGame then creates the 151 Boss boundary instances before scrLevelGen.
+    for _ in 0..151 {
+        literal_rand(&mut source_state, 100);
+    }
+    assert_eq!(source_state, EXPECTED_BEFORE_ROUTE);
+    let expected_route_start = (literal_rand(&mut source_state, 4) - 1) as usize;
+    assert_eq!(expected_route_start, EXPECTED_ROUTE_START);
+
+    let mut positions = super::special::BOSS_LAVA_CREATE_ORDER;
+    positions.sort_unstable();
+    assert_eq!(positions, std::array::from_fn(|index| index as u8));
+
+    let mut actual_rng = Rng::new(SEED);
+    let flags = BTreeSet::from(["low_graphics".into(), "no_dark_level".into()]);
+    begin();
+    let world = generate(&mut actual_rng, 16, &flags);
+    let observed = finish();
+    let (before_path, before_path_rng) = observed
+        .before_path
+        .expect("Boss source generation checkpoints immediately before scrLevelGen");
+    assert_eq!(before_path_rng, u64::from(EXPECTED_BEFORE_ROUTE));
+    assert_eq!(
+        verify(
+            &before_path,
+            &observed.births,
+            EXPECTED_AFTER_STATIC_CREATE,
+            54,
+            false,
+            false,
+            "oTemple",
+            false,
+        ),
+        u64::from(EXPECTED_BEFORE_ROUTE)
+    );
+    let route = world
+        .source_room_path
+        .as_ref()
+        .expect("SourceClassic level 16 retains its selected room route");
+    assert_eq!(
+        route[0].iter().position(|&room| room == 1),
+        Some(EXPECTED_ROUTE_START)
+    );
+
+    let olmec = world
+        .entities
+        .iter()
+        .find(|entity| entity.object == "oOlmec")
+        .expect("authored Olmec instance");
+    assert_eq!(olmec.facing, expected_facing);
+    assert_eq!(olmec.value("olmec_facing_created"), 1.0);
+
+    let lava: Vec<_> = world
+        .entities
+        .iter()
+        .filter(|entity| entity.object == "oLava")
+        .collect();
+    assert_eq!(lava.len(), 240);
+    for (birth, (entity, &position)) in lava
+        .iter()
+        .zip(&super::special::BOSS_LAVA_CREATE_ORDER)
+        .enumerate()
+    {
+        let position = usize::from(position);
+        let expected_pos = Vec2::new(
+            ((position % 40) + 1) as f64 * 16.0,
+            ((position / 40) + 48) as f64 * 16.0,
+        );
+        assert_eq!(entity.pos, expected_pos, "source Lava birth {birth}");
+        assert_eq!(
+            entity.value("spurt_time"),
+            f64::from(expected_timers[birth]),
+            "source Lava timer at {expected_pos:?}"
+        );
+        assert_eq!(
+            entity.value("spurt_counter"),
+            f64::from(expected_timers[birth])
+        );
+        assert_eq!(entity.value("lava_initialized"), 1.0);
+    }
+}
+
+#[test]
 fn explicit_historical_revision_matches_sealed_before_function_world_and_rng() {
     for canonical in [false, true] {
         for (level, flags) in [
@@ -536,7 +643,7 @@ fn historical_before_boundary_correction(
                     && rng.chance(1, 12)));
         false
     };
-    special::apply(&mut world, rng, &selected, state.revision);
+    special::apply(&mut world, rng, &selected, state.revision, None);
     apply_wanted_posters(&mut world, &selected);
     let graphics_high = !has(&selected, "low_graphics");
     terrain::create_generated_with_context(&mut world, rng, context);

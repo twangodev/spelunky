@@ -816,6 +816,14 @@ pub(crate) fn generate_campaign_result(
         };
     }
     let source_classic = state.revision == crate::GenerationRevision::SourceClassicV2;
+    // rOlmec's static Olmec and Lava instances finish their Create events
+    // before oGame.Create reaches scrInitLevel/scrLevelGen. Preserve that RNG
+    // prefix now, then attach its results to the final authored instances.
+    let boss_create_tape = if source_classic && area == Area::Boss {
+        Some(special::create_source_boss_tape(rng))
+    } else {
+        None
+    };
     let height = if area == Area::Boss {
         55
     } else if area == Area::Ice {
@@ -1020,7 +1028,13 @@ pub(crate) fn generate_campaign_result(
                     && rng.chance(1, 12)));
         false
     };
-    special::apply(&mut world, rng, &selected, state.revision);
+    special::apply(
+        &mut world,
+        rng,
+        &selected,
+        state.revision,
+        boss_create_tape.as_ref(),
+    );
     apply_wanted_posters(&mut world, &selected);
     let graphics_high = !has(&selected, "low_graphics");
     terrain::create_generated_with_context(&mut world, rng, context);

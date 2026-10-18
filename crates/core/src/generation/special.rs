@@ -9,6 +9,41 @@
 use crate::model::{Area, Rng, Vec2, World};
 use std::collections::BTreeSet;
 
+/// rOlmec's static Create calls run before oGame.Create starts route
+/// generation. The first draw is oOlmec.facing, followed by each authored
+/// oLava.spurtTime in the resource's instance order. Positions encode
+/// `row * 40 + column`, with row 0 at y=768 and column 0 at x=16.
+pub(super) const BOSS_LAVA_CREATE_ORDER: [u8; 240] = [
+    200, 160, 120, 80, 40, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+    20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 79, 78, 77, 76,
+    112, 110, 107, 106, 104, 102, 101, 98, 97, 96, 95, 94, 93, 92, 91, 90, 89, 88, 87, 86, 85, 41,
+    42, 43, 52, 55, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 75, 74, 111,
+    109, 108, 105, 103, 100, 99, 57, 56, 54, 53, 51, 50, 49, 48, 47, 46, 45, 44, 84, 83, 82, 81,
+    121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 179, 180, 181, 182, 183,
+    184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 156, 155, 140, 135, 136, 137, 138,
+    139, 141, 145, 149, 154, 153, 152, 150, 148, 142, 143, 144, 146, 147, 151, 113, 114, 115, 116,
+    117, 118, 119, 159, 158, 157, 196, 197, 198, 199, 239, 238, 237, 236, 235, 234, 233, 232, 231,
+    230, 229, 228, 227, 226, 225, 224, 223, 222, 221, 220, 219, 218, 178, 177, 176, 175, 174, 173,
+    172, 171, 170, 169, 168, 167, 166, 165, 164, 161, 162, 163, 201, 202, 203, 204, 205, 206, 207,
+    208, 209, 210, 211, 212, 213, 214, 215, 216, 217,
+];
+
+/// The source Create results captured before any route or room draws. Lava
+/// timers stay in the authored instance order above until their final births.
+pub(super) struct BossCreateTape {
+    olmec_facing: i8,
+    lava_spurt_times: [u16; 240],
+}
+
+pub(super) fn create_source_boss_tape(rng: &mut Rng) -> BossCreateTape {
+    let olmec_facing = if rng.range(2) == 0 { -1 } else { 1 };
+    let lava_spurt_times = std::array::from_fn(|_| (100 + rng.range(201)) as u16);
+    BossCreateTape {
+        olmec_facing,
+        lava_spurt_times,
+    }
+}
+
 // b = destructible brick, h = invincible hard block, l/L = ladder/top.
 const TUTORIAL_TERRAIN: [&str; 19] = [
     "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh",
@@ -168,9 +203,10 @@ pub(super) fn apply(
     rng: &mut Rng,
     flags: &BTreeSet<String>,
     revision: crate::GenerationRevision,
+    boss_create_tape: Option<&BossCreateTape>,
 ) {
     if world.area == Area::Boss {
-        boss_arena(world, rng, revision);
+        boss_arena(world, rng, revision, boss_create_tape);
     }
     if flags.contains("city_of_gold") {
         // Tile identities remain oTemple; rendering chooses the golden temple
@@ -192,7 +228,12 @@ pub(super) fn apply(
     }
 }
 
-fn boss_arena(world: &mut World, rng: &mut Rng, revision: crate::GenerationRevision) {
+fn boss_arena(
+    world: &mut World,
+    rng: &mut Rng,
+    revision: crate::GenerationRevision,
+    boss_create_tape: Option<&BossCreateTape>,
+) {
     world.name = "Olmec's Lair".into();
     world.entrance = Vec2::new(24.0, 552.0);
     world.exit = Vec2::new(648.0, 552.0);
@@ -226,12 +267,32 @@ fn boss_arena(world: &mut World, rng: &mut Rng, revision: crate::GenerationRevis
             world.set_tile(x, y, "");
         }
     }
-    // rOlmec instances 127721 onward are authored column by column, bottom
-    // first. Preserve their order: SetupWalls mutates surface sprite masks,
-    // and its exact-origin probes must see untouched lava above each layer.
-    for x in 1..41 {
-        for y in (48..54).rev() {
-            world.spawn("oLava", Vec2::new(x as f64 * 16.0, y as f64 * 16.0));
+    // SourceClassic follows rOlmec.xml's authored instance order so its timer
+    // tape remains attached to the right positions. SetupWalls later mutates
+    // surface sprite masks, so its exact-origin probes also need this order.
+    if let Some(tape) = boss_create_tape {
+        assert_eq!(revision, crate::GenerationRevision::SourceClassicV2);
+        for (birth, &position) in BOSS_LAVA_CREATE_ORDER.iter().enumerate() {
+            let position = usize::from(position);
+            let x = 1 + position % 40;
+            let y = 48 + position / 40;
+            let id = world.spawn("oLava", Vec2::new(x as f64 * 16.0, y as f64 * 16.0));
+            // create_generated later completes the normal lava Create. The
+            // preset timer prevents it from drawing again and keeps each draw
+            // attached to the matching source instance.
+            world
+                .entity_mut(id)
+                .expect("new authored lava")
+                .data
+                .insert("spurt_time".into(), f64::from(tape.lava_spurt_times[birth]));
+        }
+    } else {
+        // HistoricalV1 retains its original producer order. This also keeps
+        // direct legacy special-room fixtures independent of the source tape.
+        for x in 1..41 {
+            for y in (48..54).rev() {
+                world.spawn("oLava", Vec2::new(x as f64 * 16.0, y as f64 * 16.0));
+            }
         }
     }
     for x in 1..41 {
@@ -247,9 +308,18 @@ fn boss_arena(world: &mut World, rng: &mut Rng, revision: crate::GenerationRevis
         ("oHawkmanWorship", 280.0, 544.0, "sHawkLeft"),
     ] {
         let id = if object == "oOlmec" && revision == crate::GenerationRevision::SourceClassicV2 {
-            // Complete its local Create at this authored birth, before the
-            // following worshippers, and preserve producer sprite overrides.
-            crate::creation::spawn_generated_entity(world, rng, object, Vec2::new(x, y))
+            if let Some(tape) = boss_create_tape {
+                // Reuse the authored Create draw made before route generation.
+                let id = world.spawn(object, Vec2::new(x, y));
+                let entity = world.entity_mut(id).expect("new authored Olmec");
+                entity.facing = tape.olmec_facing;
+                entity.data.insert("olmec_facing_created".into(), 1.0);
+                id
+            } else {
+                // Preserve standalone arena fixtures that do not run the
+                // level-generation preamble.
+                crate::creation::spawn_generated_entity(world, rng, object, Vec2::new(x, y))
+            }
         } else {
             world.spawn(object, Vec2::new(x, y))
         };
@@ -328,6 +398,7 @@ mod tests {
             &mut world,
             &mut Rng::new(0),
             crate::GenerationRevision::SourceClassicV2,
+            None,
         );
         assert_eq!(world.entrance, Vec2::new(24.0, 552.0));
         assert_eq!(
@@ -391,7 +462,7 @@ mod tests {
                 } else {
                     1
                 };
-                boss_arena(&mut world, &mut actual, revision);
+                boss_arena(&mut world, &mut actual, revision, None);
                 let boss = world
                     .entities
                     .iter()

@@ -1629,7 +1629,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_olmec_lava_only_enables_exposed_surface_spurts() {
+    fn generated_olmec_lava_preserves_source_ordered_surfaces_and_spurts() {
         let world = crate::generation::generate(&mut Rng::new(42), 16, &Default::default());
         let lava: Vec<_> = world
             .entities
@@ -1642,18 +1642,27 @@ mod tests {
                 .filter(|entity| entity.pos.y == 768.0)
                 .any(|entity| entity.value("spurt") == 1.0)
         );
+        // rOlmec.xml creates (640,768) before (640,784). scrSetupWalls
+        // immediately changes the first instance to sLavaTop; its frame-0
+        // separate bbox starts at y+1, so the later collision_point at the
+        // second instance's above origin misses and that lower lava can spurt.
+        let at = |x, y| {
+            lava.iter()
+                .find(|entity| entity.pos == Vec2::new(x, y))
+                .unwrap()
+        };
+        assert_eq!(at(640.0, 784.0).sprite, "sLavaTop");
+        assert_eq!(at(624.0, 784.0).value("spurt"), 1.0);
+        assert_eq!(at(624.0, 784.0).sprite, "sLavaTop");
+
+        // scrCheckWaterTop later propagates the surface horizontally. It can
+        // turn covered lava into sLavaTop, but does not roll another spurt.
+        assert_eq!(at(16.0, 784.0).sprite, "sLavaTop");
+        assert_eq!(at(16.0, 784.0).value("spurt"), 0.0);
         for entity in lava {
             assert_eq!(entity.value("lava_initialized"), 1.0);
-            assert_eq!(
-                entity.sprite,
-                if entity.pos.y == 768.0 {
-                    "sLavaTop"
-                } else {
-                    "sLava"
-                }
-            );
-            if entity.pos.y > 768.0 {
-                assert_eq!(entity.value("spurt"), 0.0);
+            if entity.value("spurt") == 1.0 {
+                assert_eq!(entity.sprite, "sLavaTop");
             }
         }
     }
