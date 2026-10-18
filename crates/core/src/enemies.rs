@@ -1345,6 +1345,12 @@ fn base_character_collision(game: &mut Game, e: &mut Entity) {
         game.sound("sndHurt", game.player.pos);
         game.player.invincible = 30;
         game.player.data.insert("blink".into(), 30.0);
+        // Basis/oEnemy Collision with oCharacter sets yVel=-6 when the
+        // player's origin is above the enemy, even when the contact was not
+        // classified as a stomp.
+        if game.player.pos.y < e.pos.y {
+            game.player.vel.y = -6.0;
+        }
         game.player.vel.x = if game.player.pos.x < e.pos.x {
             -6.0
         } else {
