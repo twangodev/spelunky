@@ -40,6 +40,22 @@ fn player_spike_query_ignores_inactive_entity_and_terrain() {
 }
 
 #[test]
+fn dead_player_spike_settle_ignores_an_inactive_solid_tile() {
+    for active in [false, true] {
+        let mut game = room();
+        game.state = crate::RunState::Dead;
+        game.world.set_tile(5, 5, "oBlock");
+        game.world.tiles[5 * game.world.width + 5].engine_active = active;
+        game.spawn("oSpikes", Vec2::new(80.0, 80.0));
+        crate::dispatcher::register_instances(&mut game);
+
+        super::player_spikes(&mut game);
+
+        assert_eq!(game.player.pos.y, if active { 80.0 } else { 80.05 });
+    }
+}
+
+#[test]
 fn spear_player_query_ignores_inactive_instances() {
     let mut game = room();
     let id = game.spawn("oSpearsLeft", Vec2::new(72.0, 80.0));

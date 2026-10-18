@@ -658,7 +658,7 @@ enum CustomCreateBirth {
 pub(super) fn initialize_with_graphics(world: &mut World, rng: &mut Rng, graphics_high: bool) {
     create_generated(world, rng);
     setup_generated(world, rng, graphics_high);
-    finalize_generated(world);
+    finalize_generated(world, crate::GenerationRevision::HistoricalV1);
 }
 
 /// Generated terrain Create events precede scrEntityGen. This phase establishes
@@ -1215,7 +1215,7 @@ fn setup_wall_remainder(
     city: bool,
     cemetery: bool,
 ) {
-    setup_fake_temple(world, rng, city, graphics_high);
+    setup_fake_temple(world, rng, city, graphics_high, revision);
     super::water::setup_with_revision(world, rng, revision);
     for y in 0..world.height {
         for x in 0..world.width {
@@ -1245,7 +1245,7 @@ fn setup_wall_remainder(
     if source_canopy {
         super::canopy::vines(world);
     }
-    super::blocks::setup(world, rng);
+    super::blocks::setup(world, rng, revision);
     if source_canopy {
         super::canopy::trees_and_branches(world, rng, cemetery);
     }
@@ -1253,8 +1253,11 @@ fn setup_wall_remainder(
 
 /// scrInitLevel propagates surface sprites after background details and
 /// post-generation cleanup, rather than as part of scrSetupWalls itself.
-pub(super) fn finalize_generated(world: &mut World) {
-    super::water::propagate_surface(world);
+pub(super) fn finalize_generated(world: &mut World, revision: crate::GenerationRevision) {
+    super::water::propagate_surface(
+        world,
+        revision == crate::GenerationRevision::SourceClassicV2,
+    );
 }
 
 /// Source tile_add decorations use background pixel rectangles, not sprites.
@@ -1349,13 +1352,21 @@ fn setup_fringe(
     }
 }
 
-fn setup_fake_temple(world: &mut World, rng: &mut Rng, city: bool, graphics_high: bool) {
+fn setup_fake_temple(
+    world: &mut World,
+    rng: &mut Rng,
+    city: bool,
+    graphics_high: bool,
+    revision: crate::GenerationRevision,
+) {
+    let source = revision == crate::GenerationRevision::SourceClassicV2;
     let ids: Vec<_> = world
         .entities
         .iter()
         .filter(|entity| {
             entity.alive
                 && entity.object == "oTempleFake"
+                && (!source || entity.engine_active)
                 && entity.value("fake_setup_initialized") == 0.0
         })
         .map(|entity| entity.id)
@@ -1363,13 +1374,18 @@ fn setup_fake_temple(world: &mut World, rng: &mut Rng, city: bool, graphics_high
     for id in ids {
         let origin = world.entity(id).unwrap().pos;
         let connected = |point: Vec2| {
-            world.tiles_point(point, "oTemple")
-                || world.tiles_point(point, "oTempleFake")
-                || world.entities.iter().any(|entity| {
-                    entity.alive
-                        && matches!(entity.object.as_str(), "oTemple" | "oTempleFake")
-                        && entity.sprite_bounds().contains(point)
-                })
+            if source {
+                world.point_family_active(point, "oTemple")
+                    || world.point_family_active(point, "oTempleFake")
+            } else {
+                world.tiles_point(point, "oTemple")
+                    || world.tiles_point(point, "oTempleFake")
+                    || world.entities.iter().any(|entity| {
+                        entity.alive
+                            && matches!(entity.object.as_str(), "oTemple" | "oTempleFake")
+                            && entity.sprite_bounds().contains(point)
+                    })
+            }
         };
         let up = origin.y == 0.0 || connected(Vec2::new(origin.x, origin.y - 16.0));
         let down = connected(Vec2::new(origin.x, origin.y + 16.0));
@@ -1492,13 +1508,17 @@ fn lava_exposed(world: &World, origin: Vec2, revision: crate::GenerationRevision
     } else {
         world.solid_point_except(above, 0)
     };
-    !solid_above
-        && !world.tiles_point(above, "oWater")
-        && !world.entities.iter().any(|entity| {
-            entity.alive
-                && crate::catalog::is_a(&entity.object, "oWater")
-                && entity.sprite_bounds().contains(above)
-        })
+    let water_above = if revision == crate::GenerationRevision::SourceClassicV2 {
+        world.point_family_active(above, "oWater")
+    } else {
+        world.tiles_point(above, "oWater")
+            || world.entities.iter().any(|entity| {
+                entity.alive
+                    && crate::catalog::is_a(&entity.object, "oWater")
+                    && entity.sprite_bounds().contains(above)
+            })
+    };
+    !solid_above && !water_above
 }
 
 fn setup_lava(entity: &mut Entity, rng: &mut Rng, exposed: bool, metadata: bool) {
@@ -1744,7 +1764,7 @@ mod tests {
         setup_generated(&mut world, &mut rng, false);
         assert_eq!(world.entity(open).unwrap().sprite, "sWaterTop");
         assert_eq!(world.entity(covered).unwrap().sprite, "sWater");
-        finalize_generated(&mut world);
+        finalize_generated(&mut world, crate::GenerationRevision::HistoricalV1);
         assert_eq!(world.entity(covered).unwrap().sprite, "sWaterTop");
     }
 
@@ -1824,7 +1844,13 @@ mod tests {
                 }
                 let mut actual = Rng::new(42);
                 let mut expected = actual.clone();
-                setup_fake_temple(&mut world, &mut actual, city, false);
+                setup_fake_temple(
+                    &mut world,
+                    &mut actual,
+                    city,
+                    false,
+                    crate::GenerationRevision::SourceClassicV2,
+                );
                 assert_eq!(
                     actual.range(100000),
                     expected.range(100000),
@@ -1849,9 +1875,35 @@ mod tests {
         world.spawn("oTempleFake", Vec2::new(32.0, 32.0));
         let mut actual = Rng::new(42);
         let mut expected = actual.clone();
-        setup_fake_temple(&mut world, &mut actual, false, true);
+        setup_fake_temple(
+            &mut world,
+            &mut actual,
+            false,
+            true,
+            crate::GenerationRevision::SourceClassicV2,
+        );
         assert_eq!(actual.range(100000), expected.range(100000));
         assert!(!world.entities.iter().any(|e| e.sprite == "bgCaveTop4"));
+    }
+
+    #[test]
+    fn fake_temple_source_setup_skips_inactive_receivers() {
+        let mut world = World::new(5, 5, Area::Temple, 13);
+        let id = world.spawn("oTempleFake", Vec2::new(32.0, 32.0));
+        world.entity_mut(id).unwrap().engine_active = false;
+        let sprite = world.entity(id).unwrap().sprite.clone();
+
+        setup_fake_temple(
+            &mut world,
+            &mut Rng::new(42),
+            false,
+            true,
+            crate::GenerationRevision::SourceClassicV2,
+        );
+
+        let fake = world.entity(id).unwrap();
+        assert_eq!(fake.sprite, sprite);
+        assert_eq!(fake.value("fake_setup_initialized"), 0.0);
     }
 
     #[test]

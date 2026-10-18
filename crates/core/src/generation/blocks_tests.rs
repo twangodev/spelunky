@@ -245,6 +245,36 @@ fn fixture(city: bool) -> World {
 }
 
 #[test]
+fn inactive_block_receivers_are_skipped_only_by_source_generation() {
+    for dynamic in [false, true] {
+        for revision in [
+            crate::GenerationRevision::HistoricalV1,
+            crate::GenerationRevision::SourceClassicV2,
+        ] {
+            let mut world = World::new(8, 8, Area::Mines, 1);
+            if dynamic {
+                let id = world.spawn("oBlock", Vec2::new(32.0, 32.0));
+                world.entity_mut(id).unwrap().engine_active = false;
+            } else {
+                world.set_tile(2, 2, "oBlock");
+                world.tiles[2 * world.width + 2].engine_active = false;
+            }
+            let mut actual = Rng::new(7);
+            let mut historical_expected = actual.clone();
+            historical_expected.range(4);
+
+            super::setup(&mut world, &mut actual, revision);
+
+            if revision == crate::GenerationRevision::SourceClassicV2 {
+                assert_eq!(actual.state_bits(), 7, "dynamic={dynamic}");
+            } else {
+                assert_eq!(actual.state_bits(), historical_expected.state_bits());
+            }
+        }
+    }
+}
+
+#[test]
 fn setup_block_promotion_mixed_receivers_interleave_create_destroy_and_next_roll() {
     for city in [false, true] {
         let mut promoted = 0;

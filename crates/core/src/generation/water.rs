@@ -8,18 +8,24 @@ enum Cell {
     Instance(u64),
 }
 
-fn cells(world: &World) -> Vec<Cell> {
+fn cells(world: &World, active_only: bool) -> Vec<Cell> {
     world
         .tiles
         .iter()
         .enumerate()
-        .filter(|(_, tile)| catalog::is_a(&tile.object, "oWater"))
+        .filter(|(_, tile)| {
+            (!active_only || tile.engine_active) && catalog::is_a(&tile.object, "oWater")
+        })
         .map(|(index, _)| Cell::Tile(index))
         .chain(
             world
                 .entities
                 .iter()
-                .filter(|entity| entity.alive && catalog::is_a(&entity.object, "oWater"))
+                .filter(|entity| {
+                    entity.alive
+                        && (!active_only || entity.engine_active)
+                        && catalog::is_a(&entity.object, "oWater")
+                })
                 .map(|entity| Cell::Instance(entity.id)),
         )
         .collect()
@@ -88,17 +94,22 @@ fn set_sprite(world: &mut World, cell: Cell, sprite: &str) {
     }
 }
 
-fn point(world: &World, pos: Vec2, family: &str) -> bool {
-    world.tiles_point(pos, family)
-        || world
-            .entities
-            .iter()
-            .any(|e| e.alive && catalog::is_a(&e.object, family) && e.sprite_bounds().contains(pos))
+fn point(world: &World, pos: Vec2, family: &str, revision: crate::GenerationRevision) -> bool {
+    if revision == crate::GenerationRevision::SourceClassicV2 {
+        world.point_family_active(pos, family)
+    } else {
+        world.tiles_point(pos, family)
+            || world.entities.iter().any(|entity| {
+                entity.alive
+                    && catalog::is_a(&entity.object, family)
+                    && entity.sprite_bounds().contains(pos)
+            })
+    }
 }
 
 // instance_place moves the current instance mask to the supplied origin.
 // It does not reduce the source's query to a tile lookup or center distance.
-fn place(world: &World, source: Cell, destination: Vec2) -> Option<Cell> {
+fn place(world: &World, source: Cell, destination: Vec2, active_only: bool) -> Option<Cell> {
     let old = origin(world, source);
     let r = bounds(world, source);
     let shifted = Rect::new(
@@ -107,7 +118,7 @@ fn place(world: &World, source: Cell, destination: Vec2) -> Option<Cell> {
         r.w,
         r.h,
     );
-    cells(world)
+    cells(world, active_only)
         .into_iter()
         .find(|&candidate| shifted.intersects(bounds(world, candidate)))
 }
@@ -123,7 +134,8 @@ pub(super) fn setup_with_revision(
     rng: &mut Rng,
     revision: crate::GenerationRevision,
 ) {
-    for cell in cells(world) {
+    let active_only = revision == crate::GenerationRevision::SourceClassicV2;
+    for cell in cells(world, active_only) {
         if lava(world, cell) {
             continue;
         }
@@ -132,9 +144,10 @@ pub(super) fn setup_with_revision(
         let p = origin(world, cell);
         let above = Vec2::new(p.x, p.y - 16.0);
         let below = Vec2::new(p.x, p.y + 16.0);
-        let up_water = point(world, above, "oWater");
-        let up = point(world, above, "oSolid");
-        let down = point(world, below, "oSolid") && !point(world, below, "oWater");
+        let up_water = point(world, above, "oWater", revision);
+        let up = point(world, above, "oSolid", revision);
+        let down =
+            point(world, below, "oSolid", revision) && !point(world, below, "oWater", revision);
         if !up && !up_water {
             set_sprite(world, cell, "sWaterTop");
         }
@@ -142,19 +155,19 @@ pub(super) fn setup_with_revision(
             // Original AND evaluates each operand expression before its
             // operator truth checks, even when upWater/down is false.
             // Preserve query then rand order; the else-if roll is separate.
-            let two_above = point(world, Vec2::new(p.x, p.y - 32.0), "oWater");
+            let two_above = point(world, Vec2::new(p.x, p.y - 32.0), "oWater", revision);
             let tall_roll = rng.chance(1, 4);
             up_water && two_above && down && tall_roll
         } else {
             // Explicit historical generation retains its earlier RNG tape.
             up_water
-                && point(world, Vec2::new(p.x, p.y - 32.0), "oWater")
+                && point(world, Vec2::new(p.x, p.y - 32.0), "oWater", revision)
                 && down
                 && rng.chance(1, 4)
         };
         if tall {
             set_sprite(world, cell, "sWaterBottomTall2");
-            if let Some(above_cell) = place(world, cell, above) {
+            if let Some(above_cell) = place(world, cell, above, active_only) {
                 set_sprite(world, above_cell, "sWaterBottomTall1");
             }
         } else if (up || up_water) && down {
@@ -174,8 +187,8 @@ pub(super) fn setup_with_revision(
 /// scrInitLevel.gml:269 and scrCheckWaterTop.gml:26–50. Explicit stack avoids
 /// overflowing Rust's call stack for long connected rows, preserving left-first
 /// recursive visitation and the source's current-mask instance_place queries.
-pub(super) fn propagate_surface(world: &mut World) {
-    for seed in cells(world) {
+pub(super) fn propagate_surface(world: &mut World, active_only: bool) {
+    for seed in cells(world, active_only) {
         if !matches!(sprite(world, seed), "sWaterTop" | "sLavaTop") {
             continue;
         }
@@ -187,7 +200,7 @@ pub(super) fn propagate_surface(world: &mut World) {
             stack.push((cell, side + 1));
             let p = origin(world, cell);
             let destination = Vec2::new(p.x + if side == 0 { -16.0 } else { 16.0 }, p.y);
-            let Some(next) = place(world, cell, destination) else {
+            let Some(next) = place(world, cell, destination, active_only) else {
                 continue;
             };
             if matches!(sprite(world, next), "sWaterTop" | "sLavaTop") {
@@ -218,8 +231,46 @@ mod tests {
         setup(&mut w, &mut Rng::new(1));
         assert_eq!(w.entity(open).unwrap().sprite, "sWaterTop");
         assert_eq!(w.entity(covered).unwrap().sprite, "sWater");
-        propagate_surface(&mut w);
+        propagate_surface(&mut w, false);
         assert_eq!(w.entity(covered).unwrap().sprite, "sWaterTop");
+    }
+
+    #[test]
+    fn source_setup_walls_skips_inactive_water_receivers_but_history_is_retained() {
+        for dynamic in [false, true] {
+            for revision in [
+                crate::GenerationRevision::HistoricalV1,
+                crate::GenerationRevision::SourceClassicV2,
+            ] {
+                let mut world = World::new(12, 12, Area::Jungle, 5);
+                let before = if dynamic {
+                    let id = world.spawn("oWaterSwim", Vec2::new(64.0, 80.0));
+                    world.entity_mut(id).unwrap().engine_active = false;
+                    world.entity(id).unwrap().sprite.clone()
+                } else {
+                    world.set_tile(4, 5, "oWater");
+                    world.tiles[5 * world.width + 4].engine_active = false;
+                    String::new()
+                };
+
+                setup_with_revision(&mut world, &mut Rng::new(1), revision);
+
+                let source_skips = revision == crate::GenerationRevision::SourceClassicV2;
+                if dynamic {
+                    let water = world
+                        .entities
+                        .iter()
+                        .find(|entity| entity.object == "oWaterSwim")
+                        .unwrap();
+                    assert_eq!(water.sprite == before, source_skips, "{revision:?}");
+                } else {
+                    let metadata = world.entities.iter().find(|entity| {
+                        entity.object == "oTerrainMetadata" && entity.pos == Vec2::new(72.0, 88.0)
+                    });
+                    assert_eq!(metadata.is_none(), source_skips, "{revision:?}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -262,9 +313,29 @@ mod tests {
         let lava = w.spawn("oLava", Vec2::new(64.0, 80.0));
         let water = w.spawn("oWaterSwim", Vec2::new(80.0, 80.0));
         w.entity_mut(lava).unwrap().sprite = "sLavaTop".into();
-        propagate_surface(&mut w);
+        propagate_surface(&mut w, false);
         assert_eq!(w.entity(water).unwrap().sprite, "sWaterTop");
         assert_eq!(w.entity(lava).unwrap().sprite, "sLavaTop");
+    }
+
+    #[test]
+    fn source_surface_propagation_ignores_inactive_water_instances() {
+        for active_only in [false, true] {
+            let mut world = World::new(12, 12, Area::Jungle, 5);
+            let lava = world.spawn("oLava", Vec2::new(64.0, 80.0));
+            let water = world.spawn("oWaterSwim", Vec2::new(80.0, 80.0));
+            world.entity_mut(lava).unwrap().sprite = "sLavaTop".into();
+            world.entity_mut(water).unwrap().engine_active = false;
+            let original = world.entity(water).unwrap().sprite.clone();
+
+            propagate_surface(&mut world, active_only);
+
+            assert_eq!(
+                world.entity(water).unwrap().sprite == original,
+                active_only,
+                "active_only={active_only}"
+            );
+        }
     }
 }
 

@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Area, GenerationRevision};
+use crate::{Area, CollisionPrecision, GenerationRevision};
 
 fn world() -> World {
     World::new(20, 20, Area::Jungle, 5)
@@ -195,6 +195,37 @@ fn bounding_box_canopy_probe_does_not_use_precise_alpha_or_viewport_culling() {
     );
     trees_and_branches(&mut world, &mut Rng::new_canonical(10), false);
     assert!(world.entity(branch).is_none());
+}
+
+#[test]
+fn inactive_vine_receivers_do_not_run_the_setup_walls_body() {
+    for dynamic in [false, true] {
+        let mut world = world();
+        let id = if dynamic {
+            let id = world.spawn("oVine", Vec2::new(64.0, 64.0));
+            world.entity_mut(id).unwrap().engine_active = false;
+            Some(id)
+        } else {
+            world.set_tile(4, 4, "oVine");
+            world.tiles[4 * world.width + 4].engine_active = false;
+            None
+        };
+
+        vines(&mut world);
+
+        if let Some(id) = id {
+            let vine = world.entity(id).unwrap();
+            assert_eq!(vine.sprite, "sVine");
+            assert!(!vine.data.contains_key("up"));
+        } else {
+            assert!(
+                world
+                    .entities
+                    .iter()
+                    .all(|entity| entity.object != "oTerrainMetadata")
+            );
+        }
+    }
 }
 
 #[test]

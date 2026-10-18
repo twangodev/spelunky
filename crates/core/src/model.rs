@@ -923,6 +923,19 @@ impl World {
         )
     }
 
+    /// Source `collision_point(x, y, family, 0, 0)` across stored tile and
+    /// dynamic family instances. Inactive, destroyed, and non-family members
+    /// are excluded; held state and the engine `solid` flag are irrelevant.
+    pub fn point_family_active(&self, point: Vec2, family: &str) -> bool {
+        self.tiles_point_active(point, family)
+            || self.entities.iter().any(|entity| {
+                entity.alive
+                    && entity.engine_active
+                    && crate::catalog::is_a(&entity.object, family)
+                    && entity.mask_contains(point, CollisionPrecision::BoundingBox)
+            })
+    }
+
     fn tiles_match(
         &self,
         r: Rect,

@@ -92,20 +92,11 @@ pub(super) fn create_local(ctx: &mut crate::creation::EntityCreateContext<'_>, e
 }
 
 fn water(world: &World, p: Vec2) -> bool {
-    world.tiles_point_active(p, "oWater")
-        || world.entities.iter().any(|e| {
-            e.alive
-                && e.engine_active
-                && crate::catalog::is_a(&e.object, "oWater")
-                && e.mask_contains(p, CollisionPrecision::BoundingBox)
-        })
+    world.point_family_active(p, "oWater")
 }
 
 fn vine(world: &World, p: Vec2) -> bool {
-    world.tiles_point(p, "oVine")
-        || world.entities.iter().any(|e| {
-            e.alive && crate::catalog::is_a(&e.object, "oVine") && e.sprite_bounds().contains(p)
-        })
+    world.point_family_active(p, "oVine")
 }
 
 fn countdown(e: &mut Entity, key: &str) {

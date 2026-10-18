@@ -731,12 +731,7 @@ pub(crate) fn idol_step(game: &mut Game, id: u64) {
     let unsupported =
         entity.value("colBot") == 0. && entity.data.get("trigger").copied().unwrap_or(1.) != 0.;
     let feet = Vec2::new(pos.x, pos.y + 4.);
-    let smooth_brick = game.world.tiles_point(feet, "oBrickSmooth")
-        || game.world.entities.iter().any(|brick| {
-            brick.alive
-                && crate::catalog::is_a(&brick.object, "oBrickSmooth")
-                && brick.mask_contains(feet, crate::model::CollisionPrecision::BoundingBox)
-        });
+    let smooth_brick = game.world.point_family_active(feet, "oBrickSmooth");
     // The source reads oShopkeeper.status/x directly, rather than selecting a
     // nearby eligible keeper. Use the current active family array's first one.
     let keeper = crate::dispatcher::descendant_instances(game, "oShopkeeper")
@@ -959,6 +954,44 @@ mod tests {
                             .any(|message| message.first == "PLEASURE DOING BUSINESS!")
                     );
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn idol_shop_point_query_ignores_inactive_smooth_brick_members() {
+        for dynamic in [false, true] {
+            for active in [false, true] {
+                let mut game = Game::shell(31, RulesPreset::Classic);
+                game.world.name = "rLevel".into();
+                game.spawn("oShopkeeper", Vec2::new(100.0, 144.0));
+                let idol = game.spawn("oGoldIdol", Vec2::new(96.0, 156.0));
+                if dynamic {
+                    let brick = game.spawn("oBrickSmooth", Vec2::new(96.0, 160.0));
+                    game.world.entity_mut(brick).unwrap().engine_active = active;
+                } else {
+                    game.world.set_tile(6, 10, "oBrickSmooth");
+                    game.world.tiles[10 * game.world.width + 6].engine_active = active;
+                }
+                crate::dispatcher::register_instances(&mut game);
+                if dynamic {
+                    let brick = game
+                        .world
+                        .entities
+                        .iter()
+                        .find(|entity| entity.object == "oBrickSmooth")
+                        .unwrap()
+                        .id;
+                    game.world.entity_mut(brick).unwrap().engine_active = active;
+                }
+
+                idol_step(&mut game, idol);
+
+                assert_eq!(
+                    game.data.get("idols").copied().unwrap_or(0.0),
+                    f64::from(active),
+                    "dynamic={dynamic}, active={active}"
+                );
             }
         }
     }

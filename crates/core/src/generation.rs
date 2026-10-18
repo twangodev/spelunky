@@ -1091,7 +1091,7 @@ pub(crate) fn generate_campaign_result(
     init_cleanup::cleanup(&mut world, state.revision);
     #[cfg(test)]
     terrain::observe_init_cleanup(&world, true);
-    terrain::finalize_generated(&mut world);
+    terrain::finalize_generated(&mut world, state.revision);
     GeneratedLevel {
         world,
         dark_roll_selected,

@@ -1166,15 +1166,7 @@ fn olmec(game: &mut Game, e: &mut Entity) {
     }
     // Classic tests the left edge at the feet/head. Authored arenas store
     // lava as water-family entities, while custom levels can also use tiles.
-    let lava = |world: &World, point: Vec2| {
-        world.tiles_point(point, "oLava")
-            || world.entities.iter().any(|lava| {
-                lava.alive
-                    && lava.engine_active
-                    && crate::catalog::is_a(&lava.object, "oLava")
-                    && lava.mask_contains(point, crate::CollisionPrecision::BoundingBox)
-            })
-    };
+    let lava = |world: &World, point: Vec2| world.point_family_active(point, "oLava");
     // Source foot lava selects DROWNING before the independent head test.
     if lava(&game.world, Vec2::new(e.pos.x, e.pos.y + 64.0)) {
         e.state = 4;
@@ -2288,6 +2280,23 @@ mod tests {
         );
         assert!(game.flags.contains("olmec_dead"));
     }
+
+    #[test]
+    fn olmec_point_lava_query_ignores_inactive_terrain() {
+        let mut game = room();
+        game.world.set_tile(5, 5, "oLava");
+        game.world.tiles[5 * game.world.width + 5].engine_active = false;
+        let id = spawn(&mut game, "oOlmec", Vec2::new(80.0, 96.0));
+        let mut boss = game.world.entity(id).unwrap().clone();
+        boss.state = 0;
+        boss.vel = Vec2::default();
+
+        olmec(&mut game, &mut boss);
+
+        assert!(boss.alive, "inactive lava is invisible to collision_point");
+        assert!(!game.flags.contains("olmec_dead"));
+    }
+
     #[test]
     fn natural_olmec_intro_locks_actions_pans_and_releases_after_slam_alarm() {
         let mut game = Game::new(42, RulesPreset::Classic);

@@ -1354,13 +1354,7 @@ fn scarab(game: &mut Game, e: &mut Entity) {
 
 // oDeadFish uses collision_point(..., oWater, 0, 0), including Lava.
 fn dead_fish_water(game: &Game, pos: Vec2) -> bool {
-    game.world.tiles_point(pos, "oWater")
-        || game.world.entities.iter().any(|water| {
-            water.alive
-                && water.engine_active
-                && crate::catalog::is_a(&water.object, "oWater")
-                && water.mask_contains(pos, CollisionPrecision::BoundingBox)
-        })
+    game.world.point_family_active(pos, "oWater")
 }
 
 fn dead_fish(game: &mut Game, e: &mut Entity) {
@@ -3545,6 +3539,30 @@ mod deadfish_isolated_membership_tests {
                 "ISOLATED_ABSENT_ACTIVE_CHARACTER_SKIPS_ATTACK_BRANCH"
             );
             assert_eq!(game.rng.state_bits(), rng);
+        }
+    }
+
+    #[test]
+    fn dead_fish_exits_when_its_only_water_tile_is_inactive() {
+        for active in [false, true] {
+            let mut game = Game::shell(42, RulesPreset::Classic);
+            game.world = World::new(30, 20, Area::Jungle, 5);
+            game.world.set_tile(6, 6, "oWaterSwim");
+            game.world.tiles[6 * game.world.width + 6].engine_active = active;
+            let id = game.spawn("oDeadFish", Vec2::new(96.0, 96.0));
+            let mut fish = game.world.entity(id).unwrap().clone();
+
+            dead_fish(&mut game, &mut fish);
+
+            assert_eq!(fish.alive, active, "active={active}");
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .any(|entity| entity.object == "oFishBone"),
+                !active,
+                "active={active}"
+            );
         }
     }
     #[test]

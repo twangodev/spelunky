@@ -20,7 +20,7 @@ fn world_points_use_raw_queries_against_cached_fractional_target_bounds() {
             assert!(target.sprite_bounds().contains(Vec2::new(96., 88.)));
             for (x, expected) in [(79.9995, false), (80., true), (95.75, true), (96., false)] {
                 assert_eq!(
-                    world_point_family(&game.world, Vec2::new(x, 88.), family),
+                    game.world.point_family_active(Vec2::new(x, 88.), family),
                     expected
                 );
             }
@@ -45,18 +45,19 @@ fn world_points_exclude_inactive_and_retired_targets_but_include_held_family_mem
             target.held = held;
             target.solid = false; // Family membership is independent of this flag.
             assert_eq!(
-                world_point_family(&game.world, Vec2::new(88., 88.), "oSolid"),
+                game.world
+                    .point_family_active(Vec2::new(88., 88.), "oSolid"),
                 expected
             );
         }
         let mut game = Game::shell(42, rules);
         let id = game.spawn("oRubbleSmall", Vec2::new(80., 80.));
         game.world.entity_mut(id).unwrap().solid = true;
-        assert!(!world_point_family(
-            &game.world,
-            Vec2::new(88., 88.),
-            "oSolid"
-        ));
+        assert!(
+            !game
+                .world
+                .point_family_active(Vec2::new(88., 88.), "oSolid")
+        );
     }
 }
 
@@ -72,9 +73,9 @@ fn world_tile_points_respect_active_state_and_raw_bbox_instead_of_precise_alpha(
                 .tile_collision_mask(5, 5)
                 .contains(point, CollisionPrecision::Precise)
         );
-        assert!(world_point_family(&game.world, point, "oWater"));
+        assert!(game.world.point_family_active(point, "oWater"));
         game.world.tiles[5 * game.world.width + 5].engine_active = false;
-        assert!(!world_point_family(&game.world, point, "oWater"));
+        assert!(!game.world.point_family_active(point, "oWater"));
         // The compatibility query retains its separate all-terrain contract.
         assert!(game.world.tiles_point(point, "oWater"));
     }

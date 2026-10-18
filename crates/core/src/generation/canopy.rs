@@ -1,6 +1,6 @@
 //! The Vine and Tree/TreeBranch passes of scrSetupWalls:438–513.
 //! Called only for SourceClassicV2, around the existing Block pass.
-use crate::{CollisionPrecision, Rng, Vec2, World, catalog};
+use crate::{Rng, Vec2, World, catalog};
 
 #[derive(Clone, Copy)]
 enum Instance {
@@ -20,7 +20,7 @@ fn receivers(world: &World, family: &str) -> Vec<Receiver> {
         .tiles
         .iter()
         .enumerate()
-        .filter(|(_, tile)| catalog::is_a(&tile.object, family))
+        .filter(|(_, tile)| tile.engine_active && catalog::is_a(&tile.object, family))
         .map(|(index, tile)| Receiver {
             instance: Instance::Tile(index),
             serial: tile.creation_serial,
@@ -30,11 +30,12 @@ fn receivers(world: &World, family: &str) -> Vec<Receiver> {
             ),
         })
         .chain(world.entities.iter().filter_map(|entity| {
-            (entity.alive && catalog::is_a(&entity.object, family)).then_some(Receiver {
-                instance: Instance::Entity(entity.id),
-                serial: entity.creation_serial,
-                origin: entity.pos,
-            })
+            (entity.alive && entity.engine_active && catalog::is_a(&entity.object, family))
+                .then_some(Receiver {
+                    instance: Instance::Entity(entity.id),
+                    serial: entity.creation_serial,
+                    origin: entity.pos,
+                })
         }))
         .collect();
     // No body creates another receiver in its own family. Merge the two
@@ -46,21 +47,20 @@ fn receivers(world: &World, family: &str) -> Vec<Receiver> {
 fn live(world: &World, receiver: Receiver, family: &str) -> bool {
     match receiver.instance {
         Instance::Tile(index) => world.tiles.get(index).is_some_and(|tile| {
-            tile.creation_serial == receiver.serial && catalog::is_a(&tile.object, family)
+            tile.engine_active
+                && tile.creation_serial == receiver.serial
+                && catalog::is_a(&tile.object, family)
         }),
         Instance::Entity(id) => world.entity(id).is_some_and(|entity| {
-            entity.creation_serial == receiver.serial && catalog::is_a(&entity.object, family)
+            entity.engine_active
+                && entity.creation_serial == receiver.serial
+                && catalog::is_a(&entity.object, family)
         }),
     }
 }
 
 fn point(world: &World, origin: Vec2, family: &str) -> bool {
-    world.tiles_point(origin, family)
-        || world.entities.iter().any(|entity| {
-            entity.alive
-                && catalog::is_a(&entity.object, family)
-                && entity.mask_contains(origin, CollisionPrecision::BoundingBox)
-        })
+    world.point_family_active(origin, family)
 }
 
 fn properties(world: &mut World, receiver: Receiver) -> &mut crate::Entity {

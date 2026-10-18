@@ -94,6 +94,24 @@ fn jungle_water_query_respects_inactive_tiles_and_dynamic_instances() {
 }
 
 #[test]
+fn monkey_vine_queries_respect_inactive_family_members() {
+    for dynamic in [false, true] {
+        for active in [false, true] {
+            let mut game = room();
+            let point = Vec2::new(88.0, 88.0);
+            if dynamic {
+                let id = game.spawn("oVine", Vec2::new(80.0, 80.0));
+                game.world.entity_mut(id).unwrap().engine_active = active;
+            } else {
+                game.world.set_tile(5, 5, "oVine");
+                game.world.tiles[5 + 5 * game.world.width].engine_active = active;
+            }
+            assert_eq!(super::vine(&game.world, point), active, "dynamic={dynamic}");
+        }
+    }
+}
+
+#[test]
 fn monkey_water_step_negative_flags_include_transparent_bbox_pixels() {
     let mut game = room();
     let fluid = game.spawn("oWaterSwim", Vec2::new(80.0, 80.0));

@@ -921,7 +921,7 @@ fn historical_before_boundary_correction(
     init_cleanup::cleanup(&mut world, state.revision);
     #[cfg(test)]
     terrain::observe_init_cleanup(&world, true);
-    terrain::finalize_generated(&mut world);
+    terrain::finalize_generated(&mut world, state.revision);
     GeneratedLevel {
         world,
         dark_roll_selected,

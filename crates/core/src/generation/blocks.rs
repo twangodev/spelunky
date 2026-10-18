@@ -1,5 +1,5 @@
 //! The oBlock family pass in scrSetupWalls:458–472.
-use crate::{CollisionPrecision, Entity, Rng, Vec2, World, catalog};
+use crate::{Entity, GenerationRevision, Rng, Vec2, World, catalog};
 
 #[derive(Clone, Copy)]
 enum Instance {
@@ -14,27 +14,34 @@ struct Receiver {
     metadata: Option<u64>,
 }
 
-fn point(world: &World, origin: Vec2, family: &str) -> bool {
-    world.tiles_point(origin, family)
-        || world.entities.iter().any(|entity| {
-            entity.alive
-                && catalog::is_a(&entity.object, family)
-                && entity.mask_contains(origin, CollisionPrecision::BoundingBox)
-        })
+fn point(world: &World, origin: Vec2, family: &str, revision: GenerationRevision) -> bool {
+    if revision == GenerationRevision::SourceClassicV2 {
+        world.point_family_active(origin, family)
+    } else {
+        world.tiles_point(origin, family)
+            || world.entities.iter().any(|entity| {
+                entity.alive
+                    && catalog::is_a(&entity.object, family)
+                    && entity.mask_contains(origin, crate::CollisionPrecision::BoundingBox)
+            })
+    }
 }
 
-fn receivers(world: &World) -> Vec<(u64, Instance)> {
+fn receivers(world: &World, revision: GenerationRevision) -> Vec<(u64, Instance)> {
+    let source = revision == GenerationRevision::SourceClassicV2;
     let mut instances: Vec<_> = world
         .tiles
         .iter()
         .enumerate()
-        .filter(|(_, tile)| tile.object == "oBlock")
+        .filter(|(_, tile)| tile.object == "oBlock" && (!source || tile.engine_active))
         .map(|(index, tile)| (tile.creation_serial, Instance::Tile(index)))
         .chain(
             world
                 .entities
                 .iter()
-                .filter(|entity| entity.alive && entity.object == "oBlock")
+                .filter(|entity| {
+                    entity.alive && entity.object == "oBlock" && (!source || entity.engine_active)
+                })
                 .map(|entity| (entity.creation_serial, Instance::Entity(entity.id))),
         )
         .collect();
@@ -114,7 +121,7 @@ fn retire(world: &mut World, rng: &mut Rng, receiver: Receiver) {
     }
 }
 
-pub(super) fn setup(world: &mut World, rng: &mut Rng) {
+pub(super) fn setup(world: &mut World, rng: &mut Rng, revision: GenerationRevision) {
     #[cfg(test)]
     let trace = TRACE.with(|trace| {
         trace.borrow().as_ref().map(|_| SetupTrace {
@@ -123,18 +130,26 @@ pub(super) fn setup(world: &mut World, rng: &mut Rng) {
             rng_after: rng.clone(),
         })
     });
-    for (serial, instance) in receivers(world) {
+    for (serial, instance) in receivers(world, revision) {
         let Some(receiver) = receiver(world, serial, instance) else {
             continue;
         };
         let origin = receiver.source.pos;
         let below = Vec2::new(origin.x, origin.y + 16.0);
-        let mut down = point(world, below, "oBrick")
-            || point(world, below, "oTemple")
-            || point(world, below, "oHardBlock");
-        if point(world, Vec2::new(origin.x - 16.0, origin.y), "oLava")
-            || point(world, Vec2::new(origin.x + 16.0, origin.y), "oLava")
-        {
+        let mut down = point(world, below, "oBrick", revision)
+            || point(world, below, "oTemple", revision)
+            || point(world, below, "oHardBlock", revision);
+        if point(
+            world,
+            Vec2::new(origin.x - 16.0, origin.y),
+            "oLava",
+            revision,
+        ) || point(
+            world,
+            Vec2::new(origin.x + 16.0, origin.y),
+            "oLava",
+            revision,
+        ) {
             down = false;
         }
         // Source and/or are eager: every live Block consumes this roll,

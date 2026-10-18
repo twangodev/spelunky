@@ -492,13 +492,7 @@ pub(crate) fn player_spikes(game: &mut Game) {
         .find(|h| Rect::new(pos.x - 4., pos.y - 4., 9., 13.).intersects(current_rect(game, h)));
     if spikes.is_some() && game.state == crate::RunState::Dead {
         let point = Vec2::new(pos.x, pos.y + 9.0);
-        let supported = game.world.tiles_point(point, "oSolid")
-            || game.world.entities.iter().any(|entity| {
-                entity.alive
-                    && entity.engine_active
-                    && crate::catalog::is_a(&entity.object, "oSolid")
-                    && entity.mask_contains(point, crate::CollisionPrecision::BoundingBox)
-            });
+        let supported = game.world.point_family_active(point, "oSolid");
         if !supported {
             game.player.pos.y += 0.05;
         } else {

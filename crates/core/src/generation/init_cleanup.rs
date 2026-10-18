@@ -1,5 +1,5 @@
 //! scrInitLevel's post-SetupWalls treasure cleanup, before water propagation.
-use crate::{CollisionPrecision, GenerationRevision, World};
+use crate::{GenerationRevision, World};
 
 pub(super) fn cleanup(world: &mut World, revision: GenerationRevision) {
     if revision != GenerationRevision::SourceClassicV2 {
@@ -9,22 +9,24 @@ pub(super) fn cleanup(world: &mut World, revision: GenerationRevision) {
         .entities
         .iter()
         .filter(|treasure| {
-            if !treasure.alive || !crate::catalog::is_a(&treasure.object, "oTreasure") {
+            if !treasure.alive
+                || !treasure.engine_active
+                || !crate::catalog::is_a(&treasure.object, "oTreasure")
+            {
                 return false;
             }
             // The source first asks collision_point(..., precise=false), then
             // instance_place using the receiver's current sprite collision mask.
-            let mut point_hit = false;
+            let point_hit = world.point_family_active(treasure.pos, "oSolid");
             let mut first = None;
             let mask = treasure.collision_mask();
             for (index, tile) in world.tiles.iter().enumerate() {
-                if !crate::catalog::is_a(&tile.object, "oSolid") {
+                if !tile.engine_active || !crate::catalog::is_a(&tile.object, "oSolid") {
                     continue;
                 }
                 let x = (index % world.width) as i32;
                 let y = (index / world.width) as i32;
                 let solid = world.tile_collision_mask(x, y);
-                point_hit |= solid.contains(treasure.pos, CollisionPrecision::BoundingBox);
                 if mask.intersects_mask(&solid)
                     && first.is_none_or(|(serial, _)| tile.creation_serial < serial)
                 {
@@ -38,12 +40,9 @@ pub(super) fn cleanup(world: &mut World, revision: GenerationRevision) {
                     first = Some((tile.creation_serial, invincible));
                 }
             }
-            for solid in world
-                .entities
-                .iter()
-                .filter(|solid| solid.alive && crate::catalog::is_a(&solid.object, "oSolid"))
-            {
-                point_hit |= solid.mask_contains(treasure.pos, CollisionPrecision::BoundingBox);
+            for solid in world.entities.iter().filter(|solid| {
+                solid.alive && solid.engine_active && crate::catalog::is_a(&solid.object, "oSolid")
+            }) {
                 if mask.intersects_mask(&solid.collision_mask())
                     && first.is_none_or(|(serial, _)| solid.creation_serial < serial)
                 {
@@ -138,6 +137,64 @@ mod tests {
                 !first_invincible
             );
         }
+    }
+
+    #[test]
+    fn cleanup_collision_queries_ignore_inactive_treasure_and_solid_members() {
+        for dynamic in [false, true] {
+            for active in [false, true] {
+                let mut world = World::new(8, 8, Area::Jungle, 5);
+                if dynamic {
+                    let solid = world.spawn("oLush", Vec2::new(32., 32.));
+                    let entity = world.entity_mut(solid).unwrap();
+                    entity.engine_active = active;
+                    entity.data.insert("invincible".into(), 1.);
+                } else {
+                    world.set_tile(2, 2, "oBlock");
+                    world.tiles[2 * world.width + 2].engine_active = active;
+                    let metadata = world.spawn("oTerrainMetadata", Vec2::new(40., 40.));
+                    world
+                        .entity_mut(metadata)
+                        .unwrap()
+                        .data
+                        .insert("invincible".into(), 1.);
+                }
+                let treasure = world.spawn("oRubyBig", Vec2::new(32., 32.));
+
+                cleanup(&mut world, GenerationRevision::SourceClassicV2);
+
+                assert_eq!(
+                    world
+                        .entities
+                        .iter()
+                        .find(|entity| entity.id == treasure)
+                        .is_some_and(|entity| entity.alive),
+                    !active,
+                    "dynamic={dynamic}, solid active={active}"
+                );
+            }
+        }
+
+        let mut world = World::new(8, 8, Area::Jungle, 5);
+        let solid = world.spawn("oLush", Vec2::new(32., 32.));
+        world
+            .entity_mut(solid)
+            .unwrap()
+            .data
+            .insert("invincible".into(), 1.);
+        let treasure = world.spawn("oRubyBig", Vec2::new(32., 32.));
+        world.entity_mut(treasure).unwrap().engine_active = false;
+
+        cleanup(&mut world, GenerationRevision::SourceClassicV2);
+
+        assert!(
+            world
+                .entities
+                .iter()
+                .find(|entity| entity.id == treasure)
+                .unwrap()
+                .alive
+        );
     }
 
     #[test]

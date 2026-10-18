@@ -93,10 +93,29 @@ fn stock_seed_zero_lake_first_water_executes_rand_even_when_up_water_is_false() 
     );
     assert_eq!(family[0].object, "oWaterSwim");
     let p = origin(&first.before, first.cell);
-    let up_water = point(&first.before, Vec2::new(p.x, p.y - 16.), "oWater");
-    let up = point(&first.before, Vec2::new(p.x, p.y - 16.), "oSolid");
-    let down = point(&first.before, Vec2::new(p.x, p.y + 16.), "oSolid")
-        && !point(&first.before, Vec2::new(p.x, p.y + 16.), "oWater");
+    let up_water = point(
+        &first.before,
+        Vec2::new(p.x, p.y - 16.),
+        "oWater",
+        crate::GenerationRevision::SourceClassicV2,
+    );
+    let up = point(
+        &first.before,
+        Vec2::new(p.x, p.y - 16.),
+        "oSolid",
+        crate::GenerationRevision::SourceClassicV2,
+    );
+    let down = point(
+        &first.before,
+        Vec2::new(p.x, p.y + 16.),
+        "oSolid",
+        crate::GenerationRevision::SourceClassicV2,
+    ) && !point(
+        &first.before,
+        Vec2::new(p.x, p.y + 16.),
+        "oWater",
+        crate::GenerationRevision::SourceClassicV2,
+    );
     assert!(
         !up_water,
         "first topmost stock Water receiver premise; never replace the seed to repair this premise"

@@ -1357,13 +1357,7 @@ fn point_family(game: &Game, point: Vec2, family: &str) -> bool {
 }
 
 fn world_point_family(world: &crate::World, point: Vec2, family: &str) -> bool {
-    world.tiles_point_active(point, family)
-        || world.entities.iter().any(|e| {
-            e.alive
-                && e.engine_active
-                && catalog::is_a(&e.object, family)
-                && e.mask_contains(point, crate::CollisionPrecision::BoundingBox)
-        })
+    world.point_family_active(point, family)
 }
 
 fn ice_bottom(game: &mut Game, e: &mut Entity) {
