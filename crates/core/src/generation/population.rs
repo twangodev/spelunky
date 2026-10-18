@@ -441,6 +441,19 @@ fn family_origins(world: &World, family: &str) -> Vec<Vec2> {
         .collect()
 }
 
+fn source_active_family_origins(world: &World, family: &str) -> Vec<Vec2> {
+    let mut instances: Vec<_> = world
+        .entities
+        .iter()
+        .filter(|entity| {
+            entity.alive && entity.engine_active && crate::catalog::is_a(&entity.object, family)
+        })
+        .map(|entity| (entity.creation_serial, entity.pos))
+        .collect();
+    instances.sort_by_key(|(serial, _)| *serial);
+    instances.into_iter().map(|(_, origin)| origin).collect()
+}
+
 #[cfg(test)]
 thread_local! {
     static SOURCE_UDJAT_KEY_TRACE: std::cell::RefCell<Option<Vec<(World, Rng, Rng)>>> = const {
@@ -1615,7 +1628,13 @@ fn populate_internal(
         }
     }
     if udjat && !exists(world, "oLockedChest") {
-        world.spawn("oLockedChest", free_near(world, world.exit));
+        if source_classic {
+            if let Some(position) = source_udjat_chest_position(world) {
+                world.spawn("oLockedChest", position);
+            }
+        } else {
+            world.spawn("oLockedChest", free_near(world, world.exit));
+        }
     }
     if exists(world, "oLockedChest") && source_classic {
         // The source creates at most one key by traversing the complete
@@ -1691,8 +1710,63 @@ fn populate_internal(
         jungle_population(world, rng, cemetery);
     }
     if world.dark {
-        world.spawn("oFlareCrate", free_near(world, world.entrance));
+        if source_classic {
+            for position in source_flare_crate_positions(world) {
+                world.spawn("oFlareCrate", position);
+            }
+        } else {
+            world.spawn("oFlareCrate", free_near(world, world.entrance));
+        }
     }
+}
+
+/// Source scrEntityGen's forced Udjat chest checks one `oExit` in birth order.
+/// The probes are at the exit's instance origin, while the chest positions
+/// are offset independently from those probe coordinates.
+fn source_udjat_chest_position(world: &World) -> Option<Vec2> {
+    let exit = source_active_family_origins(world, "oExit")
+        .into_iter()
+        .next()?;
+    let left_probe = Vec2::new(exit.x - 8.0, exit.y);
+    if !source_point_family(world, left_probe, "oSolid")
+        && !source_point_family(world, Vec2::new(exit.x - 8.0, exit.y + 15.0), "oTreasure")
+        && !source_point_family(world, Vec2::new(exit.x - 8.0, exit.y + 8.0), "oChest")
+        && !source_point_family(world, Vec2::new(exit.x - 8.0, exit.y + 8.0), "oSpikes")
+    {
+        return Some(Vec2::new(exit.x - 8.0, exit.y + 8.0));
+    }
+
+    let right_probe = Vec2::new(exit.x + 8.0, exit.y);
+    if !source_point_family(world, right_probe, "oSolid")
+        && !source_point_family(world, Vec2::new(exit.x + 8.0, exit.y + 15.0), "oTreasure")
+        && !source_point_family(world, Vec2::new(exit.x + 8.0, exit.y + 8.0), "oChest")
+        && !source_point_family(world, Vec2::new(exit.x + 8.0, exit.y + 8.0), "oSpikes")
+    {
+        return Some(Vec2::new(exit.x + 24.0, exit.y + 8.0));
+    }
+
+    Some(Vec2::new(exit.x + 8.0, exit.y + 8.0))
+}
+
+/// Source scrEntityGen's dark-level flare placement runs once per Entrance.
+/// Unlike the chest branch, it only probes oSolid and uses x +/- 16 probes.
+fn source_flare_crate_positions(world: &World) -> Vec<Vec2> {
+    source_active_family_origins(world, "oEntrance")
+        .into_iter()
+        .map(|entrance| {
+            if !source_point_family(world, Vec2::new(entrance.x - 16.0, entrance.y), "oSolid") {
+                Vec2::new(entrance.x - 8.0, entrance.y + 8.0)
+            } else if !source_point_family(
+                world,
+                Vec2::new(entrance.x + 16.0, entrance.y),
+                "oSolid",
+            ) {
+                Vec2::new(entrance.x + 24.0, entrance.y + 8.0)
+            } else {
+                Vec2::new(entrance.x + 8.0, entrance.y + 8.0)
+            }
+        })
+        .collect()
 }
 
 fn free_near(world: &World, origin: Vec2) -> Vec2 {
@@ -1926,6 +2000,91 @@ fn arrows(world: &mut World, rng: &mut Rng, _supports: &[(i32, i32)]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn source_landmark_fixture(area: Area, entrance: Vec2, exit: Vec2) -> World {
+        let mut world = World::new(42, 34, area, 4);
+        world.entrance = Vec2::new(entrance.x + 8.0, entrance.y + 8.0);
+        world.exit = Vec2::new(exit.x + 8.0, exit.y + 8.0);
+        world.spawn("oEntrance", entrance);
+        world.spawn("oExit", exit);
+        world.source_room_path = Some([[0; 4]; 5]);
+        world
+    }
+
+    fn populate_source_fixture(world: &mut World, flags: &BTreeSet<String>) {
+        let mut rng = Rng::new(0);
+        let mut campaign = super::super::GenerationState::fresh(&rng);
+        campaign.revision = crate::GenerationRevision::SourceClassicV2;
+        let room_path = [[0; 4]; 5];
+        populate_internal(
+            world,
+            &mut rng,
+            flags,
+            super::super::GenerationContext::default(),
+            Some(&mut campaign),
+            Some(&room_path),
+        );
+    }
+
+    #[test]
+    fn source_udjat_fallback_uses_exit_probes_and_active_solid_descendants() {
+        let exit = Vec2::new(320.0, 320.0);
+        // Keep the blocker in the entrance room so its regular source support
+        // callback is skipped, isolating the final forced-chest placement.
+        let mut world = source_landmark_fixture(Area::Mines, Vec2::new(304.0, 320.0), exit);
+        let blocker = world.spawn("oPushBlock", Vec2::new(exit.x - 8.0, exit.y));
+        world.entity_mut(blocker).unwrap().solid = false;
+        let left_probe = Vec2::new(exit.x - 8.0, exit.y);
+        assert!(source_point_family(&world, left_probe, "oSolid"));
+
+        let flags = BTreeSet::from([
+            "gen_udjat_eye".to_owned(),
+            "made_market_entrance".to_owned(),
+        ]);
+        populate_source_fixture(&mut world, &flags);
+
+        let chest = world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oLockedChest")
+            .expect("SourceClassic guarantees the forced Udjat chest");
+        assert_eq!(
+            chest.pos,
+            Vec2::new(exit.x + 24.0, exit.y + 8.0),
+            "the left source point query sees an active oSolid descendant even though its engine solid flag is false"
+        );
+    }
+
+    #[test]
+    fn source_dark_flare_fallback_uses_entrance_probes_and_active_solid_descendants() {
+        let entrance = Vec2::new(320.0, 320.0);
+        let mut world = source_landmark_fixture(Area::Mines, entrance, Vec2::new(400.0, 320.0));
+        world.dark = true;
+        let blocker = world.spawn("oPushBlock", Vec2::new(entrance.x - 16.0, entrance.y));
+        world.entity_mut(blocker).unwrap().solid = false;
+        assert!(source_point_family(
+            &world,
+            Vec2::new(entrance.x - 16.0, entrance.y),
+            "oSolid"
+        ));
+
+        let flags = BTreeSet::from([
+            "made_udjat_eye".to_owned(),
+            "made_market_entrance".to_owned(),
+        ]);
+        populate_source_fixture(&mut world, &flags);
+
+        let flare = world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oFlareCrate")
+            .expect("SourceClassic dark level creates a flare crate");
+        assert_eq!(
+            flare.pos,
+            Vec2::new(entrance.x + 24.0, entrance.y + 8.0),
+            "the source checks x+16 before choosing the right-side crate offset"
+        );
+    }
 
     #[test]
     fn source_collision_family_helpers_skip_inactive_tiles_and_instances() {
@@ -5099,6 +5258,7 @@ mod tests {
             let mut world = World::new(42, 34, Area::Mines, 4);
             world.entrance = at(3, 3);
             world.exit = at(37, 30);
+            world.spawn("oExit", Vec2::new(world.exit.x - 8.0, world.exit.y - 8.0));
             world.source_room_path = Some([[0; 4]; 5]);
             // The first family member is blocked at its exact source origin.
             // The later children exercise a source-family type omitted by the
@@ -5210,6 +5370,11 @@ mod tests {
             .find(|e| e.object == "oFlareCrate")
             .unwrap()
             .pos;
+        assert_eq!(
+            crate_pos,
+            Vec2::new(world.entrance.x - 16.0, world.entrance.y),
+            "legacy generation retains its free_near ordering"
+        );
         assert!(!world.solid_at(crate_pos.x, crate_pos.y));
     }
 }
