@@ -2349,6 +2349,48 @@ mod tests {
     }
 
     #[test]
+    fn laser_ignores_deactivated_gold_in_source_collision_queries() {
+        let mut g = game();
+        let source = Entity::new(0, "oBrick", Vec2::new(80.0, 80.0));
+        let gold_id = g.spawn("oGold", Vec2::new(79.0, 79.0));
+        let gold = g.world.entity(gold_id).unwrap();
+        assert!(gold.mask_contains(source.pos, CollisionPrecision::BoundingBox));
+        assert!(source.event_intersects(gold));
+        g.world.entity_mut(gold_id).unwrap().engine_active = false;
+
+        remove_embedded_gold(&mut g, &source);
+        assert!(
+            g.world.entity(gold_id).is_some_and(|gold| gold.alive),
+            "collision_point(..., oGold, 0, 0) ignores a deactivated instance"
+        );
+        assert!(
+            !g.world
+                .entities
+                .iter()
+                .any(|entity| entity.object == "oGoldChunk")
+        );
+
+        g.world.entity_mut(gold_id).unwrap().engine_active = true;
+        remove_embedded_gold(&mut g, &source);
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .find(|gold| gold.id == gold_id)
+                .is_some_and(|gold| !gold.alive)
+        );
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|entity| entity.object == "oGoldChunk")
+                .count(),
+            3,
+            "an active Gold at the queried point is destroyed"
+        );
+    }
+
+    #[test]
     fn psychic_wave_has_source_damage_and_lifetime() {
         let mut g = game();
         let mut e = Entity::new(1, "oPsychicWave", g.player.pos);
