@@ -224,12 +224,18 @@ pub(super) fn animation_end(game: &mut Game, e: &mut Entity, ended_sprite: &str)
         }
         ("oAlienBoss", "sAlienBossDie") => {
             e.set_sprite("sAlienBossDead");
-            let emitters: Vec<_> = game
-                .world
-                .entities
-                .iter()
-                .filter(|emitter| emitter.alive && emitter.object == "oBarrierEmitter")
-                .map(|emitter| emitter.id)
+            // Source with(oBarrierEmitter) follows the current active family
+            // array, which reactivation may reorder independently of storage.
+            let emitters: Vec<_> = crate::dispatcher::descendant_instances(game, "oBarrierEmitter")
+                .into_iter()
+                .filter_map(|instance| match instance {
+                    crate::dispatcher::Instance::Entity(id) => game
+                        .world
+                        .entity(id)
+                        .filter(|emitter| emitter.engine_active)
+                        .map(|_| id),
+                    _ => None,
+                })
                 .collect();
             for id in emitters {
                 super::destroy_barrier_emitter(game, id);
@@ -3471,3 +3477,7 @@ mod psychic_wave_step_contract_tests;
 #[cfg(test)]
 #[path = "ice_patrol_throw_followup_tests.rs"]
 mod ice_patrol_throw_followup_tests;
+
+#[cfg(test)]
+#[path = "ice_boss_with_order_tests.rs"]
+mod ice_boss_with_order_tests;

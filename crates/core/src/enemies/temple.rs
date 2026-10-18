@@ -4,6 +4,10 @@
 #[path = "temple_followup_tests.rs"]
 mod followup_tests;
 
+#[cfg(test)]
+#[path = "temple_boss_with_order_tests.rs"]
+mod boss_with_order_tests;
+
 use super::{center, move_body};
 use crate::dispatcher::Instance;
 use crate::model::{Entity, Game, GameEvent, Rect, Vec2, World};
@@ -986,6 +990,22 @@ pub(super) fn alarm(game: &mut Game, e: &mut Entity, index: u8) {
     }
 }
 
+fn active_family_positions(game: &Game, family: &str) -> Vec<(u64, Vec2)> {
+    // A source with statement uses its current active family array. Storage
+    // returns to its original order at frame end, unlike reactivated members.
+    crate::dispatcher::descendant_instances(game, family)
+        .into_iter()
+        .filter_map(|instance| match instance {
+            Instance::Entity(id) => game
+                .world
+                .entity(id)
+                .filter(|entity| entity.engine_active)
+                .map(|entity| (id, entity.pos)),
+            _ => None,
+        })
+        .collect()
+}
+
 fn olmec_alarm(game: &mut Game, boss: &mut Entity, index: u8) {
     match index {
         1..=4 => {
@@ -1034,13 +1054,7 @@ fn olmec_alarm(game: &mut Game, boss: &mut Entity, index: u8) {
                 game.sound("sndThump", boss.pos);
                 boss.alarms[usize::from(index + 1)] = 50;
                 if stage == 0 {
-                    let worshippers: Vec<_> = game
-                        .world
-                        .entities
-                        .iter()
-                        .filter(|e| e.alive && e.object == "oHawkmanWorship")
-                        .map(|e| (e.id, e.pos))
-                        .collect();
+                    let worshippers = active_family_positions(game, "oHawkmanWorship");
                     for (old_id, pos) in worshippers {
                         game.world.entity_mut(old_id).unwrap().alive = false;
                         let new_id = spawn(game, "oHawkman", pos);
@@ -1050,12 +1064,10 @@ fn olmec_alarm(game: &mut Game, boss: &mut Entity, index: u8) {
                         hawk.timer = 300;
                         hawk.vel = Vec2::new(-3.0, -5.0);
                     }
-                    for caveman in game
-                        .world
-                        .entities
-                        .iter_mut()
-                        .filter(|e| e.alive && e.object == "oCavemanWorship")
-                    {
+                    for (id, _) in active_family_positions(game, "oCavemanWorship") {
+                        let Some(caveman) = game.world.entity_mut(id) else {
+                            continue;
+                        };
                         caveman.animation = 0.0;
                         caveman.data.insert("animation_speed".into(), 0.0);
                     }
@@ -1070,13 +1082,7 @@ fn olmec_alarm(game: &mut Game, boss: &mut Entity, index: u8) {
             }
         }
         6 => {
-            let worshippers: Vec<_> = game
-                .world
-                .entities
-                .iter()
-                .filter(|e| e.alive && e.object == "oCavemanWorship")
-                .map(|e| (e.id, e.pos))
-                .collect();
+            let worshippers = active_family_positions(game, "oCavemanWorship");
             for (old_id, pos) in worshippers {
                 game.world.entity_mut(old_id).unwrap().alive = false;
                 let new_id = spawn(game, "oCaveman", pos);
