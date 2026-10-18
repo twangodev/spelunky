@@ -174,6 +174,7 @@ const equivalents: Record<string, string[]> = {
  'crates/core/src/items.rs': ['oWhip','oWhipPre'],
  'crates/app/src/scene.rs': ['oMsgSign','oLamp','oLampRed','oTikiTorch','oHintHand'],
  'crates/core/src/generation/terrain.rs': ['oGold','oGoldBig','oFrozenCaveman'],
+ 'crates/core/src/generation.rs': ['oBricks'],
  'crates/core/src/traps/curses.rs': ['oBall','oBall2','oChain','oChain2'],
  'crates/core/src/traps.rs': ['oGiantTikiHead'],
  'crates/core/src/hub.rs': ['oBatTarget','oBasket','oTarget','oRim','oRimDeflect'],
@@ -187,6 +188,7 @@ const reviewedFunctions: Record<string,Record<string,string[]>> = {
  'crates/core/src/traps.rs': {oGiantTikiHead:['alarm']},
  'crates/core/src/traps/curses.rs': {oBall:['step_instance_with_motion','step_instance'],oBall2:['step_instance_with_motion','step_instance'],oChain:['chain_step'],oChain2:['chain_step']},
  'crates/core/src/progression.rs': {oXGold:['complete']},
+ 'crates/core/src/generation.rs': {oBricks:['initialize_authored_setup_walls']},
 };
 for (const [module,names] of Object.entries(equivalents)) {
  const text=productionText(readFileSync(join(root,module),'utf8'))[0];

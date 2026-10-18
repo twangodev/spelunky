@@ -1146,6 +1146,60 @@ mod tests {
     }
 
     #[test]
+    fn custom_room_terrain_and_enemy_creates_follow_source_birth_order() {
+        let mut game = Game::shell(0, RulesPreset::Classic);
+        let mut level = level::Level::default();
+        level.set_tile(2, 2, 'p').unwrap();
+        level.set_tile(3, 2, '1').unwrap();
+
+        // The Piranha is born in the first map cell and draws its facing before
+        // the next cell's Brick runs its variant/content Create rolls.
+        let mut expected = game.rng.clone();
+        let expected_facing = if expected.range(2) == 0 { -1 } else { 1 };
+        expected.chance(1, 10);
+        let brick_roll = expected.range(100) + 1;
+        if brick_roll >= 30 {
+            let mut treasure = false;
+            for denominator in [100, 120, 140] {
+                if expected.chance(1, denominator) {
+                    treasure = true;
+                    break;
+                }
+            }
+            if !treasure && expected.chance(1, 1200) {
+                expected.range(19);
+            }
+        }
+
+        game.load_custom(&level, "create-order", "");
+        let piranha = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oPiranha")
+            .expect("the custom p tile creates a Piranha");
+        assert_eq!(piranha.facing, expected_facing);
+        assert_eq!(game.rng.state_bits(), expected.state_bits());
+
+        // Its first Step then creates a Bubble before choosing the next timer,
+        // continuing immediately after the row-major terrain Create sequence.
+        expected.range(3);
+        let expected_bubble_timer = 30 + expected.range(21);
+        game.step(&InputFrame::default());
+        let piranha = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oPiranha")
+            .expect("the Piranha remains in the pool");
+        assert_eq!(
+            piranha.value("bubble_timer"),
+            f64::from(expected_bubble_timer)
+        );
+        assert_eq!(game.rng.state_bits(), expected.state_bits());
+    }
+
+    #[test]
     fn editor_test_load_preserves_real_inventory_while_regular_load_clamps() {
         let mut level = level::Level::default();
         level.starting_life = 0;

@@ -1108,6 +1108,29 @@ pub(crate) fn initialize_hub_fringe(world: &mut World, rng: &mut Rng) {
     }
 }
 
+/// Run the source oBricks Create handler for an authored room. The authored
+/// controller invokes scrSetupWalls(224); generated levels use a different
+/// boundary argument and have their own setup order.
+pub(crate) fn initialize_authored_setup_walls(
+    world: &mut World,
+    rng: &mut Rng,
+    revision: crate::GenerationRevision,
+    graphics_high: bool,
+    city: bool,
+    cemetery: bool,
+) -> bool {
+    if revision != crate::GenerationRevision::SourceClassicV2
+        || !world
+            .entities
+            .iter()
+            .any(|entity| entity.alive && entity.object == "oBricks")
+    {
+        return false;
+    }
+    terrain::setup_authored_walls(world, rng, graphics_high, city, cemetery);
+    true
+}
+
 /// The only authored oBricks room with this family is rSun (12 Vines).
 /// Its SetupWalls Vine pass runs even when the Brick fringe is disabled.
 pub(crate) fn initialize_hub_canopy(world: &mut World, revision: crate::GenerationRevision) {

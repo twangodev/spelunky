@@ -1089,6 +1089,72 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn source_transition_room_steps_apply_the_authored_wall_boundary() {
+        let cases: &[(Area, u32, &str, &[&str])] = &[
+            (Area::Jungle, 5, "rTransition1x", &["oLush"]),
+            (Area::Jungle, 6, "rTransition2", &["oLush"]),
+            (Area::Jungle, 9, "rTransition2x", &["oLush", "oDark"]),
+            (Area::Ice, 10, "rTransition3", &["oDark"]),
+            (Area::Ice, 13, "rTransition3x", &["oDark", "oTemple"]),
+            (Area::Temple, 14, "rTransition4", &["oTemple"]),
+        ];
+
+        for (index, (area, next, room, families)) in cases.iter().enumerate() {
+            let mut game = Game::shell(index as u32 + 1, RulesPreset::Classic);
+            game.world = World::new(40, 20, *area, *next - 1);
+            game.world.name = "rLevel".into();
+            game.data.insert("next_level".into(), f64::from(*next));
+            begin_exit(&mut game, EndingKind::Transition);
+
+            for _ in 0..100 {
+                if game.world.name == *room
+                    && game
+                        .ending
+                        .as_ref()
+                        .is_some_and(|ending| ending.stage == EndingStage::Transition)
+                {
+                    break;
+                }
+                game.step(&InputFrame::default());
+            }
+            assert_eq!(game.world.name, *room);
+            assert_eq!(game.ending.as_ref().unwrap().stage, EndingStage::Transition);
+
+            for family in *families {
+                let floor_index = game
+                    .world
+                    .tiles
+                    .iter()
+                    .enumerate()
+                    .find(|(index, tile)| {
+                        tile.object == *family && *index / game.world.width * 16 == 224
+                    })
+                    .map(|(index, _)| index)
+                    .expect("authored transition terrain reaches scrSetupWalls(224)");
+                let floor = Vec2::new(
+                    (floor_index % game.world.width) as f64 * 16.0 + 8.0,
+                    (floor_index / game.world.width) as f64 * 16.0 + 8.0,
+                );
+                let metadata = game
+                    .world
+                    .entities
+                    .iter()
+                    .find(|entity| {
+                        entity.alive && entity.object == "oTerrainMetadata" && entity.pos == floor
+                    })
+                    .expect("SetupWalls materializes terrain metadata");
+                assert_eq!(
+                    metadata.value("terrain_setup_initialized"),
+                    1.0,
+                    "{room} {family}"
+                );
+                assert_eq!(metadata.value("down"), 1.0, "{room} {family} floor bound");
+            }
+        }
+    }
+
     #[test]
     fn transition_cape_and_punishment_ball_chain_follow_the_running_dummy() {
         let mut g = Game::shell(28, RulesPreset::Classic);
@@ -1446,7 +1512,18 @@ pub fn load_room(game: &mut Game, name: &str) {
     }
     game.world = world;
     crate::hub::initialize_brick_variants(game);
-    crate::hub::setup_wall_sprites(&mut game.world);
+    let city = game.flags.contains("cityOfGold") || game.flags.contains("city_of_gold");
+    let cemetery = game.flags.contains("cemetary") || game.flags.contains("cemetery");
+    if !crate::generation::initialize_authored_setup_walls(
+        &mut game.world,
+        &mut game.rng,
+        game.generation_revision,
+        !game.flags.contains("low_graphics"),
+        city,
+        cemetery,
+    ) {
+        crate::hub::setup_wall_sprites(&mut game.world);
+    }
     game.camera = Vec2::default();
     game.previous_camera = game.camera;
     game.level_tick = 0;

@@ -581,8 +581,76 @@ pub(super) fn initialize(world: &mut World, rng: &mut Rng) {
 }
 
 pub(super) fn initialize_custom(world: &mut World, rng: &mut Rng) {
-    create_terrain(world, rng, true, super::GenerationContext::default());
-    initialize_custom_instances(world, rng);
+    // Classic runs each tile object's Create immediately from
+    // scrCreateTileObj. Its RNG work therefore interleaves with neighboring
+    // enemy and trap Create events in row-major room order.
+    let mut births: Vec<_> = world
+        .tiles
+        .iter()
+        .enumerate()
+        .filter(|(_, tile)| {
+            matches!(
+                tile.object.as_str(),
+                "oBrick" | "oLush" | "oDark" | "oTemple" | "oIce" | "oLava"
+            )
+        })
+        .map(|(index, tile)| (tile.creation_serial, CustomCreateBirth::Tile(index)))
+        .chain(
+            world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive)
+                .map(|entity| (entity.creation_serial, CustomCreateBirth::Entity(entity.id))),
+        )
+        .collect();
+    births.sort_by_key(|(serial, _)| *serial);
+    let city = world.name == "City of Gold";
+    for (_, birth) in births {
+        match birth {
+            CustomCreateBirth::Tile(index) => {
+                let x = index % world.width;
+                let y = index / world.width;
+                let object = world.tiles[index].object.as_str();
+                if object == "oLava" {
+                    let id = metadata(world, x, y);
+                    create_lava(world.entity_mut(id).unwrap(), rng);
+                } else {
+                    create_terrain_tile(
+                        world,
+                        rng,
+                        x,
+                        y,
+                        true,
+                        super::GenerationContext::default(),
+                        city,
+                    );
+                }
+            }
+            CustomCreateBirth::Entity(id) => {
+                let Some(object) = world.entity(id).map(|entity| entity.object.clone()) else {
+                    continue;
+                };
+                if object == "oLava" {
+                    if let Some(entity) = world.entity_mut(id) {
+                        create_lava(entity, rng);
+                    }
+                } else if matches!(
+                    object.as_str(),
+                    "oBrick" | "oLush" | "oDark" | "oTemple" | "oIce"
+                ) {
+                    initialize_custom_instance(world, rng, id);
+                } else {
+                    crate::creation::initialize_entity_local(world, rng, id);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CustomCreateBirth {
+    Tile(usize),
+    Entity(u64),
 }
 
 #[cfg(test)]
@@ -592,10 +660,9 @@ pub(super) fn initialize_with_graphics(world: &mut World, rng: &mut Rng, graphic
     finalize_generated(world);
 }
 
-/// Terrain Create events precede scrEntityGen. This phase establishes the
-/// original base/treasure sprites and buried contents without SetupWalls masks,
-/// fringes, drips or water surfaces. Room-stamp/Create interleaving remains a
-/// separate compatibility concern; this port currently batches the Create pass.
+/// Generated terrain Create events precede scrEntityGen. This phase establishes
+/// the original base/treasure sprites and buried contents without SetupWalls
+/// masks, fringes, drips or water surfaces.
 #[cfg(test)]
 pub(super) fn create_generated(world: &mut World, rng: &mut Rng) {
     create_generated_with_context(world, rng, super::GenerationContext::default());
@@ -625,158 +692,179 @@ fn create_terrain(
             ) {
                 continue;
             }
-            let id = metadata(world, x, y);
-            if world.entity(id).unwrap().value("terrain_initialized") != 0.0 {
-                continue;
-            }
-            #[cfg(test)]
-            let create_trace = create_contents_tests::observe_before(world, rng, x, y, id, custom);
-            let explicit_sprite = world
-                .entity(id)
-                .unwrap()
-                .text
-                .get("terrain_sprite")
-                .cloned();
-            let source_boundary = world.entity(id).unwrap().value("source_boundary") != 0.0;
-            let mut sprite = if object == "oBrick" && !source_boundary && rng.chance(1, 10) {
-                "sBrick2".into()
-            } else {
-                format!("s{}", &object[1..])
-            };
-            let mut gold = 0;
-            let mut treasure = None;
-            let mut frozen = false;
-            if source_boundary {
-                // scrInitLevel explicitly replaces boundary Create-event
-                // variants with the area's base sprite. Boundary Create RNG
-                // draws are not reproduced here yet; this phase split does
-                // not establish exact GameMaker generation/RNG parity.
-                if object == "oTemple" && city {
-                    sprite = "sGTemple".into();
-                }
-            } else if object == "oIce" {
-                if rng.chance(1, 80) {
-                    // FrozenCaveman Destroy releases this live caveman.
-                    if custom {
-                        release_custom_frozen(world, Vec2::new(x as f64 * 16.0, y as f64 * 16.0));
-                    } else {
-                        treasure = Some(("oCaveman", -8.0, -8.0));
-                        frozen = true;
-                    }
-                }
-            } else {
-                let roll = rng.range(100) + 1;
-                if object == "oTemple" && city {
-                    sprite = "sGTemple".into();
-                    gold = 2;
-                } else if roll < 20 {
-                    sprite = format!("s{}Gold", &object[1..]);
-                    gold = 1;
-                } else if roll < 30 {
-                    sprite = format!("s{}GoldBig", &object[1..]);
-                    gold = 2;
-                } else if x > 0 && y > 0 && x + 1 < world.width && y + 1 < world.height {
-                    let chances = match object.as_str() {
-                        "oBrick" => [100, 120, 140],
-                        "oLush" => [80, 100, 120],
-                        "oDark" => [40, 60, 80],
-                        _ => [60, 80, 100],
-                    };
-                    for (name, chance) in ["oSapphireBig", "oEmeraldBig", "oRubyBig"]
-                        .into_iter()
-                        .zip(chances)
-                    {
-                        if rng.chance(1, chance) {
-                            treasure = Some((name, 0.0, 0.0));
-                            break;
-                        }
-                    }
-                    if treasure.is_none() && rng.chance(1, 1200) {
-                        treasure = Some(UNDERGROUND[rng.range(19) as usize]);
-                    }
-                }
-            }
-            if let Some(explicit) = explicit_sprite {
-                sprite = explicit;
-                if !(object == "oTemple" && city) {
-                    gold = 0;
-                }
-            }
-            if custom {
-                sprite = format!("s{}", &object[1..]);
-                gold = 0;
-            }
-            let e = world.entity_mut(id).unwrap();
-            e.sprite.clear();
-            e.data.insert("terrain_initialized".into(), 1.0);
-            e.text.insert("terrain_sprite".into(), sprite);
-            if gold > 0 {
-                e.data.insert("gold_chunks".into(), 3.0);
-                e.data
-                    .insert("gold_nuggets".into(), if gold == 2 { 1.0 } else { 0.0 });
-            }
-            if frozen {
-                e.data.insert("frozen_caveman".into(), 1.0);
-            }
-            if !custom && matches!(object.as_str(), "oLush" | "oTemple") {
-                // Own Create births are independent of caller-assigned OWN
-                // Destroy treasure, including the R-template's Big Ruby.
-                // Do not record new deferred debt: clean/normal destruction
-                // must retain this child's identity, alarm and mutable state.
-                if let Some((name, dx, dy)) = treasure {
-                    let pos = Vec2::new(x as f64 * 16.0 + 8.0 + dx, y as f64 * 16.0 + 8.0 + dy);
-                    let child = crate::creation::spawn_generated_terrain_child(
-                        world,
-                        rng,
-                        name,
-                        pos,
-                        context.has_spectacles,
-                    );
-                    let child = world.entity_mut(child).unwrap();
-                    if crate::catalog::is_a(name, "oItem") {
-                        // scrGenerateItem(...,2) overwrites price AFTER Create.
-                        child.data.insert("cost".into(), 0.0);
-                        child.data.insert("forSale".into(), 0.0);
-                    }
-                }
-            } else if !e.text.contains_key("treasure") {
-                // Existing custom/other-family and serialized metadata adapter.
-                if let Some((name, dx, dy)) = treasure {
-                    e.data.insert("embedded_treasure".into(), 1.0);
-                    e.data.insert("treasure_dx".into(), dx);
-                    e.data.insert("treasure_dy".into(), dy);
-                    if crate::catalog::is_a(name, "oItem") {
-                        e.data.insert(
-                            "create_has_spectacles".into(),
-                            f64::from(context.has_spectacles),
-                        );
-                    }
-                    e.text.insert("treasure".into(), name.into());
-                }
-            }
-            #[cfg(test)]
-            create_contents_tests::observe_after(world, rng, create_trace);
+            create_terrain_tile(world, rng, x, y, custom, context, city);
         }
     }
     // oLava Create selects its spurt timer when the instance is created, before
     // population. Surface selection and its extra random roll belong later.
-    for y in 0..world.height {
-        for x in 0..world.width {
-            if world.tile(x as i32, y as i32).unwrap().object == "oLava" {
-                let id = metadata(world, x, y);
-                create_lava(world.entity_mut(id).unwrap(), rng);
+    if !custom {
+        for y in 0..world.height {
+            for x in 0..world.width {
+                if world.tile(x as i32, y as i32).unwrap().object == "oLava" {
+                    let id = metadata(world, x, y);
+                    create_lava(world.entity_mut(id).unwrap(), rng);
+                }
+            }
+        }
+        let lava: Vec<_> = world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive && entity.object == "oLava")
+            .map(|entity| entity.id)
+            .collect();
+        for id in lava {
+            create_lava(world.entity_mut(id).unwrap(), rng);
+        }
+    }
+}
+
+fn create_terrain_tile(
+    world: &mut World,
+    rng: &mut Rng,
+    x: usize,
+    y: usize,
+    custom: bool,
+    context: super::GenerationContext,
+    city: bool,
+) {
+    let object = world.tiles[y * world.width + x].object.clone();
+    if !matches!(
+        object.as_str(),
+        "oBrick" | "oLush" | "oDark" | "oTemple" | "oIce"
+    ) {
+        return;
+    }
+    let id = metadata(world, x, y);
+    if world.entity(id).unwrap().value("terrain_initialized") != 0.0 {
+        return;
+    }
+    #[cfg(test)]
+    let create_trace = create_contents_tests::observe_before(world, rng, x, y, id, custom);
+    let explicit_sprite = world
+        .entity(id)
+        .unwrap()
+        .text
+        .get("terrain_sprite")
+        .cloned();
+    let source_boundary = world.entity(id).unwrap().value("source_boundary") != 0.0;
+    let mut sprite = if object == "oBrick" && !source_boundary && rng.chance(1, 10) {
+        "sBrick2".into()
+    } else {
+        format!("s{}", &object[1..])
+    };
+    let mut gold = 0;
+    let mut treasure = None;
+    let mut frozen = false;
+    if source_boundary {
+        // scrInitLevel explicitly replaces boundary Create-event
+        // variants with the area's base sprite. Boundary Create RNG
+        // draws are not reproduced here yet; this phase split does
+        // not establish exact GameMaker generation/RNG parity.
+        if object == "oTemple" && city {
+            sprite = "sGTemple".into();
+        }
+    } else if object == "oIce" {
+        if rng.chance(1, 80) {
+            // FrozenCaveman Destroy releases this live caveman.
+            if custom {
+                release_custom_frozen(world, Vec2::new(x as f64 * 16.0, y as f64 * 16.0));
+            } else {
+                treasure = Some(("oCaveman", -8.0, -8.0));
+                frozen = true;
+            }
+        }
+    } else {
+        let roll = rng.range(100) + 1;
+        if object == "oTemple" && city {
+            sprite = "sGTemple".into();
+            gold = 2;
+        } else if roll < 20 {
+            sprite = format!("s{}Gold", &object[1..]);
+            gold = 1;
+        } else if roll < 30 {
+            sprite = format!("s{}GoldBig", &object[1..]);
+            gold = 2;
+        } else if x > 0 && y > 0 && x + 1 < world.width && y + 1 < world.height {
+            let chances = match object.as_str() {
+                "oBrick" => [100, 120, 140],
+                "oLush" => [80, 100, 120],
+                "oDark" => [40, 60, 80],
+                _ => [60, 80, 100],
+            };
+            for (name, chance) in ["oSapphireBig", "oEmeraldBig", "oRubyBig"]
+                .into_iter()
+                .zip(chances)
+            {
+                if rng.chance(1, chance) {
+                    treasure = Some((name, 0.0, 0.0));
+                    break;
+                }
+            }
+            if treasure.is_none() && rng.chance(1, 1200) {
+                treasure = Some(UNDERGROUND[rng.range(19) as usize]);
             }
         }
     }
-    let lava: Vec<_> = world
-        .entities
-        .iter()
-        .filter(|entity| entity.alive && entity.object == "oLava")
-        .map(|entity| entity.id)
-        .collect();
-    for id in lava {
-        create_lava(world.entity_mut(id).unwrap(), rng);
+    if let Some(explicit) = explicit_sprite {
+        sprite = explicit;
+        if !(object == "oTemple" && city) {
+            gold = 0;
+        }
     }
+    if custom {
+        sprite = format!("s{}", &object[1..]);
+        gold = 0;
+    }
+    let e = world.entity_mut(id).unwrap();
+    e.sprite.clear();
+    e.data.insert("terrain_initialized".into(), 1.0);
+    e.text.insert("terrain_sprite".into(), sprite);
+    if gold > 0 {
+        e.data.insert("gold_chunks".into(), 3.0);
+        e.data
+            .insert("gold_nuggets".into(), if gold == 2 { 1.0 } else { 0.0 });
+    }
+    if frozen {
+        e.data.insert("frozen_caveman".into(), 1.0);
+    }
+    if !custom && matches!(object.as_str(), "oLush" | "oTemple") {
+        // Own Create births are independent of caller-assigned OWN Destroy
+        // treasure, including the R-template's Big Ruby. Do not record new
+        // deferred debt: clean/normal destruction must retain this child's
+        // identity, alarm and mutable state.
+        if let Some((name, dx, dy)) = treasure {
+            let pos = Vec2::new(x as f64 * 16.0 + 8.0 + dx, y as f64 * 16.0 + 8.0 + dy);
+            let child = crate::creation::spawn_generated_terrain_child(
+                world,
+                rng,
+                name,
+                pos,
+                context.has_spectacles,
+            );
+            let child = world.entity_mut(child).unwrap();
+            if crate::catalog::is_a(name, "oItem") {
+                // scrGenerateItem(...,2) overwrites price AFTER Create.
+                child.data.insert("cost".into(), 0.0);
+                child.data.insert("forSale".into(), 0.0);
+            }
+        }
+    } else if !e.text.contains_key("treasure") {
+        // Existing custom/other-family and serialized metadata adapter.
+        if let Some((name, dx, dy)) = treasure {
+            e.data.insert("embedded_treasure".into(), 1.0);
+            e.data.insert("treasure_dx".into(), dx);
+            e.data.insert("treasure_dy".into(), dy);
+            if crate::catalog::is_a(name, "oItem") {
+                e.data.insert(
+                    "create_has_spectacles".into(),
+                    f64::from(context.has_spectacles),
+                );
+            }
+            e.text.insert("treasure".into(), name.into());
+        }
+    }
+    #[cfg(test)]
+    create_contents_tests::observe_after(world, rng, create_trace);
 }
 
 /// scrSetupWalls runs after population, so its probes see the solids/traps
@@ -809,16 +897,14 @@ fn setup_source_point(world: &World, point: Vec2, family: &str) -> bool {
         })
 }
 
-fn setup_source_sides(world: &World, origin: Vec2, family: &str) -> (bool, bool, bool, bool) {
+fn setup_source_sides(
+    world: &World,
+    origin: Vec2,
+    family: &str,
+    bottom: f64,
+) -> (bool, bool, bool, bool) {
     let point = |dx: f64, dy: f64, group: &str| {
         setup_source_point(world, Vec2::new(origin.x + dx, origin.y + dy), group)
-    };
-    let bottom = if world.area == crate::model::Area::Boss {
-        864.
-    } else if world.name == "Lake" {
-        656.
-    } else {
-        528.
     };
     match family {
         "oBrick" => (
@@ -889,7 +975,13 @@ fn setup_source_fringe(
     }
 }
 
-fn setup_source_parents(world: &mut World, rng: &mut Rng, city: bool, graphics_high: bool) {
+fn setup_source_parents(
+    world: &mut World,
+    rng: &mut Rng,
+    city: bool,
+    graphics_high: bool,
+    bottom: f64,
+) {
     // The five canonical families have no descendants. No body creates a
     // new parent in its own family, changes activation, or deletes another
     // parent: each captured identity list is valid for this generation pass.
@@ -942,7 +1034,7 @@ fn setup_source_parents(world: &mut World, rng: &mut Rng, city: bool, graphics_h
             if world.entity(id).unwrap().value("terrain_setup_initialized") != 0. {
                 continue;
             }
-            let sides = setup_source_sides(world, origin, family);
+            let sides = setup_source_sides(world, origin, family, bottom);
             let edge = edge_sprite(family, city, sides);
             let entity = world.entity_mut(id).unwrap();
             for (name, value) in ["up", "down", "left", "right"]
@@ -994,8 +1086,15 @@ pub(super) fn setup_generated_with_revision(
     cemetery: bool,
 ) {
     let city = world.name == "City of Gold";
+    let bottom = if world.area == crate::model::Area::Boss {
+        864.
+    } else if world.name == "Lake" {
+        656.
+    } else {
+        528.
+    };
     if revision == crate::GenerationRevision::SourceClassicV2 {
-        setup_source_parents(world, rng, city, graphics_high);
+        setup_source_parents(world, rng, city, graphics_high, bottom);
     } else {
         for y in 0..world.height {
             for x in 0..world.width {
@@ -1046,6 +1145,67 @@ pub(super) fn setup_generated_with_revision(
             }
         }
     }
+    setup_wall_remainder(world, rng, graphics_high, revision, city, cemetery);
+}
+
+/// Execute the authored controller's scrSetupWalls(224) after the room has
+/// been assembled. The source-room argument is distinct from generated-level
+/// bounds (528/656/864), especially for transition-room terrain at the floor.
+pub(super) fn setup_authored_walls(
+    world: &mut World,
+    rng: &mut Rng,
+    graphics_high: bool,
+    city: bool,
+    cemetery: bool,
+) {
+    initialize_authored_lava_creates(world, rng);
+    setup_source_parents(world, rng, city, graphics_high, 224.);
+    setup_wall_remainder(
+        world,
+        rng,
+        graphics_high,
+        crate::GenerationRevision::SourceClassicV2,
+        city,
+        cemetery,
+    );
+}
+
+fn initialize_authored_lava_creates(world: &mut World, rng: &mut Rng) {
+    let mut receivers: Vec<_> = world
+        .tiles
+        .iter()
+        .enumerate()
+        .filter(|(_, tile)| tile.object == "oLava")
+        .map(|(index, tile)| (tile.creation_serial, SetupParent::Tile(index)))
+        .chain(
+            world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.object == "oLava")
+                .map(|entity| (entity.creation_serial, SetupParent::Entity(entity.id))),
+        )
+        .collect();
+    receivers.sort_by_key(|(serial, _)| *serial);
+    for (_, receiver) in receivers {
+        let id = match receiver {
+            SetupParent::Tile(index) => metadata(world, index % world.width, index / world.width),
+            SetupParent::Entity(id) => id,
+        };
+        create_lava(
+            world.entity_mut(id).expect("authored lava Create receiver"),
+            rng,
+        );
+    }
+}
+
+fn setup_wall_remainder(
+    world: &mut World,
+    rng: &mut Rng,
+    graphics_high: bool,
+    revision: crate::GenerationRevision,
+    city: bool,
+    cemetery: bool,
+) {
     setup_fake_temple(world, rng, city, graphics_high);
     super::water::setup_with_revision(world, rng, revision);
     for y in 0..world.height {
@@ -1229,70 +1389,60 @@ fn release_custom_frozen(world: &mut World, origin: Vec2) {
     caveman.timer = caveman.value("stun_time") as u32;
 }
 
-fn initialize_custom_instances(world: &mut World, rng: &mut Rng) {
+fn initialize_custom_instance(world: &mut World, rng: &mut Rng, id: u64) {
     // Custom compound symbols can overlap static terrain with pools or room
     // borders. Those additional terrain instances live outside tile storage
     // but still execute the same source Create events.
-    let ids: Vec<_> = world
-        .entities
-        .iter()
-        .filter(|entity| {
-            entity.alive
-                && matches!(
-                    entity.object.as_str(),
-                    "oBrick" | "oLush" | "oDark" | "oTemple" | "oIce"
-                )
-                && entity.value("terrain_initialized") == 0.0
-        })
-        .map(|entity| entity.id)
-        .collect();
-    for id in ids {
-        let entity = world.entity(id).unwrap();
-        let object = entity.object.clone();
-        let origin = entity.pos;
-        let mut treasure = None;
-        if object == "oIce" {
-            if rng.chance(1, 80) {
-                release_custom_frozen(world, origin);
-            }
-        } else {
-            if object == "oBrick" {
-                rng.range(10);
-            }
-            let roll = rng.range(100) + 1;
-            if roll >= 30
-                && origin.x > 1.0
-                && origin.x < (world.width - 1) as f64 * 16.0
-                && origin.y > 1.0
-                && origin.y < (world.height - 1) as f64 * 16.0
-            {
-                let chances = match object.as_str() {
-                    "oBrick" => [100, 120, 140],
-                    "oLush" => [80, 100, 120],
-                    "oDark" => [40, 60, 80],
-                    _ => [60, 80, 100],
-                };
-                for (name, chance) in ["oSapphireBig", "oEmeraldBig", "oRubyBig"]
-                    .into_iter()
-                    .zip(chances)
-                {
-                    if rng.chance(1, chance) {
-                        treasure = Some((name, 0.0, 0.0));
-                        break;
-                    }
-                }
-                if treasure.is_none() && rng.chance(1, 1200) {
-                    treasure = Some(UNDERGROUND[rng.range(19) as usize]);
-                }
-            }
-        }
-        if let Some((object, dx, dy)) = treasure {
-            world.spawn(object, Vec2::new(origin.x + 8.0 + dx, origin.y + 8.0 + dy));
-        }
-        let entity = world.entity_mut(id).unwrap();
-        entity.data.insert("terrain_initialized".into(), 1.0);
-        entity.sprite = format!("s{}", &object[1..]);
+    let Some(entity) = world.entity(id) else {
+        return;
+    };
+    if entity.value("terrain_initialized") != 0.0 {
+        return;
     }
+    let object = entity.object.clone();
+    let origin = entity.pos;
+    let mut treasure = None;
+    if object == "oIce" {
+        if rng.chance(1, 80) {
+            release_custom_frozen(world, origin);
+        }
+    } else {
+        if object == "oBrick" {
+            rng.range(10);
+        }
+        let roll = rng.range(100) + 1;
+        if roll >= 30
+            && origin.x > 1.0
+            && origin.x < (world.width - 1) as f64 * 16.0
+            && origin.y > 1.0
+            && origin.y < (world.height - 1) as f64 * 16.0
+        {
+            let chances = match object.as_str() {
+                "oBrick" => [100, 120, 140],
+                "oLush" => [80, 100, 120],
+                "oDark" => [40, 60, 80],
+                _ => [60, 80, 100],
+            };
+            for (name, chance) in ["oSapphireBig", "oEmeraldBig", "oRubyBig"]
+                .into_iter()
+                .zip(chances)
+            {
+                if rng.chance(1, chance) {
+                    treasure = Some((name, 0.0, 0.0));
+                    break;
+                }
+            }
+            if treasure.is_none() && rng.chance(1, 1200) {
+                treasure = Some(UNDERGROUND[rng.range(19) as usize]);
+            }
+        }
+    }
+    if let Some((object, dx, dy)) = treasure {
+        world.spawn(object, Vec2::new(origin.x + 8.0 + dx, origin.y + 8.0 + dy));
+    }
+    let entity = world.entity_mut(id).unwrap();
+    entity.data.insert("terrain_initialized".into(), 1.0);
+    entity.sprite = format!("s{}", &object[1..]);
 }
 
 fn lava_exposed(world: &World, origin: Vec2) -> bool {

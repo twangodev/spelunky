@@ -626,10 +626,20 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
         }
     }
     initialize_brick_variants(game);
-    if !game.flags.contains("low_graphics") {
-        crate::generation::initialize_hub_fringe(&mut game.world, &mut game.rng);
+    let authored_walls = crate::generation::initialize_authored_setup_walls(
+        &mut game.world,
+        &mut game.rng,
+        game.generation_revision,
+        !game.flags.contains("low_graphics"),
+        false,
+        false,
+    );
+    if !authored_walls {
+        if !game.flags.contains("low_graphics") {
+            crate::generation::initialize_hub_fringe(&mut game.world, &mut game.rng);
+        }
+        crate::generation::initialize_hub_canopy(&mut game.world, game.generation_revision);
     }
-    crate::generation::initialize_hub_canopy(&mut game.world, game.generation_revision);
     game.data.insert("hub_draw_status".into(), 0.0);
     if kind.challenge() {
         game.data.insert("source_hub_music_alarm".into(), 100.0);
@@ -2789,6 +2799,47 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn sun_setup_walls_spur_lava_emits_particles_through_game_steps() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.load_hub(HubKind::Sun);
+
+        let lava = game
+            .world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive && entity.object == "oLava")
+            .collect::<Vec<_>>();
+        let top_lava = lava
+            .iter()
+            .filter(|entity| entity.sprite == "sLavaTop")
+            .count();
+        assert!(top_lava > 0, "scrSetupWalls exposes the upper lava row");
+        let spurter = lava
+            .iter()
+            .find(|entity| entity.value("spurt") == 1.0)
+            .expect("one exposed lava tile takes the source one-in-four spurt roll");
+        let spurt_time = spurter.value("spurt_time");
+        assert!(spurt_time >= 100.0 && spurt_time <= 300.0);
+
+        let particles_before = game
+            .world
+            .entities
+            .iter()
+            .filter(|entity| matches!(entity.object.as_str(), "oMagma" | "oFlame"))
+            .count();
+        for _ in 0..=(spurt_time as usize + 1) {
+            game.step(&InputFrame::default());
+        }
+        let particles_after = game
+            .world
+            .entities
+            .iter()
+            .filter(|entity| matches!(entity.object.as_str(), "oMagma" | "oFlame"))
+            .count();
+        assert!(particles_after > particles_before);
     }
 
     #[test]
