@@ -165,7 +165,11 @@ fn detector(game: &Game, h: &Hazard, faces_right: bool) -> Rect {
     if faces_right {
         let mut x = h.pos.x + 16.0;
         let mut remaining = 100;
-        while !game.world.solid_at(x, y) && remaining > 0 {
+        while !game
+            .world
+            .solid_point_active(Vec2::new(x, y), CollisionPrecision::BoundingBox, None)
+            && remaining > 0
+        {
             if x - h.pos.x > 96.0 {
                 break;
             }
@@ -181,7 +185,10 @@ fn detector(game: &Game, h: &Hazard, faces_right: bool) -> Rect {
         )
     } else {
         let mut x = h.pos.x - 1.0;
-        while !game.world.solid_at(x, y) {
+        while !game
+            .world
+            .solid_point_active(Vec2::new(x, y), CollisionPrecision::BoundingBox, None)
+        {
             if h.pos.x - x > 96.0 {
                 break;
             }

@@ -1030,8 +1030,34 @@ impl World {
     pub fn solid_point_except(&self, pos: Vec2, excluded: u64) -> bool {
         self.solid_at_except(pos.x, pos.y, excluded)
     }
-    /// Source collision_point(oSolid): authored tiles and alive, nonheld
-    /// dynamic solids. Outside-room space is open unless explicitly authored.
+    /// Explicit source `collision_point(x, y, oSolid, prec, notme)` query.
+    ///
+    /// `precision` selects the source collision mask mode. `excluded_caller`
+    /// models `notme`: `None` leaves the caller eligible, while `Some(id)`
+    /// ignores that dynamic instance. Only active `oSolid` family instances
+    /// participate; held state and GameMaker's independent object `solid`
+    /// property do not affect explicit family membership.
+    pub fn solid_point_active(
+        &self,
+        point: Vec2,
+        precision: CollisionPrecision,
+        excluded_caller: Option<u64>,
+    ) -> bool {
+        if !point.x.is_finite() || !point.y.is_finite() {
+            return false;
+        }
+        self.tiles_point_active_precision(point, "oSolid", precision)
+            || self.entities.iter().any(|entity| {
+                Some(entity.id) != excluded_caller
+                    && entity.alive
+                    && entity.engine_active
+                    && crate::catalog::is_a(&entity.object, "oSolid")
+                    && entity.mask_contains(point, precision)
+            })
+    }
+    /// Legacy BBox occupancy query retained for existing callers. Source
+    /// collision_point adapters should use `solid_point_active` and provide
+    /// their explicit precision and caller-exclusion semantics.
     pub fn solid_at_except(&self, x: f64, y: f64, excluded: u64) -> bool {
         if !x.is_finite() || !y.is_finite() {
             return false;
@@ -1930,6 +1956,66 @@ mod geometry_tests {
         assert!(Tile::new("oDark").is_destructible());
         assert!(!Tile::new("oHardBlock").is_destructible());
         assert!(!Tile::new("oLavaSolid").is_destructible());
+    }
+
+    #[test]
+    fn active_source_solid_point_uses_family_activity_and_includes_held_targets() {
+        let mut world = World::new(8, 8, Area::Mines, 9);
+        let tile_point = Vec2::new(16.0, 16.0);
+        world.set_tile(1, 1, "oHardBlock");
+        assert!(world.solid_point_active(tile_point, CollisionPrecision::BoundingBox, None));
+        world.tiles[world.width + 1].engine_active = false;
+        assert!(!world.solid_point_active(tile_point, CollisionPrecision::BoundingBox, None));
+
+        let point = Vec2::new(44.0, 44.0);
+        let mut block = Entity::new(21, "oPushBlock", Vec2::new(40.0, 40.0));
+        block.solid = false;
+        block.held = true;
+        assert!(!crate::catalog::object("oPushBlock").unwrap().solid);
+        assert!(block.mask_contains(point, CollisionPrecision::BoundingBox));
+        world.entities.push(block);
+        assert!(world.solid_point_active(point, CollisionPrecision::BoundingBox, None));
+        assert!(!world.solid_point_active(point, CollisionPrecision::BoundingBox, Some(21)));
+
+        let mut second_block = Entity::new(22, "oPushBlock", Vec2::new(40.0, 40.0));
+        second_block.held = true;
+        world.entities.push(second_block);
+        assert!(world.solid_point_active(point, CollisionPrecision::BoundingBox, Some(21)));
+        world.entities[1].engine_active = false;
+        assert!(!world.solid_point_active(point, CollisionPrecision::BoundingBox, Some(21)));
+    }
+
+    #[test]
+    fn active_source_solid_point_uses_precision_and_rejects_engine_solid_impostors() {
+        let mut world = World::new(8, 8, Area::Mines, 9);
+        let point = Vec2::new(80.0, 80.0);
+        let dark_fall = Entity::new(31, "oDarkFall", point);
+        assert!(dark_fall.mask_contains(point, CollisionPrecision::BoundingBox));
+        assert!(!dark_fall.mask_contains(point, CollisionPrecision::Precise));
+        world.entities.push(dark_fall);
+        assert!(world.solid_point_active(point, CollisionPrecision::BoundingBox, None));
+        assert!(!world.solid_point_active(point, CollisionPrecision::Precise, None));
+
+        let precise_point = Vec2::new(81.0, 80.0);
+        assert!(world.solid_point_active(precise_point, CollisionPrecision::Precise, None));
+        assert!(!world.solid_point_active(precise_point, CollisionPrecision::Precise, Some(31)));
+
+        let second_dark_fall = Entity::new(32, "oDarkFall", point);
+        assert!(second_dark_fall.mask_contains(precise_point, CollisionPrecision::Precise));
+        world.entities.push(second_dark_fall);
+        assert!(world.solid_point_active(precise_point, CollisionPrecision::Precise, Some(31)));
+        world.entities[1].engine_active = false;
+
+        let mut engine_solid = Entity::new(33, "oBasketball", point);
+        assert!(crate::catalog::object("oBasketball").unwrap().solid);
+        assert!(!crate::catalog::is_a("oBasketball", "oSolid"));
+        assert!(engine_solid.mask_contains(point, CollisionPrecision::BoundingBox));
+        engine_solid.solid = true;
+        world.entities.push(engine_solid);
+        assert!(!world.solid_point_active(point, CollisionPrecision::BoundingBox, Some(31)));
+
+        world.entities[0].engine_active = false;
+        assert!(!world.solid_point_active(precise_point, CollisionPrecision::Precise, None));
     }
 
     #[test]

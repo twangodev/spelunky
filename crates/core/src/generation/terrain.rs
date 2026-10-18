@@ -895,6 +895,9 @@ enum SetupParent {
 }
 
 fn setup_source_point(world: &World, point: Vec2, family: &str) -> bool {
+    if family == "oSolid" {
+        return world.solid_point_active(point, crate::CollisionPrecision::BoundingBox, None);
+    }
     world.tiles_point_active(point, family)
         || world.entities.iter().any(|entity| {
             entity.alive
@@ -1221,7 +1224,7 @@ fn setup_wall_remainder(
                 continue;
             }
             let origin = Vec2::new(x as f64 * 16.0, y as f64 * 16.0);
-            let exposed = lava_exposed(world, origin);
+            let exposed = lava_exposed(world, origin, revision);
             let id = metadata(world, x, y);
             setup_lava(world.entity_mut(id).unwrap(), rng, exposed, true);
         }
@@ -1234,7 +1237,7 @@ fn setup_wall_remainder(
         .collect();
     for id in lava {
         let origin = world.entity(id).unwrap().pos;
-        let exposed = lava_exposed(world, origin);
+        let exposed = lava_exposed(world, origin, revision);
         setup_lava(world.entity_mut(id).unwrap(), rng, exposed, false);
     }
     // Preserve the historical layout/masks and RNG continuation, including
@@ -1481,11 +1484,16 @@ fn initialize_custom_instance(world: &mut World, rng: &mut Rng, id: u64) {
     entity.sprite = format!("s{}", &object[1..]);
 }
 
-fn lava_exposed(world: &World, origin: Vec2) -> bool {
+fn lava_exposed(world: &World, origin: Vec2, revision: crate::GenerationRevision) -> bool {
     // scrSetupWalls probes the original instance origin, not its tile center.
     // oLava itself inherits oWater, so this also suppresses buried lava layers.
     let above = Vec2::new(origin.x, origin.y - 16.0);
-    !world.solid_point_except(above, 0)
+    let solid_above = if revision == crate::GenerationRevision::SourceClassicV2 {
+        world.solid_point_active(above, crate::CollisionPrecision::BoundingBox, None)
+    } else {
+        world.solid_point_except(above, 0)
+    };
+    !solid_above
         && !world.tiles_point(above, "oWater")
         && !world.entities.iter().any(|entity| {
             entity.alive
@@ -1540,6 +1548,30 @@ mod setup_order_tests;
 mod tests {
     use super::*;
     use crate::model::Area;
+
+    #[test]
+    fn lava_solid_probe_uses_source_family_but_preserves_historical_adapter() {
+        let mut world = World::new(8, 8, Area::Mines, 1);
+        let crate_id = world.spawn("oPushBlock", Vec2::new(32.0, 32.0));
+        world.entity_mut(crate_id).unwrap().held = true;
+        let lava_origin = Vec2::new(32.0, 48.0);
+
+        assert!(world.solid_point_active(
+            Vec2::new(32.0, 32.0),
+            crate::CollisionPrecision::BoundingBox,
+            None,
+        ));
+        assert!(!lava_exposed(
+            &world,
+            lava_origin,
+            crate::GenerationRevision::SourceClassicV2,
+        ));
+        assert!(lava_exposed(
+            &world,
+            lava_origin,
+            crate::GenerationRevision::HistoricalV1,
+        ));
+    }
 
     #[test]
     fn mines_population_before_block_promotion_is_independent_of_graphics_rng() {

@@ -437,7 +437,10 @@ fn fire_bow(game: &mut Game) {
         .unwrap_or(80.0);
     let facing = f64::from(game.player.facing);
     let mut pos = Vec2::new(game.player.pos.x + 14.0 * facing, game.player.pos.y);
-    if game.world.solid_at(pos.x, pos.y) {
+    if game
+        .world
+        .solid_point_active(pos, CollisionPrecision::BoundingBox, None)
+    {
         pos = game.player.pos;
     }
     if matches!(game.player.sprite.as_str(), "sDuckLeft" | "sDamselDuckL") {
@@ -492,7 +495,10 @@ fn tick_item_body(game: &Game, e: &mut Entity) {
         return;
     }
     let contact = |e: &Entity, x, y| super::body_contact(&game.world, e, x, y);
-    if game.world.solid_at_except(e.pos.x, e.pos.y, e.id) {
+    if game
+        .world
+        .solid_point_active(e.pos, CollisionPrecision::BoundingBox, None)
+    {
         let (left, right, bottom, top) = (
             contact(e, -1, 0),
             contact(e, 1, 0),

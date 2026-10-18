@@ -258,6 +258,49 @@ fn reached_predicates_preserve_body_order_clearance_failures_and_independent_cha
         }
     }
 }
+
+#[test]
+fn source_tile_solid_point_uses_active_o_solid_family_membership() {
+    let point = Vec2::new(48.0, 48.0);
+    let mut held_world = world(Area::Mines, "Mines", false);
+    let held_crate = held_world.spawn("oPushBlock", point);
+    assert!(crate::catalog::is_a("oPushBlock", "oSolid"));
+    held_world.entity_mut(held_crate).unwrap().held = true;
+    assert!(source_solid_point(&held_world, point));
+    stamp_at_source(
+        &mut held_world,
+        &mut Rng::new(17),
+        "1",
+        3,
+        3,
+        false,
+        false,
+        "General",
+        false,
+    );
+    assert!(held_world.tile(3, 3).unwrap().object.is_empty());
+
+    let mut inactive_world = world(Area::Mines, "Mines", false);
+    let inactive_crate = inactive_world.spawn("oPushBlock", point);
+    inactive_world
+        .entity_mut(inactive_crate)
+        .unwrap()
+        .engine_active = false;
+    assert!(!source_solid_point(&inactive_world, point));
+    stamp_at_source(
+        &mut inactive_world,
+        &mut Rng::new(17),
+        "1",
+        3,
+        3,
+        false,
+        false,
+        "General",
+        false,
+    );
+    assert!(!inactive_world.tile(3, 3).unwrap().object.is_empty());
+}
+
 #[test]
 fn historical_decoder_retains_exact_world_and_rng_for_both_algorithms() {
     for (_, area, name, source) in sources() {

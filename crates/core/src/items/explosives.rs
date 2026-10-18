@@ -53,7 +53,7 @@ fn can_use(game: &Game) -> bool {
 }
 
 fn solid_point(world: &World, pos: Vec2) -> bool {
-    world.solid_point_except(pos, 0)
+    world.solid_point_active(pos, CollisionPrecision::BoundingBox, None)
 }
 
 /// Literal precision-zero Solid rectangle/point query used by the two Rope
@@ -1428,7 +1428,7 @@ fn projectile_motion(world: &World, entity: &mut Entity, sticky: bool) -> bool {
         };
         world.solid_line_except(first, second, entity.id)
     };
-    if world.solid_at_except(entity.pos.x, entity.pos.y, entity.id) {
+    if world.solid_point_active(entity.pos, CollisionPrecision::BoundingBox, None) {
         let (left, right, bottom, top) = (
             contact(entity.pos, -1, 0),
             contact(entity.pos, 1, 0),
@@ -1997,7 +1997,11 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
             .filter(|entity| {
                 entity.alive
                     && entity.object == "oSpikes"
-                    && !game.world.solid_at(entity.pos.x, entity.pos.y + 16.0)
+                    && !game.world.solid_point_active(
+                        Vec2::new(entity.pos.x, entity.pos.y + 16.0),
+                        CollisionPrecision::BoundingBox,
+                        None,
+                    )
             })
             .map(|entity| entity.id)
             .collect();

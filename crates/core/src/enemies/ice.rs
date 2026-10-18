@@ -4,7 +4,7 @@
 //! Decorative blood and dynamic tile-layer effects remain approximate.
 //! Source contains no oAlienUFO object; this module does not invent that alias.
 use super::move_body;
-use crate::{Entity, Game, GameEvent, PlayerState, Rect, Vec2};
+use crate::{CollisionPrecision, Entity, Game, GameEvent, PlayerState, Rect, Vec2};
 
 #[cfg(test)]
 #[path = "player_hurt_rectangle_contract_tests.rs"]
@@ -300,9 +300,11 @@ fn yeti(game: &mut Game, e: &mut Entity) {
     }
     let crush_y = if e.state >= 98 { 12.0 } else { 8.0 };
     if (e.state >= 98 || !e.held)
-        && game
-            .world
-            .solid_point_except(Vec2::new(e.pos.x + 8.0, e.pos.y + crush_y), e.id)
+        && game.world.solid_point_active(
+            Vec2::new(e.pos.x + 8.0, e.pos.y + crush_y),
+            CollisionPrecision::BoundingBox,
+            None,
+        )
     {
         super::create_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 3);
         game.sound("sndCavemanDie", e.pos);
@@ -435,12 +437,15 @@ fn yeti(game: &mut Game, e: &mut Entity) {
         0 => {
             e.data.insert("bounced".into(), 0.0);
             if floor
-                && (game
-                    .world
-                    .solid_point_except(Vec2::new(e.pos.x - 1.0, e.pos.y), e.id)
-                    || game
-                        .world
-                        .solid_point_except(Vec2::new(e.pos.x + 16.0, e.pos.y), e.id))
+                && (game.world.solid_point_active(
+                    Vec2::new(e.pos.x - 1.0, e.pos.y),
+                    CollisionPrecision::Precise,
+                    Some(e.id),
+                ) || game.world.solid_point_active(
+                    Vec2::new(e.pos.x + 16.0, e.pos.y),
+                    CollisionPrecision::Precise,
+                    Some(e.id),
+                ))
             {
                 e.vel.y = -6.0;
                 e.vel.x = f64::from(e.facing);
@@ -485,9 +490,13 @@ fn yeti(game: &mut Game, e: &mut Entity) {
             }
             if floor {
                 if game.rng.range(100) == 0
-                    || !game.world.solid_at(
-                        e.pos.x + if e.facing < 0 { -1.0 } else { 16.0 },
-                        e.pos.y + 16.0,
+                    || !game.world.solid_point_active(
+                        Vec2::new(
+                            e.pos.x + if e.facing < 0 { -1.0 } else { 16.0 },
+                            e.pos.y + 16.0,
+                        ),
+                        CollisionPrecision::Precise,
+                        Some(e.id),
                     )
                 {
                     enter(e, 0);
@@ -552,10 +561,11 @@ fn settle_yeti(e: &mut Entity, contacts: super::BodyContacts, impact_y: f64) {
 fn alien(game: &mut Game, e: &mut Entity) {
     let next_y = e.vel.y + 0.6;
     let (_, floor) = move_body(&game.world, e, 0.6);
-    if game
-        .world
-        .solid_point_except(Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), e.id)
-    {
+    if game.world.solid_point_active(
+        Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0),
+        CollisionPrecision::BoundingBox,
+        None,
+    ) {
         e.health = 0;
     }
     if e.health < 1 {
@@ -584,10 +594,26 @@ fn alien(game: &mut Game, e: &mut Entity) {
         if contacts.left {
             e.facing = 1;
         }
-        let left_head = game.world.solid_at(e.pos.x - 1.0, e.pos.y);
-        let left_foot = game.world.solid_at(e.pos.x - 1.0, e.pos.y + 16.0);
-        let right_head = game.world.solid_at(e.pos.x + 16.0, e.pos.y);
-        let right_foot = game.world.solid_at(e.pos.x + 16.0, e.pos.y + 16.0);
+        let left_head = game.world.solid_point_active(
+            Vec2::new(e.pos.x - 1.0, e.pos.y),
+            CollisionPrecision::Precise,
+            Some(e.id),
+        );
+        let left_foot = game.world.solid_point_active(
+            Vec2::new(e.pos.x - 1.0, e.pos.y + 16.0),
+            CollisionPrecision::Precise,
+            Some(e.id),
+        );
+        let right_head = game.world.solid_point_active(
+            Vec2::new(e.pos.x + 16.0, e.pos.y),
+            CollisionPrecision::Precise,
+            Some(e.id),
+        );
+        let right_foot = game.world.solid_point_active(
+            Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0),
+            CollisionPrecision::Precise,
+            Some(e.id),
+        );
         if e.facing < 0 && !left_head && !left_foot {
             e.facing = 1;
         } else if e.facing > 0 && !right_head && !right_foot {
@@ -612,10 +638,11 @@ fn king(game: &mut Game, e: &mut Entity) {
     let next_y = (e.vel.y + super::inherited::gravity(e, 0.6)).min(10.0);
     let (_, floor) = move_body(&game.world, e, 0.6);
     e.vel.y = if floor && e.state != 98 { 0.0 } else { next_y };
-    if game
-        .world
-        .solid_point_except(Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0), e.id)
-    {
+    if game.world.solid_point_active(
+        Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0),
+        CollisionPrecision::BoundingBox,
+        None,
+    ) {
         e.health = 0;
     }
     if e.health < 1 {
@@ -919,10 +946,11 @@ fn ufo(game: &mut Game, e: &mut Entity) {
 
 fn boss(game: &mut Game, e: &mut Entity) {
     // Boss Step checks crushing before its moveTo, unlike the walkers.
-    if game
-        .world
-        .solid_point_except(Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), e.id)
-    {
+    if game.world.solid_point_active(
+        Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0),
+        CollisionPrecision::BoundingBox,
+        None,
+    ) {
         e.health = 0;
     }
     if e.health < 1 && e.state != 99 {
@@ -1027,19 +1055,21 @@ fn eject(game: &mut Game, e: &mut Entity) {
     } else {
         e.vel.x = 0.0;
         e.vel.y = 2.0;
-        if game
-            .world
-            .solid_point_except(Vec2::new(e.pos.x, e.pos.y + 6.0), e.id)
-        {
+        if game.world.solid_point_active(
+            Vec2::new(e.pos.x, e.pos.y + 6.0),
+            CollisionPrecision::BoundingBox,
+            None,
+        ) {
             game.spawn("oAlien", Vec2::new(e.pos.x - 8.0, e.pos.y - 12.0));
             e.alive = false;
             return;
         }
         e.vel.x = f64::from(e.facing);
-        if game
-            .world
-            .solid_point_except(Vec2::new(e.pos.x + e.vel.x * 8.0, e.pos.y), e.id)
-        {
+        if game.world.solid_point_active(
+            Vec2::new(e.pos.x + e.vel.x * 8.0, e.pos.y),
+            CollisionPrecision::BoundingBox,
+            None,
+        ) {
             e.facing = 0;
         }
     }
@@ -1469,7 +1499,11 @@ fn yeti_player_collision(game: &mut Game, e: &mut Entity) {
         return;
     }
     if game.player.invincible == 0 && e.state < 98 {
-        if game.world.solid_at(e.pos.x + 8.0, e.pos.y - 4.0) {
+        if game.world.solid_point_active(
+            Vec2::new(e.pos.x + 8.0, e.pos.y - 4.0),
+            CollisionPrecision::BoundingBox,
+            None,
+        ) {
             game.player.invincible = 30;
             game.player.data.insert("blink".into(), 30.0);
             game.player.vel.x = if game.player.pos.x < e.pos.x {

@@ -443,7 +443,9 @@ pub(super) fn collision(game: &mut Game, this: Instance, other: Instance) {
 /// Source oPlayer1 Step1563, before projectile and trap hurt.
 pub(super) fn player_crush(game: &mut Game) {
     if !super::player_hurt_enabled(game)
-        || !game.world.solid_at(game.player.pos.x, game.player.pos.y)
+        || !game
+            .world
+            .solid_point_active(game.player.pos, CollisionPrecision::BoundingBox, None)
     {
         return;
     }
@@ -1070,9 +1072,10 @@ fn ceiling(game: &mut Game, entity: &mut Entity) {
             entity.pos.y += 1.0;
         }
         entity.vel.y = 0.0;
-        if game.world.solid_point_except(
+        if game.world.solid_point_active(
             Vec2::new(entity.pos.x + 8.0, entity.pos.y + 17.0),
-            entity.id,
+            CollisionPrecision::BoundingBox,
+            None,
         ) {
             entity.state = 2;
         }
@@ -1135,10 +1138,11 @@ fn boulder(game: &mut Game, entity: &mut Entity) {
             entity.vel.x = 0.0;
         }
     }
-    if !game
-        .world
-        .solid_point_except(Vec2::new(entity.pos.x, entity.pos.y + 16.0), entity.id)
-    {
+    if !game.world.solid_point_active(
+        Vec2::new(entity.pos.x, entity.pos.y + 16.0),
+        CollisionPrecision::BoundingBox,
+        None,
+    ) {
         let left = collides_except(
             game,
             Rect::new(entity.pos.x - 16.0, entity.pos.y - 16.0, 9.0, 33.0),
@@ -1169,9 +1173,10 @@ fn push_block(game: &mut Game, entity: &mut Entity) {
     if touches_lava(
         game,
         Rect::new(entity.pos.x + 8.0, entity.pos.y + 14.0, 1.0, 1.0),
-    ) && !game.world.solid_point_except(
+    ) && !game.world.solid_point_active(
         Vec2::new(entity.pos.x + 8.0, entity.pos.y + 17.0),
-        entity.id,
+        CollisionPrecision::BoundingBox,
+        None,
     ) {
         entity.vel.y = 0.0;
         entity.data.insert("push_gravity".into(), 0.0);
@@ -1209,9 +1214,10 @@ fn ice_block(game: &mut Game, entity: &mut Entity) {
     if touches_lava(
         game,
         Rect::new(entity.pos.x + 8.0, entity.pos.y + 16.0, 1.0, 1.0),
-    ) && !game.world.solid_point_except(
+    ) && !game.world.solid_point_active(
         Vec2::new(entity.pos.x + 8.0, entity.pos.y + 17.0),
-        entity.id,
+        CollisionPrecision::BoundingBox,
+        None,
     ) {
         entity.vel.y = 0.0;
         entity.data.insert("push_gravity".into(), 0.0);
@@ -1657,6 +1663,33 @@ mod tests {
                 if destroyed { 1.9 } else { -1.0 }
             );
         }
+    }
+
+    #[test]
+    fn game_step_boulder_source_point_query_includes_fractionally_rounded_caller() {
+        let mut game = authored_standing_game();
+        game.player.pos = Vec2::new(320.0, 80.0);
+        game.player.previous_pos = game.player.pos;
+        // This hard block overlaps only the boulder's left correction strip.
+        // Its right/bottom edges stay outside the source point at (x, y+16).
+        game.world.set_tile(4, 5, "oHardBlock");
+        let id = game.world.spawn("oBoulder", Vec2::new(80.0, 80.75));
+        game.world.entity_mut(id).unwrap().vel = Vec2::default();
+
+        let source_probe = Vec2::new(80.0, 96.75);
+        assert!(
+            game.world
+                .solid_point_active(source_probe, CollisionPrecision::BoundingBox, None,)
+        );
+        assert!(!game.world.solid_point_active(
+            source_probe,
+            CollisionPrecision::BoundingBox,
+            Some(id),
+        ));
+
+        game.step(&crate::InputFrame::default());
+
+        assert_eq!(game.world.entity(id).unwrap().pos, Vec2::new(80.0, 80.75));
     }
 
     #[test]

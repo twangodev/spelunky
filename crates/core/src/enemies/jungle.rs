@@ -269,7 +269,11 @@ fn die(game: &mut Game, e: &mut Entity) {
 
 fn frog(game: &mut Game, e: &mut Entity) {
     move_body(&game.world, e, 0.2);
-    if game.world.solid_at(e.pos.x + 8.0, e.pos.y + 8.0) {
+    if game.world.solid_point_active(
+        Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0),
+        CollisionPrecision::BoundingBox,
+        None,
+    ) {
         e.health = -999;
     }
     if e.health <= 0 {
@@ -339,7 +343,11 @@ fn monkey(game: &mut Game, e: &mut Entity) {
     move_body(&game.world, e, gravity);
     // Source moveTo blocks displacement without clearing stored yVel.
     e.vel.y = (entry_y_velocity + gravity).min(10.0);
-    if game.world.solid_at(e.pos.x + 8.0, e.pos.y + 8.0) {
+    if game.world.solid_point_active(
+        Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0),
+        CollisionPrecision::BoundingBox,
+        None,
+    ) {
         e.health = -999;
     }
     // Monkey Step42 uses collision_point(..., oWater, -1, -1).
@@ -567,7 +575,11 @@ fn fish(game: &mut Game, e: &mut Entity) {
         0 => {
             e.vel = Vec2::new(e.facing as f64, 0.0);
             let probe = Vec2::new(e.pos.x + if e.facing > 0 { 10.0 } else { -2.0 }, e.pos.y);
-            if water(&game.world, probe) && !game.world.solid_at(probe.x, probe.y) {
+            if water(&game.world, probe)
+                && !game
+                    .world
+                    .solid_point_active(probe, CollisionPrecision::BoundingBox, None)
+            {
                 move_body(&game.world, e, 0.0);
             } else {
                 e.facing *= -1;
@@ -743,7 +755,11 @@ fn jaws(game: &mut Game, e: &mut Entity) {
                 e.pos.x + if e.facing > 0 { 18.0 } else { -2.0 },
                 e.pos.y + 16.0,
             );
-            if water(&game.world, probe) && !game.world.solid_at(probe.x, probe.y) {
+            if water(&game.world, probe)
+                && !game
+                    .world
+                    .solid_point_active(probe, CollisionPrecision::BoundingBox, None)
+            {
                 e.vel = Vec2::new(2.0 * e.facing as f64, 0.0);
                 move_body(&game.world, e, 0.0);
             } else {
@@ -772,7 +788,11 @@ fn jaws(game: &mut Game, e: &mut Entity) {
                 // Turn sprites suppress re-aiming; source dir is the horizontal
                 // direction established when the turn began.
                 let probe = Vec2::new(e.pos.x + e.facing as f64, e.pos.y);
-                if water(&game.world, probe) && !game.world.solid_at(probe.x, probe.y) {
+                if water(&game.world, probe)
+                    && !game
+                        .world
+                        .solid_point_active(probe, CollisionPrecision::BoundingBox, None)
+                {
                     e.vel = Vec2::new(3.0 * e.facing as f64, 0.0);
                     move_body(&game.world, e, 0.0);
                 }
@@ -784,7 +804,11 @@ fn jaws(game: &mut Game, e: &mut Entity) {
                         e.id,
                     )
                 } else {
-                    !game.world.solid_at(e.pos.x - 2.0, e.pos.y + 16.0)
+                    !game.world.solid_point_active(
+                        Vec2::new(e.pos.x - 2.0, e.pos.y + 16.0),
+                        CollisionPrecision::BoundingBox,
+                        None,
+                    )
                 };
                 if wants_left != (e.facing < 0) && can_turn {
                     begin_jaws_turn(e);
@@ -803,7 +827,13 @@ fn jaws(game: &mut Game, e: &mut Entity) {
                         Vec2::new((target.x - origin.x) / dist, (target.y - origin.y) / dist)
                     };
                     let probe = Vec2::new(e.pos.x + dir.x, e.pos.y + dir.y);
-                    if water(&game.world, probe) && !game.world.solid_at(probe.x, probe.y) {
+                    if water(&game.world, probe)
+                        && !game.world.solid_point_active(
+                            probe,
+                            CollisionPrecision::BoundingBox,
+                            None,
+                        )
+                    {
                         e.vel = Vec2::new(dir.x * 3.0, dir.y * 3.0);
                         move_body(&game.world, e, 0.0);
                     }
@@ -978,10 +1008,26 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
             if left || right {
                 e.facing *= -1;
             }
-            let left_top = game.world.solid_at(e.pos.x - 1.0, e.pos.y);
-            let left_floor = game.world.solid_at(e.pos.x - 1.0, e.pos.y + 16.0);
-            let right_top = game.world.solid_at(e.pos.x + 16.0, e.pos.y);
-            let right_floor = game.world.solid_at(e.pos.x + 16.0, e.pos.y + 16.0);
+            let left_top = game.world.solid_point_active(
+                Vec2::new(e.pos.x - 1.0, e.pos.y),
+                CollisionPrecision::Precise,
+                Some(e.id),
+            );
+            let left_floor = game.world.solid_point_active(
+                Vec2::new(e.pos.x - 1.0, e.pos.y + 16.0),
+                CollisionPrecision::Precise,
+                Some(e.id),
+            );
+            let right_top = game.world.solid_point_active(
+                Vec2::new(e.pos.x + 16.0, e.pos.y),
+                CollisionPrecision::Precise,
+                Some(e.id),
+            );
+            let right_floor = game.world.solid_point_active(
+                Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0),
+                CollisionPrecision::Precise,
+                Some(e.id),
+            );
             if e.facing < 0 && !left_top && !left_floor {
                 e.facing = 1;
             } else if e.facing > 0 && !right_top && !right_floor {
@@ -1021,9 +1067,17 @@ fn mantrap(game: &mut Game, e: &mut Entity) {
                     e.state = 0;
                     e.timer = 20 + game.rng.range(31);
                     if e.held {
-                        if game.world.solid_at(e.pos.x + 16.0, e.pos.y + 8.0) {
+                        if game.world.solid_point_active(
+                            Vec2::new(e.pos.x + 16.0, e.pos.y + 8.0),
+                            CollisionPrecision::BoundingBox,
+                            None,
+                        ) {
                             e.pos.x = game.player.pos.x - 12.0;
-                        } else if game.world.solid_at(e.pos.x, e.pos.y + 8.0) {
+                        } else if game.world.solid_point_active(
+                            Vec2::new(e.pos.x, e.pos.y + 8.0),
+                            CollisionPrecision::BoundingBox,
+                            None,
+                        ) {
                             e.pos.x = game.player.pos.x - 4.0;
                         }
                         e.pos.y = game.player.pos.y - 8.0;
@@ -1345,9 +1399,11 @@ fn monkey_collision(game: &mut Game, e: &mut Entity, other: crate::dispatcher::I
         return true;
     }
     let pos = item.pos;
-    let lift = !game
-        .world
-        .solid_at(pos.x, pos.y - if rope { 0.0 } else { 2.0 });
+    let lift = !game.world.solid_point_active(
+        Vec2::new(pos.x, pos.y - if rope { 0.0 } else { 2.0 }),
+        CollisionPrecision::BoundingBox,
+        None,
+    );
     if let Some(item) = game.world.entity_mut(id) {
         item.vel = Vec2::new(5.0 * e.facing as f64, -4.0);
         if lift {

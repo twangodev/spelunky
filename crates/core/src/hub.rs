@@ -1202,7 +1202,10 @@ fn sun(game: &mut Game) {
 }
 fn sun_alarm0(game: &mut Game) {
     let x = game.player.pos.x.clamp(40.0, 280.0);
-    if game.world.solid_at(x, 32.0) {
+    if game
+        .world
+        .solid_point_active(Vec2::new(x, 32.0), CollisionPrecision::BoundingBox, None)
+    {
         game.data.insert("hub_alarm0".into(), 1.0);
         return;
     }
@@ -1704,7 +1707,13 @@ fn basketball(game: &mut Game) {
             ball.data.insert("goingIn".into(), 0.0);
         }
         ball.set_sprite(
-            if ball.held && game.world.solid_at(ball.pos.x, ball.pos.y + 6.0) {
+            if ball.held
+                && game.world.solid_point_active(
+                    Vec2::new(ball.pos.x, ball.pos.y + 6.0),
+                    CollisionPrecision::BoundingBox,
+                    None,
+                )
+            {
                 "sDribble"
             } else {
                 "sBasketball"

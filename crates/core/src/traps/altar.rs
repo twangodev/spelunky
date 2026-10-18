@@ -4,7 +4,7 @@
 //! and the Gold Idol pickup branch of oPlayer1 Step (Classic 1.1).
 #[cfg(test)]
 use crate::model::Rect;
-use crate::model::{Area, Game, GameEvent, Vec2};
+use crate::model::{Area, CollisionPrecision, Game, GameEvent, Vec2};
 
 #[cfg(test)]
 pub(super) fn tick(game: &mut Game) {
@@ -177,7 +177,11 @@ pub(super) fn step_instance(game: &mut Game, instance: crate::dispatcher::Instan
         && pos.x < view.x + (view.w + 4.)
         && pos.y > view.y - 20.
         && pos.y < view.y + (view.h + 4.)
-        && !game.world.solid_at(pos.x, pos.y + 16.)
+        && !game.world.solid_point_active(
+            Vec2::new(pos.x, pos.y + 16.0),
+            CollisionPrecision::BoundingBox,
+            None,
+        )
     {
         match instance {
             crate::dispatcher::Instance::Entity(id) => {

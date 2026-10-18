@@ -1,5 +1,5 @@
 //! Source ending and inter-level cinematic controllers.
-use crate::model::{Entity, Game, InputFrame, Rect, RunState, Vec2, World};
+use crate::model::{CollisionPrecision, Entity, Game, InputFrame, Rect, RunState, Vec2, World};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -2542,7 +2542,10 @@ fn actor_step(game: &mut Game, s: &mut EndingState, e: &mut Entity, input: &Inpu
         }
         "oBurn" => {
             e.pos.y += e.vel.y;
-            if game.world.solid_at(e.pos.x, e.pos.y) {
+            if game
+                .world
+                .solid_point_active(e.pos, CollisionPrecision::BoundingBox, None)
+            {
                 e.alive = false;
             }
         }

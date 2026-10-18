@@ -10,7 +10,7 @@ mod boss_with_order_tests;
 
 use super::{center, move_body};
 use crate::dispatcher::Instance;
-use crate::model::{Entity, Game, GameEvent, Rect, Vec2, World};
+use crate::model::{CollisionPrecision, Entity, Game, GameEvent, Rect, Vec2, World};
 
 pub fn matches(object: &str) -> bool {
     matches!(
@@ -257,7 +257,13 @@ fn character_collision(game: &mut Game, e: &mut Entity) {
         }
         game.sound("sndHit", e.pos);
     } else if game.player.invincible == 0 {
-        if hawk && !game.world.solid_at(e.pos.x + 8.0, e.pos.y - 4.0) {
+        if hawk
+            && !game.world.solid_point_active(
+                Vec2::new(e.pos.x + 8.0, e.pos.y - 4.0),
+                CollisionPrecision::BoundingBox,
+                None,
+            )
+        {
             if e.state == 3 {
                 return;
             }
@@ -554,7 +560,13 @@ fn hawk(game: &mut Game, e: &mut Entity) {
     // oHawkman Step checks the lower corpse origin after moveTo, and the
     // center for a live, unheld actor. This must not run before movement.
     let crush_y = if e.state >= 98 { 12.0 } else { 8.0 };
-    if (e.state >= 98 || !e.held) && game.world.solid_at(e.pos.x + 8.0, e.pos.y + crush_y) {
+    if (e.state >= 98 || !e.held)
+        && game.world.solid_point_active(
+            Vec2::new(e.pos.x + 8.0, e.pos.y + crush_y),
+            CollisionPrecision::BoundingBox,
+            None,
+        )
+    {
         super::create_blood(game, e, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0), 3);
         e.alive = false;
         game.sound("sndCavemanDie", e.pos);
@@ -664,9 +676,13 @@ fn hawk(game: &mut Game, e: &mut Entity) {
                 e.facing = -e.facing;
             }
             e.vel.x = 1.5 * e.facing as f64;
-            if !game.world.solid_at(
-                e.pos.x + if e.facing < 0 { -1.0 } else { 16.0 },
-                e.pos.y + 16.0,
+            if !game.world.solid_point_active(
+                Vec2::new(
+                    e.pos.x + if e.facing < 0 { -1.0 } else { 16.0 },
+                    e.pos.y + 16.0,
+                ),
+                CollisionPrecision::Precise,
+                Some(e.id),
             ) {
                 e.state = 0;
                 e.timer = 20 + game.rng.range(31);
@@ -686,7 +702,13 @@ fn hawk(game: &mut Game, e: &mut Entity) {
                 e.facing = -e.facing;
             }
             e.vel.x = 3.0 * e.facing as f64;
-            if grounded && !game.world.solid_at(e.pos.x, e.pos.y - 16.0) {
+            if grounded
+                && !game.world.solid_point_active(
+                    Vec2::new(e.pos.x, e.pos.y - 16.0),
+                    CollisionPrecision::BoundingBox,
+                    None,
+                )
+            {
                 e.vel.y = -6.0;
             }
         }
@@ -734,7 +756,11 @@ fn hawk(game: &mut Game, e: &mut Entity) {
 fn tomb_lord(game: &mut Game, e: &mut Entity) {
     let (wall, _) = move_body(&game.world, e, 0.6);
     // oTombLord Step: the source center-in-solid death check follows moveTo.
-    if game.world.solid_at(e.pos.x + 16.0, e.pos.y + 16.0) {
+    if game.world.solid_point_active(
+        Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0),
+        CollisionPrecision::BoundingBox,
+        None,
+    ) {
         e.health = 0;
     }
     if e.health <= 0 {
@@ -1470,7 +1496,13 @@ fn magma_man(game: &mut Game, e: &mut Entity) {
     if e.health > 0 {
         e.health -= 1;
     }
-    if e.health <= 0 || game.world.solid_at(e.pos.x + 8.0, e.pos.y + 8.0) {
+    if e.health <= 0
+        || game.world.solid_point_active(
+            Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0),
+            CollisionPrecision::BoundingBox,
+            None,
+        )
+    {
         e.state = 99;
         e.vel = Vec2::default();
         e.set_sprite("sMagmaManDie");
@@ -1555,9 +1587,13 @@ fn magma_man(game: &mut Game, e: &mut Entity) {
             e.facing = -e.facing;
         }
         e.vel.x = 1.5 * e.facing as f64;
-        if !game.world.solid_at(
-            e.pos.x + if e.facing < 0 { -1.0 } else { 16.0 },
-            e.pos.y + 16.0,
+        if !game.world.solid_point_active(
+            Vec2::new(
+                e.pos.x + if e.facing < 0 { -1.0 } else { 16.0 },
+                e.pos.y + 16.0,
+            ),
+            CollisionPrecision::Precise,
+            Some(e.id),
         ) {
             e.state = 0;
             e.timer = 20 + game.rng.range(31);

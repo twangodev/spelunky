@@ -148,8 +148,17 @@ fn top(world: &World, e: &Entity) -> bool {
     let r = bounds(e);
     super::solid_mask(world, Rect::new(r.x, r.y - 1.0, r.w, 1.0), e.id)
 }
+#[cfg(test)]
 fn solid_at(world: &World, e: &Entity, x: f64, y: f64) -> bool {
     world.solid_point_except(Vec2::new(x, y), e.id)
+}
+fn source_solid_at(
+    world: &World,
+    pos: Vec2,
+    precision: CollisionPrecision,
+    excluded_caller: Option<u64>,
+) -> bool {
+    world.solid_point_active(pos, precision, excluded_caller)
 }
 fn source_move(world: &World, e: &mut Entity, gravity: f64) {
     // moveTo only moves; unlike move_body it does not zero vertical velocity.
@@ -251,7 +260,12 @@ fn skeleton(game: &mut Game, e: &mut Entity) {
                     .contains(Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0))
         });
     source_move(&game.world, e, if swimming { 0.2 } else { 0.6 });
-    if solid_at(&game.world, e, e.pos.x + 8.0, e.pos.y + 8.0) {
+    if source_solid_at(
+        &game.world,
+        Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0),
+        CollisionPrecision::BoundingBox,
+        None,
+    ) {
         e.health = 0;
     }
     if e.health < 1 {
@@ -290,7 +304,12 @@ fn skeleton(game: &mut Game, e: &mut Entity) {
 }
 fn zombie(game: &mut Game, e: &mut Entity) {
     source_move(&game.world, e, 0.2);
-    if solid_at(&game.world, e, e.pos.x + 8.0, e.pos.y + 8.0) {
+    if source_solid_at(
+        &game.world,
+        Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0),
+        CollisionPrecision::BoundingBox,
+        None,
+    ) {
         e.health = -999;
     }
     if e.health < 1 {
@@ -374,11 +393,14 @@ fn vampire(game: &mut Game, e: &mut Entity) {
     let ceiling = top(&game.world, e);
     let left = side(&game.world, e, -1, 1.0);
     let right = side(&game.world, e, 1, 1.0);
-    let crushed = solid_at(
+    let crushed = source_solid_at(
         &game.world,
-        e,
-        e.pos.x + 8.0,
-        e.pos.y + if e.state >= 98 { 12.0 } else { 8.0 },
+        Vec2::new(
+            e.pos.x + 8.0,
+            e.pos.y + if e.state >= 98 { 12.0 } else { 8.0 },
+        ),
+        CollisionPrecision::BoundingBox,
+        None,
     );
     if crushed && (e.state >= 98 || !e.held) {
         game.spawn("oSmokePuff", Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
@@ -410,8 +432,17 @@ fn vampire(game: &mut Game, e: &mut Entity) {
         0 => {
             e.data.insert("bounced".into(), 0.0);
             if grounded
-                && (solid_at(&game.world, e, e.pos.x - 1.0, e.pos.y)
-                    || solid_at(&game.world, e, e.pos.x + 16.0, e.pos.y))
+                && (source_solid_at(
+                    &game.world,
+                    Vec2::new(e.pos.x - 1.0, e.pos.y),
+                    CollisionPrecision::Precise,
+                    Some(e.id),
+                ) || source_solid_at(
+                    &game.world,
+                    Vec2::new(e.pos.x + 16.0, e.pos.y),
+                    CollisionPrecision::Precise,
+                    Some(e.id),
+                ))
             {
                 e.vel = Vec2::new(f64::from(e.facing), -6.0);
                 e.timer = e.timer.saturating_sub(10);
@@ -442,7 +473,14 @@ fn vampire(game: &mut Game, e: &mut Entity) {
             if grounded {
                 let stop = game.rng.chance(1, 100);
                 let ahead_x = e.pos.x + if e.facing < 0 { -1.0 } else { 16.0 };
-                if stop || !solid_at(&game.world, e, ahead_x, e.pos.y + 16.0) {
+                if stop
+                    || !source_solid_at(
+                        &game.world,
+                        Vec2::new(ahead_x, e.pos.y + 16.0),
+                        CollisionPrecision::Precise,
+                        Some(e.id),
+                    )
+                {
                     e.state = 0;
                     e.timer = 20 + game.rng.range(31);
                     e.vel.x = 0.0;
@@ -465,11 +503,11 @@ fn vampire(game: &mut Game, e: &mut Entity) {
                 } else {
                     e.state = 5;
                 }
-            } else if !solid_at(
+            } else if !source_solid_at(
                 &game.world,
-                e,
-                e.pos.x + f64::from(e.facing) * 8.0,
-                e.pos.y + 16.0,
+                Vec2::new(e.pos.x + f64::from(e.facing) * 8.0, e.pos.y + 16.0),
+                CollisionPrecision::BoundingBox,
+                None,
             ) {
                 e.state = 5;
             }
@@ -507,7 +545,12 @@ fn vampire(game: &mut Game, e: &mut Entity) {
             e.vel = Vec2::default();
             if player_available(game)
                 && ((distance < 90.0 && target.y > e.pos.y + 16.0)
-                    || !solid_at(&game.world, e, e.pos.x + 8.0, e.pos.y - 1.0))
+                    || !source_solid_at(
+                        &game.world,
+                        Vec2::new(e.pos.x + 8.0, e.pos.y - 1.0),
+                        CollisionPrecision::BoundingBox,
+                        None,
+                    ))
             {
                 e.state = 7;
                 game.sound("sndBat", e.pos);
@@ -515,7 +558,12 @@ fn vampire(game: &mut Game, e: &mut Entity) {
         }
         7 => {
             e.vel = Vec2::default();
-            let at_ceiling = solid_at(&game.world, e, e.pos.x + 8.0, e.pos.y - 1.0);
+            let at_ceiling = source_solid_at(
+                &game.world,
+                Vec2::new(e.pos.x + 8.0, e.pos.y - 1.0),
+                CollisionPrecision::BoundingBox,
+                None,
+            );
             if player_available(game) {
                 if distance < 160.0 {
                     let delta = Vec2::new(target.x - (e.pos.x + 8.0), target.y - (e.pos.y + 8.0));

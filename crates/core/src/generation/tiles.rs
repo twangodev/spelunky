@@ -547,9 +547,10 @@ fn stamp_source_tile(
                 .is_none_or(|width| rng.range(width) == 0);
             // Evaluate each reached source collision operand, even when the
             // random/symbol operand failed; plain clauses have no such query.
-            let clear_pass = !source_clear_predicate(dialect, candidate) || !solid_point(world, p);
+            let clear_pass =
+                !source_clear_predicate(dialect, candidate) || !source_solid_point(world, p);
             if candidate == symbol && random_pass && clear_pass {
-                let occupied = solid_point(world, p);
+                let occupied = source_solid_point(world, p);
                 stamp_tile_body(
                     world,
                     rng,
@@ -1148,11 +1149,14 @@ fn spawn(w: &mut World, r: &mut Rng, object: &str, p: Vec2) -> u64 {
     id
 }
 
-/// The source collision_point query includes previously created solid
-/// instances, including moving blocks and the full four-tile Moai side masks.
-/// Room edges themselves have no implicit source collision surface.
+/// Historical tile-stamping occupancy adapter. SourceClassicV2 uses the
+/// explicit active `oSolid` family query below instead.
 fn solid_point(world: &World, point: Vec2) -> bool {
     world.solid_point_except(point, 0)
+}
+
+fn source_solid_point(world: &World, point: Vec2) -> bool {
+    world.solid_point_active(point, crate::CollisionPrecision::BoundingBox, None)
 }
 
 fn climbable(world: &mut World, rng: &mut Rng, x: usize, y: usize, object: &str, point: Vec2) {

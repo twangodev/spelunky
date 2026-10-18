@@ -141,15 +141,28 @@ struct TreasureState {
 }
 
 fn source_point_family(world: &World, point: Vec2, family: &str) -> bool {
-    world.tiles_point(point, family)
+    if family == "oSolid" {
+        return world.solid_point_active(point, crate::CollisionPrecision::BoundingBox, None);
+    }
+    world.tiles_point_active(point, family)
         || world.entities.iter().any(|entity| {
             entity.alive
+                && entity.engine_active
                 && crate::catalog::is_a(&entity.object, family)
                 && entity.mask_contains(point, crate::CollisionPrecision::BoundingBox)
         })
 }
 
 fn source_rectangle_family(world: &World, rectangle: Rect, family: &str) -> bool {
+    source_rectangle_family_except(world, rectangle, family, None)
+}
+
+fn source_rectangle_family_except(
+    world: &World,
+    rectangle: Rect,
+    family: &str,
+    excluded_caller: Option<FamilyInstance>,
+) -> bool {
     // Rect stores literal inclusive query endpoints as max-min+1. GM8 keeps
     // those endpoints fractional, but the target aggregate bbox is integer.
     // This is deliberately asymmetric: expanding a half-open query by one
@@ -163,14 +176,18 @@ fn source_rectangle_family(world: &World, rectangle: Rect, family: &str) -> bool
             && target.y <= rectangle.y + rectangle.h - 1.0
     };
     world.tiles.iter().enumerate().any(|(index, tile)| {
-        crate::catalog::is_a(&tile.object, family)
+        excluded_caller != Some(FamilyInstance::Tile(index))
+            && tile.engine_active
+            && crate::catalog::is_a(&tile.object, family)
             && hits(
                 world
                     .tile_collision_mask((index % world.width) as i32, (index / world.width) as i32)
                     .point_bounds(),
             )
     }) || world.entities.iter().any(|entity| {
-        entity.alive
+        excluded_caller != Some(FamilyInstance::Entity(entity.id))
+            && entity.alive
+            && entity.engine_active
             && crate::catalog::is_a(&entity.object, family)
             && hits(entity.collision_mask().point_bounds())
     })
@@ -199,7 +216,7 @@ fn source_family_distance(world: &World, bounds: Rect, family: &str) -> f64 {
         .fold(1_000_000.0, f64::min)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Eq, PartialEq)]
 enum FamilyInstance {
     Tile(usize),
     Entity(u64),
@@ -1088,8 +1105,12 @@ fn temple_population(
             && origin.y > 16.0
             && !source_point_family(world, above, "oSolid")
         {
-            let clear =
-                !source_rectangle_family(world, Rect::new(origin.x, high.y, 33.0, 32.0), "oSolid");
+            let clear = !source_rectangle_family_except(
+                world,
+                Rect::new(origin.x, high.y, 33.0, 32.0),
+                "oSolid",
+                Some(receiver.instance),
+            );
             let tomb_roll = rng.chance(1, 40);
             if gen_tomb_lord && !made_tomb && clear && tomb_roll {
                 spawn_at(world, rng, "oTombLord", high);
@@ -1905,6 +1926,73 @@ fn arrows(world: &mut World, rng: &mut Rng, _supports: &[(i32, i32)]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_collision_family_helpers_skip_inactive_tiles_and_instances() {
+        let mut world = World::new(8, 8, Area::Jungle, 5);
+        let point = Vec2::new(40.0, 40.0);
+        let rectangle = Rect::new(38.0, 38.0, 4.0, 4.0);
+
+        world.set_tile(2, 2, "oBrick");
+        assert!(source_point_family(&world, point, "oSolid"));
+        assert!(source_rectangle_family(&world, rectangle, "oSolid"));
+        world.tiles[2 * world.width + 2].engine_active = false;
+        assert!(!source_point_family(&world, point, "oSolid"));
+        assert!(!source_rectangle_family(&world, rectangle, "oSolid"));
+
+        let crate_id = world.spawn("oPushBlock", point);
+        let crate_entity = world.entity_mut(crate_id).unwrap();
+        crate_entity.solid = false;
+        crate_entity.held = true;
+        assert!(source_point_family(&world, point, "oSolid"));
+        assert!(source_rectangle_family(&world, rectangle, "oSolid"));
+        world.entity_mut(crate_id).unwrap().engine_active = false;
+        assert!(!source_point_family(&world, point, "oSolid"));
+        assert!(!source_rectangle_family(&world, rectangle, "oSolid"));
+    }
+
+    #[test]
+    fn source_population_solid_point_includes_held_and_skips_inactive_descendants() {
+        let point = Vec2::new(32.0, 32.0);
+        let mut held_world = World::new(8, 8, Area::Jungle, 5);
+        let held_crate = held_world.spawn("oPushBlock", point);
+        held_world.entity_mut(held_crate).unwrap().held = true;
+        assert!(source_point_family(&held_world, point, "oSolid"));
+
+        let mut inactive_world = World::new(8, 8, Area::Jungle, 5);
+        let inactive_crate = inactive_world.spawn("oPushBlock", point);
+        inactive_world
+            .entity_mut(inactive_crate)
+            .unwrap()
+            .engine_active = false;
+        assert!(!source_point_family(&inactive_world, point, "oSolid"));
+    }
+
+    #[test]
+    fn source_rectangle_can_exclude_the_calling_solid_instance() {
+        let mut world = World::new(8, 8, Area::Temple, 5);
+        let id = world.spawn("oPushBlock", Vec2::new(32.0, 48.0));
+        let rectangle = Rect::new(32.0, 32.0, 16.0, 32.0);
+
+        assert!(source_rectangle_family(&world, rectangle, "oSolid"));
+        assert!(!source_rectangle_family_except(
+            &world,
+            rectangle,
+            "oSolid",
+            Some(FamilyInstance::Entity(id)),
+        ));
+
+        world.entity_mut(id).unwrap().alive = false;
+        world.set_tile(2, 3, "oBrick");
+        let tile_rect = Rect::new(32.0, 48.0, 16.0, 16.0);
+        assert!(source_rectangle_family(&world, tile_rect, "oSolid"));
+        assert!(!source_rectangle_family_except(
+            &world,
+            tile_rect,
+            "oSolid",
+            Some(FamilyInstance::Tile(3 * world.width + 2)),
+        ));
+    }
 
     fn literal_jungle_column_statement(
         source: &mut Rng,

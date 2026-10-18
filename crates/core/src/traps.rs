@@ -2,8 +2,8 @@
 //! GameMaker instance origins (usually tile top-left), not actor centers.
 use crate::dispatcher::Instance;
 #[cfg(test)]
-use crate::model::{CollisionPrecision, PlayerState};
-use crate::model::{Entity, Game, GameEvent, Rect, Vec2};
+use crate::model::PlayerState;
+use crate::model::{CollisionPrecision, Entity, Game, GameEvent, Rect, Vec2};
 
 #[path = "traps/altar.rs"]
 pub(crate) mod altar;
@@ -821,7 +821,13 @@ fn detectors(game: &mut Game) {
                     && h.pos.x < game.camera.x + 328.0
                     && h.pos.y > game.camera.y - 8.0
                     && h.pos.y < game.camera.y + 248.0;
-                if active && !game.world.solid_at(h.pos.x, h.pos.y + 16.0) {
+                if active
+                    && !game.world.solid_point_active(
+                        Vec2::new(h.pos.x, h.pos.y + 16.0),
+                        CollisionPrecision::BoundingBox,
+                        None,
+                    )
+                {
                     remove_hazard(game, &h);
                 }
             }

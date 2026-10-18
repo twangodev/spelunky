@@ -604,7 +604,12 @@ fn damsel(game: &mut Game, e: &mut Entity) {
     e.data
         .insert("gravity".into(), if swimming { 0.2 } else { 0.6 });
     damsel_death_anger(game, e);
-    if e.value("invincible") == 0.0 && !e.held && game.world.solid_at(e.pos.x, e.pos.y) {
+    if e.value("invincible") == 0.0
+        && !e.held
+        && game
+            .world
+            .solid_point_active(e.pos, CollisionPrecision::BoundingBox, None)
+    {
         if e.health > 0 {
             super::record_damsel_death(game, e, true);
         }
@@ -883,9 +888,13 @@ fn shopkeeper(game: &mut Game, e: &mut Entity) {
         impact_y = 0.0;
     }
     if (e.state >= 98 || !e.held)
-        && game.world.solid_at(
-            e.pos.x + 8.0,
-            e.pos.y + if e.state >= 98 { 12.0 } else { 8.0 },
+        && game.world.solid_point_active(
+            Vec2::new(
+                e.pos.x + 8.0,
+                e.pos.y + if e.state >= 98 { 12.0 } else { 8.0 },
+            ),
+            CollisionPrecision::BoundingBox,
+            None,
         )
     {
         super::record_keeper_crush(game, e);
@@ -1270,7 +1279,11 @@ fn scarab(game: &mut Game, e: &mut Entity) {
     move_body(&game.world, e, 0.0);
     // Source moveTo changes position, retaining both velocity components.
     e.vel = velocity;
-    if game.world.solid_at(e.pos.x + 8.0, e.pos.y + 8.0) {
+    if game.world.solid_point_active(
+        Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0),
+        CollisionPrecision::BoundingBox,
+        None,
+    ) {
         e.health = 0;
     }
     if e.health < 1 {
@@ -1370,7 +1383,11 @@ fn dead_fish(game: &mut Game, e: &mut Entity) {
     if e.state == 0 {
         let right = direction == 0.0;
         let probe = Vec2::new(e.pos.x + if right { 10.0 } else { -2.0 }, e.pos.y);
-        if dead_fish_water(game, probe) && !game.world.solid_at(probe.x, probe.y) {
+        if dead_fish_water(game, probe)
+            && !game
+                .world
+                .solid_point_active(probe, CollisionPrecision::BoundingBox, None)
+        {
             movement = Some(Vec2::new(if right { 1.0 } else { -1.0 }, 0.0));
         } else {
             direction = if right { 180.0 } else { 0.0 };
@@ -1429,7 +1446,13 @@ fn dead_fish(game: &mut Game, e: &mut Entity) {
 }
 
 fn barrier(game: &mut Game, e: &mut Entity) {
-    if e.object == "oBarrierEmitter" && !game.world.solid_at(e.pos.x, e.pos.y - 16.0) {
+    if e.object == "oBarrierEmitter"
+        && !game.world.solid_point_active(
+            Vec2::new(e.pos.x, e.pos.y - 16.0),
+            CollisionPrecision::BoundingBox,
+            None,
+        )
+    {
         destroy_emitter(game, e);
     }
 }
@@ -1523,7 +1546,11 @@ fn keeper_player_collision(game: &mut Game, e: &mut Entity) {
     if game.player.invincible != 0 || e.state >= 98 {
         return;
     }
-    if game.world.solid_at(e.pos.x + 8.0, e.pos.y - 4.0) {
+    if game.world.solid_point_active(
+        Vec2::new(e.pos.x + 8.0, e.pos.y - 4.0),
+        CollisionPrecision::BoundingBox,
+        None,
+    ) {
         game.player.invincible = 30;
         game.player.data.insert("blink".into(), 30.0);
         game.player.vel.x = if game.player.pos.x < e.pos.x {

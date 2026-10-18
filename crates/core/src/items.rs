@@ -1090,7 +1090,7 @@ fn pick_up(game: &mut Game) {
             entity.value("canPickUp") != 0.0
                 && !game
                     .world
-                    .solid_at_except(entity.pos.x, entity.pos.y, entity.id)
+                    .solid_point_active(entity.pos, CollisionPrecision::BoundingBox, None)
         })
         .map(|entity| entity.id);
     if let Some(id) = nearest {
@@ -1146,10 +1146,16 @@ fn throw_item(game: &mut Game, id: u64, input: &InputFrame) {
     let ducking = player_is_ducking(&game.player);
     let throwing_bomb = game.world.entity(id).is_some_and(|e| e.object == "oBomb");
     let throwing_damsel = game.world.entity(id).is_some_and(|e| e.object == "oDamsel");
-    let overhead = game
-        .world
-        .solid_at_except(pos.x + facing * 8.0, pos.y - 10.0, id);
-    let wall = game.world.solid_at_except(pos.x + facing * 8.0, pos.y, id);
+    let overhead = game.world.solid_point_active(
+        Vec2::new(pos.x + facing * 8.0, pos.y - 10.0),
+        CollisionPrecision::BoundingBox,
+        None,
+    );
+    let wall = game.world.solid_point_active(
+        Vec2::new(pos.x + facing * 8.0, pos.y),
+        CollisionPrecision::BoundingBox,
+        None,
+    );
     if throwing_damsel {
         if let Some(entity) = game.world.entity_mut(id) {
             entity.state = 2;
@@ -1563,7 +1569,7 @@ fn advance_item_body(game: &mut Game, entity: &mut Entity) -> bool {
     let mut hit_y = false;
     let embedded = game
         .world
-        .solid_at_except(entity.pos.x, entity.pos.y, entity.id);
+        .solid_point_active(entity.pos, CollisionPrecision::BoundingBox, None);
     if embedded && !overrides_parent {
         let left = body_contact(&game.world, entity, -1, 0);
         let right = body_contact(&game.world, entity, 1, 0);
@@ -1658,7 +1664,7 @@ fn advance_item_body(game: &mut Game, entity: &mut Entity) -> bool {
         let jar_embedded = if game.generation_revision == crate::GenerationRevision::SourceClassicV2
         {
             game.world
-                .solid_at_except(entity.pos.x, entity.pos.y, entity.id)
+                .solid_point_active(entity.pos, CollisionPrecision::BoundingBox, None)
         } else {
             embedded
         };

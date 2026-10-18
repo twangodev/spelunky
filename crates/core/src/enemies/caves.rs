@@ -13,7 +13,7 @@
 //! `Alarm 0.xml`/`Alarm 1.xml` and `Step.xml` define recovery and drowning.
 
 use super::{bounds, center, move_body, move_body_preserving_velocity, steer_toward};
-use crate::{Entity, Game, PlayerState, Rect, Vec2, World};
+use crate::{CollisionPrecision, Entity, Game, PlayerState, Rect, Vec2, World};
 
 pub fn matches(object: &str) -> bool {
     matches!(
@@ -191,8 +191,11 @@ fn set_sprite(e: &mut Entity, sprite: &str) {
 }
 
 fn crushed(game: &Game, e: &Entity, offset: Vec2) -> bool {
-    game.world
-        .solid_point_except(Vec2::new(e.pos.x + offset.x, e.pos.y + offset.y), e.id)
+    game.world.solid_point_active(
+        Vec2::new(e.pos.x + offset.x, e.pos.y + offset.y),
+        CollisionPrecision::BoundingBox,
+        None,
+    )
 }
 
 // Native distance_to_object reads inclusive cached integer envelopes from
@@ -445,7 +448,11 @@ fn spider_death(game: &mut Game, e: &mut Entity, giant: bool) {
 fn hanging_spider(game: &mut Game, e: &mut Entity, giant: bool) {
     let half = if giant { 16.0 } else { 8.0 };
     let crush_y = if giant { 8.0 } else { 4.0 };
-    if game.world.solid_at(e.pos.x + half, e.pos.y + crush_y) {
+    if game.world.solid_point_active(
+        Vec2::new(e.pos.x + half, e.pos.y + crush_y),
+        CollisionPrecision::BoundingBox,
+        None,
+    ) {
         e.health = 0;
     }
     if e.health <= 0 {
@@ -455,7 +462,14 @@ fn hanging_spider(game: &mut Game, e: &mut Entity, giant: bool) {
     let beneath = distance_to_object(game, e, "oCharacter") < 90.0
         && game.player.pos.y > e.pos.y
         && (game.player.pos.x - (e.pos.x + half)).abs() < 8.0;
-    if (giant && e.health < 10) || !game.world.solid_at(e.pos.x, e.pos.y - 16.0) || beneath {
+    if (giant && e.health < 10)
+        || !game.world.solid_point_active(
+            Vec2::new(e.pos.x, e.pos.y - 16.0),
+            CollisionPrecision::BoundingBox,
+            None,
+        )
+        || beneath
+    {
         // Both hanging Step events create a fresh actor and copy only hp.
         // Reusing the ID would also incorrectly retain whip-hit bookkeeping.
         let id = game.spawn(if giant { "oGiantSpider" } else { "oSpider" }, e.pos);
@@ -489,9 +503,13 @@ fn side(world: &World, e: &Entity, direction: i8) -> bool {
 }
 
 fn floor_ahead(world: &World, e: &Entity, direction: i8) -> bool {
-    world.solid_at(
-        e.pos.x + if direction < 0 { -1.0 } else { 16.0 },
-        e.pos.y + 16.0,
+    world.solid_point_active(
+        Vec2::new(
+            e.pos.x + if direction < 0 { -1.0 } else { 16.0 },
+            e.pos.y + 16.0,
+        ),
+        CollisionPrecision::Precise,
+        Some(e.id),
     )
 }
 
@@ -538,12 +556,24 @@ fn snake(game: &mut Game, e: &mut Entity) {
         if !floor_ahead(&game.world, e, e.facing) {
             e.facing *= -1;
         }
-        let blocked_left =
-            !floor_ahead(&game.world, e, -1) || game.world.solid_at(e.pos.x - 1.0, e.pos.y);
-        let blocked_right =
-            !floor_ahead(&game.world, e, 1) || game.world.solid_at(e.pos.x + 16.0, e.pos.y);
+        let blocked_left = !floor_ahead(&game.world, e, -1)
+            || game.world.solid_point_active(
+                Vec2::new(e.pos.x - 1.0, e.pos.y),
+                CollisionPrecision::Precise,
+                Some(e.id),
+            );
+        let blocked_right = !floor_ahead(&game.world, e, 1)
+            || game.world.solid_point_active(
+                Vec2::new(e.pos.x + 16.0, e.pos.y),
+                CollisionPrecision::Precise,
+                Some(e.id),
+            );
         e.vel.x = if blocked_left && blocked_right {
-            e.facing = if game.world.solid_at(e.pos.x - 1.0, e.pos.y) {
+            e.facing = if game.world.solid_point_active(
+                Vec2::new(e.pos.x - 1.0, e.pos.y),
+                CollisionPrecision::Precise,
+                Some(e.id),
+            ) {
                 1
             } else {
                 -1
@@ -596,7 +626,11 @@ fn bat(game: &mut Game, e: &mut Entity) {
     }
     let body_center = center(e);
     let distance = body_center.distance(game.player.pos);
-    let ceiling = game.world.solid_at(e.pos.x + 8.0, e.pos.y - 1.0);
+    let ceiling = game.world.solid_point_active(
+        Vec2::new(e.pos.x + 8.0, e.pos.y - 1.0),
+        CollisionPrecision::BoundingBox,
+        None,
+    );
     if e.state == 0 {
         set_sprite(e, "sBatHang");
         if player_available(game)
