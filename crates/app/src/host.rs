@@ -18,14 +18,12 @@ use crate::{
 use spelunky_core::Area;
 use spelunky_core::{Game, GameEvent, RunState, SourceMusicCommand, SourceMusicState};
 use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
-use winit::window::Fullscreen;
 use winit::{
     application::ApplicationHandler,
     event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     keyboard::{KeyCode, PhysicalKey},
-    window::{Window, WindowId},
+    window::{Fullscreen, Window, WindowId},
 };
 
 const WHITE: [f32; 4] = [1.0, 0.95, 0.85, 1.0];
@@ -3367,7 +3365,9 @@ impl ApplicationHandler<UserEvent> for App {
         if self.window.is_some() {
             return;
         }
-        let attributes = Window::default_attributes().with_title("Spelunky Classic - Rust");
+        let attributes = Window::default_attributes()
+            .with_title("Spelunky Classic - Rust")
+            .with_fullscreen(startup_fullscreen_attribute(cfg!(target_arch = "wasm32")));
         #[cfg(not(target_arch = "wasm32"))]
         let attributes = attributes.with_inner_size(winit::dpi::LogicalSize::new(960., 720.));
         #[cfg(target_arch = "wasm32")]
@@ -3855,8 +3855,28 @@ fn focus_browser_canvas() {
 fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
     Viewport::from_surface(width, height).logical_pointer(x, y)
 }
+
+/// Classic starts fullscreen. Browsers require a user gesture, so web startup
+/// leaves the canvas in its already full-viewport layout and defers API entry.
+fn startup_fullscreen_attribute(browser_requires_gesture: bool) -> Option<Fullscreen> {
+    if browser_requires_gesture {
+        None
+    } else {
+        Some(Fullscreen::Borderless(None))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn startup_fullscreen_matches_classic_native_default_and_browser_gesture_rules() {
+        assert_eq!(
+            startup_fullscreen_attribute(false),
+            Some(winit::window::Fullscreen::Borderless(None))
+        );
+        assert_eq!(startup_fullscreen_attribute(true), None);
+    }
+
     #[test]
     fn about_controls_hint_shows_default_bomb_and_rope_bindings() {
         assert_eq!(ABOUT_CONTROL_HINT, "C CYCLE, A BOMB, S ROPE, F FLARE");
