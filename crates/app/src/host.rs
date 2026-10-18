@@ -168,6 +168,12 @@ fn audio_policy(
     }
 }
 
+/// Classic's playSound is keyed by a global resource, not an object position.
+/// Only an explicit SS_SetSoundPan call changes its per-resource stereo pan.
+fn source_sound_pan(_position: spelunky_core::Vec2) -> f32 {
+    0.0
+}
+
 pub fn run() -> Result<(), String> {
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()
@@ -1461,13 +1467,12 @@ impl App {
                             GameEvent::SoundPan { name, pan } => {
                                 self.audio.set_sound_pan(name, *pan)
                             }
-                            GameEvent::Sound { name, pos } => self
-                                .audio
-                                .play(name, ((pos.x - game.camera.x) / 320. * 2. - 1.) as f32),
-                            GameEvent::SoundIfIdle { name, pos } => self.audio.play_if_idle(
-                                name,
-                                ((pos.x - game.camera.x) / 320. * 2. - 1.) as f32,
-                            ),
+                            GameEvent::Sound { name, pos } => {
+                                self.audio.play(name, source_sound_pan(*pos))
+                            }
+                            GameEvent::SoundIfIdle { name, pos } => {
+                                self.audio.play_if_idle(name, source_sound_pan(*pos))
+                            }
                             GameEvent::Message(message) => {
                                 // Bare events are host notices, never source
                                 // assignments inferred from an unrelated timer.
@@ -1548,13 +1553,12 @@ impl App {
                             GameEvent::SoundPan { name, pan } => {
                                 self.audio.set_sound_pan(name, *pan)
                             }
-                            GameEvent::Sound { name, pos } => self
-                                .audio
-                                .play(name, ((pos.x - game.camera.x) / 320. * 2. - 1.) as f32),
-                            GameEvent::SoundIfIdle { name, pos } => self.audio.play_if_idle(
-                                name,
-                                ((pos.x - game.camera.x) / 320. * 2. - 1.) as f32,
-                            ),
+                            GameEvent::Sound { name, pos } => {
+                                self.audio.play(name, source_sound_pan(*pos))
+                            }
+                            GameEvent::SoundIfIdle { name, pos } => {
+                                self.audio.play_if_idle(name, source_sound_pan(*pos))
+                            }
                             _ => {}
                         }
                     }
@@ -3533,6 +3537,17 @@ mod tests {
                 mute_music: false,
             }
         );
+    }
+
+    #[test]
+    fn classic_global_sound_events_default_to_center_pan_at_any_object_position() {
+        for position in [
+            spelunky_core::Vec2::new(-1_000.0, 0.0),
+            spelunky_core::Vec2::new(0.0, 0.0),
+            spelunky_core::Vec2::new(1_000.0, 0.0),
+        ] {
+            assert_eq!(source_sound_pan(position), 0.0);
+        }
     }
 
     #[test]
