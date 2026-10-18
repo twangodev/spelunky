@@ -171,3 +171,48 @@ fn jungle_followup_piranha_npc_attack_water_probe_does_not_invent_solid_pause() 
     assert_eq!(fish.pos, Vec2::new(80.0, 80.0));
     assert_eq!(game.rng.state_bits(), source_rng.state_bits());
 }
+
+#[test]
+fn jungle_followup_piranha_nearest_tie_uses_source_family_order_after_storage_reorder() {
+    let mut game = Game::shell(23, RulesPreset::Classic);
+    game.world = World::new(24, 20, Area::Jungle, 5);
+    game.player.pos = Vec2::new(304.0, 128.0);
+    for x in 4..=8 {
+        game.world.set_tile(x, 5, "oWaterSwim");
+        game.world.set_tile(x, 6, "oBlock");
+    }
+
+    // Equal-distance Cavemen expose which active-family member
+    // instance_nearest returns. Register them in Classic creation order.
+    let first = game.world.spawn("oCaveman", Vec2::new(96.0, 80.0));
+    let second = game.world.spawn("oCaveman", Vec2::new(96.0, 80.0));
+    let fish = game.world.spawn("oPiranha", Vec2::new(96.0, 80.0));
+    game.step(&InputFrame::default());
+
+    for id in [first, second] {
+        let caveman = game.world.entity_mut(id).unwrap();
+        caveman.state = 0;
+        caveman.vel = Vec2::default();
+        caveman.data.insert("counter".into(), 100.0);
+        caveman.data.insert("sight_counter".into(), 100.0);
+    }
+    let fish_actor = game.world.entity_mut(fish).unwrap();
+    fish_actor.state = 0;
+    fish_actor.data.insert("bubble_timer".into(), 100.0);
+    assert_eq!(
+        crate::dispatcher::descendant_instances(&game, "oCaveman"),
+        [
+            crate::dispatcher::Instance::Entity(first),
+            crate::dispatcher::Instance::Entity(second)
+        ]
+    );
+
+    // Engine instance arrays retain their registration order while physical
+    // storage can be compacted/reordered independently.
+    game.world.entities.reverse();
+    game.step(&InputFrame::default());
+
+    let fish_actor = game.world.entity(fish).unwrap();
+    assert_eq!(fish_actor.state, 3);
+    assert_eq!(fish_actor.value("fish_target") as u64, first);
+}

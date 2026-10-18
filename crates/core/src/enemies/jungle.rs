@@ -4,8 +4,8 @@
 use super::event_bounds;
 use super::{center, move_body};
 #[cfg(test)]
-use crate::model::Rect;
-use crate::model::{Area, CollisionPrecision, Entity, Game, PlayerState, Vec2, World};
+use crate::model::PlayerState;
+use crate::model::{Area, CollisionPrecision, Entity, Game, Vec2, World};
 
 pub fn matches(object: &str) -> bool {
     matches!(
@@ -578,7 +578,7 @@ fn fish(game: &mut Game, e: &mut Entity) {
             }
             // Source independently checks an NPC after selecting the player;
             // a swimming NPC therefore takes priority over a nearby player.
-            if let Some(target) = fish_target(&game.world, e.pos) {
+            if let Some(target) = fish_target(game, e.pos) {
                 e.state = 3;
                 e.data.insert("fish_target".into(), target as f64);
             }
@@ -605,7 +605,7 @@ fn fish(game: &mut Game, e: &mut Entity) {
         }
         3 => {
             // instance_nearest is evaluated afresh every tick in the source.
-            let target = fish_target(&game.world, e.pos)
+            let target = fish_target(game, e.pos)
                 .and_then(|id| game.world.entity(id))
                 .map(|t| (t.id, Vec2::new(t.pos.x + 8.0, t.pos.y + 8.0)));
             if let Some((id, pos)) = target {
@@ -668,18 +668,46 @@ fn aim_fish(game: &mut Game, e: &mut Entity, target: Vec2) {
     };
 }
 
-fn fish_target(world: &World, pos: Vec2) -> Option<u64> {
+fn fish_target(game: &Game, pos: Vec2) -> Option<u64> {
     // Classic checks each family in this order, rather than choosing globally.
     for family in ["oCaveman", "oShopkeeper", "oHawkman", "oYeti"] {
-        let target = world
+        // instance_nearest follows the active native family array, not the
+        // current storage vector. Preserve that tie-break even after an
+        // activation/compaction has reordered World.entities. Newborns that
+        // have not entered the array yet append in their source birth order.
+        let instances = crate::dispatcher::descendant_instances(game, family);
+        let mut known = std::collections::HashSet::with_capacity(instances.len());
+        let mut candidates: Vec<_> = instances
+            .into_iter()
+            .filter_map(|instance| match instance {
+                crate::dispatcher::Instance::Entity(id) => {
+                    known.insert(id);
+                    game.world.entity(id)
+                }
+                _ => None,
+            })
+            .filter(|target| target.engine_active && crate::catalog::is_a(&target.object, family))
+            .collect();
+        let mut newborns: Vec<_> = game
+            .world
             .entities
             .iter()
-            .filter(|t| t.alive && crate::catalog::is_a(&t.object, family))
+            .filter(|target| {
+                target.alive
+                    && target.engine_active
+                    && !known.contains(&target.id)
+                    && crate::catalog::is_a(&target.object, family)
+            })
+            .collect();
+        newborns.sort_by_key(|target| target.creation_serial);
+        candidates.extend(newborns);
+        let target = candidates
+            .into_iter()
             .min_by(|a, b| a.pos.distance(pos).total_cmp(&b.pos.distance(pos)));
-        if let Some(t) = target {
-            if t.health > 0 {
-                return (t.value("swimming") != 0.0).then_some(t.id);
-            }
+        if let Some(target) = target
+            && target.health > 0
+        {
+            return (target.value("swimming") != 0.0).then_some(target.id);
         }
     }
     None
