@@ -1366,6 +1366,7 @@ mod tests {
         let mut g = game(14);
         let id = g.world.spawn("oSceptre", g.player.pos);
         g.player.held = Some(id);
+        g.world.entity_mut(id).unwrap().held = true;
         g.world.spawn("oGoldDoor", g.player.pos);
         tick(&mut g, &InputFrame::default());
         assert!(g.world.entity(id).is_some());
