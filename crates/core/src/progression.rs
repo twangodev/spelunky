@@ -409,6 +409,8 @@ fn ghost(game: &mut Game) {
     let elapsed = game.data.get("xtime").copied().unwrap_or(0.);
     if game.world.level <= 1
         || game.world.area == Area::Boss
+        // oGame Step explicitly suppresses both ghost branches in rLoadLevel.
+        || game.world.name == "rLoadLevel"
         || game.flags.contains("custom_level")
         || game.flags.contains("custom")
         || game.player.has("Crown")
@@ -1232,6 +1234,20 @@ mod tests {
             1
         );
     }
+
+    #[test]
+    fn actual_step_does_not_warn_or_spawn_ghost_in_load_room() {
+        let mut g = game(7);
+        g.world.name = "rLoadLevel".into();
+        g.data.insert("xtime".into(), 150030.);
+
+        g.step(&InputFrame::default());
+
+        assert!(!g.flags.contains("ghost_warning"));
+        assert!(!g.flags.contains("ghost_exists"));
+        assert!(!g.world.entities.iter().any(|e| e.object == "oGhost"));
+    }
+
     #[test]
     fn hedjet_suppresses_ghost() {
         let mut g = game(14);
