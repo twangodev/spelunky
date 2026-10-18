@@ -547,10 +547,12 @@ impl App {
         snapshot_exit_stats(self.game.as_ref(), &mut self.store.data);
         let _ = self.store.save();
         #[cfg(not(target_arch = "wasm32"))]
-        if let Err(error) = crate::editor_io::write_classic_stats_file(
-            &self.store.data.lifetime_stats.to_classic_report(),
-        ) {
-            eprintln!("Cannot write Classic stats report: {error}");
+        if self.store.may_write_classic_stats_report() {
+            if let Err(error) = crate::editor_io::write_classic_stats_file(
+                &self.store.data.lifetime_stats.to_classic_report(),
+            ) {
+                eprintln!("Cannot write Classic stats report: {error}");
+            }
         }
     }
     fn settings_changed(&mut self) {

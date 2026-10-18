@@ -342,6 +342,13 @@ impl Store {
         self.data.import_classic_stats_report(report)
     }
 
+    /// The native Classic report is derived from the loaded save. Do not
+    /// overwrite it when that save could not be read: `data` then contains a
+    /// fresh placeholder rather than the user's lifetime counters.
+    pub fn may_write_classic_stats_report(&self) -> bool {
+        !self.overwrite_blocked
+    }
+
     pub fn save(&mut self) -> Result<(), String> {
         if self.overwrite_blocked {
             return Err(self
@@ -523,6 +530,21 @@ mod tests {
             assert!(store.overwrite_blocked);
             assert!(store.warning.is_some());
         }
+    }
+
+    #[test]
+    fn unreadable_save_blocks_overwriting_the_legacy_stats_report_with_defaults() {
+        for result in [
+            Ok(Some("invalid".into())),
+            Ok(Some(r#"{"version":99}"#.into())),
+            Err("Storage access denied".into()),
+        ] {
+            let store = Store::from_read(result);
+            assert!(store.overwrite_blocked);
+            assert!(!store.may_write_classic_stats_report());
+        }
+
+        assert!(Store::from_read(Ok(None)).may_write_classic_stats_report());
     }
 
     #[test]
