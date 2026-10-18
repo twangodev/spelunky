@@ -340,9 +340,9 @@ fn collect_scarab(game: &mut Game, e: &mut Entity) {
     });
     game.sound("sndCoin", e.pos);
     e.alive = false;
-    // This Destroy event is entered synchronously from the character
-    // Collision event, so its `other` is the character that collected it.
-    destroyed_with_other(game, e, Some(game.player.pos));
+    // The GM8 instance_destroy function invokes Destroy with the retiring
+    // instance as both self and other, even when called from Collision.
+    destroyed_with_other(game, e, Some(e.pos));
 }
 
 fn destroy_emitter(game: &mut Game, e: &mut Entity) {
@@ -2990,16 +2990,16 @@ mod tests {
                     .filter(|e| e.object == "oFlareSpark")
                     .map(|e| e.pos)
                     .collect();
-                let character = g.player.pos;
+                let scarab = pos;
                 assert_eq!(sparks.len(), 3);
                 assert!(
                     sparks.iter().all(|p| {
-                        p.x >= character.x + 6.0
-                            && p.x <= character.x + 10.0
-                            && p.y >= character.y + 6.0
-                            && p.y <= character.y + 10.0
+                        p.x >= scarab.x + 6.0
+                            && p.x <= scarab.x + 10.0
+                            && p.y >= scarab.y + 6.0
+                            && p.y <= scarab.y + 10.0
                     }),
-                    "Destroy.xml positions collection sparks from Collision `other` at {character:?}: {sparks:?}"
+                    "nested instance_destroy binds Destroy `other` to the Scarab at {scarab:?}: {sparks:?}"
                 );
             }
             assert_eq!(g.player.money, 0);
