@@ -201,6 +201,11 @@ fn render_clock_running(
                 && game.is_some_and(|game| game.state == RunState::Dead)))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn native_window_is_presentable(focused: bool, occluded: bool, width: u32, height: u32) -> bool {
+    focused && !occluded && width > 0 && height > 0
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AudioPolicy {
     pause_all: bool,
@@ -4111,6 +4116,18 @@ impl ApplicationHandler<UserEvent> for App {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let presentable = self.window.as_ref().is_some_and(|window| {
+                let size = window.inner_size();
+                native_window_is_presentable(self.focused, self.occluded, size.width, size.height)
+            });
+            if !presentable {
+                // Classic freezes on focus loss. Do not keep requesting redraws
+                // or rebuilding scenes when the native surface cannot be seen.
+                // Focus/occlusion/resize events wake the loop and schedule the
+                // next frame when the window becomes presentable again.
+                event_loop.set_control_flow(ControlFlow::Wait);
+                return;
+            }
             let delay = (self.next_frame - self.now()).max(0.);
             if delay > 0. {
                 event_loop.set_control_flow(ControlFlow::WaitUntil(
@@ -9007,3 +9024,17 @@ mod message_compass_phase_tests {
 #[cfg(test)]
 #[path = "host_living_exit_pause_tests.rs"]
 mod living_exit_pause_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod native_window_scheduling_tests {
+    use super::native_window_is_presentable;
+
+    #[test]
+    fn hidden_or_zero_sized_native_window_does_not_schedule_frames() {
+        assert!(native_window_is_presentable(true, false, 1280, 720));
+        assert!(!native_window_is_presentable(false, false, 1280, 720));
+        assert!(!native_window_is_presentable(true, true, 1280, 720));
+        assert!(!native_window_is_presentable(true, false, 0, 720));
+        assert!(!native_window_is_presentable(true, false, 1280, 0));
+    }
+}
