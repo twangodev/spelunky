@@ -605,6 +605,8 @@ pub struct SceneBuffers {
     pub quads: Vec<DrawQuad>,
     sprites: Vec<DrawQuad>,
     layers: Vec<(f64, u8, u64, std::ops::Range<usize>)>,
+    source_entity_order: HashMap<u64, u64>,
+    source_player_order: Option<u64>,
     visible_ids: HashSet<u64>,
     hidden_ids: HashSet<u64>,
     hidden_indices: Vec<usize>,
@@ -636,6 +638,8 @@ pub fn game_scene_in_view_into(
         quads,
         sprites,
         layers,
+        source_entity_order,
+        source_player_order,
         visible_ids,
         hidden_ids,
         hidden_indices,
@@ -644,11 +648,36 @@ pub fn game_scene_in_view_into(
     quads.clear();
     sprites.clear();
     layers.clear();
+    source_entity_order.clear();
+    *source_player_order = None;
     visible_ids.clear();
     hidden_ids.clear();
     hidden_indices.clear();
     terrain_sprites.clear();
     let game = game.presentation();
+    // Classic draws the global active list after sorting it by depth. The
+    // stable sort keeps the list's instance order for depth ties, including
+    // instances appended by region reactivation. Reuse that per-frame rank as
+    // the renderer's tie key so scene collection order and birth IDs cannot
+    // reverse overlapping instances.
+    let mut source_rank = 0_u64;
+    for instance in game
+        .dispatcher
+        .active_order
+        .iter()
+        .chain(&game.dispatcher.inactive_order)
+    {
+        match instance {
+            spelunky_core::dispatcher::Instance::Player => {
+                *source_player_order = Some(source_rank);
+            }
+            spelunky_core::dispatcher::Instance::Entity(id) => {
+                source_entity_order.entry(*id).or_insert(source_rank);
+            }
+            spelunky_core::dispatcher::Instance::Terrain(_) => {}
+        }
+        source_rank = source_rank.saturating_add(1);
+    }
     let alpha = if game.flags.contains("render_discontinuity") {
         1.0
     } else if alpha.is_finite() {
@@ -802,7 +831,7 @@ pub fn game_scene_in_view_into(
         let depth = override_sprite
             .and_then(|(_, _, depth)| depth)
             .unwrap_or_else(|| definition.map_or(100, |def| def.depth));
-        layers.push((f64::from(depth), 0, index as u64, layer_start..layer.len()));
+        layers.push((f64::from(depth), 1, index as u64, layer_start..layer.len()));
     }
     for metadata in entities
         .clone()
@@ -859,7 +888,10 @@ pub fn game_scene_in_view_into(
         layers.push((
             f64::from(depth),
             0,
-            1_000_000 + metadata.id,
+            source_entity_order
+                .get(&metadata.id)
+                .copied()
+                .unwrap_or(1_000_000 + metadata.id),
             layer_start..layer.len(),
         ));
     }
@@ -1016,7 +1048,10 @@ pub fn game_scene_in_view_into(
         layers.push((
             f64::from(depth),
             0,
-            1_000_000 + entity.id,
+            source_entity_order
+                .get(&entity.id)
+                .copied()
+                .unwrap_or(1_000_000 + entity.id),
             layer_start..layer.len(),
         ));
     }
@@ -1134,7 +1169,12 @@ pub fn game_scene_in_view_into(
                 50.0
             }
         }) as i32;
-        layers.push((f64::from(depth), 0, u64::MAX, layer_start..layer.len()));
+        layers.push((
+            f64::from(depth),
+            0,
+            source_player_order.unwrap_or(u64::MAX),
+            layer_start..layer.len(),
+        ));
     }
     for (index, tile) in game.world.generated_graphic_tiles.iter().enumerate() {
         if let Some(quad) = generated_graphic_quad(&tile.graphic, atlas, camera, pixel_snap) {
@@ -1142,12 +1182,13 @@ pub fn game_scene_in_view_into(
             // identity. Finite equal-depth actors are emitted before graphics.
             let start = sprites.len();
             sprites.push(quad);
-            layers.push((tile.graphic.depth, 1, index as u64, start..sprites.len()));
+            layers.push((tile.graphic.depth, 2, index as u64, start..sprites.len()));
         }
     }
-    // Existing actor integer depths and tie keys retain their exact ordering.
-    // partial_cmp preserves finite equal signed zero; total_cmp would reorder it.
-    // This reconstructed Scene is not the complete native Draw traversal.
+    // The native merge draws the actor before an equal-depth terrain tile and
+    // leaves equal-depth actors in their stable active-list order. Graphics
+    // tiles follow both world layers at a depth tie. partial_cmp preserves
+    // finite equal signed zero; total_cmp would reorder it.
     layers.sort_by(|a, b| {
         b.0.partial_cmp(&a.0)
             .unwrap_or(std::cmp::Ordering::Equal)
@@ -5043,8 +5084,8 @@ mod tests {
             .unwrap();
         let branch_index = ordinary.iter().position(|q| q.uv == branch_uv).unwrap();
         assert!(
-            tile_index < branch_index,
-            "absent override keeps catalog depth and tile tie order"
+            branch_index < tile_index,
+            "Classic draws equal-depth actors before terrain tiles"
         );
     }
 
@@ -6280,3 +6321,7 @@ mod source_red_lamp_begin_tests;
 #[cfg(test)]
 #[path = "scene_generated_graphics_tests.rs"]
 mod generated_graphics_tests;
+
+#[cfg(test)]
+#[path = "scene_draw_order_tests.rs"]
+mod draw_order_tests;
