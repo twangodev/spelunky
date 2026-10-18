@@ -553,10 +553,91 @@ mod tests {
         assert!(report.contains(" ???        | 0\n"));
         assert!(report.contains(" MONKEY     | 2\n"));
         assert!(report.ends_with("------------+------------\n TOTAL      | 3\n"));
+        let scalar_order = [
+            "CRATES OPENED:",
+            "CHESTS OPENED:",
+            "IDOLS GRABBED:",
+            "IDOLS CONVERTED:",
+            "DAMSELS GRABBED:",
+            "KISSES BOUGHT:",
+            "DAMSELS BOUGHT:",
+            "DAMSELS SAVED:",
+            "DAMSELS KILLED:",
+            "ITEMS BOUGHT:",
+            "ITEMS STOLEN:",
+            "DICE GAMES PLAYED:",
+            "DICE GAMES WON:",
+            "DICE GAMES LOST:",
+        ];
+        let lines: Vec<_> = report.lines().collect();
+        let scalar_positions: Vec<_> = scalar_order
+            .iter()
+            .map(|label| {
+                lines
+                    .iter()
+                    .position(|line| line.starts_with(label))
+                    .expect("source scalar label is written")
+            })
+            .collect();
+        assert!(scalar_positions.windows(2).all(|pair| pair[0] < pair[1]));
+        let table_order = [
+            "LEVEL        DEATHS",
+            "ENEMY        DEATHS",
+            "MISC         DEATHS",
+            "ENEMY        KILLS",
+        ];
+        let table_positions: Vec<_> = table_order
+            .iter()
+            .map(|heading| {
+                lines
+                    .iter()
+                    .position(|line| line == heading)
+                    .expect("source table heading is written")
+            })
+            .collect();
+        assert!(table_positions.windows(2).all(|pair| pair[0] < pair[1]));
         assert_eq!(
             LifetimeStats::from_classic_report(&report).unwrap(),
             expected
         );
+    }
+
+    #[test]
+    fn classic_report_round_trips_every_source_counter_and_table_row() {
+        let mut stats = LifetimeStats {
+            total_crates: 1_001,
+            total_chests: 1_002,
+            idols_grabbed: 1_003,
+            idols_converted: 1_004,
+            damsels_grabbed: 1_005,
+            kisses_bought: 1_006,
+            damsels_bought: 1_007,
+            damsels_saved_total: 1_008,
+            damsels_killed_total: 1_009,
+            items_bought: 1_010,
+            items_stolen: 1_011,
+            dice_games_played: 1_012,
+            dice_games_won: 1_013,
+            dice_games_lost: 1_014,
+            total_monkey_kills: 1_015,
+            ..LifetimeStats::default()
+        };
+        for (index, value) in stats.level_deaths.iter_mut().enumerate() {
+            *value = 2_000 + index as u64;
+        }
+        for (index, value) in stats.enemy_deaths.iter_mut().enumerate() {
+            *value = 3_000 + index as u64;
+        }
+        for (index, value) in stats.misc_deaths.iter_mut().enumerate() {
+            *value = 4_000 + index as u64;
+        }
+        for (index, value) in stats.enemy_kills.iter_mut().enumerate() {
+            *value = 5_000 + index as u64;
+        }
+
+        let report = stats.to_classic_report();
+
+        assert_eq!(LifetimeStats::from_classic_report(&report).unwrap(), stats);
     }
 
     #[test]

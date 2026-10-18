@@ -61,6 +61,48 @@ enum UserEvent {
     StatsImportError(String),
 }
 
+fn lifetime_stats_summary_lines(stats: &spelunky_core::statistics::LifetimeStats) -> Vec<String> {
+    let sum = |values: &[u64]| {
+        values
+            .iter()
+            .fold(0_u64, |total, value| total.saturating_add(*value))
+    };
+    vec![
+        format!(
+            "CRATES OPENED: {}   CHESTS OPENED: {}",
+            stats.total_crates, stats.total_chests
+        ),
+        format!(
+            "IDOLS GRABBED: {}   IDOLS CONVERTED: {}",
+            stats.idols_grabbed, stats.idols_converted
+        ),
+        format!("DAMSELS GRABBED: {}", stats.damsels_grabbed),
+        format!("KISSES BOUGHT: {}", stats.kisses_bought),
+        format!("DAMSELS BOUGHT: {}", stats.damsels_bought),
+        format!("DAMSELS SAVED: {}", stats.damsels_saved_total),
+        format!("DAMSELS KILLED: {}", stats.damsels_killed_total),
+        format!(
+            "ITEMS BOUGHT: {}   ITEMS STOLEN: {}",
+            stats.items_bought, stats.items_stolen
+        ),
+        format!("DICE GAMES PLAYED: {}", stats.dice_games_played),
+        format!(
+            "DICE GAMES WON: {}   DICE GAMES LOST: {}",
+            stats.dice_games_won, stats.dice_games_lost
+        ),
+        format!(
+            "LEVEL DEATHS: {}   ENEMY DEATHS: {}",
+            sum(&stats.level_deaths),
+            sum(&stats.enemy_deaths)
+        ),
+        format!(
+            "MISC DEATHS: {}   ENEMY KILLS: {}",
+            sum(&stats.misc_deaths),
+            stats.total_enemy_kills()
+        ),
+    ]
+}
+
 /// Presentation history becomes usable only after a tick in the current room.
 /// A frame sampled before a menu action must not advance a newly resumed game.
 struct HostTiming {
@@ -2255,11 +2297,6 @@ impl App {
             }
             Screen::Stats => {
                 let stats = &self.store.data.lifetime_stats;
-                let sum = |values: &[u64]| {
-                    values
-                        .iter()
-                        .fold(0_u64, |total, value| total.saturating_add(*value))
-                };
                 text(
                     quads,
                     atlas,
@@ -2269,52 +2306,14 @@ impl App {
                     1.35,
                     GOLD,
                 );
-                for (index, line) in [
-                    format!(
-                        "CRATES OPENED: {}   CHESTS OPENED: {}",
-                        stats.total_crates, stats.total_chests
-                    ),
-                    format!(
-                        "IDOLS GRABBED: {}   CONVERTED: {}",
-                        stats.idols_grabbed, stats.idols_converted
-                    ),
-                    format!(
-                        "DAMSELS GRABBED: {}   SAVED: {}",
-                        stats.damsels_grabbed, stats.damsels_saved_total
-                    ),
-                    format!(
-                        "DAMSELS KILLED: {}   KISSES BOUGHT: {}",
-                        stats.damsels_killed_total, stats.kisses_bought
-                    ),
-                    format!(
-                        "ITEMS BOUGHT: {}   STOLEN: {}",
-                        stats.items_bought, stats.items_stolen
-                    ),
-                    format!(
-                        "DICE PLAYED: {}   WON: {}   LOST: {}",
-                        stats.dice_games_played, stats.dice_games_won, stats.dice_games_lost
-                    ),
-                    format!(
-                        "LEVEL DEATHS: {}   ENEMY DEATHS: {}",
-                        sum(&stats.level_deaths),
-                        sum(&stats.enemy_deaths)
-                    ),
-                    format!(
-                        "MISC DEATHS: {}   ENEMY KILLS: {}",
-                        sum(&stats.misc_deaths),
-                        stats.total_enemy_kills()
-                    ),
-                ]
-                .iter()
-                .enumerate()
-                {
+                for (index, line) in lifetime_stats_summary_lines(stats).iter().enumerate() {
                     text(
                         quads,
                         atlas,
                         line,
                         8.,
-                        38. + index as f32 * 11.,
-                        0.72,
+                        30. + index as f32 * 8.5,
+                        0.66,
                         WHITE,
                     );
                 }
@@ -4235,6 +4234,50 @@ fn startup_fullscreen_attribute(browser_requires_gesture: bool) -> Option<Fullsc
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lifetime_stats_panel_shows_every_source_scalar_in_order_and_table_totals() {
+        let stats = spelunky_core::statistics::LifetimeStats {
+            enemy_kills: [4; 22],
+            enemy_deaths: [2; 24],
+            level_deaths: [1; 16],
+            misc_deaths: [3; 12],
+            total_crates: 1,
+            total_chests: 2,
+            idols_grabbed: 3,
+            idols_converted: 4,
+            damsels_grabbed: 5,
+            kisses_bought: 6,
+            damsels_bought: 7,
+            damsels_saved_total: 8,
+            damsels_killed_total: 9,
+            items_bought: 10,
+            items_stolen: 11,
+            dice_games_played: 12,
+            dice_games_won: 13,
+            dice_games_lost: 14,
+            total_monkey_kills: 15,
+        };
+
+        assert_eq!(
+            lifetime_stats_summary_lines(&stats),
+            [
+                "CRATES OPENED: 1   CHESTS OPENED: 2",
+                "IDOLS GRABBED: 3   IDOLS CONVERTED: 4",
+                "DAMSELS GRABBED: 5",
+                "KISSES BOUGHT: 6",
+                "DAMSELS BOUGHT: 7",
+                "DAMSELS SAVED: 8",
+                "DAMSELS KILLED: 9",
+                "ITEMS BOUGHT: 10   ITEMS STOLEN: 11",
+                "DICE GAMES PLAYED: 12",
+                "DICE GAMES WON: 13   DICE GAMES LOST: 14",
+                "LEVEL DEATHS: 16   ENEMY DEATHS: 48",
+                "MISC DEATHS: 36   ENEMY KILLS: 103",
+            ]
+            .map(str::to_owned)
+        );
+    }
+
     #[test]
     fn startup_fullscreen_matches_classic_native_default_and_browser_gesture_rules() {
         assert_eq!(

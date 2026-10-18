@@ -275,7 +275,7 @@ impl Store {
     pub fn load() -> Self {
         let stored = read();
         #[cfg(not(target_arch = "wasm32"))]
-        let should_check_classic_stats = matches!(&stored, Ok(None));
+        let should_check_classic_stats = should_import_classic_stats(&stored);
         #[cfg(not(target_arch = "wasm32"))]
         let legacy = if should_check_classic_stats {
             read_classic_stats_file()
@@ -316,9 +316,9 @@ impl Store {
         stored: Result<Option<String>, String>,
         legacy: Result<Option<String>, String>,
     ) -> (Self, bool) {
-        let stored_is_missing = matches!(&stored, Ok(None));
+        let should_import = should_import_classic_stats(&stored);
         let mut store = Self::from_read(stored);
-        if !stored_is_missing || store.overwrite_blocked {
+        if !should_import || store.overwrite_blocked {
             return (store, false);
         }
         let Ok(Some(report)) = legacy else {
@@ -376,6 +376,34 @@ impl Store {
         self.data = SaveData::default();
         self.overwrite_blocked = false;
         self.save()
+    }
+}
+
+/// A Classic stats report is the migration source for new profiles and Rust
+/// saves written before lifetime counters were added. A current save that has
+/// the field (even when all values are zero) remains authoritative.
+fn should_import_classic_stats(stored: &Result<Option<String>, String>) -> bool {
+    match stored {
+        Ok(None) => true,
+        Ok(Some(json)) => {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+                return false;
+            };
+            let Some(object) = value.as_object() else {
+                return false;
+            };
+            let version = object
+                .get("version")
+                .map(serde_json::Value::as_u64)
+                .unwrap_or(Some(0));
+            version.is_some_and(|version| version <= u64::from(SAVE_VERSION))
+                && !object.contains_key("lifetime_stats")
+                && object
+                    .get("classic_stats_imported")
+                    .and_then(serde_json::Value::as_bool)
+                    != Some(true)
+        }
+        Err(_) => false,
     }
 }
 
@@ -1016,6 +1044,56 @@ mod tests {
         let mut reopened = reopened;
         assert!(reopened.import_classic_stats(&legacy_report).is_err());
         assert_eq!(reopened.data.lifetime_stats, legacy_stats);
+    }
+
+    #[test]
+    fn classic_stats_migrate_into_older_rust_saves_without_lifetime_stats() {
+        let mut legacy_stats = spelunky_core::statistics::LifetimeStats::default();
+        legacy_stats.total_crates = 41;
+        legacy_stats.damsels_bought = 7;
+        legacy_stats.enemy_kills[8] = 3;
+        legacy_stats.total_monkey_kills = 2;
+        let legacy_report = legacy_stats.to_classic_report();
+        let old_save = r#"{"version":1,"first_time":false,"unlocks":["old-unlock"]}"#;
+
+        let (migrated, imported) = Store::from_read_and_classic_stats(
+            Ok(Some(old_save.into())),
+            Ok(Some(legacy_report.clone())),
+        );
+
+        assert!(imported);
+        assert!(migrated.data.classic_stats_imported);
+        assert_eq!(migrated.data.lifetime_stats, legacy_stats);
+        assert!(!migrated.data.first_time);
+        assert!(migrated.data.unlocks.contains("old-unlock"));
+        let saved = SaveData::from_json(&migrated.data.to_json().unwrap()).unwrap();
+        assert_eq!(saved.lifetime_stats, legacy_stats);
+        assert!(saved.classic_stats_imported);
+
+        let current_stats = spelunky_core::statistics::LifetimeStats::default();
+        let current_save = SaveData {
+            lifetime_stats: current_stats.clone(),
+            ..SaveData::default()
+        }
+        .to_json()
+        .unwrap();
+        let (current, imported) =
+            Store::from_read_and_classic_stats(Ok(Some(current_save)), Ok(Some(legacy_report)));
+        assert!(!imported);
+        assert_eq!(current.data.lifetime_stats, current_stats);
+        assert!(!current.data.classic_stats_imported);
+
+        let (future, imported) = Store::from_read_and_classic_stats(
+            Ok(Some(r#"{"version":999}"#.into())),
+            Ok(Some(legacy_stats.to_classic_report())),
+        );
+        assert!(!imported);
+        assert!(future.overwrite_blocked);
+        assert!(!future.may_write_classic_stats_report());
+        assert_eq!(
+            future.data.lifetime_stats,
+            spelunky_core::statistics::LifetimeStats::default()
+        );
     }
 
     #[test]
