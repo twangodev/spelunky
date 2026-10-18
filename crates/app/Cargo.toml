@@ -16,7 +16,7 @@ bytemuck = { version = "1", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-pollster = "0.4"
+pollster = "1.0"
 rodio = { version = "0.21", default-features = false, features = ["playback", "vorbis", "wav"] }
 gilrs = "0.11"
 
