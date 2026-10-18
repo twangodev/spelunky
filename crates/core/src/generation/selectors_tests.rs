@@ -3,7 +3,7 @@
 //! script anchors below refer to references/classic-1.1/Scripts/Level Generation.
 //! Public canonical Rng supplies draws; no independent GM8 arithmetic is claimed.
 use super::{
-    Features,
+    Features, GenerationContext, GenerationState, generate_campaign_result,
     selectors::{self, Context, Selection},
 };
 use crate::{Area, Game, Rng, RulesPreset, Vec2, World};
@@ -765,33 +765,40 @@ fn source_yeti_depth_eager_half_third_and_live_king_queries() {
 
 #[test]
 fn source_selector_trace_at_actual_next_level_boundary() {
-    // Normal Game APIs, without forcing a new helper or synthetic room records.
+    // Exercise ordinary transitions through the real Game API. The Market
+    // scenario uses the persistent genBlackMarket request; per-room special
+    // flags are cleared at this boundary. Pit forcing is covered separately
+    // by the target-level generation entry point below.
     // Trace RNG starts after previous room stamping and ends before alternatives.
     let scenarios = [
-        (1, None),
-        (5, None),
-        (9, None),
-        (13, None),
-        (16, None),
-        (5, Some("black_market")),
-        (9, Some("yeti_lair")),
-        (13, Some("sacrifice_pit")),
+        (1, false),
+        (5, false),
+        (9, false),
+        (13, false),
+        (16, false),
+        (5, true),
     ];
-    let mut seen = BTreeSet::new();
-    for (level, forced) in scenarios {
+    for (level, request_black_market) in scenarios {
         for seed in [0, 1, 42, 127] {
             let mut game = Game::shell(seed, RulesPreset::Classic);
             game.world.level = level - 1;
             game.flags.insert("no_dark_level".into());
-            if let Some(name) = forced {
-                game.flags.insert(name.into());
+            if request_black_market {
+                // This run-persistent source flag survives next_level's
+                // per-room cleanup and selects the target Jungle layout.
+                game.flags.insert("genBlackMarket".into());
             }
             selectors::begin_trace();
             game.next_level();
+            if request_black_market {
+                assert_eq!(game.world.name, "Black Market");
+            }
             let rows = selectors::take_trace();
             assert!(!rows.is_empty(), "next_level must reach the real selector");
+            if request_black_market {
+                assert!(rows.iter().all(|t| t.script_name == "scrRoomGenMarket"));
+            }
             for t in rows {
-                seen.insert(t.script_name.clone());
                 let i = Input {
                     script: &t.script_name,
                     path: t.path,
@@ -808,17 +815,60 @@ fn source_selector_trace_at_actual_next_level_boundary() {
                 assert_eq!(t.selection, oracle(&mut p, i, &mut f, &t.flags));
                 same_rng(&t.rng_after, &p.rng);
                 assert_eq!(t.features_after, f);
-                if forced == Some("sacrifice_pit") {
-                    assert!(t.features_before.idol && t.features_before.damsel);
-                }
             }
         }
     }
-    for script in SCRIPTS {
-        assert!(
-            seen.contains(script),
-            "missing natural API coverage: {script}"
+}
+
+#[test]
+fn source_selector_trace_for_selected_target_level_specials() {
+    // The generation entry point receives a selected special destination for
+    // the target room. Setting the flag before Game::next_level would be stale:
+    // that transition clears specials belonging to the previous room first.
+    for (level, flag, expected_name, expected_script) in [
+        (9, "yeti_lair", "Yeti Lair", "scrRoomGenYeti"),
+        (14, "sacrifice_pit", "Sacrifice Pit", "scrRoomGen4"),
+    ] {
+        let mut rng = Rng::new(42);
+        let mut state = GenerationState::fresh(&rng);
+        let flags = BTreeSet::from(["no_dark_level".into(), flag.into()]);
+        selectors::begin_trace();
+        let generated = generate_campaign_result(
+            &mut rng,
+            level,
+            &flags,
+            GenerationContext::default(),
+            &mut state,
         );
+        let rows = selectors::take_trace();
+        assert_eq!(generated.world.name, expected_name);
+        assert!(
+            !rows.is_empty(),
+            "target-level generation must reach selectors"
+        );
+
+        for t in rows {
+            assert_eq!(t.script_name, expected_script);
+            if flag == "sacrifice_pit" {
+                assert!(t.features_before.idol && t.features_before.damsel);
+            }
+            let i = Input {
+                script: &t.script_name,
+                path: t.path,
+                above: t.above,
+                start: t.start,
+                end: t.end,
+                col: t.col,
+                row: t.row,
+                level: t.level,
+                king: t.king_present,
+            };
+            let mut p = Program::new(&t.rng_before);
+            let mut f = t.features_before.clone();
+            assert_eq!(t.selection, oracle(&mut p, i, &mut f, &t.flags));
+            same_rng(&t.rng_after, &p.rng);
+            assert_eq!(t.features_after, f);
+        }
     }
 }
 
