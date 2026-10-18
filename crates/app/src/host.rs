@@ -5703,8 +5703,8 @@ mod tests {
         assert_eq!(snapshot["rendered"]["x"], 97.);
         assert_eq!(snapshot["rendered"]["screenX"], 16.);
         assert_eq!(snapshot["rendered"]["screenY"], 18.);
-        assert_eq!(snapshot["player"]["bombs"], 2);
-        assert_eq!(snapshot["player"]["ropes"], 3);
+        assert_eq!(snapshot["player"]["bombs"], 2.0);
+        assert_eq!(snapshot["player"]["ropes"], 3.0);
         assert_eq!(snapshot["money"], 1234);
         assert_eq!(snapshot["world"]["name"], game.world.name);
         assert_eq!(snapshot["world"]["width"], game.world.width);
