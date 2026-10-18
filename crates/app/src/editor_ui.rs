@@ -136,7 +136,7 @@ impl EditorUi {
     }
 
     pub fn load(&mut self, name: &str, source: &str) -> Result<(), String> {
-        let level = Level::parse(source)?;
+        let level = Level::parse_for_editor(source)?;
         let starting_inventory = raw_starting_inventory(source)?;
         let name = file_name(name)?;
         let mut state = EditorState::with_source_rng(
@@ -403,8 +403,14 @@ impl EditorUi {
     }
 
     fn playtest(&mut self) -> EditorCommand {
+        let starting_inventory = match self.starting_inventory_values() {
+            Ok(values) => values,
+            Err(error) => {
+                self.status = error;
+                return EditorCommand::None;
+            }
+        };
         let document = self.state.document();
-        let starting_inventory = self.starting_inventory_values();
         self.play_snapshot = Some((document.clone(), self.starting_inventory.clone()));
         EditorCommand::Play(EditorPlay {
             level: document,
@@ -426,13 +432,12 @@ impl EditorUi {
         lines.join("\n")
     }
 
-    fn starting_inventory_values(&self) -> [f64; 3] {
-        std::array::from_fn(|index| {
-            self.starting_inventory[index]
-                .trim()
-                .parse::<f64>()
-                .expect("parsed custom level inventory is finite")
-        })
+    fn starting_inventory_values(&self) -> Result<[f64; 3], String> {
+        Ok([
+            spelunky_core::level::source_real(&self.starting_inventory[0])?,
+            spelunky_core::level::source_real(&self.starting_inventory[1])?,
+            spelunky_core::level::source_real(&self.starting_inventory[2])?,
+        ])
     }
 
     pub fn can_playtest_action(&self) -> bool {
@@ -582,30 +587,34 @@ impl EditorUi {
                         }
                     }
                     Field::Life | Field::Bombs | Field::Ropes => {
-                        match entry.value.trim().parse::<f64>() {
-                            Err(_) => Err("ENTER A NUMBER".to_owned()),
-                            Ok(value) if !value.is_finite() => {
-                                Err("ENTER A FINITE NUMBER".to_owned())
-                            }
-                            Ok(value) => {
-                                // The editor retains this raw value for saving and
-                                // test play. Ordinary loading floors and clamps it.
-                                match field {
-                                    Field::Life => {
-                                        self.starting_inventory[0] = entry.value.clone();
+                        if entry.value.is_empty() {
+                            Err("STARTING VALUE CANNOT BE EMPTY".to_owned())
+                        } else {
+                            // Classic accepts nonempty text here and keeps it
+                            // raw. F5 later calls real() directly; normal level
+                            // loading also floors and clamps the result.
+                            let value = spelunky_core::level::source_real(&entry.value).ok();
+                            match field {
+                                Field::Life => {
+                                    self.starting_inventory[0] = entry.value.clone();
+                                    if let Some(value) = value {
                                         next.starting_life = value.floor().clamp(1.0, 99.0) as i32;
                                     }
-                                    Field::Bombs => {
-                                        self.starting_inventory[1] = entry.value.clone();
+                                }
+                                Field::Bombs => {
+                                    self.starting_inventory[1] = entry.value.clone();
+                                    if let Some(value) = value {
                                         next.starting_bombs = value.floor().clamp(0.0, 99.0) as i32;
                                     }
-                                    _ => {
-                                        self.starting_inventory[2] = entry.value.clone();
+                                }
+                                _ => {
+                                    self.starting_inventory[2] = entry.value.clone();
+                                    if let Some(value) = value {
                                         next.starting_ropes = value.floor().clamp(0.0, 99.0) as i32;
                                     }
                                 }
-                                Ok(())
                             }
+                            Ok(())
                         }
                     }
                     _ => unreachable!(),
@@ -1479,6 +1488,59 @@ mod tests {
         assert_eq!(Level::parse(&saved).unwrap().sign_message(0), "hello");
         ui.key(KeyCode::KeyZ, None, true);
         assert_eq!(ui.state.level.sign_message(0), "");
+    }
+
+    #[test]
+    fn source_inventory_fields_keep_invalid_text_and_report_real_error_on_f5() {
+        let mut ui = EditorUi::new();
+        for (field, initial, key, typed) in [
+            (Field::Life, "4", KeyCode::KeyA, "A"),
+            (Field::Bombs, "4", KeyCode::KeyB, "B"),
+            (Field::Ropes, "4", KeyCode::KeyC, "C"),
+        ] {
+            ui.begin(field, initial.into());
+            ui.key(KeyCode::Backspace, None, false);
+            ui.key(key, Some(typed), false);
+            ui.key(KeyCode::Enter, None, false);
+        }
+
+        let text = ui.document_text();
+        let lines: Vec<_> = text.lines().collect();
+        assert_eq!(&lines[34..37], &["A", "B", "C"]);
+        assert!(
+            Level::parse(&text).is_err(),
+            "normal gameplay loading converts and rejects malformed metadata"
+        );
+        assert!(matches!(
+            ui.key(KeyCode::F5, None, false),
+            EditorCommand::None
+        ));
+        assert_eq!(ui.status, "Error in function real().");
+
+        let mut reloaded = EditorUi::new();
+        reloaded.load("non-numeric.lvl", &text).unwrap();
+        assert_eq!(
+            &reloaded.document_text().lines().collect::<Vec<_>>()[34..37],
+            &["A", "B", "C"],
+            "the editor preserves source text through save/load"
+        );
+    }
+
+    #[test]
+    fn source_empty_inventory_strings_convert_to_zero_for_editor_testplay() {
+        let mut lines: Vec<String> = Level::default()
+            .to_text()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        lines[34..37].fill(String::new());
+        let mut ui = EditorUi::new();
+        ui.load("empty-inventory.lvl", &lines.join("\n")).unwrap();
+
+        let EditorCommand::Play(test) = ui.key(KeyCode::F5, None, false) else {
+            panic!("empty strings convert to zero in the source real() function");
+        };
+        assert_eq!(test.starting_inventory, [0.0, 0.0, 0.0]);
     }
 
     #[test]

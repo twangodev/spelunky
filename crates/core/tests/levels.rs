@@ -74,6 +74,25 @@ fn source_inventory_floors_and_clamps() {
         (1, 99, 0)
     );
     assert!(Level::parse(&text.replace("999", "NaN")).is_err());
+
+    let empty_inventory = old_level("").replace("\n4\n4\n4\n", "\n\n\n\n");
+    let level = Level::parse(&empty_inventory).unwrap();
+    assert_eq!(
+        (
+            level.starting_life,
+            level.starting_bombs,
+            level.starting_ropes
+        ),
+        (1, 0, 0),
+        "GM8 empty real conversion returns zero before ordinary load applies its clamps"
+    );
+
+    let malformed_inventory = old_level("").replace("\n4\n4\n4\n", "\n12A\n4\n4\n");
+    assert_eq!(
+        Level::parse(&malformed_inventory).unwrap_err(),
+        "Error in function real()."
+    );
+    assert!(Level::parse_for_editor(&malformed_inventory).is_ok());
 }
 
 #[test]

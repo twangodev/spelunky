@@ -38,6 +38,21 @@ impl Default for Level {
 
 impl Level {
     pub fn parse(text: &str) -> Result<Self, String> {
+        Self::parse_with_editor_inventory(text, false)
+    }
+
+    /// Parse a level for editing, where the source editor keeps starting
+    /// inventory fields raw until test play or ordinary gameplay loading.
+    /// `oLoadLevel` calls `scrLoadLevel(-1)` when opening the level editor, so
+    /// invalid `real()` conversions do not run on this path.
+    pub fn parse_for_editor(text: &str) -> Result<Self, String> {
+        Self::parse_with_editor_inventory(text, true)
+    }
+
+    fn parse_with_editor_inventory(
+        text: &str,
+        allow_invalid_inventory: bool,
+    ) -> Result<Self, String> {
         if text.len() > MAX_LEVEL_BYTES {
             return Err("Level exceeds the 4 MiB import limit".into());
         }
@@ -66,9 +81,12 @@ impl Level {
         }
         level.author = lines[32].into();
         level.music = lines[33].into();
-        level.starting_life = parse_inventory(lines[34], "life", 1)?;
-        level.starting_bombs = parse_inventory(lines[35], "bombs", 0)?;
-        level.starting_ropes = parse_inventory(lines[36], "ropes", 0)?;
+        level.starting_life =
+            parse_inventory_for_mode(lines[34], 1, level.starting_life, allow_invalid_inventory)?;
+        level.starting_bombs =
+            parse_inventory_for_mode(lines[35], 0, level.starting_bombs, allow_invalid_inventory)?;
+        level.starting_ropes =
+            parse_inventory_for_mode(lines[36], 0, level.starting_ropes, allow_invalid_inventory)?;
         level.next_level = lines[37].into();
         let mut cursor = 38;
         if lines[cursor..].iter().any(|line| !line.is_empty()) {
@@ -310,15 +328,42 @@ impl Level {
 fn one_line(text: &str) -> String {
     text.replace(['\r', '\n'], " ")
 }
-fn parse_inventory(text: &str, name: &str, min: i32) -> Result<i32, String> {
-    let number: f64 = text
-        .trim()
-        .parse()
-        .map_err(|_| format!("Invalid starting {name}: {text:?}"))?;
-    if !number.is_finite() {
-        return Err(format!("Starting {name} must be finite"));
+/// Converts editor metadata using the behavior of the bundled GM8 runtime.
+/// Empty and whitespace-only input becomes zero; malformed nonempty text raises
+/// the runtime's `real()` conversion error. The bundled GM8.0 RC executable's
+/// `real()` wrapper at VA `0x551200` establishes this behavior.
+pub fn source_real(text: &str) -> Result<f64, String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(0.0);
     }
+    let number = text
+        .parse::<f64>()
+        .map_err(|_| "Error in function real().".to_owned())?;
+    if !number.is_finite() {
+        return Err("Error in function real().".to_owned());
+    }
+    Ok(number)
+}
+
+fn parse_inventory(text: &str, min: i32) -> Result<i32, String> {
+    let number = source_real(text)?;
     Ok(number.floor().clamp(f64::from(min), 99.0) as i32)
+}
+
+fn parse_inventory_for_mode(
+    text: &str,
+    min: i32,
+    editor_fallback: i32,
+    allow_invalid_inventory: bool,
+) -> Result<i32, String> {
+    match parse_inventory(text, min) {
+        Ok(value) => Ok(value),
+        // The editor separately preserves and displays this raw text; its
+        // numeric Level fields are only placeholders until F5 or game load.
+        Err(_) if allow_invalid_inventory => Ok(editor_fallback),
+        Err(error) => Err(error),
+    }
 }
 fn parse_count(text: &str, name: &str) -> Result<usize, String> {
     let count: usize = text
