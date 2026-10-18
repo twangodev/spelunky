@@ -17,6 +17,26 @@ fn source_trigger_pressed(button: ControllerButton, pressed: bool, value: f32) -
         ) && value > 0.1)
 }
 
+#[cfg(any(test, target_arch = "wasm32"))]
+#[derive(Debug, Clone, Copy, Default)]
+struct BrowserButtonSample {
+    pressed: bool,
+    value: f32,
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn browser_button_pressed(button: ControllerButton, sample: BrowserButtonSample) -> bool {
+    let threshold = if matches!(
+        button,
+        ControllerButton::LeftTrigger | ControllerButton::RightTrigger
+    ) {
+        0.1
+    } else {
+        0.5
+    };
+    sample.pressed || sample.value > threshold
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiButton {
     Up,
@@ -308,6 +328,37 @@ impl InputState {
             press_allowed |= 1 << 3;
         }
         (actions, ui, press_allowed)
+    }
+
+    /// Classic reads joystick button numbers directly. A browser with
+    /// `mapping=""` still exposes raw buttons and axes, so keep sampling that
+    /// joystick instead of discarding it.
+    #[cfg(any(test, target_arch = "wasm32"))]
+    fn accept_browser_controller_sample(
+        &mut self,
+        buttons: &[BrowserButtonSample],
+        axes: [f32; 2],
+    ) {
+        let mut held = 0;
+        let mut capture = 0;
+        for button in controller::ALL {
+            let sample = buttons.get(button as usize).copied().unwrap_or_default();
+            if browser_button_pressed(button, sample) {
+                held |= button.mask();
+                capture |= button.mask();
+            }
+        }
+        let [x, y] = axes;
+        let directions = [
+            x < -DEAD_ZONE || held & ControllerButton::DPadLeft.mask() != 0,
+            x > DEAD_ZONE || held & ControllerButton::DPadRight.mask() != 0,
+            y < -DEAD_ZONE || held & ControllerButton::DPadUp.mask() != 0,
+            y > DEAD_ZONE || held & ControllerButton::DPadDown.mask() != 0,
+        ];
+        let (actions, ui, press_allowed) =
+            self.portable_controller_with_direction_edges(held, directions);
+        self.accept_controller_capture(capture);
+        self.accept_controller_sample_with_direction_edges(actions, ui, press_allowed);
     }
 
     fn accept_controller_capture(&mut self, held: u32) {
@@ -632,10 +683,10 @@ impl InputState {
     #[cfg(target_arch = "wasm32")]
     pub fn update_gamepad(&mut self) {
         use wasm_bindgen::JsCast;
-        let mut actions = Actions::default();
-        let mut ui = 0;
-        let mut capture = 0;
-        let mut direction_press_allowed = 0x0f;
+        let actions = Actions::default();
+        let ui = 0;
+        let capture = 0;
+        let direction_press_allowed = 0x0f;
         if let Some(pads) =
             web_sys::window().and_then(|window| window.navigator().get_gamepads().ok())
         {
@@ -650,65 +701,31 @@ impl InputState {
                     self.accept_controller_sample_with_direction_edges(actions, ui, 0x0f);
                     return;
                 };
-                // Select by source slot before checking browser mapping. A
-                // connected but unsupported joystick 1 does not fall through
-                // to joystick 2.
-                if !pad.connected() || pad.mapping() != web_sys::GamepadMappingType::Standard {
+                // Select by source slot before checking connection. Classic
+                // reads joystick IDs and button numbers directly; an empty
+                // browser mapping still exposes raw controls for that slot.
+                if !pad.connected() {
                     self.accept_controller_capture(0);
                     self.accept_controller_sample_with_direction_edges(actions, ui, 0x0f);
                     return;
                 }
                 let buttons = pad.buttons();
-                let button = |index| {
-                    buttons
-                        .get(index)
-                        .dyn_into::<web_sys::GamepadButton>()
-                        .is_ok_and(|button| {
-                            let physical = controller::ALL[index as usize];
-                            let threshold = if matches!(
-                                physical,
-                                ControllerButton::LeftTrigger | ControllerButton::RightTrigger
-                            ) {
-                                0.1
-                            } else {
-                                0.5
-                            };
-                            button.pressed() || button.value() > threshold
-                        })
-                };
+                let samples: [BrowserButtonSample; controller::ALL.len()] =
+                    std::array::from_fn(|index| {
+                        buttons
+                            .get(index as u32)
+                            .dyn_into::<web_sys::GamepadButton>()
+                            .map(|button| BrowserButtonSample {
+                                pressed: button.pressed(),
+                                value: button.value() as f32,
+                            })
+                            .unwrap_or_default()
+                    });
                 let axes = pad.axes();
                 let x = axes.get(0).as_f64().unwrap_or(0.0) as f32;
                 let y = axes.get(1).as_f64().unwrap_or(0.0) as f32;
-                let left = x < -DEAD_ZONE || button(14);
-                let right = x > DEAD_ZONE || button(15);
-                let up = y < -DEAD_ZONE || button(12);
-                let down = y > DEAD_ZONE || button(13);
-                let mut held = 0;
-                for physical in controller::ALL {
-                    let index = physical as u32;
-                    if button(index) {
-                        held |= physical.mask();
-                    }
-                    let capturing = if matches!(
-                        physical,
-                        ControllerButton::LeftTrigger | ControllerButton::RightTrigger
-                    ) {
-                        buttons
-                            .get(index)
-                            .dyn_into::<web_sys::GamepadButton>()
-                            .is_ok_and(|button| button.pressed() || button.value() > 0.1)
-                    } else {
-                        button(index)
-                    };
-                    if capturing {
-                        capture |= physical.mask();
-                    }
-                }
-                let (mapped_actions, mapped_ui, press_allowed) =
-                    self.portable_controller_with_direction_edges(held, [left, right, up, down]);
-                actions = mapped_actions;
-                ui = mapped_ui;
-                direction_press_allowed = press_allowed;
+                self.accept_browser_controller_sample(&samples, [x, y]);
+                return;
             }
         }
         self.accept_controller_capture(capture);
@@ -844,6 +861,57 @@ mod tests {
                 assert!(source_trigger_pressed(button, true, 0.0));
             }
         }
+    }
+
+    #[test]
+    fn browser_gamepad_raw_button_ordinals_work_without_a_standard_mapping() {
+        // The browser may expose a connected joystick with mapping="".
+        // GameMaker still queries numbered buttons (Jump defaults to button 2),
+        // so the host must use those raw button positions rather than discard it.
+        let mut input = InputState::default();
+        input.set_controller_enabled(true);
+        input.accept_browser_controller_sample(&[], [0.0, 0.0]);
+        input.take_tick();
+        let mut buttons = vec![BrowserButtonSample::default(); 2];
+        buttons[1] = BrowserButtonSample {
+            pressed: true,
+            value: 1.0,
+        };
+        input.accept_browser_controller_sample(&buttons, [0.0, 0.0]);
+        let tick = input.take_tick();
+        assert!(tick.jump && tick.jump_pressed);
+        assert!(!tick.attack);
+        assert_eq!(input.controller_pressed(), vec![ControllerButton::East]);
+
+        input.accept_browser_controller_sample(&[], [0.0, -1.0]);
+        let tick = input.take_tick();
+        assert!(!tick.jump);
+        assert!(tick.up);
+        assert!(tick.up_pressed);
+
+        buttons[1] = BrowserButtonSample {
+            pressed: false,
+            value: 0.6,
+        };
+        input.accept_browser_controller_sample(&buttons, [0.0, 0.0]);
+        let tick = input.take_tick();
+        assert!(tick.jump && tick.jump_pressed);
+        assert_eq!(input.controller_pressed(), vec![ControllerButton::East]);
+
+        input.accept_browser_controller_sample(&[], [0.0, 0.0]);
+        input.take_tick();
+        let mut trigger = vec![BrowserButtonSample::default(); 7];
+        trigger[ControllerButton::LeftTrigger as usize] = BrowserButtonSample {
+            pressed: false,
+            value: 0.2,
+        };
+        input.accept_browser_controller_sample(&trigger, [0.0, 0.0]);
+        let tick = input.take_tick();
+        assert!(tick.bomb_pressed);
+        assert_eq!(
+            input.controller_pressed(),
+            vec![ControllerButton::LeftTrigger]
+        );
     }
 
     #[test]
