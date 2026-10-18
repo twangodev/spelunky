@@ -1323,6 +1323,13 @@ fn populate_internal(
         } {
             continue;
         }
+        // scrEntityGen:38 wraps the entire Mines Solid body (including
+        // scrTreasureGen) in `y > 16`. The top two tile rows are still Solid
+        // receivers for later standalone passes such as the Block arrow traps,
+        // so limit this skip to the current area-specific with-body.
+        if source_classic && world.area == Area::Mines && origin.y <= 16.0 {
+            continue;
+        }
         let tile = support.object.clone();
         let altar = matches!(
             tile.as_str(),
@@ -4615,6 +4622,63 @@ mod tests {
             phases,
             [PopulationPhase::Treasure, PopulationPhase::Enemies],
             "scrEntityGen's Mines with oSolid pass must populate generated oPushBlock descendants"
+        );
+    }
+
+    #[test]
+    fn source_mines_skips_population_for_top_boundary_solids() {
+        // scrEntityGen:38 wraps both TreasureGen and enemy placement in
+        // `y > 16`. The authored y=0 boundary still belongs to oSolid, but
+        // must not consume any per-support draws or spawn loot/enemies.
+        let entrance = Vec2::new(320.0, 320.0);
+        let exit = Vec2::new(600.0, 480.0);
+        let mut world = source_landmark_fixture(Area::Mines, entrance, exit);
+        world.set_tile(10, 0, "oBrick");
+        world.set_tile(20, 1, "oBrick");
+
+        let flags = BTreeSet::from([
+            "made_udjat_eye".to_owned(),
+            "made_market_entrance".to_owned(),
+        ]);
+        let mut actual_rng = Rng::new_canonical(0);
+        let mut expected_rng = actual_rng.clone();
+        expected_rng.chance(1, 6); // EntityGen's one global giant-spider roll.
+        let mut campaign = super::super::GenerationState::fresh(&actual_rng);
+        campaign.revision = crate::GenerationRevision::SourceClassicV2;
+        populate_internal(
+            &mut world,
+            &mut actual_rng,
+            &flags,
+            super::super::GenerationContext::default(),
+            Some(&mut campaign),
+            Some(&[[0; 4]; 5]),
+        );
+
+        assert_eq!(
+            actual_rng.state_bits(),
+            expected_rng.state_bits(),
+            "the y=0 boundary is outside Mines' y>16 EntityGen body"
+        );
+        assert!(
+            world.entities.iter().all(|entity| {
+                !matches!(
+                    entity.object.as_str(),
+                    "oRock"
+                        | "oJar"
+                        | "oGoldBar"
+                        | "oGoldBars"
+                        | "oBones"
+                        | "oFakeBones"
+                        | "oScarab"
+                        | "oLamp"
+                        | "oBat"
+                        | "oSpiderHang"
+                        | "oGiantSpiderHang"
+                        | "oSnake"
+                        | "oCaveman"
+                )
+            }),
+            "the top boundary must not receive source loot or enemy births"
         );
     }
 
