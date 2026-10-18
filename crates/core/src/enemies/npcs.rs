@@ -335,7 +335,9 @@ fn collect_scarab(game: &mut Game, e: &mut Entity) {
     });
     game.sound("sndCoin", e.pos);
     e.alive = false;
-    destroyed(game, e);
+    // This Destroy event is entered synchronously from the character
+    // Collision event, so its `other` is the character that collected it.
+    destroyed_with_other(game, e, Some(game.player.pos));
 }
 
 fn destroy_emitter(game: &mut Game, e: &mut Entity) {
@@ -346,6 +348,10 @@ fn destroy_emitter(game: &mut Game, e: &mut Entity) {
 /// Source Destroy events also run after collection, outside-room removal, and
 /// destruction by another system. Keep the callback idempotent across phases.
 pub(super) fn destroyed(game: &mut Game, e: &mut Entity) {
+    destroyed_with_other(game, e, None);
+}
+
+fn destroyed_with_other(game: &mut Game, e: &mut Entity, other_pos: Option<Vec2>) {
     if e.alive || e.value("npc_destroyed") != 0.0 {
         return;
     }
@@ -371,13 +377,11 @@ pub(super) fn destroyed(game: &mut Game, e: &mut Entity) {
         }
         "oScarab" => {
             e.data.insert("npc_destroyed".into(), 1.0);
-            // Destroy.xml spells this origin `other.x/y`; its binding during
-            // nested GM8 Collision destruction remains unverified. Preserve
-            // the actor origin here rather than assume the collecting player.
+            let origin = other_pos.unwrap_or(e.pos);
             for _ in 0..3 {
                 let pos = Vec2::new(
-                    e.pos.x + 6.0 + f64::from(game.rng.range(5)),
-                    e.pos.y + 6.0 + f64::from(game.rng.range(5)),
+                    origin.x + 6.0 + f64::from(game.rng.range(5)),
+                    origin.y + 6.0 + f64::from(game.rng.range(5)),
                 );
                 game.spawn("oFlareSpark", pos);
             }
@@ -2895,6 +2899,26 @@ mod tests {
                 expected_sparks,
                 "collected={collected}, dead={dead}"
             );
+            if collected {
+                let sparks: Vec<_> = g
+                    .world
+                    .entities
+                    .iter()
+                    .filter(|e| e.object == "oFlareSpark")
+                    .map(|e| e.pos)
+                    .collect();
+                let character = g.player.pos;
+                assert_eq!(sparks.len(), 3);
+                assert!(
+                    sparks.iter().all(|p| {
+                        p.x >= character.x + 6.0
+                            && p.x <= character.x + 10.0
+                            && p.y >= character.y + 6.0
+                            && p.y <= character.y + 10.0
+                    }),
+                    "Destroy.xml positions collection sparks from Collision `other` at {character:?}: {sparks:?}"
+                );
+            }
             assert_eq!(g.player.money, 0);
             assert_eq!(
                 g.data.get("collect").copied().unwrap_or(0.0),
