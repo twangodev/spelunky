@@ -1079,7 +1079,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 432,
+          "line": 439,
           "module": "crates/core/src/opening.rs"
         }
       ],
@@ -1865,7 +1865,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 197,
+          "line": 204,
           "module": "crates/core/src/opening.rs"
         }
       ],
@@ -3038,7 +3038,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 189,
+          "line": 196,
           "module": "crates/core/src/opening.rs"
         }
       ],
@@ -3154,7 +3154,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 203,
+          "line": 210,
           "module": "crates/core/src/opening.rs"
         }
       ],
@@ -3173,7 +3173,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 204,
+          "line": 211,
           "module": "crates/core/src/opening.rs"
         }
       ],
@@ -3242,7 +3242,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 205,
+          "line": 212,
           "module": "crates/core/src/opening.rs"
         }
       ],
@@ -5554,12 +5554,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 192,
+          "line": 199,
           "module": "crates/core/src/opening.rs"
         },
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 167,
+          "line": 174,
           "module": "crates/core/src/opening.rs"
         }
       ],
@@ -5594,7 +5594,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 426,
+          "line": 433,
           "module": "crates/core/src/opening.rs"
         }
       ],
@@ -7794,7 +7794,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 426,
+          "line": 433,
           "module": "crates/core/src/opening.rs"
         }
       ],
@@ -8200,7 +8200,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 328,
+          "line": 335,
           "module": "crates/core/src/opening.rs"
         }
       ],
@@ -8223,7 +8223,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 328,
+          "line": 335,
           "module": "crates/core/src/opening.rs"
         }
       ],
@@ -11858,7 +11858,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 220,
+          "line": 227,
           "module": "crates/core/src/opening.rs"
         }
       ],
