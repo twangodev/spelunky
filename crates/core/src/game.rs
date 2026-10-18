@@ -688,7 +688,6 @@ impl Game {
             self.events.push(GameEvent::Won);
             return;
         }
-        self.generate_campaign_room(next);
         self.flags.retain(|f| {
             !matches!(
                 f.as_str(),
@@ -709,6 +708,11 @@ impl Game {
                     | "sacrificePit"
             )
         });
+        // Classic resets the per-room special layout globals at the start of
+        // scrLevelGen, before it selects the next room. Clear their previous
+        // room values before passing flags into generation so they cannot
+        // force the same special layout to repeat.
+        self.generate_campaign_room(next);
         for e in &self.world.entities {
             match e.object.as_str() {
                 "oKey"
@@ -1020,6 +1024,25 @@ mod tests {
         assert_eq!(game.player.money, 500);
         assert_eq!(game.player.pos, game.player.previous_pos);
         assert_eq!(game.camera, game.previous_camera);
+    }
+    #[test]
+    fn transition_clears_prior_ice_special_before_generating_next_level() {
+        let mut start = Game::shell(0, RulesPreset::Classic);
+        start.start_from_hub(false, 9);
+        let mut expected = start.clone();
+        let mut actual = start;
+        expected.data.insert("next_level".into(), 10.0);
+        actual.data.insert("next_level".into(), 10.0);
+        actual.flags.insert("yeti_lair".into());
+
+        expected.next_level();
+        actual.next_level();
+
+        assert_eq!(expected.world.name, "Ice Caves");
+        assert_eq!(
+            actual.world.name, expected.world.name,
+            "the previous level's Yeti flag must be cleared before new room generation"
+        );
     }
     fn flat_game() -> Game {
         let mut game = Game::shell(7, RulesPreset::Classic);
