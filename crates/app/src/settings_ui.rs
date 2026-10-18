@@ -181,7 +181,11 @@ impl SettingsUi {
             } else {
                 format!("{key:?}")
             };
-            settings.bindings.insert(ACTIONS[index].0.into(), value);
+            let action = ACTIONS[index].0;
+            settings.bindings.insert(action.into(), value.clone());
+            if action == "up" {
+                settings.bindings.insert("exit".into(), value);
+            }
             return SettingsCommand::Changed;
         }
         match key {
@@ -672,6 +676,38 @@ mod tests {
             menu.key(KeyCode::Delete, &mut settings);
             assert!(settings.bindings[*action].is_empty());
         }
+    }
+
+    #[test]
+    fn rebinding_up_also_rebinds_the_start_door_alias() {
+        let mut menu = SettingsUi::new();
+        let mut settings = Settings::default();
+        let up = ACTIONS
+            .iter()
+            .position(|(action, _)| *action == "up")
+            .unwrap();
+        menu.selected = FIRST_BINDING + up;
+
+        assert_eq!(
+            menu.key(KeyCode::Enter, &mut settings),
+            SettingsCommand::None
+        );
+        assert_eq!(
+            menu.key(KeyCode::KeyI, &mut settings),
+            SettingsCommand::Changed
+        );
+        assert_eq!(settings.bindings["up"], "KeyI");
+        assert_eq!(settings.bindings["exit"], "KeyI");
+
+        let mut input = crate::input::InputState::default();
+        input.set_bindings(&settings.bindings);
+        input.key(KeyCode::ArrowUp, true, false);
+        let stale_key = input.take_tick();
+        assert!(!stale_key.up && !stale_key.exit_pressed);
+        input.key(KeyCode::ArrowUp, false, false);
+        input.key(KeyCode::KeyI, true, false);
+        let rebound_key = input.take_tick();
+        assert!(rebound_key.up && rebound_key.up_pressed && rebound_key.exit_pressed);
     }
 
     #[test]
