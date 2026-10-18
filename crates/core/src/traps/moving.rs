@@ -294,10 +294,43 @@ pub(super) fn collision(game: &mut Game, this: Instance, other: Instance) {
                         decoration_point,
                     );
                     let spike_point = Vec2::new(other_pos.x + 8.0, other_pos.y - 1.0);
-                    if let Some(spikes) = game.world.entities.iter_mut().find(|e| {
-                        e.alive && e.object == "oSpikes" && e.sprite_bounds().contains(spike_point)
-                    }) {
-                        spikes.alive = false;
+                    if let Some(spike) = crate::dispatcher::descendant_instances(game, "oSpikes")
+                        .into_iter()
+                        .find(|instance| {
+                            if !crate::dispatcher::is_active(game, *instance) {
+                                return false;
+                            }
+                            match *instance {
+                                Instance::Entity(spike) => game
+                                    .world
+                                    .entity(spike)
+                                    .is_some_and(|e| e.sprite_bounds().contains(spike_point)),
+                                Instance::Terrain(index) => game
+                                    .world
+                                    .tile_collision_mask(
+                                        (index % game.world.width) as i32,
+                                        (index / game.world.width) as i32,
+                                    )
+                                    .contains(spike_point, CollisionPrecision::BoundingBox),
+                                Instance::Player => false,
+                            }
+                        })
+                    {
+                        match spike {
+                            Instance::Entity(spike) => {
+                                if let Some(entity) = game.world.entity_mut(spike) {
+                                    entity.alive = false;
+                                }
+                            }
+                            Instance::Terrain(index) => {
+                                game.world.set_tile(
+                                    index % game.world.width,
+                                    index / game.world.width,
+                                    "",
+                                );
+                            }
+                            Instance::Player => {}
+                        }
                     }
                     match other {
                         Instance::Entity(other_id) => {
@@ -514,10 +547,21 @@ pub(super) fn player_hurt(game: &mut Game) {
         }
     }
     let ceiling_probe = Rect::new(pos.x - 2.0, pos.y - 9.0, 5.0, 3.0);
-    let ceiling = game.world.entities.iter().find(|e| {
-        e.alive && e.object == "oCeilingTrap" && e.sprite_bounds().intersects(ceiling_probe)
-    });
-    if ceiling.is_some_and(|e| e.state > 0) {
+    // collision_rectangle returns the first intersecting active family member;
+    // an idle first trap suppresses later overlapping traps in source order.
+    let ceiling_status = crate::dispatcher::descendant_instances(game, "oCeilingTrap")
+        .into_iter()
+        .filter(|instance| crate::dispatcher::is_active(game, *instance))
+        .find_map(|instance| match instance {
+            Instance::Entity(id) => game.world.entity(id).and_then(|entity| {
+                entity
+                    .sprite_bounds()
+                    .intersects(ceiling_probe)
+                    .then_some(entity.state)
+            }),
+            Instance::Terrain(_) | Instance::Player => None,
+        });
+    if ceiling_status.is_some_and(|status| status > 0) {
         if game.player.health > 0 && crate::statistics::is_real_level(game) {
             game.lifetime_stats
                 .misc_death(crate::statistics::MiscDeath::CeilingTrap);
@@ -606,10 +650,11 @@ fn edge_blocked(game: &Game, entity: &Entity, direction: u8, distance: f64) -> b
 /// explicit `prec=0` callers on their separate bounding-box path below.
 fn precise_collides_except(game: &Game, rect: Rect, excluded: u64) -> bool {
     game.world
-        .tiles_collide_precision(rect, "oSolid", CollisionPrecision::Precise)
+        .tiles_collide_active_precision(rect, "oSolid", CollisionPrecision::Precise)
         || game.world.entities.iter().any(|entity| {
             entity.id != excluded
                 && entity.alive
+                && entity.engine_active
                 && entity.solid
                 && !entity.held
                 && entity.mask_intersects(rect, CollisionPrecision::Precise)
@@ -617,20 +662,27 @@ fn precise_collides_except(game: &Game, rect: Rect, excluded: u64) -> bool {
 }
 
 fn collides_except(game: &Game, rect: Rect, excluded: u64) -> bool {
-    game.world.collides_except(rect, excluded)
+    game.world
+        .tiles_collide_active_precision(rect, "oSolid", CollisionPrecision::BoundingBox)
+        || game.world.entities.iter().any(|entity| {
+            entity.id != excluded
+                && entity.alive
+                && entity.engine_active
+                && entity.solid
+                && !entity.held
+                && entity.sprite_bounds().intersects(rect)
+        })
 }
 
 fn touches_lava(game: &Game, rect: Rect) -> bool {
-    let x0 = (rect.x / 16.0).floor() as i32;
-    let x1 = ((rect.x + rect.w - 0.001) / 16.0).floor() as i32;
-    let y0 = (rect.y / 16.0).floor() as i32;
-    let y1 = ((rect.y + rect.h - 0.001) / 16.0).floor() as i32;
-    (y0..=y1).any(|y| (x0..=x1).any(|x| game.world.tile(x, y).is_some_and(|t| t.object == "oLava")))
-        || game
-            .world
-            .entities
-            .iter()
-            .any(|e| e.alive && e.object == "oLava" && e.sprite_bounds().intersects(rect))
+    game.world
+        .tiles_collide_active_precision(rect, "oLava", CollisionPrecision::BoundingBox)
+        || game.world.entities.iter().any(|e| {
+            e.alive
+                && e.engine_active
+                && crate::catalog::is_a(&e.object, "oLava")
+                && e.sprite_bounds().intersects(rect)
+        })
 }
 
 fn smash(game: &mut Game, entity: &mut Entity) {
@@ -701,6 +753,7 @@ fn smash(game: &mut Game, entity: &mut Entity) {
         let lord_probe = Rect::new(entity.pos.x - 1.0, entity.pos.y - 1.0, 19.0, 19.0);
         hit |= game.world.entities.iter().any(|other| {
             other.alive
+                && other.engine_active
                 && other.object == "oTombLord"
                 && other.sprite_bounds().intersects(lord_probe)
         });
@@ -2432,3 +2485,7 @@ mod thwomp_cached_distance_tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "moving_active_query_contract_tests.rs"]
+mod moving_active_query_contract_tests;

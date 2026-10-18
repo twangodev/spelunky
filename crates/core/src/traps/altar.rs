@@ -563,6 +563,40 @@ fn idol_trap_receivers(game: &mut Game) -> Vec<u64> {
         .collect()
 }
 
+/// Classic `with`, `instance_exists`, and `instance_nearest` queries only see
+/// active instances. Keeping dispatcher order also preserves tie behavior for
+/// nearest-instance queries.
+fn active_trap_entities(game: &Game, object: &str) -> Vec<u64> {
+    crate::dispatcher::descendant_instances(game, object)
+        .into_iter()
+        .filter(|instance| crate::dispatcher::is_active(game, *instance))
+        .filter_map(|instance| match instance {
+            crate::dispatcher::Instance::Entity(id) => game
+                .world
+                .entity(id)
+                .filter(|entity| entity.alive)
+                .map(|entity| entity.id),
+            _ => None,
+        })
+        .collect()
+}
+
+fn nearest_active_trap_entity(game: &Game, object: &str, point: Vec2) -> Option<u64> {
+    let mut nearest = None;
+    let mut nearest_distance = f64::INFINITY;
+    for id in active_trap_entities(game, object) {
+        let Some(entity) = game.world.entity(id) else {
+            continue;
+        };
+        let distance = entity.pos.distance(point);
+        if nearest.is_none() || distance < nearest_distance {
+            nearest = Some(id);
+            nearest_distance = distance;
+        }
+    }
+    nearest
+}
+
 fn idol_trap_distance_to_character(game: &mut Game, id: u64) -> f64 {
     use crate::dispatcher::Instance;
     crate::dispatcher::register_instances(game);
@@ -598,26 +632,18 @@ pub(crate) fn idol_pickup(game: &mut Game, id: u64) {
     {
         return;
     }
+    crate::dispatcher::register_instances(game);
     *game.data.entry("idols_grabbed".into()).or_default() += 1.;
     game.lifetime_stats
         .increment(crate::statistics::LifetimeCounter::IdolsGrabbed);
     match game.world.area {
         Area::Mines => {
-            if let Some(entity) = game
-                .world
-                .entities
-                .iter_mut()
-                .filter(|e| e.alive && e.object == "oGiantTikiHead")
-                .min_by(|a, b| {
-                    a.pos
-                        .distance(Vec2::new(game.player.pos.x, game.player.pos.y - 64.))
-                        .total_cmp(
-                            &b.pos
-                                .distance(Vec2::new(game.player.pos.x, game.player.pos.y - 64.)),
-                        )
-                })
-            {
-                entity.alarms[0] = 100;
+            if let Some(head) = nearest_active_trap_entity(
+                game,
+                "oGiantTikiHead",
+                Vec2::new(game.player.pos.x, game.player.pos.y - 64.0),
+            ) {
+                game.world.entity_mut(head).unwrap().alarms[0] = 100;
             }
             crate::camera_shake::request(game, 100.0);
         }
@@ -636,14 +662,10 @@ pub(crate) fn idol_pickup(game: &mut Game, id: u64) {
             }
         }
         Area::Temple | Area::Boss => {
-            let ceiling = game
-                .world
-                .entities
-                .iter()
-                .any(|e| e.alive && e.object == "oCeilingTrap");
-            if ceiling {
-                for entity in &mut game.world.entities {
-                    if entity.alive && entity.object == "oCeilingTrap" {
+            let ceilings = active_trap_entities(game, "oCeilingTrap");
+            if !ceilings.is_empty() {
+                for id in ceilings {
+                    if let Some(entity) = game.world.entity_mut(id) {
                         entity.state = 1;
                         entity.vel.y = 0.5;
                     }
@@ -652,15 +674,11 @@ pub(crate) fn idol_pickup(game: &mut Game, id: u64) {
                     Vec2::new(game.player.pos.x - 64.0, game.player.pos.y - 64.0),
                     Vec2::new(game.player.pos.x + 64.0, game.player.pos.y - 64.0),
                 ] {
-                    if let Some(door) = game
-                        .world
-                        .entities
-                        .iter_mut()
-                        .filter(|e| e.alive && e.object == "oDoor")
-                        .min_by(|a, b| a.pos.distance(target).total_cmp(&b.pos.distance(target)))
-                    {
-                        door.state = 1;
-                        door.vel.y = 1.0;
+                    if let Some(door) = nearest_active_trap_entity(game, "oDoor", target) {
+                        if let Some(entity) = game.world.entity_mut(door) {
+                            entity.state = 1;
+                            entity.vel.y = 1.0;
+                        }
                     }
                 }
                 crate::camera_shake::request(game, 20.0);
@@ -2117,3 +2135,6 @@ mod tests {
 #[cfg(test)]
 #[path = "idol_trap_character_query_tests.rs"]
 mod idol_trap_character_query_tests;
+#[cfg(test)]
+#[path = "idol_trap_instance_query_tests.rs"]
+mod idol_trap_instance_query_tests;

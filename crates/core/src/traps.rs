@@ -15,6 +15,9 @@ mod detectors;
 mod moving;
 
 #[cfg(test)]
+#[path = "traps/player_active_query_contract_tests.rs"]
+mod player_active_query_contract_tests;
+#[cfg(test)]
 #[path = "traps/player_health_prelude_contract_tests.rs"]
 mod player_health_prelude_contract_tests;
 
@@ -356,6 +359,29 @@ fn hazards(game: &Game) -> Vec<Hazard> {
     }
     result
 }
+/// Source oPlayer1 collision_rectangle calls traverse active instance
+/// membership, in registration order. The broad hazard inventory also serves
+/// non-dispatch queries and therefore deliberately includes inactive storage.
+fn active_hazards(game: &Game, object: &str) -> Vec<Hazard> {
+    crate::dispatcher::descendant_instances(game, object)
+        .into_iter()
+        .filter(|instance| crate::dispatcher::is_active(game, *instance))
+        .filter_map(|instance| {
+            let object = instance.object(game).to_owned();
+            let (id, data_key) = match instance {
+                Instance::Entity(id) => (Some(id), format!("hazard_entity:{id}")),
+                Instance::Terrain(index) => (None, format!("hazard:{index}")),
+                Instance::Player => return None,
+            };
+            Some(Hazard {
+                id,
+                object,
+                pos: instance.position(game),
+                data_key,
+            })
+        })
+        .collect()
+}
 fn is_hazard(object: &str) -> bool {
     matches!(
         object,
@@ -459,11 +485,11 @@ pub(crate) fn player_lava(game: &mut Game) {
 pub(crate) fn player_spikes(game: &mut Game) {
     // The dispatcher evaluates the source outer hurt guard once, before crush.
     // Its later visibility/health changes do not skip the rest of this block.
+    crate::dispatcher::register_instances(game);
     let pos = game.player.pos;
-    let spikes = hazards(game).into_iter().find(|h| {
-        h.object == "oSpikes"
-            && Rect::new(pos.x - 4., pos.y - 4., 9., 13.).intersects(current_rect(game, h))
-    });
+    let spikes = active_hazards(game, "oSpikes")
+        .into_iter()
+        .find(|h| Rect::new(pos.x - 4., pos.y - 4., 9., 13.).intersects(current_rect(game, h)));
     if spikes.is_some() && game.state == crate::RunState::Dead {
         let point = Vec2::new(pos.x, pos.y + 9.0);
         let supported = game.world.tiles_point(point, "oSolid")

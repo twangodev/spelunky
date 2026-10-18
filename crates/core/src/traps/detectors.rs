@@ -391,12 +391,18 @@ pub(super) fn animation_end(game: &mut Game, instance: Instance) {
 /// One collision_rectangle query in oPlayer1's late Hurt action selects one spear.
 pub(super) fn player_hurt(game: &mut Game) {
     let area = Rect::new(game.player.pos.x - 6.0, game.player.pos.y - 6.0, 13.0, 14.0);
-    let Some((phase, faces_left)) = game
-        .world
-        .entities
+    let Some((phase, faces_left)) = crate::dispatcher::descendant_instances(game, "oSpearsLeft")
         .iter()
-        .find(|e| e.alive && e.object == "oSpearsLeft" && e.sprite_bounds().intersects(area))
-        .map(|e| (e.animation, e.sprite == "sSpearsLeft"))
+        .filter(|instance| crate::dispatcher::is_active(game, **instance))
+        .find_map(|instance| match instance {
+            Instance::Entity(id) => game.world.entity(*id).and_then(|entity| {
+                entity
+                    .sprite_bounds()
+                    .intersects(area)
+                    .then_some((entity.animation, entity.sprite == "sSpearsLeft"))
+            }),
+            Instance::Terrain(_) | Instance::Player => None,
+        })
     else {
         return;
     };
