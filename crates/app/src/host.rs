@@ -236,7 +236,7 @@ pub fn run() -> Result<(), String> {
         let mut app = app;
         for path in std::env::args()
             .skip(1)
-            .filter(|path| path.ends_with(".lvl"))
+            .filter(|path| is_level_argument(path))
         {
             match std::fs::read_to_string(&path) {
                 Ok(contents) => app.import_level(path, contents),
@@ -251,6 +251,12 @@ pub fn run() -> Result<(), String> {
         event_loop.spawn_app(app);
         Ok(())
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn is_level_argument(path: &str) -> bool {
+    let basename = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    basename.len() > 4 && basename.to_ascii_lowercase().ends_with(".lvl")
 }
 
 struct App {
@@ -5873,6 +5879,23 @@ mod tests {
         assert_eq!(actual, snapped);
     }
     use super::*;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_level_arguments_match_classic_case_insensitive_level_names() {
+        for path in [
+            "custom.lvl",
+            "Custom.LVL",
+            "levels/Custom.LvL",
+            r"C:\levels\Custom.LVL",
+        ] {
+            assert!(is_level_argument(path), "{path}");
+        }
+        for path in ["stats.txt", "custom.lvl/notes.txt", ".lvl"] {
+            assert!(!is_level_argument(path), "{path}");
+        }
+    }
+
     #[test]
     fn custom_selector_controller_start_confirms_the_selected_level() {
         assert_eq!(
