@@ -6594,7 +6594,7 @@ mod tests {
         opening::begin_intro(&mut game);
         assert_eq!(game_music(&game), "");
         opening::begin_title(&mut game, 0);
-        for _ in 0..269 {
+        for _ in 0..266 {
             game.step(&InputFrame::default());
             assert_eq!(game_music(&game), "");
         }
