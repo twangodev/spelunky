@@ -1,8 +1,8 @@
 //! Run progression translated from oPlayer1 Step, oGame Step, GoldDoor
 //! collision, and TunnelMan Step. Filesystem loading belongs to the host.
-use crate::model::{
-    Area, Game, GameEvent, InputFrame, PlayerState, Rect, RunState, VIEW_HEIGHT, VIEW_WIDTH, Vec2,
-};
+#[cfg(test)]
+use crate::model::PlayerState;
+use crate::model::{Area, Game, GameEvent, InputFrame, RunState, VIEW_HEIGHT, VIEW_WIDTH, Vec2};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -391,39 +391,97 @@ fn revive(game: &mut Game) {
     crate::enemies::shop_dialogue::say(game, "THE ANKH SHATTERS!", "YOU HAVE BEEN REVIVED!", 150);
 }
 
-pub(crate) fn gold_door_collision(game: &mut Game) {
-    // The Gold Door consumes a held sceptre only when the Hedjet is owned.
-    if let Some(id) = game.player.held {
-        let sceptre = game
-            .world
-            .entity(id)
-            .filter(|e| e.object == "oSceptre")
-            .map(|e| e.sprite_bounds());
-        if let Some(bounds) = sceptre {
-            if let Some(door) = game.world.entities.iter().position(|e| {
-                e.alive && e.object == "oGoldDoor" && e.sprite_bounds().intersects(bounds)
-            }) {
-                if game.player.has("Crown") {
-                    let door_pos = game.world.entities[door].pos;
-                    game.world.entities[door].alive = false;
-                    if let Some(item) = game.world.entity_mut(id) {
-                        item.alive = false;
-                        item.held = false;
-                    }
-                    game.player.held = None;
-                    game.player.pickup_item_type.clear();
-                    game.world.spawn("oXGold", door_pos);
-                    game.sound("sndChestOpen", door_pos);
-                } else {
-                    crate::enemies::shop_dialogue::say(
-                        game,
-                        "THE SCEPTRE FITS...",
-                        "BUT NOTHING IS HAPPENING!",
-                        100,
-                    );
-                }
+pub(crate) fn gold_door_collision(
+    game: &mut Game,
+    door_id: u64,
+    other: crate::dispatcher::Instance,
+) {
+    let crate::dispatcher::Instance::Entity(sceptre_id) = other else {
+        return;
+    };
+    let Some(door) = game
+        .world
+        .entity(door_id)
+        .filter(|entity| entity.alive && entity.object == "oGoldDoor")
+        .cloned()
+    else {
+        return;
+    };
+    let Some(sceptre) = game
+        .world
+        .entity(sceptre_id)
+        .filter(|entity| entity.alive && crate::catalog::is_a(&entity.object, "oSceptre"))
+        .cloned()
+    else {
+        return;
+    };
+    // The source handler tests other.held on the actual Collision pair. The
+    // dispatcher normally guarantees overlap; keep that guard for adapter calls.
+    if !sceptre.held || !door.event_intersects(&sceptre) {
+        return;
+    }
+    if game.player.has("Crown") {
+        if let Some(door) = game.world.entity_mut(door_id) {
+            door.alive = false;
+        }
+        if let Some(item) = game.world.entity_mut(sceptre_id) {
+            item.alive = false;
+            item.held = false;
+        }
+        game.player.held = None;
+        game.player.pickup_item_type.clear();
+        game.world.spawn("oXGold", door.pos);
+        game.sound("sndChestOpen", door.pos);
+    } else {
+        crate::enemies::shop_dialogue::say(
+            game,
+            "THE SCEPTRE FITS...",
+            "BUT NOTHING IS HAPPENING!",
+            100,
+        );
+    }
+}
+
+/// Compatibility path for callers outside Game's authoritative event slices.
+/// Derive GoldDoor callbacks from the same active, overlapping instance pairs.
+fn gold_door_collisions(game: &mut Game) {
+    crate::dispatcher::register_instances(game);
+    let doors: Vec<_> = crate::dispatcher::descendant_instances(game, "oGoldDoor")
+        .into_iter()
+        .filter(|instance| crate::dispatcher::is_active(game, *instance))
+        .filter_map(|instance| match instance {
+            crate::dispatcher::Instance::Entity(id) => Some(id),
+            _ => None,
+        })
+        .collect();
+    let sceptres: Vec<_> = crate::dispatcher::descendant_instances(game, "oSceptre")
+        .into_iter()
+        .filter(|instance| crate::dispatcher::is_active(game, *instance))
+        .filter_map(|instance| match instance {
+            crate::dispatcher::Instance::Entity(id) => Some(id),
+            _ => None,
+        })
+        .collect();
+    let mut pairs = Vec::new();
+    for &sceptre_id in &sceptres {
+        for &door_id in &doors {
+            let Some(door) = game.world.entity(door_id) else {
+                continue;
+            };
+            let Some(sceptre) = game.world.entity(sceptre_id) else {
+                continue;
+            };
+            if door.event_intersects(sceptre) {
+                pairs.push((door_id, sceptre_id));
             }
         }
+    }
+    for (door_id, sceptre_id) in pairs {
+        gold_door_collision(
+            game,
+            door_id,
+            crate::dispatcher::Instance::Entity(sceptre_id),
+        );
     }
 }
 
@@ -962,7 +1020,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     player_actions(game, input);
     player_revival(game);
     player_deposits(game);
-    gold_door_collision(game);
+    gold_door_collisions(game);
     tunnel_step(game, input);
 }
 
@@ -1860,6 +1918,76 @@ mod tests {
         assert!(g.world.entity(sceptre).is_none());
         assert!(g.world.entities.iter().any(|e| e.object == "oXGold"));
     }
+
+    #[test]
+    fn actual_step_gold_door_uses_the_receiving_collision_pair() {
+        let mut g = Game::shell(3, RulesPreset::Classic);
+        let event_first_door = g.world.spawn("oGoldDoor", Vec2::new(88.0, 48.0));
+        crate::dispatcher::register_instances(&mut g);
+        let storage_first_door = g.world.spawn("oGoldDoor", Vec2::new(80.0, 48.0));
+        crate::dispatcher::register_instances(&mut g);
+
+        // Dispatcher registration records source instance order. Put the
+        // other receiver first in World storage so a global scan would pick it.
+        let event_index = g
+            .world
+            .entities
+            .iter()
+            .position(|entity| entity.id == event_first_door)
+            .unwrap();
+        let storage_index = g
+            .world
+            .entities
+            .iter()
+            .position(|entity| entity.id == storage_first_door)
+            .unwrap();
+        g.world.entities.swap(event_index, storage_index);
+        for x in 0..g.world.width {
+            g.world.set_tile(x, 4, "oTemple");
+        }
+        g.player.pos = Vec2::new(88.0, 56.0);
+        g.player.previous_pos = g.player.pos;
+        g.player.grounded = true;
+        g.player.state = PlayerState::Standing;
+        g.player.equipment.insert("Crown".into());
+        let sceptre = g.world.spawn("oSceptre", g.player.pos);
+        g.player.held = Some(sceptre);
+        g.world.entity_mut(sceptre).unwrap().held = true;
+
+        assert!(
+            g.world
+                .entity(event_first_door)
+                .unwrap()
+                .event_intersects(g.world.entity(sceptre).unwrap())
+        );
+        assert!(
+            g.world
+                .entity(storage_first_door)
+                .unwrap()
+                .event_intersects(g.world.entity(sceptre).unwrap())
+        );
+        assert_eq!(
+            crate::dispatcher::descendant_instances(&g, "oGoldDoor"),
+            [
+                crate::dispatcher::Instance::Entity(event_first_door),
+                crate::dispatcher::Instance::Entity(storage_first_door),
+            ]
+        );
+
+        g.step(&InputFrame::default());
+
+        assert!(g.world.entity(event_first_door).is_none());
+        assert!(g.world.entity(storage_first_door).is_some());
+        assert!(g.world.entity(sceptre).is_none());
+        let opened = g
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oXGold")
+            .expect("the actual collision receiver creates the XGold");
+        assert_eq!(opened.pos, Vec2::new(88.0, 48.0));
+    }
+
     #[test]
     fn actual_step_deposits_idol_and_damsel_without_exiting() {
         let (mut g, id) = carried_exit("oGoldIdol");

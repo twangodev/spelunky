@@ -777,7 +777,6 @@ fn jungle(
                 .unwrap()
                 .data
                 .insert("cost".into(), 50000.0);
-            w.entity_mut(id).unwrap().data.insert("forSale".into(), 1.0);
         }
         b'B' => {
             let id = spawn(w, r, "oTrapBlock", p);
@@ -1724,6 +1723,79 @@ mod tests {
                 );
                 assert_eq!(world.entity(head_id).unwrap().sprite, sprite);
             }
+        }
+    }
+
+    #[test]
+    fn kali_prize_weapon_create_prices_reach_pickup_and_theft_steps() {
+        for (object, cost, pickup_message) in [
+            ("oShotgun", 15000.0, "YOU GOT A SHOTGUN!"),
+            ("oMattock", 8000.0, "YOU GOT A MATTOCK!"),
+            ("oPistol", 5000.0, "YOU GOT A PISTOL!"),
+            ("oMachete", 7000.0, "YOU GOT A MACHETE!"),
+        ] {
+            // Kali Create and q's unused dice roll both run before the high-end
+            // item draw in the real xq room alphabet.
+            let seed = (0..20_000)
+                .find(|seed| {
+                    let mut source = Rng::new(*seed);
+                    source.range(3);
+                    source.range(6);
+                    high_end(&mut source) == object
+                })
+                .unwrap_or_else(|| panic!("no test seed generated {object}"));
+            let mut world = World::new(42, 34, Area::Jungle, 2);
+            world.name = "Jungle".into();
+            let mut rng = Rng::new(seed);
+            stamp(
+                &mut world,
+                &mut rng,
+                &format!("xq{:0<78}", ""),
+                0,
+                0,
+                false,
+                false,
+                "Craps",
+            );
+            let prize_id = world
+                .entities
+                .iter()
+                .find(|item| item.value("inDiceHouse") != 0.0)
+                .expect("Kali room generated its q prize")
+                .id;
+            assert_eq!(world.entity(prize_id).unwrap().object, object);
+            assert_eq!(world.entity(prize_id).unwrap().value("cost"), cost);
+
+            // The source weapon Create price must be present before inherited
+            // Item Step chooses the theft branch when no keeper remains.
+            let mut thief = crate::Game::shell(seed, crate::RulesPreset::Classic);
+            thief.world = world.clone();
+            crate::items::step_instance(&mut thief, prize_id);
+            assert_eq!(thief.data["itemsStolen"], 1.0, "{object}");
+            assert_eq!(thief.lifetime_stats.items_stolen, 1, "{object}");
+            assert_eq!(thief.world.entity(prize_id).unwrap().value("cost"), 0.0);
+
+            // In the Dice House, a keeper preserves the price through Item
+            // Step. Carrying the prize out then reaches the paid-weapon branch
+            // of the source pickup/theft handler.
+            let mut carrier = crate::Game::shell(seed, crate::RulesPreset::Classic);
+            carrier.world = world;
+            carrier.world.spawn("oShopkeeper", Vec2::new(24.0, 24.0));
+            carrier.player.pos = Vec2::new(200.0, 32.0);
+            carrier.player.held = Some(prize_id);
+            carrier.world.entity_mut(prize_id).unwrap().held = true;
+            crate::items::step_instance(&mut carrier, prize_id);
+            assert_eq!(carrier.world.entity(prize_id).unwrap().value("cost"), cost);
+            crate::economy::player_held_step(&mut carrier);
+            assert_eq!(carrier.world.entity(prize_id).unwrap().value("cost"), 0.0);
+            assert!(
+                carrier.events.iter().any(|event| matches!(
+                    event,
+                    crate::GameEvent::Dialogue(message)
+                        if message.first == pickup_message && message.ticks == 120
+                )),
+                "{object}"
+            );
         }
     }
 

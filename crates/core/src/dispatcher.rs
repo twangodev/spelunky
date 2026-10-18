@@ -1154,7 +1154,7 @@ fn collision(game: &mut Game, this: Instance, other: Instance) {
         Instance::Entity(id) => {
             let object = source_object(game, this);
             if object == "oGoldDoor" && catalog::is_a(other.object(game), "oSceptre") {
-                crate::progression::gold_door_collision(game);
+                crate::progression::gold_door_collision(game, id, other);
                 return;
             }
             if crate::enemies::handles(&object) {

@@ -68,6 +68,22 @@ fn spawn_pre(game: &mut Game, mattock: bool) {
 }
 
 pub fn init_entity(e: &mut Entity) {
+    // These weapon Creates set their source pickup price even when the item
+    // was born through generation rather than Game::spawn. Keep the default
+    // below producer overrides such as free crate prizes and shop stock.
+    let source_price = match e.object.as_str() {
+        "oShotgun" => Some((15000.0, "A SHOTGUN FOR $15000.")),
+        "oMattock" => Some((8000.0, "A MATTOCK FOR $8000.")),
+        "oPistol" => Some((5000.0, "A PISTOL FOR $5000.")),
+        "oMachete" => Some((7000.0, "A MACHETE FOR $7000.")),
+        _ => None,
+    };
+    if let Some((cost, message)) = source_price {
+        e.data.entry("cost".into()).or_insert(cost);
+        e.text
+            .entry("buyMessage".into())
+            .or_insert_with(|| message.into());
+    }
     if e.value("weapon_initialized") != 0.0 {
         return;
     }

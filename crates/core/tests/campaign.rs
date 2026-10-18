@@ -340,17 +340,38 @@ fn generated_market_ankh_moai_chain_to_temple(seed: u32) -> Game {
         .unwrap();
     let ankh_id = ankh.id;
     let ankh_pos = ankh.pos;
-    assert!(ankh.value("forSale") > 0.0);
+    assert_eq!(ankh.value("cost"), 50000.0);
+    // Classic tile A only creates oAnkh; its inherited Create leaves
+    // forSale=false. Positive cost still makes the Player pay branch purchase it.
+    assert_eq!(ankh.value("forSale"), 0.0);
+
+    // Drop it into an adjacent non-shop room. A source-faithful Ankh is not
+    // stock for oItem's outside-shop theft check, so its price remains intact.
+    let outside_shop = Vec2::new(520.0, 200.0); // Black Market path[1][3] == 2.
+    assert_eq!(game.world.source_room_path.unwrap()[1][3], 2);
+    position_player(&mut game, outside_shop);
+    let ankh = game.world.entity_mut(ankh_id).unwrap();
+    ankh.pos = outside_shop;
+    ankh.previous_pos = outside_shop;
+    game.step(&InputFrame::default());
+    assert_eq!(game.world.entity(ankh_id).unwrap().value("cost"), 50000.0);
+    assert_eq!(game.world.entity(ankh_id).unwrap().value("forSale"), 0.0);
+    assert_eq!(game.lifetime_stats.items_stolen, 0);
+
     position_player(&mut game, ankh_pos);
-    game.player.money = 1_000_000; // Purchase affordability is not this scenario's target.
+    let ankh = game.world.entity_mut(ankh_id).unwrap();
+    ankh.pos = ankh_pos;
+    ankh.previous_pos = ankh_pos;
+    ankh.held = true;
     game.player.held = Some(ankh_id);
-    game.world.entity_mut(ankh_id).unwrap().held = true;
+    game.player.money = 1_000_000; // Purchase affordability is not this scenario's target.
     game.step(&InputFrame {
         pay_pressed: true,
         ..Default::default()
     });
     assert!(game.player.has("Ankh"));
     assert!(game.world.entity(ankh_id).is_none());
+    assert_eq!(game.player.money, 950_000);
 
     while !game
         .world
