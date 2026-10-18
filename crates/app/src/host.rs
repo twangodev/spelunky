@@ -303,6 +303,7 @@ impl App {
         let mut input = InputState::default();
         input.set_bindings(&store.data.settings.bindings);
         input.set_controller_bindings(&store.data.settings.controller_bindings);
+        input.set_controller_enabled(store.data.settings.controller_enabled);
         let source_music = SourceMusicState::default();
         let mut game = Game::shell_with_music(
             wall_seed(),
@@ -457,6 +458,8 @@ impl App {
         self.input.set_bindings(&settings.bindings);
         self.input
             .set_controller_bindings(&settings.controller_bindings);
+        self.input
+            .set_controller_enabled(settings.controller_enabled);
         self.audio
             .set_volumes(settings.music_volume, settings.effects_volume);
         if let Some(renderer) = &mut self.renderer {

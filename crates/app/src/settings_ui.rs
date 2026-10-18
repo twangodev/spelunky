@@ -21,7 +21,8 @@ const ACTIONS: [(&str, &str); 14] = [
     ("exit", "ENTER DOOR"),
     ("pause", "PAUSE"),
 ];
-const FIRST_BINDING: usize = 8;
+const CONTROLLER_INPUT: usize = 8;
+const FIRST_BINDING: usize = CONTROLLER_INPUT + 1;
 const CONFIGURE_CONTROLLER: usize = FIRST_BINDING + ACTIONS.len();
 const RESTORE: usize = CONFIGURE_CONTROLLER + 1;
 const BACK: usize = RESTORE + 1;
@@ -154,6 +155,7 @@ impl SettingsUi {
             }
             6 if confirm => return SettingsCommand::Fullscreen,
             7 => settings.down_to_run = !settings.down_to_run,
+            CONTROLLER_INPUT => settings.controller_enabled = !settings.controller_enabled,
             FIRST_BINDING..CONFIGURE_CONTROLLER if confirm => {
                 self.binding = Some(self.selected - FIRST_BINDING);
                 self.unsupported_key = false;
@@ -211,6 +213,7 @@ impl SettingsUi {
             5 => "BROWSER FRAME TIMING FOLLOWS THE DISPLAY.",
             6 => "ENTER: TOGGLE FULLSCREEN.",
             7 => "HOLD DOWN WHILE MOVING TO RUN.",
+            CONTROLLER_INPUT => "ENABLES CONTROLLER GAMEPLAY AND MENU INPUT.",
             FIRST_BINDING..CONFIGURE_CONTROLLER => "ENTER: REPLACE KEYS FOR THIS ACTION.",
             CONFIGURE_CONTROLLER => "ENTER: CONFIGURE CONTROLLER BUTTONS.",
             RESTORE => "RESTORES SETTINGS. RECORDS ARE PRESERVED.",
@@ -324,6 +327,7 @@ fn row(index: usize, settings: &Settings) -> (String, String) {
         ),
         6 => ("FULLSCREEN", "ENTER".into()),
         7 => ("DOWN TO RUN", on(settings.down_to_run)),
+        CONTROLLER_INPUT => ("GAMEPAD INPUT", on(settings.controller_enabled)),
         FIRST_BINDING..CONFIGURE_CONTROLLER => {
             let (action, label) = ACTIONS[index - FIRST_BINDING];
             let value = settings.bindings.get(action).cloned().unwrap_or_default();
@@ -408,6 +412,36 @@ mod tests {
             menu.key(KeyCode::Enter, &mut settings),
             SettingsCommand::Back
         );
+    }
+
+    #[test]
+    fn controller_input_toggle_starts_off_and_changes_the_saved_setting() {
+        let mut menu = SettingsUi::new();
+        let mut settings = Settings::default();
+        assert!(!settings.controller_enabled);
+        assert_eq!(
+            row(CONTROLLER_INPUT, &settings),
+            ("GAMEPAD INPUT".into(), "OFF".into())
+        );
+
+        for _ in 0..CONTROLLER_INPUT {
+            assert_eq!(
+                menu.key(KeyCode::ArrowDown, &mut settings),
+                SettingsCommand::None
+            );
+        }
+        assert_eq!(
+            menu.key(KeyCode::Enter, &mut settings),
+            SettingsCommand::Changed
+        );
+        assert!(settings.controller_enabled);
+        assert_eq!(row(CONTROLLER_INPUT, &settings).1, "ON");
+        assert_eq!(
+            menu.key(KeyCode::ArrowLeft, &mut settings),
+            SettingsCommand::Changed
+        );
+        assert!(!settings.controller_enabled);
+        assert_eq!(row(CONTROLLER_INPUT, &settings).1, "OFF");
     }
 
     #[test]

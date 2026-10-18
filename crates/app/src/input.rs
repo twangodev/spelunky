@@ -93,7 +93,7 @@ pub struct InputState {
     keys: HashSet<KeyCode>,
     bindings: BTreeMap<String, Vec<KeyCode>>,
     gamepad_actions: Actions,
-    gamepad_connected: bool,
+    controller_enabled: bool,
     controller_bindings: BTreeMap<String, String>,
     controller_capture_held: bool,
     controller_capture_blocked: bool,
@@ -118,7 +118,7 @@ impl Default for InputState {
                 .map(|(_, name, key)| (name.to_string(), vec![*key]))
                 .collect(),
             gamepad_actions: Actions::default(),
-            gamepad_connected: false,
+            controller_enabled: false,
             controller_bindings: controller::default_bindings(),
             controller_capture_held: false,
             controller_capture_blocked: false,
@@ -210,6 +210,24 @@ impl InputState {
         self.clear();
     }
 
+    /// Classic defaults controller input off and only polls gameplay/menu
+    /// controls while its `global.gamepadOn` option is enabled.
+    pub fn set_controller_enabled(&mut self, enabled: bool) {
+        if self.controller_enabled == enabled {
+            return;
+        }
+        self.controller_enabled = enabled;
+        if enabled {
+            // Don't turn a button held while enabling into a new press.
+            self.blocked_gamepad_actions = Actions(u16::MAX);
+            self.blocked_gamepad_ui = u8::MAX;
+        } else {
+            self.blocked_gamepad_actions = Actions::default();
+            self.blocked_gamepad_ui = 0;
+            self.accept_gamepads(Actions::default(), 0);
+        }
+    }
+
     /// Raw physical controls are captured before menu navigation is translated
     /// to keyboard keys. Classic accepts one control per all-neutral stroke.
     pub fn controller_pressed(&mut self) -> Vec<ControllerButton> {
@@ -294,10 +312,9 @@ impl InputState {
     }
 
     /// Source prompts select controller mode (`global.gamepadOn`), not the
-    /// most recently used device. This port enables supported connected pads
-    /// automatically, and labels their current mappings by physical position.
+    /// most recently used device.
     pub fn action_label(&self, action: &str) -> String {
-        if self.gamepad_connected {
+        if self.controller_enabled {
             let controller_action = if action == "pause" { "start" } else { action };
             if let Some(value) = self.controller_bindings.get(controller_action) {
                 if let Some(button) = controller::parse(value) {
@@ -456,41 +473,44 @@ impl InputState {
         self.refresh();
     }
 
+    fn accept_controller_sample(&mut self, actions: Actions, ui: u8) {
+        if self.controller_enabled {
+            self.accept_gamepads(actions, ui);
+        } else {
+            self.accept_gamepads(Actions::default(), 0);
+        }
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub fn update_gamepad(&mut self) {
         let Some(mut gilrs) = self.gilrs.take() else {
-            self.gamepad_connected = false;
             self.accept_controller_capture(0);
-            self.accept_gamepads(Actions::default(), 0);
+            self.accept_controller_sample(Actions::default(), 0);
             return;
         };
         // Sampling after every queued event preserves a press/release pair that
         // arrives between two presentation frames.
         while gilrs.next_event().is_some() {
-            let (actions, ui, connected, capture) = self.native_gamepads(&gilrs);
-            self.gamepad_connected = connected;
+            let (actions, ui, capture) = self.native_gamepads(&gilrs);
             self.accept_controller_capture(capture);
-            self.accept_gamepads(actions, ui);
+            self.accept_controller_sample(actions, ui);
         }
-        let (actions, ui, connected, capture) = self.native_gamepads(&gilrs);
-        self.gamepad_connected = connected;
+        let (actions, ui, capture) = self.native_gamepads(&gilrs);
         self.accept_controller_capture(capture);
-        self.accept_gamepads(actions, ui);
+        self.accept_controller_sample(actions, ui);
         self.gilrs = Some(gilrs);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn native_gamepads(&self, gilrs: &gilrs::Gilrs) -> (Actions, u8, bool, u32) {
+    fn native_gamepads(&self, gilrs: &gilrs::Gilrs) -> (Actions, u8, u32) {
         use gilrs::{Axis, Button};
         let mut actions = Actions::default();
         let mut ui = 0;
-        let mut connected = false;
         let mut capture = 0;
         for (_, pad) in gilrs.gamepads() {
             if !pad.is_connected() {
                 continue;
             }
-            connected = true;
             let x = pad.value(Axis::LeftStickX);
             let y = pad.value(Axis::LeftStickY);
             let left = x < -DEAD_ZONE || pad.is_pressed(Button::DPadLeft);
@@ -526,7 +546,7 @@ impl InputState {
             actions.0 |= mapped_actions.0;
             ui |= mapped_ui;
         }
-        (actions, ui, connected, capture)
+        (actions, ui, capture)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -534,7 +554,6 @@ impl InputState {
         use wasm_bindgen::JsCast;
         let mut actions = Actions::default();
         let mut ui = 0;
-        let mut connected = false;
         let mut capture = 0;
         if let Some(pads) =
             web_sys::window().and_then(|window| window.navigator().get_gamepads().ok())
@@ -547,7 +566,6 @@ impl InputState {
                 if !pad.connected() || pad.mapping() != web_sys::GamepadMappingType::Standard {
                     continue;
                 }
-                connected = true;
                 let buttons = pad.buttons();
                 let button = |index| {
                     buttons
@@ -600,9 +618,8 @@ impl InputState {
                 ui |= mapped_ui;
             }
         }
-        self.gamepad_connected = connected;
         self.accept_controller_capture(capture);
-        self.accept_gamepads(actions, ui);
+        self.accept_controller_sample(actions, ui);
     }
 }
 
@@ -925,10 +942,10 @@ mod tests {
         remap_sample(&mut input, 0);
         remap_sample(&mut input, ControllerButton::Mode.mask());
         assert_eq!(input.ui_pressed(), vec![UiButton::Pause]);
-        input.gamepad_connected = true;
+        input.set_controller_enabled(true);
         assert_eq!(input.action_label("attack"), "WEST BUTTON");
         assert_eq!(input.action_label("pause"), "MODE");
-        input.gamepad_connected = false;
+        input.set_controller_enabled(false);
         assert_eq!(input.action_label("attack"), "X");
     }
 
@@ -1409,13 +1426,13 @@ mod tests {
     }
 
     #[test]
-    fn connected_controller_selects_prompts_without_a_button_or_last_device_rule() {
+    fn enabled_controller_selects_prompts_without_a_button_or_last_device_rule() {
         let mut input = InputState::default();
         input.set_bindings(&BTreeMap::from([
             ("attack".into(), "KeyJ".into()),
             ("pay".into(), "".into()),
         ]));
-        input.gamepad_connected = true;
+        input.set_controller_enabled(true);
         assert_eq!(input.take_tick(), InputFrame::default());
         assert_eq!(input.action_label("attack"), "SOUTH BUTTON");
         assert_eq!(input.action_label("pay"), "RIGHT SHOULDER");
@@ -1423,9 +1440,44 @@ mod tests {
         assert_eq!(input.action_label("attack"), "SOUTH BUTTON");
         input.clear_gameplay();
         assert_eq!(input.action_label("attack"), "SOUTH BUTTON");
-        input.gamepad_connected = false;
+        input.set_controller_enabled(false);
         assert_eq!(input.action_label("attack"), "J");
         assert_eq!(input.action_label("pay"), "UNBOUND");
+    }
+
+    #[test]
+    fn controller_enable_gates_gameplay_but_keeps_settings_capture_available() {
+        let mut input = InputState::default();
+        let south = ControllerButton::South.mask();
+        let (actions, ui) = input.portable_controller(south, [false; 4]);
+        input.accept_controller_capture(south);
+        input.accept_controller_sample(actions, ui);
+        let frame = input.take_tick();
+        assert!(!frame.attack && !frame.attack_pressed);
+        assert!(input.ui_pressed().is_empty());
+        assert_eq!(input.controller_pressed(), vec![ControllerButton::South]);
+
+        // The setting takes effect immediately; neutral clears the safety
+        // block, after which an ordinary press reaches gameplay and menus.
+        input.accept_controller_capture(0);
+        input.set_controller_enabled(true);
+        input.accept_controller_sample(Actions::default(), 0);
+        input.take_tick();
+        let (actions, ui) = input.portable_controller(south, [false; 4]);
+        input.accept_controller_capture(south);
+        input.accept_controller_sample(actions, ui);
+        let frame = input.take_tick();
+        assert!(frame.attack && frame.attack_pressed);
+        assert_eq!(input.ui_pressed(), vec![UiButton::Confirm]);
+        assert_eq!(input.controller_pressed(), vec![ControllerButton::South]);
+
+        input.set_controller_enabled(false);
+        let frame = input.take_tick();
+        assert!(!frame.attack && frame.attack_released);
+        assert!(input.ui_pressed().is_empty());
+        let (actions, ui) = input.portable_controller(south, [false; 4]);
+        input.accept_controller_sample(actions, ui);
+        assert!(!input.take_tick().attack);
     }
 
     #[test]

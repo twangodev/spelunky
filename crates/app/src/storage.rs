@@ -22,6 +22,8 @@ pub struct Settings {
     pub bindings: BTreeMap<String, String>,
     /// Classic controller actions map to portable physical button names.
     pub controller_bindings: BTreeMap<String, String>,
+    /// Classic `global.gamepadOn`: controller input is opt-in and saved.
+    pub controller_enabled: bool,
 }
 
 impl Default for Settings {
@@ -55,6 +57,7 @@ impl Default for Settings {
             frame_cap: None,
             bindings,
             controller_bindings: crate::controller::default_bindings(),
+            controller_enabled: false,
         }
     }
 }
@@ -524,6 +527,7 @@ mod tests {
                 data.settings.controller_bindings,
                 crate::controller::default_bindings()
             );
+            assert!(!data.settings.controller_enabled);
             if json != "{}" {
                 assert_eq!(data.settings.bindings["jump"], "KeyJ");
                 assert_eq!(data.settings.bindings["attack"], "");
@@ -534,6 +538,7 @@ mod tests {
     #[test]
     fn controller_remaps_survive_save_round_trip_with_records_unchanged() {
         let mut data = SaveData::default();
+        data.settings.controller_enabled = true;
         data.settings
             .controller_bindings
             .insert("jump".into(), "East".into());
@@ -548,6 +553,7 @@ mod tests {
             decoded.settings.controller_bindings,
             data.settings.controller_bindings
         );
+        assert!(decoded.settings.controller_enabled);
         assert_eq!(decoded.settings.bindings, data.settings.bindings);
         assert_eq!(decoded.unlocks, data.unlocks);
         assert_eq!(decoded.challenge_records, data.challenge_records);
