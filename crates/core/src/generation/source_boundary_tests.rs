@@ -274,14 +274,73 @@ fn generated_source_boundary_rng_and_real_world_exist_before_path_selection() {
 #[test]
 fn olmec_create_tape_precedes_boundaries_and_route_and_is_reused_by_authored_instances() {
     const SEED: u32 = 0;
-    const EXPECTED_AFTER_STATIC_CREATE: u32 = 1_549_976_401;
-    const EXPECTED_BEFORE_ROUTE: u32 = 952_404_984;
+    const EXPECTED_AFTER_TEMPLE_CREATE: u32 = 964_265_884;
+    const EXPECTED_AFTER_STATIC_CREATE: u32 = 62_565_469;
+    const EXPECTED_BEFORE_ROUTE: u32 = 1_078_910_996;
     const EXPECTED_ROUTE_START: usize = 2;
-    const EXPECTED_TIMER_DIGEST: u64 = 3_330_284_806_749_926_215;
+    const EXPECTED_TIMER_DIGEST: u64 = 2_439_870_408_187_396_080;
+    // Independent literal room-resource order: row 0/1 is y=560/576, and
+    // column 0 is x=16. Kept separate from the production tape constant.
+    const SOURCE_TEMPLE_ORDER: [u8; 80] = [
+        0, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+        32, 33, 34, 35, 36, 37, 38, 39, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65,
+        64, 63, 62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 5, 6, 7, 9, 8, 49, 48, 47, 46,
+        45, 4, 3, 2, 1, 40, 41, 42, 43, 44,
+    ];
+    assert_eq!(
+        super::special::BOSS_TEMPLE_CREATE_ORDER,
+        SOURCE_TEMPLE_ORDER
+    );
 
-    // Independent literal GM8 draws for the authored room's pre-oGame Create
-    // prefix: Olmec first, then all Lava instances in rOlmec resource order.
+    // Independent literal GM8 draws for all authored pre-oGame Create events.
     let mut source_state = SEED;
+    let mut temple_results = Vec::new();
+    for &position in &SOURCE_TEMPLE_ORDER {
+        let roll = literal_rand(&mut source_state, 100);
+        let treasure = if roll < 30 {
+            None
+        } else if literal_rand(&mut source_state, 60) == 1 {
+            Some(("oSapphireBig", 0.0, 0.0))
+        } else if literal_rand(&mut source_state, 80) == 1 {
+            Some(("oEmeraldBig", 0.0, 0.0))
+        } else if literal_rand(&mut source_state, 100) == 1 {
+            Some(("oRubyBig", 0.0, 0.0))
+        } else if literal_rand(&mut source_state, 1200) == 1 {
+            const UNDERGROUND: [(&str, f64, f64); 19] = [
+                ("oJetpack", 0.0, -2.0),
+                ("oCapePickup", 0.0, 0.0),
+                ("oShotgun", 0.0, 0.0),
+                ("oMattock", 0.0, 0.0),
+                ("oTeleporter", 0.0, 3.0),
+                ("oGloves", 0.0, -1.0),
+                ("oSpectacles", 0.0, 0.0),
+                ("oWebCannon", -2.0, 0.0),
+                ("oPistol", 0.0, 0.0),
+                ("oMitt", 0.0, -1.0),
+                ("oPaste", 0.0, 0.0),
+                ("oSpringShoes", 0.0, 0.0),
+                ("oSpikeShoes", 0.0, 0.0),
+                ("oMachete", 0.0, 0.0),
+                ("oBombBox", 0.0, -2.0),
+                ("oBow", 0.0, 0.0),
+                ("oCompass", 0.0, 0.0),
+                ("oParaPickup", 0.0, 0.0),
+                ("oRopePile", 0.0, 0.0),
+            ];
+            Some(UNDERGROUND[(literal_rand(&mut source_state, 19) - 1) as usize])
+        } else {
+            None
+        };
+        temple_results.push((position, roll, treasure));
+    }
+    assert_eq!(source_state, EXPECTED_AFTER_TEMPLE_CREATE);
+    assert_eq!(
+        temple_results
+            .iter()
+            .filter_map(|(position, _, treasure)| treasure.map(|(object, _, _)| (*position, object)))
+            .collect::<Vec<_>>(),
+        vec![(23, "oRubyBig"), (30, "oSapphireBig")]
+    );
     let olmec_roll = literal_rand(&mut source_state, 2) - 1;
     let expected_facing = if olmec_roll == 0 { -1 } else { 1 };
     let expected_timers: Vec<u16> = (0..240)
@@ -339,6 +398,26 @@ fn olmec_create_tape_precedes_boundaries_and_route_and_is_reused_by_authored_ins
         route[0].iter().position(|&room| room == 1),
         Some(EXPECTED_ROUTE_START)
     );
+
+    for &(position, roll, treasure) in &temple_results {
+        let x = usize::from(position) % 40 + 1;
+        let y = usize::from(position) / 40 + 35;
+        let metadata = world
+            .tile_sprite_metadata(x as i32, y as i32)
+            .expect("authored Temple Create result is attached to its tile");
+        assert_eq!(metadata.value("n"), f64::from(roll));
+        if let Some((object, dx, dy)) = treasure {
+            let center = Vec2::new(x as f64 * 16.0 + 8.0, y as f64 * 16.0 + 8.0);
+            assert!(
+                world.entities.iter().any(|entity| {
+                    entity.alive
+                        && entity.object == object
+                        && entity.pos == Vec2::new(center.x + dx, center.y + dy)
+                }),
+                "source Temple treasure {object} at ({x}, {y})"
+            );
+        }
+    }
 
     let olmec = world
         .entities

@@ -28,17 +28,71 @@ pub(super) const BOSS_LAVA_CREATE_ORDER: [u8; 240] = [
     208, 209, 210, 211, 212, 213, 214, 215, 216, 217,
 ];
 
+/// rOlmec's 80 authored oTemple instances, in room-resource order. Each value
+/// stores `(row * 40 + column)` where row 0/1 maps to y=560/576 and column 0
+/// maps to x=16. Their Create events run before Olmec, Lava, and oGame.Create.
+pub(super) const BOSS_TEMPLE_CREATE_ORDER: [u8; 80] = [
+    0, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+    33, 34, 35, 36, 37, 38, 39, 79, 78, 77, 76, 75, 74, 73, 72, 71, 70, 69, 68, 67, 66, 65, 64, 63,
+    62, 61, 60, 59, 58, 57, 56, 55, 54, 53, 52, 51, 50, 5, 6, 7, 9, 8, 49, 48, 47, 46, 45, 4, 3, 2,
+    1, 40, 41, 42, 43, 44,
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BossTempleTreasure {
+    SapphireBig,
+    EmeraldBig,
+    RubyBig,
+    Underground(u8),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct BossTempleCreate {
+    pub roll: u8,
+    pub treasure: Option<BossTempleTreasure>,
+}
+
 /// The source Create results captured before any route or room draws. Lava
-/// timers stay in the authored instance order above until their final births.
+/// timers and Temple variants/contents stay in their authored instance order
+/// until their final births.
 pub(super) struct BossCreateTape {
+    city_of_gold: bool,
+    has_spectacles: bool,
+    temple_creates: [BossTempleCreate; 80],
     olmec_facing: i8,
     lava_spurt_times: [u16; 240],
 }
 
-pub(super) fn create_source_boss_tape(rng: &mut Rng) -> BossCreateTape {
+pub(super) fn create_source_boss_tape(
+    rng: &mut Rng,
+    city_of_gold: bool,
+    has_spectacles: bool,
+) -> BossCreateTape {
+    let temple_creates = std::array::from_fn(|_| {
+        // oTemple.Create always consumes rand(1,100). Its treasure predicates
+        // then short-circuit in source order for each interior rOlmec tile.
+        let roll = (rng.range(100) + 1) as u8;
+        let treasure = if city_of_gold || roll < 30 {
+            None
+        } else if rng.range(60) == 0 {
+            Some(BossTempleTreasure::SapphireBig)
+        } else if rng.range(80) == 0 {
+            Some(BossTempleTreasure::EmeraldBig)
+        } else if rng.range(100) == 0 {
+            Some(BossTempleTreasure::RubyBig)
+        } else if rng.range(1200) == 0 {
+            Some(BossTempleTreasure::Underground(rng.range(19) as u8))
+        } else {
+            None
+        };
+        BossTempleCreate { roll, treasure }
+    });
     let olmec_facing = if rng.range(2) == 0 { -1 } else { 1 };
     let lava_spurt_times = std::array::from_fn(|_| (100 + rng.range(201)) as u16);
     BossCreateTape {
+        city_of_gold,
+        has_spectacles,
+        temple_creates,
         olmec_facing,
         lava_spurt_times,
     }
@@ -257,9 +311,29 @@ fn boss_arena(
                 | "oLavaSolid"
         )
     });
-    for y in [35, 36] {
-        for x in 1..41 {
-            world.set_tile(x, y, "oTemple");
+    if let Some(tape) = boss_create_tape {
+        // The source Create order is intentionally retained instead of using
+        // the tile grid's row-major order. Temple outcomes (including nested
+        // treasure births) were already drawn before route generation.
+        for (&position, create) in BOSS_TEMPLE_CREATE_ORDER.iter().zip(tape.temple_creates) {
+            let position = usize::from(position);
+            let x = 1 + position % 40;
+            let y = 35 + position / 40;
+            super::terrain::create_authored_boss_temple(
+                world,
+                rng,
+                x,
+                y,
+                create,
+                tape.city_of_gold,
+                tape.has_spectacles,
+            );
+        }
+    } else {
+        for y in [35, 36] {
+            for x in 1..41 {
+                world.set_tile(x, y, "oTemple");
+            }
         }
     }
     for y in 48..54 {
@@ -447,6 +521,34 @@ mod tests {
                 .any(|entity| entity.value("boss_exit") == 1.0)
         );
     }
+
+    #[test]
+    fn authored_temple_underground_item_reuses_its_recorded_choice_without_later_draws() {
+        let mut rng = Rng::new(32);
+        let tape = create_source_boss_tape(&mut rng, false, false);
+        assert_eq!(
+            tape.temple_creates[78].treasure,
+            Some(BossTempleTreasure::Underground(6))
+        );
+        let state_after_source_creates = rng.state_bits();
+        let mut world = World::new(42, 55, Area::Boss, 16);
+        boss_arena(
+            &mut world,
+            &mut rng,
+            crate::GenerationRevision::SourceClassicV2,
+            Some(&tape),
+        );
+        assert_eq!(rng.state_bits(), state_after_source_creates);
+        let spectacles = world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oSpectacles")
+            .expect("recorded Underground-set Temple item is born");
+        assert_eq!(spectacles.pos, Vec2::new(72.0, 584.0));
+        assert_eq!(spectacles.value("cost"), 0.0);
+        assert_eq!(spectacles.value("forSale"), 0.0);
+    }
+
     #[test]
     fn authored_olmec_completes_one_facing_draw_before_following_births() {
         for seed in 0..16 {

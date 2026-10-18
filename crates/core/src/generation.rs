@@ -827,11 +827,15 @@ pub(crate) fn generate_campaign_result(
         };
     }
     let source_classic = state.revision == crate::GenerationRevision::SourceClassicV2;
-    // rOlmec's static Olmec and Lava instances finish their Create events
-    // before oGame.Create reaches scrInitLevel/scrLevelGen. Preserve that RNG
-    // prefix now, then attach its results to the final authored instances.
+    // rOlmec's static Temples, Olmec, and Lava instances finish their Create
+    // events before oGame.Create reaches scrInitLevel/scrLevelGen. Preserve
+    // that RNG prefix now, then attach its results to the authored instances.
     let boss_create_tape = if source_classic && area == Area::Boss {
-        Some(special::create_source_boss_tape(rng))
+        Some(special::create_source_boss_tape(
+            rng,
+            has(&selected, "city_of_gold"),
+            context.has_spectacles,
+        ))
     } else {
         None
     };

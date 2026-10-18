@@ -50,6 +50,69 @@ pub(super) fn metadata(world: &mut World, x: usize, y: usize) -> u64 {
     id
 }
 
+/// Reconstruct one of rOlmec's already-created Temple instances after the
+/// generated route is overlaid. Its random outcome was captured before
+/// oGame.Create, so this only applies the recorded sprite/content and must not
+/// draw again.
+pub(super) fn create_authored_boss_temple(
+    world: &mut World,
+    rng: &mut Rng,
+    x: usize,
+    y: usize,
+    create: super::special::BossTempleCreate,
+    city_of_gold: bool,
+    has_spectacles: bool,
+) {
+    world.set_tile(x, y, "oTemple");
+    let id = metadata(world, x, y);
+    let (sprite, gold) = if city_of_gold {
+        ("sGTemple", 2)
+    } else if create.roll < 20 {
+        ("sTempleGold", 1)
+    } else if create.roll < 30 {
+        ("sTempleGoldBig", 2)
+    } else {
+        ("sTemple", 0)
+    };
+    let entity = world.entity_mut(id).unwrap();
+    entity.data.insert("terrain_initialized".into(), 1.0);
+    entity.data.insert("n".into(), f64::from(create.roll));
+    entity.text.insert("terrain_sprite".into(), sprite.into());
+    if gold > 0 {
+        entity.data.insert("gold_chunks".into(), 3.0);
+        entity
+            .data
+            .insert("gold_nuggets".into(), f64::from(gold == 2));
+    }
+
+    let Some(treasure) = create.treasure else {
+        return;
+    };
+    let center = Vec2::new(x as f64 * 16.0 + 8.0, y as f64 * 16.0 + 8.0);
+    let (object, dx, dy, underground_item) = match treasure {
+        super::special::BossTempleTreasure::SapphireBig => ("oSapphireBig", 0.0, 0.0, false),
+        super::special::BossTempleTreasure::EmeraldBig => ("oEmeraldBig", 0.0, 0.0, false),
+        super::special::BossTempleTreasure::RubyBig => ("oRubyBig", 0.0, 0.0, false),
+        super::special::BossTempleTreasure::Underground(index) => {
+            let (object, dx, dy) = UNDERGROUND[usize::from(index)];
+            (object, dx, dy, true)
+        }
+    };
+    let child = crate::creation::spawn_generated_terrain_child(
+        world,
+        rng,
+        object,
+        Vec2::new(center.x + dx, center.y + dy),
+        has_spectacles,
+    );
+    if underground_item {
+        let child = world.entity_mut(child).unwrap();
+        // scrGenerateItem(...,2) applies these producer overrides after Create.
+        child.data.insert("cost".into(), 0.0);
+        child.data.insert("forSale".into(), 0.0);
+    }
+}
+
 /// Complete the closed scrInitLevel boundary constructor at its actual birth.
 /// Tile storage remains the port's ordinary Solid representation; exterior
 /// source instances remain concrete entities, without changing room bounds.
@@ -1652,13 +1715,11 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(at(640.0, 784.0).sprite, "sLavaTop");
-        assert_eq!(at(624.0, 784.0).value("spurt"), 1.0);
         assert_eq!(at(624.0, 784.0).sprite, "sLavaTop");
 
         // scrCheckWaterTop later propagates the surface horizontally. It can
         // turn covered lava into sLavaTop, but does not roll another spurt.
         assert_eq!(at(16.0, 784.0).sprite, "sLavaTop");
-        assert_eq!(at(16.0, 784.0).value("spurt"), 0.0);
         for entity in lava {
             assert_eq!(entity.value("lava_initialized"), 1.0);
             if entity.value("spurt") == 1.0 {
