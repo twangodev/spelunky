@@ -783,9 +783,6 @@ pub fn game_scene_in_view_into(
         };
         let position = Vec2::new(tile_x as f64 * 16.0, tile_y as f64 * 16.0);
         let [x, y] = screen(position, position, camera, alpha, pixel_snap);
-        if x < -64.0 || y < -64.0 || x > view.width || y > view.height {
-            continue;
-        }
         let definition = catalog::object(&tile.object);
         if definition.is_some_and(|def| !def.visible) {
             continue;
@@ -5951,6 +5948,30 @@ mod tests {
                 .iter()
                 .any(|quad| quad.uv == atlas.sprite("sRock", 0.0).unwrap().uv)
         );
+    }
+
+    #[test]
+    fn adaptive_view_keeps_overhanging_source_terrain_sprite_at_right_edge() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        // oKaliHead Alarm 0 changes the terrain instance's sprite to sGTHHole
+        // and stores the visual override at its cell center. Its 32x32 sprite
+        // has origin (16,16), so a 16px tile at x=432 reaches back into the
+        // 426.67px-wide logical view used by a 1920x1080 surface.
+        game.world.set_tile(27, 5, "oKaliHead");
+        let metadata = game.world.spawn("oTerrainMetadata", Vec2::new(440.0, 88.0));
+        game.world
+            .entity_mut(metadata)
+            .unwrap()
+            .text
+            .insert("terrain_sprite".into(), "sGTHHole".into());
+
+        let view = Viewport::from_surface(1920, 1080);
+        let quads = game_scene_in_view(&game, 1.0, false, &atlas, view);
+        let hole = atlas.sprite("sGTHHole", 0.0).unwrap();
+        let drawn: Vec<_> = quads.iter().filter(|quad| quad.uv == hole.uv).collect();
+        assert_eq!(drawn.len(), 1, "the source terrain image overlaps the view");
+        assert_eq!(drawn[0].rect, [416.0, 64.0, 32.0, 32.0]);
     }
 
     #[test]
