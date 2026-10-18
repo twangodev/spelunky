@@ -1980,6 +1980,32 @@ mod tests {
         }
     }
 
+    fn reservation_fixture(bombs: i32) -> (Game, u64) {
+        let mut game = game();
+        game.world = World::new(30, 20, Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oHardBlock");
+        }
+        game.player.pos = Vec2::new(88.0, 152.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        game.player.facing = 1;
+        game.player.bombs = bombs;
+        game.player.ropes = 4;
+        let rock = game.spawn("oRock", game.player.pos);
+        game.step(&InputFrame {
+            down: true,
+            attack: true,
+            attack_pressed: true,
+            ..InputFrame::default()
+        });
+        assert_eq!(game.player.held, Some(rock));
+        game.step(&InputFrame::default());
+        (game, rock)
+    }
+
     #[test]
     fn game_step_equipment_grant_follows_the_one_parent_pickup_selection() {
         for (rock_position, expected_cape) in [
@@ -2796,6 +2822,91 @@ mod tests {
                 .any(|e| e.alive && e.object == "oWhip" && e.pos.x == 56.0)
         );
     }
+
+    #[test]
+    fn game_step_whip_forward_hit_breaks_ground_jar_but_bags_have_no_whip_event() {
+        fn attack_room(target: &str) -> (Game, u64) {
+            let mut game = game();
+            for x in 0..game.world.width {
+                game.world.set_tile(x, 4, "oBlock");
+            }
+            game.player.pos = Vec2::new(40.0, 56.0);
+            game.player.previous_pos = game.player.pos;
+            game.player.state = PlayerState::Standing;
+            game.player.grounded = true;
+            game.player.facing = 1;
+            let target = game.spawn(target, Vec2::new(56.0, 56.0));
+            (game, target)
+        }
+
+        for bag_type in ["oBombBag", "oRopeBag"] {
+            let (mut game, bag) = attack_room(bag_type);
+            game.step(&InputFrame {
+                attack_pressed: true,
+                ..InputFrame::default()
+            });
+            for frame in 2..=5 {
+                game.step(&InputFrame::default());
+                assert!(
+                    game.world.entity(bag).is_some(),
+                    "{bag_type}, frame {frame}"
+                );
+                assert!(
+                    !game
+                        .world
+                        .entities
+                        .iter()
+                        .any(|entity| entity.alive && entity.object == "oWhip"),
+                    "forward hit spawned early: {bag_type}, frame {frame}"
+                );
+            }
+
+            // Player Step creates the forward hit only once image_index > 4.
+            // Its real sprite mask overlaps each bag here; Classic declares no
+            // oWhip collision event for the oItem child bag objects.
+            game.step(&InputFrame::default());
+            let bag_entity = game.world.entity(bag).unwrap();
+            let forward = game
+                .world
+                .entities
+                .iter()
+                .find(|entity| entity.alive && entity.object == "oWhip")
+                .unwrap();
+            assert!(
+                bag_entity
+                    .collision_mask()
+                    .intersects_mask(&forward.collision_mask()),
+                "attack frame must test an actual ground-bag overlap"
+            );
+            assert!(
+                game.world.entity(bag).is_some(),
+                "{bag_type} is whip-immune"
+            );
+        }
+
+        let (mut game, jar) = attack_room("oJar");
+        game.step(&InputFrame {
+            attack_pressed: true,
+            ..InputFrame::default()
+        });
+        for frame in 2..=5 {
+            game.step(&InputFrame::default());
+            assert!(
+                game.world.entity(jar).is_some(),
+                "jar broke before frame {frame}"
+            );
+        }
+        game.step(&InputFrame::default());
+        assert!(
+            game.world.entity(jar).is_none(),
+            "the frame-six forward Whip collision must execute oJar's callback"
+        );
+        assert!(
+            game.events
+                .iter()
+                .any(|event| matches!(event, GameEvent::Sound { name, .. } if name == "sndBreak"))
+        );
+    }
     #[test]
     fn tunnel_man_innate_attack_digs_and_damages_through_game_step() {
         let mut game = game();
@@ -3025,6 +3136,80 @@ mod tests {
         assert!(!game.world.entity(bomb).unwrap().held);
         assert_eq!(game.player.bombs, 3);
         assert_eq!(fresh.value("stashed"), 0.0);
+    }
+
+    #[test]
+    fn game_step_throwing_reserved_bomb_restores_the_picked_up_item() {
+        let (mut game, old_rock) = reservation_fixture(4);
+        game.step(&InputFrame {
+            cycle_pressed: true,
+            ..InputFrame::default()
+        });
+        let bomb = game.player.held.unwrap();
+        assert!(game.world.entity(old_rock).is_none());
+        assert_eq!(game.world.entity(bomb).unwrap().object, "oBomb");
+        assert_eq!(game.player.pickup_item_type, "Rock");
+        assert_eq!(game.player.bombs, 3);
+
+        game.step(&InputFrame {
+            attack_pressed: true,
+            ..InputFrame::default()
+        });
+        assert_eq!(game.player.held, Some(bomb));
+        assert_eq!(game.world.entity(bomb).unwrap().sprite, "sBombArmed");
+        game.step(&InputFrame::default());
+        game.step(&InputFrame {
+            attack_pressed: true,
+            ..InputFrame::default()
+        });
+
+        let restored = game.player.held.unwrap();
+        assert_ne!(
+            restored, old_rock,
+            "scrHoldItem creates a new item instance"
+        );
+        assert_eq!(game.world.entity(restored).unwrap().object, "oRock");
+        assert!(game.world.entity(restored).unwrap().held);
+        assert_eq!(game.player.pickup_item_type, "Rock");
+        assert_eq!(game.player.bombs, 3);
+        assert!(game.world.entity(bomb).is_some_and(|entity| !entity.held));
+    }
+
+    #[test]
+    fn game_step_using_reserved_rope_restores_the_picked_up_item_once() {
+        let (mut game, old_rock) = reservation_fixture(0);
+        game.step(&InputFrame {
+            cycle_pressed: true,
+            ..InputFrame::default()
+        });
+        let rope = game.player.held.unwrap();
+        assert!(game.world.entity(old_rock).is_none());
+        assert_eq!(game.world.entity(rope).unwrap().object, "oRopeThrow");
+        assert_eq!(game.player.pickup_item_type, "Rock");
+        assert_eq!(game.player.ropes, 3);
+
+        game.step(&InputFrame {
+            attack_pressed: true,
+            ..InputFrame::default()
+        });
+
+        let launched = game.world.entity(rope).unwrap();
+        assert!(!launched.held);
+        // The same frame's inherited oItem Step applies gravity after the
+        // launch writes -12, so the live actor exits Game::step at -11.4.
+        assert_eq!(launched.vel, Vec2::new(0.0, -11.4));
+        assert_eq!(launched.value("armed"), 1.0);
+        assert_eq!(launched.value("px"), game.player.pos.x);
+        assert_eq!(launched.value("py"), game.player.pos.y);
+        assert_eq!(game.player.ropes, 3, "reservation spends exactly one rope");
+        let restored = game.player.held.unwrap();
+        assert_ne!(
+            restored, old_rock,
+            "scrHoldItem creates a new item instance"
+        );
+        assert_eq!(game.world.entity(restored).unwrap().object, "oRock");
+        assert!(game.world.entity(restored).unwrap().held);
+        assert_eq!(game.player.pickup_item_type, "Rock");
     }
 
     #[test]
