@@ -214,7 +214,19 @@ impl EditorUi {
         if self.entry.is_some() {
             match key {
                 KeyCode::Escape => {
-                    self.entry = None;
+                    let entry = self.entry.take().unwrap();
+                    if matches!(
+                        entry.field,
+                        Field::Name
+                            | Field::Author
+                            | Field::Music
+                            | Field::Life
+                            | Field::Bombs
+                            | Field::Ropes
+                            | Field::Next
+                    ) {
+                        return EditorCommand::Back;
+                    }
                 }
                 KeyCode::Enter | KeyCode::NumpadEnter => self.commit_entry(),
                 KeyCode::Tab => {
@@ -432,7 +444,10 @@ impl EditorUi {
         self.entry = Some(Entry {
             field,
             value,
-            replace: true,
+            // Classic appends typed characters and removes one at a time in
+            // existing metadata, sign, and door strings. The host filename
+            // prompt keeps its select-on-first-input convenience.
+            replace: matches!(field, Field::Name),
         });
     }
     fn metadata(&mut self) {
@@ -506,26 +521,42 @@ impl EditorUi {
             field => {
                 let result = match field {
                     Field::Author => {
-                        next.author = entry.value.clone();
-                        Ok(())
+                        if entry.value.is_empty() {
+                            Err("AUTHOR CANNOT BE EMPTY".to_owned())
+                        } else {
+                            next.author = entry.value.clone();
+                            Ok(())
+                        }
                     }
                     Field::Music => {
-                        next.music = entry.value.to_ascii_uppercase();
-                        Ok(())
+                        if entry.value.is_empty() {
+                            Err("MUSIC CANNOT BE EMPTY".to_owned())
+                        } else {
+                            next.music = entry.value.to_ascii_uppercase();
+                            Ok(())
+                        }
                     }
                     Field::Next => {
-                        next.next_level = entry.value.clone();
-                        Ok(())
+                        if entry.value.is_empty() {
+                            Err("NEXT LEVEL CANNOT BE EMPTY".to_owned())
+                        } else {
+                            next.next_level = entry.value.clone();
+                            Ok(())
+                        }
                     }
                     Field::Life | Field::Bombs | Field::Ropes => entry
                         .value
-                        .parse::<i32>()
-                        .map_err(|_| "ENTER A WHOLE NUMBER".to_owned())
+                        .trim()
+                        .parse::<f64>()
+                        .map_err(|_| "ENTER A NUMBER".to_owned())
                         .and_then(|value| {
-                            let minimum = if matches!(field, Field::Life) { 1 } else { 0 };
-                            if !(minimum..=99).contains(&value) {
-                                return Err(format!("VALUE MUST BE {minimum}-99"));
+                            if !value.is_finite() {
+                                return Err("ENTER A FINITE NUMBER".to_owned());
                             }
+                            let minimum = if matches!(field, Field::Life) { 1 } else { 0 };
+                            // scrLoadLevel applies floor(real(text)) and then
+                            // clamps each inventory field to its source range.
+                            let value = value.floor().clamp(f64::from(minimum), 99.0) as i32;
                             match field {
                                 Field::Life => next.starting_life = value,
                                 Field::Bombs => next.starting_bombs = value,
@@ -1364,8 +1395,20 @@ mod tests {
         let mut ui = EditorUi::new();
         ui.begin(Field::Life, "0".into());
         ui.commit_entry();
-        assert!(ui.entry.is_some());
-        assert_eq!(ui.state.level.starting_life, 4);
+        assert!(ui.entry.is_none());
+        assert_eq!(ui.state.level.starting_life, 1);
+        ui.begin(Field::Bombs, "12.9".into());
+        ui.commit_entry();
+        assert_eq!(ui.state.level.starting_bombs, 12);
+        ui.begin(Field::Ropes, "1000".into());
+        ui.commit_entry();
+        assert_eq!(ui.state.level.starting_ropes, 99);
+        ui.begin(Field::Author, String::new());
+        ui.commit_entry();
+        assert!(
+            ui.entry.is_some(),
+            "Classic does not advance on empty metadata"
+        );
         ui.entry = None;
         ui.state.set_tile(0, 0, 'I').unwrap();
         ui.pointer(4.0, 40.0, false, false);
@@ -1416,10 +1459,10 @@ mod tests {
         ui.key(KeyCode::KeyM, None, false);
         ui.key(KeyCode::KeyA, Some("Ada"), false);
         ui.key(KeyCode::Tab, None, false);
-        assert_eq!(ui.state.level.author, "Ada");
+        assert_eq!(ui.state.level.author, "ANONYMOUSAda");
         ui.key(KeyCode::KeyJ, Some("jungle"), false);
         ui.key(KeyCode::Enter, None, false);
-        assert_eq!(ui.state.level.music, "JUNGLE");
+        assert_eq!(ui.state.level.music, "CAVEJUNGLE");
     }
     #[test]
     fn source_exit_confirmation_blocks_edits_cancels_and_discards_with_ordinary_keys() {
@@ -1504,7 +1547,7 @@ mod tests {
         ui.key(KeyCode::KeyA, Some("Ada!"), false);
         ui.key(KeyCode::Delete, None, false);
         ui.key(KeyCode::Enter, None, false);
-        assert_eq!(ui.state.level.author, "Ada");
+        assert_eq!(ui.state.level.author, "ANONYMOUSAda");
         ui.state.set_tile(0, 0, 'I').unwrap();
         ui.pointer(4., 40., false, false);
         ui.key(KeyCode::KeyE, None, false);
@@ -1525,6 +1568,53 @@ mod tests {
         ui.key(KeyCode::KeyN, Some("new"), false);
         ui.key(KeyCode::Enter, None, false);
         assert_eq!(ui.level_name(), "new.lvl");
+    }
+
+    #[test]
+    fn existing_sign_and_door_text_append_and_erase_one_character() {
+        let mut sign = EditorUi::new();
+        let mut level = Level::default();
+        level.set_tile(0, 0, 'I').unwrap();
+        level.signs.push("hello".into());
+        sign.load("sign.lvl", &level.to_text()).unwrap();
+        sign.pointer(4.0, 40.0, false, false);
+        sign.key(KeyCode::KeyE, None, false);
+        sign.key(KeyCode::KeyX, Some("!"), false);
+        sign.key(KeyCode::Backspace, None, false);
+        sign.key(KeyCode::KeyX, Some("?"), false);
+        sign.key(KeyCode::Enter, None, false);
+        assert_eq!(sign.state.level.sign_message(0), "hello?");
+
+        let mut door = EditorUi::new();
+        let mut level = Level::default();
+        level.set_tile(0, 0, 'X').unwrap();
+        level.exit_targets.push("next".into());
+        door.load("door.lvl", &level.to_text()).unwrap();
+        door.pointer(4.0, 40.0, false, false);
+        door.key(KeyCode::KeyL, None, false);
+        door.key(KeyCode::KeyJ, Some(".lvl"), false);
+        door.key(KeyCode::Enter, None, false);
+        assert_eq!(door.state.level.exit_target(0), "next.lvl");
+    }
+
+    #[test]
+    fn escape_from_metadata_leaves_for_title_but_text_edit_returns_to_editor() {
+        let mut metadata = EditorUi::new();
+        metadata.key(KeyCode::KeyM, None, false);
+        assert!(matches!(
+            metadata.key(KeyCode::Escape, None, false),
+            EditorCommand::Back
+        ));
+
+        let mut sign = EditorUi::new();
+        sign.state.set_tile(0, 0, 'I').unwrap();
+        sign.pointer(4.0, 40.0, false, false);
+        sign.key(KeyCode::KeyE, None, false);
+        assert!(matches!(
+            sign.key(KeyCode::Escape, None, false),
+            EditorCommand::None
+        ));
+        assert!(sign.entry.is_none());
     }
 
     #[test]
