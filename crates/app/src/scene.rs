@@ -1033,56 +1033,9 @@ pub fn game_scene_in_view_into(
                 player.sprite.as_str(),
                 "sPExit" | "sDamselExit" | "sTunnelExit"
             );
-        // oCape Step uses the climbing/exit back sprite only while Player is
-        // not whipping. During an attack it falls through to the facing/open
-        // branches even if the platform state still says Climbing.
-        let cape_back = climbing && player.attack_timer == 0;
         // characterDrawEvent's early back-jetpack branch bypasses redColor.
         // Whipping uses the ordinary tinted character and side jetpack instead.
         let back_jetpack = jetpack && climbing && player.attack_timer == 0;
-        if (player.has("Cape") || player.has("cape"))
-            && !game
-                .world
-                .entities
-                .iter()
-                .any(|entity| entity.alive && entity.engine_active && entity.object == "oCape")
-        {
-            let right = player.facing > 0;
-            let open = player.data.get("cape_open").copied().unwrap_or(0.0) > 0.0;
-            let name = if cape_back {
-                "sCapeBack"
-            } else if open {
-                if right { "sCapeUR" } else { "sCapeUL" }
-            } else if player.vel.x.abs() > 0.0 {
-                if right { "sCapeRight" } else { "sCapeLeft" }
-            } else if right {
-                "sCapeDR"
-            } else {
-                "sCapeDL"
-            };
-            let cape_start = sprites.len();
-            let cape = &mut *sprites;
-            sprite(
-                cape,
-                atlas,
-                name,
-                player.animation,
-                if cape_back {
-                    x
-                } else {
-                    x - if right { 4.0 } else { -4.0 }
-                },
-                if cape_back { y + 4.0 } else { y - 2.0 },
-                false,
-                WHITE,
-            );
-            layers.push((
-                if cape_back { 0.0 } else { 100.0 },
-                0,
-                u64::MAX - 1,
-                cape_start..cape.len(),
-            ));
-        }
         if player.data.get("parachute_open").copied().unwrap_or(0.0) > 0.0
             && !game
                 .world
@@ -4699,6 +4652,81 @@ mod tests {
         let facing_pose = atlas.sprite("sCapeDR", game.player.animation).unwrap().uv;
         assert!(!quads.iter().any(|quad| quad.uv == back));
         assert!(quads.iter().any(|quad| quad.uv == facing_pose));
+    }
+
+    #[test]
+    fn natural_cape_pickup_does_not_draw_the_cape_before_player_creates_its_actor() {
+        let atlas = Atlas::load().unwrap();
+        let mut level = spelunky_core::level::Level::default();
+        level.set_tile(7, 4, '@').unwrap();
+        for x in 7..=8 {
+            level.set_tile(x, 5, '1').unwrap();
+        }
+        for x in 0..40 {
+            level.set_tile(x, 24, '1').unwrap();
+        }
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.load_custom(&level, "natural-cape-draw-phase", "");
+        let pickup = game.spawn("oCapePickup", Vec2::new(136.0, 90.0));
+        for _ in 0..4 {
+            game.step(&spelunky_core::InputFrame::default());
+        }
+        assert!(game.player.grounded);
+        assert_eq!(game.world.entity(pickup).unwrap().value("cost"), 0.0);
+
+        game.step(&spelunky_core::InputFrame {
+            down: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert!(game.player.has("Cape"));
+        assert!(game.world.entity(pickup).is_none());
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|entity| entity.alive && entity.object == "oCape"),
+            "oPlayer1 checks for oCape before its later same-Step scrStealItem pickup"
+        );
+
+        let cape_poses = [
+            "sCapeBack",
+            "sCapeUR",
+            "sCapeUL",
+            "sCapeRight",
+            "sCapeLeft",
+            "sCapeDR",
+            "sCapeDL",
+        ];
+        let drawn = game_scene(&game, 1.0, false, &atlas);
+        for pose in cape_poses {
+            let uv = atlas.sprite(pose, 0.0).unwrap().uv;
+            assert!(
+                !drawn.iter().any(|quad| quad.uv == uv),
+                "source has no Cape actor on the pickup frame, but renderer drew {pose}"
+            );
+        }
+
+        game.step(&spelunky_core::InputFrame::default());
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .any(|entity| entity.alive && entity.object == "oCape")
+        );
+        let drawn = game_scene(&game, 1.0, false, &atlas);
+        let actor_pose = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oCape")
+            .unwrap()
+            .sprite
+            .clone();
+        let uv = atlas.sprite(&actor_pose, 0.0).unwrap().uv;
+        assert!(drawn.iter().any(|quad| quad.uv == uv));
     }
 
     #[test]
