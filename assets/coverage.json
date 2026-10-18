@@ -9,9 +9,9 @@
     "by_status": {
       "asset_only_unverified": 18,
       "host_replacement_unverified": 119,
-      "partial_handler_present": 297,
+      "partial_handler_present": 299,
       "partial_static_tile_adapter": 7,
-      "source_abstraction": 12
+      "source_abstraction": 10
     },
     "total": 453
   },
@@ -376,7 +376,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2385,
+          "line": 2410,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -395,7 +395,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2385,
+          "line": 2410,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -414,7 +414,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 143,
+          "line": 125,
+          "module": "crates/core/src/enemies/shop_dialogue.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 190,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -453,7 +458,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 819,
+          "line": 825,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -496,7 +501,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2388,
+          "line": 2413,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -539,7 +544,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2388,
+          "line": 2413,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -582,7 +587,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2386,
+          "line": 2411,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -657,7 +662,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2386,
+          "line": 2411,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -757,12 +762,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1828,
+          "line": 1834,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2560,
+          "line": 2566,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -779,8 +784,14 @@
     },
     {
       "category": "behavior",
-      "handlers": [],
-      "note": "Source parent/group; requires inherited behavior coverage in concrete descendants.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 437,
+          "module": "crates/core/src/world_events.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oBackdrop",
       "parity_verified": false,
       "source_events": [
@@ -788,7 +799,7 @@
       ],
       "source_id": 343,
       "source_path": "Objects/Basis/oBackdrop.xml",
-      "status": "source_abstraction"
+      "status": "partial_handler_present"
     },
     {
       "category": "gameplay",
@@ -830,12 +841,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1778,
+          "line": 1784,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2439,
+          "line": 2445,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -1154,12 +1165,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 454,
+          "line": 462,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 723,
+          "line": 731,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -1185,12 +1196,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1775,
+          "line": 1781,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2438,
+          "line": 2444,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -1243,7 +1254,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2390,
+          "line": 2415,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -1268,17 +1279,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 460,
+          "line": 468,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 711,
+          "line": 719,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1606,
+          "line": 1614,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -1311,22 +1322,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 562,
+          "line": 570,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 717,
+          "line": 725,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 788,
+          "line": 796,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1412,
+          "line": 1420,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -1357,12 +1368,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 717,
+          "line": 725,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 788,
+          "line": 796,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -1392,22 +1403,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 668,
+          "line": 662,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 820,
+          "line": 826,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1032,
+          "line": 1038,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 632,
+          "line": 626,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -1436,7 +1447,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 128,
+          "line": 114,
+          "module": "crates/core/src/enemies/shop_dialogue.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 179,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -1497,7 +1513,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 129,
+          "line": 115,
+          "module": "crates/core/src/enemies/shop_dialogue.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 180,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -1595,12 +1616,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 711,
+          "line": 719,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 791,
+          "line": 799,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -1626,7 +1647,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 720,
+          "line": 728,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -1709,7 +1730,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 134,
+          "line": 120,
+          "module": "crates/core/src/enemies/shop_dialogue.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 185,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -1821,7 +1847,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2384,
+          "line": 2409,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -1841,7 +1867,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2385,
+          "line": 2410,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -1860,7 +1886,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1845,
+          "line": 1851,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -1894,22 +1920,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 563,
+          "line": 571,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 717,
+          "line": 725,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 788,
+          "line": 796,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1412,
+          "line": 1420,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -1980,12 +2006,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1819,
+          "line": 1825,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2600,
+          "line": 2606,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -1995,22 +2021,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 473,
+          "line": 481,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 718,
+          "line": 726,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 789,
+          "line": 797,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1412,
+          "line": 1420,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -2056,12 +2082,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1796,
+          "line": 1802,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2538,
+          "line": 2544,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -2081,17 +2107,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2624,
+          "line": 2630,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 437,
+          "line": 445,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 587,
+          "line": 595,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -2121,7 +2147,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 146,
+          "line": 128,
+          "module": "crates/core/src/enemies/shop_dialogue.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 193,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -2182,12 +2213,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1804,
+          "line": 1810,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2538,
+          "line": 2544,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -2392,7 +2423,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2387,
+          "line": 2412,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -2464,7 +2495,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2650,
+          "line": 2656,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -2637,7 +2668,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 144,
+          "line": 126,
+          "module": "crates/core/src/enemies/shop_dialogue.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 191,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -2757,7 +2793,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1846,
+          "line": 1852,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -2788,7 +2824,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1846,
+          "line": 1852,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -2984,12 +3020,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1770,
+          "line": 1776,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2524,
+          "line": 2530,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3212,12 +3248,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1853,
+          "line": 1859,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2585,
+          "line": 2591,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3237,12 +3273,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1854,
+          "line": 1860,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2585,
+          "line": 2591,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3281,12 +3317,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1855,
+          "line": 1861,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2585,
+          "line": 2591,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3306,7 +3342,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 711,
+          "line": 719,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -3478,7 +3514,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 731,
+          "line": 739,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -3612,7 +3648,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1845,
+          "line": 1851,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3633,7 +3669,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1845,
+          "line": 1851,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3667,7 +3703,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1845,
+          "line": 1851,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3695,7 +3731,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1845,
+          "line": 1851,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3723,7 +3759,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2510,
+          "line": 2516,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3830,12 +3866,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 660,
+          "line": 668,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 862,
+          "line": 870,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -3885,12 +3921,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1040,
+          "line": 1046,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 635,
+          "line": 629,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -3922,12 +3958,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 720,
+          "line": 728,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 793,
+          "line": 801,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -4053,17 +4089,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 668,
+          "line": 662,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1032,
+          "line": 1038,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 633,
+          "line": 627,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -4108,7 +4144,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 819,
+          "line": 825,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -4139,22 +4175,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 468,
+          "line": 476,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 712,
+          "line": 720,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 881,
+          "line": 889,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1614,
+          "line": 1622,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -4187,12 +4223,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 718,
+          "line": 726,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 789,
+          "line": 797,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -4314,22 +4350,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 473,
+          "line": 481,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 718,
+          "line": 726,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 789,
+          "line": 797,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1412,
+          "line": 1420,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -4391,8 +4427,14 @@
     },
     {
       "category": "behavior",
-      "handlers": [],
-      "note": "Source parent/group; requires inherited behavior coverage in concrete descendants.",
+      "handlers": [
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 441,
+          "module": "crates/core/src/world_events.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oForeground",
       "parity_verified": false,
       "source_events": [
@@ -4400,7 +4442,7 @@
       ],
       "source_id": 348,
       "source_path": "Objects/Basis/oForeground.xml",
-      "status": "source_abstraction"
+      "status": "partial_handler_present"
     },
     {
       "category": "behavior",
@@ -4497,7 +4539,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 703,
+          "line": 711,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -4527,7 +4569,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1845,
+          "line": 1851,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -4832,7 +4874,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 132,
+          "line": 118,
+          "module": "crates/core/src/enemies/shop_dialogue.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 183,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -5168,17 +5215,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2385,
+          "line": 2410,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 445,
+          "line": 453,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 673,
+          "line": 681,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -5204,7 +5251,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 441,
+          "line": 449,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -5362,27 +5409,27 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1825,
+          "line": 1831,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2408,
+          "line": 2414,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2595,
+          "line": 2601,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 454,
+          "line": 462,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 723,
+          "line": 731,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -5440,7 +5487,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 886,
+          "line": 918,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -5526,12 +5573,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 565,
+          "line": 573,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 702,
+          "line": 710,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -5604,12 +5651,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1833,
+          "line": 1839,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2569,
+          "line": 2575,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -5656,12 +5703,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 455,
+          "line": 463,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 723,
+          "line": 731,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -5692,7 +5739,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 819,
+          "line": 825,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -5799,12 +5846,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 139,
+          "line": 123,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 140,
+          "line": 188,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -6140,7 +6187,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1851,
+          "line": 1892,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -6213,7 +6260,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1851,
+          "line": 1892,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -6346,17 +6393,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 564,
+          "line": 572,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 718,
+          "line": 726,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 789,
+          "line": 797,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -6386,12 +6433,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 719,
+          "line": 727,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 790,
+          "line": 798,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -6416,7 +6463,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1752,
+          "line": 1758,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -6431,7 +6478,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 713,
+          "line": 721,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -6462,12 +6509,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 790,
+          "line": 798,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 731,
+          "line": 739,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -6487,7 +6534,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 441,
+          "line": 449,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -6506,17 +6553,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1842,
+          "line": 1848,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2407,
+          "line": 2413,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2484,
+          "line": 2490,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -6559,12 +6606,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 474,
+          "line": 482,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 731,
+          "line": 739,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -6583,7 +6630,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 693,
+          "line": 701,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -6835,7 +6882,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2389,
+          "line": 2414,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -6855,7 +6902,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 151,
+          "line": 133,
+          "module": "crates/core/src/enemies/shop_dialogue.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 198,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -7003,7 +7055,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1614,
+          "line": 1622,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -7250,7 +7302,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 147,
+          "line": 129,
+          "module": "crates/core/src/enemies/shop_dialogue.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 194,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -7608,7 +7665,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 133,
+          "line": 119,
+          "module": "crates/core/src/enemies/shop_dialogue.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 184,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -7913,7 +7975,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 885,
+          "line": 893,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -8168,17 +8230,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1755,
+          "line": 1761,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2330,
+          "line": 2336,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2429,
+          "line": 2435,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8206,17 +8268,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1760,
+          "line": 1766,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2385,
+          "line": 2391,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2430,
+          "line": 2436,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8284,7 +8346,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2431,
+          "line": 2437,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8304,7 +8366,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1765,
+          "line": 1771,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8390,12 +8452,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1856,
+          "line": 1862,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2586,
+          "line": 2592,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8415,7 +8477,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 145,
+          "line": 127,
+          "module": "crates/core/src/enemies/shop_dialogue.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 192,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -8459,12 +8526,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 478,
+          "line": 486,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 720,
+          "line": 728,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -8494,17 +8561,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 721,
+          "line": 729,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 792,
+          "line": 800,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 886,
+          "line": 894,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -8552,7 +8619,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 130,
+          "line": 116,
+          "module": "crates/core/src/enemies/shop_dialogue.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 181,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -8674,7 +8746,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 148,
+          "line": 130,
+          "module": "crates/core/src/enemies/shop_dialogue.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 195,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -8806,12 +8883,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1792,
+          "line": 1798,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2511,
+          "line": 2517,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8831,12 +8908,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1819,
+          "line": 1825,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2596,
+          "line": 2602,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -8846,17 +8923,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 717,
+          "line": 725,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 788,
+          "line": 796,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1407,
+          "line": 1415,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -8933,12 +9010,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 701,
+          "line": 709,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 790,
+          "line": 798,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -8969,17 +9046,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 701,
+          "line": 709,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 790,
+          "line": 798,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 880,
+          "line": 888,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -9099,7 +9176,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2390,
+          "line": 2415,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -9292,17 +9369,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 673,
+          "line": 666,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1049,
+          "line": 1055,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 636,
+          "line": 630,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -9366,17 +9443,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 674,
+          "line": 667,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1050,
+          "line": 1056,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 638,
+          "line": 632,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -9396,12 +9473,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 135,
+          "line": 121,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 136,
+          "line": 186,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -9477,17 +9554,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 672,
+          "line": 665,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1039,
+          "line": 1045,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 634,
+          "line": 628,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -9517,17 +9594,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 673,
+          "line": 666,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1049,
+          "line": 1055,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 637,
+          "line": 631,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -9546,7 +9623,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 731,
+          "line": 739,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -9563,7 +9640,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 724,
+          "line": 732,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -9589,7 +9666,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 731,
+          "line": 739,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -9608,7 +9685,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 731,
+          "line": 739,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -9628,7 +9705,7 @@
       "handlers": [
         {
           "kind": "inherited_rubble_family_handler",
-          "line": 731,
+          "line": 739,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -9738,7 +9815,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2385,
+          "line": 2410,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -10208,7 +10285,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 149,
+          "line": 131,
+          "module": "crates/core/src/enemies/shop_dialogue.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 196,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -10382,12 +10464,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1857,
+          "line": 1863,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2585,
+          "line": 2591,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -10407,7 +10489,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2385,
+          "line": 2410,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -10488,7 +10570,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 819,
+          "line": 825,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -10621,12 +10703,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 454,
+          "line": 462,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 723,
+          "line": 731,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -10652,7 +10734,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2387,
+          "line": 2412,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -10693,7 +10775,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2387,
+          "line": 2412,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -10756,22 +10838,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 472,
+          "line": 480,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 717,
+          "line": 725,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 788,
+          "line": 796,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1411,
+          "line": 1419,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -10883,7 +10965,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2387,
+          "line": 2412,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -11001,7 +11083,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2386,
+          "line": 2411,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -11078,12 +11160,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 137,
+          "line": 122,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 138,
+          "line": 187,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -11259,12 +11341,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 141,
+          "line": 124,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 142,
+          "line": 189,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -11344,12 +11426,12 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 717,
+          "line": 725,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 788,
+          "line": 796,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -11374,7 +11456,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 131,
+          "line": 117,
+          "module": "crates/core/src/enemies/shop_dialogue.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 182,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -11486,7 +11573,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1839,
+          "line": 1845,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -11601,7 +11688,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 152,
+          "line": 134,
+          "module": "crates/core/src/enemies/shop_dialogue.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 199,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -11738,7 +11830,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2389,
+          "line": 2414,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -11768,7 +11860,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 672,
+          "line": 680,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -11894,7 +11986,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1853,
+          "line": 1894,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -12097,7 +12189,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1845,
+          "line": 1851,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -12125,7 +12217,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2386,
+          "line": 2411,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
@@ -12165,12 +12257,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1792,
+          "line": 1798,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2511,
+          "line": 2517,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -12190,12 +12282,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2384,
+          "line": 2409,
           "module": "crates/core/src/items/explosives.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 689,
+          "line": 697,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -12231,7 +12323,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 693,
+          "line": 701,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -12314,7 +12406,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2594,
+          "line": 2600,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -12666,12 +12758,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1813,
+          "line": 1819,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2609,
+          "line": 2615,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -12693,12 +12785,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1810,
+          "line": 1816,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2530,
+          "line": 2536,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -12859,7 +12951,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 150,
+          "line": 132,
+          "module": "crates/core/src/enemies/shop_dialogue.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 197,
           "module": "crates/core/src/enemies/shop_dialogue.rs"
         },
         {
@@ -13276,7 +13373,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2390,
+          "line": 2415,
           "module": "crates/core/src/items/explosives.rs"
         }
       ],
@@ -13296,12 +13393,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 459,
+          "line": 467,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 722,
+          "line": 730,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -13366,12 +13463,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 718,
+          "line": 726,
           "module": "crates/core/src/world_events.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 789,
+          "line": 797,
           "module": "crates/core/src/world_events.rs"
         },
         {
