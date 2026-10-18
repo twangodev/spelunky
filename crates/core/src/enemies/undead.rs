@@ -435,13 +435,13 @@ fn vampire(game: &mut Game, e: &mut Entity) {
                 && (source_solid_at(
                     &game.world,
                     Vec2::new(e.pos.x - 1.0, e.pos.y),
-                    CollisionPrecision::Precise,
-                    Some(e.id),
+                    CollisionPrecision::BoundingBox,
+                    None,
                 ) || source_solid_at(
                     &game.world,
                     Vec2::new(e.pos.x + 16.0, e.pos.y),
-                    CollisionPrecision::Precise,
-                    Some(e.id),
+                    CollisionPrecision::BoundingBox,
+                    None,
                 ))
             {
                 e.vel = Vec2::new(f64::from(e.facing), -6.0);
@@ -477,8 +477,8 @@ fn vampire(game: &mut Game, e: &mut Entity) {
                     || !source_solid_at(
                         &game.world,
                         Vec2::new(ahead_x, e.pos.y + 16.0),
-                        CollisionPrecision::Precise,
-                        Some(e.id),
+                        CollisionPrecision::BoundingBox,
+                        None,
                     )
                 {
                     e.state = 0;

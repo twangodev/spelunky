@@ -596,23 +596,23 @@ fn alien(game: &mut Game, e: &mut Entity) {
         }
         let left_head = game.world.solid_point_active(
             Vec2::new(e.pos.x - 1.0, e.pos.y),
-            CollisionPrecision::Precise,
-            Some(e.id),
+            CollisionPrecision::BoundingBox,
+            None,
         );
         let left_foot = game.world.solid_point_active(
             Vec2::new(e.pos.x - 1.0, e.pos.y + 16.0),
-            CollisionPrecision::Precise,
-            Some(e.id),
+            CollisionPrecision::BoundingBox,
+            None,
         );
         let right_head = game.world.solid_point_active(
             Vec2::new(e.pos.x + 16.0, e.pos.y),
-            CollisionPrecision::Precise,
-            Some(e.id),
+            CollisionPrecision::BoundingBox,
+            None,
         );
         let right_foot = game.world.solid_point_active(
             Vec2::new(e.pos.x + 16.0, e.pos.y + 16.0),
-            CollisionPrecision::Precise,
-            Some(e.id),
+            CollisionPrecision::BoundingBox,
+            None,
         );
         if e.facing < 0 && !left_head && !left_foot {
             e.facing = 1;
@@ -1398,6 +1398,7 @@ fn remove_embedded_gold(game: &mut Game, source: &Entity) {
         // one instance_place using the solid receiver's full sprite mask.
         if !game.world.entities.iter().any(|gold| {
             gold.alive
+                && gold.engine_active
                 && crate::catalog::is_a(&gold.object, object)
                 && gold.mask_contains(source.pos, crate::CollisionPrecision::BoundingBox)
         }) {
@@ -1409,6 +1410,7 @@ fn remove_embedded_gold(game: &mut Game, source: &Entity) {
             .iter()
             .find(|gold| {
                 gold.alive
+                    && gold.engine_active
                     && crate::catalog::is_a(&gold.object, object)
                     && source.event_intersects(gold)
             })

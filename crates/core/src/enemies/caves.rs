@@ -508,8 +508,11 @@ fn floor_ahead(world: &World, e: &Entity, direction: i8) -> bool {
             e.pos.x + if direction < 0 { -1.0 } else { 16.0 },
             e.pos.y + 16.0,
         ),
-        CollisionPrecision::Precise,
-        Some(e.id),
+        // Snake, Caveman, and other patrols call collision_point(..., -1,
+        // -1). GM8's native handler compares each flag to 0.5, so both are
+        // false: use the bbox and include the caller.
+        CollisionPrecision::BoundingBox,
+        None,
     )
 }
 
@@ -559,20 +562,20 @@ fn snake(game: &mut Game, e: &mut Entity) {
         let blocked_left = !floor_ahead(&game.world, e, -1)
             || game.world.solid_point_active(
                 Vec2::new(e.pos.x - 1.0, e.pos.y),
-                CollisionPrecision::Precise,
-                Some(e.id),
+                CollisionPrecision::BoundingBox,
+                None,
             );
         let blocked_right = !floor_ahead(&game.world, e, 1)
             || game.world.solid_point_active(
                 Vec2::new(e.pos.x + 16.0, e.pos.y),
-                CollisionPrecision::Precise,
-                Some(e.id),
+                CollisionPrecision::BoundingBox,
+                None,
             );
         e.vel.x = if blocked_left && blocked_right {
             e.facing = if game.world.solid_point_active(
                 Vec2::new(e.pos.x - 1.0, e.pos.y),
-                CollisionPrecision::Precise,
-                Some(e.id),
+                CollisionPrecision::BoundingBox,
+                None,
             ) {
                 1
             } else {
@@ -843,53 +846,19 @@ pub(super) fn continuation_sight_owner(game: &mut Game, e: &Entity) -> f64 {
         .unwrap_or(-4.0) // GameMaker noone
 }
 
-// Source IDLE uses raw top collision_point(-1,-1), while WALK/ATTACK
-// consume the earlier captured full-height side flags. Native GM8 converts
-// each finite -1 flag to false, so these points use the cached bbox.
+// Source IDLE uses raw top collision_point(..., -1, -1), while WALK/ATTACK
+// consume the earlier captured full-height side flags. The native GM8
+// collision_point handler compares each flag to 0.5, so -1 selects bbox
+// checks and leaves notme disabled.
 fn caveman_idle_wall(game: &Game, e: &Entity) -> bool {
     let points = [
         Vec2::new(e.pos.x - 1.0, e.pos.y),
         Vec2::new(e.pos.x + 16.0, e.pos.y),
     ];
-    // A false-only coarse query avoids resolving every terrain mask for an
-    // empty pair of points; registered source receivers remain authoritative.
-    let world = &game.world;
-    if !points.iter().any(|point| {
-        world.tiles_point(*point, "oSolid")
-            || world.entities.iter().any(|other| {
-                other.alive
-                    && other.engine_active
-                    && crate::catalog::is_a(&other.object, "oSolid")
-                    && other.mask_contains(*point, crate::CollisionPrecision::BoundingBox)
-            })
-    }) {
-        return false;
-    }
-    crate::dispatcher::descendant_instances(game, "oSolid")
-        .into_iter()
-        .any(|instance| match instance {
-            crate::dispatcher::Instance::Player => false,
-            crate::dispatcher::Instance::Terrain(index) => {
-                world
-                    .tiles
-                    .get(index)
-                    .is_some_and(|tile| tile.engine_active)
-                    && points.iter().any(|point| {
-                        world
-                            .tile_collision_mask(
-                                (index % world.width) as i32,
-                                (index / world.width) as i32,
-                            )
-                            .contains(*point, crate::CollisionPrecision::BoundingBox)
-                    })
-            }
-            crate::dispatcher::Instance::Entity(id) => world.entity(id).is_some_and(|other| {
-                other.engine_active
-                    && points.iter().any(|point| {
-                        other.mask_contains(*point, crate::CollisionPrecision::BoundingBox)
-                    })
-            }),
-        })
+    points.into_iter().any(|point| {
+        game.world
+            .solid_point_active(point, CollisionPrecision::BoundingBox, None)
+    })
 }
 
 fn caveman(game: &mut Game, e: &mut Entity) {
