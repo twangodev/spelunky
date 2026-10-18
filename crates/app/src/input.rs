@@ -560,15 +560,10 @@ impl InputState {
     #[cfg(not(target_arch = "wasm32"))]
     fn native_gamepads(&self, gilrs: &gilrs::Gilrs) -> (Actions, u8, u8, u32) {
         use gilrs::{Axis, Button};
-        let mut gamepads = [None, None];
-        for (id, pad) in gilrs.gamepads() {
-            // Gilrs IDs are zero-based; only slots 0 and 1 map to Classic's
-            // joystick 1 and joystick 2.
-            let slot: usize = id.into();
-            if slot < gamepads.len() {
-                gamepads[slot] = Some(pad);
-            }
-        }
+        // Gilrs IDs are stable device identities, not Classic joystick slots:
+        // unplugging a pad can leave a gap and later devices receive higher IDs.
+        // Classic chooses the first two currently connected devices instead.
+        let gamepads = first_two_connected_gamepads(gilrs.gamepads().map(|(_id, gamepad)| gamepad));
         let slots = gamepads
             .iter()
             .enumerate()
@@ -701,6 +696,12 @@ impl InputState {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+fn first_two_connected_gamepads<T>(connected: impl IntoIterator<Item = T>) -> [Option<T>; 2] {
+    let mut connected = connected.into_iter();
+    [connected.next(), connected.next()]
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn native_controller_button(button: ControllerButton) -> gilrs::Button {
     use gilrs::Button;
     match button {
@@ -730,6 +731,35 @@ fn parse_key(name: &str) -> Option<KeyCode> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_gamepad_slots_follow_connected_order_instead_of_sparse_ids() {
+        // Gilrs retains IDs across hotplug, so connected IDs can begin at 2 or
+        // have gaps. The first connected device is still Classic joystick 1.
+        let candidates = first_two_connected_gamepads([2, 5, 7]);
+        assert_eq!(candidates, [Some(2), Some(5)]);
+        assert_eq!(
+            crate::controller::classic_gamepad_slot(
+                candidates
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(slot, pad)| pad.map(|_| slot))
+            ),
+            Some(0)
+        );
+        let candidates = first_two_connected_gamepads([4]);
+        assert_eq!(candidates, [Some(4), None]);
+        assert_eq!(
+            crate::controller::classic_gamepad_slot(
+                candidates
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(slot, pad)| pad.map(|_| slot))
+            ),
+            Some(0)
+        );
+    }
+
     #[test]
     fn host_input_audit_partial_triggers_preserve_mapped_edges_and_neutral_capture() {
         for trigger in [
