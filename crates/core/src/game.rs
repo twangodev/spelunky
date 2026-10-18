@@ -696,7 +696,13 @@ impl Game {
         });
         for e in &self.world.entities {
             match e.object.as_str() {
-                "oLockedChest" => {
+                "oKey"
+                    if e.alive
+                        && self.generation_revision == GenerationRevision::SourceClassicV2 =>
+                {
+                    self.flags.insert("made_udjat_eye".into());
+                }
+                "oLockedChest" if self.generation_revision == GenerationRevision::HistoricalV1 => {
                     self.flags.insert("made_udjat_eye".into());
                 }
                 "oMoai" => {

@@ -424,6 +424,87 @@ fn family_origins(world: &World, family: &str) -> Vec<Vec2> {
         .collect()
 }
 
+#[cfg(test)]
+thread_local! {
+    static SOURCE_UDJAT_KEY_TRACE: std::cell::RefCell<Option<Vec<(World, Rng, Rng)>>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
+/// Match scrEntityGen's seven ordered rand(1,8) passes over oTreasure, then
+/// its no-roll fallback to the first treasure outside a Solid point. Every
+/// failed random check still performs the point query, as the GML evaluates
+/// the random operand before collision_point.
+fn source_udjat_key(world: &mut World, rng: &mut Rng) -> bool {
+    #[cfg(test)]
+    let trace_enabled = SOURCE_UDJAT_KEY_TRACE.with(|trace| {
+        let mut trace = trace.borrow_mut();
+        if let Some(trace) = trace.as_mut() {
+            trace.push((world.clone(), rng.clone(), rng.clone()));
+            true
+        } else {
+            false
+        }
+    });
+
+    let treasures: Vec<_> = family_instances(world, "oTreasure")
+        .into_iter()
+        .filter_map(|(_, instance, origin)| match instance {
+            FamilyInstance::Entity(id) => {
+                let object = world.entity(id)?.object.clone();
+                Some((id, origin, object))
+            }
+            // Classic's oTreasure descendants are all object instances, not
+            // terrain tiles. Keep the source `with` order from the shared
+            // family helper while excluding the port's unrelated tile form.
+            FamilyInstance::Tile(_) => None,
+        })
+        .collect();
+
+    let created = 'search: {
+        for _ in 0..7 {
+            for &(id, origin, ref object) in &treasures {
+                let won = rng.chance(1, 8);
+                let clear = !source_point_family(world, origin, "oSolid");
+                if won && clear {
+                    let key_pos = if object == "oGoldBars" {
+                        Vec2::new(origin.x, origin.y + 4.0)
+                    } else {
+                        origin
+                    };
+                    // Source performs instance_create before instance_destroy;
+                    // the shared Create path is RNG-free for oKey.
+                    crate::creation::spawn_generated_entity(world, rng, "oKey", key_pos);
+                    world.entity_mut(id).unwrap().alive = false;
+                    break 'search true;
+                }
+            }
+        }
+
+        for &(id, origin, ref object) in &treasures {
+            if !source_point_family(world, origin, "oSolid") {
+                let key_pos = if object == "oGoldBars" {
+                    Vec2::new(origin.x, origin.y + 4.0)
+                } else {
+                    origin
+                };
+                crate::creation::spawn_generated_entity(world, rng, "oKey", key_pos);
+                world.entity_mut(id).unwrap().alive = false;
+                break 'search true;
+            }
+        }
+        false
+    };
+
+    #[cfg(test)]
+    if trace_enabled {
+        SOURCE_UDJAT_KEY_TRACE.with(|trace| {
+            trace.borrow_mut().as_mut().unwrap().last_mut().unwrap().2 = rng.clone();
+        });
+    }
+    created
+}
+
 fn protect_gold_door_support(world: &mut World, instance: FamilyInstance) {
     match instance {
         FamilyInstance::Entity(id) => {
@@ -1515,7 +1596,14 @@ fn populate_internal(
     if udjat && !exists(world, "oLockedChest") {
         world.spawn("oLockedChest", free_near(world, world.exit));
     }
-    if exists(world, "oLockedChest") && !exists(world, "oKey") {
+    if exists(world, "oLockedChest") && source_classic {
+        // The source creates at most one key by traversing the complete
+        // oTreasure family in birth order, with seven random passes followed
+        // by a first-eligible no-roll fallback. If every treasure is embedded
+        // in Solid, it leaves global.Key false and makes no Udjat guarantee.
+        source_udjat_key(world, rng);
+    } else if exists(world, "oLockedChest") && !exists(world, "oKey") {
+        // HistoricalV1 keeps its prior approximation for serialized runs.
         let candidates: Vec<_> = world
             .entities
             .iter()
@@ -4816,6 +4904,196 @@ mod tests {
         populate(&mut world, &mut Rng::new(17), &flags);
         assert!(!exists(&world, "oLockedChest"));
         assert!(!exists(&world, "oKey"));
+    }
+
+    const SOURCE_TREASURE_CHILDREN: &[&str] = &[
+        "oDiamond",
+        "oEmerald",
+        "oEmeraldBig",
+        "oGoldBar",
+        "oGoldBars",
+        "oGoldChunk",
+        "oGoldNugget",
+        "oRuby",
+        "oRubyBig",
+        "oSapphire",
+        "oSapphireBig",
+    ];
+
+    fn literal_source_udjat_key(world: &mut World, rng: &mut Rng) -> Option<(Vec2, String)> {
+        // Independent transcription of scrEntityGen:109-142. Source `with`
+        // traverses the live Treasure instances in birth order; the `rand`
+        // operand is evaluated before the exact Solid point query for each.
+        let mut treasures: Vec<_> = world
+            .entities
+            .iter()
+            .filter(|entity| {
+                entity.alive && SOURCE_TREASURE_CHILDREN.contains(&entity.object.as_str())
+            })
+            .map(|entity| (entity.creation_serial, entity.id))
+            .collect();
+        treasures.sort_by_key(|(serial, _)| *serial);
+
+        for _ in 1..8 {
+            for &(_, id) in &treasures {
+                let won = 1 + rng.range(8) <= 1;
+                let Some(treasure) = world.entity(id).filter(|entity| entity.alive) else {
+                    continue;
+                };
+                if won && !source_point_family(world, treasure.pos, "oSolid") {
+                    let mut key_pos = treasure.pos;
+                    if treasure.object == "oGoldBars" {
+                        key_pos.y += 4.0;
+                    }
+                    let selected = treasure.object.clone();
+                    world.entity_mut(id).unwrap().alive = false;
+                    world.spawn("oKey", key_pos);
+                    return Some((key_pos, selected));
+                }
+            }
+        }
+
+        // The no-roll fallback in source chooses the first eligible instance.
+        for &(_, id) in &treasures {
+            let Some(treasure) = world.entity(id).filter(|entity| entity.alive) else {
+                continue;
+            };
+            if !source_point_family(world, treasure.pos, "oSolid") {
+                let mut key_pos = treasure.pos;
+                if treasure.object == "oGoldBars" {
+                    key_pos.y += 4.0;
+                }
+                let selected = treasure.object.clone();
+                world.entity_mut(id).unwrap().alive = false;
+                world.spawn("oKey", key_pos);
+                return Some((key_pos, selected));
+            }
+        }
+        None
+    }
+
+    fn literal_previous_udjat_key_approximation(world: &World, rng: &mut Rng) -> Option<Vec2> {
+        // Preserve the former port's five-object uniform picker as a baseline
+        // so this regression proves the source fixture distinguishes it.
+        let candidates: Vec<_> = world
+            .entities
+            .iter()
+            .filter(|entity| {
+                matches!(
+                    entity.object.as_str(),
+                    "oGoldBar" | "oGoldBars" | "oEmeraldBig" | "oSapphireBig" | "oRubyBig"
+                ) && !world.solid_at(entity.pos.x, entity.pos.y)
+            })
+            .collect();
+        if candidates.is_empty() {
+            return Some(free_near(world, world.entrance));
+        }
+        let entity = candidates[rng.range(candidates.len() as u32) as usize];
+        Some(if entity.object == "oGoldBars" {
+            Vec2::new(entity.pos.x, entity.pos.y + 4.0)
+        } else {
+            entity.pos
+        })
+    }
+
+    #[test]
+    fn generated_udjat_key_matches_source_treasure_order_and_rng_continuation() {
+        for &treasure in SOURCE_TREASURE_CHILDREN {
+            assert!(
+                crate::catalog::is_a(treasure, "oTreasure"),
+                "source XML declares {treasure} under oTreasure"
+            );
+        }
+
+        let mut selected_objects = BTreeSet::new();
+        let mut previous_picker_mismatches = 0;
+        for seed in 0..16 {
+            let mut world = World::new(42, 34, Area::Mines, 4);
+            world.entrance = at(3, 3);
+            world.exit = at(37, 30);
+            world.source_room_path = Some([[0; 4]; 5]);
+            // The first family member is blocked at its exact source origin.
+            // The later children exercise a source-family type omitted by the
+            // old five-type Rust filter and Gold Bars' +4 key offset.
+            world.set_tile(4, 4, "oBrick");
+            world.spawn("oGoldBar", Vec2::new(64.0, 64.0));
+            world.spawn("oDiamond", Vec2::new(144.0, 128.0));
+            world.spawn("oEmeraldBig", Vec2::new(224.0, 128.0));
+            world.spawn("oGoldBars", Vec2::new(304.0, 128.0));
+
+            let flags = BTreeSet::from([
+                "gen_udjat_eye".to_owned(),
+                "made_market_entrance".to_owned(),
+            ]);
+            let mut actual_rng = Rng::new(seed);
+            let mut campaign = super::super::GenerationState::fresh(&actual_rng);
+            SOURCE_UDJAT_KEY_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
+            populate_with_campaign(
+                &mut world,
+                &mut actual_rng,
+                &flags,
+                super::super::GenerationContext::default(),
+                &mut campaign,
+                &[[0; 4]; 5],
+            );
+            let mut source_inputs =
+                SOURCE_UDJAT_KEY_TRACE.with(|trace| trace.borrow_mut().take().unwrap());
+            assert_eq!(source_inputs.len(), 1, "source key branch was not reached");
+            let (mut source_world, mut source_rng, mut actual_after_key) =
+                source_inputs.pop().unwrap();
+            let mut old_rng = source_rng.clone();
+            let previous_key =
+                literal_previous_udjat_key_approximation(&source_world, &mut old_rng);
+            let expected_key = literal_source_udjat_key(&mut source_world, &mut source_rng);
+            if previous_key != expected_key.as_ref().map(|(position, _)| *position) {
+                previous_picker_mismatches += 1;
+            }
+            if let Some((_, object)) = &expected_key {
+                selected_objects.insert(object.clone());
+            }
+
+            assert!(exists(&world, "oLockedChest"));
+            let actual_key = world
+                .entities
+                .iter()
+                .find(|entity| entity.alive && entity.object == "oKey")
+                .map(|entity| entity.pos);
+            assert_eq!(
+                actual_key,
+                expected_key.map(|(position, _)| position),
+                "seed={seed}"
+            );
+            assert_eq!(
+                actual_after_key.next_u64(),
+                source_rng.next_u64(),
+                "key-loop RNG continuation, seed={seed}"
+            );
+        }
+        assert!(
+            selected_objects.contains("oDiamond"),
+            "bounded source seeds should exercise the source-only treasure child"
+        );
+        assert!(
+            previous_picker_mismatches > 0,
+            "the source fixture must distinguish the former candidate picker"
+        );
+    }
+
+    #[test]
+    fn source_udjat_does_not_guarantee_a_key_without_an_eligible_treasure() {
+        let mut world = World::new(42, 34, Area::Mines, 4);
+        world.set_tile(4, 4, "oBrick");
+        let treasure = world.spawn("oDiamond", at(4, 4));
+        let mut actual = Rng::new(29);
+        let mut source = actual.clone();
+        for _ in 0..7 {
+            source.range(8);
+        }
+
+        assert!(!source_udjat_key(&mut world, &mut actual));
+        assert!(world.entity(treasure).unwrap().alive);
+        assert!(!exists(&world, "oKey"));
+        assert_eq!(actual.next_u64(), source.next_u64());
     }
 
     #[test]

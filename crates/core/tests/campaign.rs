@@ -195,11 +195,21 @@ fn generated_key_opens_generated_locked_chest_through_game_step() {
         positioned_exit(&mut game);
         game.next_level();
     }
+    assert!(
+        game.flags.contains("made_udjat_eye"),
+        "source progression flag is set when the generated key exists"
+    );
+    assert!(
+        game.world
+            .entities
+            .iter()
+            .any(|e| e.alive && e.object == "oKey")
+    );
     let key = game
         .world
         .entities
         .iter()
-        .find(|e| e.object == "oKey")
+        .find(|e| e.alive && e.object == "oKey")
         .unwrap()
         .id;
     let chest = game
