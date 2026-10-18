@@ -3523,12 +3523,28 @@ mod tests {
         let mut g = game();
         g.world.set_tile(5, 5, "oBlock");
         g.world.set_tile(6, 5, "oSolid");
+        g.world.set_tile(5, 6, "oSolid");
+        let boundary = g.world.spawn("oTerrainMetadata", Vec2::new(88.0, 104.0));
+        g.world
+            .entity_mut(boundary)
+            .unwrap()
+            .data
+            .insert("invincible".into(), 1.0);
         explode(&mut g, Vec2::new(88.0, 88.0));
         for _ in 0..13 {
             tick(&mut g);
         }
         assert_eq!(g.world.tile(5, 5).unwrap().object, "");
-        assert_eq!(g.world.tile(6, 5).unwrap().object, "oSolid");
+        assert_eq!(
+            g.world.tile(6, 5).unwrap().object,
+            "",
+            "ordinary oSolid inherits the destructible source callback"
+        );
+        assert_eq!(
+            g.world.tile(5, 6).unwrap().object,
+            "oSolid",
+            "an invincible boundary solid survives the explosion"
+        );
     }
 
     #[test]
