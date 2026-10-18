@@ -189,6 +189,14 @@ fn counter(e: &mut Entity, key: &str) -> f64 {
     value
 }
 
+fn yeti_source_solid_point(game: &Game, point: Vec2) -> bool {
+    // Yeti Step passes raw (-1, -1) for collision_point's precise/notme flags.
+    // The GM8 builtin converts both with >= 0.5, so this is bbox mode and the
+    // caller remains eligible for the oSolid family query.
+    game.world
+        .solid_point_active(point, CollisionPrecision::BoundingBox, None)
+}
+
 fn enter(e: &mut Entity, state: i32) {
     // Source status writes do not restart sprite playback. Only explicit
     // image_index writes at attack entry reset the animation.
@@ -437,15 +445,8 @@ fn yeti(game: &mut Game, e: &mut Entity) {
         0 => {
             e.data.insert("bounced".into(), 0.0);
             if floor
-                && (game.world.solid_point_active(
-                    Vec2::new(e.pos.x - 1.0, e.pos.y),
-                    CollisionPrecision::Precise,
-                    Some(e.id),
-                ) || game.world.solid_point_active(
-                    Vec2::new(e.pos.x + 16.0, e.pos.y),
-                    CollisionPrecision::Precise,
-                    Some(e.id),
-                ))
+                && (yeti_source_solid_point(game, Vec2::new(e.pos.x - 1.0, e.pos.y))
+                    || yeti_source_solid_point(game, Vec2::new(e.pos.x + 16.0, e.pos.y)))
             {
                 e.vel.y = -6.0;
                 e.vel.x = f64::from(e.facing);
@@ -490,13 +491,12 @@ fn yeti(game: &mut Game, e: &mut Entity) {
             }
             if floor {
                 if game.rng.range(100) == 0
-                    || !game.world.solid_point_active(
+                    || !yeti_source_solid_point(
+                        game,
                         Vec2::new(
                             e.pos.x + if e.facing < 0 { -1.0 } else { 16.0 },
                             e.pos.y + 16.0,
                         ),
-                        CollisionPrecision::Precise,
-                        Some(e.id),
                     )
                 {
                     enter(e, 0);
@@ -1715,6 +1715,31 @@ mod tests {
         g.world = World::new(20, 20, Area::Ice, 9);
         g.player.pos = Vec2::new(100.0, 100.0);
         g
+    }
+
+    #[test]
+    fn yeti_idle_ledge_jump_uses_bbox_collision_point_flags() {
+        let mut game = game();
+        game.world.set_tile(6, 9, "oBlock");
+        let yeti_id = game.spawn("oYeti", Vec2::new(96.0, 128.0));
+        // sDarkFall has a transparent top-left pixel inside its precise mask
+        // bounds. The source's raw (-1,-1) point query still sees that pixel.
+        let ledge_id = game.spawn("oDarkFall", Vec2::new(112.0, 128.0));
+        let probe = Vec2::new(112.0, 128.0);
+        let ledge = game.world.entity(ledge_id).unwrap();
+        assert!(ledge.mask_contains(probe, CollisionPrecision::BoundingBox));
+        assert!(!ledge.mask_contains(probe, CollisionPrecision::Precise));
+
+        let mut yeti = game.world.entity(yeti_id).unwrap().clone();
+        yeti.vel = Vec2::default();
+        yeti.state = 0;
+        yeti.data.insert("counter".into(), 30.0);
+        super::yeti(&mut game, &mut yeti);
+
+        assert_eq!(
+            yeti.vel.y, -6.0,
+            "source Yeti Step sees the ledge with collision_point(..., -1, -1)"
+        );
     }
 
     #[test]
