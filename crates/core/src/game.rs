@@ -1177,6 +1177,52 @@ mod tests {
     }
 
     #[test]
+    fn editor_test_fractional_life_below_one_dies_on_player_step() {
+        let level = level::Level::default();
+        let mut game = Game::shell(4, RulesPreset::Classic);
+        game.load_custom_editor_test(&level, "editor", "", [0.75, 4.0, 4.0]);
+        game.flags.insert("editor_test".into());
+
+        game.step(&InputFrame::default());
+
+        assert_eq!(game.state, RunState::Dead);
+        assert_eq!(game.player.health, 0.0);
+        assert!(
+            game.events
+                .iter()
+                .any(|event| matches!(event, GameEvent::Died))
+        );
+    }
+
+    #[test]
+    fn editor_test_fractional_life_below_one_uses_ankh_before_death() {
+        let level = level::Level::default();
+        let mut game = Game::shell(4, RulesPreset::Classic);
+        game.load_custom_editor_test(&level, "editor", "", [0.75, 4.0, 4.0]);
+        game.flags.insert("editor_test".into());
+        game.player.equipment.insert("Ankh".into());
+
+        game.step(&InputFrame::default());
+
+        assert_eq!(game.state, RunState::Playing);
+        assert_eq!(game.player.health, 4.0);
+        assert!(!game.player.has("Ankh"));
+    }
+
+    #[test]
+    fn editor_test_starting_life_of_one_does_not_trip_fractional_death_threshold() {
+        let level = level::Level::default();
+        let mut game = Game::shell(4, RulesPreset::Classic);
+        game.load_custom_editor_test(&level, "editor", "", [1.0, 4.0, 4.0]);
+        game.flags.insert("editor_test".into());
+
+        game.step(&InputFrame::default());
+
+        assert_eq!(game.state, RunState::Playing);
+        assert_eq!(game.player.health, 1.0);
+    }
+
+    #[test]
     fn completed_exit_recreates_source_controller_and_moves_in_linked_room() {
         use characters::Character;
         for rules in [RulesPreset::Classic, RulesPreset::Assisted] {

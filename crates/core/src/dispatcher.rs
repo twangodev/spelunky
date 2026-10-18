@@ -999,7 +999,7 @@ fn player_step(game: &mut Game, input: &InputFrame) {
     crate::player::late_hurt_step(game);
     crate::progression::player_revival(game);
     let protected = game.flags.contains("hub_title") || game.flags.contains("hub_scores");
-    if game.player.health <= 0.0 && !protected {
+    if game.player.health < 1.0 && !protected {
         let first = game.state != crate::RunState::Dead;
         if first {
             game.player.health = 0.0;

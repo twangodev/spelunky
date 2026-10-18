@@ -320,7 +320,7 @@ fn moai_revival_anchor(game: &Game) -> Option<Vec2> {
 
 fn revive(game: &mut Game) {
     if game.state == RunState::Dead
-        || game.player.health > 0.0
+        || game.player.health >= 1.0
         || !game.player.equipment.remove("Ankh")
     {
         return;
