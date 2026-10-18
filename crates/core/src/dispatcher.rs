@@ -1169,6 +1169,28 @@ fn collision(game: &mut Game, this: Instance, other: Instance) {
         }
     }
 }
+fn collision_with_solid_response(game: &mut Game, this: Instance, other: Instance) {
+    let this_object = source_object(game, this);
+    let other_object = source_object(game, other);
+    // Game Maker 8's automatic solid response is local to a nonempty Collision
+    // callback: it backs up the receiver only when that callback's `other` is
+    // solid, runs the body, then reapplies the receiver's motion. A no-event
+    // direction has no response even when its target is solid.
+    if !collision_events::has_event(&this_object, &other_object) {
+        return;
+    }
+    let other_is_solid = source_solid(game, other);
+    if other_is_solid {
+        restore_previous(game, this);
+    }
+    collision(game, this, other);
+    if other_is_solid {
+        replay_motion(game, this);
+        if intersects(game, this, other) {
+            restore_previous(game, this);
+        }
+    }
+}
 fn source_solid(game: &Game, i: Instance) -> bool {
     let default = catalog::object(&source_object(game, i)).is_some_and(|o| o.solid);
     match i {
@@ -1274,26 +1296,14 @@ fn auto_collisions(game: &mut Game) {
                 {
                     continue;
                 }
-                if source_solid(game, a) || source_solid(game, b) {
-                    restore_previous(game, a);
-                    restore_previous(game, b);
-                }
-                collision(game, a, b);
+                collision_with_solid_response(game, a, b);
                 if matches!(
                     game.state,
                     crate::RunState::Transition | crate::RunState::Won
                 ) {
                     return;
                 }
-                collision(game, b, a);
-                if source_solid(game, a) || source_solid(game, b) {
-                    replay_motion(game, a);
-                    replay_motion(game, b);
-                    if intersects(game, a, b) {
-                        restore_previous(game, a);
-                        restore_previous(game, b);
-                    }
-                }
+                collision_with_solid_response(game, b, a);
             }
         }
     }
@@ -1772,3 +1782,68 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
 
 #[cfg(test)]
 mod skeleton_player_create_tests;
+
+#[cfg(test)]
+mod automatic_collision_tests {
+    use super::*;
+    use crate::{Area, PlayerState, RulesPreset, World};
+
+    #[test]
+    fn one_sided_collision_with_solid_keeps_the_nonreceiver_motion() {
+        let mut game = Game::shell(5, RulesPreset::Classic);
+        game.world = World::new(24, 18, Area::Mines, 1);
+        game.player.pos = Vec2::new(24.0, 24.0);
+        game.player.state = PlayerState::Standing;
+
+        // oRuby's source descriptor is GM-solid. oWeb has only a Collision
+        // with oTreasure body, which zeros other's velocity; Ruby's own Step
+        // moves it before that one-sided callback runs.
+        let web = game.spawn("oWeb", Vec2::new(120.0, 120.0));
+        let ruby = game.spawn("oRuby", Vec2::new(120.0, 120.0));
+        game.world.entity_mut(ruby).unwrap().vel = Vec2::new(1.0, 0.0);
+        assert!(collision_events::has_event("oWeb", "oRuby"));
+        assert!(!collision_events::has_event("oRuby", "oWeb"));
+
+        game.step(&InputFrame::default());
+
+        let ruby = game.world.entity(ruby).unwrap();
+        assert!(game.world.entity(web).is_some());
+        assert_eq!(
+            ruby.vel,
+            Vec2::default(),
+            "oWeb's source Collision zeros other velocity"
+        );
+        assert_eq!(
+            ruby.pos.x, 121.0,
+            "the solid target keeps its Step movement"
+        );
+    }
+
+    #[test]
+    fn one_sided_collision_with_nonsolid_other_keeps_receiver_motion_until_destroy() {
+        let mut game = Game::shell(5, RulesPreset::Classic);
+        game.world = World::new(24, 18, Area::Mines, 1);
+        game.player.pos = Vec2::new(24.0, 24.0);
+        game.player.state = PlayerState::Standing;
+
+        // Big gems receive a source Collision with oGhost; Ghost is non-solid.
+        // The event creates its Diamond at the gem's post-Step coordinates.
+        let ghost = game.spawn("oGhost", Vec2::new(120.0, 120.0));
+        game.world.entity_mut(ghost).unwrap().state = 0;
+        let gem = game.spawn("oRubyBig", Vec2::new(128.0, 128.0));
+        game.world.entity_mut(gem).unwrap().vel = Vec2::new(1.0, 0.0);
+        assert!(collision_events::has_event("oRubyBig", "oGhost"));
+        assert!(!collision_events::has_event("oGhost", "oRubyBig"));
+
+        game.step(&InputFrame::default());
+
+        assert!(game.world.entity(gem).is_none());
+        let diamond = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oDiamond")
+            .unwrap();
+        assert_eq!(diamond.pos.x, 129.0, "source event uses moved receiver x");
+    }
+}
