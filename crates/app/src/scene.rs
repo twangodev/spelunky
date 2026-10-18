@@ -2280,6 +2280,17 @@ fn hud_in_view(
         hub_hud(quads, game, camera, atlas);
         return;
     }
+    // scrDrawHUD is gated by global.drawHUD independently of the player's
+    // death state. Ghost/ManTrap collisions clear this flag before the same
+    // room Draw runs, one simulation tick before the host marks the run dead.
+    if game
+        .data
+        .get("draw_hud")
+        .or_else(|| game.data.get("drawHUD"))
+        .is_some_and(|draw_hud| *draw_hud == 0.0)
+    {
+        return;
+    }
     let player = &game.player;
     // Original Classic HUD positions and 16-pixel bitmap font.
     for (icon, value, x) in [
