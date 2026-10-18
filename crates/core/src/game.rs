@@ -73,6 +73,7 @@ impl Game {
         game.flags.insert("no_dark_level".into());
         game.generate_campaign_room(1);
         game.reset_position();
+        traps::initialize_level(&mut game);
         game
     }
 
@@ -96,11 +97,13 @@ impl Game {
         game.world = generation::tutorial();
         game.flags.insert("tutorial".into());
         game.reset_position();
+        traps::initialize_level(&mut game);
         game
     }
 
     pub fn load_custom(&mut self, level: &level::Level, name: &str, previous: &str) {
         self.load_custom_room(level, name, previous, true);
+        traps::initialize_level(self);
     }
 
     /// Linked custom rooms preserve the run's inventory, as scrLoadLevel(-1)
@@ -111,6 +114,7 @@ impl Game {
         self.load_custom_room(level, name, previous, false);
         self.apply_kisses(kisses);
         self.restore_transition_carry(carry);
+        traps::initialize_level(self);
     }
 
     fn load_custom_room(
@@ -182,6 +186,7 @@ impl Game {
         self.world = hub::world(kind, &self.flags);
         self.reset_position();
         hub::initialize(self, kind);
+        traps::initialize_level(self);
         self.player.previous_pos = self.player.pos;
         self.update_camera();
         self.previous_camera = self.camera;
@@ -243,6 +248,7 @@ impl Game {
                 && key != "water_counter"
                 && key != "water_loop_safety"
                 && key != "source_music_room_created"
+                && key != "curse_level_create_initialized"
                 && key != "progression_initialized"
                 && key != "progression_entrance_x"
                 && key != "progression_entrance_y"
@@ -547,6 +553,7 @@ impl Game {
             self.generate_campaign_room(level.clamp(1, 16));
         }
         self.reset_position();
+        traps::initialize_level(self);
     }
 
     pub fn simulation_version(&self) -> u32 {
@@ -662,6 +669,7 @@ impl Game {
         self.reset_position();
         self.apply_kisses(kisses);
         self.restore_transition_carry(carry);
+        traps::initialize_level(self);
         if !self.flags.contains("wanted") && !self.flags.contains("murderer") {
             self.flags.remove("shopkeepers_angry");
         }

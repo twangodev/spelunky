@@ -2,13 +2,20 @@
 //! oChain/2 and the inherited oItem Step. Player tether limits run in player.rs.
 use crate::model::{Entity, Game, Vec2};
 
+const LEVEL_CREATE_MARKER: &str = "curse_level_create_initialized";
+
 pub(super) fn handles(object: &str) -> bool {
     matches!(object, "oBall" | "oBall2" | "oChain" | "oChain2")
 }
 
-/// oLevel Create restores a campaign punishment before the room starts.
-/// This is a room initializer, never a ball's Step or a mid-room repair.
+/// oLevel Create restores a campaign punishment before the room's first Draw.
+/// Game room entry calls this synchronously; the first Step is a fallback for
+/// low-level fixtures that construct a room without using the room lifecycle.
 pub(super) fn initialize_level(game: &mut Game) {
+    if game.data.contains_key(LEVEL_CREATE_MARKER) {
+        return;
+    }
+    game.data.insert(LEVEL_CREATE_MARKER.into(), 1.0);
     if !game.flags.contains("hub") && game.data.get("kali_punish").copied().unwrap_or(0.0) >= 2.0 {
         spawn_chain(game, game.player.pos, false);
     }
@@ -391,6 +398,24 @@ mod tests {
             4
         );
         g.next_level();
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oBall")
+                .count(),
+            1,
+            "oLevel Create restores the punishment before the first draw"
+        );
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|e| e.alive && e.object == "oChain")
+                .count(),
+            4,
+            "all four authored chain links exist before the first draw"
+        );
         g.step(&crate::InputFrame::default());
         assert_eq!(
             g.world
