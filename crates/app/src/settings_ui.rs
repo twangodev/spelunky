@@ -40,6 +40,8 @@ const ROW_HEIGHT: f32 = 12.0;
 const ROW_STEP: f32 = 14.0;
 const VOLUME_TRACK_X: f32 = 210.0;
 const VOLUME_TRACK_WIDTH: f32 = 86.0;
+const CLASSIC_VOLUME_LEVELS: i32 = 18;
+const CLASSIC_VOLUME_FLOOR: f32 = 0.2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsCommand {
@@ -49,6 +51,12 @@ pub enum SettingsCommand {
     Fullscreen,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsAudioAction {
+    PreviewCave,
+    StopAllMusic,
+}
+
 #[derive(Default)]
 pub struct SettingsUi {
     selected: usize,
@@ -56,6 +64,7 @@ pub struct SettingsUi {
     controller_binding: Option<usize>,
     unsupported_key: bool,
     volume_drag: Option<usize>,
+    audio_action: Option<SettingsAudioAction>,
     effects_preview_focus: bool,
     effects_preview_alarm: Option<u8>,
 }
@@ -92,7 +101,9 @@ impl SettingsUi {
                 return SettingsCommand::None;
             }
             self.volume_drag = Some(index);
-            if index == 3 {
+            if index == 2 {
+                self.audio_action = Some(SettingsAudioAction::PreviewCave);
+            } else if index == 3 {
                 // Classic oSlider2 starts its sndJump preview one simulation
                 // step after the effects slider is clicked.
                 self.effects_preview_focus = true;
@@ -115,15 +126,25 @@ impl SettingsUi {
         };
         if !left_down {
             self.volume_drag = None;
+            if index == 2 {
+                self.audio_action = Some(SettingsAudioAction::StopAllMusic);
+            }
             return SettingsCommand::None;
         }
         self.set_volume_from_pointer(index, x, settings)
     }
 
     pub fn cancel_pointer(&mut self) {
+        if self.volume_drag == Some(2) {
+            self.audio_action = Some(SettingsAudioAction::StopAllMusic);
+        }
         self.volume_drag = None;
         self.effects_preview_focus = false;
         self.effects_preview_alarm = None;
+    }
+
+    pub fn take_audio_action(&mut self) -> Option<SettingsAudioAction> {
+        self.audio_action.take()
     }
 
     /// Advance the Classic effects-slider preview alarm by one game step.
@@ -155,8 +176,12 @@ impl SettingsUi {
         x: f32,
         settings: &mut Settings,
     ) -> SettingsCommand {
-        let volume = ((x - VOLUME_TRACK_X) / VOLUME_TRACK_WIDTH).clamp(0.0, 1.0);
-        let target = (volume * 100.0).round() / 100.0;
+        let progress = ((x - VOLUME_TRACK_X) / VOLUME_TRACK_WIDTH).clamp(0.0, 1.0);
+        // The source handle spans x=8..144 and Step uses floor(x / 8), giving
+        // levels 1..18 during a drag. Keep the redesigned track's endpoints
+        // mapped to those same source steps.
+        let level = 1 + (progress * (CLASSIC_VOLUME_LEVELS - 1) as f32).floor() as i32;
+        let target = volume_from_classic_level(level);
         let value = if index == 2 {
             &mut settings.music_volume
         } else {
@@ -326,7 +351,12 @@ impl SettingsUi {
                 );
                 scene::rect(
                     quads,
-                    [VOLUME_TRACK_X, y + 6.0, VOLUME_TRACK_WIDTH * volume, 2.0],
+                    [
+                        VOLUME_TRACK_X,
+                        y + 6.0,
+                        VOLUME_TRACK_WIDTH * classic_volume_progress(volume),
+                        2.0,
+                    ],
                     if selected { GOLD } else { MUTED },
                 );
             }
@@ -445,7 +475,36 @@ fn settings_row_at(selected: usize, x: f32, y: f32) -> Option<usize> {
 }
 
 fn volume_step(value: f32, direction: i32) -> f32 {
-    ((value * 10.0).round() + direction as f32).clamp(0.0, 10.0) / 10.0
+    if value <= 0.0 && direction < 0 {
+        return 0.0;
+    }
+    let level = classic_volume_level(value);
+    volume_from_classic_level((level + direction).clamp(0, CLASSIC_VOLUME_LEVELS))
+}
+
+fn classic_volume_level(value: f32) -> i32 {
+    if value <= 0.0 {
+        return 0;
+    }
+    (((value.clamp(CLASSIC_VOLUME_FLOOR, 1.0) - CLASSIC_VOLUME_FLOOR)
+        / (1.0 - CLASSIC_VOLUME_FLOOR)
+        * CLASSIC_VOLUME_LEVELS as f32)
+        .round() as i32)
+        .clamp(0, CLASSIC_VOLUME_LEVELS)
+}
+
+fn volume_from_classic_level(level: i32) -> f32 {
+    CLASSIC_VOLUME_FLOOR
+        + (1.0 - CLASSIC_VOLUME_FLOOR)
+            * (level.clamp(0, CLASSIC_VOLUME_LEVELS) as f32 / CLASSIC_VOLUME_LEVELS as f32)
+}
+
+fn classic_volume_progress(value: f32) -> f32 {
+    classic_volume_level(value) as f32 / CLASSIC_VOLUME_LEVELS as f32
+}
+
+fn classic_volume_percent(value: f32) -> u32 {
+    (value.clamp(0.0, 1.0) * 100.0).round() as u32
 }
 
 fn row(index: usize, settings: &Settings) -> (String, String) {
@@ -455,11 +514,11 @@ fn row(index: usize, settings: &Settings) -> (String, String) {
         1 => ("PIXEL SNAP", on(settings.pixel_snap)),
         2 => (
             "MUSIC",
-            format!("{}%", (settings.music_volume * 100.0).round()),
+            format!("{}%", classic_volume_percent(settings.music_volume)),
         ),
         3 => (
             "EFFECTS",
-            format!("{}%", (settings.effects_volume * 100.0).round()),
+            format!("{}%", classic_volume_percent(settings.effects_volume)),
         ),
         4 => ("VSYNC", on(settings.vsync)),
         5 => (
@@ -760,7 +819,8 @@ mod tests {
         for _ in 0..20 {
             menu.key(KeyCode::ArrowLeft, &mut settings);
         }
-        assert_eq!(settings.music_volume, 0.0);
+        assert_eq!(classic_volume_level(settings.music_volume), 0);
+        assert_eq!(settings.music_volume, CLASSIC_VOLUME_FLOOR);
         menu.selected = 5;
         for cap in CAPS.into_iter().cycle().skip(1).take(5) {
             menu.key(KeyCode::ArrowRight, &mut settings);
@@ -771,6 +831,33 @@ mod tests {
             menu.key(KeyCode::Enter, &mut settings),
             SettingsCommand::Fullscreen
         );
+    }
+
+    #[test]
+    fn source_volume_levels_round_trip_and_report_slider_progress() {
+        assert_eq!(classic_volume_level(Settings::default().music_volume), 15);
+        assert_eq!(classic_volume_percent(Settings::default().music_volume), 87);
+        assert_eq!(classic_volume_progress(Settings::default().music_volume), 15.0 / 18.0);
+        assert_eq!(row(2, &Settings::default()).1, "87%");
+        for level in 0..=CLASSIC_VOLUME_LEVELS {
+            let value = volume_from_classic_level(level);
+            assert_eq!(classic_volume_level(value), level);
+            assert_eq!(classic_volume_progress(value), level as f32 / 18.0);
+        }
+
+        let mut settings = Settings::default();
+        let mut menu = SettingsUi::new();
+        menu.selected = 2;
+        let music_track_y = ROW_TOP + 2.0 * ROW_STEP + 9.0;
+        menu.pointer_press(VOLUME_TRACK_X, music_track_y, &mut settings);
+        assert_eq!(classic_volume_level(settings.music_volume), 1);
+        menu.pointer_move(VOLUME_TRACK_X, false, &mut settings);
+        menu.take_audio_action();
+
+        menu.key(KeyCode::ArrowRight, &mut settings);
+        assert_eq!(classic_volume_level(settings.music_volume), 2);
+        menu.key(KeyCode::ArrowLeft, &mut settings);
+        assert_eq!(classic_volume_level(settings.music_volume), 1);
     }
 
     #[test]
@@ -824,7 +911,12 @@ mod tests {
             menu.pointer_press(253.0, music_track_y, &mut settings),
             SettingsCommand::Changed
         );
-        assert_eq!(settings.music_volume, 0.5);
+        assert_eq!(classic_volume_level(settings.music_volume), 9);
+        assert_eq!(classic_volume_percent(settings.music_volume), 60);
+        assert_eq!(
+            menu.take_audio_action(),
+            Some(SettingsAudioAction::PreviewCave)
+        );
         assert_eq!(
             menu.pointer_move(296.0, true, &mut settings),
             SettingsCommand::Changed
@@ -833,6 +925,10 @@ mod tests {
         assert_eq!(
             menu.pointer_move(210.0, false, &mut settings),
             SettingsCommand::None
+        );
+        assert_eq!(
+            menu.take_audio_action(),
+            Some(SettingsAudioAction::StopAllMusic)
         );
         assert_eq!(
             menu.pointer_move(210.0, true, &mut settings),
@@ -851,6 +947,7 @@ mod tests {
             menu.pointer_press(253.0, effects_track_y, &mut settings),
             SettingsCommand::Changed
         );
+        assert_eq!(menu.take_audio_action(), None);
         assert!(
             menu.tick_effects_preview(),
             "source alarm starts at one step"

@@ -9,7 +9,7 @@ use crate::{
     performance::{FrameSample, Profiler, Stamp},
     renderer::{DrawQuad, Renderer},
     scene::{self, rect, text},
-    settings_ui::{SettingsCommand, SettingsUi},
+    settings_ui::{SettingsAudioAction, SettingsCommand, SettingsUi},
     storage::{Record, Store},
     timing::FixedClock,
     viewport::Viewport,
@@ -449,6 +449,7 @@ impl App {
         self.mouse_left = false;
         self.mouse_right = false;
         self.settings_ui.cancel_pointer();
+        self.apply_settings_audio_action();
         self.editor.cancel_pointer();
     }
     fn reset_room_timing(&mut self) {
@@ -461,6 +462,7 @@ impl App {
         self.input.clear_edges();
     }
     fn screen(&mut self, screen: Screen) {
+        let entering_settings = screen == Screen::Settings && self.screen != Screen::Settings;
         if screen == Screen::Editor && self.screen != Screen::Editor {
             if let Some(game) = &self.game {
                 self.editor.set_source_rng(game.rng.clone());
@@ -482,6 +484,11 @@ impl App {
             0
         };
         self.reset_timing();
+        if entering_settings {
+            // Classic oSlider1's idle Step branch calls stopAllMusic while
+            // rInit is open; the host stops the prior screen's track on entry.
+            self.audio.stop_all_music();
+        }
         self.apply_audio_policy();
     }
     /// Classic clears `global.testLevel` before opening the level editor from
@@ -1025,6 +1032,20 @@ impl App {
             SettingsCommand::Back => self.screen(self.settings_return),
             SettingsCommand::Fullscreen => self.fullscreen(),
             SettingsCommand::None => {}
+        }
+    }
+    fn apply_settings_audio_action(&mut self) {
+        match self.settings_ui.take_audio_action() {
+            Some(SettingsAudioAction::PreviewCave) => {
+                if let Some(game) = &mut self.game {
+                    // Source playMusic(musCave, true) checks global.music and
+                    // resource idleness before starting the looping track.
+                    spelunky_core::music::play(game, "musCave", true);
+                }
+                self.flush_source_music();
+            }
+            Some(SettingsAudioAction::StopAllMusic) => self.audio.stop_all_music(),
+            None => {}
         }
     }
     fn return_from_custom_selector(&mut self) {
@@ -2451,6 +2472,7 @@ impl App {
                     &mut self.store.data.settings,
                 );
                 self.apply_settings_command(command);
+                self.apply_settings_audio_action();
             }
             _ => {}
         }
@@ -2464,6 +2486,7 @@ impl App {
                     &mut self.store.data.settings,
                 );
                 self.apply_settings_command(command);
+                self.apply_settings_audio_action();
             }
             _ => {}
         }
@@ -3664,6 +3687,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.mouse_left = false;
                 self.mouse_right = false;
                 self.settings_ui.cancel_pointer();
+                self.apply_settings_audio_action();
                 self.editor.cancel_pointer();
                 if let Some([x, y]) = self.cursor_physical {
                     self.cursor = logical_pointer(x, y, size.width, size.height);
