@@ -184,6 +184,10 @@ fn resource_volume(name: &str, music: f32, effects: f32, music_muted: bool) -> f
     }
 }
 
+fn resumed_unlock_state(previously_unlocked: bool, resume_succeeded: bool) -> bool {
+    previously_unlocked || resume_succeeded
+}
+
 #[cfg(test)]
 mod policy_tests {
     use super::*;
@@ -194,6 +198,20 @@ mod policy_tests {
         assert_eq!(resource_volume("flame", 0.4, 0.7, false), 0.7);
         assert_eq!(resource_volume("title", 0.4, 0.7, true), 0.0);
         assert_eq!(resource_volume("flame", 0.4, 0.7, true), 0.7);
+    }
+
+    #[test]
+    fn rejected_audio_resume_stays_locked_until_a_later_resume_succeeds() {
+        let locked = resumed_unlock_state(false, false);
+        assert!(!locked, "a rejected resume must not drain queued audio");
+
+        let unlocked = resumed_unlock_state(locked, true);
+        assert!(unlocked, "a fulfilled resume opens the playback gate");
+
+        assert!(
+            resumed_unlock_state(unlocked, false),
+            "a failed redundant resume does not undo a prior successful unlock"
+        );
     }
 }
 
@@ -1075,7 +1093,7 @@ mod backend {
 mod backend {
     use super::*;
     use std::{
-        cell::RefCell,
+        cell::{Cell, RefCell},
         collections::{HashMap, HashSet, VecDeque},
         rc::Rc,
     };
@@ -1120,7 +1138,7 @@ mod backend {
         music_muted: bool,
         sound_pans: HashMap<&'static str, f32>,
         music_frequencies: HashMap<&'static str, u32>,
-        unlocked: bool,
+        unlocked: Rc<Cell<bool>>,
         paused: bool,
         last_update: f64,
     }
@@ -1144,7 +1162,7 @@ mod backend {
                 music_muted: false,
                 sound_pans: HashMap::new(),
                 music_frequencies: HashMap::new(),
-                unlocked: false,
+                unlocked: Rc::new(Cell::new(false)),
                 paused: false,
                 last_update: 0.0,
             }
@@ -1157,11 +1175,12 @@ mod backend {
             if let Some(context) = &self.context {
                 if !self.paused {
                     if let Ok(promise) = context.resume() {
+                        let unlocked = Rc::clone(&self.unlocked);
                         spawn_local(async move {
-                            let _ = JsFuture::from(promise).await;
+                            let resumed = JsFuture::from(promise).await.is_ok();
+                            unlocked.set(resumed_unlock_state(unlocked.get(), resumed));
                         });
                     }
-                    self.unlocked = true;
                 }
             }
         }
@@ -1413,7 +1432,7 @@ mod backend {
                 self.last_update = context.current_time();
                 let result = if paused {
                     context.suspend()
-                } else if self.unlocked {
+                } else if self.unlocked.get() {
                     context.resume()
                 } else {
                     return;
@@ -1535,7 +1554,7 @@ mod backend {
             let now = context.current_time();
             let delta = (now - self.last_update).max(0.0);
             self.last_update = now;
-            if self.paused || !self.unlocked {
+            if self.paused || !self.unlocked.get() {
                 return;
             }
             self.effects.retain(|effect| {
@@ -1604,7 +1623,7 @@ mod backend {
                 music_muted: false,
                 sound_pans: HashMap::new(),
                 music_frequencies: HashMap::new(),
-                unlocked: false,
+                unlocked: Rc::new(Cell::new(false)),
                 paused: false,
                 last_update: 0.0,
             }
