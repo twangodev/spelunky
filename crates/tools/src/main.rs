@@ -505,7 +505,7 @@ mod tests {
                     "ticks": expected.tick,
                     "hash": format!("{:016x}", expected.state_hash()),
                     "score": expected.player.money,
-                    "health": expected.player.health,
+                    "health": expected.player.health as i32,
                     "level": expected.world.level,
                     "entities": expected.world.entities.len(),
                     "state": expected.state,
