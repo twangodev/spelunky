@@ -17,6 +17,7 @@ pub enum HubKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HubPortal {
     Start,
+    End,
     Scores,
     Tutorial,
     Title,
@@ -878,50 +879,79 @@ fn activate_portal(game: &mut Game) {
     {
         return;
     }
-    let portal = game
-        .world
-        .entities
-        .iter()
-        .find(|e| {
-            e.alive
-                && crate::catalog::is_a(&e.object, "oXStart")
-                && e.sprite_bounds().contains(game.player.pos)
+
+    // Player Step first gates on collision_point(x, y, oXStart), then resolves
+    // `instance_place(x, y, oXStart)` separately. Both source queries see only
+    // active members and preserve the registered family order; the latter
+    // uses the Player's full sprite mask rather than its origin point.
+    crate::dispatcher::register_instances(game);
+    let doors: Vec<_> = crate::dispatcher::descendant_instances(game, "oXStart")
+        .into_iter()
+        .filter_map(|instance| match instance {
+            crate::dispatcher::Instance::Entity(id) => game.world.entity(id),
+            _ => None,
         })
-        .map(|e| (e.object.clone(), e.pos));
-    let Some((portal, portal_pos)) = portal else {
+        .filter(|door| door.alive && door.engine_active)
+        .cloned()
+        .collect();
+    if !doors
+        .iter()
+        .any(|door| door.mask_contains(game.player.pos, crate::CollisionPrecision::BoundingBox))
+    {
         return;
-    };
+    }
+    let player_mask = game.player.collision_mask();
+    let receiver = doors
+        .iter()
+        .find(|door| player_mask.intersects_mask(&door.collision_mask()));
+    if let Some(receiver) = receiver {
+        game.player.pos.x = receiver.pos.x + 8.0;
+    }
+
+    // pExit is resolved after the receiver snap, using the source's explicit
+    // subtype precedence rather than assuming it is the same instance that
+    // `instance_place` selected.
+    let portal = [
+        ("oXScores", HubPortal::Scores),
+        ("oXTutorial", HubPortal::Tutorial),
+        ("oXTitle", HubPortal::Title),
+        ("oXEnd", HubPortal::End),
+        ("oXShortcut5", HubPortal::Shortcut5),
+        ("oXShortcut9", HubPortal::Shortcut9),
+        ("oXShortcut13", HubPortal::Shortcut13),
+        ("oXSun", HubPortal::Sun),
+        ("oXMoon", HubPortal::Moon),
+        ("oXStars", HubPortal::Stars),
+        ("oXChange", HubPortal::Change),
+        ("oXChange2", HubPortal::Change2),
+    ]
+    .into_iter()
+    .find_map(|(object, portal)| {
+        doors
+            .iter()
+            .any(|door| {
+                door.object == object
+                    && door.mask_contains(game.player.pos, crate::CollisionPrecision::BoundingBox)
+            })
+            .then_some(portal)
+    })
+    .unwrap_or(HubPortal::Start);
     let stages = shortcut_stages(&game.flags);
     // The level-five shortcut is authored into rTitle and the source player
     // accepts it unconditionally. Only the later doors appear after their
     // tunnel donations; those rooms are already guarded by their creation
     // conditions, with this check protecting stray/custom instances too.
-    if matches!(portal.as_str(), "oXShortcut9") && !stages[1]
-        || matches!(portal.as_str(), "oXShortcut13") && !stages[2]
+    if matches!(portal, HubPortal::Shortcut9) && !stages[1]
+        || matches!(portal, HubPortal::Shortcut13) && !stages[2]
     {
         return;
     }
-    game.player.pos.x = portal_pos.x + 8.0;
     if let Some(id) = game.player.held.take() {
         if let Some(item) = game.world.entity_mut(id) {
             item.held = false;
         }
     }
     game.player.pickup_item_type.clear();
-    let portal = match portal.as_str() {
-        "oXScores" => HubPortal::Scores,
-        "oXTutorial" => HubPortal::Tutorial,
-        "oXTitle" => HubPortal::Title,
-        "oXShortcut5" => HubPortal::Shortcut5,
-        "oXShortcut9" => HubPortal::Shortcut9,
-        "oXShortcut13" => HubPortal::Shortcut13,
-        "oXSun" => HubPortal::Sun,
-        "oXMoon" => HubPortal::Moon,
-        "oXStars" => HubPortal::Stars,
-        "oXChange" => HubPortal::Change,
-        "oXChange2" => HubPortal::Change2,
-        _ => HubPortal::Start,
-    };
     crate::ending::begin_hub_exit(game, portal);
     if portal != HubPortal::Change2 {
         crate::music::stop_all(game);
@@ -963,6 +993,7 @@ pub fn complete_portal(game: &mut Game, portal: HubPortal) {
     }
     let destination = match portal {
         HubPortal::Scores => "scores",
+        HubPortal::End => unreachable!("xEND enters the campaign chamber in Animation End"),
         HubPortal::Tutorial => "tutorial",
         HubPortal::Start if game.flags.remove("first_time") => {
             game.flags.insert("onboarding_consumed".into());
@@ -2084,6 +2115,111 @@ mod tests {
                 assert!(g.ending.is_none());
             }
         }
+    }
+
+    #[test]
+    fn game_step_resolves_portal_receiver_in_active_family_order() {
+        let mut g = Game::shell(9, RulesPreset::Classic);
+        g.world = World::new(40, 20, Area::Mines, 1);
+        g.flags.insert("hub".into());
+        g.flags.insert("hub_title".into());
+        for x in 0..g.world.width {
+            g.world.set_tile(x, 12, "oTemple");
+        }
+
+        // The origin point is inside only the generic door at x=384, while
+        // the Player's full mask also overlaps Scores at x=396. Create Scores
+        // first so source family order chooses it for instance_place.
+        g.world.spawn("oXScores", Vec2::new(396.0, 176.0));
+        g.world.spawn("oXStart", Vec2::new(384.0, 176.0));
+        g.player.pos = Vec2::new(392.0, 184.0);
+        g.player.previous_pos = g.player.pos;
+        g.player.grounded = true;
+        g.player.state = PlayerState::Standing;
+
+        g.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+
+        assert!(g.player.is_exiting());
+        assert_eq!(
+            g.ending.as_ref().and_then(|ending| ending.portal),
+            Some(HubPortal::Scores),
+            "instance_place uses the active source-family receiver order"
+        );
+    }
+
+    #[test]
+    fn game_step_routes_xend_portal_into_campaign_ending_room() {
+        let mut g = Game::shell(9, RulesPreset::Classic);
+        g.world = World::new(40, 20, Area::Mines, 1);
+        g.flags.insert("hub".into());
+        g.flags.insert("hub_title".into());
+        for x in 0..g.world.width {
+            g.world.set_tile(x, 12, "oTemple");
+        }
+        g.world.spawn("oXEnd", Vec2::new(384.0, 176.0));
+        g.player.pos = Vec2::new(392.0, 184.0);
+        g.player.previous_pos = g.player.pos;
+        g.player.grounded = true;
+        g.player.state = PlayerState::Standing;
+
+        g.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+
+        assert!(g.player.is_exiting());
+        assert_eq!(
+            g.ending.as_ref().unwrap().kind,
+            crate::ending::EndingKind::HubPortal
+        );
+        assert_eq!(g.ending.as_ref().unwrap().portal, Some(HubPortal::End));
+        for _ in 0..40 {
+            if g.world.name == "rEnd" {
+                break;
+            }
+            g.step(&InputFrame::default());
+        }
+        assert_eq!(g.world.name, "rEnd");
+        assert_eq!(
+            g.ending.as_ref().unwrap().stage,
+            crate::ending::EndingStage::Chamber
+        );
+    }
+
+    #[test]
+    fn inactive_authored_title_portal_does_not_activate_on_game_step() {
+        let mut g = Game::shell(9, RulesPreset::Classic);
+        g.load_hub(HubKind::Title);
+        for _ in 0..200 {
+            if g.player.pos.x <= 440.0 {
+                break;
+            }
+            g.step(&InputFrame {
+                left: true,
+                ..Default::default()
+            });
+        }
+        assert!((g.player.pos.x - 440.0).abs() <= 3.0);
+
+        let scores = g
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oXScores")
+            .unwrap()
+            .id;
+        g.world.entity_mut(scores).unwrap().engine_active = false;
+        g.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+
+        assert_eq!(g.state, RunState::Playing);
+        assert!(!g.player.is_exiting());
+        assert!(!g.flags.contains("hub_destination:scores"));
     }
 
     #[test]

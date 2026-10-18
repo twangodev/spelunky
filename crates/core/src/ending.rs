@@ -1783,8 +1783,14 @@ pub(crate) fn player_animation_end(game: &mut Game) {
     game.player.money = game.player.money.saturating_add(collect);
     game.player.held = None;
     if let Some(portal) = s.portal {
-        crate::hub::complete_portal(game, portal);
-        return;
+        if portal == crate::hub::HubPortal::End {
+            // Classic xEND follows the shared exit animation directly into
+            // rEnd; it is not a normal title-start portal.
+            s.kind = EndingKind::Campaign;
+        } else {
+            crate::hub::complete_portal(game, portal);
+            return;
+        }
     }
     // oPlayer1 Animation End: the ordinary exit advances currLevel before
     // this callback, so City remains active until the level-16 transition.
