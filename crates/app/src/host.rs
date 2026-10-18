@@ -1745,7 +1745,7 @@ impl App {
                 apply_cinematic_start(&mut input, &mut self.cinematic_action);
                 apply_credits_keyboard_skip(&mut input, &mut self.credits_keyboard_skip);
                 if let Some(game) = &mut self.game {
-                    let begin_message = self.source_message.clone();
+                    let mut begin_message = self.source_message.clone();
                     game.down_to_run = self.store.data.settings.down_to_run;
                     gameplay_view
                         .apply_gameplay_extent(game)
@@ -1787,6 +1787,13 @@ impl App {
                                     &mut self.source_message,
                                     message,
                                 );
+                            }
+                            GameEvent::ClearSourceDialogue => {
+                                clear_source_dialogue_on_transition(
+                                    &mut self.source_message,
+                                    &mut self.drawn_source_message,
+                                );
+                                begin_message = None;
                             }
                             _ => {}
                         }
@@ -8478,11 +8485,38 @@ mod source_message_lifecycle_tests {
         until: &mut f64,
         simulated: &mut bool,
     ) {
-        let begin_message = source.clone();
-        game.step(&InputFrame::default());
+        step_with_host_dialogue_input(
+            game,
+            source,
+            drawn,
+            bare,
+            until,
+            simulated,
+            &InputFrame::default(),
+        );
+    }
+
+    fn step_with_host_dialogue_input(
+        game: &mut Game,
+        source: &mut Option<SourceMessage>,
+        drawn: &mut Option<SourceMessage>,
+        bare: &mut String,
+        until: &mut f64,
+        simulated: &mut bool,
+        input: &InputFrame,
+    ) {
+        let mut begin_message = source.clone();
+        game.step(input);
         for event in &game.events {
-            if let GameEvent::Dialogue(message) = event {
-                replace_source_dialogue(bare, until, simulated, source, message);
+            match event {
+                GameEvent::Dialogue(message) => {
+                    replace_source_dialogue(bare, until, simulated, source, message);
+                }
+                GameEvent::ClearSourceDialogue => {
+                    clear_source_dialogue_on_transition(source, drawn);
+                    begin_message = None;
+                }
+                _ => {}
             }
         }
         *drawn = begin_source_message(game, begin_message.as_ref());
@@ -8580,6 +8614,99 @@ mod source_message_lifecycle_tests {
                 .all(|event| !matches!(event, GameEvent::Dialogue(_)))
         );
         assert!(simulated);
+    }
+
+    #[test]
+    fn sign_dialogue_clears_at_the_authored_tally_room_creation_boundary() {
+        use spelunky_core::ending::{EndingKind, EndingStage};
+
+        let mut game = Game::shell(32, RulesPreset::Classic);
+        game.world = World::new(20, 15, Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 3, "oTemple");
+        }
+        game.player.pos = Vec2::new(40., 40.);
+        game.player.previous_pos = game.player.pos;
+        game.player.grounded = true;
+        game.player.state = spelunky_core::PlayerState::Standing;
+        let sign = game.world.spawn("oMsgSign", Vec2::new(32., 32.));
+        let sign = game.world.entity_mut(sign).unwrap();
+        sign.text.insert("message".into(), "OLD ROOM SIGN".into());
+        sign.text.insert("message2".into(), "SECOND LINE".into());
+
+        let mut source = None;
+        let mut drawn = None;
+        let mut bare = String::new();
+        let mut until = 0.;
+        let mut simulated = false;
+        step_with_host_dialogue(
+            &mut game,
+            &mut source,
+            &mut drawn,
+            &mut bare,
+            &mut until,
+            &mut simulated,
+        );
+        let old_message = source.clone().expect("real sign collision emits Dialogue");
+        step_with_host_dialogue(
+            &mut game,
+            &mut source,
+            &mut drawn,
+            &mut bare,
+            &mut until,
+            &mut simulated,
+        );
+        assert_eq!(drawn.as_ref(), Some(&old_message));
+        game.world
+            .entities
+            .iter_mut()
+            .find(|entity| entity.object == "oMsgSign")
+            .unwrap()
+            .alive = false;
+        game.world.spawn("oExit", Vec2::new(32., 32.));
+
+        step_with_host_dialogue_input(
+            &mut game,
+            &mut source,
+            &mut drawn,
+            &mut bare,
+            &mut until,
+            &mut simulated,
+            &InputFrame {
+                up: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(game.ending.as_ref().unwrap().stage, EndingStage::Exit);
+        assert_eq!(game.ending.as_ref().unwrap().kind, EndingKind::Transition);
+        assert_eq!(source.as_ref(), Some(&old_message));
+        assert_eq!(drawn.as_ref(), Some(&old_message));
+
+        for _ in 0..100 {
+            if game.ending.as_ref().unwrap().stage != EndingStage::Exit {
+                break;
+            }
+            step_with_host_dialogue(
+                &mut game,
+                &mut source,
+                &mut drawn,
+                &mut bare,
+                &mut until,
+                &mut simulated,
+            );
+        }
+        assert_eq!(game.world.name, "rTransition1");
+        assert_eq!(game.ending.as_ref().unwrap().stage, EndingStage::Transition);
+        assert!(game.data["message_timer"] > 0.);
+        assert!(
+            game.events
+                .iter()
+                .any(|event| matches!(event, GameEvent::ClearSourceDialogue)),
+            "oTransition Create must clear both source strings on room entry"
+        );
+        assert!(source.is_none());
+        assert!(drawn.is_none());
     }
 
     #[test]

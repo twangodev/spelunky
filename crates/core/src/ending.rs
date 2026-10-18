@@ -1609,6 +1609,12 @@ fn enter(game: &mut Game, s: &mut EndingState, stage: EndingStage, room: &str) {
         game.data.insert("shake".into(), 0.);
     }
     load_room(game, room);
+    if stage == EndingStage::Transition {
+        // oTransition Create clears global.message and global.message2 as
+        // soon as the authored tally room is created, before its first Step.
+        game.events
+            .push(crate::model::GameEvent::ClearSourceDialogue);
+    }
     s.stage = stage;
     s.stage_tick = 0;
     s.alarms = [-1; 12];

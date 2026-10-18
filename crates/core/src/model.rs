@@ -1348,6 +1348,8 @@ pub enum GameEvent {
     },
     Message(String),
     Dialogue(SourceMessage),
+    /// Classic clears both global message strings in oTransition Create.
+    ClearSourceDialogue,
     LevelComplete,
     Died,
     Won,
