@@ -1057,6 +1057,11 @@ fn alarm(game: &mut Game, i: Instance, index: u8) {
             let object = source_object(game, i);
             if crate::enemies::handles(&object) {
                 crate::enemies::alarm(game, id, index);
+                // oDamsel is dispatched through the NPC adapter, but its
+                // source parent is oItem and it inherits oItem Alarm 2.
+                if catalog::is_a(&object, "oItem") {
+                    crate::items::alarm(game, id, index);
+                }
             } else if crate::items::handles(&object) {
                 crate::items::alarm(game, id, index);
             } else if crate::traps::handles(&object) {

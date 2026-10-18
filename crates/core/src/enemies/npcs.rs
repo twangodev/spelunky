@@ -1842,6 +1842,30 @@ mod tests {
     }
 
     #[test]
+    fn actual_step_damsel_inherits_item_alarm2_to_clear_throw_safety() {
+        let mut game = actual_room();
+        let id = game.spawn("oDamsel", game.player.pos);
+        game.world.entity_mut(id).unwrap().held = true;
+        game.player.held = Some(id);
+
+        game.step(&InputFrame {
+            attack_pressed: true,
+            ..InputFrame::default()
+        });
+        assert_eq!(game.world.entity(id).unwrap().value("safe"), 1.0);
+        assert_eq!(game.world.entity(id).unwrap().alarms[2], 10);
+
+        for _ in 0..9 {
+            game.step(&InputFrame::default());
+        }
+        assert_eq!(game.world.entity(id).unwrap().value("safe"), 1.0);
+        game.step(&InputFrame::default());
+
+        assert_eq!(game.world.entity(id).unwrap().alarms[2], 0);
+        assert_eq!(game.world.entity(id).unwrap().value("safe"), 0.0);
+    }
+
+    #[test]
     fn actual_step_generated_damsel_preserves_free_producer_override_at_bootstrap() {
         // Select only the natural pre-Step producer: scrTreasureGen creates
         // an ordinary Damsel and then clears its sale flag and price. Do not
