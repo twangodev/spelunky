@@ -504,9 +504,13 @@ fn snake(game: &mut Game, e: &mut Entity) {
     // following bottom probe is the only place that settles velocity, and it
     // deliberately skips that assignment while STUNNED.
     let incoming_y = e.vel.y;
-    move_body(&game.world, e, 0.0);
+    // Classic's post-move isCollisionBottom(1) uses the same rounded precise
+    // line query as moveTo. Keep that result instead of probing a smooth
+    // rectangle, which can report contact with fractional sinking supports
+    // that the source collision mask has already rounded away.
+    let (_, grounded) = move_body(&game.world, e, 0.0);
     e.vel.y = (incoming_y + super::inherited::gravity(e, 0.6)).min(10.0);
-    if e.state != 98 && bottom(&game.world, e) {
+    if e.state != 98 && grounded {
         e.vel.y = 0.0;
     }
     if crushed(game, e, Vec2::new(8.0, 8.0)) {
