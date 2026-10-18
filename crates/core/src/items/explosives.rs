@@ -1633,7 +1633,8 @@ fn tick_rope_after_attachment(game: &mut Game, rope: &mut Entity, held_branch: b
         } else {
             rope.data.insert("gravity".into(), 0.6);
         }
-        if super::lava_at(game, Rect::new(rope.pos.x, rope.pos.y - 5.0, 0.001, 0.001)) {
+        if super::utility::source_point_bbox(game, Vec2::new(rope.pos.x, rope.pos.y - 5.0), "oLava")
+        {
             // instance_destroy retires this receiver without exiting its event.
             // The child can still deploy rope; publishing must keep it dead.
             rope.alive = false;

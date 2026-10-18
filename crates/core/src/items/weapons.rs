@@ -616,7 +616,7 @@ fn tick_item_body(game: &Game, e: &mut Entity) {
     } else {
         e.data.insert("gravity".into(), 0.6);
     }
-    if super::lava_at(game, Rect::new(e.pos.x, e.pos.y - 5.0, 0.001, 0.001)) {
+    if super::utility::source_point_bbox(game, Vec2::new(e.pos.x, e.pos.y - 5.0), "oLava") {
         e.alive = false;
     }
 }
