@@ -129,6 +129,44 @@ fn hurt(g: &mut Game, obj: &str, chosen: u64, marker: &str) {
         rng.next_u64(),
         "selector never consumes RNG"
     );
+    let mut expected_ledger = ledger;
+    if obj == "oLaser" {
+        // Classic's laser hit synchronously instance_creates oLaserExplode.
+        // Its Create syncs pending raw births in creation-serial order too.
+        // Those legitimate births join their families after the nearest query;
+        // existing registrations must retain their order and membership.
+        let registered: std::collections::BTreeSet<_> = expected_ledger
+            .0
+            .iter()
+            .chain(&expected_ledger.1)
+            .chain(&expected_ledger.2)
+            .copied()
+            .collect();
+        let mut newborns: Vec<_> = g
+            .world
+            .entities
+            .iter()
+            .filter(|entity| !registered.contains(&Instance::Entity(entity.id)))
+            .map(|entity| (entity.creation_serial, entity.id, entity.object.as_str()))
+            .collect();
+        newborns.sort_by_key(|(serial, _, _)| *serial);
+        assert!(
+            newborns
+                .iter()
+                .any(|(_, _, object)| *object == "oLaserExplode"),
+            "laser hit creates its source explosion effect"
+        );
+        for (_, id, object) in newborns {
+            let instance = Instance::Entity(id);
+            expected_ledger.0.push(instance);
+            expected_ledger.1.push(instance);
+            expected_ledger
+                .3
+                .entry(crate::catalog::object(object).unwrap().id)
+                .or_default()
+                .push(instance);
+        }
+    }
     assert_eq!(
         (
             g.dispatcher.registration_order.clone(),
@@ -136,7 +174,7 @@ fn hurt(g: &mut Game, obj: &str, chosen: u64, marker: &str) {
             g.dispatcher.inactive_order.clone(),
             g.dispatcher.resource_order.clone(),
         ),
-        ledger,
+        expected_ledger,
         "QUERY_DOES_NOT_REGISTER_OR_REPARTITION"
     );
     assert_eq!(g.level_tick, 0);
