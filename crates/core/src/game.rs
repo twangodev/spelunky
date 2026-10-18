@@ -263,7 +263,10 @@ impl Game {
         self.player.pickup_item_type.clear();
         self.player.stun = 0;
         self.player.attack_timer = 0;
-        self.player.jump_time = 0;
+        // characterCreateEvent initializes jumpTime to jumpTimeTotal. This
+        // preserves full gravity on the initial falling ticks; an actual jump
+        // resets the counter to zero before variable-height gravity begins.
+        self.player.jump_time = 10;
         self.player.coyote_ticks = 0;
         self.player.buffered_jump_ticks = 0;
         self.player.animation = 0.0;

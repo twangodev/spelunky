@@ -4002,6 +4002,26 @@ mod tests {
         assert!((g.player.vel.y - before - 1.0).abs() < 1e-12);
     }
     #[test]
+    fn new_room_airborne_spawn_keeps_full_gravity_until_first_jump() {
+        let mut level = crate::level::Level::default();
+        level.set_tile(4, 3, '@').unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.load_custom(&level, "airborne-create-gravity", "");
+        let spawn = game.player.pos;
+        assert!(!game.player.grounded);
+        assert_eq!(game.player.jump_time, JUMP_TICKS);
+
+        game.step(&InputFrame::default());
+        assert_eq!(game.player.pos.y, spawn.y + 1.0);
+        assert_eq!(game.player.vel.y, 1.0);
+        assert_eq!(value(&game.player, "gravity_intensity", -1.0), 1.0);
+
+        game.step(&InputFrame::default());
+        assert_eq!(game.player.pos.y, spawn.y + 3.0);
+        assert_eq!(game.player.vel.y, 2.0);
+        assert_eq!(value(&game.player, "gravity_intensity", -1.0), 1.0);
+    }
+    #[test]
     fn sprint_reaches_original_six_pixel_limit() {
         let mut g = room(RulesPreset::Classic);
         for _ in 0..10 {
