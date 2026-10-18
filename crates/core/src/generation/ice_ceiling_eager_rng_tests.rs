@@ -109,20 +109,38 @@ fn bright_ceiling_premises(first: &First) {
         assert!(!bbox_point(world, point, "oSolid"));
         assert!(!bbox_point(world, point, "oWater"));
     }
-    // First reached current row-major support, not an assertion of native
-    // active-family enumeration equivalence across the entire generator.
-    let first_eligible = (1..world.height as i32 - 1)
-        .flat_map(|y| (1..world.width as i32 - 1).map(move |x| (x, y)))
-        .find(|&(x, y)| {
-            solid(world, x, y)
-                && !in_shop(world, x, y)
-                && !start_room(world, x, y - 1)
-                && y < world.height as i32 - 4
-                && !solid(world, x, y + 1)
-                && !solid(world, x, y + 2)
-                && !water.wet(x, y + 1)
-                && !water.wet(x, y + 2)
-        });
+    // `with oSolid` visits every live descendant in creation order, including
+    // top-border instances. Qualify the first source receiver directly instead
+    // of reusing the historical interior-tile scan.
+    let first_eligible = population_supports(world, true)
+        .into_iter()
+        .find(|support| {
+            !campaign_shop_membership(world, support.origin)
+                .unwrap_or_else(|| in_shop(world, support.x, support.y))
+                && !source_start_room(world, support.origin)
+                && support.origin.y < world.height as f64 * 16.0 - 64.0
+                && !source_point_family(
+                    world,
+                    Vec2::new(support.origin.x, support.origin.y + 16.0),
+                    "oSolid",
+                )
+                && !source_point_family(
+                    world,
+                    Vec2::new(support.origin.x, support.origin.y + 32.0),
+                    "oSolid",
+                )
+                && !source_point_family(
+                    world,
+                    Vec2::new(support.origin.x, support.origin.y + 16.0),
+                    "oWater",
+                )
+                && !source_point_family(
+                    world,
+                    Vec2::new(support.origin.x, support.origin.y + 32.0),
+                    "oWater",
+                )
+        })
+        .map(|support| (support.x, support.y));
     assert_eq!(first_eligible, Some((first.x, first.y)));
     let before_ids: Vec<_> = world.entities.iter().map(|entity| entity.id).collect();
     assert_eq!(

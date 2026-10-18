@@ -205,6 +205,84 @@ enum FamilyInstance {
     Entity(u64),
 }
 
+#[derive(Clone)]
+struct PopulationSupport {
+    instance: FamilyInstance,
+    x: i32,
+    y: i32,
+    origin: Vec2,
+    bounds: Rect,
+    object: String,
+}
+
+fn population_supports(world: &World, source_classic: bool) -> Vec<PopulationSupport> {
+    if source_classic {
+        return family_instances(world, "oSolid")
+            .into_iter()
+            .filter_map(|(_, instance, origin)| {
+                let (object, bounds) = match instance {
+                    FamilyInstance::Tile(index) => {
+                        let tile = world.tiles.get(index)?;
+                        (
+                            tile.object.clone(),
+                            world
+                                .tile_collision_mask(
+                                    (index % world.width) as i32,
+                                    (index / world.width) as i32,
+                                )
+                                .point_bounds(),
+                        )
+                    }
+                    FamilyInstance::Entity(id) => {
+                        let entity = world.entity(id)?;
+                        (
+                            entity.object.clone(),
+                            entity.collision_mask().point_bounds(),
+                        )
+                    }
+                };
+                Some(PopulationSupport {
+                    instance,
+                    x: (origin.x / 16.0).floor() as i32,
+                    y: (origin.y / 16.0).floor() as i32,
+                    origin,
+                    bounds,
+                    object,
+                })
+            })
+            .collect();
+    }
+
+    (1..world.height as i32 - 1)
+        .flat_map(|y| (1..world.width as i32 - 1).map(move |x| (x, y)))
+        .filter_map(|(x, y)| {
+            let tile = world.tile(x, y)?;
+            if !tile.is_solid() {
+                return None;
+            }
+            Some(PopulationSupport {
+                instance: FamilyInstance::Tile(y as usize * world.width + x as usize),
+                x,
+                y,
+                origin: Vec2::new(f64::from(x * 16), f64::from(y * 16)),
+                bounds: world.tile_collision_mask(x, y).point_bounds(),
+                object: tile.object.clone(),
+            })
+        })
+        .collect()
+}
+
+fn source_sprite(world: &World, support: &PopulationSupport) -> Option<String> {
+    match support.instance {
+        FamilyInstance::Tile(_) => world
+            .tile_sprite_metadata(support.x, support.y)
+            .and_then(|metadata| metadata.text.get("terrain_sprite"))
+            .cloned()
+            .or_else(|| crate::catalog::sprite(&support.object).map(str::to_owned)),
+        FamilyInstance::Entity(id) => world.entity(id).map(|entity| entity.sprite.clone()),
+    }
+}
+
 struct TempleReceiver {
     instance: FamilyInstance,
     origin: Vec2,
@@ -703,6 +781,19 @@ thread_local! {
 }
 
 #[cfg(test)]
+struct IceFloorGuardTrace {
+    origin: Vec2,
+    source_guard: bool,
+    before: Rng,
+    after: Rng,
+}
+#[cfg(test)]
+thread_local! {
+    static ICE_FLOOR_GUARD_TRACE: std::cell::RefCell<Option<Vec<IceFloorGuardTrace>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PopulationPhase {
     Enemies,
@@ -751,6 +842,11 @@ fn source_room(origin: Vec2) -> (i32, i32) {
         4
     };
     (x, y)
+}
+
+fn source_start_room(world: &World, support_origin: Vec2) -> bool {
+    source_room(Vec2::new(world.entrance.x - 8.0, world.entrance.y - 8.0))
+        == source_room(Vec2::new(support_origin.x, support_origin.y - 16.0))
 }
 
 fn temple_in_shop(world: &World, origin: Vec2) -> bool {
@@ -1087,36 +1183,56 @@ fn populate_internal(
         jungle_population(world, rng, cemetery);
         return;
     }
-    // Snapshot iteration mirrors `with oSolid`: spawned entities are not terrain.
-    let supports: Vec<_> = (1..world.height as i32 - 1)
-        .flat_map(|y| (1..world.width as i32 - 1).map(move |x| (x, y)))
-        .filter(|&(x, y)| solid(world, x, y))
-        .collect();
+    // Classic `with oSolid` captures every initial descendant, including
+    // dynamic `oMoveableSolid` instances such as generated PushBlocks. Merge
+    // tile and entity storage by source birth order for canonical campaigns.
+    let supports = population_supports(world, source_classic);
+    let source_entrance = if source_classic {
+        family_origins(world, "oEntrance").into_iter().next()
+    } else {
+        None
+    };
     let made_gold = world.area == Area::Temple
         && temple_population(world, rng, &water, &mut state, tomb_lord, &mut gold_chance);
-    for &(x, y) in &supports {
+    for support in &supports {
+        let x = support.x;
+        let y = support.y;
+        let origin = support.origin;
         if world.area == Area::Temple {
             continue;
         }
-        if in_shop(world, x, y) {
+        if if source_classic {
+            campaign_shop_membership(world, origin).unwrap_or_else(|| in_shop(world, x, y))
+        } else {
+            in_shop(world, x, y)
+        } {
             continue;
         }
-        let tile = world
-            .tile(x, y)
-            .map(|t| t.object.clone())
-            .unwrap_or_default();
+        let tile = support.object.clone();
         let altar = matches!(
             tile.as_str(),
             "oAltarLeft" | "oAltarRight" | "oSacAltarLeft" | "oSacAltarRight"
         );
         let tree = tile == "oTree";
-        let floor = !solid(world, x, y - 1);
-        let ceiling = y < world.height as i32 - 4
-            && !solid(world, x, y + 1)
-            && !solid(world, x, y + 2)
-            && !water.wet(x, y + 1)
-            && !water.wet(x, y + 2);
-        let far = at(x, y).distance(world.entrance) > 64.0;
+        let floor = if source_classic {
+            !source_point_family(world, Vec2::new(origin.x, origin.y - 16.0), "oSolid")
+        } else {
+            !solid(world, x, y - 1)
+        };
+        let ceiling = if source_classic {
+            origin.y < world.height as f64 * 16.0 - 64.0
+                && !source_point_family(world, Vec2::new(origin.x, origin.y + 16.0), "oSolid")
+                && !source_point_family(world, Vec2::new(origin.x, origin.y + 32.0), "oSolid")
+                && !source_point_family(world, Vec2::new(origin.x, origin.y + 16.0), "oWater")
+                && !source_point_family(world, Vec2::new(origin.x, origin.y + 32.0), "oWater")
+        } else {
+            y < world.height as i32 - 4
+                && !solid(world, x, y + 1)
+                && !solid(world, x, y + 2)
+                && !water.wet(x, y + 1)
+                && !water.wet(x, y + 2)
+        };
+        let far = origin.distance(world.entrance) > 64.0;
         #[cfg(test)]
         let treasure_first_id = world.next_id;
         // Mines/Jungle call scrTreasureGen before their enemy statements;
@@ -1124,16 +1240,26 @@ fn populate_internal(
         if matches!(world.area, Area::Mines | Area::Jungle) && !altar && !tree {
             #[cfg(test)]
             trace_population_phase(world, x, y, PopulationPhase::Treasure);
-            treasure(world, rng, &water, &mut state, x, y);
+            if source_classic {
+                treasure_at(world, rng, &water, &mut state, origin, Some(support.bounds));
+            } else {
+                treasure(world, rng, &water, &mut state, x, y);
+            }
         }
         #[cfg(test)]
         trace_population_phase(world, x, y, PopulationPhase::Enemies);
         match world.area {
             Area::Mines => {
-                if start_room(world, x, y - 1) {
+                if if source_classic {
+                    source_start_room(world, origin)
+                } else {
+                    start_room(world, x, y - 1)
+                } {
                     continue;
                 }
-                if ceiling && !occupied(world, x, y + 1) {
+                let no_enemy_below = !source_classic
+                    || !source_point_family(world, Vec2::new(origin.x, origin.y + 16.0), "oEnemy");
+                if ceiling && no_enemy_below && (source_classic || !occupied(world, x, y + 1)) {
                     mines_ceiling(world, rng, giant_spider, x, y);
                 }
                 #[cfg(test)]
@@ -1223,7 +1349,11 @@ fn populate_internal(
                 }
             }
             Area::Ice => {
-                if !start_room(world, x, y - 1) {
+                if !(if source_classic {
+                    source_start_room(world, origin)
+                } else {
+                    start_room(world, x, y - 1)
+                }) {
                     if ceiling {
                         #[cfg(test)]
                         let ice_prefix = ice_ceiling_eager_rng_tests::observe_before(
@@ -1247,38 +1377,88 @@ fn populate_internal(
                         #[cfg(test)]
                         ice_ceiling_eager_rng_tests::observe_after(world, rng, ice_prefix);
                     } else if floor
-                        && y > 1
-                        && y < 37
-                        && !occupied(world, x, y - 1)
+                        && if source_classic {
+                            origin.y > 16.0 && origin.y < 592.0
+                        } else {
+                            y > 1 && y < 37 && !occupied(world, x, y - 1)
+                        }
                         && rng.chance(1, if yeti { 90 } else { 30 })
                     {
                         spawn(world, rng, "oUFO", x, y - 1);
                     }
                 }
-                if floor && y > 1 && y < 37 && far && !occupied(world, x, y - 1) {
+                let source_trap_guard = source_classic
+                    && origin.y > 16.0
+                    && origin.y < 592.0
+                    && source_entrance.is_some_and(|entrance| origin.distance(entrance) > 64.0)
+                    && !source_point_family(world, Vec2::new(origin.x, origin.y - 16.0), "oSolid")
+                    && !source_point_family(
+                        world,
+                        Vec2::new(origin.x + 8.0, origin.y - 8.0),
+                        "oEnemy",
+                    )
+                    && !source_point_family(
+                        world,
+                        Vec2::new(origin.x + 8.0, origin.y - 1.0),
+                        "oSpikes",
+                    );
+                let historical_trap_guard = !source_classic
+                    && floor
+                    && y > 1
+                    && y < 37
+                    && far
+                    && !occupied(world, x, y - 1);
+                #[cfg(test)]
+                let guard_trace_before = ICE_FLOOR_GUARD_TRACE.with(|trace| {
+                    trace
+                        .borrow()
+                        .is_some()
+                        .then(|| (rng.clone(), source_trap_guard))
+                });
+                if source_trap_guard || historical_trap_guard {
                     #[cfg(test)]
                     let observation = ICE_FLOOR_ROLL_TRACE.with(|trace| {
                         trace.borrow().is_some().then(|| {
                             (
                                 rng.clone(),
                                 world.entities.len(),
-                                tile == "oDark"
-                                    && !solid(world, x, y - 2)
-                                    && !solid(world, x, y - 3)
-                                    && !solid(world, x, y - 4)
-                                    && at(x, y).distance(world.exit) > 64.0,
+                                if source_classic {
+                                    source_sprite(world, support).as_deref() == Some("sDark")
+                                        && !source_rectangle_family(
+                                            world,
+                                            Rect::new(origin.x, origin.y - 64.0, 16.0, 64.0),
+                                            "oSolid",
+                                        )
+                                        && source_family_distance(world, support.bounds, "oExit")
+                                            > 64.0
+                                } else {
+                                    tile == "oDark"
+                                        && !solid(world, x, y - 2)
+                                        && !solid(world, x, y - 3)
+                                        && !solid(world, x, y - 4)
+                                        && at(x, y).distance(world.exit) > 64.0
+                                },
                             )
                         })
                     });
                     // Source :370 evaluates its roll before every pure guard.
                     let spring_roll = rng.chance(1, 10);
-                    if spring_roll
-                        && tile == "oDark"
-                        && !solid(world, x, y - 2)
-                        && !solid(world, x, y - 3)
-                        && !solid(world, x, y - 4)
-                        && at(x, y).distance(world.exit) > 64.0
-                    {
+                    let spring_allowed = if source_classic {
+                        source_sprite(world, support).as_deref() == Some("sDark")
+                            && !source_rectangle_family(
+                                world,
+                                Rect::new(origin.x, origin.y - 64.0, 16.0, 64.0),
+                                "oSolid",
+                            )
+                            && source_family_distance(world, support.bounds, "oExit") > 64.0
+                    } else {
+                        tile == "oDark"
+                            && !solid(world, x, y - 2)
+                            && !solid(world, x, y - 3)
+                            && !solid(world, x, y - 4)
+                            && at(x, y).distance(world.exit) > 64.0
+                    };
+                    if spring_roll && spring_allowed {
                         spawn(world, rng, "oSpringTrap", x, y - 1);
                     } else if rng.chance(1, 20) {
                         spawn(world, rng, "oYeti", x, y - 1);
@@ -1292,7 +1472,8 @@ fn populate_internal(
                                 .unwrap()
                                 .push(IceFloorRollTrace {
                                     origin: Vec2::new(f64::from(x) * 16.0, f64::from(y) * 16.0),
-                                    dark_support: tile == "oDark",
+                                    dark_support: source_sprite(world, support).as_deref()
+                                        == Some("sDark"),
                                     spring_allowed,
                                     before,
                                     after: rng.clone(),
@@ -1304,6 +1485,19 @@ fn populate_internal(
                         });
                     }
                 }
+                #[cfg(test)]
+                if let Some((before, source_guard)) = guard_trace_before {
+                    ICE_FLOOR_GUARD_TRACE.with(|trace| {
+                        if let Some(trace) = trace.borrow_mut().as_mut() {
+                            trace.push(IceFloorGuardTrace {
+                                origin,
+                                source_guard,
+                                before,
+                                after: rng.clone(),
+                            });
+                        }
+                    });
+                }
             }
             Area::Temple => unreachable!("Temple uses its source instance pass"),
             Area::Boss => {}
@@ -1311,7 +1505,11 @@ fn populate_internal(
         if world.area == Area::Ice && !altar {
             #[cfg(test)]
             trace_population_phase(world, x, y, PopulationPhase::Treasure);
-            treasure(world, rng, &water, &mut state, x, y);
+            if source_classic {
+                treasure_at(world, rng, &water, &mut state, origin, Some(support.bounds));
+            } else {
+                treasure(world, rng, &water, &mut state, x, y);
+            }
         }
     }
     if udjat && !exists(world, "oLockedChest") {
@@ -1343,11 +1541,12 @@ fn populate_internal(
         }
     }
     if need_market && !exists(world, "oXMarket") {
-        if let Some(&(x, y)) = supports
-            .iter()
-            .find(|&&(x, y)| y > 2 && solid(world, x, y - 1) && !in_shop(world, x, y))
-        {
-            spawn(world, rng, "oXMarket", x, y - 1);
+        if let Some(support) = supports.iter().find(|support| {
+            support.y > 2
+                && solid(world, support.x, support.y - 1)
+                && !in_shop(world, support.x, support.y)
+        }) {
+            spawn(world, rng, "oXMarket", support.x, support.y - 1);
         }
     }
     if world.area == Area::Temple && world.level == 14 && !made_gold {
@@ -1377,7 +1576,7 @@ fn populate_internal(
         }
     }
     if matches!(world.area, Area::Mines | Area::Temple) {
-        arrows(world, rng, &supports);
+        arrows(world, rng, &[]);
     }
     if world.area == Area::Jungle {
         jungle_population(world, rng, cemetery);
@@ -4038,6 +4237,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn source_mines_population_visits_dynamic_moveable_solids() {
+        let mut world = World::new(42, 34, Area::Mines, 1);
+        world.entrance = Vec2::new(40.0, 40.0);
+        world.exit = Vec2::new(600.0, 480.0);
+        let block_id = world.spawn("oPushBlock", Vec2::new(320.0, 320.0));
+        let source_supports = population_supports(&world, true);
+        assert!(source_supports.iter().any(|support| {
+            matches!(&support.instance, FamilyInstance::Entity(id) if *id == block_id)
+                && support.object == "oPushBlock"
+                && (support.x, support.y) == (20, 20)
+        }));
+        assert!(!population_supports(&world, false).iter().any(
+            |support| matches!(&support.instance, FamilyInstance::Entity(id) if *id == block_id)
+        ));
+
+        POPULATION_PHASE_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
+        let mut rng = Rng::new(0);
+        let mut campaign = super::super::GenerationState::fresh(&rng);
+        campaign.revision = crate::GenerationRevision::SourceClassicV2;
+        let room_path = [[0; 4]; 5];
+        populate_internal(
+            &mut world,
+            &mut rng,
+            &BTreeSet::new(),
+            super::super::GenerationContext::default(),
+            Some(&mut campaign),
+            Some(&room_path),
+        );
+        let phases = POPULATION_PHASE_TRACE.with(|trace| {
+            trace
+                .borrow_mut()
+                .take()
+                .unwrap()
+                .into_iter()
+                .filter(|(_, x, y, _)| (*x, *y) == (20, 20))
+                .map(|(_, _, _, phase)| phase)
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(
+            phases,
+            [PopulationPhase::Treasure, PopulationPhase::Enemies],
+            "scrEntityGen's Mines with oSolid pass must populate generated oPushBlock descendants"
+        );
+    }
+
     fn assert_local_create_completed(entity: &crate::Entity) {
         let marker = match entity.object.as_str() {
             "oFrog" | "oFireFrog" | "oMonkey" | "oPiranha" => "jungle_context_created",
@@ -4475,6 +4720,75 @@ mod tests {
         populate(&mut world, &mut actual, &flags);
         assert!(!exists(&world, "oSpringTrap") && !exists(&world, "oYeti"));
         assert_eq!(actual.next_u64(), source.next_u64());
+    }
+
+    #[test]
+    fn source_ice_floor_traps_skip_rng_near_authored_entrance() {
+        let mut world = World::new(42, 38, Area::Ice, 9);
+        let entrance_origin = Vec2::new(168.0, 256.0);
+        let support_origin = Vec2::new(176.0, 272.0);
+        world.entrance = Vec2::new(entrance_origin.x + 8.0, entrance_origin.y + 8.0);
+        world.exit = at(38, 30);
+        world.spawn("oEntrance", entrance_origin);
+        world.set_tile(11, 17, "oDark");
+
+        assert!(support_origin.distance(entrance_origin) <= 64.0);
+        assert!(!source_start_room(&world, support_origin));
+        assert!(!source_point_family(
+            &world,
+            Vec2::new(support_origin.x, support_origin.y - 16.0),
+            "oSolid"
+        ));
+        assert_eq!(
+            source_sprite(&world, &population_supports(&world, true)[0]),
+            Some("sDark".into())
+        );
+        assert!(!source_rectangle_family(
+            &world,
+            Rect::new(support_origin.x, support_origin.y - 64.0, 16.0, 64.0),
+            "oSolid"
+        ));
+        assert!(
+            source_family_distance(
+                &world,
+                Rect::new(support_origin.x, support_origin.y, 16.0, 16.0),
+                "oExit"
+            ) > 64.0
+        );
+
+        let mut rng = Rng::new(0);
+        let mut campaign = super::super::GenerationState::fresh(&rng);
+        let room_path = [[0; 4]; 5];
+        ICE_FLOOR_GUARD_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
+        populate_internal(
+            &mut world,
+            &mut rng,
+            &BTreeSet::from(["made_udjat_eye".into(), "made_market_entrance".into()]),
+            super::super::GenerationContext::default(),
+            Some(&mut campaign),
+            Some(&room_path),
+        );
+        let trace = ICE_FLOOR_GUARD_TRACE.with(|trace| {
+            trace
+                .borrow_mut()
+                .take()
+                .unwrap()
+                .into_iter()
+                .find(|trace| trace.origin == support_origin)
+                .expect("the authored support reaches the Ice floor-trap callback")
+        });
+        assert!(
+            !trace.source_guard,
+            "Classic's entrance-distance guard rejects this support"
+        );
+        assert_eq!(trace.before.state_bits(), trace.after.state_bits());
+        let mut would_be_trap = trace.before;
+        assert!(
+            would_be_trap.chance(1, 10),
+            "the fixed seed would spawn a spring trap if the outer guard admitted this support"
+        );
+        assert!(!exists(&world, "oSpringTrap"));
+        assert!(!exists(&world, "oYeti"));
     }
 
     #[test]
