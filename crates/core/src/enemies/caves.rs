@@ -500,7 +500,15 @@ fn random_facing(game: &mut Game) -> i8 {
 }
 
 fn snake(game: &mut Game, e: &mut Entity) {
-    move_body(&game.world, e, 0.6);
+    // Snake's source moveTo preserves yVel on vertical obstruction. Its own
+    // following bottom probe is the only place that settles velocity, and it
+    // deliberately skips that assignment while STUNNED.
+    let incoming_y = e.vel.y;
+    move_body(&game.world, e, 0.0);
+    e.vel.y = (incoming_y + super::inherited::gravity(e, 0.6)).min(10.0);
+    if e.state != 98 && bottom(&game.world, e) {
+        e.vel.y = 0.0;
+    }
     if crushed(game, e, Vec2::new(8.0, 8.0)) {
         e.health = 0;
     }
@@ -1167,6 +1175,62 @@ mod tests {
             snake.value("animation_speed"),
             0.4,
             "STUNNED Step must retain Snake's pre-stun animation speed"
+        );
+    }
+
+    #[test]
+    fn game_step_fly_stunned_snake_preserves_vertical_speed_on_landing() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.world = World::new(20, 16, crate::Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        game.player.pos = Vec2::new(250.0, 100.0);
+        game.player.previous_pos = game.player.pos;
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 10, "oBlock");
+        }
+
+        let snake_id = game.spawn("oSnake", Vec2::new(80.0, 144.0));
+        {
+            let snake = game.world.entity_mut(snake_id).unwrap();
+            // A normal Fly hit deals two damage. Keep this source stun branch
+            // alive long enough to observe its no-ground-recovery behavior.
+            snake.health = 3;
+            snake.state = 1;
+        }
+        let fly_id = game.spawn("oFly", Vec2::new(88.0, 154.0));
+        game.world.entity_mut(fly_id).unwrap().vel = Vec2::default();
+        assert!(
+            game.world
+                .entity(snake_id)
+                .unwrap()
+                .event_intersects(game.world.entity(fly_id).unwrap())
+        );
+
+        game.step(&crate::InputFrame::default());
+        let snake = game.world.entity(snake_id).unwrap();
+        assert_eq!(
+            snake.state, 98,
+            "normal automatic Fly collision must stun Snake"
+        );
+        assert!(game.world.entity(fly_id).is_none());
+
+        let mut rose = false;
+        let mut landing_velocity = None;
+        for _ in 0..60 {
+            game.step(&crate::InputFrame::default());
+            let snake = game.world.entity(snake_id).unwrap();
+            rose |= snake.pos.y < 144.0;
+            if rose && snake.pos.y == 144.0 {
+                landing_velocity = Some(snake.vel.y);
+                break;
+            }
+        }
+        assert!(rose, "the real Fly hit must launch Snake upward");
+        assert_eq!(game.world.entity(snake_id).unwrap().pos.y, 144.0);
+        assert_eq!(game.world.entity(snake_id).unwrap().state, 98);
+        assert!(
+            landing_velocity.unwrap() > 0.0,
+            "Classic leaves stunned Snake's yVel intact at the floor"
         );
     }
 
