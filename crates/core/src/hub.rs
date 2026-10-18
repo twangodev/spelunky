@@ -546,6 +546,12 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
         ] {
             game.data.remove(key);
         }
+        if reset_dead_run {
+            // Player Step calls scrClearGlobals before routing an acknowledged
+            // death to rHighscores. Mirror that whole run reset here as the
+            // host's room-transition boundary, after the hub's world exists.
+            game.clear_run_globals();
+        }
     }
     if reset_tutorial_run {
         // The tutorial's manual xTITLE return calls scrClearGlobals before
@@ -3051,6 +3057,67 @@ mod tests {
         assert_eq!(g.player.health, 4.0);
         assert_eq!(g.player.money, 0);
         assert!(g.player.equipment.is_empty());
+    }
+
+    #[test]
+    fn acknowledged_level_death_clears_source_run_globals_before_scores_room() {
+        let mut g = Game::shell(41, RulesPreset::Classic);
+        g.data.insert("marketChance".into(), 73.0);
+        g.data.insert("goldChance".into(), 29.0);
+        g.data.insert("probDarkLevel".into(), 3.0);
+        g.data.insert("currLevel".into(), 12.0);
+        g.data.insert("levelType".into(), 3.0);
+        g.data.insert("time".into(), 120_000.0);
+        g.data.insert("kills".into(), 7.0);
+        g.flags.extend([
+            "made_market_entrance".into(),
+            "made_gold_entrance".into(),
+            "ghost_exists".into(),
+            "murderer".into(),
+        ]);
+        g.player.money = 1_000;
+        g.player.equipment.insert("Jetpack".into());
+        g.world.spawn("oExplosion", g.player.pos);
+
+        g.step(&InputFrame::default());
+        assert_eq!(g.state, RunState::Dead);
+        g.step(&InputFrame {
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(g.state, RunState::Dead, "first edge skips the reveal");
+        g.step(&InputFrame {
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(g.state, RunState::Transition);
+        assert_eq!(g.lifetime_stats.level_deaths[0], 1);
+
+        // The host completes the acknowledged room transition here, as source
+        // room_goto(rHighscores) does after scrClearGlobals in Player Step.
+        g.load_hub(HubKind::Scores);
+
+        assert_eq!(g.data["marketChance"], 160.0);
+        assert_eq!(g.data["goldChance"], 160.0);
+        assert_eq!(g.data["probDarkLevel"], 12.0);
+        assert_eq!(g.data["currLevel"], 1.0);
+        assert_eq!(g.data["levelType"], 0.0);
+        assert_eq!(g.data["time"], 0.0);
+        assert_eq!(g.data["kills"], 0.0);
+        for flag in [
+            "made_market_entrance",
+            "made_gold_entrance",
+            "ghost_exists",
+            "murderer",
+        ] {
+            assert!(!g.flags.contains(flag), "run flag {flag} survived death");
+        }
+        assert!(g.flags.contains("no_dark_level"));
+        assert_eq!(g.player.health, 4.0);
+        assert_eq!((g.player.bombs, g.player.ropes), (4.0, 4.0));
+        assert_eq!(g.player.money, 0);
+        assert!(g.player.equipment.is_empty());
+        assert_eq!(g.lifetime_stats.level_deaths[0], 1);
     }
     #[test]
     fn fresh_title_has_source_hint_and_barriers_then_walks_to_first_start_tutorial() {
