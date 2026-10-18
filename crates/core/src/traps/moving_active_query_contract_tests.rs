@@ -95,10 +95,11 @@ fn platform_collision_queries_ignore_inactive_terrain_solids() {
     let mut game = room();
     game.world.set_tile(5, 5, "oBrick");
     game.world.tiles[5 * game.world.width + 5].engine_active = false;
-    let probe = Rect::new(80.0, 80.0, 16.0, 16.0);
+    let bounds_probe = Rect::new(80.0, 80.0, 16.0, 16.0);
+    let precise_probe = Rect::new(80.0, 80.0, 1.0, 16.0);
 
-    assert!(!collides_except(&game, probe, 0));
-    assert!(!precise_collides_except(&game, probe, 0));
+    assert!(!collides_except(&game, bounds_probe, 0));
+    assert!(!precise_collides_except(&game, precise_probe, 0));
 }
 
 #[test]
