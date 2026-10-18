@@ -1441,11 +1441,21 @@ fn shop_item(w: &mut World, r: &mut Rng, p: Vec2, style: &str) {
         crate::economy::classic_shop_price(base, level),
     );
     e.data.insert("forSale".into(), 1.0);
+    if level > 2 {
+        // scrShopItemsGen updates buyMessage after Create alongside the
+        // inflated price. Generated stock predates Game Create, so its source
+        // type/shopDesc fields come from the object-name fallback.
+        let description = crate::enemies::shop_dialogue::scaled_shop_description(e);
+        let cost = e.value("cost").max(0.0) as u32;
+        e.text
+            .insert("buyMessage".into(), format!("{description} FOR ${cost}."));
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{InputFrame, RulesPreset};
     fn room(w: &mut World, symbols: &str) {
         let template = format!("{symbols:0<80}");
         stamp(
@@ -1980,7 +1990,88 @@ mod tests {
                     .iter()
                     .all(|e| e.value("cost") >= 1200.0 && e.pos.x % 16.0 == 8.0)
             );
+            for item in goods {
+                let description = crate::enemies::shop_dialogue::scaled_shop_description(item);
+                if let Some(source_description) = match item.object.as_str() {
+                    "oBombBag" => Some("A BAG OF 3 BOMBS"),
+                    "oBow" => Some("BOW AND ARROWS"),
+                    "oMachete" => Some("A MACHETE"),
+                    "oSpectacles" => Some("A SPECTACLES"),
+                    "oShotgun" => Some("A SHOTGUN"),
+                    _ => None,
+                } {
+                    assert_eq!(description, source_description, "{}", item.object);
+                }
+                assert_eq!(
+                    item.text.get("buyMessage"),
+                    Some(&format!(
+                        "{description} FOR ${}.",
+                        item.value("cost") as u32
+                    )),
+                    "sale prompt must be regenerated after level-based price inflation: {}",
+                    item.object
+                );
+            }
         }
+    }
+
+    #[test]
+    fn actual_pickup_prompt_uses_scaled_generated_weapon_price() {
+        let (mut game, shotgun) = (0..128)
+            .find_map(|seed| {
+                let mut game = crate::Game::shell(seed, RulesPreset::Classic);
+                game.world.name = "rLevel".into();
+                game.world.level = 3;
+                let mut rng = Rng::new(seed);
+                shop_item(&mut game.world, &mut rng, Vec2::new(16.0, 46.0), "Weapon");
+                let shotgun = game
+                    .world
+                    .entities
+                    .iter()
+                    .find(|entity| entity.object == "oShotgun")?
+                    .id;
+                Some((game, shotgun))
+            })
+            .expect("bounded Weapon shop seeds must generate a shotgun");
+
+        let mut room_path = [[0; 4]; 5];
+        room_path[0][0] = 4;
+        game.world.source_room_path = Some(room_path);
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 4, "oTemple");
+        }
+        game.player.pos = game.world.entity(shotgun).unwrap().pos;
+        game.player.previous_pos = game.player.pos;
+        game.player.grounded = true;
+        let keeper = game.spawn("oShopkeeper", Vec2::new(128.0, 48.0));
+        game.world
+            .entity_mut(keeper)
+            .unwrap()
+            .text
+            .insert("style".into(), "Weapon".into());
+
+        let stock = game.world.entity(shotgun).unwrap();
+        assert_eq!(stock.value("cost"), 16_500.0);
+        assert_eq!(
+            stock.text.get("buyMessage").map(String::as_str),
+            Some("A SHOTGUN FOR $16500.")
+        );
+        game.step(&InputFrame::default());
+        game.step(&InputFrame {
+            down: true,
+            attack: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(game.player.held, Some(shotgun));
+        assert_eq!(
+            game.events.iter().rev().find_map(|event| match event {
+                crate::GameEvent::Dialogue(message) => Some(message.first.as_str()),
+                _ => None,
+            }),
+            Some("A SHOTGUN FOR $16500."),
+            "the actual pickup flow must display the generated sale price"
+        );
     }
 
     #[test]

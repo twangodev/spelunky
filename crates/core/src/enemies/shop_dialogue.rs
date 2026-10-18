@@ -98,6 +98,54 @@ pub(super) fn tick(game: &mut Game, keeper: &mut Entity, peaceful: bool) {
     keeper.data.insert("welcomed".into(), 1.0);
 }
 
+pub(crate) fn scaled_shop_description(item: &Entity) -> String {
+    if let Some(description) = item
+        .text
+        .get("shopDesc")
+        .filter(|description| !description.is_empty())
+    {
+        return description.clone();
+    }
+    // Generated shop items are created before a Game exists, so their source
+    // Create-time type/shopDesc fields are supplied from this object mapping.
+    // Keep explicit shopDesc wording ahead of type for Bow, Bomb Bag, and
+    // other stock whose source type alone would produce a different label.
+    match item.object.as_str() {
+        "oBombBag" => "A BAG OF 3 BOMBS",
+        "oBombBox" => "A BOX OF 12 BOMBS",
+        "oPaste" => "BOMB PASTE",
+        "oSpringShoes" => "SPRINGY SHOES",
+        "oGloves" => "CLIMBING GLOVES",
+        "oMitt" => "PITCHER'S MITT",
+        "oBow" => "BOW AND ARROWS",
+        "oRopePile" => "A ROPE PILE",
+        "oSpectacles" => "A SPECTACLES",
+        "oJetpack" => "A JETPACK",
+        "oSpikeShoes" => "A SPIKE SHOES",
+        "oAnkh" => "AN ANKH",
+        "oCompass" => "A COMPASS",
+        "oParaPickup" => "A PARACHUTE",
+        "oCapePickup" => "A CAPE",
+        "oMattock" => "A MATTOCK",
+        "oPistol" => "A PISTOL",
+        "oShotgun" => "A SHOTGUN",
+        "oWebCannon" => "A WEB CANNON",
+        "oMachete" => "A MACHETE",
+        "oTeleporter" => "A TELEPORTER",
+        _ => {
+            if let Some(kind) = item
+                .text
+                .get("type")
+                .filter(|kind| !kind.is_empty() && kind.as_str() != "None")
+            {
+                return format!("A {}", kind.to_uppercase());
+            }
+            "AN ITEM"
+        }
+    }
+    .into()
+}
+
 fn purchase_description(game: &Game, item: &Entity) -> String {
     if let Some(description) = item.text.get("buyMessage") {
         return description.clone();
@@ -124,33 +172,34 @@ fn purchase_description(game: &Game, item: &Entity) -> String {
     // retains source wording such as A SPECTACLES and A ROPE PILE there.
     let scaled_stock =
         item.value("forSale") > 0.0 && game.world.level > 2 && item.object != "oAnkh";
-    let description = match item.object.as_str() {
-        "oBombBag" => "A BAG OF 3 BOMBS",
-        "oBombBox" => "A BOX OF 12 BOMBS",
-        "oPaste" => "BOMB PASTE",
-        "oSpringShoes" => "SPRINGY SHOES",
-        "oGloves" => "CLIMBING GLOVES",
-        "oMitt" => "PITCHER'S MITT",
-        "oBow" => "BOW AND ARROWS",
-        "oRopePile" if scaled_stock => "A ROPE PILE",
-        "oRopePile" => "EXTRA ROPE",
-        "oSpectacles" if scaled_stock => "A SPECTACLES",
-        "oSpectacles" => "SPECTACLES",
-        "oJetpack" if scaled_stock => "A JETPACK",
-        "oJetpack" => "JETPACK",
-        "oSpikeShoes" if scaled_stock => "A SPIKE SHOES",
-        "oSpikeShoes" => "SPIKE SHOES",
-        "oAnkh" => "AN ANKH",
-        "oCompass" => "A COMPASS",
-        "oParaPickup" => "A PARACHUTE",
-        "oCapePickup" => "A CAPE",
-        "oMattock" => "A MATTOCK",
-        "oPistol" => "A PISTOL",
-        "oShotgun" => "A SHOTGUN",
-        "oWebCannon" => "A WEB CANNON",
-        "oMachete" => "A MACHETE",
-        "oTeleporter" => "A TELEPORTER",
-        _ => "AN ITEM",
+    let description: String = if scaled_stock {
+        scaled_shop_description(item)
+    } else {
+        match item.object.as_str() {
+            "oBombBag" => "A BAG OF 3 BOMBS",
+            "oBombBox" => "A BOX OF 12 BOMBS",
+            "oPaste" => "BOMB PASTE",
+            "oSpringShoes" => "SPRINGY SHOES",
+            "oGloves" => "CLIMBING GLOVES",
+            "oMitt" => "PITCHER'S MITT",
+            "oBow" => "BOW AND ARROWS",
+            "oRopePile" => "EXTRA ROPE",
+            "oSpectacles" => "SPECTACLES",
+            "oJetpack" => "JETPACK",
+            "oSpikeShoes" => "SPIKE SHOES",
+            "oAnkh" => "AN ANKH",
+            "oCompass" => "A COMPASS",
+            "oParaPickup" => "A PARACHUTE",
+            "oCapePickup" => "A CAPE",
+            "oMattock" => "A MATTOCK",
+            "oPistol" => "A PISTOL",
+            "oShotgun" => "A SHOTGUN",
+            "oWebCannon" => "A WEB CANNON",
+            "oMachete" => "A MACHETE",
+            "oTeleporter" => "A TELEPORTER",
+            _ => "AN ITEM",
+        }
+        .into()
     };
     format!("{description} FOR ${cost}.")
 }
