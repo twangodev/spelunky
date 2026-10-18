@@ -648,18 +648,27 @@ fn edge_blocked(game: &Game, entity: &Entity, direction: u8, distance: f64) -> b
     }
 }
 
-/// Explicit `prec=1` source edge probes. Keep implicit event/placement and
-/// explicit `prec=0` callers on their separate bounding-box path below.
+/// Explicit `prec=1` source edge probes are axis-aligned `collision_line`
+/// calls. Keep implicit event/placement and explicit `prec=0` callers on their
+/// separate bounding-box path below; using a smooth Rect here loses the
+/// source's rounded integer mask pixels at fractional instance origins.
 fn precise_collides_except(game: &Game, rect: Rect, excluded: u64) -> bool {
+    debug_assert!(rect.w == 1.0 || rect.h == 1.0);
+    let first = Vec2::new(rect.x, rect.y);
+    let last = Vec2::new(rect.x + rect.w - 1.0, rect.y + rect.h - 1.0);
     game.world
-        .tiles_collide_active_precision(rect, "oSolid", CollisionPrecision::Precise)
+        .tiles_line_active_precision(first, last, "oSolid", CollisionPrecision::Precise)
         || game.world.entities.iter().any(|entity| {
             entity.id != excluded
                 && entity.alive
                 && entity.engine_active
                 && entity.solid
                 && !entity.held
-                && entity.mask_intersects(rect, CollisionPrecision::Precise)
+                && entity.collision_mask().intersects_axis_line(
+                    first,
+                    last,
+                    CollisionPrecision::Precise,
+                )
         })
 }
 
@@ -1365,6 +1374,42 @@ mod tests {
         }
         assert!(game.player.grounded);
         game
+    }
+
+    #[test]
+    fn game_step_fractional_smash_trap_keeps_precise_outer_line_open() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = crate::World::new(20, 15, crate::Area::Temple, 1);
+        game.player.pos = Vec2::new(280.0, 200.0);
+        let id = game.spawn("oSmashTrap", Vec2::new(80.0, 80.0));
+        // The source enters ATTACK after alignment and accelerates by 0.5;
+        // run its authored Step state to a fractional instance origin.
+        let trap = game.world.entity_mut(id).unwrap();
+        trap.state = 1;
+        trap.data.insert("direction".into(), 0.0);
+        trap.data.insert("xa".into(), 0.5);
+        trap.data.insert("ya".into(), 0.0);
+        trap.data.insert("xv".into(), 0.0);
+        trap.data.insert("yv".into(), 0.0);
+        for _ in 0..2 {
+            game.step(&crate::InputFrame::default());
+        }
+        let trap = game.world.entity(id).unwrap();
+        assert_eq!(trap.state, 1);
+        assert_eq!(
+            trap.pos.x, 81.5,
+            "source oSmashTrap Step preserves half-pixels"
+        );
+
+        // The canonical precise line clips to the rounded source bbox, whose
+        // right edge is x=96; the smooth AABB's fraction extends past x=97.
+        let first = Vec2::new(97.0, 80.0);
+        let last = Vec2::new(97.0, 95.0);
+        assert!(!game.world.solid_line_except(first, last, u64::MAX));
+        assert!(
+            !precise_collides_except(&game, Rect::new(97.0, 80.0, 1.0, 16.0), u64::MAX),
+            "prec=1 must not treat the fractional smooth AABB sliver as a mask pixel"
+        );
     }
 
     #[test]
