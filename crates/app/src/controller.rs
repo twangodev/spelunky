@@ -100,16 +100,16 @@ pub fn parse(name: &str) -> Option<Button> {
     ALL.into_iter().find(|button| button.name() == name)
 }
 
-/// The source wizard order, using the port's existing physical defaults.
+/// Classic's B1..B10 wizard values translated to standard physical positions.
 pub const ACTIONS: [(&str, &str, Button); 9] = [
-    ("jump", "JUMP", Button::South),
-    ("attack", "ACTION", Button::West),
-    ("cycle", "SWITCH", Button::RightShoulder),
+    ("jump", "JUMP", Button::East),
+    ("attack", "ACTION", Button::South),
+    ("cycle", "SWITCH", Button::West),
     ("run", "RUN", Button::LeftShoulder),
     ("bomb", "BOMB", Button::LeftTrigger),
     ("rope", "ROPE", Button::RightTrigger),
     ("flare", "FLARE", Button::North),
-    ("pay", "PURCHASE", Button::Select),
+    ("pay", "PURCHASE", Button::RightShoulder),
     ("start", "START", Button::Start),
 ];
 
@@ -149,5 +149,23 @@ mod tests {
         for unsupported in ["", "B1", "Button18", "south"] {
             assert_eq!(parse(unsupported), None);
         }
+    }
+
+    #[test]
+    fn classic_control_wizard_numbers_translate_to_standard_button_positions() {
+        assert_eq!(
+            default_bindings(),
+            BTreeMap::from([
+                ("jump".into(), "East".into()),
+                ("attack".into(), "South".into()),
+                ("cycle".into(), "West".into()),
+                ("run".into(), "LeftShoulder".into()),
+                ("bomb".into(), "LeftTrigger".into()),
+                ("rope".into(), "RightTrigger".into()),
+                ("flare".into(), "North".into()),
+                ("pay".into(), "RightShoulder".into()),
+                ("start".into(), "Start".into()),
+            ])
+        );
     }
 }

@@ -27,15 +27,15 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         let bindings = [
-            ("left", "ArrowLeft,KeyA"),
+            ("left", "ArrowLeft"),
             ("right", "ArrowRight,KeyD"),
             ("up", "ArrowUp,KeyW"),
-            ("down", "ArrowDown,KeyS"),
+            ("down", "ArrowDown"),
             ("jump", "KeyZ,Space"),
             ("attack", "KeyX"),
             ("cycle", "KeyC"),
-            ("bomb", "KeyB"),
-            ("rope", "KeyR"),
+            ("bomb", "KeyA"),
+            ("rope", "KeyS"),
             ("flare", "KeyF"),
             ("pay", "KeyP"),
             ("run", "ShiftLeft,ShiftRight"),
@@ -484,8 +484,31 @@ mod tests {
             assert_eq!(data.version, SAVE_VERSION);
             assert_eq!(data.settings.bindings["jump"], "KeyJ");
             assert!(data.settings.bindings.contains_key("rope"));
+            assert_eq!(data.settings.bindings["bomb"], "KeyA");
+            assert_eq!(data.settings.bindings["rope"], "KeyS");
             assert!(data.settings.vsync);
             assert!(!data.settings.pixel_snap);
+        }
+    }
+
+    #[test]
+    fn fresh_keyboard_defaults_match_classic_controls_without_conflicting_aliases() {
+        let bindings = Settings::default().bindings;
+        for (action, key) in [
+            ("left", "ArrowLeft"),
+            ("right", "ArrowRight,KeyD"),
+            ("up", "ArrowUp,KeyW"),
+            ("down", "ArrowDown"),
+            ("jump", "KeyZ,Space"),
+            ("attack", "KeyX"),
+            ("cycle", "KeyC"),
+            ("bomb", "KeyA"),
+            ("rope", "KeyS"),
+            ("flare", "KeyF"),
+            ("pay", "KeyP"),
+            ("run", "ShiftLeft,ShiftRight"),
+        ] {
+            assert_eq!(bindings[action], key, "{action}");
         }
     }
 

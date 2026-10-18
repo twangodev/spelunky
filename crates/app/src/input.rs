@@ -54,8 +54,8 @@ const ACTIONS: [(Action, &str, KeyCode); 13] = [
     (Action::Run, "run", KeyCode::ShiftLeft),
     (Action::Jump, "jump", KeyCode::KeyZ),
     (Action::Attack, "attack", KeyCode::KeyX),
-    (Action::Bomb, "bomb", KeyCode::KeyB),
-    (Action::Rope, "rope", KeyCode::KeyR),
+    (Action::Bomb, "bomb", KeyCode::KeyA),
+    (Action::Rope, "rope", KeyCode::KeyS),
     (Action::Flare, "flare", KeyCode::KeyF),
     (Action::Cycle, "cycle", KeyCode::KeyC),
     (Action::Pay, "pay", KeyCode::KeyP),
@@ -853,19 +853,16 @@ mod tests {
             input.ui_pressed();
             remap_sample(&mut input, button.mask());
             let tick = input.take_tick();
-            assert_eq!(tick.jump, button == ControllerButton::South);
-            assert_eq!(tick.jump_pressed, button == ControllerButton::South);
-            assert_eq!(tick.attack, button == ControllerButton::West);
-            assert_eq!(tick.attack_pressed, button == ControllerButton::West);
-            assert_eq!(
-                tick.cycle_pressed,
-                button == ControllerButton::RightShoulder
-            );
+            assert_eq!(tick.jump, button == ControllerButton::East);
+            assert_eq!(tick.jump_pressed, button == ControllerButton::East);
+            assert_eq!(tick.attack, button == ControllerButton::South);
+            assert_eq!(tick.attack_pressed, button == ControllerButton::South);
+            assert_eq!(tick.cycle_pressed, button == ControllerButton::West);
             assert_eq!(tick.run, button == ControllerButton::LeftShoulder);
             assert_eq!(tick.bomb_pressed, button == ControllerButton::LeftTrigger);
             assert_eq!(tick.rope_pressed, button == ControllerButton::RightTrigger);
             assert_eq!(tick.flare_pressed, button == ControllerButton::North);
-            assert_eq!(tick.pay_pressed, button == ControllerButton::Select);
+            assert_eq!(tick.pay_pressed, button == ControllerButton::RightShoulder);
             assert_eq!(tick.left, button == ControllerButton::DPadLeft);
             assert_eq!(tick.right, button == ControllerButton::DPadRight);
             assert_eq!(tick.up, button == ControllerButton::DPadUp);
@@ -1395,12 +1392,12 @@ mod tests {
         ]));
         input.gamepad_connected = true;
         assert_eq!(input.take_tick(), InputFrame::default());
-        assert_eq!(input.action_label("attack"), "WEST BUTTON");
-        assert_eq!(input.action_label("pay"), "SELECT");
+        assert_eq!(input.action_label("attack"), "SOUTH BUTTON");
+        assert_eq!(input.action_label("pay"), "RIGHT SHOULDER");
         input.key(KeyCode::KeyJ, true, false);
-        assert_eq!(input.action_label("attack"), "WEST BUTTON");
+        assert_eq!(input.action_label("attack"), "SOUTH BUTTON");
         input.clear_gameplay();
-        assert_eq!(input.action_label("attack"), "WEST BUTTON");
+        assert_eq!(input.action_label("attack"), "SOUTH BUTTON");
         input.gamepad_connected = false;
         assert_eq!(input.action_label("attack"), "J");
         assert_eq!(input.action_label("pay"), "UNBOUND");
@@ -1472,13 +1469,11 @@ mod tests {
         input.set_bindings(&crate::storage::Settings::default().bindings);
         for (key, direction) in [
             (KeyCode::ArrowLeft, Action::Left),
-            (KeyCode::KeyA, Action::Left),
             (KeyCode::ArrowRight, Action::Right),
             (KeyCode::KeyD, Action::Right),
             (KeyCode::ArrowUp, Action::Up),
             (KeyCode::KeyW, Action::Up),
             (KeyCode::ArrowDown, Action::Down),
-            (KeyCode::KeyS, Action::Down),
         ] {
             input.key(key, true, false);
             let tick = input.take_tick();
@@ -1501,6 +1496,24 @@ mod tests {
             input.key(key, false, false);
             input.take_tick();
         }
+    }
+
+    #[test]
+    fn classic_keyboard_bomb_and_rope_defaults_do_not_move_the_player() {
+        let mut input = InputState::default();
+        input.set_bindings(&crate::storage::Settings::default().bindings);
+
+        input.key(KeyCode::KeyA, true, false);
+        let bomb = input.take_tick();
+        assert!(bomb.bomb_pressed);
+        assert!(!bomb.left && !bomb.right && !bomb.up && !bomb.down);
+        input.key(KeyCode::KeyA, false, false);
+        input.take_tick();
+
+        input.key(KeyCode::KeyS, true, false);
+        let rope = input.take_tick();
+        assert!(rope.rope_pressed);
+        assert!(!rope.left && !rope.right && !rope.up && !rope.down);
     }
 
     #[test]
