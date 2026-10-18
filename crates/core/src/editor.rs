@@ -51,7 +51,7 @@ impl EditorState {
             .collect();
         Self {
             level,
-            selected_tile: '1',
+            selected_tile: '@',
             palette,
             previews,
             undo: vec![],
@@ -406,5 +406,27 @@ fn remap_records(old: &Level, next: &mut Level, door: bool) {
         next.exit_targets = records;
     } else {
         next.signs = records;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_paint_creates_the_classic_entrance() {
+        let mut editor = EditorState::default();
+
+        assert_eq!(editor.selected_tile, '@');
+        editor.paint(0, 0).unwrap();
+
+        assert_eq!(editor.level.get_tile(0, 0), Some('@'));
+        let id = editor
+            .previews
+            .at_point(Vec2::new(16.0, 16.0), "oEntrance")
+            .expect("first paint should create an entrance preview");
+        let entrance = editor.previews.instance(id).unwrap();
+        assert_eq!(entrance.tile, '@');
+        assert_eq!(entrance.object, "oEntrance");
     }
 }
