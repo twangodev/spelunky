@@ -103,6 +103,7 @@ pub struct InputState {
     gamepad_held: Actions,
     frame: InputFrame,
     gamepad_ui: u8,
+    gamepad_direction_press_allowed: u8,
     blocked_gamepad_ui: u8,
     ui_edges: Vec<UiButton>,
     #[cfg(not(target_arch = "wasm32"))]
@@ -128,6 +129,7 @@ impl Default for InputState {
             gamepad_held: Actions::default(),
             frame: InputFrame::default(),
             gamepad_ui: 0,
+            gamepad_direction_press_allowed: 0x0f,
             blocked_gamepad_ui: 0,
             ui_edges: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -285,6 +287,29 @@ impl InputState {
         (actions, ui)
     }
 
+    fn portable_controller_with_direction_edges(
+        &self,
+        held: u32,
+        directions: [bool; 4],
+    ) -> (Actions, u8, u8) {
+        let (actions, ui) = self.portable_controller(held, directions);
+        let [left, right, up, down] = directions;
+        let mut press_allowed = 0;
+        if up && !left && !right {
+            press_allowed |= 1 << 0;
+        }
+        if down && !left && !right {
+            press_allowed |= 1 << 1;
+        }
+        if left && !up && !down {
+            press_allowed |= 1 << 2;
+        }
+        if right && !up && !down {
+            press_allowed |= 1 << 3;
+        }
+        (actions, ui, press_allowed)
+    }
+
     fn accept_controller_capture(&mut self, held: u32) {
         if held == 0 {
             self.controller_capture_blocked = false;
@@ -413,9 +438,18 @@ impl InputState {
         // Classic's check*Pressed/Released scripts OR the keyboard and gamepad
         // edges independently. A fresh press on one device must survive even
         // when the other device already holds the same action.
+        let direction_press_allowed = |action| match action {
+            Action::Up => self.gamepad_direction_press_allowed & (1 << 0) != 0,
+            Action::Down => self.gamepad_direction_press_allowed & (1 << 1) != 0,
+            Action::Left => self.gamepad_direction_press_allowed & (1 << 2) != 0,
+            Action::Right => self.gamepad_direction_press_allowed & (1 << 3) != 0,
+            _ => true,
+        };
         let pressed = |action| {
             (keyboard.has(action) && !self.keyboard_held.has(action))
-                || (self.gamepad_actions.has(action) && !self.gamepad_held.has(action))
+                || (self.gamepad_actions.has(action)
+                    && !self.gamepad_held.has(action)
+                    && direction_press_allowed(action))
         };
         let released = |action| {
             (!keyboard.has(action) && self.keyboard_held.has(action))
@@ -449,6 +483,15 @@ impl InputState {
     }
 
     fn accept_gamepads(&mut self, actions: Actions, ui: u8) {
+        self.accept_gamepads_with_direction_edges(actions, ui, 0x0f);
+    }
+
+    fn accept_gamepads_with_direction_edges(
+        &mut self,
+        actions: Actions,
+        ui: u8,
+        press_allowed: u8,
+    ) {
         self.blocked_gamepad_ui &= ui;
         let ui = ui & !self.blocked_gamepad_ui;
         for (index, button) in [
@@ -463,21 +506,34 @@ impl InputState {
         .into_iter()
         .enumerate()
         {
-            if ui & (1 << index) != 0 && self.gamepad_ui & (1 << index) == 0 {
+            if ui & (1 << index) != 0
+                && self.gamepad_ui & (1 << index) == 0
+                && (index >= 4 || press_allowed & (1 << index) != 0)
+            {
                 self.ui_edges.push(button);
             }
         }
         self.blocked_gamepad_actions.0 &= actions.0;
         self.gamepad_actions = Actions(actions.0 & !self.blocked_gamepad_actions.0);
         self.gamepad_ui = ui;
+        self.gamepad_direction_press_allowed = press_allowed;
         self.refresh();
     }
 
     fn accept_controller_sample(&mut self, actions: Actions, ui: u8) {
+        self.accept_controller_sample_with_direction_edges(actions, ui, 0x0f);
+    }
+
+    fn accept_controller_sample_with_direction_edges(
+        &mut self,
+        actions: Actions,
+        ui: u8,
+        press_allowed: u8,
+    ) {
         if self.controller_enabled {
-            self.accept_gamepads(actions, ui);
+            self.accept_gamepads_with_direction_edges(actions, ui, press_allowed);
         } else {
-            self.accept_gamepads(Actions::default(), 0);
+            self.accept_gamepads_with_direction_edges(Actions::default(), 0, 0x0f);
         }
     }
 
@@ -491,26 +547,24 @@ impl InputState {
         // Sampling after every queued event preserves a press/release pair that
         // arrives between two presentation frames.
         while gilrs.next_event().is_some() {
-            let (actions, ui, capture) = self.native_gamepads(&gilrs);
+            let (actions, ui, press_allowed, capture) = self.native_gamepads(&gilrs);
             self.accept_controller_capture(capture);
-            self.accept_controller_sample(actions, ui);
+            self.accept_controller_sample_with_direction_edges(actions, ui, press_allowed);
         }
-        let (actions, ui, capture) = self.native_gamepads(&gilrs);
+        let (actions, ui, press_allowed, capture) = self.native_gamepads(&gilrs);
         self.accept_controller_capture(capture);
-        self.accept_controller_sample(actions, ui);
+        self.accept_controller_sample_with_direction_edges(actions, ui, press_allowed);
         self.gilrs = Some(gilrs);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn native_gamepads(&self, gilrs: &gilrs::Gilrs) -> (Actions, u8, u32) {
+    fn native_gamepads(&self, gilrs: &gilrs::Gilrs) -> (Actions, u8, u8, u32) {
         use gilrs::{Axis, Button};
-        let mut actions = Actions::default();
-        let mut ui = 0;
-        let mut capture = 0;
         for (_, pad) in gilrs.gamepads() {
             if !pad.is_connected() {
                 continue;
             }
+            let mut capture = 0;
             let x = pad.value(Axis::LeftStickX);
             let y = pad.value(Axis::LeftStickY);
             let left = x < -DEAD_ZONE || pad.is_pressed(Button::DPadLeft);
@@ -541,12 +595,11 @@ impl InputState {
                     capture |= button.mask();
                 }
             }
-            let (mapped_actions, mapped_ui) =
-                self.portable_controller(held, [left, right, up, down]);
-            actions.0 |= mapped_actions.0;
-            ui |= mapped_ui;
+            let (actions, ui, press_allowed) =
+                self.portable_controller_with_direction_edges(held, [left, right, up, down]);
+            return (actions, ui, press_allowed, capture);
         }
-        (actions, ui, capture)
+        (Actions::default(), 0, 0x0f, 0)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -555,6 +608,7 @@ impl InputState {
         let mut actions = Actions::default();
         let mut ui = 0;
         let mut capture = 0;
+        let mut direction_press_allowed = 0x0f;
         if let Some(pads) =
             web_sys::window().and_then(|window| window.navigator().get_gamepads().ok())
         {
@@ -612,14 +666,16 @@ impl InputState {
                         capture |= physical.mask();
                     }
                 }
-                let (mapped_actions, mapped_ui) =
-                    self.portable_controller(held, [left, right, up, down]);
-                actions.0 |= mapped_actions.0;
-                ui |= mapped_ui;
+                let (mapped_actions, mapped_ui, press_allowed) =
+                    self.portable_controller_with_direction_edges(held, [left, right, up, down]);
+                actions = mapped_actions;
+                ui = mapped_ui;
+                direction_press_allowed = press_allowed;
+                break;
             }
         }
         self.accept_controller_capture(capture);
-        self.accept_controller_sample(actions, ui);
+        self.accept_controller_sample_with_direction_edges(actions, ui, direction_press_allowed);
     }
 }
 
@@ -816,6 +872,39 @@ mod tests {
                 assert!(source_trigger_pressed(button, true, 0.0));
             }
         }
+    }
+
+    #[test]
+    fn diagonal_directions_hold_for_motion_without_cardinal_press_edges() {
+        let mut input = InputState::default();
+        let diagonal = [false, true, true, false];
+        let (actions, ui, edges) = input.portable_controller_with_direction_edges(0, diagonal);
+        input.accept_gamepads_with_direction_edges(actions, ui, edges);
+        let tick = input.take_tick();
+        assert!(tick.up && tick.right);
+        assert!(!tick.up_pressed);
+        assert!(input.ui_pressed().is_empty());
+
+        // The gamepad object recalculates cardinal edges before applying the
+        // diagonal hold each tick, so changing NE to N remains held as well.
+        let (actions, ui, edges) =
+            input.portable_controller_with_direction_edges(0, [false, false, true, false]);
+        input.accept_gamepads_with_direction_edges(actions, ui, edges);
+        let tick = input.take_tick();
+        assert!(tick.up && !tick.up_pressed);
+        assert!(input.ui_pressed().is_empty());
+
+        let (actions, ui, edges) = input.portable_controller_with_direction_edges(0, [false; 4]);
+        input.accept_gamepads_with_direction_edges(actions, ui, edges);
+        input.take_tick();
+        let (actions, ui, edges) =
+            input.portable_controller_with_direction_edges(0, [false, false, true, false]);
+        input.accept_gamepads_with_direction_edges(actions, ui, edges);
+        assert!(
+            input.take_tick().up_pressed,
+            "a fresh cardinal Up still fires"
+        );
+        assert_eq!(input.ui_pressed(), vec![UiButton::Up]);
     }
 
     #[test]
