@@ -290,23 +290,41 @@ impl EditorUi {
                 KeyCode::KeyS => self.record(false),
                 KeyCode::KeyL => self.record(true),
                 KeyCode::PageUp | KeyCode::PageDown => {
-                    let len = self.state.palette.len();
-                    let index = self
-                        .state
-                        .palette
-                        .iter()
-                        .position(|&c| c == self.state.selected_tile)
-                        .unwrap_or(0);
-                    self.state.selected_tile = self.state.palette[if key == KeyCode::PageUp {
-                        (index + len - 1) % len
-                    } else {
-                        (index + 1) % len
-                    }];
+                    self.cycle_palette(if key == KeyCode::PageUp { -1 } else { 1 });
                 }
                 _ => {}
             }
         }
         EditorCommand::None
+    }
+
+    /// Classic's mouse wheel steps the selected tile just like its A/S
+    /// shortcuts. Positive values follow wheel-up/PageDown; negative values
+    /// follow wheel-down/PageUp.
+    pub fn wheel(&mut self, vertical: f32) {
+        if self.entry.is_some() || self.confirmation.is_some() || !vertical.is_finite() {
+            return;
+        }
+        if vertical > 0.0 {
+            self.cycle_palette(1);
+        } else if vertical < 0.0 {
+            self.cycle_palette(-1);
+        }
+    }
+
+    fn cycle_palette(&mut self, delta: isize) {
+        let len = self.state.palette.len();
+        if len == 0 {
+            return;
+        }
+        let index = self
+            .state
+            .palette
+            .iter()
+            .position(|&tile| tile == self.state.selected_tile)
+            .unwrap_or(0);
+        self.state.selected_tile =
+            self.state.palette[(index as isize + delta).rem_euclid(len as isize) as usize];
     }
 
     fn confirm(&mut self, confirmation: Confirmation) {
@@ -854,9 +872,16 @@ fn draw_tile(quads: &mut Vec<DrawQuad>, atlas: &Atlas, tile: char, x: f32, y: f3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn editor_with_block_selected() -> EditorUi {
+        let mut ui = EditorUi::new();
+        ui.state.select('1').unwrap();
+        ui
+    }
+
     #[test]
     fn simultaneous_mouse_buttons_paint_before_right_only_erase() {
-        let mut ui = EditorUi::new();
+        let mut ui = editor_with_block_selected();
         ui.pointer(4.0, 40.0, true, true);
         assert_eq!(ui.state.level.get_tile(0, 11), Some('1'));
         ui.pointer(20.0, 40.0, true, true);
@@ -870,6 +895,24 @@ mod tests {
         ui.pointer(20.0, 40.0, false, true);
         assert_eq!(ui.state.level.get_tile(2, 11), Some('0'));
         assert_eq!(ui.state.level.get_tile(1, 11), Some('0'));
+    }
+
+    #[test]
+    fn mouse_wheel_cycles_the_palette_in_classic_order_and_wraps() {
+        let mut ui = EditorUi::new();
+        assert_eq!(ui.state.selected_tile, '@');
+        ui.wheel(1.0);
+        assert_eq!(ui.state.selected_tile, 'X');
+        ui.wheel(-1.0);
+        assert_eq!(ui.state.selected_tile, '@');
+        ui.wheel(f32::NEG_INFINITY);
+        assert_eq!(ui.state.selected_tile, '@');
+
+        ui.state.select('0').unwrap();
+        ui.wheel(-1.0);
+        assert_eq!(ui.state.selected_tile, 'J');
+        ui.wheel(1.0);
+        assert_eq!(ui.state.selected_tile, '0');
     }
 
     #[test]
@@ -1113,7 +1156,7 @@ mod tests {
 
     #[test]
     fn paint_erase_history_and_play() {
-        let mut ui = EditorUi::new();
+        let mut ui = editor_with_block_selected();
         ui.pointer(4.0, 40.0, true, false);
         assert_eq!(ui.state.level.get_tile(0, 11), Some('1'));
         ui.pointer(4.0, 40.0, false, true);
@@ -1135,7 +1178,7 @@ mod tests {
     }
     #[test]
     fn interrupted_pointer_stroke_does_not_connect_the_next_click() {
-        let mut ui = EditorUi::new();
+        let mut ui = editor_with_block_selected();
         ui.pointer(4., 40., true, false);
         ui.cancel_pointer();
         ui.pointer(44., 40., true, false);
@@ -1208,7 +1251,7 @@ mod tests {
     }
     #[test]
     fn source_exit_confirmation_blocks_edits_cancels_and_discards_with_ordinary_keys() {
-        let mut ui = EditorUi::new();
+        let mut ui = editor_with_block_selected();
         let original = ui.state.level.clone();
         assert!(matches!(
             ui.key(KeyCode::Escape, None, false),
@@ -1488,7 +1531,7 @@ mod tests {
     }
     #[test]
     fn source_pointer_jump_does_not_paint_unvisited_cells() {
-        let mut ui = EditorUi::new();
+        let mut ui = editor_with_block_selected();
         ui.pointer(4.0, 48.0, true, false);
         ui.pointer(44.0, 48.0, true, false);
         ui.pointer(44.0, 48.0, false, false);
@@ -1554,7 +1597,7 @@ mod tests {
     #[test]
     fn source_staged_map_input_waits_for_fixed_ticks_and_stationary_holds_repeat() {
         let atlas = Atlas::load().unwrap();
-        let mut ui = EditorUi::new();
+        let mut ui = editor_with_block_selected();
         ui.stage_pointer(4.0, 48.0, true, false);
         assert_eq!(ui.state.level.get_tile(0, 12), Some('0'));
         let before = ui.state.previews.clone();

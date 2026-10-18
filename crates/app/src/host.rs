@@ -20,7 +20,7 @@ use std::sync::Arc;
 use winit::window::Fullscreen;
 use winit::{
     application::ApplicationHandler,
-    event::{ElementState, MouseButton, WindowEvent},
+    event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     keyboard::{KeyCode, PhysicalKey},
     window::{Window, WindowId},
@@ -225,6 +225,7 @@ struct App {
     donation_confirm: bool,
     recorded: bool,
     cinematic_action: bool,
+    credits_keyboard_skip: bool,
     pause_start_requested: bool,
     exit_requested: bool,
     focused: bool,
@@ -310,6 +311,7 @@ impl App {
             store.data.settings.rules,
             source_music.session_state(),
         );
+        game.set_graphics_high(store.data.settings.graphics_high);
         hydrate_run(&mut game, &store.data);
         spelunky_core::opening::begin_intro(&mut game);
         let editor = EditorUi::with_source_rng(
@@ -340,6 +342,7 @@ impl App {
             donation_confirm: false,
             recorded: false,
             cinematic_action: false,
+            credits_keyboard_skip: false,
             pause_start_requested: false,
             exit_requested: false,
             focused: true,
@@ -378,6 +381,7 @@ impl App {
     }
     fn reset_timing(&mut self) {
         self.cinematic_action = false;
+        self.credits_keyboard_skip = false;
         self.pause_start_requested = false;
         self.donation_confirm = false;
         self.timing.reset(self.now());
@@ -391,6 +395,7 @@ impl App {
             resume_room_music(game);
         }
         self.donation_confirm = false;
+        self.credits_keyboard_skip = false;
         self.timing.reset(self.now());
         self.input.clear_edges();
     }
@@ -454,6 +459,7 @@ impl App {
         event_loop.exit();
     }
     fn settings_changed(&mut self) {
+        let graphics_high = self.store.data.settings.graphics_high;
         let settings = &self.store.data.settings;
         self.input.set_bindings(&settings.bindings);
         self.input
@@ -464,6 +470,9 @@ impl App {
             .set_volumes(settings.music_volume, settings.effects_volume);
         if let Some(renderer) = &mut self.renderer {
             renderer.set_vsync(settings.vsync);
+        }
+        if let Some(game) = &mut self.game {
+            game.set_graphics_high(graphics_high);
         }
         if let Err(error) = self.store.save() {
             self.toast(error);
@@ -496,17 +505,20 @@ impl App {
         self.source_message = None;
         self.drawn_source_message = None;
         let seed = wall_seed() ^ fold_seed_entropy(u128::from(self.now().to_bits()));
+        let graphics_high = self.store.data.settings.graphics_high;
         let mut game = if tutorial {
-            Game::tutorial_with_music(
+            Game::tutorial_with_music_and_graphics(
                 seed,
                 self.store.data.settings.rules,
                 self.source_music.session_state(),
+                graphics_high,
             )
         } else {
-            Game::new_with_music(
+            Game::new_with_music_and_graphics(
                 seed,
                 self.store.data.settings.rules,
                 self.source_music.session_state(),
+                graphics_high,
             )
         };
         hydrate_run(&mut game, &self.store.data);
@@ -744,6 +756,13 @@ impl App {
                     .as_ref()
                     .is_some_and(ending_uses_cinematic_controls)
                 {
+                    if self.game.as_ref().is_some_and(|game| {
+                        game.ending.as_ref().is_some_and(|ending| {
+                            ending.stage == spelunky_core::ending::EndingStage::Credits
+                        })
+                    }) {
+                        self.credits_keyboard_skip |= source_credits_skip_key(key);
+                    }
                     self.cinematic_action |= source_start_key(key, true);
                     return;
                 }
@@ -1362,10 +1381,9 @@ impl App {
                     .and_then(|game| game.opening.as_ref())
                     .is_some_and(|opening| !opening.can_pause)
             {
-                self.cinematic_action |= matches!(
-                    button,
-                    UiButton::Confirm | UiButton::Cancel | UiButton::Pause
-                );
+                // Attack has already been preserved as InputFrame.attack_pressed;
+                // only the controller Start edge maps to checkStartPressed here.
+                self.cinematic_action |= button == UiButton::Pause;
                 continue;
             }
             if self.screen == Screen::Playing
@@ -1374,10 +1392,9 @@ impl App {
                     .as_ref()
                     .is_some_and(ending_uses_cinematic_controls)
             {
-                self.cinematic_action |= matches!(
-                    button,
-                    UiButton::Confirm | UiButton::Cancel | UiButton::Pause
-                );
+                // Attack has already been preserved as InputFrame.attack_pressed;
+                // the extra East/Cancel affordance is not a Classic skip input.
+                self.cinematic_action |= button == UiButton::Pause;
                 continue;
             }
             if self.screen == Screen::Playing
@@ -1452,6 +1469,7 @@ impl App {
             for _ in 0..frame.ticks {
                 let mut input = self.input.take_tick();
                 apply_cinematic_start(&mut input, &mut self.cinematic_action);
+                apply_credits_keyboard_skip(&mut input, &mut self.credits_keyboard_skip);
                 if let Some(game) = &mut self.game {
                     let begin_message = self.source_message.clone();
                     game.down_to_run = self.store.data.settings.down_to_run;
@@ -2743,8 +2761,14 @@ fn settings_controller_frame(
 fn apply_cinematic_start(input: &mut spelunky_core::InputFrame, pending: &mut bool) {
     input.start_pressed |= std::mem::take(pending);
 }
+fn apply_credits_keyboard_skip(input: &mut spelunky_core::InputFrame, pending: &mut bool) {
+    input.credits_keyboard_skip_pressed |= std::mem::take(pending);
+}
 fn source_start_key(key: KeyCode, allow_enter: bool) -> bool {
     key == KeyCode::Escape || (allow_enter && key == KeyCode::Enter)
+}
+fn source_credits_skip_key(key: KeyCode) -> bool {
+    matches!(key, KeyCode::Enter | KeyCode::Escape)
 }
 fn source_game_over_hint(game: &Game, editor_play: bool, attack: &str) -> String {
     let destination = if editor_play || game.flags.contains("editor_test") {
@@ -3232,6 +3256,13 @@ impl ApplicationHandler<UserEvent> for App {
                     _ => {}
                 }
                 self.pointer();
+            }
+            WindowEvent::MouseWheel { delta, .. } if self.screen == Screen::Editor => {
+                let vertical = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y,
+                    MouseScrollDelta::PixelDelta(position) => position.y as f32,
+                };
+                self.editor.wheel(vertical);
             }
             #[cfg(not(target_arch = "wasm32"))]
             WindowEvent::DroppedFile(path) => match std::fs::read_to_string(&path) {
@@ -4204,7 +4235,7 @@ mod tests {
         bindings.insert("bomb".into(), "invalid".into());
         bindings.insert("rope".into(), "".into());
         input.set_bindings(&bindings);
-        assert!(input.action_key("bomb", KeyCode::KeyB));
+        assert!(input.action_key("bomb", KeyCode::KeyA));
         assert!(!input.action_key("bomb", KeyCode::Enter));
         assert!(!input.action_key("rope", KeyCode::KeyR));
     }
@@ -4533,8 +4564,8 @@ mod tests {
         assert_eq!(timing.advance(frame).ticks, 0);
         input.key(KeyCode::KeyZ, true, false);
         input.key(KeyCode::KeyZ, false, false);
-        input.key(KeyCode::KeyB, true, false);
-        input.key(KeyCode::KeyB, false, false);
+        input.key(KeyCode::KeyA, true, false);
+        input.key(KeyCode::KeyA, false, false);
         for callback in 1..8 {
             assert!(!cadence.ready(f64::from(callback) / 240., Some(30)));
         }
@@ -5626,6 +5657,32 @@ mod tests {
     }
 
     #[test]
+    fn credits_keyboard_skip_stays_distinct_from_generic_controller_start() {
+        assert!(source_credits_skip_key(KeyCode::Enter));
+        assert!(source_credits_skip_key(KeyCode::Escape));
+        assert!(!source_credits_skip_key(KeyCode::KeyP));
+
+        let mut pending = source_credits_skip_key(KeyCode::Escape);
+        let mut input = spelunky_core::InputFrame {
+            start_pressed: true,
+            ..Default::default()
+        };
+        apply_credits_keyboard_skip(&mut input, &mut pending);
+        assert!(
+            input.start_pressed,
+            "controller Start remains a separate edge"
+        );
+        assert!(input.credits_keyboard_skip_pressed);
+        assert!(!pending);
+
+        let mut pending = source_credits_skip_key(KeyCode::KeyP);
+        let mut input = spelunky_core::InputFrame::default();
+        apply_credits_keyboard_skip(&mut input, &mut pending);
+        assert!(!input.credits_keyboard_skip_pressed);
+        assert!(!pending);
+    }
+
+    #[test]
     fn tutorial_manual_return_uses_its_authored_title_door_and_resets_run_inventory() {
         let mut game = Game::tutorial(42, spelunky_core::RulesPreset::Classic);
         spelunky_core::characters::apply(
@@ -6373,6 +6430,9 @@ mod tests {
     #[test]
     fn resized_editor_pointer_paints_the_same_source_cells_without_joining_strokes() {
         let mut editor = EditorUi::new();
+        for _ in 0..3 {
+            editor.wheel(1.0);
+        }
         for ((width, height), [source_x, source_y]) in
             [((1920, 1080), [12., 48.]), ((800, 800), [100., 72.])]
         {
@@ -6685,6 +6745,9 @@ mod tests {
     #[test]
     fn editor_exit_save_failure_keeps_the_draft_until_success_then_returns_to_authored_title() {
         let mut editor = EditorUi::new();
+        for _ in 0..3 {
+            editor.wheel(1.0);
+        }
         editor.key(KeyCode::KeyN, None, false);
         editor.key(KeyCode::KeyA, Some("saved-room"), false);
         editor.key(KeyCode::Enter, None, false);

@@ -12,6 +12,8 @@ const STORAGE_KEY: &str = "spelunky-rust.save";
 pub struct Settings {
     pub rules: RulesPreset,
     pub pixel_snap: bool,
+    /// Classic `global.graphicsHigh`: adds source-gated decorations and effects.
+    pub graphics_high: bool,
     /// Source settings default: hold Down while moving to run.
     pub down_to_run: bool,
     pub music_volume: f32,
@@ -50,6 +52,7 @@ impl Default for Settings {
         Self {
             rules: RulesPreset::Classic,
             pixel_snap: false,
+            graphics_high: true,
             down_to_run: true,
             music_volume: 0.6,
             effects_volume: 0.8,
@@ -489,9 +492,24 @@ mod tests {
             assert!(data.settings.bindings.contains_key("rope"));
             assert_eq!(data.settings.bindings["bomb"], "KeyA");
             assert_eq!(data.settings.bindings["rope"], "KeyS");
+            assert!(data.settings.graphics_high);
             assert!(data.settings.vsync);
             assert!(!data.settings.pixel_snap);
         }
+    }
+
+    #[test]
+    fn graphics_detail_migrates_to_classic_high_and_preserves_explicit_low() {
+        assert!(
+            SaveData::from_json(r#"{"settings":{}}"#)
+                .unwrap()
+                .settings
+                .graphics_high
+        );
+        let low = SaveData::from_json(r#"{"settings":{"graphics_high":false}}"#).unwrap();
+        assert!(!low.settings.graphics_high);
+        let reopened = SaveData::from_json(&low.to_json().unwrap()).unwrap();
+        assert!(!reopened.settings.graphics_high);
     }
 
     #[test]

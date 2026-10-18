@@ -122,10 +122,10 @@ fn natural_paused_exit_preserves_bomb_rope_start_priority() {
         let settings = crate::storage::Settings::default();
         for (keys, expected) in [
             (
-                vec![KeyCode::KeyB, KeyCode::KeyR],
+                vec![KeyCode::KeyA, KeyCode::KeyS],
                 SourcePausedControl::Suicide,
             ),
-            (vec![KeyCode::KeyR], SourcePausedControl::Quit),
+            (vec![KeyCode::KeyS], SourcePausedControl::Quit),
             (vec![], SourcePausedControl::Resume),
         ] {
             let mut input = InputState::default();

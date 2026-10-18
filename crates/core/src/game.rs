@@ -39,6 +39,19 @@ impl Game {
         Self::generate_first_room(Self::shell_with_music(seed, rules, music))
     }
 
+    /// Build the initial campaign room with the source graphics preference in
+    /// place before SetupWalls and background-decoration RNG is consumed.
+    pub fn new_with_music_and_graphics(
+        seed: u32,
+        rules: RulesPreset,
+        music: SourceMusicState,
+        graphics_high: bool,
+    ) -> Self {
+        let mut game = Self::shell_with_music(seed, rules, music);
+        game.set_graphics_high(graphics_high);
+        Self::generate_first_room(game)
+    }
+
     pub fn try_new(seed: u64, rules: RulesPreset) -> Result<Self, RngSeedError> {
         Ok(Self::generate_first_room(Self::try_shell(seed, rules)?))
     }
@@ -79,6 +92,17 @@ impl Game {
 
     pub fn tutorial_with_music(seed: u32, rules: RulesPreset, music: SourceMusicState) -> Self {
         Self::prepare_tutorial(Self::shell_with_music(seed, rules, music))
+    }
+
+    pub fn tutorial_with_music_and_graphics(
+        seed: u32,
+        rules: RulesPreset,
+        music: SourceMusicState,
+        graphics_high: bool,
+    ) -> Self {
+        let mut game = Self::shell_with_music(seed, rules, music);
+        game.set_graphics_high(graphics_high);
+        Self::prepare_tutorial(game)
     }
 
     pub fn tutorial(seed: u32, rules: RulesPreset) -> Self {

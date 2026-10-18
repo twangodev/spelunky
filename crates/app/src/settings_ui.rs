@@ -22,7 +22,8 @@ const ACTIONS: [(&str, &str); 14] = [
     ("pause", "PAUSE"),
 ];
 const CONTROLLER_INPUT: usize = 8;
-const FIRST_BINDING: usize = CONTROLLER_INPUT + 1;
+const GRAPHICS_DETAIL: usize = CONTROLLER_INPUT + 1;
+const FIRST_BINDING: usize = GRAPHICS_DETAIL + 1;
 const CONFIGURE_CONTROLLER: usize = FIRST_BINDING + ACTIONS.len();
 const RESTORE: usize = CONFIGURE_CONTROLLER + 1;
 const BACK: usize = RESTORE + 1;
@@ -156,6 +157,7 @@ impl SettingsUi {
             6 if confirm => return SettingsCommand::Fullscreen,
             7 => settings.down_to_run = !settings.down_to_run,
             CONTROLLER_INPUT => settings.controller_enabled = !settings.controller_enabled,
+            GRAPHICS_DETAIL => settings.graphics_high = !settings.graphics_high,
             FIRST_BINDING..CONFIGURE_CONTROLLER if confirm => {
                 self.binding = Some(self.selected - FIRST_BINDING);
                 self.unsupported_key = false;
@@ -214,6 +216,7 @@ impl SettingsUi {
             6 => "ENTER: TOGGLE FULLSCREEN.",
             7 => "HOLD DOWN WHILE MOVING TO RUN.",
             CONTROLLER_INPUT => "ENABLES CONTROLLER GAMEPLAY AND MENU INPUT.",
+            GRAPHICS_DETAIL => "LOW REDUCES SOURCE-GATED DECORATION AND EFFECTS.",
             FIRST_BINDING..CONFIGURE_CONTROLLER => "ENTER: REPLACE KEYS FOR THIS ACTION.",
             CONFIGURE_CONTROLLER => "ENTER: CONFIGURE CONTROLLER BUTTONS.",
             RESTORE => "RESTORES SETTINGS. RECORDS ARE PRESERVED.",
@@ -328,6 +331,15 @@ fn row(index: usize, settings: &Settings) -> (String, String) {
         6 => ("FULLSCREEN", "ENTER".into()),
         7 => ("DOWN TO RUN", on(settings.down_to_run)),
         CONTROLLER_INPUT => ("GAMEPAD INPUT", on(settings.controller_enabled)),
+        GRAPHICS_DETAIL => (
+            "GRAPHICS DETAIL",
+            if settings.graphics_high {
+                "HIGH"
+            } else {
+                "LOW"
+            }
+            .into(),
+        ),
         FIRST_BINDING..CONFIGURE_CONTROLLER => {
             let (action, label) = ACTIONS[index - FIRST_BINDING];
             let value = settings.bindings.get(action).cloned().unwrap_or_default();
@@ -627,5 +639,30 @@ mod tests {
         menu.selected = RESTORE;
         menu.key(KeyCode::Enter, &mut settings);
         assert!(settings.down_to_run);
+    }
+
+    #[test]
+    fn classic_graphics_detail_toggle_exposes_high_and_low_source_modes() {
+        let mut menu = SettingsUi::new();
+        let mut settings = Settings::default();
+        assert!(settings.graphics_high);
+        assert_eq!(
+            row(GRAPHICS_DETAIL, &settings),
+            ("GRAPHICS DETAIL".into(), "HIGH".into())
+        );
+
+        menu.selected = GRAPHICS_DETAIL;
+        assert_eq!(
+            menu.key(KeyCode::Enter, &mut settings),
+            SettingsCommand::Changed
+        );
+        assert!(!settings.graphics_high);
+        assert_eq!(row(GRAPHICS_DETAIL, &settings).1, "LOW");
+        assert_eq!(
+            menu.key(KeyCode::ArrowLeft, &mut settings),
+            SettingsCommand::Changed
+        );
+        assert!(settings.graphics_high);
+        assert_eq!(row(GRAPHICS_DETAIL, &settings).1, "HIGH");
     }
 }

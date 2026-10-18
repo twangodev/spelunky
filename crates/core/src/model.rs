@@ -110,6 +110,10 @@ pub struct InputFrame {
     pub attack_released: bool,
     #[serde(default)]
     pub start_pressed: bool,
+    /// Physical keyboard Enter/Escape edges used by the authored credits
+    /// controllers, which do not treat controller Start as a skip action.
+    #[serde(default)]
+    pub credits_keyboard_skip_pressed: bool,
     /// Fresh physical M, independent from remappable player actions.
     #[serde(default)]
     pub music_pressed: bool,
@@ -131,6 +135,7 @@ impl InputFrame {
         self.jump_released = false;
         self.attack_pressed = false;
         self.start_pressed = false;
+        self.credits_keyboard_skip_pressed = false;
         self.music_pressed = false;
         self.bomb_pressed = false;
         self.rope_pressed = false;
@@ -1562,6 +1567,16 @@ impl Game {
         let mut game = Self::shell(seed, rules);
         game.source_music = music;
         game
+    }
+
+    /// Apply Classic's `global.graphicsHigh` switch. Its inverse flag is
+    /// consumed by both generation callbacks and runtime visual-effect births.
+    pub fn set_graphics_high(&mut self, enabled: bool) {
+        if enabled {
+            self.flags.remove("low_graphics");
+        } else {
+            self.flags.insert("low_graphics".into());
+        }
     }
     pub fn try_shell(seed: u64, rules: RulesPreset) -> Result<Self, RngSeedError> {
         Ok(Self::shell_from_rng(seed, rules, Rng::try_canonical(seed)?))

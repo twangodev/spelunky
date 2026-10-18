@@ -576,6 +576,124 @@ mod tests {
         }
     }
     #[test]
+    fn credits_skip_uses_authored_keyboard_edges_or_held_attack_only() {
+        for (kind, room) in [
+            (EndingKind::TitleCredits, "rCredits1"),
+            (EndingKind::Campaign, "rCredits2"),
+        ] {
+            for (input, expected) in [
+                (
+                    InputFrame {
+                        start_pressed: true,
+                        ..Default::default()
+                    },
+                    false,
+                ),
+                (
+                    InputFrame {
+                        attack_pressed: true,
+                        ..Default::default()
+                    },
+                    false,
+                ),
+                (
+                    InputFrame {
+                        attack: true,
+                        ..Default::default()
+                    },
+                    true,
+                ),
+                (
+                    InputFrame {
+                        credits_keyboard_skip_pressed: true,
+                        ..Default::default()
+                    },
+                    true,
+                ),
+            ] {
+                let mut g = game();
+                let mut s = EndingState::new(&g, kind, EndingStage::Credits);
+                enter(&mut g, &mut s, EndingStage::Credits, room);
+                s.fade_in = false;
+                s.fade_level = 0.;
+                s.alarms = [-1; 12];
+                spawn(&mut g, &mut s, "oCamel", Vec2::new(200., 144.));
+                g.ending = Some(s);
+                g.state = RunState::Ending;
+
+                g.step(&input);
+
+                assert_eq!(
+                    g.ending.as_ref().unwrap().fade_out,
+                    expected,
+                    "{room} should match keyboard Enter/Escape or held checkAttack"
+                );
+            }
+        }
+    }
+    #[test]
+    fn title_credits_intro_backdrop_runs_its_authored_step() {
+        let mut g = game();
+        let mut s = EndingState::new(&g, EndingKind::TitleCredits, EndingStage::Credits);
+        enter(&mut g, &mut s, EndingStage::Credits, "rCredits1");
+        s.fade_in = false;
+        s.alarms = [-1; 12];
+        s.alarms[0] = 1;
+        let backdrop = g
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oIntroBG")
+            .expect("oCredits1 Create adds the authored intro backdrop")
+            .id;
+        assert_eq!(g.world.entity(backdrop).unwrap().pos.x, -120.);
+        g.ending = Some(s);
+        g.state = RunState::Ending;
+
+        // oCredits1 Alarm 0 creates the Camel, then the fresh Step phase runs
+        // oIntroBG's lower-resource Step and pins x to view_xview + xOff.
+        g.step(&InputFrame::default());
+
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .any(|entity| entity.object == "oCamel")
+        );
+        assert_eq!(g.world.entity(backdrop).unwrap().pos.x, 0.);
+
+        g.camera.x = 8.;
+        g.step(&InputFrame::default());
+        assert_eq!(
+            g.world.entity(backdrop).unwrap().pos.x,
+            8.,
+            "the camel branch leaves xOff unchanged before pinning to the view"
+        );
+        g.world.entities.retain(|entity| entity.object != "oCamel");
+        g.step(&InputFrame::default());
+        assert_eq!(
+            g.world.entity(backdrop).unwrap().pos.x,
+            7.98,
+            "without a camel, a nonzero view decrements xOff by 0.02"
+        );
+    }
+    #[test]
+    fn leaving_r_end_runs_its_room_end_shake_reset() {
+        for (source_room, expected_shake) in [("rEnd", 0.), ("rEnd2", 17.)] {
+            let mut g = game();
+            g.world.name = source_room.into();
+            g.data.insert("shake".into(), 17.);
+            let mut s = EndingState::new(&g, EndingKind::Campaign, EndingStage::Landing);
+
+            enter(&mut g, &mut s, EndingStage::Landing, "rEnd3");
+
+            assert_eq!(
+                g.data["shake"], expected_shake,
+                "only oEnd's Room End clears the source shake global"
+            );
+        }
+    }
+    #[test]
     fn higher_resource_newborn_steps_and_animation_follow_the_source_phases() {
         let mut g = game();
         begin_custom(&mut g);
@@ -1339,6 +1457,10 @@ pub fn load_room(game: &mut Game, name: &str) {
 }
 
 fn enter(game: &mut Game, s: &mut EndingState, stage: EndingStage, room: &str) {
+    // oEnd.events/Room End clears global.shake when leaving rEnd.
+    if game.world.name == "rEnd" {
+        game.data.insert("shake".into(), 0.);
+    }
     load_room(game, room);
     s.stage = stage;
     s.stage_tick = 0;
@@ -1553,6 +1675,12 @@ fn init_actor(game: &mut Game, s: &mut EndingState, id: u64) {
             e.pos.x -= 64.;
             e.previous_pos = e.pos;
             e.data.insert("x_off".into(), -64.);
+        }
+        "oIntroBG" => {
+            // oIntroBG Create initializes xOff before the Credits1 Step pins
+            // the sprite to the view. Credits1 creates it at x=-120, but
+            // its first source Step moves it to view_xview + xOff (zero).
+            e.data.insert("x_off".into(), 0.);
         }
         "oSprite" => {
             e.data.insert("animation_speed".into(), 0.);
@@ -2278,6 +2406,22 @@ fn actor_step(game: &mut Game, s: &mut EndingState, e: &mut Entity, input: &Inpu
                 e.data.insert("x_off".into(), offset + 0.02);
             }
         }
+        "oIntroBG" => {
+            // Its source Step first adjusts xOff when the view moves, except
+            // in rCredits1 while the Camel exists; it then pins x to the view.
+            let has_credits_camel = game.world.name == "rCredits1"
+                && game
+                    .world
+                    .entities
+                    .iter()
+                    .any(|entity| entity.alive && entity.object == "oCamel");
+            let mut offset = e.value("x_off");
+            if game.camera.x != 0. && !has_credits_camel {
+                offset -= 0.02;
+                e.data.insert("x_off".into(), offset);
+            }
+            e.pos.x = game.camera.x + offset;
+        }
         "oDesertScroll" | "oDesertScroll2" | "oDesertTopScroll" | "oShrubScroll"
         | "oPalmTreeScroll" => {
             if s.scrolling {
@@ -2692,7 +2836,7 @@ fn controller_step(game: &mut Game, s: &mut EndingState, input: &InputFrame) {
                 .iter()
                 .find(|e| e.object == "oCamel")
                 .map(|e| e.pos.x);
-            if (input.attack || action(input)) && camel.is_some() {
+            if (input.attack || input.credits_keyboard_skip_pressed) && camel.is_some() {
                 if s.fade_in {
                     s.fade_level = 0.;
                 } else {
