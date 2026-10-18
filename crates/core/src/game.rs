@@ -649,6 +649,18 @@ impl Game {
             self.flags.insert("had_dark_level".into());
         }
         self.world = generated.world;
+        // scrLevelGen sets global.madeMoai as soon as it schedules a Moai
+        // room. Persist that source side effect with the generated room so a
+        // hub start at level 9 suppresses another Moai on level 10.
+        if !historical
+            && self
+                .world
+                .entities
+                .iter()
+                .any(|entity| entity.alive && entity.object == "oMoai")
+        {
+            self.flags.insert("made_moai".into());
+        }
         if !historical {
             self.data
                 .insert("marketChance".into(), f64::from(state.market_chance));
@@ -1985,6 +1997,33 @@ mod tests {
         game.load_hub(hub::HubKind::Title);
         assert_eq!(game.world.name, "rTitle");
         assert_eq!(game.player.pos, Vec2::new(344., 184.));
+    }
+
+    #[test]
+    fn hub_started_moai_suppresses_a_second_moai_at_level_ten() {
+        // scrLevelGen.gml:214-221 sets madeMoai during level generation;
+        // GameMaker shortcuts can enter level 9 directly from the hub.
+        let mut game = Game::shell(11, RulesPreset::Classic);
+        game.start_from_hub(false, 9);
+        assert_eq!(game.world.level, 9);
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oMoai")
+        );
+        assert!(game.flags.contains("made_moai"));
+
+        game.data.insert("next_level".into(), 10.0);
+        game.next_level();
+        assert_eq!(game.world.level, 10);
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|e| e.alive && e.object == "oMoai")
+        );
     }
 }
 
