@@ -7725,6 +7725,25 @@ mod moon_timeout_host_tests;
 mod source_message_lifecycle_tests {
     use super::*;
     use spelunky_core::{InputFrame, RulesPreset, SourceMessage, Vec2, World};
+
+    fn step_with_host_dialogue(
+        game: &mut Game,
+        source: &mut Option<SourceMessage>,
+        drawn: &mut Option<SourceMessage>,
+        bare: &mut String,
+        until: &mut f64,
+        simulated: &mut bool,
+    ) {
+        let begin_message = source.clone();
+        game.step(&InputFrame::default());
+        for event in &game.events {
+            if let GameEvent::Dialogue(message) = event {
+                replace_source_dialogue(bare, until, simulated, source, message);
+            }
+        }
+        *drawn = begin_source_message(game, begin_message.as_ref());
+    }
+
     #[test]
     fn room_transition_retires_live_and_captured_dialogue() {
         let mut source = Some(SourceMessage {
@@ -7736,6 +7755,87 @@ mod source_message_lifecycle_tests {
         clear_source_dialogue_on_transition(&mut source, &mut drawn);
         assert!(source.is_none());
         assert!(drawn.is_none());
+    }
+
+    #[test]
+    fn real_sign_dialogue_stays_gone_after_transition_while_source_timer_remains_live() {
+        let mut game = Game::shell(31, RulesPreset::Classic);
+        game.world = World::new(20, 15, Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        game.player.pos = Vec2::new(40., 40.);
+        game.player.previous_pos = game.player.pos;
+        let sign_id = game.world.spawn("oMsgSign", Vec2::new(32., 32.));
+        let sign = game.world.entity_mut(sign_id).unwrap();
+        sign.text.insert("message".into(), "OLD ROOM SIGN".into());
+        sign.text.insert("message2".into(), "SECOND LINE".into());
+
+        let mut source = None;
+        let mut drawn = None;
+        let mut bare = String::new();
+        let mut until = 0.;
+        let mut simulated = false;
+        step_with_host_dialogue(
+            &mut game,
+            &mut source,
+            &mut drawn,
+            &mut bare,
+            &mut until,
+            &mut simulated,
+        );
+        let old_message = source.clone().expect("real sign collision emits Dialogue");
+        assert_eq!(old_message.first, "OLD ROOM SIGN");
+        assert_eq!(old_message.second, "SECOND LINE");
+        game.world.entity_mut(sign_id).unwrap().alive = false;
+
+        step_with_host_dialogue(
+            &mut game,
+            &mut source,
+            &mut drawn,
+            &mut bare,
+            &mut until,
+            &mut simulated,
+        );
+        assert_eq!(drawn.as_ref(), Some(&old_message));
+        assert!(game.data["message_timer"] > 0.);
+
+        // This is the dialogue clear followed by Game::next_level performed
+        // by App::transition when the source transition room completes.
+        clear_source_dialogue_on_transition(&mut source, &mut drawn);
+        game.next_level();
+        assert!(
+            game.data["message_timer"] > 0.,
+            "source keeps this global timer"
+        );
+        assert!(source.is_none());
+        assert!(drawn.is_none());
+
+        step_with_host_dialogue(
+            &mut game,
+            &mut source,
+            &mut drawn,
+            &mut bare,
+            &mut until,
+            &mut simulated,
+        );
+        assert!(
+            game.data["message_timer"] > 0.,
+            "timer is still live in the new room"
+        );
+        assert!(
+            source.is_none(),
+            "no old host string can be restored from the timer"
+        );
+        assert!(
+            drawn.is_none(),
+            "no stale source text is eligible to render"
+        );
+        assert!(bare.is_empty(), "Dialogue retired the bare-toast copy");
+        assert!(
+            game.events
+                .iter()
+                .all(|event| !matches!(event, GameEvent::Dialogue(_)))
+        );
+        assert!(simulated);
     }
 
     #[test]
