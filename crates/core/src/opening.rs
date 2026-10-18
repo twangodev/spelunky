@@ -277,7 +277,18 @@ fn climb_sound(game: &mut Game, state: &mut OpeningState) {
 }
 fn alarms(game: &mut Game, state: &mut OpeningState) {
     let actor_due = due(&mut state.dummy_alarms);
-    for alarm in due(&mut state.alarms) {
+    // GameMaker visits live alarm slots in ascending index order. A callback
+    // that sets a later slot therefore loses one tick before that later slot
+    // is visited; a callback that sets an earlier slot waits until next tick.
+    for alarm in 0..state.alarms.len() {
+        if state.alarms[alarm] <= 0 {
+            continue;
+        }
+        state.alarms[alarm] -= 1;
+        if state.alarms[alarm] != 0 {
+            continue;
+        }
+        state.alarms[alarm] = -1;
         match (state.kind, alarm) {
             (OpeningKind::Intro, 11 | 10 | 9) if !state.fade_in => {
                 if state.draw_status >= 0 {
@@ -725,15 +736,22 @@ mod tests {
                 state.stage,
                 if tick < 50 {
                     0
-                } else if tick < 150 {
+                } else if tick < 149 {
                     1
-                } else if tick < 220 {
+                } else if tick < 218 {
                     2
                 } else {
                     3
                 }
             );
-            assert_eq!(state.can_pause, tick >= 270);
+            match tick {
+                50 => assert_eq!(state.alarms[1], 99),
+                149 => assert_eq!(state.alarms[2], 69),
+                218 => assert_eq!(state.alarms[3], 49),
+                267 => assert!(state.can_pause),
+                _ => {}
+            }
+            assert_eq!(state.can_pause, tick >= 267);
             assert_eq!(game.camera, Vec2::new(320., 0.));
             assert_eq!(game.player.data.get("hidden"), Some(&1.));
             ignites += game
@@ -760,7 +778,7 @@ mod tests {
                 .find(|e| e.object == "oPDummy4")
                 .unwrap()
                 .pos,
-            Vec2::new(600., -32.)
+            Vec2::new(600., -26.)
         );
         for _ in 0..150 {
             if game.opening.is_none() {
@@ -786,7 +804,7 @@ mod tests {
     #[test]
     fn title_pause_waits_until_the_authored_player_instance_arrives() {
         let mut game = title();
-        for _ in 0..270 {
+        for _ in 0..267 {
             game.step(&InputFrame::default());
         }
 
@@ -850,7 +868,7 @@ mod tests {
     #[test]
     fn title_skip_stops_when_alarm_three_enables_pause() {
         let mut game = title();
-        for _ in 0..270 {
+        for _ in 0..267 {
             game.step(&InputFrame::default());
         }
         let id = game
@@ -957,7 +975,7 @@ mod tests {
         assert_eq!(game.opening.as_ref().unwrap().alarms[0], 1);
         game.step(&InputFrame::default());
         assert_eq!(game.opening.as_ref().unwrap().stage, 1);
-        assert_eq!(game.opening.as_ref().unwrap().alarms[1], 100);
+        assert_eq!(game.opening.as_ref().unwrap().alarms[1], 99);
     }
     #[test]
     fn intro_skip_first_reveals_scene_then_second_edge_fades_to_title() {
