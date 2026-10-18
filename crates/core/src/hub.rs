@@ -546,6 +546,18 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
             game.data.remove(key);
         }
     }
+    if reset_tutorial_run {
+        // The tutorial's manual xTITLE return calls scrClearGlobals before
+        // setting these room-specific values. Match that full run reset here
+        // because load_hub is where the destination room is assembled.
+        game.clear_run_globals();
+        game.flags.retain(|flag| !flag.starts_with("title_start:"));
+        game.flags.insert("title_start:3".into());
+        game.data.insert("message_timer".into(), 0.0);
+        for key in ["mini1", "mini2", "mini3"] {
+            game.data.insert(key.into(), 0.0);
+        }
+    }
     let source_start = game.flags.iter().find_map(|f| {
         f.strip_prefix("scores_start:")
             .and_then(|n| n.parse::<u8>().ok())
@@ -579,6 +591,11 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
         for flag in ["dark", "darkLevel", "snake_pit", "snakePit"] {
             game.flags.remove(flag);
         }
+        // oHighscores Create resets these globals on every entry, including
+        // a return from a challenge or a completed campaign. In particular,
+        // stale campaign levels must not survive into a score-room session.
+        game.data.insert("currLevel".into(), 1.0);
+        game.data.insert("message_timer".into(), 0.0);
         game.player.equipment.remove("Jordans");
         game.data.insert("arrows".into(), 0.0);
         for key in ["mini1", "mini2", "mini3"] {
@@ -875,8 +892,11 @@ fn activate_portal(game: &mut Game) {
         return;
     };
     let stages = shortcut_stages(&game.flags);
-    if matches!(portal.as_str(), "oXShortcut5") && !stages[0]
-        || matches!(portal.as_str(), "oXShortcut9") && !stages[1]
+    // The level-five shortcut is authored into rTitle and the source player
+    // accepts it unconditionally. Only the later doors appear after their
+    // tunnel donations; those rooms are already guarded by their creation
+    // conditions, with this check protecting stray/custom instances too.
+    if matches!(portal.as_str(), "oXShortcut9") && !stages[1]
         || matches!(portal.as_str(), "oXShortcut13") && !stages[2]
     {
         return;
@@ -2454,9 +2474,8 @@ mod tests {
         }
     }
     #[test]
-    fn each_shortcut_portal_requires_its_completed_stage() {
+    fn later_shortcut_portals_require_their_completed_stage() {
         for (object, destination, flag) in [
-            ("oXShortcut5", "shortcut5", "shortcut_5"),
             ("oXShortcut9", "shortcut9", "shortcut_9"),
             ("oXShortcut13", "shortcut13", "shortcut_13"),
         ] {
@@ -2484,6 +2503,34 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn authored_level_five_shortcut_works_without_a_tunnel_unlock() {
+        let mut g = challenge(HubKind::Title);
+        assert!(!shortcut_stages(&g.flags)[0]);
+        assert!(g.world.entities.iter().any(|e| e.object == "oXShortcut5"));
+
+        // The source room's fixed level-five door is at (80,128), above the
+        // authored floor. Exercise the same hub input controller used by the
+        // Game::step dispatcher without bypassing portal eligibility.
+        g.player.pos = Vec2::new(88.0, 136.0);
+        g.player.previous_pos = g.player.pos;
+        g.player.grounded = true;
+        tick(
+            &mut g,
+            &InputFrame {
+                up: true,
+                ..InputFrame::default()
+            },
+        );
+        assert!(g.player.is_exiting());
+        finish_portal(&mut g);
+        assert!(g.flags.contains("hub_destination:shortcut5"));
+        g.start_from_hub(false, 5);
+        assert_eq!(g.world.level, 5);
+        assert!(g.flags.contains("used_shortcut"));
+        assert_eq!(g.state, RunState::Playing);
     }
     #[test]
     fn record_thresholds_and_valid_win_time() {
@@ -2677,9 +2724,18 @@ mod tests {
         let mut g = Game::tutorial(11, RulesPreset::Classic);
         g.flags.insert("shortcut_5".into());
         g.flags.insert("wanted".into());
+        g.flags.insert("darkLevel".into());
+        g.flags.insert("snakePit".into());
         g.player.money = 12345;
         g.data.insert("kali_punish".into(), 1.);
         g.data.insert("kali_gift".into(), 1.);
+        g.data.insert("currLevel".into(), 16.);
+        g.data.insert("shake_toggle".into(), 1.);
+        g.data.insert("message_timer".into(), 100.);
+        g.data.insert("mini1".into(), 21.);
+        g.data.insert("mini2".into(), 22.);
+        g.data.insert("mini3".into(), 23.);
+        g.data.insert("arrows".into(), 9.);
         g.player.bombs = 33;
         g.player.equipment.insert("Jetpack".into());
         for _ in 0..5 {
@@ -2699,10 +2755,21 @@ mod tests {
         assert_eq!((g.player.health, g.player.bombs, g.player.ropes), (4, 4, 4));
         assert_eq!(g.player.money, 0);
         assert!(g.player.equipment.is_empty());
+        assert_eq!(g.data["currLevel"], 1.);
+        assert_eq!(g.data["shake_toggle"], 0.);
+        assert_eq!(g.data["shakeToggle"], 0.);
+        assert_eq!(g.data["message_timer"], 0.);
+        assert_eq!(
+            [g.data["mini1"], g.data["mini2"], g.data["mini3"]],
+            [0., 0., 0.]
+        );
+        assert_eq!(g.data["arrows"], 0.);
+        assert!(!g.flags.contains("darkLevel"));
+        assert!(!g.flags.contains("snakePit"));
         assert!(!g.flags.contains("wanted"));
         assert!(g.flags.contains("shortcut_5"));
-        assert!(!g.data.contains_key("kali_punish"));
-        assert!(!g.data.contains_key("kali_gift"));
+        assert_eq!(g.data["kali_punish"], 0.);
+        assert_eq!(g.data["kali_gift"], 0.);
         g.step(&InputFrame::default());
         assert!(
             !g.world
@@ -2725,6 +2792,8 @@ mod tests {
         for flag in ["dark", "darkLevel", "snake_pit", "snakePit"] {
             g.flags.insert(flag.into());
         }
+        g.data.insert("currLevel".into(), 16.0);
+        g.data.insert("message_timer".into(), 100.0);
         g.player.equipment.insert("Jordans".into());
         g.player.equipment.insert("Compass".into());
         g.load_hub(HubKind::Scores);
@@ -2732,6 +2801,8 @@ mod tests {
             assert!(!g.flags.contains(flag));
         }
         assert!(!g.player.has("Jordans"));
+        assert_eq!(g.data["currLevel"], 1.0);
+        assert_eq!(g.data["message_timer"], 0.0);
         assert!(
             g.player.has("Compass"),
             "room reset must not wipe unrelated equipment"
