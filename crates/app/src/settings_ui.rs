@@ -21,6 +21,9 @@ const ACTIONS: [(&str, &str); 14] = [
     ("exit", "ENTER DOOR"),
     ("pause", "PAUSE"),
 ];
+const CLASSIC_KEY_ORDER: [&str; 12] = [
+    "up", "down", "left", "right", "jump", "attack", "cycle", "run", "bomb", "rope", "flare", "pay",
+];
 const CONTROLLER_INPUT: usize = 8;
 const GRAPHICS_DETAIL: usize = CONTROLLER_INPUT + 1;
 const FIRST_BINDING: usize = GRAPHICS_DETAIL + 1;
@@ -225,20 +228,32 @@ impl SettingsUi {
         if let Some(index) = self.binding.take() {
             self.unsupported_key = false;
             if key == KeyCode::Escape {
+                // Classic oKeyConfig increments its capture status even when
+                // Escape leaves the current key unchanged and advances through
+                // Classic's authored capture sequence, which differs from the
+                // visible row order in this host settings menu.
+                let action = ACTIONS[index].0;
+                if let Some(order_index) = CLASSIC_KEY_ORDER.iter().position(|key| *key == action) {
+                    if let Some(next_action) = CLASSIC_KEY_ORDER.get(order_index + 1) {
+                        let next_index = ACTIONS
+                            .iter()
+                            .position(|(key, _)| key == next_action)
+                            .expect("Classic key actions have visible settings rows");
+                        self.selected = FIRST_BINDING + next_index;
+                        self.binding = Some(next_index);
+                    }
+                }
                 return SettingsCommand::None;
             }
-            if !matches!(key, KeyCode::Backspace | KeyCode::Delete)
-                && !crate::input::supported_key(key)
-            {
+            // Classic oKeyConfig accepts every physical key except Escape.
+            // In particular, Backspace and Delete are valid bindings rather
+            // than implicit clear commands.
+            if !crate::input::supported_key(key) {
                 self.binding = Some(index);
                 self.unsupported_key = true;
                 return SettingsCommand::None;
             }
-            let value = if matches!(key, KeyCode::Backspace | KeyCode::Delete) {
-                String::new()
-            } else {
-                format!("{key:?}")
-            };
+            let value = format!("{key:?}");
             let action = ACTIONS[index].0;
             settings.bindings.insert(action.into(), value.clone());
             if action == "up" {
@@ -384,7 +399,7 @@ impl SettingsUi {
                 if self.unsupported_key {
                     "UNSUPPORTED KEY. TRY ANOTHER."
                 } else {
-                    "PRESS A KEY. ESC: CANCEL."
+                    "PRESS A KEY. ESC: KEEP SAME."
                 },
                 18.0,
                 211.0,
@@ -394,7 +409,7 @@ impl SettingsUi {
             scene::text(
                 quads,
                 atlas,
-                "ESC: CANCEL. DELETE / BACKSPACE: UNBIND.",
+                "ESC KEEPS THIS KEY AND SKIPS TO THE NEXT SLOT.",
                 18.0,
                 223.0,
                 0.75,
@@ -735,7 +750,9 @@ mod tests {
     }
 
     #[test]
-    fn bindings_can_capture_extended_and_navigation_keys_cancel_and_unbind() {
+    // Classic's oKeyConfig Key any key event excludes only vk_escape; its
+    // control capture can therefore bind Backspace and Delete as gameplay keys.
+    fn bindings_match_classic_capture_for_backspace_and_delete() {
         let mut menu = SettingsUi::new();
         let mut settings = Settings::default();
         for (index, (action, _)) in ACTIONS.iter().enumerate() {
@@ -752,9 +769,6 @@ mod tests {
             assert!(!menu.awaiting_binding());
             assert_eq!(settings.bindings[*action], "F35");
             menu.key(KeyCode::Enter, &mut settings);
-            menu.key(KeyCode::Escape, &mut settings);
-            assert_eq!(settings.bindings[*action], "F35");
-            menu.key(KeyCode::Enter, &mut settings);
             assert_eq!(
                 menu.key(KeyCode::ArrowUp, &mut settings),
                 SettingsCommand::Changed
@@ -762,11 +776,76 @@ mod tests {
             assert_eq!(settings.bindings[*action], "ArrowUp");
             assert!(!menu.awaiting_binding());
             menu.key(KeyCode::Enter, &mut settings);
-            menu.key(KeyCode::Escape, &mut settings);
-            assert_eq!(settings.bindings[*action], "ArrowUp");
+            assert_eq!(
+                menu.key(KeyCode::Backspace, &mut settings),
+                SettingsCommand::Changed
+            );
+            assert_eq!(settings.bindings[*action], "Backspace");
+            let mut input = crate::input::InputState::default();
+            input.set_bindings(&settings.bindings);
+            assert!(crate::input::supported_key(KeyCode::Backspace));
+            if *action != "pause" {
+                assert!(input.action_key(action, KeyCode::Backspace));
+            }
             menu.key(KeyCode::Enter, &mut settings);
-            menu.key(KeyCode::Delete, &mut settings);
-            assert!(settings.bindings[*action].is_empty());
+            assert_eq!(
+                menu.key(KeyCode::Delete, &mut settings),
+                SettingsCommand::Changed
+            );
+            assert_eq!(settings.bindings[*action], "Delete");
+            let mut input = crate::input::InputState::default();
+            input.set_bindings(&settings.bindings);
+            assert!(crate::input::supported_key(KeyCode::Delete));
+            if *action != "pause" {
+                assert!(input.action_key(action, KeyCode::Delete));
+            }
+        }
+        let mut save = crate::storage::SaveData::default();
+        save.settings = settings;
+        let reopened = crate::storage::SaveData::from_json(&save.to_json().unwrap()).unwrap();
+        for (action, _) in ACTIONS {
+            assert_eq!(reopened.settings.bindings[action], "Delete");
+        }
+        save.settings
+            .bindings
+            .insert("attack".into(), "Backspace".into());
+        let reopened = crate::storage::SaveData::from_json(&save.to_json().unwrap()).unwrap();
+        assert_eq!(reopened.settings.bindings["attack"], "Backspace");
+    }
+
+    #[test]
+    // Classic oKeyConfig increments `status` after every Key any key event,
+    // including Escape; Escape skips the current assignment without changing it.
+    fn escape_skips_unchanged_classic_binding_and_advances_capture_status() {
+        let mut menu = SettingsUi::new();
+        let mut settings = Settings::default();
+
+        for (index, action) in CLASSIC_KEY_ORDER.iter().enumerate() {
+            let visible_index = ACTIONS
+                .iter()
+                .position(|(key, _)| key == action)
+                .expect("Classic key actions have visible settings rows");
+            if index == 0 {
+                menu.selected = FIRST_BINDING + visible_index;
+                menu.key(KeyCode::Enter, &mut settings);
+            }
+            let old = settings.bindings[*action].clone();
+            assert_eq!(
+                menu.key(KeyCode::Escape, &mut settings),
+                SettingsCommand::None
+            );
+            assert_eq!(settings.bindings[*action], old);
+            if let Some(next_action) = CLASSIC_KEY_ORDER.get(index + 1) {
+                let next_index = ACTIONS
+                    .iter()
+                    .position(|(key, _)| key == next_action)
+                    .expect("Classic key actions have visible settings rows");
+                assert_eq!(menu.selected, FIRST_BINDING + next_index);
+                assert_eq!(menu.binding, Some(next_index));
+            } else {
+                assert_eq!(menu.binding, None);
+                assert!(!menu.awaiting_binding());
+            }
         }
     }
 
