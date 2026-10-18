@@ -1366,70 +1366,13 @@ fn depth(game: &Game, i: Instance) -> f64 {
         Instance::Terrain(_) => catalog::object(i.object(game)).map_or(0.0, |o| o.depth as f64),
     }
 }
-fn sort_draw_order(game: &Game) -> Vec<Instance> {
-    // GameMaker keeps its object/event lists independent from the depth-sorted
-    // draw list. Sorting `active_order` here used to leak draw order back into
-    // `rebuild_resources` after activation changes, which could reorder Step,
-    // Alarm, and collision traversal for same-object instances.
-    let mut order = game.dispatcher.active_order.clone();
+fn sort_draw_order(game: &mut Game) {
+    // Classic sorts the global active list in place before Draw. Object event
+    // arrays remain independent until an activation change rebuilds them from
+    // this newly sorted global order.
+    let mut order = std::mem::take(&mut game.dispatcher.active_order);
     order.sort_by(|a, b| depth(game, *b).total_cmp(&depth(game, *a)));
-    order
-}
-
-#[cfg(test)]
-mod draw_order_tests {
-    use super::*;
-    use crate::{Area, RulesPreset, World};
-
-    #[test]
-    fn depth_sorting_does_not_reorder_source_object_event_lists() {
-        let mut game = Game::shell(1, RulesPreset::Classic);
-        game.world = World::new(16, 12, Area::Mines, 1);
-        let first = game.world.spawn("oBomb", Vec2::new(32.0, 32.0));
-        let second = game.world.spawn("oBomb", Vec2::new(48.0, 32.0));
-        game.world
-            .entity_mut(first)
-            .unwrap()
-            .data
-            .insert("depth".into(), 10.0);
-        game.world
-            .entity_mut(second)
-            .unwrap()
-            .data
-            .insert("depth".into(), 100.0);
-        sync_newborns(&mut game);
-
-        let source_order = vec![Instance::Entity(first), Instance::Entity(second)];
-        assert_eq!(
-            game.dispatcher
-                .resource_order
-                .get(&catalog::object("oBomb").unwrap().id),
-            Some(&source_order)
-        );
-        let source_instance_order = game.dispatcher.active_order.clone();
-        let draw_order = sort_draw_order(&game);
-        let second_draw_index = draw_order
-            .iter()
-            .position(|instance| *instance == Instance::Entity(second))
-            .unwrap();
-        let first_draw_index = draw_order
-            .iter()
-            .position(|instance| *instance == Instance::Entity(first))
-            .unwrap();
-        assert!(second_draw_index < first_draw_index);
-
-        // A later activation/deactivation rebuilds object event lists from
-        // active_order, so depth sorting must not have changed that source
-        // traversal order in the meantime.
-        rebuild_resources(&mut game);
-        assert_eq!(game.dispatcher.active_order, source_instance_order);
-        assert_eq!(
-            game.dispatcher
-                .resource_order
-                .get(&catalog::object("oBomb").unwrap().id),
-            Some(&source_order)
-        );
-    }
+    game.dispatcher.active_order = order;
 }
 
 pub fn animate_entities(game: &mut Game) {
@@ -1455,8 +1398,8 @@ pub fn animate_entities(game: &mut Game) {
         rebuild_resources(game);
     }
     sync_newborns(game);
-    let order = sort_draw_order(game);
-    for i in order {
+    sort_draw_order(game);
+    for i in game.dispatcher.active_order.clone() {
         if matches!(i, Instance::Entity(_)) {
             advance_one(game, i);
         }
@@ -1791,9 +1734,9 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
         rebuild_resources(game);
     }
     sync_newborns(game);
-    let draw_order = sort_draw_order(game);
+    sort_draw_order(game);
     game.dispatcher.phase = Phase::Draw;
-    for i in draw_order.iter().copied() {
+    for i in game.dispatcher.active_order.clone() {
         if i == Instance::Player
             && game.player.data.get("hidden").copied().unwrap_or(0.0) == 0.0
             && game.player.data.get("visible").copied().unwrap_or(1.0) != 0.0
@@ -1825,7 +1768,7 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
     }
     game.dispatcher.phase = Phase::Animation;
     let room_tick = game.level_tick;
-    for i in draw_order {
+    for i in game.dispatcher.active_order.clone() {
         advance_one(game, i);
         if game.level_tick != room_tick {
             break;
