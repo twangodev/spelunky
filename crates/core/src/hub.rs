@@ -1197,10 +1197,12 @@ fn sun(game: &mut Game) {
     {
         game.player.health = 0.0;
     }
-    if game.player.health <= 0.0
-        || game.player.state == PlayerState::Dead
-        || game.state == RunState::Dead
-    {
+    // oSunRoom Step only sets global.plife to zero when the intro damsel is
+    // missing. The later oPlayer1 Step observes that value and performs death
+    // or Ankh revival; the challenge score is recorded from that Player event.
+    // Recording on health alone here would finish the challenge one tick early
+    // and incorrectly keep it finished if the Player revives.
+    if game.player.state == PlayerState::Dead || game.state == RunState::Dead {
         if !game.flags.contains("hub_challenge_finished") {
             record(game, "mini1", value(game, "points"));
         }
@@ -2743,16 +2745,59 @@ mod tests {
         assert_eq!(g.world.level, 0);
     }
     #[test]
-    fn sun_damsel_loss_finishes_source_counter() {
-        let mut g = challenge(HubKind::Sun);
+    fn sun_intro_damsel_loss_records_when_player_enters_death() {
+        let mut g = loaded(HubKind::Sun);
         g.data.insert("points".into(), 42.0);
-        for e in &mut g.world.entities {
-            if e.object == "oDamsel" {
-                e.health = 0;
-            }
-        }
-        tick_hub(&mut g);
+        g.world
+            .entities
+            .iter_mut()
+            .find(|e| e.object == "oDamsel")
+            .unwrap()
+            .health = 0;
+
+        g.step(&InputFrame::default());
         assert_eq!(g.player.health, 0.0);
+        assert_eq!(g.state, RunState::Playing);
+        assert!(!g.data.contains_key("mini1"));
+        assert!(!g.flags.contains("hub_challenge_finished"));
+
+        g.step(&InputFrame::default());
+        assert_eq!(g.state, RunState::Dead);
+        assert_eq!(g.data["mini1"], 42.0);
+        assert!(g.flags.contains("hub_challenge_finished"));
+    }
+
+    #[test]
+    fn sun_intro_damsel_loss_does_not_finish_before_ankh_revival() {
+        let mut g = loaded(HubKind::Sun);
+        g.data.insert("points".into(), 42.0);
+        g.player.equipment.insert("Ankh".into());
+        g.world
+            .entities
+            .iter_mut()
+            .find(|e| e.object == "oDamsel")
+            .unwrap()
+            .health = 0;
+
+        // The room Step zeros life after Player Step, so no score is committed
+        // until the next Player Step handles the fatal life value.
+        g.step(&InputFrame::default());
+        assert_eq!(g.player.health, 0.0);
+        assert_eq!(g.state, RunState::Playing);
+        assert!(!g.data.contains_key("mini1"));
+        assert!(!g.flags.contains("hub_challenge_finished"));
+
+        // Ankh revives in Player Step, then the still-running intro room Step
+        // zeros life again. This must not have recorded a completed challenge.
+        g.step(&InputFrame::default());
+        assert_eq!(g.player.health, 0.0);
+        assert!(!g.player.has("Ankh"));
+        assert_eq!(g.state, RunState::Playing);
+        assert!(!g.data.contains_key("mini1"));
+        assert!(!g.flags.contains("hub_challenge_finished"));
+
+        g.step(&InputFrame::default());
+        assert_eq!(g.state, RunState::Dead);
         assert_eq!(g.data["mini1"], 42.0);
         assert!(g.flags.contains("hub_challenge_finished"));
     }
