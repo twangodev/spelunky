@@ -1,5 +1,5 @@
 //! Source ending and inter-level cinematic controllers.
-use crate::model::{CollisionPrecision, Entity, Game, InputFrame, Rect, RunState, Vec2, World};
+use crate::model::{Entity, Game, InputFrame, Rect, RunState, Vec2, World};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
@@ -145,6 +145,26 @@ mod tests {
         g.data.insert("time".into(), 549_000.);
         g
     }
+
+    #[test]
+    fn treasure_source_collision_lines_round_each_fractional_endpoint() {
+        let mut game = Game::shell(19, RulesPreset::Classic);
+        game.world = World::new(20, 16, Area::Boss, 16);
+        game.world.set_tile(7, 4, "oBlock");
+        let mut ending = EndingState::new(&game, EndingKind::Campaign, EndingStage::Landing);
+        let mut treasure = Entity::new(900, "oBigTreasure", Vec2::new(80.25, 81.0));
+        treasure.vel = Vec2::new(0.25, -1.0);
+        treasure.data.insert("gravity".into(), 0.6);
+
+        treasure_step(&mut game, &mut ending, &mut treasure);
+
+        assert_eq!(treasure.pos, Vec2::new(80.5, 80.0));
+        assert!(
+            (treasure.vel.y - 0.32).abs() < 1e-12,
+            "rounded source top line hits x=112"
+        );
+    }
+
     #[test]
     fn actual_tutorial_rock_pickup_clears_transition_state_and_all_dummy_copies() {
         let mut game = Game::tutorial(73, RulesPreset::Classic);
@@ -2774,26 +2794,16 @@ fn treasure_step(game: &mut Game, s: &mut EndingState, e: &mut Entity) {
     if e.vel.y < 6. {
         e.vel.y += e.value("gravity");
     }
-    let x = e.pos.x.round_ties_even();
-    let y = e.pos.y.round_ties_even();
-    let top = solid_edge(
-        &game.world,
-        Rect::new(x, (e.pos.y - 1.).round_ties_even(), 32., 1.),
-        e.id,
-    );
-    let left = solid_edge(
-        &game.world,
-        Rect::new((e.pos.x - 1.).round_ties_even(), y, 1., 32.),
-        e.id,
-    );
+    let top = solid_edge(&game.world, Rect::new(e.pos.x, e.pos.y - 1., 32., 1.), e.id);
+    let left = solid_edge(&game.world, Rect::new(e.pos.x - 1., e.pos.y, 1., 32.), e.id);
     let right = solid_edge(
         &game.world,
-        Rect::new((e.pos.x + 32.).round_ties_even(), y, 1., 32.),
+        Rect::new(e.pos.x + 32., e.pos.y, 1., 32.),
         e.id,
     );
     let bottom = solid_edge(
         &game.world,
-        Rect::new(x, (e.pos.y + 32.).round_ties_even(), 32., 1.),
+        Rect::new(e.pos.x, e.pos.y + 32., 32., 1.),
         e.id,
     );
     if top && e.vel.y < 0. {
@@ -2819,7 +2829,7 @@ fn treasure_step(game: &mut Game, s: &mut EndingState, e: &mut Entity) {
     }
     if solid_edge(
         &game.world,
-        Rect::new(x, (e.pos.y + 31.).round_ties_even(), 32., 1.),
+        Rect::new(e.pos.x, e.pos.y + 31., 32., 1.),
         e.id,
     ) && e.vel.y.abs() < 1.
     {
@@ -2829,14 +2839,17 @@ fn treasure_step(game: &mut Game, s: &mut EndingState, e: &mut Entity) {
 }
 
 fn solid_edge(world: &World, probe: Rect, excluded: u64) -> bool {
-    world.tiles_collide_precision(probe, "oSolid", CollisionPrecision::Precise)
-        || world.entities.iter().any(|e| {
-            e.id != excluded
-                && e.alive
-                && e.solid
-                && !e.held
-                && e.mask_intersects(probe, CollisionPrecision::Precise)
-        })
+    // oBigTreasure calls the shared isCollision* line helpers. Preserve their
+    // RTE endpoint conversion, oSolid ancestry, active-instance filter, and
+    // held-target visibility instead of treating this as a solid-flag Rect.
+    world.solid_line_except(
+        Vec2::new(probe.x.round_ties_even(), probe.y.round_ties_even()),
+        Vec2::new(
+            (probe.x + probe.w - 1.0).round_ties_even(),
+            (probe.y + probe.h - 1.0).round_ties_even(),
+        ),
+        excluded,
+    )
 }
 
 fn controller_step(game: &mut Game, s: &mut EndingState, input: &InputFrame) {

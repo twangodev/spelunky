@@ -451,7 +451,7 @@ fn yeti(game: &mut Game, e: &mut Entity) {
                 let top = (body.y - 1.0).round_ties_even();
                 let first = Vec2::new(body.x.round_ties_even(), top);
                 let second = Vec2::new((body.x + body.w - 1.0).round_ties_even(), top);
-                let ceiling = game.world.tiles_line_precision(
+                let ceiling = game.world.tiles_line_active_precision(
                     first,
                     second,
                     "oSolid",
@@ -1682,6 +1682,35 @@ mod tests {
         g.player.pos = Vec2::new(100.0, 100.0);
         g
     }
+
+    #[test]
+    fn fractional_yeti_jump_ignores_deactivated_ceiling_terrain() {
+        for active in [true, false] {
+            let mut game = game();
+            game.world.set_tile(5, 6, "oBlock");
+            game.world.tiles[6 * game.world.width + 5].engine_active = active;
+            let id = game.spawn("oYeti", Vec2::new(80.25, 112.25));
+            let yeti = game.world.entity_mut(id).unwrap();
+            yeti.vel.y = -2.0;
+
+            // Invoke this actor's source Step in isolation. Game::step runs the
+            // level's activation pass first, which correctly reactivates nearby
+            // tiles and would erase the deactivated-instance test condition.
+            let mut yeti = game.world.entity(id).unwrap().clone();
+            super::yeti(&mut game, &mut yeti);
+            if active {
+                assert_eq!(yeti.pos.y, 112.25, "active roof blocks the upward move");
+                assert_eq!(yeti.vel.y, 0.0, "active roof is reported by isCollisionTop");
+            } else {
+                assert_eq!(yeti.pos.y, 110.25, "inactive roof does not block moveTo");
+                assert!(
+                    yeti.vel.y < 0.0,
+                    "isCollisionTop must ignore a deactivated tile at fractional coordinates"
+                );
+            }
+        }
+    }
+
     fn first_family_psychic_room(rules: RulesPreset, two_bosses: bool) -> (Game, Vec<u64>) {
         let mut game = Game::shell(42, rules);
         game.world = World::new(20, 16, Area::Ice, 9);

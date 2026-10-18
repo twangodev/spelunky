@@ -525,13 +525,13 @@ fn spawn(game: &mut Game, object: &str, pos: Vec2) -> u64 {
 
 fn hawk_idle_wall(world: &World, e: &Entity) -> bool {
     let point_is_solid = |point| {
-        world.tiles_point_precision(point, "oSolid", crate::CollisionPrecision::BoundingBox)
+        world.tiles_point_active_precision(point, "oSolid", crate::CollisionPrecision::Precise)
             || world.entities.iter().any(|other| {
                 other.id != e.id
                     && other.alive
                     && other.engine_active
                     && crate::catalog::is_a(&other.object, "oSolid")
-                    && other.mask_contains(point, crate::CollisionPrecision::BoundingBox)
+                    && other.mask_contains(point, crate::CollisionPrecision::Precise)
             })
     };
     point_is_solid(Vec2::new(e.pos.x - 1.0, e.pos.y))
@@ -1608,6 +1608,29 @@ fn magma(game: &mut Game, e: &mut Entity) {
 mod tests {
     use super::*;
     use crate::model::{Area, RulesPreset};
+
+    #[test]
+    fn hawk_idle_wall_uses_active_precise_solid_point_queries() {
+        let mut world = World::new(20, 16, Area::Ice, 1);
+        let hawk = Entity::new(900, "oHawkman", Vec2::new(80.0, 80.0));
+        let point = Vec2::new(79.0, 80.0);
+        world.set_tile(4, 5, "oBlock");
+        assert!(hawk_idle_wall(&world, &hawk));
+        world.tiles[5 * world.width + 4].engine_active = false;
+        assert!(!hawk_idle_wall(&world, &hawk));
+
+        world.set_tile(4, 5, "");
+        let solid = world.spawn("oBlock", Vec2::new(64.0, 80.0));
+        world.entity_mut(solid).unwrap().held = true;
+        assert!(hawk_idle_wall(&world, &hawk));
+        world.entity_mut(solid).unwrap().engine_active = false;
+        assert!(!hawk_idle_wall(&world, &hawk));
+        world.entity_mut(solid).unwrap().engine_active = true;
+        world.entity_mut(solid).unwrap().alive = false;
+        let impostor = world.spawn("oGoldNugget", point);
+        world.entity_mut(impostor).unwrap().solid = true;
+        assert!(!hawk_idle_wall(&world, &hawk));
+    }
 
     // Independent static prediction from canonical EXE bytes: one unsigned
     // LCG state per draw, scaled by 2^-32. All source widths here are <=2^21,

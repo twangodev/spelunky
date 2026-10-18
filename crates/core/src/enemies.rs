@@ -1020,14 +1020,18 @@ pub(super) fn body_overlaps_ladder(world: &World, e: &Entity) -> bool {
 }
 
 pub(super) fn solid_mask(world: &World, r: Rect, excluded: u64) -> bool {
-    world.tiles_collide_precision(r, "oSolid", crate::CollisionPrecision::Precise)
-        || world.entities.iter().any(|other| {
-            other.id != excluded
-                && other.alive
-                && other.solid
-                && !other.held
-                && other.mask_intersects(r, crate::CollisionPrecision::Precise)
-        })
+    // Every caller builds a one-pixel movement/contact probe corresponding to
+    // isCollisionLeft/Right/Top/Bottom. Preserve the source's independent
+    // endpoint rounding and hierarchy lookup; an engine `solid` flag and the
+    // held state do not change membership in an explicit oSolid query.
+    world.solid_line_except(
+        Vec2::new(r.x.round_ties_even(), r.y.round_ties_even()),
+        Vec2::new(
+            (r.x + r.w - 1.0).round_ties_even(),
+            (r.y + r.h - 1.0).round_ties_even(),
+        ),
+        excluded,
+    )
 }
 
 /// Classic moveTo quantizes fractional speeds by global time, and resolves X first.
@@ -1134,18 +1138,22 @@ pub(super) fn body_contacts(world: &World, e: &Entity) -> BodyContacts {
     let tb = b.y.round_ties_even();
     let bb = (b.y + b.h - 1.0).round_ties_even();
     let line = |first, second| {
-        world.tiles_line_precision(first, second, "oSolid", crate::CollisionPrecision::Precise)
-            || world.entities.iter().any(|other| {
-                other.id != e.id
-                    && other.alive
-                    && other.engine_active
-                    && crate::catalog::is_a(&other.object, "oSolid")
-                    && other.collision_mask().intersects_axis_line(
-                        first,
-                        second,
-                        crate::CollisionPrecision::Precise,
-                    )
-            })
+        world.tiles_line_active_precision(
+            first,
+            second,
+            "oSolid",
+            crate::CollisionPrecision::Precise,
+        ) || world.entities.iter().any(|other| {
+            other.id != e.id
+                && other.alive
+                && other.engine_active
+                && crate::catalog::is_a(&other.object, "oSolid")
+                && other.collision_mask().intersects_axis_line(
+                    first,
+                    second,
+                    crate::CollisionPrecision::Precise,
+                )
+        })
     };
     let left = (b.x - 1.0).round_ties_even();
     let right = (b.x + b.w).round_ties_even();
@@ -3928,6 +3936,62 @@ mod body_settlement_contract_tests {
         assert!(
             !body_contacts(&world, &body).right,
             "engine solid does not imply source oSolid family"
+        );
+    }
+
+    #[test]
+    fn source_contacts_ignore_deactivated_solid_terrain() {
+        let mut world = World::new(20, 16, Area::Ice, 1);
+        let body = Entity::new(900, "oYeti", Vec2::new(80.0, 80.0));
+        world.set_tile(6, 5, "oBlock");
+        let tile_index = 5 * world.width + 6;
+        assert!(
+            body_contacts(&world, &body).right,
+            "active solid terrain counts"
+        );
+        world.tiles[tile_index].engine_active = false;
+        assert!(
+            !body_contacts(&world, &body).right,
+            "source collision_line must ignore deactivated terrain"
+        );
+    }
+
+    #[test]
+    fn source_movement_probe_rounds_fractional_ends_and_queries_solid_family() {
+        let mut world = World::new(20, 16, Area::Ice, 1);
+        let probe = Rect::new(80.5, 80.0, 16.0, 1.0);
+        let tile = 5 * world.width + 5;
+        world.set_tile(5, 5, "oBlock");
+        assert!(
+            solid_mask(&world, probe, 900),
+            "RTE endpoints hit source mask"
+        );
+        world.tiles[tile].engine_active = false;
+        assert!(
+            !solid_mask(&world, probe, 900),
+            "inactive terrain is absent"
+        );
+        world.tiles[tile].engine_active = true;
+
+        world.set_tile(5, 5, "");
+        let family = world.spawn("oBlock", Vec2::new(80.0, 80.0));
+        world.entity_mut(family).unwrap().held = true;
+        assert!(
+            solid_mask(&world, probe, 900),
+            "held oSolid descendants still count"
+        );
+        world.entity_mut(family).unwrap().engine_active = false;
+        assert!(
+            !solid_mask(&world, probe, 900),
+            "inactive dynamic instances are absent from source collision_line"
+        );
+        world.entity_mut(family).unwrap().engine_active = true;
+        world.entity_mut(family).unwrap().alive = false;
+        let impostor = world.spawn("oGoldNugget", Vec2::new(80.0, 76.0));
+        world.entity_mut(impostor).unwrap().solid = true;
+        assert!(
+            !solid_mask(&world, probe, 900),
+            "the engine solid flag does not add an object to oSolid"
         );
     }
 
