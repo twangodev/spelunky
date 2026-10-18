@@ -30,8 +30,6 @@ const WHITE: [f32; 4] = [1.0, 0.95, 0.85, 1.0];
 const GOLD: [f32; 4] = [1.0, 0.78, 0.30, 1.0];
 const ABOUT_CONTROL_HINT: &str = "C CYCLE, A BOMB, S ROPE, F FLARE";
 #[cfg(target_arch = "wasm32")]
-const AUDIO_UNLOCK_EVENT: &str = "spelunky-audio-gesture";
-#[cfg(target_arch = "wasm32")]
 const PAUSE_MENU_STATE_EVENT: &str = "spelunky-pause-menu-state";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Screen {
@@ -51,8 +49,6 @@ enum Screen {
 }
 enum UserEvent {
     Ready(Result<(Renderer, Atlas), String>),
-    #[cfg(target_arch = "wasm32")]
-    UnlockAudio,
     #[cfg(target_arch = "wasm32")]
     Imported(String, String),
     #[cfg(target_arch = "wasm32")]
@@ -306,8 +302,6 @@ struct App {
     control: bool,
     #[cfg(target_arch = "wasm32")]
     browser_shortcuts: Option<crate::browser_shortcuts::BrowserShortcutModifiers>,
-    #[cfg(target_arch = "wasm32")]
-    browser_audio_unlock: Option<wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>>,
     message: String,
     message_until: f64,
     message_simulated: bool,
@@ -449,8 +443,6 @@ impl App {
             control: false,
             #[cfg(target_arch = "wasm32")]
             browser_shortcuts: None,
-            #[cfg(target_arch = "wasm32")]
-            browser_audio_unlock: None,
             message: String::new(),
             message_until: 0.,
             message_simulated: false,
@@ -471,40 +463,6 @@ impl App {
                 .and_then(|w| w.performance())
                 .map(|p| p.now() / 1000.)
                 .unwrap_or_else(|| js_sys::Date::now() / 1000.)
-        }
-    }
-    #[cfg(target_arch = "wasm32")]
-    fn install_browser_audio_unlock(&mut self) {
-        use wasm_bindgen::JsCast;
-        if self.browser_audio_unlock.is_some() {
-            return;
-        }
-        let Some(window) = web_sys::window() else {
-            return;
-        };
-        let proxy = self.proxy.clone();
-        let listener =
-            wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
-                let _ = proxy.send_event(UserEvent::UnlockAudio);
-            });
-        if window
-            .add_event_listener_with_callback(AUDIO_UNLOCK_EVENT, listener.as_ref().unchecked_ref())
-            .is_ok()
-        {
-            self.browser_audio_unlock = Some(listener);
-        }
-    }
-    #[cfg(target_arch = "wasm32")]
-    fn remove_browser_audio_unlock(&mut self) {
-        use wasm_bindgen::JsCast;
-        let Some(listener) = self.browser_audio_unlock.take() else {
-            return;
-        };
-        if let Some(window) = web_sys::window() {
-            let _ = window.remove_event_listener_with_callback(
-                AUDIO_UNLOCK_EVENT,
-                listener.as_ref().unchecked_ref(),
-            );
         }
     }
     fn reset_timing(&mut self) {
@@ -626,8 +584,6 @@ impl App {
         }
     }
     fn shutdown(&mut self, event_loop: &ActiveEventLoop) {
-        #[cfg(target_arch = "wasm32")]
-        self.remove_browser_audio_unlock();
         self.exit_requested = true;
         self.persist_exit_state();
         self.input.clear();
@@ -3806,8 +3762,6 @@ impl ApplicationHandler<UserEvent> for App {
             }
         };
         #[cfg(target_arch = "wasm32")]
-        self.install_browser_audio_unlock();
-        #[cfg(target_arch = "wasm32")]
         {
             use winit::platform::web::WindowExtWebSys;
             if let Some(canvas) = window.canvas() {
@@ -3863,8 +3817,6 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 event_loop.exit()
             }
-            #[cfg(target_arch = "wasm32")]
-            UserEvent::UnlockAudio => self.audio.unlock(),
             #[cfg(target_arch = "wasm32")]
             UserEvent::Imported(name, text) => self.import_level(name, text),
             #[cfg(target_arch = "wasm32")]

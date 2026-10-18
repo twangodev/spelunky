@@ -25,4 +25,4 @@ function pauseMenuStateFollowsHostAndUnsubscribes(): void {
   }
 }
 
-test('browser pause controls follow the host screen and detach on cleanup', pauseMenuStateFollowsHostAndUnsubscribes);
+test('fullscreen feedback follows the host pause state and detaches on cleanup', pauseMenuStateFollowsHostAndUnsubscribes);

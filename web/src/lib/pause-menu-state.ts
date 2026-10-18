@@ -4,7 +4,7 @@ type PauseMenuStateTarget = EventTarget & {
   __spelunkyPauseMenuOpen?: unknown;
 };
 
-/** Mirror the Rust host's pause state so browser-only controls stay in the menu. */
+/** Mirror the Rust host's pause state so fullscreen feedback clears on resume. */
 export function installPauseMenuState(
   target: PauseMenuStateTarget,
   onChange: (open: boolean) => void,
