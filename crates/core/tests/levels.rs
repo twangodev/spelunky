@@ -1,5 +1,9 @@
 use spelunky_core::{
-    editor::EditorState,
+    catalog,
+    editor::{
+        EditorState,
+        preview::{PreviewContext, PreviewRoom, cursor_sprite, preview_sprite},
+    },
     level::{LEVEL_HEIGHT, LEVEL_WIDTH, Level, tile_spawns},
 };
 
@@ -198,6 +202,104 @@ fn all_source_tile_creations_match_catalog_in_order() {
         assert!(
             EditorState::default().palette.contains(&symbol),
             "palette {symbol:?}"
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 84);
+}
+
+#[test]
+fn all_editor_preview_symbols_match_classic_objects_sprites_and_cursor_sprites() {
+    let create_source =
+        include_str!("../../../references/classic-1.1/Scripts/Level Editor/scrCreateTile.gml");
+    let cursor_source =
+        include_str!("../../../references/classic-1.1/Scripts/Level Editor/scrSetCursorTile.gml");
+
+    let mut source_cursors = std::collections::BTreeMap::new();
+    for line in cursor_source.lines() {
+        let Some((left, right)) = line.split_once("oCursObj.sprite_index = ") else {
+            continue;
+        };
+        let symbol = left
+            .split_once("== \"")
+            .expect("cursor source symbol")
+            .1
+            .chars()
+            .next()
+            .expect("one-character palette symbol");
+        let sprite = right.trim().trim_end_matches(';').trim();
+        source_cursors.insert(symbol, sprite);
+    }
+    assert_eq!(source_cursors.len(), 84);
+
+    let source_lines: Vec<_> = create_source.lines().collect();
+    let branch_starts: Vec<_> = source_lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| line.contains("argument0 == \"").then_some(index))
+        .collect();
+    let mut checked = 0;
+    for (branch_index, &start) in branch_starts.iter().enumerate() {
+        let line = source_lines[start];
+        let tile = line
+            .split_once("argument0 == \"")
+            .unwrap()
+            .1
+            .chars()
+            .next()
+            .unwrap();
+        let end = branch_starts
+            .get(branch_index + 1)
+            .copied()
+            .unwrap_or(source_lines.len());
+        let body = &source_lines[start + 1..end];
+        let Some(create) = body.iter().find(|line| line.contains("instance_create(")) else {
+            continue;
+        };
+        let object = create
+            .split_once("instance_create(")
+            .unwrap()
+            .1
+            .split(')')
+            .next()
+            .unwrap()
+            .rsplit(',')
+            .next()
+            .unwrap()
+            .trim();
+        let expected_sprite = body
+            .iter()
+            .find_map(|line| line.trim().strip_prefix("obj.sprite_index = "))
+            .map(|sprite| sprite.trim_end_matches(';').trim())
+            .unwrap_or_else(|| catalog::sprite(object).expect("source object default sprite"));
+        let expected_cursor = source_cursors
+            .get(&tile)
+            .unwrap_or_else(|| panic!("missing cursor sprite for {tile:?}"));
+
+        let mut room = PreviewRoom::new(PreviewContext::default());
+        let id = room
+            .create_tile(tile, 0, 0)
+            .unwrap_or_else(|| panic!("preview does not recognize {tile:?}"));
+        let preview = room.instance(id).unwrap();
+        assert_eq!(preview.object, object, "preview object {tile:?}");
+        assert_eq!(preview.sprite, expected_sprite, "preview sprite {tile:?}");
+        assert_eq!(
+            preview_sprite(tile),
+            Some(expected_sprite),
+            "palette sprite {tile:?}"
+        );
+        assert_eq!(
+            cursor_sprite(tile),
+            Some(*expected_cursor),
+            "cursor sprite {tile:?}"
+        );
+        assert_eq!(
+            preview.depth,
+            if matches!(tile, '@' | 'X' | 'I') {
+                59
+            } else {
+                100
+            }
         );
         checked += 1;
     }
