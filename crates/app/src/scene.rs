@@ -1144,6 +1144,11 @@ pub fn game_scene_in_view_into(
             player.facing > 0,
             color,
         );
+        if back_jetpack {
+            // characterDrawEvent draws the back-facing jetpack immediately
+            // after the character, before its held-arrow decoration.
+            sprite(layer, atlas, "sJetpackBack", 0.0, x, y, false, WHITE);
+        }
         let held_arrow = player.data.get("hold_arrow").copied().unwrap_or(0.0);
         if held_arrow > 0.0 {
             let bomb = held_arrow == 2.0;
@@ -1168,9 +1173,6 @@ pub fn game_scene_in_view_into(
                 false,
                 WHITE,
             );
-        }
-        if back_jetpack {
-            sprite(layer, atlas, "sJetpackBack", 0.0, x, y, false, WHITE);
         }
         let depth = player.data.get("depth").copied().unwrap_or_else(|| {
             if player.data.get("burning").copied().unwrap_or(0.0) > 0.0 {
@@ -3267,6 +3269,28 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn source_back_jetpack_draw_precedes_held_arrow_while_climbing() {
+        let atlas = Atlas::load().unwrap();
+        let mut draw = Game::shell(1, RulesPreset::Classic);
+        draw.player.state = PlayerState::Climbing;
+        draw.player.set_sprite("sClimbUp");
+        draw.player.facing = -1;
+        draw.player.equipment.insert("Jetpack".into());
+        draw.player.data.insert("hold_arrow".into(), 1.0);
+
+        let quads = game_scene(&draw, 1.0, false, &atlas);
+        let back = atlas.sprite("sJetpackBack", 0.0).unwrap().uv;
+        let arrow = atlas.sprite("sArrowLeft", 0.0).unwrap().uv;
+        let back_index = quads.iter().position(|quad| quad.uv == back).unwrap();
+        let arrow_index = quads.iter().position(|quad| quad.uv == arrow).unwrap();
+
+        assert!(
+            back_index < arrow_index,
+            "characterDrawEvent draws the back jetpack before its held arrow"
+        );
     }
 
     fn adaptive_room() -> Game {
