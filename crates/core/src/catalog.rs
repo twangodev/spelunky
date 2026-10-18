@@ -347,8 +347,6 @@ impl CollisionMask {
             && self.angle == 0.0
             && self.scale.x.is_finite()
             && self.scale.y.is_finite()
-            && self.scale.x != 0.0
-            && self.scale.y != 0.0
             && self.pos.x.is_finite()
             && self.pos.y.is_finite()
             && self.source_query_geometry().is_some()
@@ -375,7 +373,7 @@ impl CollisionMask {
         {
             return self.unrotated_unit_event_geometry();
         }
-        if self.angle != 0.0 || self.scale.x == 0.0 || self.scale.y == 0.0 {
+        if self.angle != 0.0 {
             return None;
         }
         let [left, top, right, bottom] = self.event_bounds?;
@@ -445,22 +443,24 @@ impl CollisionMask {
             });
             return self.image_pixel(ix, iy);
         }
-        let Some(sx) = source_real::Real::from_f64(self.scale.x) else {
-            return false;
-        };
-        let Some(sy) = source_real::Real::from_f64(self.scale.y) else {
-            return false;
-        };
-        let Some(ix) = source_real::Real::from_i32(x).div(sx).and_then(|n| {
-            n.add(source_real::Real::from_i32(self.origin[0]))
+        let inverse_pixel = |relative: i32, scale: f64, origin: i32| -> Option<i32> {
+            if scale == 0.0 {
+                // Native 48A9F4 still performs FILD/Fdiv/FADD for signed
+                // zero. The following 4238E8 floor adapter converts the
+                // masked NaN/Inf FISTP result (low word 0), sees an unordered
+                // fractional comparison, and decrements the final image
+                // coordinate to -1, which is outside the mask.
+                return Some(-1);
+            }
+            source_real::Real::from_i32(relative)
+                .div(source_real::Real::from_f64(scale)?)
+                .map(|n| n.add(source_real::Real::from_i32(origin)))?
                 .floor_i32()
-        }) else {
+        };
+        let Some(ix) = inverse_pixel(x, self.scale.x, self.origin[0]) else {
             return false;
         };
-        let Some(iy) = source_real::Real::from_i32(y).div(sy).and_then(|n| {
-            n.add(source_real::Real::from_i32(self.origin[1]))
-                .floor_i32()
-        }) else {
+        let Some(iy) = inverse_pixel(y, self.scale.y, self.origin[1]) else {
             return false;
         };
         self.image_pixel(ix, iy)
@@ -2724,6 +2724,48 @@ mod tests {
                 left.intersects_axis_line(q, q, CollisionPrecision::Precise),
                 expected
             );
+        }
+    }
+
+    #[test]
+    fn native_zero_scale_cache_keeps_bbox_but_rejects_invalid_precise_pixels() {
+        // Classic 1.1 PE 4AA958 rounds and sorts both cached edges even when
+        // image scale is signed zero. 48A9F4 then divides the rounded pixel
+        // offset by zero; 4238E8/4034A4 produce -1 from the masked invalid
+        // conversion, which the mask kernel rejects as an image coordinate.
+        for (pos, scale, bounds, point) in [
+            (
+                Vec2::new(80.0, 80.0),
+                Vec2::new(0.0, 0.0),
+                Rect::new(79.0, 79.0, 2.0, 2.0),
+                Vec2::new(79.0, 79.0),
+            ),
+            (
+                Vec2::new(80.0, 80.0),
+                Vec2::new(-0.0, -0.0),
+                Rect::new(79.0, 79.0, 2.0, 2.0),
+                Vec2::new(80.0, 80.0),
+            ),
+            (
+                Vec2::new(80.5, 80.5),
+                Vec2::new(-0.0, 0.0),
+                Rect::new(80.0, 80.0, 1.0, 1.0),
+                Vec2::new(80.0, 80.0),
+            ),
+        ] {
+            let mask = instance_mask("oWebBall", "sWebBall", pos, 0.0, scale, 0.0);
+            assert_eq!(mask.point_bounds(), bounds, "pos={pos:?}, scale={scale:?}");
+            assert!(mask.contains(point, CollisionPrecision::BoundingBox));
+            assert!(mask.intersects_rectangle_bbox(point, point));
+            assert!(mask.intersects_rectangle(point, point, CollisionPrecision::BoundingBox));
+            assert!(mask.intersects_axis_line(point, point, CollisionPrecision::BoundingBox));
+            assert!(!mask.contains(point, CollisionPrecision::Precise));
+            assert!(!mask.intersects_rectangle(point, point, CollisionPrecision::Precise));
+            assert!(!mask.intersects_axis_line(point, point, CollisionPrecision::Precise));
+            assert!(!mask.contains(
+                Vec2::new(bounds.x + bounds.w, point.y),
+                CollisionPrecision::Precise
+            ));
         }
     }
 
