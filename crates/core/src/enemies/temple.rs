@@ -531,13 +531,13 @@ fn spawn(game: &mut Game, object: &str, pos: Vec2) -> u64 {
 
 fn hawk_idle_wall(world: &World, e: &Entity) -> bool {
     let point_is_solid = |point| {
-        world.tiles_point_active_precision(point, "oSolid", crate::CollisionPrecision::Precise)
+        world.tiles_point_active_precision(point, "oSolid", crate::CollisionPrecision::BoundingBox)
             || world.entities.iter().any(|other| {
                 other.id != e.id
                     && other.alive
                     && other.engine_active
                     && crate::catalog::is_a(&other.object, "oSolid")
-                    && other.mask_contains(point, crate::CollisionPrecision::Precise)
+                    && other.mask_contains(point, crate::CollisionPrecision::BoundingBox)
             })
     };
     point_is_solid(Vec2::new(e.pos.x - 1.0, e.pos.y))
@@ -1646,7 +1646,7 @@ mod tests {
     use crate::model::{Area, RulesPreset};
 
     #[test]
-    fn hawk_idle_wall_uses_active_precise_solid_point_queries() {
+    fn hawk_idle_wall_uses_active_bbox_solid_point_queries() {
         let mut world = World::new(20, 16, Area::Ice, 1);
         let hawk = Entity::new(900, "oHawkman", Vec2::new(80.0, 80.0));
         let point = Vec2::new(79.0, 80.0);
@@ -1666,6 +1666,25 @@ mod tests {
         let impostor = world.spawn("oGoldNugget", point);
         world.entity_mut(impostor).unwrap().solid = true;
         assert!(!hawk_idle_wall(&world, &hawk));
+
+        let dark_fall = world.spawn("oDarkFall", Vec2::new(80.0, 80.0));
+        let edge_hawk = Entity::new(901, "oHawkman", Vec2::new(64.0, 80.0));
+        let edge_point = Vec2::new(80.0, 80.0);
+        assert!(
+            world
+                .entity(dark_fall)
+                .unwrap()
+                .mask_contains(edge_point, crate::CollisionPrecision::BoundingBox)
+        );
+        assert!(
+            !world
+                .entity(dark_fall)
+                .unwrap()
+                .mask_contains(edge_point, crate::CollisionPrecision::Precise)
+        );
+        assert!(hawk_idle_wall(&world, &edge_hawk));
+        world.entity_mut(dark_fall).unwrap().engine_active = false;
+        assert!(!hawk_idle_wall(&world, &edge_hawk));
     }
 
     // Independent static prediction from canonical EXE bytes: one unsigned
