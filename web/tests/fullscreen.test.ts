@@ -40,3 +40,36 @@ function unsupportedFullscreenStaysInactive(): void {
 }
 
 test('fullscreen stays inactive when the browser has no Fullscreen API', unsupportedFullscreenStaysInactive);
+
+function fullscreenDoesNotInterceptEscape(): void {
+  const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const listeners = new Map<string, EventListener>();
+  const fullscreenDocument = {
+    fullscreenEnabled: true,
+    fullscreenElement: {},
+    documentElement: { requestFullscreen: () => Promise.resolve() },
+    exitFullscreen: () => Promise.resolve(),
+    hasFocus: () => true,
+    addEventListener: (type: string, listener: EventListener) => { listeners.set(type, listener); },
+    removeEventListener: (type: string) => { listeners.delete(type); },
+  } as unknown as Document;
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: fullscreenDocument,
+  });
+
+  try {
+    const canvas = { isConnected: true, focus: () => {} } as unknown as HTMLCanvasElement;
+    const feedback = { hidden: true, textContent: '' } as unknown as HTMLParagraphElement;
+    const controls = installFullscreenControls(canvas, feedback, () => {});
+
+    equal(listeners.has('keydown'), false,
+      'Fullscreen controls must leave Escape available to the game host');
+    controls.dispose();
+  } finally {
+    if (originalDocument) Object.defineProperty(globalThis, 'document', originalDocument);
+    else Reflect.deleteProperty(globalThis, 'document');
+  }
+}
+
+test('fullscreen controls leave Escape available to game input', fullscreenDoesNotInterceptEscape);

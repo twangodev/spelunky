@@ -41,13 +41,6 @@ export function installFullscreenControls(
     focusCanvas();
   }
 
-  function fullscreenEscape(event: KeyboardEvent): void {
-    if (document.fullscreenElement && (event.key === 'Escape' || event.code === 'Escape')) {
-      // Keep the browser's normal fullscreen exit, and keep this key out of Winit.
-      event.stopPropagation();
-    }
-  }
-
   async function changeFullscreen(): Promise<void> {
     pending = true;
     feedback.hidden = true;
@@ -71,7 +64,6 @@ export function installFullscreenControls(
 
   document.addEventListener('fullscreenchange', fullscreenChanged);
   document.addEventListener('fullscreenerror', showError);
-  document.addEventListener('keydown', fullscreenEscape, true);
   publishState();
 
   return {
@@ -84,7 +76,6 @@ export function installFullscreenControls(
       disposed = true;
       document.removeEventListener('fullscreenchange', fullscreenChanged);
       document.removeEventListener('fullscreenerror', showError);
-      document.removeEventListener('keydown', fullscreenEscape, true);
     },
   };
 }
