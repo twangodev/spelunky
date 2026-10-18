@@ -1,5 +1,5 @@
 //! Builds a presentation snapshot without advancing simulation or animation.
-use spelunky_core::{Area, Entity, Game, PlayerState, TICK_RATE, Vec2, catalog};
+use spelunky_core::{Area, Entity, Game, PlayerState, Vec2, catalog};
 use std::collections::{HashMap, HashSet};
 
 use crate::{
@@ -2430,21 +2430,6 @@ fn hud_in_view(
             [1.0, 1.0, 0.0, 1.0],
         );
     }
-    let seconds = game.tick / u64::from(TICK_RATE);
-    text(
-        quads,
-        atlas,
-        &format!(
-            "{}  {:02}:{:02}",
-            game.world.level,
-            seconds / 60,
-            seconds % 60
-        ),
-        216.0,
-        230.0,
-        1.0,
-        WHITE,
-    );
 }
 
 #[cfg(test)]
@@ -2578,6 +2563,24 @@ mod tests {
 
     use super::*;
     use spelunky_core::RulesPreset;
+
+    #[test]
+    fn classic_gameplay_hud_has_no_unmapped_level_clock_overlay() {
+        let source = include_str!("../../../references/classic-1.1/Scripts/scrDrawHUD.gml");
+        assert!(source.contains("draw_text(moneyX, 8+16, \"+\" + string(global.collect))"));
+        assert!(!source.contains("global.currLevel"));
+        assert!(!source.contains("global.time"));
+
+        let atlas = Atlas::load().unwrap();
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.tick = u64::from(spelunky_core::TICK_RATE) * 61;
+        let mut quads = Vec::new();
+        hud(&mut quads, &game, Vec2::default(), &atlas);
+        assert!(
+            quads.iter().all(|quad| quad.rect[1] != 230.0),
+            "scrDrawHUD does not add a level/clock line at y=230"
+        );
+    }
 
     #[test]
     fn source_hud_kapala_uses_literal_fill_frames_and_preserves_equipment_slots() {
