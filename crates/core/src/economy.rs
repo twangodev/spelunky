@@ -10,6 +10,15 @@ fn room(pos: Vec2) -> (i32, i32) {
         (((pos.y - 16.).max(0.) / 128.).floor() as i32).min(4),
     )
 }
+
+/// Source scrShopItemsGen scales sale prices by adding ten percent of the
+/// original base cost for each level above two. Keep the same operation order
+/// as GML: expressing this as `base * (1 + 0.1 * levels)` can round just below
+/// an integer at level 15, then the purchase path truncates that price by one.
+pub(crate) fn classic_shop_price(base: f64, level: u32) -> f64 {
+    base + (base / 100.0) * 10.0 * f64::from(level.saturating_sub(2))
+}
+
 pub(crate) fn in_shop(game: &Game, pos: Vec2) -> bool {
     if let Some(path) = &game.world.source_room_path {
         // isInShop and scrGetRoomX/Y clamp the source global grid by origin.
@@ -1248,3 +1257,7 @@ mod campaign_shop_path_tests;
 #[cfg(test)]
 #[path = "economy_payment_keeper_tests.rs"]
 mod payment_keeper_tests;
+
+#[cfg(test)]
+#[path = "economy_price_parity_tests.rs"]
+mod price_parity_tests;

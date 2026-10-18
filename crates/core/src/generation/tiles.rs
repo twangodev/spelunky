@@ -1435,7 +1435,7 @@ fn shop_item(w: &mut World, r: &mut Rng, p: Vec2, style: &str) {
     };
     e.data.insert(
         "cost".into(),
-        base * (1.0 + level.saturating_sub(2) as f64 * 0.1),
+        crate::economy::classic_shop_price(base, level),
     );
     e.data.insert("forSale".into(), 1.0);
 }
