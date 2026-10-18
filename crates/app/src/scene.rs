@@ -1719,7 +1719,17 @@ fn darkness_enabled(game: &Game) -> bool {
 }
 
 fn scene_lights(game: &Game, alpha: f64) -> Vec<Light> {
+    scene_lights_in_view(game, alpha, None)
+}
+
+fn scene_lights_in_view(
+    game: &Game,
+    alpha: f64,
+    presentation_view: Option<(Vec2, Viewport)>,
+) -> Vec<Light> {
     let game = game.presentation();
+    let presentation_view =
+        presentation_view.filter(|(_, view)| view.width != 320.0 || view.height != 240.0);
     let player = interpolated(game.player.previous_pos, game.player.pos, alpha);
     let darkness = game
         .data
@@ -1766,6 +1776,56 @@ fn scene_lights(game: &Game, alpha: f64) -> Vec<Light> {
             tint,
         });
     }
+    if let Some((camera, view)) = presentation_view {
+        let visible_ids: HashSet<_> = game.world.entities.iter().map(|entity| entity.id).collect();
+        for entity in game.dispatcher.hidden_entities().iter().filter(|entity| {
+            entity.alive && !entity.engine_active && !visible_ids.contains(&entity.id)
+        }) {
+            let Some((radius, dx, dy)) = source_light(&entity.object) else {
+                continue;
+            };
+            let radius = entity.data.get("light_radius").copied().unwrap_or(radius);
+            if !radius.is_finite() || radius <= 0.0 {
+                continue;
+            }
+            let position = Vec2::new(
+                entity.pos.x + entity.data.get("light_offset_x").copied().unwrap_or(dx),
+                entity.pos.y + entity.data.get("light_offset_y").copied().unwrap_or(dy),
+            );
+            if circle_intersects_view(position, radius, camera, view) {
+                lights.push(Light {
+                    position,
+                    radius,
+                    tint,
+                });
+            }
+        }
+        for (index, tile) in game
+            .dispatcher
+            .hidden_tiles()
+            .iter()
+            .filter(|(index, tile)| {
+                !tile.engine_active
+                    && *index < game.world.tiles.len()
+                    && game.world.tiles[*index].object.is_empty()
+            })
+        {
+            let Some((radius, dx, dy)) = source_light(&tile.object) else {
+                continue;
+            };
+            let position = Vec2::new(
+                (*index % game.world.width.max(1)) as f64 * 16.0 + dx,
+                (*index / game.world.width.max(1)) as f64 * 16.0 + dy,
+            );
+            if circle_intersects_view(position, radius, camera, view) {
+                lights.push(Light {
+                    position,
+                    radius,
+                    tint,
+                });
+            }
+        }
+    }
     for (index, tile) in game.world.tiles.iter().enumerate() {
         if !tile.engine_active {
             continue;
@@ -1784,6 +1844,16 @@ fn scene_lights(game: &Game, alpha: f64) -> Vec<Light> {
         });
     }
     lights
+}
+
+fn circle_intersects_view(position: Vec2, radius: f64, camera: Vec2, view: Viewport) -> bool {
+    let closest_x = position.x.clamp(camera.x, camera.x + f64::from(view.width));
+    let closest_y = position
+        .y
+        .clamp(camera.y, camera.y + f64::from(view.height));
+    let dx = position.x - closest_x;
+    let dy = position.y - closest_y;
+    dx * dx + dy * dy <= radius * radius
 }
 
 fn red_lamp_distances(game: &Game) -> [Option<f64>; 2] {
@@ -1855,7 +1925,7 @@ fn darkness_in_view(
 ) {
     let columns = view.width.ceil() as i32;
     let rows = view.height.ceil() as i32;
-    let lights = scene_lights(game, alpha);
+    let lights = scene_lights_in_view(game, alpha, Some((camera, view)));
     let tint = lights[0].tint.map(|channel| channel as f32);
     let mut intervals: Vec<(i32, i32)> = Vec::with_capacity(lights.len());
     // oScreen builds one colored union of filled circles, then multiplies that
@@ -3422,6 +3492,84 @@ mod tests {
                 .sprite(catalog::sprite("oLush").unwrap(), 0.0)
                 .unwrap()
                 .uv
+        );
+    }
+
+    #[test]
+    fn expanded_paused_scene_keeps_a_borrowed_flare_light_without_advancing_game() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = adaptive_room();
+        game.world.dark = true;
+        let id = game.world.spawn("oFlare", Vec2::new(440.0, 80.0));
+        let lava_index = 8 * game.world.width + 33;
+        game.world.set_tile(33, 8, "oLava");
+        game.step(&spelunky_core::InputFrame::default());
+
+        let draw = game.presentation();
+        let frozen = draw
+            .dispatcher
+            .hidden_entities()
+            .iter()
+            .find(|entity| entity.id == id)
+            .expect("offscreen flare should be frozen before pause");
+        assert!(!frozen.engine_active);
+        let hidden_lava = draw
+            .dispatcher
+            .hidden_tiles()
+            .iter()
+            .find(|(index, _)| *index == lava_index)
+            .expect("offscreen lava should be frozen before pause");
+        assert!(!hidden_lava.1.engine_active);
+        let frame = atlas.sprite(&frozen.sprite, frozen.animation).unwrap();
+        let view = Viewport::from_surface(2560, 1080);
+        let camera = view.camera(
+            interpolated(draw.previous_camera, draw.camera, 1.0),
+            draw.world.width as f64 * 16.0,
+            draw.world.height as f64 * 16.0,
+        );
+        let game_hash = game.state_hash();
+        let draw_hash = draw.state_hash();
+        let quads = game_scene_in_view(&game, 1.0, false, &atlas, view);
+        assert!(
+            quads.iter().any(|quad| quad.uv == frame.uv),
+            "expanded paused view should borrow the flare sprite"
+        );
+        let lights = scene_lights_in_view(&game, 1.0, Some((camera, view)));
+        assert!(
+            lights
+                .iter()
+                .any(|light| light.position == Vec2::new(536.0, 136.0) && light.radius == 32.0),
+            "expanded paused view should borrow the frozen lava light"
+        );
+
+        let mut darkness = Vec::new();
+        darkness_in_view(&mut darkness, &game, camera, 1.0, view);
+        let lit_point = Vec2::new(552.0, 136.0);
+        let local_x = (lit_point.x - camera.x).floor() as f32;
+        let local_y = (lit_point.y - camera.y).floor() as f32;
+        assert!(
+            darkness.iter().any(|quad| {
+                quad.blend == QuadBlend::Multiply
+                    && quad.rect[0] <= local_x
+                    && local_x < quad.rect[0] + quad.rect[2]
+                    && quad.rect[1] == local_y
+                    && quad.color[..3] != [0.0, 0.0, 0.0]
+            }),
+            "borrowed sources should illuminate the widened viewport"
+        );
+        assert_eq!(
+            game.state_hash(),
+            game_hash,
+            "pause rendering cannot step simulation"
+        );
+        assert_eq!(
+            draw.state_hash(),
+            draw_hash,
+            "pause rendering cannot mutate Draw state"
+        );
+        assert!(
+            !frozen.engine_active,
+            "expanded rendering cannot reactivate the flare"
         );
     }
 
