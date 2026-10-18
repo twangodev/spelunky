@@ -759,7 +759,7 @@ pub(crate) fn alarm(game: &mut Game, id: u64, index: u8) {
                     .world
                     .entities
                     .iter()
-                    .filter(|e| e.alive && e.object == trail)
+                    .filter(|e| e.alive && e.engine_active && e.object == trail)
                     .count()
                     < 12
                 {
@@ -2937,6 +2937,67 @@ mod tests {
             let particle = g.world.entity(id).unwrap();
             let trail = g.world.entities.iter().find(|e| e.object == trail).unwrap();
             assert_eq!(trail.pos, Vec2::new(particle.pos.x - 2.0, particle.pos.y));
+        }
+    }
+    #[test]
+    fn particle_alarm_trail_cap_ignores_offscreen_deactivated_instances() {
+        for (object, trail) in [("oBlood", "oBloodTrail"), ("oFlame", "oFlameTrail")] {
+            let mut g = Game::shell(1, RulesPreset::Classic);
+            g.world = World::new(100, 40, Area::Mines, 1);
+            g.player.pos = Vec2::new(160.0, 152.0);
+            g.player.previous_pos = g.player.pos;
+            g.player.grounded = true;
+            g.player.state = crate::PlayerState::Standing;
+            g.flags.remove("low_graphics");
+
+            let mut offscreen_trails = Vec::new();
+            for index in 0..12 {
+                let id = g.spawn(
+                    trail,
+                    Vec2::new(
+                        1000.0 + f64::from(index % 4) * 16.0,
+                        128.0 + f64::from(index / 4) * 16.0,
+                    ),
+                );
+                let effect = g.world.entity_mut(id).unwrap();
+                effect.alarms = [-1; 12];
+                effect.data.insert("gravity".into(), 0.0);
+                effect.vel = Vec2::default();
+                offscreen_trails.push(id);
+            }
+
+            let particle = g.spawn(object, Vec2::new(160.0, 128.0));
+            let effect = g.world.entity_mut(particle).unwrap();
+            effect.alarms[0] = -1;
+            effect.data.insert("gravity".into(), 0.0);
+            effect.vel = Vec2::default();
+
+            g.step(&InputFrame::default());
+
+            assert!(offscreen_trails.iter().all(|id| {
+                g.world
+                    .entity(*id)
+                    .is_some_and(|trail| trail.alive && !trail.engine_active)
+            }));
+            assert!(
+                g.world
+                    .entity(particle)
+                    .is_some_and(|effect| effect.alive && effect.engine_active)
+            );
+            g.world.entity_mut(particle).unwrap().alarms[0] = 1;
+            g.step(&InputFrame::default());
+            let live_trails: Vec<_> = g
+                .world
+                .entities
+                .iter()
+                .filter(|effect| effect.alive && effect.object == trail)
+                .collect();
+            assert_eq!(
+                live_trails.len(),
+                13,
+                "{object} alarm should ignore inactive trails"
+            );
+            assert!(live_trails.iter().any(|effect| effect.engine_active));
         }
     }
     #[test]
