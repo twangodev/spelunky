@@ -2462,6 +2462,97 @@ mod tests {
         );
     }
 
+    #[test]
+    fn game_step_fire_frog_death_steps_later_resource_bomb_in_birth_frame() {
+        let mut game = collision_room();
+        game.player.pos = Vec2::new(300.0, 152.0);
+        // Classic resources order Fire Frog 882 before Fire Frog Bomb 887.
+        let frog = game.world.spawn("oFireFrog", Vec2::new(100.0, 144.0));
+        game.world.entity_mut(frog).unwrap().health = 0;
+
+        game.step(&crate::InputFrame::default());
+
+        assert!(game.world.entity(frog).is_none());
+        let bombs: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.alive && e.object == "oFireFrogBomb")
+            .collect();
+        assert_eq!(bombs.len(), 1);
+        let bomb = bombs[0];
+        assert_eq!(bomb.pos, Vec2::new(108.0, 152.0));
+        assert_eq!(
+            bomb.alarms[1], 120,
+            "birth-frame Step cannot advance the earlier Alarm phase"
+        );
+        assert_eq!(bomb.value("simulation_tick"), game.engine_time() as f64);
+    }
+
+    #[test]
+    fn game_step_fire_frog_bomb_runs_its_water_tail_on_its_birth_frame() {
+        let mut game = collision_room();
+        game.player.pos = Vec2::new(300.0, 152.0);
+        // Parent oEnemy sees the same water at the Fire Frog's center; its
+        // own Step still creates the Bomb after that transform/destruction.
+        game.world.set_tile(6, 9, "oWaterSwim");
+        let frog = game.world.spawn("oFireFrog", Vec2::new(100.0, 144.0));
+        game.world.entity_mut(frog).unwrap().health = 0;
+
+        game.step(&crate::InputFrame::default());
+
+        let bomb = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.alive && e.object == "oFireFrogBomb")
+            .expect("Fire Frog's child Step creates its Bomb after inherited water conversion");
+        assert_eq!(bomb.pos, Vec2::new(108.0, 152.0));
+        assert_eq!(bomb.value("swimming"), 1.0);
+        assert_eq!(bomb.value("simulation_tick"), game.engine_time() as f64);
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .any(|e| { e.alive && e.object == "oSplash" && e.pos == Vec2::new(108.0, 152.0) })
+        );
+        assert_eq!(bomb.alarms[1], 120);
+    }
+
+    #[test]
+    fn game_step_monkey_automatically_throws_overlapping_active_item() {
+        let mut game = collision_room();
+        game.player.pos = Vec2::new(300.0, 152.0);
+        let monkey = game.spawn("oMonkey", Vec2::new(56.0, 144.0));
+        let rock = game.spawn("oRock", Vec2::new(64.0, 156.0));
+        {
+            let monkey = game.world.entity_mut(monkey).unwrap();
+            monkey.state = 0;
+            monkey.timer = 10;
+            monkey.data.insert("throw_counter".into(), 0.0);
+        }
+        game.world.entity_mut(rock).unwrap().vel = Vec2::default();
+        // Classic Rock 450 is updated before Monkey 778; auto-collision runs
+        // after both NormalStep callbacks and should select this exact pair.
+        assert!(
+            game.world
+                .entity(monkey)
+                .unwrap()
+                .event_intersects(game.world.entity(rock).unwrap())
+        );
+
+        game.step(&crate::InputFrame::default());
+
+        let monkey = game.world.entity(monkey).unwrap();
+        let rock = game.world.entity(rock).unwrap();
+        assert_eq!(monkey.value("throw_counter"), 60.0);
+        assert_eq!(rock.vel, Vec2::new(5.0, -4.0));
+        assert_eq!(
+            rock.pos.y, 154.0,
+            "source item collision lifts a clear item by two pixels"
+        );
+    }
+
     // Literal Create oracle: random(4), random(4), random(2), rand(1,6).
     // Deliberately does not call the port's detritus or ManTrap helpers.
     fn mantrap_detritus_oracle(rng: &mut crate::Rng) -> (Vec2, f64) {
