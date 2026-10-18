@@ -120,6 +120,29 @@ pub fn default_bindings() -> BTreeMap<String, String> {
         .collect()
 }
 
+/// Classic's `oGlobals` chooses joystick 1, using joystick 2 only when
+/// joystick 1 is absent. Higher-index devices are never selected.
+pub(crate) fn classic_gamepad_slot(
+    connected_slots: impl IntoIterator<Item = usize>,
+) -> Option<usize> {
+    let mut primary_connected = false;
+    let mut secondary_connected = false;
+    for slot in connected_slots {
+        match slot {
+            0 => primary_connected = true,
+            1 => secondary_connected = true,
+            _ => {}
+        }
+    }
+    if primary_connected {
+        Some(0)
+    } else if secondary_connected {
+        Some(1)
+    } else {
+        None
+    }
+}
+
 /// Missing or unsupported values keep the defaults. The source permits
 /// duplicate assignments, but has no controller-unbind operation.
 pub fn validated_bindings(bindings: &BTreeMap<String, String>) -> BTreeMap<String, String> {
@@ -167,5 +190,14 @@ mod tests {
                 ("start".into(), "Start".into()),
             ])
         );
+    }
+
+    #[test]
+    fn classic_gamepad_selection_prefers_pad_one_and_uses_pad_two_only_as_fallback() {
+        assert_eq!(classic_gamepad_slot([0, 1]), Some(0));
+        assert_eq!(classic_gamepad_slot([1, 0]), Some(0));
+        assert_eq!(classic_gamepad_slot([1]), Some(1));
+        assert_eq!(classic_gamepad_slot([2]), None);
+        assert_eq!(classic_gamepad_slot([1, 2]), Some(1));
     }
 }

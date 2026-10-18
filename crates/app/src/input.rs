@@ -560,46 +560,57 @@ impl InputState {
     #[cfg(not(target_arch = "wasm32"))]
     fn native_gamepads(&self, gilrs: &gilrs::Gilrs) -> (Actions, u8, u8, u32) {
         use gilrs::{Axis, Button};
-        for (_, pad) in gilrs.gamepads() {
-            if !pad.is_connected() {
-                continue;
+        let mut gamepads = [None, None];
+        for (id, pad) in gilrs.gamepads() {
+            // Gilrs IDs are zero-based; only slots 0 and 1 map to Classic's
+            // joystick 1 and joystick 2.
+            let slot: usize = id.into();
+            if slot < gamepads.len() {
+                gamepads[slot] = Some(pad);
             }
-            let mut capture = 0;
-            let x = pad.value(Axis::LeftStickX);
-            let y = pad.value(Axis::LeftStickY);
-            let left = x < -DEAD_ZONE || pad.is_pressed(Button::DPadLeft);
-            let right = x > DEAD_ZONE || pad.is_pressed(Button::DPadRight);
-            let up = y > DEAD_ZONE || pad.is_pressed(Button::DPadUp);
-            let down = y < -DEAD_ZONE || pad.is_pressed(Button::DPadDown);
-            let mut held = 0;
-            for button in controller::ALL {
-                let native = native_controller_button(button);
-                if source_trigger_pressed(
-                    button,
-                    pad.is_pressed(native),
-                    pad.button_data(native).map_or(0.0, |data| data.value()),
-                ) {
-                    held |= button.mask();
-                }
-                let capturing = if matches!(
-                    button,
-                    ControllerButton::LeftTrigger | ControllerButton::RightTrigger
-                ) {
-                    pad.button_data(native)
-                        .is_some_and(|data| data.value() > 0.1)
-                        || pad.is_pressed(native)
-                } else {
-                    pad.is_pressed(native)
-                };
-                if capturing {
-                    capture |= button.mask();
-                }
-            }
-            let (actions, ui, press_allowed) =
-                self.portable_controller_with_direction_edges(held, [left, right, up, down]);
-            return (actions, ui, press_allowed, capture);
         }
-        (Actions::default(), 0, 0x0f, 0)
+        let slots = gamepads
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, pad)| pad.is_some().then_some(slot));
+        let Some(slot) = controller::classic_gamepad_slot(slots) else {
+            return (Actions::default(), 0, 0x0f, 0);
+        };
+        let pad = gamepads[slot].expect("selected native gamepad slot is connected");
+        let mut capture = 0;
+        let x = pad.value(Axis::LeftStickX);
+        let y = pad.value(Axis::LeftStickY);
+        let left = x < -DEAD_ZONE || pad.is_pressed(Button::DPadLeft);
+        let right = x > DEAD_ZONE || pad.is_pressed(Button::DPadRight);
+        let up = y > DEAD_ZONE || pad.is_pressed(Button::DPadUp);
+        let down = y < -DEAD_ZONE || pad.is_pressed(Button::DPadDown);
+        let mut held = 0;
+        for button in controller::ALL {
+            let native = native_controller_button(button);
+            if source_trigger_pressed(
+                button,
+                pad.is_pressed(native),
+                pad.button_data(native).map_or(0.0, |data| data.value()),
+            ) {
+                held |= button.mask();
+            }
+            let capturing = if matches!(
+                button,
+                ControllerButton::LeftTrigger | ControllerButton::RightTrigger
+            ) {
+                pad.button_data(native)
+                    .is_some_and(|data| data.value() > 0.1)
+                    || pad.is_pressed(native)
+            } else {
+                pad.is_pressed(native)
+            };
+            if capturing {
+                capture |= button.mask();
+            }
+        }
+        let (actions, ui, press_allowed) =
+            self.portable_controller_with_direction_edges(held, [left, right, up, down]);
+        (actions, ui, press_allowed, capture)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -612,13 +623,24 @@ impl InputState {
         if let Some(pads) =
             web_sys::window().and_then(|window| window.navigator().get_gamepads().ok())
         {
-            for value in pads.iter() {
-                let Ok(pad) = value.dyn_into::<web_sys::Gamepad>() else {
-                    continue;
+            let slots = [0_usize, 1].into_iter().filter(|slot| {
+                pads.get(*slot as u32)
+                    .dyn_into::<web_sys::Gamepad>()
+                    .is_ok_and(|pad| pad.connected())
+            });
+            if let Some(slot) = controller::classic_gamepad_slot(slots) {
+                let Ok(pad) = pads.get(slot as u32).dyn_into::<web_sys::Gamepad>() else {
+                    self.accept_controller_capture(0);
+                    self.accept_controller_sample_with_direction_edges(actions, ui, 0x0f);
+                    return;
                 };
-                // Browser indices below are defined only for standard mappings.
+                // Select by source slot before checking browser mapping. A
+                // connected but unsupported joystick 1 does not fall through
+                // to joystick 2.
                 if !pad.connected() || pad.mapping() != web_sys::GamepadMappingType::Standard {
-                    continue;
+                    self.accept_controller_capture(0);
+                    self.accept_controller_sample_with_direction_edges(actions, ui, 0x0f);
+                    return;
                 }
                 let buttons = pad.buttons();
                 let button = |index| {
@@ -671,7 +693,6 @@ impl InputState {
                 actions = mapped_actions;
                 ui = mapped_ui;
                 direction_press_allowed = press_allowed;
-                break;
             }
         }
         self.accept_controller_capture(capture);
@@ -876,35 +897,52 @@ mod tests {
 
     #[test]
     fn diagonal_directions_hold_for_motion_without_cardinal_press_edges() {
-        let mut input = InputState::default();
-        let diagonal = [false, true, true, false];
-        let (actions, ui, edges) = input.portable_controller_with_direction_edges(0, diagonal);
-        input.accept_gamepads_with_direction_edges(actions, ui, edges);
-        let tick = input.take_tick();
-        assert!(tick.up && tick.right);
-        assert!(!tick.up_pressed);
-        assert!(input.ui_pressed().is_empty());
+        for (diagonal, cardinal, is_up) in [
+            (
+                [false, true, true, false],
+                [false, false, true, false],
+                true,
+            ),
+            (
+                [false, true, false, true],
+                [false, false, false, true],
+                false,
+            ),
+        ] {
+            let mut input = InputState::default();
+            let (actions, ui, edges) = input.portable_controller_with_direction_edges(0, diagonal);
+            input.accept_gamepads_with_direction_edges(actions, ui, edges);
+            let tick = input.take_tick();
+            assert!(tick.right);
+            assert_eq!(tick.up, is_up);
+            assert_eq!(tick.down, !is_up);
+            assert!(!tick.up_pressed && !tick.down_pressed);
+            assert!(input.ui_pressed().is_empty());
 
-        // The gamepad object recalculates cardinal edges before applying the
-        // diagonal hold each tick, so changing NE to N remains held as well.
-        let (actions, ui, edges) =
-            input.portable_controller_with_direction_edges(0, [false, false, true, false]);
-        input.accept_gamepads_with_direction_edges(actions, ui, edges);
-        let tick = input.take_tick();
-        assert!(tick.up && !tick.up_pressed);
-        assert!(input.ui_pressed().is_empty());
+            // Classic recalculates cardinal edges before applying diagonal
+            // holds, so changing NE to N or SE to S remains held as well.
+            let (actions, ui, edges) = input.portable_controller_with_direction_edges(0, cardinal);
+            input.accept_gamepads_with_direction_edges(actions, ui, edges);
+            let tick = input.take_tick();
+            assert_eq!(tick.up, is_up);
+            assert_eq!(tick.down, !is_up);
+            assert!(!tick.up_pressed && !tick.down_pressed);
+            assert!(input.ui_pressed().is_empty());
 
-        let (actions, ui, edges) = input.portable_controller_with_direction_edges(0, [false; 4]);
-        input.accept_gamepads_with_direction_edges(actions, ui, edges);
-        input.take_tick();
-        let (actions, ui, edges) =
-            input.portable_controller_with_direction_edges(0, [false, false, true, false]);
-        input.accept_gamepads_with_direction_edges(actions, ui, edges);
-        assert!(
-            input.take_tick().up_pressed,
-            "a fresh cardinal Up still fires"
-        );
-        assert_eq!(input.ui_pressed(), vec![UiButton::Up]);
+            let (actions, ui, edges) =
+                input.portable_controller_with_direction_edges(0, [false; 4]);
+            input.accept_gamepads_with_direction_edges(actions, ui, edges);
+            input.take_tick();
+            let (actions, ui, edges) = input.portable_controller_with_direction_edges(0, cardinal);
+            input.accept_gamepads_with_direction_edges(actions, ui, edges);
+            let tick = input.take_tick();
+            assert_eq!(tick.up_pressed, is_up, "fresh cardinal Up press");
+            assert_eq!(tick.down_pressed, !is_up, "fresh cardinal Down press");
+            assert_eq!(
+                input.ui_pressed(),
+                vec![if is_up { UiButton::Up } else { UiButton::Down }]
+            );
+        }
     }
 
     #[test]
