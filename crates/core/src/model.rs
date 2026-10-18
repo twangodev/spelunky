@@ -757,6 +757,16 @@ impl World {
         self.tiles_match(r, group, None, None, precision, false)
     }
 
+    /// Source collision_rectangle query over active stored family members.
+    pub(crate) fn tiles_collide_active_precision(
+        &self,
+        r: Rect,
+        group: &str,
+        precision: CollisionPrecision,
+    ) -> bool {
+        self.tiles_match(r, group, None, None, precision, true)
+    }
+
     /// Explicit source collision_rectangle over active stored family members.
     /// Corners remain raw inclusive arguments; held targets stay eligible.
     /// The optional exclusion denotes a dynamic caller, never a numeric sentinel.
@@ -796,6 +806,17 @@ impl World {
         precision: CollisionPrecision,
     ) -> bool {
         self.tiles_line_precision_with_activity(first, second, group, precision, false)
+    }
+
+    /// Source collision_line query over active stored family members.
+    pub(crate) fn tiles_line_active_precision(
+        &self,
+        first: Vec2,
+        second: Vec2,
+        group: &str,
+        precision: CollisionPrecision,
+    ) -> bool {
+        self.tiles_line_precision_with_activity(first, second, group, precision, true)
     }
 
     fn tiles_line_precision_with_activity(
@@ -2056,6 +2077,55 @@ mod geometry_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn source_tile_collision_queries_skip_inactive_instances_without_changing_world_queries() {
+        let mut world = World::new(8, 8, Area::Mines, 1);
+        world.set_tile(2, 2, "oBlock");
+        let index = 2 * world.width + 2;
+        let point = Vec2::new(32.0, 40.0);
+        let line_start = Vec2::new(31.0, 40.0);
+        let line_end = Vec2::new(33.0, 40.0);
+        let rect = Rect::new(32.0, 40.0, 1.0, 1.0);
+
+        assert!(world.tiles_point_active(point, "oSolid"));
+        assert!(world.tiles_line_active_precision(
+            line_start,
+            line_end,
+            "oSolid",
+            CollisionPrecision::Precise
+        ));
+        assert!(world.tiles_collide_active_precision(
+            rect,
+            "oSolid",
+            CollisionPrecision::BoundingBox
+        ));
+
+        world.tiles[index].engine_active = false;
+
+        // Existing broad World queries intentionally continue to inspect all
+        // stored terrain. Source collision adapters must opt into activity.
+        assert!(world.tiles_point(point, "oSolid"));
+        assert!(world.tiles_line_precision(
+            line_start,
+            line_end,
+            "oSolid",
+            CollisionPrecision::Precise
+        ));
+        assert!(world.tiles_collide_precision(rect, "oSolid", CollisionPrecision::BoundingBox));
+        assert!(!world.tiles_point_active(point, "oSolid"));
+        assert!(!world.tiles_line_active_precision(
+            line_start,
+            line_end,
+            "oSolid",
+            CollisionPrecision::Precise
+        ));
+        assert!(!world.tiles_collide_active_precision(
+            rect,
+            "oSolid",
+            CollisionPrecision::BoundingBox
+        ));
     }
 
     #[test]

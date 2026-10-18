@@ -90,9 +90,10 @@ fn precise_rect(w: &World, r: Rect, group: &str) -> bool {
 fn precise_line(w: &World, r: Rect, group: &str) -> bool {
     let first = Vec2::new(r.x, r.y);
     let second = Vec2::new(r.x + r.w - 1.0, r.y + r.h - 1.0);
-    w.tiles_line_precision(first, second, group, CollisionPrecision::Precise)
+    w.tiles_line_active_precision(first, second, group, CollisionPrecision::Precise)
         || w.entities.iter().any(|e| {
             e.alive
+                && e.engine_active
                 && !e.held
                 && (crate::catalog::is_a(&e.object, group) || (group == "oSolid" && e.solid))
                 && e.collision_mask().intersects_axis_line(
@@ -144,9 +145,10 @@ fn collision_rect_precision(
 ) -> bool {
     // GameMaker has no implicit room-edge collider. In particular, the Ice
     // Caves abyss must let the player leave the room and trigger falling death.
-    w.tiles_collide_precision(r, group, precision)
+    w.tiles_collide_active_precision(r, group, precision)
         || w.entities.iter().any(|e| {
             e.alive
+                && e.engine_active
                 && !e.held
                 && (crate::catalog::is_a(&e.object, group) || (group == "oSolid" && e.solid))
                 && e.mask_intersects(r, precision)
@@ -192,9 +194,10 @@ fn edge(w: &World, p: &Player, side: Side, distance: f64) -> bool {
 fn solid_point(w: &World, pos: Vec2) -> bool {
     // A literal collision_point has no area: a point just left of a wall must
     // stay outside, even when a tiny rectangle would overlap the wall.
-    w.tiles_point(pos, "oSolid")
+    w.tiles_point_active(pos, "oSolid")
         || w.entities.iter().any(|e| {
             e.alive
+                && e.engine_active
                 && !e.held
                 && (crate::catalog::is_a(&e.object, "oSolid") || e.solid)
                 && e.mask_contains(pos, CollisionPrecision::BoundingBox)
@@ -202,9 +205,12 @@ fn solid_point(w: &World, pos: Vec2) -> bool {
 }
 fn object_at(w: &World, pos: Vec2, names: &[&str]) -> bool {
     w.tile((pos.x / 16.0).floor() as i32, (pos.y / 16.0).floor() as i32)
-        .is_some_and(|t| names.contains(&t.object.as_str()))
+        .is_some_and(|t| t.engine_active && names.contains(&t.object.as_str()))
         || w.entities.iter().any(|e| {
-            e.alive && names.contains(&e.object.as_str()) && e.sprite_bounds().contains(pos)
+            e.alive
+                && e.engine_active
+                && names.contains(&e.object.as_str())
+                && e.sprite_bounds().contains(pos)
         })
 }
 /// Literal ledge collision_point(..., family, 0, 0): active instances,
@@ -2500,6 +2506,68 @@ mod tests {
                 game.player.state, expected_state,
                 "SourceClassicV2 down continuation with active={active}"
             );
+        }
+    }
+
+    #[test]
+    fn source_controller_side_probe_ignores_inactive_solid_tiles_and_entities() {
+        for terrain in [true, false] {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            game.world = World::new(8, 8, Area::Mines, 1);
+            if terrain {
+                game.world.set_tile(2, 2, "oBlock");
+                game.world.tiles[2 * game.world.width + 2].engine_active = false;
+            } else {
+                let id = game.world.spawn("oBlock", Vec2::new(32.0, 32.0));
+                game.world.entity_mut(id).unwrap().engine_active = false;
+            }
+            // The right-edge collision_line is x=32, inside the inactive
+            // block's mask. The controller must ignore it and keep momentum.
+            game.player.pos = Vec2::new(27.0, 40.0);
+            game.player.previous_pos = game.player.pos;
+            game.player.state = PlayerState::Falling;
+            game.player.vel = Vec2::new(3.0, 0.0);
+            game.player.facing = 1;
+
+            tick(
+                &mut game,
+                &InputFrame {
+                    right: true,
+                    ..Default::default()
+                },
+            );
+
+            assert_eq!(
+                game.player.pos.x, 29.0,
+                "inactive solid terrain={terrain} must not stop the player"
+            );
+        }
+    }
+
+    #[test]
+    fn source_long_fall_rectangle_ignores_inactive_spring_traps() {
+        for terrain in [true, false] {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            game.world = World::new(8, 8, Area::Mines, 1);
+            if terrain {
+                game.world.set_tile(2, 2, "oSpringTrap");
+                game.world.tiles[2 * game.world.width + 2].engine_active = false;
+            } else {
+                let id = game.world.spawn("oSpringTrap", Vec2::new(32.0, 32.0));
+                game.world.entity_mut(id).unwrap().engine_active = false;
+            }
+            game.player.pos = Vec2::new(40.0, 40.0);
+            game.player.previous_pos = game.player.pos;
+            game.player.state = PlayerState::Standing;
+            game.player.data.insert("fall_timer".into(), 20.0);
+
+            tick(&mut game, &InputFrame::default());
+
+            assert_eq!(
+                game.player.health, 3,
+                "inactive spring trap terrain={terrain} must not suppress long-fall injury"
+            );
+            assert_eq!(game.player.stun, 60);
         }
     }
 
