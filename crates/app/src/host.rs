@@ -6238,8 +6238,8 @@ mod tests {
         game.step(&InputFrame::default());
         assert_eq!(game.state, RunState::Dead);
 
-        let record = campaign_record(&game)
-            .expect("Title keeps scoring enabled when it enters rTutorial");
+        let record =
+            campaign_record(&game).expect("Title keeps scoring enabled when it enters rTutorial");
         assert!(!record.won);
         assert_eq!(record.level, 0);
         assert_eq!(record.score, 50_000);
@@ -6248,8 +6248,7 @@ mod tests {
         assert!(improvements.contains("new_money"));
         let unlocks = spelunky_core::hub::record_unlocks(
             record.score,
-            (record.won && record.fastest_eligible)
-                .then_some(record.elapsed_seconds() as f64),
+            (record.won && record.fastest_eligible).then_some(record.elapsed_seconds() as f64),
             record.kills,
             record.rescues,
         );
