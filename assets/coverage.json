@@ -9,8 +9,7 @@
     "by_status": {
       "asset_only_unverified": 18,
       "host_replacement_unverified": 119,
-      "no_direct_handler_found": 1,
-      "partial_handler_present": 296,
+      "partial_handler_present": 297,
       "partial_static_tile_adapter": 7,
       "source_abstraction": 12
     },
@@ -923,7 +922,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 353,
+          "line": 359,
           "module": "crates/core/src/enemies/npcs.rs"
         },
         {
@@ -961,7 +960,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1682,
+          "line": 1683,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -1105,7 +1104,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1268,
+          "line": 1269,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -5323,14 +5322,20 @@
     },
     {
       "category": "gameplay",
-      "handlers": [],
-      "note": "No audited object dispatch exists; source gameplay behavior needs implementation or documented equivalent.",
+      "handlers": [
+        {
+          "kind": "manually_reviewed_shared_behavior",
+          "line": 1009,
+          "module": "crates/core/src/enemies/temple.rs"
+        }
+      ],
+      "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
       "object": "oHawkmanWorship",
       "parity_verified": false,
       "source_events": [],
       "source_id": 765,
       "source_path": "Objects/Enemies/oHawkmanWorship.xml",
-      "status": "no_direct_handler_found"
+      "status": "partial_handler_present"
     },
     {
       "category": "gameplay",
@@ -9140,7 +9145,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1600,
+          "line": 1601,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -9157,7 +9162,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1607,
+          "line": 1608,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -9834,7 +9839,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 372,
+          "line": 378,
           "module": "crates/core/src/enemies/npcs.rs"
         },
         {
@@ -11520,7 +11525,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1812,
+          "line": 1813,
           "module": "crates/core/src/hub.rs"
         }
       ],
