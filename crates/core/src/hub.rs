@@ -2733,9 +2733,10 @@ mod tests {
     }
     #[test]
     fn sun_damsel_loss_after_intro_does_not_fail_challenge() {
-        let mut g = challenge(HubKind::Sun);
-        g.level_tick = 70;
-        tick_hub(&mut g);
+        let mut g = loaded(HubKind::Sun);
+        for _ in 0..70 {
+            g.step(&InputFrame::default());
+        }
         assert_eq!(g.data["hub_draw_status"], 3.0);
         for e in &mut g.world.entities {
             if e.object == "oDamsel" {
@@ -2743,9 +2744,10 @@ mod tests {
             }
         }
 
-        tick_hub(&mut g);
+        g.step(&InputFrame::default());
 
         assert!(g.player.health > 0);
+        assert_eq!(g.state, RunState::Playing);
         assert!(!g.flags.contains("hub_challenge_finished"));
         assert!(!g.data.contains_key("mini1"));
     }

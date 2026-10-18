@@ -1448,15 +1448,27 @@ mod tests {
                     && e.value("invincible") > 0.)
         );
         assert_eq!(g.state, RunState::Playing);
-        g.player.pos = Vec2::new(exit.x + 8., exit.y + 8.);
+        // Approach from the open arena after the authored door is created;
+        // keep normal player movement and portal input in the loop.
+        g.player.pos = Vec2::new(exit.x - 32., exit.y + 8.);
         g.player.previous_pos = g.player.pos;
         g.player.vel = Vec2::default();
-        g.step(&InputFrame {
-            up: true,
-            ..Default::default()
-        });
+        for _ in 0..30 {
+            g.step(&InputFrame {
+                right: true,
+                up: true,
+                ..Default::default()
+            });
+            if g.state != RunState::Playing {
+                break;
+            }
+        }
         assert!(g.player.grounded);
         assert_eq!(g.state, RunState::Ending);
+        assert_eq!(
+            g.ending.as_ref().unwrap().kind,
+            crate::ending::EndingKind::Campaign
+        );
         assert!(!g.events.contains(&GameEvent::Won));
         assert_eq!(
             g.world
@@ -1465,6 +1477,34 @@ mod tests {
                 .filter(|e| e.object == "oXEnd")
                 .count(),
             1
+        );
+        assert_eq!(
+            g.ending.as_ref().unwrap().kind,
+            crate::ending::EndingKind::Campaign
+        );
+        for _ in 0..40 {
+            if g.world.name == "rEnd" {
+                break;
+            }
+            g.step(&InputFrame::default());
+        }
+        assert_eq!(g.world.name, "rEnd");
+        assert_eq!(
+            g.ending.as_ref().unwrap().stage,
+            crate::ending::EndingStage::Chamber
+        );
+        assert_eq!((g.world.width, g.world.height), (40, 16));
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .any(|entity| entity.object == "oEnd")
+        );
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .any(|entity| entity.object == "oPDummy")
         );
     }
 

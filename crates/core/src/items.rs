@@ -2824,23 +2824,45 @@ mod tests {
     }
 
     #[test]
-    fn game_step_whip_forward_hit_breaks_ground_jar_but_bags_have_no_whip_event() {
+    fn game_step_whip_only_breaks_ground_jars_among_treasure_and_containers() {
         fn attack_room(target: &str) -> (Game, u64) {
             let mut game = game();
             for x in 0..game.world.width {
                 game.world.set_tile(x, 4, "oBlock");
             }
-            game.player.pos = Vec2::new(40.0, 56.0);
+            game.player.pos = Vec2::new(32.0, 56.0);
             game.player.previous_pos = game.player.pos;
             game.player.state = PlayerState::Standing;
             game.player.grounded = true;
             game.player.facing = 1;
-            let target = game.spawn(target, Vec2::new(56.0, 56.0));
+            let target = game.spawn(target, Vec2::new(50.0, 56.0));
             (game, target)
         }
 
-        for bag_type in ["oBombBag", "oRopeBag"] {
-            let (mut game, bag) = attack_room(bag_type);
+        // Classic 1.1 has no oMoneyBag/oGemBag objects: its money and gems
+        // are the oTreasure children below. Their shared parent has no Whip
+        // collision event. The same is true for the item/container boxes.
+        for target_type in [
+            "oGoldChunk",
+            "oGoldNugget",
+            "oGoldBar",
+            "oGoldBars",
+            "oEmerald",
+            "oEmeraldBig",
+            "oSapphire",
+            "oSapphireBig",
+            "oRuby",
+            "oRubyBig",
+            "oDiamond",
+            "oBombBag",
+            "oRopeBag",
+            "oCrate",
+            "oBombBox",
+            "oChest",
+            "oLockedChest",
+            "oFlareCrate",
+        ] {
+            let (mut game, target) = attack_room(target_type);
             game.step(&InputFrame {
                 attack_pressed: true,
                 ..InputFrame::default()
@@ -2848,8 +2870,8 @@ mod tests {
             for frame in 2..=5 {
                 game.step(&InputFrame::default());
                 assert!(
-                    game.world.entity(bag).is_some(),
-                    "{bag_type}, frame {frame}"
+                    game.world.entity(target).is_some(),
+                    "{target_type}, frame {frame}"
                 );
                 assert!(
                     !game
@@ -2857,30 +2879,46 @@ mod tests {
                         .entities
                         .iter()
                         .any(|entity| entity.alive && entity.object == "oWhip"),
-                    "forward hit spawned early: {bag_type}, frame {frame}"
+                    "forward hit spawned early: {target_type}, frame {frame}"
                 );
             }
 
             // Player Step creates the forward hit only once image_index > 4.
-            // Its real sprite mask overlaps each bag here; Classic declares no
-            // oWhip collision event for the oItem child bag objects.
+            // Confirm a real overlap for the large loot masks; other small
+            // loot may sit below the standing whip's mask on this floor.
             game.step(&InputFrame::default());
-            let bag_entity = game.world.entity(bag).unwrap();
+            let target_entity = game.world.entity(target).unwrap();
             let forward = game
                 .world
                 .entities
                 .iter()
                 .find(|entity| entity.alive && entity.object == "oWhip")
                 .unwrap();
-            assert!(
-                bag_entity
-                    .collision_mask()
-                    .intersects_mask(&forward.collision_mask()),
-                "attack frame must test an actual ground-bag overlap"
+            let overlaps_forward = target_entity
+                .collision_mask()
+                .intersects_mask(&forward.collision_mask());
+            assert_eq!(
+                crate::dispatcher::collision_owner(target_type, "oWhip"),
+                None,
+                "only source objects with a Whip event should respond: {target_type}"
             );
+            if matches!(
+                target_type,
+                "oGoldNugget"
+                    | "oGoldBars"
+                    | "oEmeraldBig"
+                    | "oSapphireBig"
+                    | "oRubyBig"
+                    | "oDiamond"
+            ) {
+                assert!(
+                    overlaps_forward,
+                    "ground loot must overlap the forward-hit mask: {target_type}"
+                );
+            }
             assert!(
-                game.world.entity(bag).is_some(),
-                "{bag_type} is whip-immune"
+                game.world.entity(target).is_some(),
+                "{target_type} has no source whip collision callback"
             );
         }
 
