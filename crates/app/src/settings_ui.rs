@@ -837,7 +837,10 @@ mod tests {
     fn source_volume_levels_round_trip_and_report_slider_progress() {
         assert_eq!(classic_volume_level(Settings::default().music_volume), 15);
         assert_eq!(classic_volume_percent(Settings::default().music_volume), 87);
-        assert_eq!(classic_volume_progress(Settings::default().music_volume), 15.0 / 18.0);
+        assert_eq!(
+            classic_volume_progress(Settings::default().music_volume),
+            15.0 / 18.0
+        );
         assert_eq!(row(2, &Settings::default()).1, "87%");
         for level in 0..=CLASSIC_VOLUME_LEVELS {
             let value = volume_from_classic_level(level);
