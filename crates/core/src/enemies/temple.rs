@@ -253,7 +253,7 @@ fn character_collision(game: &mut Game, e: &mut Entity) {
             };
             e.set_image_speed(0.5);
         } else {
-            spawn(game, "oBone", Vec2::new(e.pos.x + 16.0, e.pos.y));
+            crate::world_events::spawn_detritus(game, "oBone", Vec2::new(e.pos.x + 16.0, e.pos.y));
         }
         game.sound("sndHit", e.pos);
     } else if game.player.invincible == 0 {
@@ -1850,6 +1850,52 @@ mod tests {
             assert_eq!(target.vel, Vec2::new(0.0, -2.0));
             assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
         }
+    }
+
+    #[test]
+    fn actual_step_tomb_lord_stomp_runs_bone_create_synchronously() {
+        let mut game = room();
+        game.player.pos = Vec2::new(96.0, 128.0);
+        game.player.state = crate::PlayerState::Falling;
+        game.player.vel.y = 1.0;
+        let lord = game.spawn("oTombLord", Vec2::new(80.0, 128.0));
+        let stored = game.world.entity_mut(lord).unwrap();
+        stored.state = 98;
+        stored.vel = Vec2::default();
+        let mut expected_rng = CanonicalOracle::checkpoint(&game.rng);
+        let unit = |rng: &mut CanonicalOracle| rng.next_u64() as f64 / 4294967296.0;
+        let velocity = Vec2::new(
+            unit(&mut expected_rng) * 4.0 - unit(&mut expected_rng) * 4.0,
+            -1.0 - unit(&mut expected_rng) * 2.0,
+        );
+        let gravity = f64::from(1 + expected_rng.draw(6) as i32) * 0.1;
+
+        game.step(&crate::InputFrame::default());
+
+        assert_eq!(
+            game.world
+                .entities
+                .iter()
+                .filter(|e| e.object == "oBone")
+                .count(),
+            1,
+            "the live player-enemy collision should trigger Tomb Lord's stomp branch"
+        );
+        let bone = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oBone")
+            .unwrap();
+        assert_eq!(bone.value("world_effect_initialized"), 1.0);
+        assert_eq!(bone.value("life"), 60.0);
+        assert_eq!(bone.value("gravity"), gravity);
+        assert_eq!(
+            bone.bounds(),
+            crate::Rect::new(bone.pos.x - 4.0, bone.pos.y - 4.0, 8.0, 8.0)
+        );
+        assert_eq!(bone.vel, velocity);
+        assert_eq!(game.rng.next_u64(), expected_rng.next_u64());
     }
 
     #[test]
