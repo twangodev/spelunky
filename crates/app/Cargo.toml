@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 spelunky-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-wgpu = { version = "=24.0.5", default-features = false, features = ["wgsl", "webgl"] }
+wgpu = { version = "=24.0.5", default-features = false, features = ["wgsl"] }
 winit = { version = "=0.30.13", default-features = false, features = ["x11", "wayland", "wayland-dlopen", "rwh_06"] }
 bytemuck = { version = "1", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
@@ -21,8 +21,18 @@ rodio = { version = "0.21", default-features = false, features = ["playback", "v
 gilrs = "0.11"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { version = "=24.0.5", default-features = false, features = ["webgl"] }
 wasm-bindgen = "=0.2.114"
 wasm-bindgen-futures = "=0.4.64"
 js-sys = "=0.3.91"
 web-sys = { version = "=0.3.91", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "Storage", "AudioContext", "AudioBuffer", "AudioBufferSourceNode", "AudioDestinationNode", "AudioNode", "AudioParam", "GainNode", "StereoPannerNode", "Navigator", "Gamepad", "GamepadButton", "GamepadMappingType", "Blob", "BlobPropertyBag", "Url", "HtmlAnchorElement", "HtmlInputElement", "File", "FileList", "Event", "EventTarget", "console", "Performance"] }
 console_error_panic_hook = "0.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+wgpu = { version = "=24.0.5", default-features = false, features = ["metal"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { version = "=24.0.5", default-features = false, features = ["dx12", "vulkan-portability"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wgpu = { version = "=24.0.5", default-features = false, features = ["vulkan-portability"] }
