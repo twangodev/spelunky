@@ -1,8 +1,81 @@
 //! Shared real-input helpers for positioned source-lifecycle integration tests.
 use spelunky_core::{
-    Game, InputFrame, RunState,
+    Game, InputFrame, RulesPreset, RunState, Vec2,
     ending::{EndingKind, EndingStage},
 };
+
+/// Find a stable, generated Market entrance with destructible Lush cover.
+/// Each candidate follows Game::new and real source level-generation
+/// transitions through level eight; no world tile or campaign flag is staged.
+pub fn generated_market_with_lush_cover() -> Game {
+    for seed in [44, 45, 46, 47, 48, 49, 50, 51] {
+        let mut game = Game::new(seed, RulesPreset::Classic);
+        loop {
+            if let Some(market) = game
+                .world
+                .entities
+                .iter()
+                .find(|entity| entity.alive && entity.object == "oXMarket")
+            {
+                let (x, y) = ((market.pos.x / 16.0) as i32, (market.pos.y / 16.0) as i32);
+                if game
+                    .world
+                    .tile(x, y)
+                    .is_some_and(|tile| tile.object == "oLush")
+                {
+                    return game;
+                }
+                break;
+            }
+            if game.world.level >= 8 {
+                break;
+            }
+            game.next_level();
+        }
+    }
+    panic!("bounded source-generation seed search found no covered Market entrance");
+}
+
+/// Reach the natural covered entrance from its generated level spawn with
+/// movement and fresh jump inputs only. This is a deterministic test driver,
+/// not a proof that every generated room layout admits this simple route.
+pub fn approach_market_cover(game: &mut Game, market: Vec2) {
+    let mut previous_x = game.player.pos.x;
+    let mut stationary = 0;
+    let mut jump_ticks = 0_u8;
+    for _ in 0..500 {
+        let dx = market.x + 24.0 - game.player.pos.x;
+        if dx.abs() < 12.0 && (game.player.pos.y - (market.y - 8.0)).abs() < 24.0 {
+            return;
+        }
+        if stationary >= 2 && jump_ticks == 0 {
+            jump_ticks = 8;
+            stationary = 0;
+        }
+        let jump = jump_ticks > 0;
+        let jump_pressed = jump_ticks == 8;
+        jump_ticks = jump_ticks.saturating_sub(1);
+        let right = dx > 0.0;
+        game.step(&InputFrame {
+            left: !right,
+            right,
+            run: true,
+            jump,
+            jump_pressed,
+            ..Default::default()
+        });
+        stationary = if (game.player.pos.x - previous_x).abs() < 0.5 {
+            stationary + 1
+        } else {
+            0
+        };
+        previous_x = game.player.pos.x;
+    }
+    panic!(
+        "input driver did not reach the generated Market cover: player={:?} market={market:?}",
+        game.player.pos
+    );
+}
 
 pub fn complete_source_exit(game: &mut Game) {
     let completed_level = game.world.level;
