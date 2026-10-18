@@ -1,5 +1,5 @@
 //! Authored source-query controls, not untouched campaign trajectories.
-//! Piranha/Jaws use active bounds; Monkey Step42 requests precise mask pixels.
+//! Piranha/Jaws/Monkey use active bounds: native negative point flags are false.
 use super::*;
 use crate::{InputFrame, RulesPreset};
 
@@ -94,7 +94,7 @@ fn jungle_water_query_respects_inactive_tiles_and_dynamic_instances() {
 }
 
 #[test]
-fn monkey_water_step_uses_precise_current_mask_pixels() {
+fn monkey_water_step_negative_flags_include_transparent_bbox_pixels() {
     let mut game = room();
     let fluid = game.spawn("oWaterSwim", Vec2::new(80.0, 80.0));
     game.world.entity_mut(fluid).unwrap().set_sprite("sWeb");
@@ -107,7 +107,6 @@ fn monkey_water_step_uses_precise_current_mask_pixels() {
         })
         .expect("sWeb has transparent pixels inside its bounding box");
     assert!(water(&game.world, transparent));
-    assert!(!precise_water(&game.world, transparent));
 
     let monkey = game.spawn(
         "oMonkey",
@@ -118,7 +117,7 @@ fn monkey_water_step_uses_precise_current_mask_pixels() {
     actor.timer = 20;
     actor.data.insert("swimming".into(), 0.0);
     game.step(&InputFrame::default());
-    assert_eq!(game.world.entity(monkey).unwrap().value("swimming"), 0.0);
+    assert_eq!(game.world.entity(monkey).unwrap().value("swimming"), 1.0);
 }
 
 #[test]

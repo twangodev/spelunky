@@ -2546,7 +2546,7 @@ mod tests {
     }
 
     #[test]
-    fn actual_step_damsel_water_probe_uses_active_precise_collision_point() {
+    fn actual_step_damsel_negative_water_flags_include_transparent_bbox_pixels() {
         let source = include_str!(
             "../../../../references/classic-1.1/Objects/Characters/oDamsel.events/Step.xml"
         );
@@ -2569,15 +2569,16 @@ mod tests {
             game.step(&InputFrame::default());
 
             let damsel = game.world.entity(damsel).unwrap();
-            assert_eq!(damsel.value("swimming"), f64::from(opaque));
-            assert_eq!(damsel.value("gravity"), if opaque { 0.2 } else { 0.6 });
+            // Native 55C044 compares the -1 flags with 0.5; both are false.
+            assert_eq!(damsel.value("swimming"), 1.0);
+            assert_eq!(damsel.value("gravity"), 0.2);
             assert_eq!(
                 game.world
                     .entities
                     .iter()
                     .any(|entity| entity.object == "oSplash"),
-                opaque,
-                "Damsel splashes only on an active opaque WaterSwim point"
+                true,
+                "Damsel's bbox query includes active transparent WaterSwim pixels"
             );
         }
     }

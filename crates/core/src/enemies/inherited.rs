@@ -26,36 +26,25 @@ fn calls_parent(object: &str) -> bool {
 }
 
 pub(super) fn point(world: &World, p: Vec2, family: &str) -> bool {
-    world.tiles_point(p, family)
+    world.tiles_point_active(p, family)
         || world.entities.iter().any(|other| {
             other.alive
+                && other.engine_active
                 && crate::catalog::is_a(&other.object, family)
-                && other.sprite_bounds().contains(p)
+                && other.mask_contains(p, CollisionPrecision::BoundingBox)
         })
 }
 
 /// oEnemy and oDamsel use collision_point(..., oWaterSwim, -1, -1).
-/// Keep precise selected pixels separate from the prec0 Lava spike probes.
+/// The original 55C044 handler compares each flag against 0.5 (SETAE), so
+/// negative flags are false: this is a bbox query, including transparent pixels.
 pub(super) fn swimming_point(world: &World, p: Vec2) -> bool {
-    world.tiles_point_active_precision(p, "oWaterSwim", CollisionPrecision::Precise)
-        || world.entities.iter().any(|water| {
-            water.alive
-                && water.engine_active
-                && crate::catalog::is_a(&water.object, "oWaterSwim")
-                && water.mask_contains(p, CollisionPrecision::Precise)
-        })
+    point(world, p, "oWaterSwim")
 }
 
 // These two inherited Lava calls explicitly request collision_point prec0.
-// WaterSwim's separate precise query and the other point callers are unchanged.
 pub(super) fn lava_point_bbox(world: &World, p: Vec2) -> bool {
-    world.tiles_point_active(p, "oLava")
-        || world.entities.iter().any(|other| {
-            other.alive
-                && other.engine_active
-                && crate::catalog::is_a(&other.object, "oLava")
-                && other.mask_contains(p, crate::CollisionPrecision::BoundingBox)
-        })
+    point(world, p, "oLava")
 }
 
 pub(super) fn gravity(e: &Entity, fallback: f64) -> f64 {
@@ -468,19 +457,19 @@ mod tests {
     }
 
     #[test]
-    fn actual_enemy_step_water_probe_uses_cached_fractional_source_mask() {
+    fn actual_enemy_step_negative_water_flags_use_cached_bbox_without_pixel_rounding() {
         let source =
             include_str!("../../../../references/classic-1.1/Objects/Basis/oEnemy.events/Step.xml");
         assert!(source.contains(
             "collision_point(x+floor(sprite_width/2), y+floor(sprite_height/2), oWaterSwim, -1, -1)"
         ));
         for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
-            // Precise RECTANGLE masks still sample the rounded source pixel:
-            // 95.875 passes the raw bbox but samples the excluded column96.
+            // Native 55C079..86 converts -1 to false. The raw point 95.875
+            // remains inside the bbox; there is no precise pixel rounding.
             for (x, expected) in [
                 (80.125, true),
                 (95.25, true),
-                (95.875, false),
+                (95.875, true),
                 (96.125, false),
             ] {
                 let mut game = room();
@@ -495,7 +484,7 @@ mod tests {
                     game.world
                         .entity(water)
                         .unwrap()
-                        .mask_contains(probe, CollisionPrecision::Precise),
+                        .mask_contains(probe, CollisionPrecision::BoundingBox),
                     expected
                 );
                 let enemy = game.spawn("oSnake", Vec2::new(x - 8., 80.));
@@ -511,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn enemy_step_precise_water_probe_respects_alpha_and_activity() {
+    fn enemy_step_negative_water_flags_include_transparent_bbox_pixels_but_require_activity() {
         for scheduled in [false, true] {
             for terrain in [false, true] {
                 for active in [false, true] {
@@ -550,10 +539,105 @@ mod tests {
                         }
                         assert_eq!(
                             game.world.entity(enemy).unwrap().value("swimming"),
-                            f64::from(active && opaque),
+                            f64::from(active),
                             "scheduled={scheduled}, terrain={terrain}, active={active}, opaque={opaque}"
                         );
                     }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn actual_step_spike_point_uses_cached_bbox_for_fractional_active_targets() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            for active in [false, true] {
+                for (x, hit) in [(80.125, true), (96.125, false)] {
+                    let mut game = room();
+                    game.rules = rules;
+                    let spike = game.spawn("oSpikes", Vec2::new(80.25, 80.25));
+                    game.world.entity_mut(spike).unwrap().engine_active = active;
+                    let probe = Vec2::new(x, 88.);
+                    let target = game.world.entity(spike).unwrap();
+                    assert_eq!(
+                        target.mask_contains(probe, CollisionPrecision::BoundingBox),
+                        hit
+                    );
+                    assert_eq!(target.sprite_bounds().contains(probe), !hit);
+                    // The direct query must enforce activity even before the
+                    // scheduler partitions inactive storage out of the world.
+                    assert_eq!(point(&game.world, probe, "oSpikes"), active && hit);
+                    let enemy = game.spawn("oSnake", Vec2::new(x - 8., 72.));
+                    game.world.entity_mut(enemy).unwrap().vel.y = 3.;
+                    game.world.fluid_dirty = false;
+                    game.step(&InputFrame::default());
+                    assert_eq!(
+                        game.world.entity(enemy).is_none_or(|e| e.health <= 0),
+                        active && hit,
+                        "rules={rules:?}, active={active}, x={x}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn actual_step_debris_point_hits_fractional_temple_cached_bbox() {
+        for active in [false, true] {
+            let mut game = room();
+            let debris = game.spawn("oOlmecDebris", Vec2::new(80., 80.));
+            let before = game.world.entity(debris).unwrap().clone();
+            let probe = Vec2::new(
+                before.pos.x + before.vel.x,
+                before.pos.y + before.vel.y + 4.,
+            );
+            // Preserve the real randomized debris Create launch. This authored
+            // fractional Temple covers the source probe only in its cached box.
+            let temple_x = if probe.x.fract() < 0.5 {
+                probe.x + (0.5 - probe.x.fract()) * 0.5
+            } else {
+                probe.x - (probe.x.fract() - 0.5) * 0.5 - 16.
+            };
+            let temple = game.spawn("oTemple", Vec2::new(temple_x, probe.y.floor() - 7.75));
+            let target = game.world.entity_mut(temple).unwrap();
+            target.engine_active = active;
+            assert!(target.mask_contains(probe, CollisionPrecision::BoundingBox));
+            assert!(!target.sprite_bounds().contains(probe));
+            assert_eq!(point(&game.world, probe, "oTemple"), active);
+            assert!(
+                before.vel.y + 0.6 <= 1.,
+                "source hit destroys instead of bouncing"
+            );
+            game.world.fluid_dirty = false;
+            game.step(&InputFrame::default());
+            // Level's source activation (resource553) precedes Debris Step.
+            // It reactivates this nearby Temple even if initially inactive.
+            assert!(game.world.entity(temple).unwrap().engine_active);
+            assert!(game.world.entity(debris).is_none());
+            assert_eq!(
+                game.world
+                    .entities
+                    .iter()
+                    .any(|e| e.alive && e.object == "oSmokePuff"),
+                true
+            );
+        }
+    }
+
+    #[test]
+    fn prec0_points_share_active_terrain_and_entity_mask_semantics() {
+        for object in ["oSpikes", "oTemple"] {
+            for terrain in [false, true] {
+                for active in [false, true] {
+                    let mut game = room();
+                    if terrain {
+                        game.world.set_tile(5, 5, object);
+                        game.world.tiles[5 * game.world.width + 5].engine_active = active;
+                    } else {
+                        let id = game.spawn(object, Vec2::new(80., 80.));
+                        game.world.entity_mut(id).unwrap().engine_active = active;
+                    }
+                    assert_eq!(point(&game.world, Vec2::new(88., 88.), object), active);
                 }
             }
         }

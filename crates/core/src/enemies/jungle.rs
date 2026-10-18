@@ -92,20 +92,12 @@ pub(super) fn create_local(ctx: &mut crate::creation::EntityCreateContext<'_>, e
 }
 
 fn water(world: &World, p: Vec2) -> bool {
-    water_with_precision(world, p, CollisionPrecision::BoundingBox)
-}
-
-fn precise_water(world: &World, p: Vec2) -> bool {
-    water_with_precision(world, p, CollisionPrecision::Precise)
-}
-
-fn water_with_precision(world: &World, p: Vec2, precision: CollisionPrecision) -> bool {
-    world.tiles_point_active_precision(p, "oWater", precision)
+    world.tiles_point_active(p, "oWater")
         || world.entities.iter().any(|e| {
             e.alive
                 && e.engine_active
                 && crate::catalog::is_a(&e.object, "oWater")
-                && e.mask_contains(p, precision)
+                && e.mask_contains(p, CollisionPrecision::BoundingBox)
         })
 }
 
@@ -351,7 +343,8 @@ fn monkey(game: &mut Game, e: &mut Entity) {
         e.health = -999;
     }
     // Monkey Step42 uses collision_point(..., oWater, -1, -1).
-    let swimming = precise_water(&game.world, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
+    // Native 55C044 converts -1 flags to false, retaining bbox-only semantics.
+    let swimming = water(&game.world, Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0));
     if swimming && e.value("swimming") == 0.0 {
         game.spawn("oSplash", Vec2::new(e.pos.x + 8.0, e.pos.y));
         game.sound("sndSplash", e.pos);
