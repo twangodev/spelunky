@@ -919,6 +919,51 @@ mod campaign_cemetery_runtime_flag_tests {
 }
 
 #[cfg(test)]
+mod boss_terrain_spectacles_context_tests {
+    use crate::{Game, GenerationRevision, RulesPreset, Vec2};
+
+    fn generated_underground_spring_shoes(has_spectacles: bool) -> crate::Entity {
+        let mut game = Game::shell(0, RulesPreset::Classic);
+        game.world.level = 15;
+        game.data.insert("next_level".into(), 16.0);
+        if has_spectacles {
+            game.player.equipment.insert("Spectacles".into());
+        }
+
+        // Exercise the real campaign transition and its SourceClassicV2
+        // generation context rather than calling the generator directly.
+        game.next_level();
+
+        assert_eq!(game.world.level, 16);
+        assert_eq!(
+            game.generation_revision,
+            GenerationRevision::SourceClassicV2
+        );
+        game.world
+            .entities
+            .into_iter()
+            .find(|entity| {
+                entity.alive
+                    && entity.object == "oSpringShoes"
+                    && entity.pos == Vec2::new(344.0, 664.0)
+                    && entity.value("source_pickup_create_initialized") == 1.0
+            })
+            .expect("fixed stock level-16 fixture must generate buried Spring Shoes")
+    }
+
+    #[test]
+    fn boss_bottom_row_terrain_create_receives_campaign_spectacles_context() {
+        let without_spectacles = generated_underground_spring_shoes(false);
+        let with_spectacles = generated_underground_spring_shoes(true);
+
+        // The source oItem Create puts Underground items at depth 101 normally,
+        // but at depth 51 when global.spectacles is active.
+        assert_eq!(without_spectacles.value("depth"), 101.0);
+        assert_eq!(with_spectacles.value("depth"), 51.0);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     // Author a legal room, then use only actual tick inputs. No midrun player,
     // image-index, animation-speed or controller-counter assignments.

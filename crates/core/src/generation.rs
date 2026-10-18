@@ -1009,7 +1009,7 @@ pub(crate) fn generate_campaign_result(
             );
             let expanded = expand(script, rng, template);
             if area == Area::Boss && row == 3 && source_classic {
-                tiles::stamp_at_source(
+                tiles::stamp_at_source_context(
                     &mut world,
                     rng,
                     &expanded,
@@ -1019,6 +1019,7 @@ pub(crate) fn generate_campaign_result(
                     false,
                     shop,
                     features.damsel,
+                    context,
                 );
             } else if area == Area::Boss && row == 3 {
                 tiles::stamp_at(
