@@ -56,6 +56,8 @@ pub struct SettingsUi {
     controller_binding: Option<usize>,
     unsupported_key: bool,
     volume_drag: Option<usize>,
+    effects_preview_focus: bool,
+    effects_preview_alarm: Option<u8>,
 }
 
 impl SettingsUi {
@@ -90,6 +92,12 @@ impl SettingsUi {
                 return SettingsCommand::None;
             }
             self.volume_drag = Some(index);
+            if index == 3 {
+                // Classic oSlider2 starts its sndJump preview one simulation
+                // step after the effects slider is clicked.
+                self.effects_preview_focus = true;
+                self.effects_preview_alarm = Some(1);
+            }
             return self.set_volume_from_pointer(index, x, settings);
         }
         self.adjust(settings, 1, true)
@@ -114,6 +122,31 @@ impl SettingsUi {
 
     pub fn cancel_pointer(&mut self) {
         self.volume_drag = None;
+        self.effects_preview_focus = false;
+        self.effects_preview_alarm = None;
+    }
+
+    /// Advance the Classic effects-slider preview alarm by one game step.
+    /// Alarm events run before the slider Step event, so a release observed
+    /// since the preceding tick still permits a due preview before focus clears.
+    pub fn tick_effects_preview(&mut self) -> bool {
+        let play = match self.effects_preview_alarm {
+            Some(remaining) if remaining > 1 => {
+                self.effects_preview_alarm = Some(remaining - 1);
+                false
+            }
+            Some(_) if self.effects_preview_focus => {
+                self.effects_preview_alarm = Some(20);
+                true
+            }
+            Some(_) => {
+                self.effects_preview_alarm = None;
+                false
+            }
+            None => false,
+        };
+        self.effects_preview_focus = self.volume_drag == Some(3);
+        play
     }
 
     fn set_volume_from_pointer(
@@ -806,6 +839,39 @@ mod tests {
             SettingsCommand::None
         );
         assert_eq!(settings.music_volume, 1.0);
+    }
+
+    #[test]
+    fn effects_slider_plays_jump_preview_on_source_alarm_cadence_until_release() {
+        let mut menu = SettingsUi::new();
+        let mut settings = Settings::default();
+        let effects_track_y = ROW_TOP + 3.0 * ROW_STEP + 9.0;
+
+        assert_eq!(
+            menu.pointer_press(253.0, effects_track_y, &mut settings),
+            SettingsCommand::Changed
+        );
+        assert!(
+            menu.tick_effects_preview(),
+            "source alarm starts at one step"
+        );
+        for _ in 0..19 {
+            assert!(!menu.tick_effects_preview());
+        }
+        assert!(
+            menu.tick_effects_preview(),
+            "source alarm rearms for 20 steps"
+        );
+
+        assert_eq!(
+            menu.pointer_move(253.0, false, &mut settings),
+            SettingsCommand::None
+        );
+        for _ in 0..20 {
+            assert!(!menu.tick_effects_preview());
+        }
+        assert!(!menu.tick_effects_preview());
+        assert!(!menu.tick_effects_preview(), "released slider stays quiet");
     }
 
     #[test]
