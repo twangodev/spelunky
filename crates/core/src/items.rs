@@ -519,6 +519,15 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
     {
         crate::enemies::inherited_item_step_impacts(game, id);
     }
+    // oBomb Step calls action_inherited() first; its own shopkeeper warning
+    // therefore follows the complete inherited item impact block.
+    if game
+        .world
+        .entity(id)
+        .is_some_and(|entity| entity.object == "oBomb")
+    {
+        explosives::bomb_step_after_inherited(game, id);
+    }
     // Fish Bone's own angle action follows the complete inherited Item
     // event, even when that event has already retired the receiver.
     if let Some(e) = game.world.entities.iter_mut().find(|e| e.id == id) {

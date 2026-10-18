@@ -667,7 +667,6 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
     match entity.object.as_str() {
         "oBomb" | "oFireFrogBomb" => {
             step_bomb_body(game, &mut entity);
-            warn_shopkeeper(game, &mut entity);
         }
         "oRopeThrow" => tick_rope(game, &mut entity),
         "oRope" | "oRopeTop" => tick_rope_burn(game, &mut entity),
@@ -684,6 +683,19 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
         *stored = entity;
     }
     destroy_bomb(game, id);
+}
+
+/// The Bomb own Step follows its inherited oItem Step, including the
+/// synchronous moving-item hit queries. Dispatch its shop warning only after
+/// those queries have completed.
+pub(crate) fn bomb_step_after_inherited(game: &mut Game, id: u64) {
+    let Some(mut bomb) = game.world.entity(id).cloned() else {
+        return;
+    };
+    warn_shopkeeper(game, &mut bomb);
+    if let Some(stored) = game.world.entities.iter_mut().find(|e| e.id == id) {
+        *stored = bomb;
+    }
 }
 
 pub(crate) fn alarm(game: &mut Game, id: u64, alarm: u8) {
