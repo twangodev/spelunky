@@ -154,6 +154,7 @@ impl EditorUi {
         self.pointer_left = false;
         self.cursor = None;
         self.stroke = None;
+        self.pan = [0.0, 0.0];
         self.play_snapshot = None;
         self.status = format!("LOADED {}", self.name);
         Ok(())
@@ -1574,8 +1575,17 @@ mod tests {
     fn import_failure_preserves_document_and_palette_is_complete() {
         let mut ui = EditorUi::new();
         let before = ui.state.level.clone();
+        ui.pan = [7.0, 9.0];
         assert!(ui.load("broken.lvl", "invalid").is_err());
         assert_eq!(ui.state.level, before);
+        assert_eq!(ui.pan, [7.0, 9.0], "failed loads preserve the current view");
+
+        ui.load("loaded.lvl", &Level::default().to_text()).unwrap();
+        assert_eq!(
+            ui.pan,
+            [0.0, 0.0],
+            "Classic opens a loaded editor room at its source camera origin"
+        );
         for tile in ui.state.palette.clone() {
             ui.state.select(tile).unwrap();
         }
