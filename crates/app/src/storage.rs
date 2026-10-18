@@ -58,7 +58,9 @@ impl Default for Settings {
             // (2000 + 8000 * (volume / 18)) / 10000 to loaded sounds.
             music_volume: 0.2 + 0.8 * (15.0 / 18.0),
             effects_volume: 0.2 + 0.8 * (15.0 / 18.0),
-            vsync: true,
+            // Classic's Global Game Settings.xml sets useVsync=false. Keep the
+            // uncapped presentation default available on supported surfaces.
+            vsync: false,
             frame_cap: None,
             bindings,
             controller_bindings: crate::controller::default_bindings(),
@@ -513,7 +515,7 @@ mod tests {
             assert_eq!(data.settings.bindings["bomb"], "KeyA");
             assert_eq!(data.settings.bindings["rope"], "KeyS");
             assert!(data.settings.graphics_high);
-            assert!(data.settings.vsync);
+            assert!(!data.settings.vsync);
             assert!(!data.settings.pixel_snap);
         }
     }
