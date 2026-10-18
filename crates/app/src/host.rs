@@ -225,6 +225,7 @@ struct App {
     profiler: Profiler,
     game: Option<Game>,
     screen: Screen,
+    pause_summary: Vec<String>,
     settings_return: Screen,
     selection: usize,
     settings_ui: SettingsUi,
@@ -356,6 +357,7 @@ impl App {
             profiler: Profiler::default(),
             game: Some(game),
             screen: Screen::Playing,
+            pause_summary: Vec::new(),
             settings_return: Screen::Title,
             selection: 0,
             settings_ui: SettingsUi::new(),
@@ -463,6 +465,21 @@ impl App {
     }
     fn screen(&mut self, screen: Screen) {
         let entering_settings = screen == Screen::Settings && self.screen != Screen::Settings;
+        if screen == Screen::Pause {
+            self.pause_summary = self
+                .game
+                .as_ref()
+                .map(|game| {
+                    source_pause_summary(
+                        game,
+                        self.store.data.settings.controller_enabled,
+                        &self.store.data.custom_levels,
+                    )
+                })
+                .unwrap_or_default();
+        } else {
+            self.pause_summary.clear();
+        }
         if screen == Screen::Editor && self.screen != Screen::Editor {
             if let Some(game) = &self.game {
                 self.editor.set_source_rng(game.rng.clone());
@@ -2035,6 +2052,16 @@ impl App {
             Screen::Pause => {
                 self.panel(quads);
                 text(quads, atlas, "PAUSED", 123., 53., 1.5, GOLD);
+                let controls_index = self.pause_summary.len().saturating_sub(1);
+                for (index, line) in self.pause_summary.iter().enumerate() {
+                    let is_controls = index == controls_index;
+                    let y = if is_controls {
+                        178.
+                    } else {
+                        70. + index as f32 * 11.
+                    };
+                    text(quads, atlas, line, 48., y, 0.68, WHITE);
+                }
                 self.menu(
                     quads,
                     atlas,
@@ -2043,9 +2070,9 @@ impl App {
                     } else {
                         &["RESUME", "SETTINGS", "TITLE", "CHEATS"]
                     },
-                    84.,
-                    91.,
-                    20.,
+                    155.,
+                    76.,
+                    21.,
                 );
             }
             Screen::Finished => {
@@ -2941,6 +2968,63 @@ fn source_paused_control(
     } else {
         None
     }
+}
+fn source_pause_summary(
+    game: &Game,
+    controller_enabled: bool,
+    custom_levels: &std::collections::BTreeMap<String, String>,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    if game.is_level() {
+        let custom = game.flags.contains("custom") || game.flags.contains("custom_level");
+        if game.flags.contains("tutorial") {
+            lines.push("TUTORIAL CAVE".into());
+        } else if custom {
+            let author = custom_level_source(custom_levels, &game.world.name)
+                .and_then(|source| spelunky_core::level::Level::parse(source).ok())
+                .map(|level| level.author);
+            lines.push(truncate(&format!("LEVEL: {}", game.world.name), 22));
+            if let Some(author) = author {
+                lines.push(truncate(&format!("BY {author}"), 22));
+            }
+        } else {
+            lines.push(format!("LEVEL {}", game.world.level));
+        }
+        let depth = 174.8 * (f64::from(game.world.level) - 1.0) + (game.player.pos.y + 8.0) * 0.34;
+        lines.push(format!("DEPTH: {depth:.2} FEET"));
+        lines.push(format!("MONEY: {}", game.player.money));
+        lines.push(format!(
+            "KILLS: {}",
+            game.data.get("kills").copied().unwrap_or(0.0) as u32
+        ));
+        let level_time = game.data.get("xtime").copied().unwrap_or(0.0);
+        let run_time = game.data.get("time").copied().unwrap_or(0.0);
+        lines.push(format!(
+            "TIME:  {} / {}",
+            source_pause_clock(level_time),
+            source_pause_clock(run_time)
+        ));
+        lines.push(format!(
+            "SAVES: {}",
+            game.data.get("damsels").copied().unwrap_or(0.0) as u32
+        ));
+    }
+    lines.push(if controller_enabled {
+        if game.is_level() {
+            "START-RETURN  BOMB-DIE  ROPE-QUIT".into()
+        } else {
+            "START-RETURN  ROPE-QUIT".into()
+        }
+    } else if game.is_level() {
+        "ESC-RETURN  F1-DIE  F10-QUIT".into()
+    } else {
+        "ESC-RETURN  F10-QUIT".into()
+    });
+    lines
+}
+fn source_pause_clock(milliseconds: f64) -> String {
+    let seconds = (milliseconds.max(0.0) / 1000.0).floor() as u64;
+    format!("{}:{:02}", seconds / 60, seconds % 60)
 }
 fn apply_source_pause_suicide(game: &mut Game) -> bool {
     game.player.vel = spelunky_core::Vec2::new(if game.player.facing < 0 { -3. } else { 3. }, -6.);
@@ -4749,6 +4833,61 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn pause_summary_shows_source_level_depth_counters_clocks_and_control_hints() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        game.world.name = "rLevel".into();
+        game.world.level = 4;
+        game.player.pos.y = 100.0;
+        game.player.money = 4321;
+        game.data.insert("kills".into(), 7.0);
+        game.data.insert("xtime".into(), 3_900_000.0);
+        game.data.insert("time".into(), 125_900.0);
+        game.data.insert("damsels".into(), 2.0);
+
+        let keyboard = source_pause_summary(&game, false, &Default::default());
+        assert_eq!(
+            keyboard,
+            [
+                "LEVEL 4",
+                "DEPTH: 561.12 FEET",
+                "MONEY: 4321",
+                "KILLS: 7",
+                "TIME:  65:00 / 2:05",
+                "SAVES: 2",
+                "ESC-RETURN  F1-DIE  F10-QUIT",
+            ]
+        );
+
+        let controller = source_pause_summary(&game, true, &Default::default());
+        assert_eq!(
+            controller.last().unwrap(),
+            "START-RETURN  BOMB-DIE  ROPE-QUIT"
+        );
+
+        game.world.name = "rTitle".into();
+        game.flags.extend(["hub".into(), "hub_title".into()]);
+        assert_eq!(
+            source_pause_summary(&game, false, &Default::default()),
+            ["ESC-RETURN  F10-QUIT"]
+        );
+    }
+
+    #[test]
+    fn custom_pause_summary_includes_the_authored_level_author() {
+        let mut level = spelunky_core::level::Level::default();
+        level.author = "CAVE MAKER".into();
+        let source = level.to_text();
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        game.load_custom(&level, "custom-cave", "");
+        let levels = std::collections::BTreeMap::from([("custom-cave".into(), source)]);
+
+        assert_eq!(
+            source_pause_summary(&game, false, &levels)[..2],
+            ["LEVEL: custom-cave", "BY CAVE MAKER"]
+        );
+    }
+
     #[test]
     fn source_custom_selector_return_clears_session_markers_and_loads_title_start_two() {
         let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
