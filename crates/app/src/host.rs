@@ -2754,7 +2754,7 @@ fn source_game_over_hint(game: &Game, editor_play: bool, attack: &str) -> String
 }
 
 fn campaign_record(game: &Game) -> Option<Record> {
-    if ["custom", "tutorial", "hub", "cheats_used"]
+    if ["custom", "hub", "cheats_used"]
         .iter()
         .any(|flag| game.flags.contains(*flag))
     {
@@ -6208,13 +6208,14 @@ mod tests {
         let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
         game.tick = 18_300;
         game.data.insert("time".into(), 549_000.);
+        game.player.money = 1_500;
         game.state = RunState::Dead;
         let record = campaign_record(&game).unwrap();
         assert_eq!(record.elapsed_seconds(), 549);
         assert!(!record.won);
         game.flags.insert("used_shortcut".into());
         assert!(!campaign_record(&game).unwrap().fastest_eligible);
-        for flag in ["custom", "tutorial", "hub"] {
+        for flag in ["custom", "hub"] {
             game.flags.insert(flag.into());
             assert!(campaign_record(&game).is_none(), "{flag}");
             game.flags.remove(flag);
@@ -6224,6 +6225,36 @@ mod tests {
             campaign_record(&game).is_none(),
             "A win without completed credits cannot be persisted"
         );
+    }
+
+    #[test]
+    fn tutorial_deaths_update_title_highscores_without_counting_as_campaign_wins() {
+        use spelunky_core::InputFrame;
+
+        let mut game = Game::tutorial(7, spelunky_core::RulesPreset::Classic);
+        game.player.money = 50_000;
+        game.data.insert("time".into(), 549_000.);
+        game.player.health = 0;
+        game.step(&InputFrame::default());
+        assert_eq!(game.state, RunState::Dead);
+
+        let record = campaign_record(&game)
+            .expect("Title keeps scoring enabled when it enters rTutorial");
+        assert!(!record.won);
+        assert_eq!(record.level, 0);
+        assert_eq!(record.score, 50_000);
+        assert_eq!(record.elapsed_seconds(), 549);
+        let improvements = record_improvements(&record, &[]);
+        assert!(improvements.contains("new_money"));
+        let unlocks = spelunky_core::hub::record_unlocks(
+            record.score,
+            (record.won && record.fastest_eligible)
+                .then_some(record.elapsed_seconds() as f64),
+            record.kills,
+            record.rescues,
+        );
+        assert!(unlocks.contains("trophy_money_1"));
+        assert!(!unlocks.contains("unlock_moon"));
     }
     #[test]
     fn campaign_win_record_waits_for_bonus_and_credits_completion() {
