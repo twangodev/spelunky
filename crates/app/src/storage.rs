@@ -54,8 +54,10 @@ impl Default for Settings {
             pixel_snap: false,
             graphics_high: true,
             down_to_run: true,
-            music_volume: 0.6,
-            effects_volume: 0.8,
+            // Classic starts both controls at 15 and applies
+            // (2000 + 8000 * (volume / 18)) / 10000 to loaded sounds.
+            music_volume: 0.2 + 0.8 * (15.0 / 18.0),
+            effects_volume: 0.2 + 0.8 * (15.0 / 18.0),
             vsync: true,
             frame_cap: None,
             bindings,
@@ -549,6 +551,15 @@ mod tests {
         ] {
             assert_eq!(bindings[action], key, "{action}");
         }
+    }
+
+    #[test]
+    fn fresh_audio_defaults_match_classic_volume_formula() {
+        let settings = Settings::default();
+        let source_default = (2000.0 + 8000.0 * (15.0 / 18.0)) / 10000.0;
+
+        assert!((settings.music_volume - source_default).abs() < f32::EPSILON);
+        assert!((settings.effects_volume - source_default).abs() < f32::EPSILON);
     }
 
     #[test]
