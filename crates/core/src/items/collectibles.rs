@@ -406,7 +406,9 @@ pub fn player_step(game: &mut Game) {
                 Area::Mines => 0,
                 Area::Jungle => 1,
                 Area::Ice => 2,
-                Area::Temple | Area::Boss => 3,
+                Area::Temple => 3,
+                // Classic sets levelType=4 for currLevel 16 (Olmec's Lair).
+                Area::Boss => 4,
             };
             let value = base.saturating_add(base.div_ceil(4).saturating_mul(area));
             let object = e.object.clone();
@@ -788,6 +790,22 @@ mod tests {
         assert_eq!(g.data["collect"], 0.);
         g.step(&InputFrame::default());
         assert_eq!(g.data["xmoney"], 150.);
+    }
+
+    #[test]
+    fn olmec_treasure_uses_classic_level_type_four_bonus() {
+        let mut g = game();
+        g.world.area = Area::Boss;
+        g.world.level = 16;
+        for x in 0..g.world.width {
+            g.world.set_tile(x, 3, "oBlock");
+        }
+        let gold = g.spawn("oGoldChunk", g.player.pos);
+        g.step(&InputFrame::default());
+        assert!(g.world.entity(gold).is_none());
+        // scrInitLevel sets global.levelType to four at currLevel 16, so
+        // Classic awards 100 + ceil(100 / 4) * 4 in Olmec's Lair.
+        assert_eq!(g.data["collect"], 200.);
     }
 
     #[test]
