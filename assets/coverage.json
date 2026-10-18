@@ -801,17 +801,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 52,
+          "line": 59,
           "module": "crates/core/src/traps/curses.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 6,
+          "line": 8,
           "module": "crates/core/src/traps/curses.rs"
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 38,
+          "line": 45,
           "module": "crates/core/src/traps/curses.rs"
         }
       ],
@@ -846,17 +846,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 52,
+          "line": 59,
           "module": "crates/core/src/traps/curses.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 6,
+          "line": 8,
           "module": "crates/core/src/traps/curses.rs"
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 38,
+          "line": 45,
           "module": "crates/core/src/traps/curses.rs"
         }
       ],
@@ -2415,17 +2415,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 65,
+          "line": 72,
           "module": "crates/core/src/traps/curses.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 6,
+          "line": 8,
           "module": "crates/core/src/traps/curses.rs"
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 208,
+          "line": 215,
           "module": "crates/core/src/traps/curses.rs"
         }
       ],
@@ -2450,17 +2450,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 65,
+          "line": 72,
           "module": "crates/core/src/traps/curses.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 6,
+          "line": 8,
           "module": "crates/core/src/traps/curses.rs"
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 208,
+          "line": 215,
           "module": "crates/core/src/traps/curses.rs"
         }
       ],
@@ -3780,7 +3780,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 144,
+          "line": 148,
           "module": "crates/core/src/game.rs"
         }
       ],
@@ -6718,7 +6718,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 645,
+          "line": 657,
           "module": "crates/core/src/game.rs"
         },
         {
@@ -7608,7 +7608,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 648,
+          "line": 660,
           "module": "crates/core/src/game.rs"
         },
         {
@@ -12238,7 +12238,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 545,
+          "line": 547,
           "module": "crates/core/src/progression.rs"
         }
       ],
@@ -12984,7 +12984,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 709,
+          "line": 711,
           "module": "crates/core/src/progression.rs"
         }
       ],
@@ -13001,7 +13001,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 651,
+          "line": 663,
           "module": "crates/core/src/game.rs"
         },
         {
