@@ -833,7 +833,11 @@ impl App {
                     self.cinematic_action |= source_start_key(key, false);
                     return;
                 }
-                if self.pause_key(key) {
+                if source_keyboard_pause_requested(
+                    self.game.as_ref(),
+                    key,
+                    &self.store.data.settings.bindings,
+                ) {
                     self.screen(Screen::Pause)
                 }
             }
@@ -1484,7 +1488,9 @@ impl App {
                 self.cinematic_action |= button == UiButton::Pause;
                 continue;
             }
-            if button == UiButton::Pause && self.screen == Screen::Playing {
+            if self.screen == Screen::Playing
+                && source_controller_pause_requested(self.game.as_ref(), button)
+            {
                 self.screen(Screen::Pause);
                 continue;
             }
@@ -2648,6 +2654,22 @@ fn configured_pause_key(
             keys.split(',')
                 .any(|name| name.trim() == format!("{key:?}"))
         })
+}
+
+fn source_keyboard_pause_requested(
+    game: Option<&Game>,
+    key: KeyCode,
+    bindings: &std::collections::BTreeMap<String, String>,
+) -> bool {
+    configured_pause_key(bindings, key)
+        && game
+            .is_none_or(|game| spelunky_core::opening::source_pause_allowed(game.opening.as_ref()))
+}
+
+fn source_controller_pause_requested(game: Option<&Game>, button: UiButton) -> bool {
+    button == UiButton::Pause
+        && game
+            .is_none_or(|game| spelunky_core::opening::source_pause_allowed(game.opening.as_ref()))
 }
 
 fn source_confirm_key(screen: Screen, input: &InputState, key: KeyCode) -> KeyCode {
@@ -6122,6 +6144,52 @@ mod tests {
         assert!(input.start_pressed);
         assert!(!input.attack_pressed);
         assert!(!pending);
+    }
+
+    #[test]
+    fn host_pause_routes_wait_for_the_title_player_instance() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        game.flags.insert("first_time".into());
+        game.flags.insert("title_start:0".into());
+        game.load_hub(spelunky_core::hub::HubKind::Title);
+        for _ in 0..270 {
+            game.step(&spelunky_core::InputFrame::default());
+        }
+
+        let opening = game
+            .opening
+            .as_ref()
+            .expect("title dummy is still entering");
+        assert!(opening.can_pause);
+        assert!(!opening.player_present);
+        let bindings = std::collections::BTreeMap::from([("pause".into(), "Escape".into())]);
+        assert!(!source_keyboard_pause_requested(
+            Some(&game),
+            KeyCode::Escape,
+            &bindings
+        ));
+        assert!(!source_controller_pause_requested(
+            Some(&game),
+            UiButton::Pause
+        ));
+
+        for _ in 0..150 {
+            if game.opening.is_none() {
+                break;
+            }
+            game.step(&spelunky_core::InputFrame::default());
+        }
+        assert!(game.opening.is_none());
+        assert_eq!(game.player.data.get("active"), Some(&1.));
+        assert!(source_keyboard_pause_requested(
+            Some(&game),
+            KeyCode::Escape,
+            &bindings
+        ));
+        assert!(source_controller_pause_requested(
+            Some(&game),
+            UiButton::Pause
+        ));
     }
 
     #[test]

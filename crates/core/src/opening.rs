@@ -34,6 +34,13 @@ pub struct OpeningState {
 fn opaque() -> f64 {
     1.
 }
+
+/// Mirrors oScreen's `canPause` and `instance_exists(oPlayer1)` checks while
+/// an opening controller stands in for the source's authored room objects.
+pub fn source_pause_allowed(state: Option<&OpeningState>) -> bool {
+    state.is_none_or(|opening| opening.can_pause && opening.player_present)
+}
+
 impl OpeningState {
     fn new(kind: OpeningKind) -> Self {
         Self {
@@ -775,6 +782,36 @@ mod tests {
         }
         assert!(game.player.pos.x < 600.);
     }
+
+    #[test]
+    fn title_pause_waits_until_the_authored_player_instance_arrives() {
+        let mut game = title();
+        for _ in 0..270 {
+            game.step(&InputFrame::default());
+        }
+
+        let opening = game
+            .opening
+            .as_ref()
+            .expect("title dummy is still entering");
+        assert!(opening.can_pause, "oTitle alarm 3 enables pausing here");
+        assert!(
+            !opening.player_present,
+            "the source creates oPlayer1 only after the dummy reaches the floor"
+        );
+        assert!(!source_pause_allowed(game.opening.as_ref()));
+
+        for _ in 0..150 {
+            if game.opening.is_none() {
+                break;
+            }
+            game.step(&InputFrame::default());
+        }
+        assert!(game.opening.is_none());
+        assert_eq!(game.player.data.get("active"), Some(&1.));
+        assert!(source_pause_allowed(game.opening.as_ref()));
+    }
+
     #[test]
     fn each_title_skip_phase_restarts_completed_entry_without_action_leak() {
         for wait in [0, 60, 160, 230] {
