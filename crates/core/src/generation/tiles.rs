@@ -1034,7 +1034,7 @@ fn temple(
         b'C' => {
             spawn(w, r, "oCeilingTrap", p);
         }
-        b'D' => fake_door(w, r, p),
+        b'D' => fake_door(w, r, p, true),
         b'?' => {
             spawn(w, r, "oTombLord", p);
         }
@@ -1088,7 +1088,9 @@ fn boss(
         b'C' => {
             spawn(w, r, "oCeilingTrap", p);
         }
-        b'D' => fake_door(w, r, p),
+        // scrRoomGen5 creates both fakes before the door; keep the historical
+        // adapter's previous order while SourceClassic follows that script.
+        b'D' => fake_door(w, r, p, source_context.is_none()),
         b'w' => {
             spawn(w, r, "oWaterSwim", p);
         }
@@ -1186,10 +1188,15 @@ fn sale_damsel(w: &mut World, r: &mut Rng, p: Vec2) {
     e.state = 5;
     e.data.insert("cost".into(), cost);
 }
-fn fake_door(w: &mut World, r: &mut Rng, p: Vec2) {
-    spawn(w, r, "oDoor", p);
+fn fake_door(w: &mut World, r: &mut Rng, p: Vec2, door_first: bool) {
+    if door_first {
+        spawn(w, r, "oDoor", p);
+    }
     spawn(w, r, "oTempleFake", p);
     spawn(w, r, "oTempleFake", offset(p, 0.0, 16.0));
+    if !door_first {
+        spawn(w, r, "oDoor", p);
+    }
 }
 fn decoration(w: &mut World, r: &mut Rng, bg: &str, p: Vec2) -> u64 {
     let id = spawn(w, r, "oGenerationDecoration", p);
@@ -2094,6 +2101,67 @@ mod tests {
             2
         );
         assert!(w.tiles.iter().any(|t| t.object == "oXocBlock"));
+    }
+
+    #[test]
+    fn boss_fake_door_birth_order_and_rng_match_literal_source() {
+        let source = include_str!(
+            "../../../../references/classic-1.1/Scripts/Level Generation/scrRoomGen5.gml"
+        );
+        let body = source
+            .split("else if (tile == \"D\")")
+            .nth(1)
+            .expect("Boss D tile branch")
+            .split('}')
+            .next()
+            .expect("Boss D tile branch body");
+        let expected: Vec<_> = body
+            .lines()
+            .filter_map(|line| {
+                let call = line.split("instance_create(").nth(1)?;
+                Some(call.split(");").next()?.rsplit(',').next()?.trim())
+            })
+            .collect();
+        assert_eq!(expected, ["oTempleFake", "oTempleFake", "oDoor"]);
+
+        let mut world = World::new(42, 55, Area::Boss, 1);
+        world.name = "Olmec's Lair".into();
+        let mut rng = Rng::new(53);
+        let mut expected_rng = rng.clone();
+        for width in [2, 3, 4] {
+            expected_rng.range(width);
+        }
+        stamp_at_source(
+            &mut world, &mut rng, "D", 3, 3, false, false, "General", false,
+        );
+        let actual: Vec<_> = world
+            .entities
+            .iter()
+            .map(|entity| entity.object.as_str())
+            .collect();
+        assert_eq!(actual, expected);
+        assert_eq!(rng.state_bits(), expected_rng.state_bits());
+
+        let mut historical_world = World::new(42, 55, Area::Boss, 1);
+        let mut historical_rng = Rng::new(53);
+        stamp_at(
+            &mut historical_world,
+            &mut historical_rng,
+            "D",
+            3,
+            3,
+            false,
+            false,
+            "General",
+        );
+        assert_eq!(
+            historical_world
+                .entities
+                .iter()
+                .map(|entity| entity.object.as_str())
+                .collect::<Vec<_>>(),
+            ["oDoor", "oTempleFake", "oTempleFake"]
+        );
     }
 
     #[test]
