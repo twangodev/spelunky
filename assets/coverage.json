@@ -923,7 +923,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 361,
+          "line": 353,
           "module": "crates/core/src/enemies/npcs.rs"
         },
         {
@@ -9813,7 +9813,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 380,
+          "line": 372,
           "module": "crates/core/src/enemies/npcs.rs"
         },
         {
