@@ -229,28 +229,69 @@ pub(crate) fn final_boss_step(game: &mut Game) {
     game.world.entities[index].alive = false;
     game.world.spawn("oXEnd", position);
     let (x, y) = ((position.x / 16.) as usize, (position.y / 16.) as usize + 1);
-    if !game
-        .world
-        .tile(x as i32, y as i32)
-        .is_some_and(|tile| tile.is_solid())
-    {
+    let point = Vec2::new(x as f64 * 16.0, y as f64 * 16.0);
+    let solid = crate::dispatcher::descendant_instances(game, "oSolid")
+        .into_iter()
+        .filter(|instance| crate::dispatcher::is_active(game, *instance))
+        .find(|instance| match *instance {
+            crate::dispatcher::Instance::Entity(id) => {
+                game.world.entity(id).is_some_and(|entity| {
+                    entity.mask_contains(point, crate::CollisionPrecision::BoundingBox)
+                })
+            }
+            crate::dispatcher::Instance::Terrain(index) => game
+                .world
+                .tile_collision_mask(
+                    (index % game.world.width) as i32,
+                    (index / game.world.width) as i32,
+                )
+                .contains(point, crate::CollisionPrecision::BoundingBox),
+            crate::dispatcher::Instance::Player => false,
+        });
+    if let Some(instance) = solid {
+        match instance {
+            crate::dispatcher::Instance::Entity(id) => {
+                if let Some(entity) = game.world.entity_mut(id) {
+                    entity.data.insert("invincible".into(), 1.0);
+                }
+            }
+            crate::dispatcher::Instance::Terrain(index) => {
+                set_terrain_instance_invincible(game, index);
+            }
+            crate::dispatcher::Instance::Player => unreachable!(),
+        }
+    } else {
         game.world.set_tile(x, y, "oTemple");
+        set_terrain_instance_invincible(game, y * game.world.width + x);
     }
-    let center = Vec2::new(x as f64 * 16. + 8., y as f64 * 16. + 8.);
+    game.flags.insert("boss_door_open".into());
+    game.sound("sndThump", position);
+}
+
+fn set_terrain_instance_invincible(game: &mut Game, index: usize) {
+    if game.world.width == 0 || index >= game.world.tiles.len() {
+        return;
+    }
+    let center = Vec2::new(
+        (index % game.world.width) as f64 * 16.0 + 8.0,
+        (index / game.world.width) as f64 * 16.0 + 8.0,
+    );
     let metadata = game
         .world
         .entities
         .iter()
-        .find(|e| e.alive && e.object == "oTerrainMetadata" && e.pos == center)
-        .map(|e| e.id)
-        .unwrap_or_else(|| game.world.spawn("oTerrainMetadata", center));
+        .find(|entity| entity.alive && entity.object == "oTerrainMetadata" && entity.pos == center)
+        .map(|entity| entity.id)
+        .unwrap_or_else(|| {
+            let id = game.world.spawn("oTerrainMetadata", center);
+            game.world.entity_mut(id).unwrap().sprite.clear();
+            id
+        });
     game.world
         .entity_mut(metadata)
         .unwrap()
         .data
-        .insert("invincible".into(), 1.);
-    game.flags.insert("boss_door_open".into());
-    game.sound("sndThump", position);
+        .insert("invincible".into(), 1.0);
 }
 
 fn moai_revival_anchor(game: &Game) -> Option<Vec2> {
@@ -714,6 +755,11 @@ fn complete(game: &mut Game, door_id: u64) {
     };
     let object = door.object.clone();
     let ending = object == "oXEnd";
+    if object == "oExit" {
+        // Classic oPlayer1 Step clears holdArrow only in its ordinary level
+        // exit branch; title, shortcut, and ending portals use oXStart paths.
+        game.player.data.insert("hold_arrow".into(), 0.0);
+    }
     let leads_to = door.text.get("leadsTo").cloned().unwrap_or_default();
     let door_center = Vec2::new(door.pos.x + 8., door.pos.y + 8.);
     if object == "oXMarket" {
@@ -1420,6 +1466,46 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn game_step_olmec_exit_uses_source_point_query_for_dynamic_support() {
+        let mut g = Game::shell(17, RulesPreset::Classic);
+        g.world = crate::World::new(80, 50, Area::Boss, 17);
+        g.world.area = Area::Boss;
+        g.world.name = "rOlmec".into();
+        g.flags.insert("olmec_dead".into());
+        g.player.pos = Vec2::new(640.0, 544.0);
+        g.player.previous_pos = g.player.pos;
+        g.update_camera();
+
+        let entrance = g.world.spawn("oEntrance", Vec2::new(640.0, 544.0));
+        g.world
+            .entity_mut(entrance)
+            .unwrap()
+            .data
+            .insert("boss_exit".into(), 1.0);
+        let support = g.world.spawn("oPushBlock", Vec2::new(640.0, 560.0));
+        // Keep the push block settled while the authoritative step reaches
+        // oFinalBoss's late resource-ordered Step callback.
+        g.world.set_tile(40, 36, "oTemple");
+        g.world.spawn("oFinalBoss", Vec2::default());
+
+        assert!(g.world.tile(40, 35).unwrap().object.is_empty());
+        g.step(&InputFrame::default());
+
+        assert!(g.world.entity(entrance).is_none());
+        assert!(
+            g.world.entities.iter().any(|entity| {
+                entity.object == "oXEnd" && entity.pos == Vec2::new(640.0, 544.0)
+            })
+        );
+        assert_eq!(
+            g.world.tile(40, 35).unwrap().object,
+            "",
+            "Classic must reuse the active dynamic solid at (640,560)"
+        );
+        assert_eq!(g.world.entity(support).unwrap().value("invincible"), 1.0);
     }
     #[test]
     fn tunnel_offers_follow_source_stages_and_area_boundaries() {
