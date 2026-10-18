@@ -23,7 +23,9 @@ fn eligible(g: &Game) -> bool {
             }
         }
     }
-    let region = Rect::new(16.0, p.y - 48.0, p.x + 48.0, 57.0);
+    // Bound the actor check to the tested corridor and the added trap mouth.
+    // A jar well beyond that route must not invalidate an otherwise safe seed.
+    let region = Rect::new(16.0, p.y - 48.0, p.x + 24.0, 57.0);
     !g.world.entities.iter().any(|e| {
         e.alive
             && e.sprite_bounds().intersects(region)
@@ -91,7 +93,11 @@ fn step(g: &mut Game, input: InputFrame, previous: &mut InputFrame, tiles: &[Str
 
 fn exercise(seed: u32, rules: RulesPreset, trap: bool) {
     let mut g = Game::new(seed, rules);
-    assert!(eligible(&g));
+    assert!(
+        eligible(&g),
+        "ineligible left-perimeter fixture: seed={seed}, rules={rules:?}, entrance={:?}",
+        g.player.pos
+    );
     assert_eq!(g.player.health, 4.0);
     assert_eq!(g.player.invincible, 0);
     assert_eq!(g.player.stun, 0);
