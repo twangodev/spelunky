@@ -517,12 +517,15 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         self.remove_browser_audio_unlock();
         self.exit_requested = true;
-        self.snapshot_lifetime_stats();
-        let _ = self.store.save();
+        self.persist_exit_state();
         self.input.clear();
         self.audio.stop_music();
         self.audio.pause(true);
         event_loop.exit();
+    }
+    fn persist_exit_state(&mut self) {
+        snapshot_exit_stats(self.game.as_ref(), &mut self.store.data);
+        let _ = self.store.save();
     }
     fn settings_changed(&mut self) {
         let graphics_high = self.store.data.settings.graphics_high;
@@ -879,6 +882,15 @@ impl App {
             Screen::Custom => visible_custom_level_names(&self.store.data.custom_levels).len() + 2,
             _ => 1,
         };
+        if self.screen == Screen::Custom && matches!(key, KeyCode::PageUp | KeyCode::PageDown) {
+            let level_count = count.saturating_sub(2);
+            self.selection = custom_page_selection(
+                self.selection,
+                level_count,
+                if key == KeyCode::PageDown { 1 } else { -1 },
+            );
+            return;
+        }
         if key == KeyCode::ArrowUp {
             self.selection = (self.selection + count - 1) % count;
             return;
@@ -1970,10 +1982,27 @@ impl App {
             }
             Screen::Custom => {
                 text(quads, atlas, "CUSTOM LEVELS", 74., 12., 1.5, GOLD);
-                let mut names = visible_custom_level_names(&self.store.data.custom_levels);
-                names.extend(["IMPORT .LVL".into(), "BACK".into()]);
-                let start = self.selection.saturating_sub(9);
-                for (index, name) in names.iter().enumerate().skip(start).take(11) {
+                let names = visible_custom_level_names(&self.store.data.custom_levels);
+                let level_count = names.len();
+                let pages = level_count.div_ceil(CUSTOM_LEVELS_PER_PAGE).max(1);
+                let page = if self.selection < level_count {
+                    self.selection / CUSTOM_LEVELS_PER_PAGE + 1
+                } else {
+                    pages
+                };
+                text(
+                    quads,
+                    atlas,
+                    &format!("PAGE {page}/{pages}"),
+                    260.,
+                    14.,
+                    0.6,
+                    WHITE,
+                );
+                let start = custom_menu_start(self.selection, level_count);
+                let end = (start + CUSTOM_LEVELS_PER_PAGE).min(level_count);
+                for (slot, index) in (start..end).enumerate() {
+                    let name = &names[index];
                     let color = if index == self.selection { GOLD } else { WHITE };
                     text(
                         quads,
@@ -1981,18 +2010,36 @@ impl App {
                         &format!(
                             "{} {}",
                             if index == self.selection { ">" } else { " " },
-                            truncate(name, 32)
+                            truncate(&name.to_ascii_uppercase(), 32)
                         ),
                         30.,
-                        43. + (index - start) as f32 * 15.,
+                        43. + slot as f32 * 15.,
                         1.,
                         color,
                     );
                 }
+                if end == level_count {
+                    for (slot, (index, name)) in
+                        [(level_count, "IMPORT .LVL"), (level_count + 1, "BACK")]
+                            .into_iter()
+                            .enumerate()
+                    {
+                        let color = if index == self.selection { GOLD } else { WHITE };
+                        text(
+                            quads,
+                            atlas,
+                            &format!("{} {name}", if index == self.selection { ">" } else { " " }),
+                            30.,
+                            43. + (end - start + slot) as f32 * 15.,
+                            1.,
+                            color,
+                        );
+                    }
+                }
                 text(
                     quads,
                     atlas,
-                    "ENTER PLAY / E EDIT / DROP .LVL IMPORT",
+                    "ENTER PLAY / E EDIT / PGUP-DN PAGE / DROP .LVL IMPORT",
                     14.,
                     223.,
                     0.8,
@@ -2278,7 +2325,8 @@ const CUSTOM_ROW_WIDTH: f32 = 292.0;
 const CUSTOM_ROW_TOP: f32 = 40.0;
 const CUSTOM_ROW_HEIGHT: f32 = 14.0;
 const CUSTOM_ROW_STEP: f32 = 15.0;
-const CUSTOM_VISIBLE_ROWS: usize = 11;
+const CUSTOM_LEVELS_PER_PAGE: usize = 10;
+const CUSTOM_VISIBLE_ROWS: usize = CUSTOM_LEVELS_PER_PAGE + 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CustomPointerAction {
@@ -2287,8 +2335,34 @@ enum CustomPointerAction {
     Back,
 }
 
-fn custom_menu_start(selection: usize) -> usize {
-    selection.saturating_sub(9)
+fn custom_menu_start(selection: usize, level_count: usize) -> usize {
+    if selection < level_count {
+        selection / CUSTOM_LEVELS_PER_PAGE * CUSTOM_LEVELS_PER_PAGE
+    } else {
+        level_count.saturating_sub(1) / CUSTOM_LEVELS_PER_PAGE * CUSTOM_LEVELS_PER_PAGE
+    }
+}
+
+fn custom_page_selection(selection: usize, level_count: usize, direction: isize) -> usize {
+    if level_count == 0 {
+        return selection;
+    }
+    let last_page = (level_count - 1) / CUSTOM_LEVELS_PER_PAGE;
+    let current_page = if selection < level_count {
+        selection / CUSTOM_LEVELS_PER_PAGE
+    } else {
+        last_page
+    };
+    let next_page = if direction < 0 {
+        current_page.saturating_sub(1)
+    } else {
+        (current_page + 1).min(last_page)
+    };
+    if next_page == current_page {
+        selection
+    } else {
+        next_page * CUSTOM_LEVELS_PER_PAGE
+    }
 }
 
 fn visible_custom_level_names(levels: &std::collections::BTreeMap<String, String>) -> Vec<String> {
@@ -2308,8 +2382,16 @@ fn custom_menu_row_at(selection: usize, count: usize, x: f32, y: f32) -> Option<
     if slot >= CUSTOM_VISIBLE_ROWS || y >= row_top + CUSTOM_ROW_HEIGHT {
         return None;
     }
-    let index = custom_menu_start(selection) + slot;
-    (index < count).then_some(index)
+    let level_count = count.saturating_sub(2);
+    let start = custom_menu_start(selection, level_count);
+    let index = start + slot;
+    if index < level_count {
+        (slot < CUSTOM_LEVELS_PER_PAGE).then_some(index)
+    } else if start + CUSTOM_LEVELS_PER_PAGE >= level_count && index < count {
+        Some(index)
+    } else {
+        None
+    }
 }
 
 fn custom_menu_pointer_action(
@@ -2822,6 +2904,9 @@ fn capture_lifetime_stats(game: &Game, data: &mut crate::storage::SaveData) -> b
     data.lifetime_stats = game.lifetime_stats.clone();
     true
 }
+fn snapshot_exit_stats(game: Option<&Game>, data: &mut crate::storage::SaveData) -> bool {
+    game.is_some_and(|game| capture_lifetime_stats(game, data))
+}
 fn consume_highscores_reset(game: &mut Game, data: &mut crate::storage::SaveData) -> bool {
     if !game.flags.remove("highscores_clear_requested") {
         return false;
@@ -3177,15 +3262,10 @@ fn wrap_message(value: &str, width: usize) -> Vec<String> {
     lines
 }
 fn level_name(value: &str) -> String {
-    let name = value.rsplit(['/', '\\']).next().unwrap_or(value);
-    if name.to_ascii_lowercase().ends_with(".lvl") {
-        name[..name.len() - 4].to_owned()
-    } else {
-        name.to_owned()
-    }
+    crate::editor_io::canonical_level_key(value)
 }
 fn runtime_level_name(value: &str) -> String {
-    level_name(value).to_ascii_lowercase()
+    level_name(value)
 }
 fn custom_level_source<'a>(
     levels: &'a std::collections::BTreeMap<String, String>,
@@ -3319,6 +3399,15 @@ impl ApplicationHandler<UserEvent> for App {
                 self.editor.message(error.clone());
                 self.toast(error)
             }
+        }
+    }
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // Winit emits LoopExiting for a non-persisted browser pagehide. That
+        // path does not produce WindowEvent::CloseRequested, so flush the
+        // latest source counters directly before the browser destroys WASM.
+        if !self.exit_requested {
+            self.exit_requested = true;
+            self.persist_exit_state();
         }
     }
     fn window_event(
@@ -4540,19 +4629,34 @@ mod tests {
             Some(CustomPointerAction::Select(2))
         );
 
-        // The renderer keeps the selected row near slot 9 as the list scrolls.
-        let selected = 10;
-        let selected_slot_y = CUSTOM_ROW_TOP + 9.0 * CUSTOM_ROW_STEP + 7.0;
         assert_eq!(
-            custom_menu_pointer_action(selected, total_rows, 30.0, selected_slot_y),
-            Some(CustomPointerAction::Select(selected))
+            custom_menu_pointer_action(
+                0,
+                total_rows,
+                30.0,
+                CUSTOM_ROW_TOP + 9.0 * CUSTOM_ROW_STEP + 7.0,
+            ),
+            Some(CustomPointerAction::Select(9))
+        );
+        assert_eq!(
+            custom_menu_pointer_action(
+                0,
+                total_rows,
+                30.0,
+                CUSTOM_ROW_TOP + 10.0 * CUSTOM_ROW_STEP + 7.0
+            ),
+            None,
+        );
+        assert_eq!(
+            custom_menu_pointer_action(10, total_rows, 30.0, CUSTOM_ROW_TOP + 7.0,),
+            Some(CustomPointerAction::Select(10))
         );
         assert_eq!(
             custom_menu_pointer_action(
                 18,
                 total_rows,
                 30.0,
-                CUSTOM_ROW_TOP + 9.0 * CUSTOM_ROW_STEP + 7.0,
+                CUSTOM_ROW_TOP + 8.0 * CUSTOM_ROW_STEP + 7.0
             ),
             Some(CustomPointerAction::Import)
         );
@@ -4561,7 +4665,7 @@ mod tests {
                 18,
                 total_rows,
                 30.0,
-                CUSTOM_ROW_TOP + 10.0 * CUSTOM_ROW_STEP + 7.0,
+                CUSTOM_ROW_TOP + 9.0 * CUSTOM_ROW_STEP + 7.0
             ),
             Some(CustomPointerAction::Back)
         );
@@ -4569,6 +4673,22 @@ mod tests {
         assert_eq!(custom_menu_pointer_action(0, total_rows, 30.0, 54.0), None);
         assert_eq!(custom_menu_pointer_action(0, 2, 30.0, 77.0), None);
         assert_eq!(custom_menu_pointer_action(0, total_rows, 30.0, 223.0), None);
+    }
+
+    #[test]
+    fn classic_selector_page_keys_move_ten_levels_and_clamp_at_page_edges() {
+        assert_eq!(custom_menu_start(9, 25), 0);
+        assert_eq!(custom_menu_start(10, 25), 10);
+        assert_eq!(custom_menu_start(24, 25), 20);
+        assert_eq!(custom_menu_start(25, 25), 20);
+
+        assert_eq!(custom_page_selection(0, 25, 1), 10);
+        assert_eq!(custom_page_selection(13, 25, 1), 20);
+        assert_eq!(custom_page_selection(24, 25, 1), 24);
+        assert_eq!(custom_page_selection(20, 25, -1), 10);
+        assert_eq!(custom_page_selection(10, 25, -1), 0);
+        assert_eq!(custom_page_selection(25, 25, -1), 10);
+        assert_eq!(custom_page_selection(0, 0, 1), 0);
     }
 
     #[test]
@@ -5175,6 +5295,10 @@ mod tests {
             Some(KeyCode::Enter)
         );
         assert_eq!(
+            controller_menu_key(Screen::Custom, UiButton::Cancel, false),
+            Some(KeyCode::Escape)
+        );
+        assert_eq!(
             controller_menu_key(Screen::Editor, UiButton::Confirm, false),
             Some(KeyCode::F5)
         );
@@ -5329,6 +5453,21 @@ mod tests {
         assert_eq!(next.lifetime_stats.level_deaths, [0; 16]);
         assert_eq!(next.lifetime_stats.misc_deaths, [0; 12]);
         assert_eq!(next.lifetime_stats.total_crates, 1);
+    }
+    #[test]
+    fn exit_snapshot_persists_final_lifetime_stats_without_another_run_event() {
+        use spelunky_core::statistics::LifetimeCounter;
+
+        let mut save = crate::storage::SaveData::default();
+        let mut game = Game::shell(7, save.settings.rules);
+        game.lifetime_stats.increment(LifetimeCounter::TotalChests);
+
+        assert!(snapshot_exit_stats(Some(&game), &mut save));
+        assert!(!snapshot_exit_stats(None, &mut save));
+
+        let reopened = crate::storage::SaveData::from_json(&save.to_json().unwrap()).unwrap();
+        assert_eq!(reopened.lifetime_stats, game.lifetime_stats);
+        assert_eq!(reopened.lifetime_stats.total_chests, 1);
     }
     #[test]
     fn browser_snapshot_reports_cinematic_gates_without_advancing_them() {
@@ -7065,7 +7204,7 @@ mod tests {
     fn imported_names_are_portable() {
         assert_eq!(level_name("/tmp/example.lvl"), "example");
         assert_eq!(level_name("C:\\levels\\example.lvl"), "example");
-        assert_eq!(level_name("C:\\levels\\Example.LVL"), "Example");
+        assert_eq!(level_name("C:\\levels\\Example.LVL"), "example");
         assert_eq!(level_name("map.lvl.lvl"), "map.lvl");
     }
     #[test]

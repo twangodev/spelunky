@@ -2,32 +2,66 @@
 
 /// Explicit user-requested export; native exports never overwrite an existing file.
 pub fn export(name: &str, text: &str) -> Result<(), String> {
+    let filename = export_name(name)?;
     #[cfg(target_arch = "wasm32")]
     {
-        download(name, text)
+        download(&filename, text)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
         use std::io::Write;
-        let path = export_name(name)?;
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&path)
+            .open(&filename)
             .map_err(|error| {
                 if error.kind() == std::io::ErrorKind::AlreadyExists {
-                    format!("{path} already exists; use N to choose another name")
+                    format!("{filename} already exists; use N to choose another name")
                 } else {
-                    format!("Cannot export {path}: {error}")
+                    format!("Cannot export {filename}: {error}")
                 }
             })?;
         file.write_all(text.as_bytes())
-            .map_err(|error| format!("Cannot write {path}: {error}"))?;
+            .map_err(|error| format!("Cannot write {filename}: {error}"))?;
         Ok(())
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+/// Classic opens level paths with `string_lower(levelName) + ".lvl"`. Keep the
+/// filename stem common to web/native and portable across their filesystems.
+pub(crate) fn canonical_level_key(value: &str) -> String {
+    let name = value.rsplit(['/', '\\']).next().unwrap_or(value);
+    let stem = if name.to_ascii_lowercase().ends_with(".lvl") {
+        &name[..name.len() - 4]
+    } else {
+        name
+    };
+    stem.to_ascii_lowercase()
+}
+
+pub(crate) fn canonical_level_sources(
+    levels: std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut canonical = std::collections::BTreeMap::new();
+    for (name, contents) in levels {
+        let key = canonical_level_key(&name);
+        if key.is_empty() {
+            continue;
+        }
+        match canonical.entry(key.clone()) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(contents);
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) if name == key => {
+                // Prefer a prior exact lowercase key over a case/path alias.
+                entry.insert(contents);
+            }
+            std::collections::btree_map::Entry::Occupied(_) => {}
+        }
+    }
+    canonical
+}
+
 fn export_name(name: &str) -> Result<String, String> {
     let basename = name.rsplit(['/', '\\']).next().unwrap_or("");
     let stem = if basename.to_ascii_lowercase().ends_with(".lvl") {
@@ -35,27 +69,56 @@ fn export_name(name: &str) -> Result<String, String> {
     } else {
         basename
     };
-    if stem.is_empty()
-        || stem.len() > 100
-        || !stem
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err("Use N to name the export with letters, numbers, - or _".into());
+    let portable = stem.chars().all(|c| {
+        c.is_ascii_alphanumeric()
+            || matches!(
+                c,
+                ' ' | '!' | '@' | '$' | '%' | '&' | '(' | ')' | '.' | '-' | '_'
+            )
+    });
+    if stem.is_empty() || stem == "." || stem == ".." || stem.len() > 100 || !portable {
+        return Err(
+            "Use a portable level name with letters, numbers, spaces, ! @ $ % & ( ) . - or _"
+                .into(),
+        );
     }
-    Ok(format!("{stem}.lvl"))
+    Ok(format!("{}.lvl", stem.to_ascii_lowercase()))
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn export_stays_in_working_directory() {
-        assert_eq!(export_name("../../custom.lvl").unwrap(), "custom.lvl");
+    fn export_uses_classic_case_folding_and_one_portable_name_policy() {
+        assert_eq!(export_name("../../Custom.LVL").unwrap(), "custom.lvl");
+        assert_eq!(export_name("MY LEVEL").unwrap(), "my level.lvl");
+        assert_eq!(export_name("N!GHT $%&().lvl").unwrap(), "n!ght $%&().lvl");
         assert_eq!(export_name("map_2.LVL").unwrap(), "map_2.lvl");
-        for invalid in ["..", ".lvl", "bad:name", "hello world", ""] {
+        for invalid in ["..", ".lvl", "bad:name", "hello🦇", "room?2", ""] {
             assert!(export_name(invalid).is_err());
         }
+    }
+
+    #[test]
+    fn classic_level_keys_ignore_path_extension_and_case() {
+        assert_eq!(canonical_level_key("/tmp/Example.LVL"), "example");
+        assert_eq!(canonical_level_key("C:\\levels\\EXAMPLE.lvl"), "example");
+        assert_eq!(canonical_level_key("map.lvl.lvl"), "map.lvl");
+    }
+
+    #[test]
+    fn prior_custom_level_aliases_collapse_to_the_classic_filename_key() {
+        let levels = std::collections::BTreeMap::from([
+            ("Rooms/Example.LVL".into(), "path variant".into()),
+            ("EXAMPLE".into(), "case variant".into()),
+            ("example".into(), "canonical file".into()),
+            ("!Hidden.LVL".into(), "hidden".into()),
+            (".lvl".into(), "empty name".into()),
+        ]);
+        let canonical = canonical_level_sources(levels);
+        assert_eq!(canonical.len(), 2);
+        assert_eq!(canonical["example"], "canonical file");
+        assert_eq!(canonical["!hidden"], "hidden");
     }
 }
 

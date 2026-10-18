@@ -172,6 +172,7 @@ impl SaveData {
         }
         let mut data: Self =
             serde_json::from_value(value).map_err(|error| format!("Invalid save data: {error}"))?;
+        data.custom_levels = crate::editor_io::canonical_level_sources(data.custom_levels);
         // Version zero used the same fields without a required schema marker.
         data.version = SAVE_VERSION;
         // Classic initializes storage on its first launch. Later launches do
@@ -385,6 +386,23 @@ fn write(json: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn classic_custom_level_names_migrate_to_lowercase_filename_identity() {
+        let data = SaveData::from_json(
+            r#"{"version":1,"custom_levels":{
+                "Rooms/Example.LVL":"path variant",
+                "EXAMPLE":"case variant",
+                "example":"canonical file",
+                "!Hidden.LVL":"hidden"
+            }}"#,
+        )
+        .unwrap();
+
+        assert_eq!(data.custom_levels.len(), 2);
+        assert_eq!(data.custom_levels["example"], "canonical file");
+        assert_eq!(data.custom_levels["!hidden"], "hidden");
+    }
 
     #[test]
     fn only_missing_storage_initializes_the_runtime_first_time_sentinel() {

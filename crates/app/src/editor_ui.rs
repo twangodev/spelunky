@@ -880,7 +880,12 @@ impl EditorUi {
 
 fn file_name(name: &str) -> Result<String, String> {
     let name = name.rsplit(['/', '\\']).next().unwrap_or("").trim();
-    if name.is_empty() || name == "." || name == ".." || name.chars().any(char::is_control) {
+    let stem = if name.to_ascii_lowercase().ends_with(".lvl") {
+        &name[..name.len() - 4]
+    } else {
+        name
+    };
+    if stem.is_empty() || name == "." || name == ".." || name.chars().any(char::is_control) {
         return Err("ENTER A VALID FILE NAME".into());
     }
     Ok(if name.to_ascii_lowercase().ends_with(".lvl") {
@@ -1383,6 +1388,7 @@ mod tests {
         }
         assert_eq!(file_name("../../map").unwrap(), "map.lvl");
         assert!(file_name("..").is_err());
+        assert!(file_name(".lvl").is_err());
     }
 
     #[test]
