@@ -610,6 +610,7 @@ pub(super) fn initialize_custom(world: &mut World, rng: &mut Rng) {
             CustomCreateBirth::Tile(index) => {
                 let x = index % world.width;
                 let y = index / world.width;
+                let creation_serial = world.tiles[index].creation_serial;
                 let object = world.tiles[index].object.as_str();
                 if object == "oLava" {
                     let id = metadata(world, x, y);
@@ -623,6 +624,7 @@ pub(super) fn initialize_custom(world: &mut World, rng: &mut Rng) {
                         true,
                         super::GenerationContext::default(),
                         city,
+                        Some(creation_serial),
                     );
                 }
             }
@@ -692,7 +694,7 @@ fn create_terrain(
             ) {
                 continue;
             }
-            create_terrain_tile(world, rng, x, y, custom, context, city);
+            create_terrain_tile(world, rng, x, y, custom, context, city, None);
         }
     }
     // oLava Create selects its spurt timer when the instance is created, before
@@ -726,6 +728,7 @@ fn create_terrain_tile(
     custom: bool,
     context: super::GenerationContext,
     city: bool,
+    custom_creation_serial: Option<u64>,
 ) {
     let object = world.tiles[y * world.width + x].object.clone();
     if !matches!(
@@ -767,7 +770,11 @@ fn create_terrain_tile(
         if rng.chance(1, 80) {
             // FrozenCaveman Destroy releases this live caveman.
             if custom {
-                release_custom_frozen(world, Vec2::new(x as f64 * 16.0, y as f64 * 16.0));
+                release_custom_frozen(
+                    world,
+                    Vec2::new(x as f64 * 16.0, y as f64 * 16.0),
+                    custom_creation_serial,
+                );
             } else {
                 treasure = Some(("oCaveman", -8.0, -8.0));
                 frozen = true;
@@ -1378,15 +1385,43 @@ fn setup_fake_temple(world: &mut World, rng: &mut Rng, city: bool, graphics_high
     }
 }
 
-fn release_custom_frozen(world: &mut World, origin: Vec2) {
+fn release_custom_frozen(world: &mut World, origin: Vec2, after_serial: Option<u64>) {
     // scrCreateTileObj destroys its freshly created FrozenCaveman. In
     // rLoadLevel cleanSolids is false, so that Destroy event releases a live,
     // stunned caveman; there is no frozen overlay left in the custom room.
     let id = world.spawn("oCaveman", origin);
+    if let Some(after_serial) = after_serial {
+        insert_birth_after(world, id, after_serial);
+    }
     let caveman = world.entity_mut(id).unwrap();
     caveman.data.insert("invincible".into(), 20.0);
     caveman.state = 98;
     caveman.timer = caveman.value("stun_time") as u32;
+}
+
+/// GameMaker runs the Ice Create and its Destroy-created CaveMan before it
+/// creates the next row-major map cell. The custom World already contains all
+/// authored cells here, so insert this nested birth into the parent's slot.
+fn insert_birth_after(world: &mut World, id: u64, after_serial: u64) {
+    let Some(child_serial) = world.entity(id).map(|entity| entity.creation_serial) else {
+        return;
+    };
+    for tile in &mut world.tiles {
+        if tile.creation_serial > after_serial && tile.creation_serial < child_serial {
+            tile.creation_serial = tile.creation_serial.saturating_add(1);
+        }
+    }
+    for entity in &mut world.entities {
+        if entity.id != id
+            && entity.creation_serial > after_serial
+            && entity.creation_serial < child_serial
+        {
+            entity.creation_serial = entity.creation_serial.saturating_add(1);
+        }
+    }
+    if let Some(child) = world.entity_mut(id) {
+        child.creation_serial = after_serial.saturating_add(1);
+    }
 }
 
 fn initialize_custom_instance(world: &mut World, rng: &mut Rng, id: u64) {
@@ -1401,10 +1436,11 @@ fn initialize_custom_instance(world: &mut World, rng: &mut Rng, id: u64) {
     }
     let object = entity.object.clone();
     let origin = entity.pos;
+    let creation_serial = entity.creation_serial;
     let mut treasure = None;
     if object == "oIce" {
         if rng.chance(1, 80) {
-            release_custom_frozen(world, origin);
+            release_custom_frozen(world, origin, Some(creation_serial));
         }
     } else {
         if object == "oBrick" {
