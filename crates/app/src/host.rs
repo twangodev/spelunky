@@ -399,6 +399,8 @@ impl App {
             if let Some(game) = &mut self.game {
                 game.rng = self.editor.source_rng().clone();
             }
+            self.editor
+                .set_palette_progress(editor_palette_progress(&self.store.data.unlocks));
         }
         self.screen = screen;
         self.selection = if screen == Screen::Finished && self.is_hub() {
@@ -2586,6 +2588,16 @@ fn editor_preview_context(game: &Game) -> spelunky_core::editor::preview::Previe
         city_of_gold: game.flags.contains("city_of_gold") || game.flags.contains("cityOfGold"),
         treasure_vision: game.player.has("Spectacles") || game.player.has("UdjatEye"),
     }
+}
+
+fn editor_palette_progress(
+    unlocks: &std::collections::BTreeSet<String>,
+) -> spelunky_core::editor::EditorPaletteProgress {
+    spelunky_core::editor::EditorPaletteProgress::from_shortcuts(
+        unlocks.contains("shortcut_5"),
+        unlocks.contains("shortcut_9"),
+        unlocks.contains("shortcut_13"),
+    )
 }
 
 fn complete_editor_save(
@@ -4813,6 +4825,34 @@ mod tests {
         assert_eq!(actual, snapped);
     }
     use super::*;
+    #[test]
+    fn editor_palette_progress_comes_from_persisted_shortcut_unlocks() {
+        let cases: &[(&[&str], (bool, bool, bool))] = &[
+            (&[], (false, false, false)),
+            (&["shortcut_5"][..], (true, false, false)),
+            (&["shortcut_5", "shortcut_9"][..], (true, true, false)),
+            (&["shortcut_9"][..], (true, true, false)),
+            (
+                &["shortcut_5", "shortcut_9", "shortcut_13"][..],
+                (true, true, true),
+            ),
+            // A later stored unlock implies the earlier source tunnel stages.
+            (&["shortcut_13"][..], (true, true, true)),
+        ];
+        for &(flags, expected) in cases {
+            let unlocks = flags.iter().map(|flag| (*flag).to_owned()).collect();
+            let progress = editor_palette_progress(&unlocks);
+            assert_eq!(
+                (
+                    progress.shortcut_5,
+                    progress.shortcut_9,
+                    progress.shortcut_13
+                ),
+                expected
+            );
+        }
+    }
+
     #[test]
     fn scores_reset_persists_source_sentinels_and_preserves_the_selected_character_and_lifetime_stats()
      {

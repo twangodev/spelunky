@@ -8,11 +8,56 @@ pub mod preview;
 use crate::Vec2;
 use preview::{PreviewContext, PreviewRoom};
 
-/// Original palette groups. Eraser is `0`; all content is available in this port.
+/// Original palette groups. Eraser is `0` and is a port convenience.
 pub const BLOCK_PALETTE: &str = "@XI1LPB&rjk2wvt|x)q3di4l";
 pub const ENEMY_PALETTE: &str = "bnsSKh!fFzAMmp{aUEyYHT";
 pub const TRAP_PALETTE: &str = "^<>][_+";
 pub const ITEM_PALETTE: &str = "$*#O5678cCD.:uR`o/~V}-=W%Gg?(\\J";
+
+/// Completed shortcut stages control which source editor palette entries are
+/// available. Later stages imply their earlier prerequisites.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EditorPaletteProgress {
+    pub shortcut_5: bool,
+    pub shortcut_9: bool,
+    pub shortcut_13: bool,
+}
+
+impl EditorPaletteProgress {
+    pub const fn all_unlocked() -> Self {
+        Self {
+            shortcut_5: true,
+            shortcut_9: true,
+            shortcut_13: true,
+        }
+    }
+
+    pub const fn from_shortcuts(shortcut_5: bool, shortcut_9: bool, shortcut_13: bool) -> Self {
+        Self {
+            shortcut_5: shortcut_5 || shortcut_9 || shortcut_13,
+            shortcut_9: shortcut_9 || shortcut_13,
+            shortcut_13,
+        }
+    }
+
+    fn palette(self) -> Vec<char> {
+        let (blocks, enemies, traps) = if self.shortcut_13 {
+            (23, 21, 6)
+        } else if self.shortcut_9 {
+            (21, 19, 5)
+        } else if self.shortcut_5 {
+            (18, 14, 4)
+        } else {
+            (10, 6, 2)
+        };
+        let mut palette = vec!['0'];
+        palette.extend(BLOCK_PALETTE.chars().take(blocks + 1));
+        palette.extend(ENEMY_PALETTE.chars().take(enemies + 1));
+        palette.extend(TRAP_PALETTE.chars().take(traps + 1));
+        palette.extend(ITEM_PALETTE.chars());
+        palette
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct EditorState {
@@ -46,16 +91,26 @@ impl EditorState {
     }
     pub fn with_source_rng(level: Level, context: PreviewContext, rng: crate::Rng) -> Self {
         let previews = build_previews(&level, context, rng);
-        let palette = format!("0{BLOCK_PALETTE}{ENEMY_PALETTE}{TRAP_PALETTE}{ITEM_PALETTE}")
-            .chars()
-            .collect();
+        let palette_progress = EditorPaletteProgress::all_unlocked();
         Self {
             level,
             selected_tile: '@',
-            palette,
+            palette: palette_progress.palette(),
             previews,
             undo: vec![],
             redo: vec![],
+        }
+    }
+
+    pub fn set_palette_progress(&mut self, progress: EditorPaletteProgress) {
+        self.palette = progress.palette();
+        if !self.palette.contains(&self.selected_tile) {
+            self.selected_tile = self
+                .palette
+                .iter()
+                .copied()
+                .find(|&tile| tile != '0')
+                .unwrap_or('0');
         }
     }
 
@@ -412,6 +467,46 @@ fn remap_records(old: &Level, next: &mut Level, door: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shortcut_progress_exposes_classic_palette_prefixes_in_source_order() {
+        let cases = [
+            (false, false, false, 11, 7, 3),
+            (true, false, false, 19, 15, 5),
+            (true, true, false, 22, 20, 6),
+            (false, true, false, 22, 20, 6),
+            (true, true, true, 24, 22, 7),
+        ];
+        for (first, second, third, block_count, enemy_count, trap_count) in cases {
+            let progress = EditorPaletteProgress::from_shortcuts(first, second, third);
+            let mut editor = EditorState::default();
+            editor.set_palette_progress(progress);
+            let expected: Vec<_> = std::iter::once('0')
+                .chain(BLOCK_PALETTE.chars().take(block_count))
+                .chain(ENEMY_PALETTE.chars().take(enemy_count))
+                .chain(TRAP_PALETTE.chars().take(trap_count))
+                .chain(ITEM_PALETTE.chars())
+                .collect();
+            assert_eq!(editor.palette, expected);
+        }
+
+        let implied = EditorPaletteProgress::from_shortcuts(false, false, true);
+        let mut editor = EditorState::default();
+        editor.select('J').unwrap();
+        editor.set_palette_progress(implied);
+        assert_eq!(editor.palette.len(), 85);
+        assert_eq!(editor.selected_tile, 'J');
+    }
+
+    #[test]
+    fn locking_a_selected_tile_moves_selection_to_first_available_source_tile() {
+        let mut editor = EditorState::default();
+        editor.select('q').unwrap();
+        editor.set_palette_progress(EditorPaletteProgress::from_shortcuts(false, false, false));
+        assert_eq!(editor.selected_tile, '@');
+        assert!(!editor.palette.contains(&'q'));
+        assert!(editor.palette.contains(&'$'));
+    }
 
     #[test]
     fn first_paint_creates_the_classic_entrance() {

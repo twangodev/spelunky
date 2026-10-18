@@ -7,7 +7,7 @@ use crate::{
 use spelunky_core::{
     Vec2, catalog,
     editor::{
-        EditorState,
+        EditorPaletteProgress, EditorState,
         preview::{self, PreviewContext},
     },
     level::{LEVEL_HEIGHT, LEVEL_WIDTH, Level},
@@ -71,6 +71,7 @@ struct Entry {
 
 pub struct EditorUi {
     state: EditorState,
+    palette_progress: EditorPaletteProgress,
     name: String,
     pan: [usize; 2],
     cursor: Option<(usize, usize)>,
@@ -102,6 +103,7 @@ impl EditorUi {
     pub fn with_source_rng(context: PreviewContext, rng: spelunky_core::Rng) -> Self {
         Self {
             state: EditorState::with_source_rng(Level::default(), context, rng),
+            palette_progress: EditorPaletteProgress::all_unlocked(),
             name: "custom.lvl".into(),
             pan: [0, LEVEL_HEIGHT - ROWS],
             cursor: None,
@@ -120,11 +122,13 @@ impl EditorUi {
     pub fn load(&mut self, name: &str, source: &str) -> Result<(), String> {
         let level = Level::parse(source)?;
         let name = file_name(name)?;
-        self.state = EditorState::with_source_rng(
+        let mut state = EditorState::with_source_rng(
             level,
             self.state.previews.context,
             self.state.previews.rng.clone(),
         );
+        state.set_palette_progress(self.palette_progress);
+        self.state = state;
         self.name = name;
         self.entry = None;
         self.confirmation = None;
@@ -158,6 +162,11 @@ impl EditorUi {
     }
     pub fn source_rng(&self) -> &spelunky_core::Rng {
         &self.state.previews.rng
+    }
+
+    pub fn set_palette_progress(&mut self, progress: EditorPaletteProgress) {
+        self.palette_progress = progress;
+        self.state.set_palette_progress(progress);
     }
 
     pub fn level_name(&self) -> &str {
@@ -310,7 +319,9 @@ impl EditorUi {
     fn restart_document(&mut self) {
         let context = self.state.previews.context;
         let rng = self.state.previews.rng.clone();
+        let palette_progress = self.palette_progress;
         *self = Self::with_source_rng(context, rng);
+        self.set_palette_progress(palette_progress);
         self.begin(Field::Name, String::new());
     }
 
@@ -387,11 +398,13 @@ impl EditorUi {
     /// Focus changes only cancel input and must not recreate preview objects.
     pub fn return_from_playtest(&mut self) {
         if let Some(document) = self.play_snapshot.take() {
-            self.state = EditorState::with_source_rng(
+            let mut state = EditorState::with_source_rng(
                 document,
                 PreviewContext::default(),
                 self.state.previews.rng.clone(),
             );
+            state.set_palette_progress(self.palette_progress);
+            self.state = state;
             self.entry = None;
             self.confirmation = None;
             self.cursor = None;
