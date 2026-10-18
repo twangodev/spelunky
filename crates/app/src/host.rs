@@ -1887,7 +1887,7 @@ impl App {
                 text(
                     quads,
                     atlas,
-                    "F2 EDITOR  F4 FULLSCREEN",
+                    "F2 EDITOR  F3 LEVELS  F4 FULLSCREEN",
                     65.,
                     224.,
                     0.8,
@@ -2598,6 +2598,16 @@ fn source_host_control(
     game: Option<&Game>,
     key: KeyCode,
 ) -> Option<SourceHostControl> {
+    // The application title menu replaces Classic's title room. Keep its
+    // source function-key routes available there as well as in the live title
+    // hub below: F2 opens the editor and F3 opens the level selector.
+    if screen == Screen::Title {
+        return match key {
+            KeyCode::F2 => Some(SourceHostControl::Editor),
+            KeyCode::F3 => Some(SourceHostControl::CustomLevels),
+            _ => None,
+        };
+    }
     if screen == Screen::Pause {
         return match key {
             KeyCode::F1 if game.is_some_and(|game| game.player.health > 0.0 && game.is_level()) => {
@@ -3004,6 +3014,12 @@ fn source_elapsed_ms(game: &Game) -> u64 {
 fn controller_menu_key(screen: Screen, button: UiButton, capturing: bool) -> Option<KeyCode> {
     if capturing {
         return None;
+    }
+    if screen == Screen::Title && button == UiButton::Pause {
+        // Classic's title Step treats Start as an activation input. The host
+        // title menu should confirm the selected entry instead of interpreting
+        // Start as Escape/back.
+        return Some(KeyCode::Enter);
     }
     if screen == Screen::Custom && button == UiButton::Pause {
         // Classic's custom-level load button accepts both Start and Attack.
@@ -3531,11 +3547,7 @@ impl ApplicationHandler<UserEvent> for App {
                             .and_then(|observer| observer.take(key));
                         #[cfg(not(target_arch = "wasm32"))]
                         let shortcut_control = None;
-                        if key == KeyCode::F2 && self.screen == Screen::Title {
-                            self.enter_fresh_editor()
-                        } else {
-                            self.key(key, event.text.as_deref(), shortcut_control)
-                        }
+                        self.key(key, event.text.as_deref(), shortcut_control);
                         if self.exit_requested {
                             self.shutdown(event_loop);
                             return;
@@ -4595,6 +4607,18 @@ mod tests {
     }
     #[test]
     fn source_title_function_keys_exist_during_title_opening_but_not_intro_or_pause() {
+        assert_eq!(
+            source_host_control(Screen::Title, None, KeyCode::F2),
+            Some(SourceHostControl::Editor)
+        );
+        assert_eq!(
+            source_host_control(Screen::Title, None, KeyCode::F3),
+            Some(SourceHostControl::CustomLevels)
+        );
+        for key in [KeyCode::F2, KeyCode::F3] {
+            assert_eq!(source_host_control(Screen::Settings, None, key), None);
+            assert_eq!(source_host_control(Screen::Custom, None, key), None);
+        }
         let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
         spelunky_core::opening::begin_intro(&mut game);
         for key in [KeyCode::F2, KeyCode::F3] {
@@ -5331,7 +5355,7 @@ mod tests {
         );
         assert_eq!(
             controller_menu_key(Screen::Title, UiButton::Pause, false),
-            Some(KeyCode::Escape)
+            Some(KeyCode::Enter)
         );
     }
 
