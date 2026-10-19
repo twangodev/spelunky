@@ -1236,6 +1236,21 @@ fn populate_internal(
     room_path: Option<&[[u8; 4]; 5]>,
 ) {
     if world.area == Area::Boss {
+        // scrInitLevel evaluates the secret scheduling chains before its
+        // EntityGen call even on Boss 16, where population itself is authored.
+        // Preserve those eager draws for SourceClassic campaigns so the Boss
+        // setup and later live RNG continue from the source state.
+        let source_classic = campaign
+            .as_ref()
+            .is_some_and(|state| state.revision == crate::GenerationRevision::SourceClassicV2);
+        if source_classic {
+            if !flag(flags, &["made_udjat_eye", "madeUdjatEye"]) {
+                let _ = schedule(rng, world.level, 2, 4);
+            }
+            if !flag(flags, &["made_market_entrance", "madeMarketEntrance"]) {
+                let _ = schedule(rng, world.level, 5, 7);
+            }
+        }
         return;
     }
     #[cfg(test)]
@@ -4945,6 +4960,55 @@ mod tests {
                             "level={level} made={made_udjat}/{made_market} forced={forced}"
                         );
                     }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn boss_source_init_consumes_unmade_secret_schedules_without_changing_history() {
+        for revision in [
+            crate::GenerationRevision::SourceClassicV2,
+            crate::GenerationRevision::HistoricalV1,
+        ] {
+            for made_udjat in [false, true] {
+                for made_market in [false, true] {
+                    let mut flags = BTreeSet::new();
+                    if made_udjat {
+                        flags.insert("made_udjat_eye".into());
+                    }
+                    if made_market {
+                        flags.insert("made_market_entrance".into());
+                    }
+
+                    let mut rng = Rng::new(23);
+                    let mut expected = rng.clone();
+                    if revision == crate::GenerationRevision::SourceClassicV2 {
+                        if !made_udjat {
+                            literal_init_schedule(&mut expected, 16, 2);
+                        }
+                        if !made_market {
+                            literal_init_schedule(&mut expected, 16, 5);
+                        }
+                    }
+
+                    let mut world = World::new(42, 38, Area::Boss, 16);
+                    let mut campaign = super::super::GenerationState::fresh(&rng);
+                    campaign.revision = revision;
+                    populate_with_campaign(
+                        &mut world,
+                        &mut rng,
+                        &flags,
+                        super::super::GenerationContext::default(),
+                        &mut campaign,
+                        &[[0; 4]; 5],
+                    );
+
+                    assert_eq!(
+                        rng.state_bits(),
+                        expected.state_bits(),
+                        "revision={revision:?} made_udjat={made_udjat} made_market={made_market}"
+                    );
                 }
             }
         }
