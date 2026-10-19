@@ -1789,6 +1789,29 @@ mod tests {
     }
 
     #[test]
+    fn living_dry_caveman_blocks_later_swimming_fish_target_families() {
+        let mut game = Game::shell(14, RulesPreset::Classic);
+        let dry_caveman = game.world.spawn("oCaveman", Vec2::new(70.0, 50.0));
+        let swimming_shopkeeper = game.world.spawn("oShopkeeper", Vec2::new(80.0, 50.0));
+        game.world
+            .entity_mut(dry_caveman)
+            .unwrap()
+            .data
+            .insert("swimming".into(), 0.0);
+        game.world
+            .entity_mut(swimming_shopkeeper)
+            .unwrap()
+            .data
+            .insert("swimming".into(), 1.0);
+
+        assert_eq!(
+            fish_target(&game, Vec2::new(50.0, 50.0)),
+            None,
+            "Classic only falls through to the next family when the nearest Caveman is absent or dead"
+        );
+    }
+
+    #[test]
     fn mantrap_ground_friction_applies_to_walking_as_in_source() {
         let mut game = Game::shell(14, RulesPreset::Classic);
         game.player.pos = Vec2::new(200.0, 200.0);
