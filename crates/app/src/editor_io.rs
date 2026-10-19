@@ -27,6 +27,27 @@ pub fn export(name: &str, text: &str) -> Result<(), String> {
     }
 }
 
+/// Save the editor's active level back to the native `levels/` catalog. Classic
+/// saves the selected level in place, while explicit Export remains a separate
+/// create-only action in the working directory.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn save_native_level(name: &str, text: &str) -> Result<(), String> {
+    save_native_level_to(std::path::Path::new("levels"), name, text)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn save_native_level_to(directory: &std::path::Path, name: &str, text: &str) -> Result<(), String> {
+    let filename = export_name(name)?;
+    std::fs::create_dir_all(directory).map_err(|error| {
+        format!(
+            "Cannot create custom level directory {}: {error}",
+            directory.display()
+        )
+    })?;
+    let path = directory.join(&filename);
+    std::fs::write(&path, text).map_err(|error| format!("Cannot save {}: {error}", path.display()))
+}
+
 /// Write the Classic stats report to the source-compatible `stats.txt` path.
 /// Native shutdown uses this directly; the Web build exports only by gesture.
 #[cfg(not(target_arch = "wasm32"))]
@@ -58,13 +79,58 @@ pub(crate) fn canonical_level_key(value: &str) -> String {
     stem.to_ascii_lowercase()
 }
 
+/// Canonicalize an authored relative link while preserving its directory.
+/// Classic appends the target to `levels/`, so `sub/room` and `room` are
+/// different destinations even though selector/import names are basenames.
+pub(crate) fn canonical_level_path_key(value: &str) -> String {
+    canonical_relative_level_path(value, true)
+}
+
+/// Normalize an authored link exactly as `string_lower(levelName)` does before
+/// Classic appends `.lvl`. Unlike a filename key, this keeps any `.lvl` in the
+/// target because `room.lvl` opens `room.lvl.lvl`.
+pub(crate) fn canonical_level_target_key(value: &str) -> String {
+    canonical_relative_level_path(value, false)
+}
+
+fn canonical_relative_level_path(value: &str, strip_extension: bool) -> String {
+    let normalized = value.replace('\\', "/");
+    let path = if strip_extension && normalized.to_ascii_lowercase().ends_with(".lvl") {
+        &normalized[..normalized.len() - 4]
+    } else {
+        &normalized
+    };
+    let mut components = Vec::new();
+    for component in path.split('/') {
+        match component {
+            "" | "." => {}
+            ".." => {
+                if components.last().is_some_and(|part| part != "..") {
+                    components.pop();
+                } else {
+                    components.push("..".to_owned());
+                }
+            }
+            name => components.push(name.to_ascii_lowercase()),
+        }
+    }
+    components.join("/")
+}
+
 pub(crate) fn canonical_level_sources(
     levels: std::collections::BTreeMap<String, String>,
 ) -> std::collections::BTreeMap<String, String> {
     let mut canonical = std::collections::BTreeMap::new();
     for (name, contents) in levels {
-        let key = canonical_level_key(&name);
-        if key.is_empty() {
+        // Save-data keys are logical selector names, not filenames. Preserve a
+        // trailing `.lvl` because it can name the distinct file `room.lvl.lvl`;
+        // older imported path aliases still collapse to their basename.
+        let key = if name.contains(['/', '\\']) {
+            canonical_level_key(&name)
+        } else {
+            name.to_ascii_lowercase()
+        };
+        if key.is_empty() || key == ".lvl" {
             continue;
         }
         match canonical.entry(key.clone()) {
@@ -79,6 +145,110 @@ pub(crate) fn canonical_level_sources(
         }
     }
     canonical
+}
+
+/// Read the Classic native `levels/**/*.lvl` catalog. Keep `!`-prefixed files:
+/// Classic hides those from the selector but `scrLoadLevel` can still open
+/// them as authored linked destinations. Web levels continue to come from
+/// explicit user imports stored in the save data.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn load_native_level_directory(
+    directory: &std::path::Path,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    match std::fs::read_dir(directory) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(std::collections::BTreeMap::new());
+        }
+        Err(error) => {
+            return Err(format!(
+                "Cannot list custom levels in {}: {error}",
+                directory.display()
+            ));
+        }
+    }
+
+    let mut files = std::collections::BTreeMap::new();
+    read_native_level_files(directory, directory, &mut files)?;
+    let mut levels = std::collections::BTreeMap::new();
+    for (name, contents) in files {
+        let key = canonical_level_path_key(&name);
+        if key.is_empty() {
+            continue;
+        }
+        match levels.entry(key.clone()) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(contents);
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry)
+                if name == format!("{key}.lvl") =>
+            {
+                entry.insert(contents);
+            }
+            std::collections::btree_map::Entry::Occupied(_) => {}
+        }
+    }
+    Ok(levels)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_native_level_files(
+    root: &std::path::Path,
+    directory: &std::path::Path,
+    files: &mut std::collections::BTreeMap<String, String>,
+) -> Result<(), String> {
+    let entries = std::fs::read_dir(directory).map_err(|error| {
+        format!(
+            "Cannot list custom levels in {}: {error}",
+            directory.display()
+        )
+    })?;
+    let mut entries = entries
+        .map(|entry| {
+            entry.map_err(|error| {
+                format!(
+                    "Cannot list custom levels in {}: {error}",
+                    directory.display()
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("Cannot inspect {}: {error}", path.display()))?;
+        if file_type.is_dir() {
+            read_native_level_files(root, &path, files)?;
+            continue;
+        }
+        if !file_type.is_file() {
+            continue;
+        }
+        if !path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("lvl"))
+        {
+            continue;
+        }
+        let Some(name) = path
+            .strip_prefix(root)
+            .ok()
+            .and_then(std::path::Path::to_str)
+        else {
+            continue;
+        };
+        let contents = std::fs::read_to_string(&path)
+            .map_err(|error| format!("Cannot read {}: {error}", path.display()))?;
+        // Retain the final extension until canonicalization. `file_stem()` on
+        // `foo.lvl.lvl` would already be `foo.lvl`, and stripping another
+        // extension there would incorrectly merge it with `foo.lvl`. Relative
+        // directories are also part of a linked target's identity.
+        files.insert(name.to_owned(), contents);
+    }
+    Ok(())
 }
 
 fn export_name(name: &str) -> Result<String, String> {
@@ -123,6 +293,81 @@ mod tests {
         assert_eq!(canonical_level_key("/tmp/Example.LVL"), "example");
         assert_eq!(canonical_level_key("C:\\levels\\EXAMPLE.lvl"), "example");
         assert_eq!(canonical_level_key("map.lvl.lvl"), "map.lvl");
+        assert_eq!(canonical_level_path_key("Sub\\Room.LVL"), "sub/room");
+        assert_eq!(canonical_level_path_key("sub/../room.lvl"), "room");
+        assert_eq!(canonical_level_path_key("map.lvl.lvl"), "map.lvl");
+        assert_eq!(canonical_level_target_key("Sub\\Room.LVL"), "sub/room.lvl");
+        assert_eq!(canonical_level_target_key("sub/../room"), "room");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_level_directory_keeps_linkable_and_double_extension_files() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spelunky-native-level-catalog-{}-{nonce}",
+            std::process::id()
+        ));
+        let directory = root.join("levels");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("RoomA.LVL"), "first").unwrap();
+        std::fs::write(directory.join("second.lvl"), "second").unwrap();
+        std::fs::write(directory.join("!hidden.lvl"), "hidden").unwrap();
+        std::fs::write(directory.join("foo.lvl"), "ordinary foo").unwrap();
+        std::fs::write(directory.join("foo.lvl.lvl"), "double extension foo").unwrap();
+        std::fs::write(directory.join("notes.txt"), "not a level").unwrap();
+        std::fs::create_dir(directory.join("nested.lvl")).unwrap();
+        std::fs::create_dir(directory.join("sub")).unwrap();
+        std::fs::write(directory.join("sub/Room.LVL"), "nested room").unwrap();
+
+        assert_eq!(
+            load_native_level_directory(&directory).unwrap(),
+            std::collections::BTreeMap::from([
+                ("!hidden".into(), "hidden".into()),
+                ("foo".into(), "ordinary foo".into()),
+                ("foo.lvl".into(), "double extension foo".into()),
+                ("rooma".into(), "first".into()),
+                ("second".into(), "second".into()),
+                ("sub/room".into(), "nested room".into()),
+            ])
+        );
+        assert!(
+            load_native_level_directory(&root.join("missing"))
+                .unwrap()
+                .is_empty()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_editor_save_replaces_catalog_file_and_keeps_double_extension_key() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spelunky-native-level-save-{}-{nonce}",
+            std::process::id()
+        ));
+        let directory = root.join("levels");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("room.lvl"), "old room").unwrap();
+
+        save_native_level_to(&directory, "room.lvl", "edited room").unwrap();
+        save_native_level_to(&directory, "bonus.lvl.lvl", "double extension").unwrap();
+
+        assert_eq!(
+            load_native_level_directory(&directory).unwrap(),
+            std::collections::BTreeMap::from([
+                ("bonus.lvl".into(), "double extension".into()),
+                ("room".into(), "edited room".into()),
+            ])
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -131,13 +376,15 @@ mod tests {
             ("Rooms/Example.LVL".into(), "path variant".into()),
             ("EXAMPLE".into(), "case variant".into()),
             ("example".into(), "canonical file".into()),
-            ("!Hidden.LVL".into(), "hidden".into()),
+            ("!Hidden".into(), "hidden".into()),
+            ("double.lvl".into(), "double extension".into()),
             (".lvl".into(), "empty name".into()),
         ]);
         let canonical = canonical_level_sources(levels);
-        assert_eq!(canonical.len(), 2);
+        assert_eq!(canonical.len(), 3);
         assert_eq!(canonical["example"], "canonical file");
         assert_eq!(canonical["!hidden"], "hidden");
+        assert_eq!(canonical["double.lvl"], "double extension");
     }
 }
 

@@ -271,6 +271,7 @@ struct App {
     audio: Audio,
     source_music: SourceMusicState,
     store: Store,
+    custom_level_catalog: std::collections::BTreeMap<String, String>,
     timing: HostTiming,
     scene_buffers: scene::SceneBuffers,
     profiler: Profiler,
@@ -381,7 +382,7 @@ fn pause_transition_preserves_keyboard(previous: Screen, next: Screen) -> bool {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TitleMenuAction {
-    StartClassicCampaign,
+    OpenTitleHub,
     ConfirmSelection(usize),
 }
 
@@ -390,15 +391,22 @@ fn title_menu_action(
     mapped_key: KeyCode,
     selection: usize,
 ) -> Option<TitleMenuAction> {
-    // Classic oTitle handles Escape by restarting at the title-room rope
-    // start. In the redesigned app menu, that is the ordinary campaign route,
-    // independent of which row has focus or how Escape is rebound.
+    // Classic oTitle's Escape route restarts rTitle at the title rope start;
+    // it enters the authored title hub instead of starting a campaign.
     if physical_key == KeyCode::Escape {
-        Some(TitleMenuAction::StartClassicCampaign)
+        Some(TitleMenuAction::OpenTitleHub)
     } else if mapped_key == KeyCode::Enter {
         Some(TitleMenuAction::ConfirmSelection(selection))
     } else {
         None
+    }
+}
+
+fn title_menu_source_control(selection: usize) -> Option<SourceHostControl> {
+    match selection {
+        3 => Some(SourceHostControl::CustomLevels),
+        4 => Some(SourceHostControl::Editor),
+        _ => None,
     }
 }
 
@@ -418,6 +426,7 @@ fn settings_audio_action_for_screen(
 impl App {
     fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
         let store = Store::load();
+        let custom_level_catalog = store.data.custom_levels.clone();
         let mut audio = Audio::new();
         // Classic applies the saved effects level to every loaded sound once
         // during initialization. Live slider changes are resource-specific.
@@ -454,6 +463,7 @@ impl App {
             audio,
             source_music,
             store,
+            custom_level_catalog,
             timing: HostTiming::default(),
             scene_buffers: scene::SceneBuffers::default(),
             profiler: Profiler::default(),
@@ -535,6 +545,9 @@ impl App {
     fn screen(&mut self, screen: Screen) {
         let previous_screen = self.screen;
         let entering_settings = screen == Screen::Settings && self.screen != Screen::Settings;
+        if screen == Screen::Custom && previous_screen != Screen::Custom {
+            self.refresh_custom_level_catalog();
+        }
         if screen == Screen::Pause {
             self.pause_summary = self
                 .game
@@ -543,7 +556,7 @@ impl App {
                     source_pause_summary(
                         game,
                         self.input.controller_enabled(),
-                        &self.store.data.custom_levels,
+                        &self.custom_level_catalog,
                     )
                 })
                 .unwrap_or_default();
@@ -598,8 +611,46 @@ impl App {
             game.flags.remove("source_load_level_menu");
             game.flags.insert("source_music_stopped".into());
         }
-        self.audio.stop_music();
         self.screen(Screen::Editor);
+    }
+    fn enter_custom_levels(&mut self) {
+        self.editor_play = false;
+        self.source_message = None;
+        self.drawn_source_message = None;
+        if let Some(game) = &mut self.game {
+            mark_source_custom_level_entry(game);
+        }
+        self.screen(Screen::Custom);
+    }
+    fn refresh_custom_level_catalog(&mut self) {
+        self.custom_level_catalog = self.store.data.custom_levels.clone();
+        #[cfg(not(target_arch = "wasm32"))]
+        match crate::editor_io::load_native_level_directory(std::path::Path::new("levels")) {
+            Ok(levels) => self.custom_level_catalog.extend(levels),
+            Err(error) => self.toast(error),
+        }
+    }
+    fn dispatch_source_host_control(&mut self, control: SourceHostControl) {
+        if control.stops_all_music() {
+            self.audio.stop_all_music();
+        }
+        match control {
+            SourceHostControl::Suicide => {
+                if let Some(game) = &mut self.game {
+                    apply_source_suicide(game);
+                }
+                self.screen(Screen::Playing);
+                self.audio.stop_all_music();
+            }
+            SourceHostControl::Quit => {
+                self.exit_requested = true;
+                self.input.clear();
+                self.audio.stop_music();
+                self.audio.pause(true);
+            }
+            SourceHostControl::Editor => self.enter_fresh_editor(),
+            SourceHostControl::CustomLevels => self.enter_custom_levels(),
+        }
     }
     fn apply_audio_policy(&mut self) {
         let policy = audio_policy(
@@ -666,16 +717,29 @@ impl App {
             self.toast(error);
         }
     }
-    fn fullscreen(&self) {
+    fn fullscreen(&mut self) {
         #[cfg(target_arch = "wasm32")]
-        toggle_browser_fullscreen();
+        {
+            toggle_browser_fullscreen();
+            self.store.data.settings.fullscreen = !self.store.data.settings.fullscreen;
+        }
         #[cfg(not(target_arch = "wasm32"))]
-        if let Some(window) = &self.window {
-            window.set_fullscreen(if window.fullscreen().is_some() {
-                None
-            } else {
-                Some(Fullscreen::Borderless(None))
-            });
+        {
+            let fullscreen = self
+                .window
+                .as_ref()
+                .is_none_or(|window| window.fullscreen().is_none());
+            if let Some(window) = &self.window {
+                window.set_fullscreen(if fullscreen {
+                    Some(Fullscreen::Borderless(None))
+                } else {
+                    None
+                });
+            }
+            self.store.data.settings.fullscreen = fullscreen;
+        }
+        if let Err(error) = self.store.save() {
+            self.toast(error);
         }
     }
     fn flush_source_music(&mut self) {
@@ -862,43 +926,9 @@ impl App {
             return;
         }
         let control = source_host_control(self.screen, self.game.as_ref(), key);
-        if control.is_some_and(SourceHostControl::stops_all_music) {
-            self.audio.stop_all_music();
-        }
-        match control {
-            Some(SourceHostControl::Suicide) => {
-                if let Some(game) = &mut self.game {
-                    apply_source_suicide(game);
-                }
-                self.screen(Screen::Playing);
-                self.audio.stop_all_music();
-                return;
-            }
-            Some(SourceHostControl::Quit) => {
-                self.exit_requested = true;
-                self.input.clear();
-                self.audio.stop_music();
-                self.audio.pause(true);
-                return;
-            }
-            Some(SourceHostControl::Editor) => {
-                self.enter_fresh_editor();
-                return;
-            }
-            Some(SourceHostControl::CustomLevels) => {
-                self.editor_play = false;
-                self.source_message = None;
-                self.drawn_source_message = None;
-                if let Some(game) = &mut self.game {
-                    game.flags.remove("editor_test");
-                    game.flags.insert("source_music_stopped".into());
-                    game.flags.insert("source_load_level_menu".into());
-                }
-                self.screen(Screen::Custom);
-                self.audio.stop_music();
-                return;
-            }
-            None => {}
+        if let Some(control) = control {
+            self.dispatch_source_host_control(control);
+            return;
         }
         match self.screen {
             Screen::Donation => {
@@ -1012,8 +1042,8 @@ impl App {
         } else {
             None
         };
-        if title_action == Some(TitleMenuAction::StartClassicCampaign) {
-            self.start_game(false);
+        if title_action == Some(TitleMenuAction::OpenTitleHub) {
+            self.open_hub(spelunky_core::hub::HubKind::Title);
             return;
         }
         if key == KeyCode::Escape && menu_escape_routes_back(self.screen) {
@@ -1041,7 +1071,7 @@ impl App {
                 }
             }
             Screen::Finished => 2,
-            Screen::Custom => visible_custom_level_names(&self.store.data.custom_levels).len() + 2,
+            Screen::Custom => visible_custom_level_names(&self.custom_level_catalog).len() + 2,
             _ => 1,
         };
         if self.screen == Screen::Custom && matches!(key, KeyCode::PageUp | KeyCode::PageDown) {
@@ -1062,14 +1092,14 @@ impl App {
             return;
         }
         if self.screen == Screen::Custom && key == KeyCode::KeyE {
-            let names = visible_custom_level_names(&self.store.data.custom_levels);
+            let names = visible_custom_level_names(&self.custom_level_catalog);
             if let Some(name) = names.get(self.selection).cloned() {
-                let contents = self.store.data.custom_levels[&name].clone();
+                let contents = self.custom_level_catalog[&name].clone();
                 if let Some(game) = &self.game {
                     self.editor.set_source_rng(game.rng.clone());
                     self.editor.set_source_context(editor_preview_context(game));
                 }
-                let result = self.editor.load(&name, &contents);
+                let result = self.editor.load_catalog_key(&name, &contents);
                 if let Some(game) = &mut self.game {
                     game.rng = self.editor.source_rng().clone();
                 }
@@ -1094,8 +1124,11 @@ impl App {
                     0 => self.start_game(false),
                     1 => self.start_game(true),
                     2 => self.open_hub(spelunky_core::hub::HubKind::Title),
-                    3 => self.screen(Screen::Custom),
-                    4 => self.enter_fresh_editor(),
+                    3 | 4 => {
+                        if let Some(control) = title_menu_source_control(selection) {
+                            self.dispatch_source_host_control(control);
+                        }
+                    }
                     5 => self.screen(Screen::Shortcuts),
                     6 => {
                         self.settings_return = Screen::Title;
@@ -1106,7 +1139,7 @@ impl App {
                     9 => self.screen(Screen::About),
                     _ => self.fullscreen(),
                 },
-                Some(TitleMenuAction::StartClassicCampaign) | None => return,
+                Some(TitleMenuAction::OpenTitleHub) | None => return,
             },
             Screen::Stats => match self.selection {
                 0 => self.import_classic_stats_dialog(),
@@ -1156,7 +1189,7 @@ impl App {
                 }
             }
             Screen::Custom => {
-                let names = visible_custom_level_names(&self.store.data.custom_levels);
+                let names = visible_custom_level_names(&self.custom_level_catalog);
                 if self.selection < names.len() {
                     self.play_custom(&names[self.selection], false)
                 } else if self.selection == names.len() {
@@ -1218,7 +1251,7 @@ impl App {
         self.snapshot_lifetime_stats();
         self.source_message = None;
         self.drawn_source_message = None;
-        let Some(contents) = self.store.data.custom_levels.get(name) else {
+        let Some(contents) = self.custom_level_catalog.get(name) else {
             return;
         };
         match spelunky_core::level::Level::parse(contents) {
@@ -1229,7 +1262,7 @@ impl App {
                     &self.source_music,
                 );
                 hydrate_run(&mut game, &self.store.data);
-                load_custom(&mut game, &level, name, "");
+                load_custom_catalog(&mut game, &level, name, "");
                 if editor {
                     game.flags.insert("editor_test".into());
                 }
@@ -1289,7 +1322,7 @@ impl App {
             self.editor.set_source_rng(game.rng.clone());
             self.editor.set_source_context(editor_preview_context(game));
         }
-        let result = self.editor.load(&name, &contents);
+        let result = self.editor.load_catalog_key(&name, &contents);
         if let Some(game) = &mut self.game {
             game.rng = self.editor.source_rng().clone();
         }
@@ -1297,7 +1330,11 @@ impl App {
             self.toast(format!("INVALID LEVEL: {error}"));
             return;
         }
-        self.store.data.custom_levels.insert(name.clone(), contents);
+        self.store
+            .data
+            .custom_levels
+            .insert(name.clone(), contents.clone());
+        self.custom_level_catalog.insert(name.clone(), contents);
         if let Err(error) = self.store.save() {
             self.toast(error)
         } else {
@@ -1359,12 +1396,19 @@ impl App {
             }
             EditorCommand::Import => self.import_dialog(),
             EditorCommand::Save { name, text } => {
+                let key = level_name(&name);
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Err(error) = crate::editor_io::save_native_level(&name, &text) {
+                    complete_editor_save(&mut self.editor, &name, Err(error));
+                    return;
+                }
                 self.store
                     .data
                     .custom_levels
-                    .insert(level_name(&name), text);
+                    .insert(key.clone(), text.clone());
+                self.custom_level_catalog.insert(key.clone(), text);
                 let result = self.store.save();
-                let command = complete_editor_save(&mut self.editor, &name, result);
+                let command = complete_editor_save(&mut self.editor, &key, result);
                 self.editor_command(command);
             }
             EditorCommand::Export { name, text } => match crate::editor_io::export(&name, &text) {
@@ -1569,7 +1613,7 @@ impl App {
             return;
         }
         if game.flags.contains("custom") {
-            match custom_exit(game, &self.store.data.custom_levels, self.editor_play) {
+            match custom_exit(game, &self.custom_level_catalog, self.editor_play) {
                 CustomExit::Editor => self.screen(Screen::Editor),
                 CustomExit::Finished => {}
                 CustomExit::Continued => self.reset_room_timing(),
@@ -2267,7 +2311,7 @@ impl App {
             }
             Screen::Custom => {
                 text(quads, atlas, "CUSTOM LEVELS", 74., 12., 1.5, GOLD);
-                let names = visible_custom_level_names(&self.store.data.custom_levels);
+                let names = visible_custom_level_names(&self.custom_level_catalog);
                 let level_count = names.len();
                 let pages = level_count.div_ceil(CUSTOM_LEVELS_PER_PAGE).max(1);
                 let page = if self.selection < level_count {
@@ -2634,7 +2678,7 @@ impl App {
         if self.screen != Screen::Custom {
             return;
         }
-        let count = visible_custom_level_names(&self.store.data.custom_levels).len() + 2;
+        let count = visible_custom_level_names(&self.custom_level_catalog).len() + 2;
         let Some(action) =
             custom_menu_pointer_action(self.selection, count, self.cursor[0], self.cursor[1])
         else {
@@ -2719,7 +2763,7 @@ fn custom_page_selection(selection: usize, level_count: usize, direction: isize)
 fn visible_custom_level_names(levels: &std::collections::BTreeMap<String, String>) -> Vec<String> {
     levels
         .keys()
-        .filter(|name| !name.starts_with('!'))
+        .filter(|name| !name.starts_with('!') && !name.contains('/') && !name.contains('\\'))
         .cloned()
         .collect()
 }
@@ -3039,7 +3083,7 @@ fn source_confirm_key(screen: Screen, input: &InputState, key: KeyCode) -> KeyCo
 fn menu_confirm_requested(screen: Screen, key: KeyCode) -> bool {
     // The port title menu fronts Classic's title room. Direct selection
     // confirmation is Enter; Attack/Start map to Enter before this point.
-    // Escape has a separate campaign route in `title_menu_action`.
+    // Escape's separate authored route is handled by `title_menu_action`.
     if screen == Screen::Title {
         key == KeyCode::Enter
     } else {
@@ -3156,6 +3200,11 @@ fn take_source_music(game: &mut Game, session: &mut SourceMusicState) -> Vec<Sou
     let commands = game.source_music.take_commands();
     *session = game.source_music.session_state();
     commands
+}
+fn mark_source_custom_level_entry(game: &mut Game) {
+    game.flags.remove("editor_test");
+    game.flags.insert("source_music_stopped".into());
+    game.flags.insert("source_load_level_menu".into());
 }
 fn supported_source_frequency(hz: i64) -> Result<u32, i64> {
     u32::try_from(hz).ok().filter(|hz| *hz > 0).ok_or(hz)
@@ -3454,9 +3503,9 @@ fn controller_menu_key(screen: Screen, button: UiButton, capturing: bool) -> Opt
         return Some(KeyCode::Enter);
     }
     if screen == Screen::Title && button == UiButton::Cancel {
-        // East/Cancel is a port convenience, not Classic's hard-wired Escape
-        // key. Preserve its previous title-row confirmation behavior.
-        return Some(KeyCode::Enter);
+        // Classic's title Step polls Attack and Start; it has no East/Cancel
+        // action. Do not turn that button into a menu confirmation.
+        return None;
     }
     if screen == Screen::Custom && button == UiButton::Pause {
         // Classic's custom-level load button accepts both Start and Attack.
@@ -3640,13 +3689,10 @@ fn prepare_challenge_scores(game: &mut Game) {
 }
 
 fn runtime_level(level: &spelunky_core::level::Level) -> spelunky_core::level::Level {
-    // The editor accepts file names as links; source files traditionally use
-    // basenames. Resolve both forms without rewriting the stored document.
-    let mut runtime_level = level.clone();
-    for target in &mut runtime_level.exit_targets {
-        *target = runtime_level_name(target);
-    }
-    runtime_level
+    // Keep raw `leadsTo` text: Classic compares it case-sensitively with
+    // `global.prevCustomLevel` when choosing the return entrance. Resolve the
+    // destination through the canonical catalog key only after that lookup.
+    level.clone()
 }
 /// Preserve canonical generation/RNG while withholding music producers from
 /// the temporary ordinary room that custom loading immediately discards.
@@ -3662,11 +3708,22 @@ fn new_custom_game(
     game
 }
 fn load_custom(game: &mut Game, level: &spelunky_core::level::Level, name: &str, previous: &str) {
+    game.load_custom(&runtime_level(level), &runtime_level_name(name), previous);
+    set_custom_previous_level(game, &runtime_level_name(name).to_ascii_uppercase());
+}
+fn load_custom_catalog(
+    game: &mut Game,
+    level: &spelunky_core::level::Level,
+    name: &str,
+    previous: &str,
+) {
     game.load_custom(
         &runtime_level(level),
-        &runtime_level_name(name),
-        &runtime_level_name(previous),
+        &runtime_custom_level_name(name),
+        previous,
     );
+    // The Classic level selector uppercases the selected name before load.
+    set_custom_previous_level(game, &runtime_level_name(name).to_ascii_uppercase());
 }
 fn continue_custom(
     game: &mut Game,
@@ -3674,11 +3731,27 @@ fn continue_custom(
     name: &str,
     previous: &str,
 ) {
+    game.continue_custom(&runtime_level(level), &runtime_level_name(name), previous);
+    set_custom_previous_level(game, name);
+}
+fn continue_custom_target(
+    game: &mut Game,
+    level: &spelunky_core::level::Level,
+    name: &str,
+    previous: &str,
+) {
     game.continue_custom(
         &runtime_level(level),
-        &runtime_level_name(name),
-        &runtime_level_name(previous),
+        &runtime_custom_level_name(name),
+        previous,
     );
+    // Linked loads use the authored target's original spelling verbatim.
+    set_custom_previous_level(game, name);
+}
+fn set_custom_previous_level(game: &mut Game, name: &str) {
+    const PREFIX: &str = "custom_previous_level:";
+    game.flags.retain(|flag| !flag.starts_with(PREFIX));
+    game.flags.insert(format!("{PREFIX}{name}"));
 }
 #[derive(Debug, PartialEq, Eq)]
 enum CustomExit {
@@ -3708,7 +3781,7 @@ fn custom_exit(
         })
         .unwrap_or("")
         .to_owned();
-    if target.is_empty() || target == "NONE" {
+    if target.is_empty() {
         game.finish_custom_transition();
         spelunky_core::ending::begin_custom(game);
         return CustomExit::Finished;
@@ -3720,16 +3793,22 @@ fn custom_exit(
         spelunky_core::ending::begin_custom(game);
         return CustomExit::Finished;
     };
-    let Ok(level) = spelunky_core::level::Level::parse(source) else {
+    let Ok(level) = spelunky_core::level::Level::parse_for_linked_load(source) else {
         return CustomExit::Missing(target);
     };
     let previous = game
-        .ending
-        .as_ref()
-        .filter(|ending| ending.kind == spelunky_core::ending::EndingKind::Transition)
-        .map(|ending| ending.completed_name.clone())
+        .flags
+        .iter()
+        .find_map(|flag| flag.strip_prefix("custom_previous_level:"))
+        .map(str::to_owned)
+        .or_else(|| {
+            game.ending
+                .as_ref()
+                .filter(|ending| ending.kind == spelunky_core::ending::EndingKind::Transition)
+                .map(|ending| ending.completed_name.clone())
+        })
         .unwrap_or_else(|| game.world.name.clone());
-    continue_custom(game, &level, &target, &previous);
+    continue_custom_target(game, &level, &target, &previous);
     CustomExit::Continued
 }
 fn capture_challenge_records(
@@ -3788,19 +3867,28 @@ fn level_name(value: &str) -> String {
     crate::editor_io::canonical_level_key(value)
 }
 fn runtime_level_name(value: &str) -> String {
-    level_name(value)
+    if value.contains('/') || value.contains('\\') {
+        crate::editor_io::canonical_level_path_key(value)
+    } else {
+        level_name(value)
+    }
+}
+fn runtime_custom_level_name(value: &str) -> String {
+    crate::editor_io::canonical_level_target_key(value)
 }
 fn custom_level_source<'a>(
     levels: &'a std::collections::BTreeMap<String, String>,
     target: &str,
 ) -> Option<&'a str> {
-    let key = level_name(target);
+    let key = runtime_custom_level_name(target);
     levels
         .get(target)
         .or_else(|| levels.get(&key))
         .or_else(|| {
             levels.iter().find_map(|(name, text)| {
-                level_name(name).eq_ignore_ascii_case(&key).then_some(text)
+                runtime_custom_level_name(name)
+                    .eq_ignore_ascii_case(&key)
+                    .then_some(text)
             })
         })
         .map(String::as_str)
@@ -3836,7 +3924,10 @@ impl ApplicationHandler<UserEvent> for App {
         }
         let attributes = Window::default_attributes()
             .with_title("Spelunky Classic - Rust")
-            .with_fullscreen(startup_fullscreen_attribute(cfg!(target_arch = "wasm32")));
+            .with_fullscreen(startup_fullscreen_attribute(
+                cfg!(target_arch = "wasm32"),
+                self.store.data.settings.fullscreen,
+            ));
         #[cfg(not(target_arch = "wasm32"))]
         let attributes = attributes.with_inner_size(winit::dpi::LogicalSize::new(960., 720.));
         #[cfg(target_arch = "wasm32")]
@@ -4341,8 +4432,11 @@ fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
 
 /// Classic starts fullscreen. Browsers require a user gesture, so web startup
 /// leaves the canvas in its already full-viewport layout and defers API entry.
-fn startup_fullscreen_attribute(browser_requires_gesture: bool) -> Option<Fullscreen> {
-    if browser_requires_gesture {
+fn startup_fullscreen_attribute(
+    browser_requires_gesture: bool,
+    saved_preference: bool,
+) -> Option<Fullscreen> {
+    if browser_requires_gesture || !saved_preference {
         None
     } else {
         Some(Fullscreen::Borderless(None))
@@ -4444,10 +4538,12 @@ mod tests {
     #[test]
     fn startup_fullscreen_matches_classic_native_default_and_browser_gesture_rules() {
         assert_eq!(
-            startup_fullscreen_attribute(false),
+            startup_fullscreen_attribute(false, true),
             Some(winit::window::Fullscreen::Borderless(None))
         );
-        assert_eq!(startup_fullscreen_attribute(true), None);
+        assert_eq!(startup_fullscreen_attribute(false, false), None);
+        assert_eq!(startup_fullscreen_attribute(true, true), None);
+        assert_eq!(startup_fullscreen_attribute(true, false), None);
     }
 
     #[test]
@@ -4606,8 +4702,8 @@ mod tests {
     #[test]
     fn title_menu_confirmation_matches_classic_enter_attack_and_start_routes() {
         // Classic oTitle accepts Enter, Escape, checkAttackPressed(), and
-        // checkStartPressed(); Escape starts the campaign route, while Attack
-        // and controller Start confirm the selected app-menu row.
+        // checkStartPressed(); Escape opens the authored title hub, while
+        // Attack and controller Start confirm the selected app-menu row.
         let mut input = InputState::default();
         input.set_bindings(&crate::storage::Settings::default().bindings);
 
@@ -4625,8 +4721,8 @@ mod tests {
         for selection in 0..11 {
             assert_eq!(
                 title_menu_action(KeyCode::Escape, KeyCode::Enter, selection),
-                Some(TitleMenuAction::StartClassicCampaign),
-                "physical Escape must launch the Classic campaign regardless of row {selection} or Attack binding"
+                Some(TitleMenuAction::OpenTitleHub),
+                "physical Escape must open the Classic title hub regardless of row {selection} or Attack binding"
             );
         }
         assert_eq!(
@@ -4652,8 +4748,8 @@ mod tests {
         }
         assert_eq!(
             controller_menu_key(Screen::Title, UiButton::Cancel, false),
-            Some(KeyCode::Enter),
-            "the separate controller Cancel affordance keeps its existing title-row behavior"
+            None,
+            "Classic has no controller Cancel/East title activation"
         );
     }
 
@@ -5338,6 +5434,25 @@ mod tests {
         );
         assert!(SourceHostControl::CustomLevels.stops_all_music());
         assert!(!SourceHostControl::Suicide.stops_all_music());
+        assert_eq!(
+            title_menu_source_control(3),
+            Some(SourceHostControl::CustomLevels)
+        );
+        assert_eq!(
+            title_menu_source_control(4),
+            Some(SourceHostControl::Editor)
+        );
+        assert_eq!(
+            title_menu_source_control(3),
+            source_host_control(Screen::Title, None, KeyCode::F3)
+        );
+        assert_eq!(
+            title_menu_source_control(4),
+            source_host_control(Screen::Title, None, KeyCode::F2)
+        );
+        assert!(title_menu_source_control(3).unwrap().stops_all_music());
+        assert!(title_menu_source_control(4).unwrap().stops_all_music());
+        assert_eq!(title_menu_source_control(2), None);
         for key in [KeyCode::F2, KeyCode::F3] {
             assert_eq!(source_host_control(Screen::Settings, None, key), None);
             assert_eq!(source_host_control(Screen::Custom, None, key), None);
@@ -5361,6 +5476,17 @@ mod tests {
         for key in [KeyCode::F2, KeyCode::F3] {
             assert_eq!(source_host_control(Screen::Pause, Some(&game), key), None);
         }
+    }
+    #[test]
+    fn custom_level_entry_marks_music_stopped_and_preserves_selector_return_flag() {
+        let mut game = Game::shell(17, spelunky_core::RulesPreset::Classic);
+        game.flags.insert("editor_test".into());
+
+        mark_source_custom_level_entry(&mut game);
+
+        assert!(!game.flags.contains("editor_test"));
+        assert!(game.flags.contains("source_music_stopped"));
+        assert!(game.flags.contains("source_load_level_menu"));
     }
     #[test]
     fn fresh_title_editor_entry_discards_the_old_draft_and_preserves_game_rng() {
@@ -5472,6 +5598,7 @@ mod tests {
             ("alpha.lvl".into(), "visible".into()),
             ("!backup.lvl".into(), "hidden".into()),
             ("beta.lvl".into(), "visible".into()),
+            ("sub/room".into(), "linked only".into()),
         ]);
         assert_eq!(
             visible_custom_level_names(&levels),
@@ -7268,7 +7395,7 @@ mod tests {
         let mut level = spelunky_core::level::Level::default();
         level.set_tile(1, 1, '@').unwrap();
         level.set_tile(15, 10, '@').unwrap();
-        level.exit_targets = vec!["elsewhere".into(), "previous.lvl".into()];
+        level.exit_targets = vec!["elsewhere".into(), "previous".into()];
         let original = level.clone();
         let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
         load_custom(&mut game, &level, "next.lvl", "previous");
@@ -7278,25 +7405,111 @@ mod tests {
         assert_eq!(game.world.name, "next");
         assert_eq!(level, original);
     }
+
     #[test]
-    fn mixed_case_custom_file_names_select_the_same_return_entrance() {
+    fn custom_return_entrance_matches_classic_case_sensitive_source_name() {
+        let first = spelunky_core::level::Level::default();
+        let mut next = spelunky_core::level::Level::default();
+        next.set_tile(1, 1, '@').unwrap();
+        next.set_tile(15, 10, '@').unwrap();
+        next.exit_targets = vec!["room".into(), "ROOM".into()];
+        let levels = std::collections::BTreeMap::from([("next".into(), next.to_text())]);
+
+        let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+        // Classic's selector uppercases the selected filename before loading.
+        load_custom_catalog(&mut game, &first, "room", "");
+        game.flags.insert("custom_level:NEXT".into());
+
+        assert_eq!(
+            custom_exit(&mut game, &levels, false),
+            CustomExit::Continued
+        );
+        assert_eq!(game.world.name, "next");
+        assert_eq!(
+            game.player.pos,
+            spelunky_core::Vec2::new(264.0, 184.0),
+            "Classic matches the uppercase source level name to the second entrance"
+        );
+    }
+
+    #[test]
+    fn mixed_case_selector_names_use_the_classic_uppercase_source_name() {
         let mut level = spelunky_core::level::Level::default();
         level.set_tile(1, 1, '@').unwrap();
         level.set_tile(15, 10, '@').unwrap();
-        level.exit_targets = vec!["elsewhere".into(), "PREVIOUS.LVL".into()];
+        level.exit_targets = vec!["elsewhere".into(), "NEXT".into()];
         let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
-        load_custom(&mut game, &level, "Next.LVL", "Previous.lvl");
+        load_custom_catalog(&mut game, &level, "Next", "NEXT");
         assert_eq!(game.world.name, "next");
         assert_eq!(game.player.pos, spelunky_core::Vec2::new(264., 184.));
-        assert_eq!(level.exit_targets[1], "PREVIOUS.LVL");
-        let levels = std::collections::BTreeMap::from([("Next".into(), level.to_text())]);
-        for target in ["next", "NEXT.LVL", "C:\\levels\\Next.LVL"] {
-            assert_eq!(
-                custom_level_source(&levels, target),
-                Some(levels["Next"].as_str())
-            );
-        }
+        assert_eq!(level.exit_targets[1], "NEXT");
+        let mut double_extension = spelunky_core::level::Level::default();
+        double_extension.author = "DOUBLE EXTENSION".into();
+        let levels = std::collections::BTreeMap::from([
+            ("Next".into(), level.to_text()),
+            ("next.lvl".into(), double_extension.to_text()),
+        ]);
+        assert_eq!(
+            custom_level_source(&levels, "next"),
+            Some(levels["Next"].as_str())
+        );
+        assert_eq!(
+            spelunky_core::level::Level::parse(custom_level_source(&levels, "NEXT.LVL").unwrap())
+                .unwrap()
+                .author,
+            "DOUBLE EXTENSION"
+        );
+        assert!(custom_level_source(&levels, "C:\\levels\\Next.LVL").is_none());
         assert!(custom_level_source(&levels, "missing.lvl").is_none());
+    }
+
+    #[test]
+    fn authored_lvl_suffix_loads_the_double_extension_custom_file() {
+        let mut ordinary = spelunky_core::level::Level::default();
+        ordinary.author = "ORDINARY".into();
+        let mut double_extension = spelunky_core::level::Level::default();
+        double_extension.author = "DOUBLE EXTENSION".into();
+        let levels = std::collections::BTreeMap::from([
+            ("room".into(), ordinary.to_text()),
+            ("room.lvl".into(), double_extension.to_text()),
+        ]);
+        let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+        load_custom_catalog(
+            &mut game,
+            &spelunky_core::level::Level::default(),
+            "start",
+            "",
+        );
+        game.flags.insert("custom_level:ROOM.LVL".into());
+
+        assert_eq!(
+            custom_exit(&mut game, &levels, false),
+            CustomExit::Continued
+        );
+        assert_eq!(game.world.name, "room.lvl");
+        assert_eq!(
+            custom_level_source(&levels, &game.world.name)
+                .and_then(|text| spelunky_core::level::Level::parse(text).ok())
+                .map(|level| level.author),
+            Some("DOUBLE EXTENSION".into())
+        );
+    }
+
+    #[test]
+    fn editing_double_extension_selector_entry_keeps_its_file_name_on_save() {
+        let mut editor = EditorUi::new();
+        editor
+            .load_catalog_key(
+                "room.lvl",
+                &spelunky_core::level::Level::default().to_text(),
+            )
+            .unwrap();
+        assert_eq!(editor.level_name(), "room.lvl.lvl");
+        let EditorCommand::Save { name, .. } = editor.key(KeyCode::KeyS, None, true) else {
+            panic!("Ctrl+S should save the selected level");
+        };
+        assert_eq!(name, "room.lvl.lvl");
+        assert_eq!(level_name(&name), "room.lvl");
     }
     #[test]
     fn linked_custom_exit_retains_filename_through_the_authored_transition_room() {
@@ -7304,12 +7517,13 @@ mod tests {
         let mut next = spelunky_core::level::Level::default();
         next.set_tile(1, 1, '@').unwrap();
         next.set_tile(15, 10, '@').unwrap();
-        next.exit_targets = vec!["elsewhere".into(), "PREVIOUS.LVL".into()];
+        next.exit_targets = vec!["elsewhere".into(), "PREVIOUS".into()];
         let levels = std::collections::BTreeMap::from([("Next".into(), next.to_text())]);
         let mut game = Game::shell(7, RulesPreset::Classic);
         game.world = World::new(40, 20, Area::Mines, 2);
         game.world.name = "previous".into();
         game.flags.insert("custom".into());
+        set_custom_previous_level(&mut game, "PREVIOUS");
         for x in 0..game.world.width {
             game.world.set_tile(x, 4, "oBrick");
         }
@@ -7318,7 +7532,7 @@ mod tests {
             .entity_mut(exit)
             .unwrap()
             .text
-            .insert("leadsTo".into(), "NEXT.LVL".into());
+            .insert("leadsTo".into(), "NEXT".into());
         game.player.pos = Vec2::new(136., 56.);
         game.player.previous_pos = game.player.pos;
         game.player.grounded = true;
@@ -7543,7 +7757,7 @@ mod tests {
         let mut second = spelunky_core::level::Level::default();
         second.set_tile(1, 1, '@').unwrap();
         second.set_tile(15, 10, '@').unwrap();
-        second.exit_targets = vec!["elsewhere.lvl".into(), "first.lvl".into()];
+        second.exit_targets = vec!["elsewhere.lvl".into(), "FIRST".into()];
         second.starting_life = 99;
         second.starting_bombs = 99;
         second.starting_ropes = 99;
@@ -7561,7 +7775,7 @@ mod tests {
         entity.data.insert("ammo".into(), 3.);
         game.player.held = Some(gun);
         game.flags.insert("carry:oPistol".into());
-        continue_custom(&mut game, &second, "second.lvl", "first.lvl");
+        continue_custom(&mut game, &second, "second.lvl", "FIRST");
         assert_eq!(game.player.pos, spelunky_core::Vec2::new(264., 184.));
         assert_eq!(
             (game.player.health, game.player.bombs, game.player.ropes),
@@ -7719,7 +7933,7 @@ mod tests {
         load_custom(&mut game, &level, "first.lvl", "");
         game.player.health = 2.0;
         game.player.bombs = 1.0;
-        game.flags.insert("custom_level:NEXT.LVL".into());
+        game.flags.insert("custom_level:NEXT".into());
         assert_eq!(
             custom_exit(&mut game, &levels, false),
             CustomExit::Continued
@@ -7745,6 +7959,122 @@ mod tests {
         assert_eq!(game.player.health, 4.0);
         assert!(!game.data.contains_key("pending_damsel_kisses"));
         assert_eq!(game.state, RunState::Ending);
+    }
+
+    #[test]
+    fn hidden_source_custom_level_remains_available_to_authored_links() {
+        let next = spelunky_core::level::Level::default();
+        let levels = std::collections::BTreeMap::from([("!secret".into(), next.to_text())]);
+        assert!(visible_custom_level_names(&levels).is_empty());
+
+        let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+        load_custom(
+            &mut game,
+            &spelunky_core::level::Level::default(),
+            "first.lvl",
+            "",
+        );
+        game.flags.insert("custom_level:!SECRET".into());
+
+        assert_eq!(
+            custom_exit(&mut game, &levels, false),
+            CustomExit::Continued
+        );
+        assert_eq!(game.world.name, "!secret");
+    }
+
+    #[test]
+    fn default_none_target_loads_none_level_when_that_file_exists() {
+        let first = spelunky_core::level::Level::default();
+        assert_eq!(first.next_level, "NONE");
+        let next = spelunky_core::level::Level::default();
+        let levels = std::collections::BTreeMap::from([("none".into(), next.to_text())]);
+
+        let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+        load_custom(&mut game, &first, "first.lvl", "");
+        assert!(game.flags.contains("default_next_custom:NONE"));
+        assert_eq!(
+            custom_exit(&mut game, &levels, false),
+            CustomExit::Continued
+        );
+        assert_eq!(game.world.name, "none");
+    }
+
+    #[test]
+    fn nested_custom_link_keeps_its_path_and_never_falls_back_to_a_basename() {
+        let mut root_room = spelunky_core::level::Level::default();
+        root_room.author = "ROOT".into();
+        let mut nested_room = spelunky_core::level::Level::default();
+        nested_room.author = "NESTED".into();
+        let levels = std::collections::BTreeMap::from([
+            ("room".into(), root_room.to_text()),
+            ("sub/room".into(), nested_room.to_text()),
+        ]);
+
+        let source = custom_level_source(&levels, "sub\\ROOM").unwrap();
+        assert_eq!(
+            spelunky_core::level::Level::parse(source).unwrap().author,
+            "NESTED"
+        );
+        assert!(custom_level_source(&levels, "missing/room").is_none());
+
+        let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+        load_custom(
+            &mut game,
+            &spelunky_core::level::Level::default(),
+            "first.lvl",
+            "",
+        );
+        game.flags.insert("custom_level:sub\\ROOM".into());
+        assert_eq!(
+            custom_exit(&mut game, &levels, false),
+            CustomExit::Continued
+        );
+        assert_eq!(game.world.name, "sub/room");
+    }
+
+    #[test]
+    fn linked_custom_exit_loads_none_named_level_and_skips_start_inventory_conversion() {
+        let mut next = spelunky_core::level::Level::default();
+        next.next_level.clear();
+        let mut lines: Vec<String> = next.to_text().lines().map(str::to_owned).collect();
+        lines[34] = "invalid-life".into();
+        lines[35] = "invalid-bombs".into();
+        lines[36] = "invalid-ropes".into();
+        let source = lines.join("\n");
+        assert!(spelunky_core::level::Level::parse(&source).is_err());
+        assert!(spelunky_core::level::Level::parse_for_linked_load(&source).is_ok());
+
+        let levels = std::collections::BTreeMap::from([("none".into(), source)]);
+        let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+        load_custom(
+            &mut game,
+            &spelunky_core::level::Level::default(),
+            "first.lvl",
+            "",
+        );
+        game.player.health = 2.0;
+        game.player.bombs = 3.0;
+        game.player.ropes = 4.0;
+        game.data.insert("pending_damsel_kisses".into(), 1.0);
+        game.flags.insert("custom_level:NONE".into());
+
+        assert_eq!(
+            custom_exit(&mut game, &levels, false),
+            CustomExit::Continued
+        );
+        assert_eq!(game.world.name, "none");
+        assert_eq!(
+            (game.player.health, game.player.bombs, game.player.ropes),
+            (3.0, 3.0, 4.0),
+            "linked loads preserve run inventory and apply the pending reward once"
+        );
+        assert!(!game.data.contains_key("pending_damsel_kisses"));
+        assert_eq!(custom_exit(&mut game, &levels, false), CustomExit::Finished);
+        assert_eq!(
+            game.player.health, 3.0,
+            "the reward must not be applied twice"
+        );
     }
     #[test]
     fn challenge_score_is_captured_before_scores_room_clears_run_counters() {
@@ -8259,6 +8589,8 @@ mod tests {
         assert_eq!(level_name("C:\\levels\\example.lvl"), "example");
         assert_eq!(level_name("C:\\levels\\Example.LVL"), "example");
         assert_eq!(level_name("map.lvl.lvl"), "map.lvl");
+        assert_eq!(runtime_level_name("sub/ROOM.LVL"), "sub/room");
+        assert_eq!(runtime_level_name(r"sub\ROOM.LVL"), "sub/room");
     }
     #[test]
     fn editor_exit_save_failure_keeps_the_draft_until_success_then_returns_to_authored_title() {

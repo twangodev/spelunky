@@ -174,7 +174,14 @@ impl Game {
         starting_inventory: Option<[f64; 3]>,
     ) {
         self.world = level.to_world();
-        generation::initialize_custom_terrain(&mut self.world, &mut self.rng);
+        generation::initialize_custom_terrain_with_context(
+            &mut self.world,
+            &mut self.rng,
+            generation::GenerationContext {
+                has_spectacles: self.player.has("Spectacles"),
+                has_cemetery: false,
+            },
+        );
         self.world.name = name.to_owned();
         self.flags.retain(|flag| {
             flag != "hub" && !flag.starts_with("hub_") && !flag.starts_with("hub_destination:")
@@ -208,7 +215,7 @@ impl Game {
                 _ => 0.0,
             },
         );
-        if !level.next_level.is_empty() && level.next_level != "NONE" {
+        if !level.next_level.is_empty() {
             self.flags
                 .insert(format!("default_next_custom:{}", level.next_level));
         }
@@ -1233,6 +1240,17 @@ mod tests {
     }
 
     #[test]
+    fn custom_default_next_level_preserves_none_for_catalog_lookup() {
+        let mut game = Game::shell(9, RulesPreset::Classic);
+        let level = level::Level::default();
+        assert_eq!(level.next_level, "NONE");
+
+        game.load_custom(&level, "first", "");
+
+        assert!(game.flags.contains("default_next_custom:NONE"));
+    }
+
+    #[test]
     fn linked_custom_exit_preserves_resources_and_the_carried_weapon() {
         let mut level = level::Level::default();
         level.set_tile(3, 3, '@').unwrap();
@@ -1850,7 +1868,18 @@ mod tests {
         game.flags.insert("custom".into());
         game.flags.insert("custom_level".into());
         game.flags.insert("editor_test".into());
+        game.flags.insert("damsel_rescued".into());
+        game.flags.insert("unlock_tunnel_man".into());
+        game.data.insert("pending_damsel_kisses".into(), 1.);
+        game.data.insert("damsels".into(), 1.);
+        game.data.insert("xdamsels".into(), 1.);
+        game.player.health = 2.0;
+        game.player.bombs = 1.0;
+        game.player.ropes = 2.0;
+        game.player.money = 125;
+        game.player.equipment.insert("Jetpack".into());
         game.world.name = "editor fixture".into();
+        let rng = game.rng.state_bits();
         game.world.spawn("oExit", Vec2::new(32., 32.));
         game.step(&InputFrame {
             up: true,
@@ -1866,7 +1895,19 @@ mod tests {
         assert_eq!(game.state, RunState::Transition);
         assert!(game.ending.is_none());
         assert_eq!(game.world.name, "editor fixture");
+        assert_eq!(game.rng.state_bits(), rng);
+        assert_eq!(
+            (game.player.health, game.player.bombs, game.player.ropes),
+            (4., 4., 4.)
+        );
         assert_eq!(game.player.money, 0);
+        assert!(game.player.equipment.is_empty());
+        assert_eq!(game.data["pending_damsel_kisses"], 0.);
+        assert_eq!(game.data["damsels"], 0.);
+        assert_eq!(game.data["xdamsels"], 0.);
+        assert!(!game.flags.contains("damsel_rescued"));
+        assert!(game.flags.contains("editor_test"));
+        assert!(game.flags.contains("unlock_tunnel_man"));
         assert!(!game.events.contains(&GameEvent::Won));
     }
 

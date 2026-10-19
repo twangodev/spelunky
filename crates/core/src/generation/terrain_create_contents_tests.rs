@@ -727,27 +727,34 @@ fn live_terrain_create_template_normal_destroy_adds_own_ruby_without_recreating_
 }
 
 #[test]
-fn live_terrain_create_legacy_deferred_and_custom_paths_stay_once_only() {
+fn custom_live_terrain_create_child_survives_destroy_without_duplication() {
     let seed = fixtures(false)["oSapphireBig"];
     let mut world = World::new(20, 16, Area::Jungle, 5);
     world.set_tile(6, 6, "oLush");
     let mut rng = Rng::new(seed);
     initialize_custom(&mut world, &mut rng);
-    assert!(
-        !world
-            .entities
-            .iter()
-            .any(|e| e.alive && e.object == "oSapphireBig"),
-        "custom tile adapter is explicitly unchanged"
-    );
     let parent = metadata(&mut world, 6, 6);
+    let child = world
+        .entities
+        .iter()
+        .find(|e| e.alive && e.object == "oSapphireBig")
+        .expect("custom terrain Create spawns its selected child immediately");
+    let child_id = child.id;
+    assert_eq!(child.pos, world.entity(parent).unwrap().pos);
     assert_eq!(
-        world.entity(parent).unwrap().text["treasure"],
-        "oSapphireBig"
+        world.entity(parent).unwrap().value("embedded_treasure"),
+        0.0
     );
+    assert!(!world.entity(parent).unwrap().text.contains_key("treasure"));
     let mut game = Game::shell(0, RulesPreset::Classic);
     game.world = world;
     game.rng = rng;
+    let allocation_count = game
+        .world
+        .entities
+        .iter()
+        .filter(|e| e.object == "oSapphireBig")
+        .count();
     assert!(crate::items::explosives::destroy_terrain_self(
         &mut game, 6, 6
     ));
@@ -755,10 +762,11 @@ fn live_terrain_create_legacy_deferred_and_custom_paths_stay_once_only() {
         game.world
             .entities
             .iter()
-            .filter(|e| e.alive && e.object == "oSapphireBig")
+            .filter(|e| e.object == "oSapphireBig")
             .count(),
-        1
+        allocation_count
     );
+    assert!(game.world.entity(child_id).is_some());
     assert!(!crate::items::explosives::destroy_terrain_self(
         &mut game, 6, 6
     ));
@@ -766,9 +774,9 @@ fn live_terrain_create_legacy_deferred_and_custom_paths_stay_once_only() {
         game.world
             .entities
             .iter()
-            .filter(|e| e.alive && e.object == "oSapphireBig")
+            .filter(|e| e.object == "oSapphireBig")
             .count(),
-        1
+        allocation_count
     );
 }
 

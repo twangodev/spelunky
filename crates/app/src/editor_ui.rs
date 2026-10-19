@@ -160,6 +160,13 @@ impl EditorUi {
         Ok(())
     }
 
+    /// Load a selector/catalog key. Keys have already had the file's final
+    /// `.lvl` removed, so appending the extension preserves names such as
+    /// `room.lvl` that refer to a native `room.lvl.lvl` file.
+    pub fn load_catalog_key(&mut self, key: &str, source: &str) -> Result<(), String> {
+        self.load(&format!("{key}.lvl"), source)
+    }
+
     pub fn message(&mut self, value: String) {
         self.status = value;
     }

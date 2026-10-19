@@ -459,6 +459,11 @@ pub(crate) fn init_entity(e: &mut Entity) {
             e.text.insert("type".into(), "None".into());
             e.text.insert("treasure".into(), String::new());
         }
+        "oRubbleDark" => {
+            // oRubbleDark inherits oDrawnSprite Create before its own Create.
+            e.data.insert("blinkToggle".into(), 0.0);
+            e.text.insert("type".into(), String::new());
+        }
         "oSmallCollect" | "oBigCollect" | "oHeart" => e.alarms[0] = 30,
         "oItemsGet" => {
             e.alarms[0] = 40;

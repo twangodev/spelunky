@@ -136,6 +136,8 @@ pub struct InputState {
     bindings: BTreeMap<String, Vec<KeyCode>>,
     gamepad_actions: Actions,
     controller_enabled: bool,
+    controller_initialized: bool,
+    pending_startup_controller_sample: Option<(Actions, u8, u8)>,
     controller_bindings: BTreeMap<String, String>,
     gamepad_available: bool,
     primary_gamepad_connected: bool,
@@ -166,6 +168,8 @@ impl Default for InputState {
                 .collect(),
             gamepad_actions: Actions::default(),
             controller_enabled: false,
+            controller_initialized: false,
+            pending_startup_controller_sample: None,
             controller_bindings: controller::default_bindings(),
             gamepad_available: false,
             primary_gamepad_connected: false,
@@ -280,23 +284,31 @@ impl InputState {
         if self.controller_enabled == enabled {
             return;
         }
+        self.controller_initialized = true;
+        self.pending_startup_controller_sample = None;
         self.controller_enabled = enabled;
-        if enabled {
-            // Don't turn a button held while enabling into a new press.
-            self.blocked_gamepad_actions = Actions(u16::MAX);
-            self.blocked_gamepad_ui = u8::MAX;
-        } else {
+        if !enabled {
             self.blocked_gamepad_actions = Actions::default();
             self.blocked_gamepad_ui = 0;
             self.accept_gamepads(Actions::default(), 0);
         }
     }
 
-    /// Applies the saved option during startup without treating controls held
-    /// at launch as newly enabled input. Classic polls its saved gamepad mode
-    /// on the first frame, so an already-held button is visible immediately.
+    /// Applies the saved option during startup and replays the first controller
+    /// sample if startup polling happened before the saved option was applied.
+    /// Classic's first enabled gamepad step sees controls already held.
     pub fn initialize_controller_enabled(&mut self, enabled: bool) {
         self.controller_enabled = enabled;
+        self.controller_initialized = true;
+        if enabled {
+            if let Some((actions, ui, press_allowed)) =
+                self.pending_startup_controller_sample.take()
+            {
+                self.accept_gamepads_with_direction_edges(actions, ui, press_allowed);
+            }
+        } else {
+            self.pending_startup_controller_sample = None;
+        }
     }
 
     /// Raw physical controls are captured before menu navigation is translated
@@ -654,6 +666,9 @@ impl InputState {
         if self.controller_enabled {
             self.accept_gamepads_with_direction_edges(actions, ui, press_allowed);
         } else {
+            if !self.controller_initialized {
+                self.pending_startup_controller_sample = Some((actions, ui, press_allowed));
+            }
             self.accept_gamepads_with_direction_edges(Actions::default(), 0, 0x0f);
         }
     }
@@ -1080,10 +1095,12 @@ mod tests {
     #[test]
     fn startup_controller_mode_accepts_controls_already_held_at_launch() {
         let mut input = InputState::default();
-        input.initialize_controller_enabled(true);
         let mut actions = Actions::default();
         actions.set(Action::Jump, true);
+        // App startup samples controller availability before applying the
+        // saved option. Preserve that held sample for Classic's first step.
         input.accept_controller_sample(actions, 0);
+        input.initialize_controller_enabled(true);
         let frame = input.take_tick();
         assert!(frame.jump);
         assert!(frame.jump_pressed);
@@ -1839,12 +1856,10 @@ mod tests {
         assert!(input.ui_pressed().is_empty());
         assert_eq!(input.controller_pressed(), vec![ControllerButton::South]);
 
-        // The setting takes effect immediately; neutral clears the safety
-        // block, after which an ordinary press reaches gameplay and menus.
+        // A control held when the setting is enabled is applied on the next
+        // sample, as it is on Classic's first enabled gamepad step.
         input.accept_controller_capture(0);
         input.set_controller_enabled(true);
-        input.accept_controller_sample(Actions::default(), 0);
-        input.take_tick();
         let (actions, ui) = input.portable_controller(south, [false; 4]);
         input.accept_controller_capture(south);
         input.accept_controller_sample(actions, ui);
@@ -1860,6 +1875,24 @@ mod tests {
         let (actions, ui) = input.portable_controller(south, [false; 4]);
         input.accept_controller_sample(actions, ui);
         assert!(!input.take_tick().attack);
+    }
+
+    #[test]
+    fn enabling_controller_input_applies_a_button_already_held() {
+        let mut input = InputState::default();
+        let mut held = Actions::default();
+        held.set(Action::Jump, true);
+
+        // While disabled, the physical controller is still sampled, but its
+        // gameplay action is gated. Enabling mirrors Classic's next-step poll.
+        input.accept_controller_sample(held, 0);
+        assert!(!input.take_tick().jump);
+        input.set_controller_enabled(true);
+        input.accept_controller_sample(held, 0);
+
+        let frame = input.take_tick();
+        assert!(frame.jump);
+        assert!(frame.jump_pressed);
     }
 
     #[test]

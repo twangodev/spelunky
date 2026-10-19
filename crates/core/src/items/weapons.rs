@@ -908,7 +908,7 @@ fn source_mattock_target(game: &mut Game, e: &Entity) -> Option<Option<DigTarget
     use crate::dispatcher::Instance;
     if !e.animation.is_finite()
         || e.animation < 0.0
-        || !e.collision_mask().supports_source_query_pixels()
+        || !e.collision_mask().supports_source_unrotated_query_pixels()
     {
         return None;
     }
@@ -949,7 +949,7 @@ fn source_mattock_target(game: &mut Game, e: &Entity) -> Option<Option<DigTarget
             }
             Instance::Player => continue,
         };
-        if !mask.supports_source_query_pixels() {
+        if !mask.supports_source_unrotated_query_pixels() {
             return None;
         }
         solids.push((instance, mask));
@@ -974,7 +974,7 @@ fn source_mattock_target(game: &mut Game, e: &Entity) -> Option<Option<DigTarget
     };
     translated.pos = point;
     let mask = translated.collision_mask();
-    if !mask.supports_source_query_pixels() {
+    if !mask.supports_source_unrotated_query_pixels() {
         return None;
     }
     let target = solids.into_iter().find_map(|(instance, target)| {

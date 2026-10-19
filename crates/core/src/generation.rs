@@ -1331,6 +1331,14 @@ pub fn initialize_custom_terrain(world: &mut World, rng: &mut Rng) {
     terrain::initialize_custom(world, rng);
 }
 
+pub(crate) fn initialize_custom_terrain_with_context(
+    world: &mut World,
+    rng: &mut Rng,
+    context: GenerationContext,
+) {
+    terrain::initialize_custom_with_context(world, rng, context);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

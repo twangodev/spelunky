@@ -143,6 +143,14 @@ pub fn acknowledge_game_over(game: &mut Game, input: &InputFrame) -> bool {
     };
     game.flags
         .retain(|flag| !flag.starts_with("previous_custom_level:"));
+    // oPlayer1 Step calls scrClearGlobals immediately before room_goto on
+    // every acknowledged death. The destination is already captured, while
+    // editor_test remains available to the host's return routing.
+    game.clear_run_globals();
+    if destination == GameOverDestination::CustomLevels {
+        game.flags.remove("custom");
+        game.flags.remove("custom_level");
+    }
     game.game_over.acknowledged = true;
     game.game_over.destination = Some(destination);
     game.state = RunState::Transition;
@@ -1242,14 +1250,25 @@ mod tests {
         for (flags, destination, counted) in [
             (&[][..], GameOverDestination::Scores, true),
             (&["tutorial"][..], GameOverDestination::Scores, false),
-            (&["custom"][..], GameOverDestination::CustomLevels, false),
             (
-                &["editor_test", "custom"][..],
+                &["custom", "custom_level"][..],
+                GameOverDestination::CustomLevels,
+                false,
+            ),
+            (
+                &["editor_test", "custom", "custom_level"][..],
                 GameOverDestination::Editor,
                 false,
             ),
         ] {
             let mut game = game_over_blast_fixture(flags);
+            game.flags.insert("damsel_rescued".into());
+            game.data.insert("pending_damsel_kisses".into(), 1.);
+            game.data.insert("damsels".into(), 1.);
+            game.player.bombs = 1.0;
+            game.player.ropes = 2.0;
+            game.player.equipment.insert("Jetpack".into());
+            game.flags.insert("unlock_tunnel_man".into());
             game.step(&InputFrame {
                 attack_pressed: true,
                 ..Default::default()
@@ -1266,6 +1285,27 @@ mod tests {
             });
             assert_eq!(game.game_over.destination, Some(destination));
             assert_eq!(game.lifetime_stats.level_deaths[0], u64::from(counted));
+            assert_eq!(
+                (game.player.health, game.player.bombs, game.player.ropes),
+                (4., 4., 4.)
+            );
+            assert!(game.player.equipment.is_empty());
+            assert_eq!(game.data["pending_damsel_kisses"], 0.);
+            assert_eq!(game.data["damsels"], 0.);
+            assert!(!game.flags.contains("damsel_rescued"));
+            assert!(game.flags.contains("unlock_tunnel_man"));
+            assert_eq!(
+                game.flags.contains("editor_test"),
+                flags.contains(&"editor_test")
+            );
+            assert_eq!(
+                game.flags.contains("custom"),
+                destination == GameOverDestination::Editor
+            );
+            assert_eq!(
+                game.flags.contains("custom_level"),
+                destination == GameOverDestination::Editor
+            );
         }
     }
     fn game(level: u32) -> Game {

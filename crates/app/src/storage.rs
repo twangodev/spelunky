@@ -26,6 +26,8 @@ pub struct Settings {
     pub controller_bindings: BTreeMap<String, String>,
     /// Classic `global.gamepadOn`: controller input is opt-in and saved.
     pub controller_enabled: bool,
+    /// Classic starts fullscreen and saves the user's display preference.
+    pub fullscreen: bool,
 }
 
 impl Default for Settings {
@@ -65,6 +67,7 @@ impl Default for Settings {
             bindings,
             controller_bindings: crate::controller::default_bindings(),
             controller_enabled: false,
+            fullscreen: true,
         }
     }
 }
@@ -621,14 +624,16 @@ mod tests {
                 "Rooms/Example.LVL":"path variant",
                 "EXAMPLE":"case variant",
                 "example":"canonical file",
-                "!Hidden.LVL":"hidden"
+                "!Hidden":"hidden",
+                "double.lvl":"double extension"
             }}"#,
         )
         .unwrap();
 
-        assert_eq!(data.custom_levels.len(), 2);
+        assert_eq!(data.custom_levels.len(), 3);
         assert_eq!(data.custom_levels["example"], "canonical file");
         assert_eq!(data.custom_levels["!hidden"], "hidden");
+        assert_eq!(data.custom_levels["double.lvl"], "double extension");
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -848,7 +853,19 @@ mod tests {
             assert!(data.settings.graphics_high);
             assert!(!data.settings.vsync);
             assert!(!data.settings.pixel_snap);
+            assert!(data.settings.fullscreen);
         }
+    }
+
+    #[test]
+    fn fullscreen_preference_defaults_on_for_legacy_saves_and_round_trips() {
+        let legacy = SaveData::from_json(r#"{"version":1,"settings":{}}"#).unwrap();
+        assert!(legacy.settings.fullscreen);
+
+        let mut windowed = legacy;
+        windowed.settings.fullscreen = false;
+        let reopened = SaveData::from_json(&windowed.to_json().unwrap()).unwrap();
+        assert!(!reopened.settings.fullscreen);
     }
 
     #[test]

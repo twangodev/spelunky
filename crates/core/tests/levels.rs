@@ -28,6 +28,14 @@ fn old_optional_formats_and_original_zero_count_writer_bug() {
 }
 
 #[test]
+fn source_loader_ignores_lines_after_declared_records() {
+    let level = Level::default();
+    let text = format!("{}\nCOMMENT", level.to_text());
+
+    assert_eq!(Level::parse(&text).unwrap(), level);
+}
+
+#[test]
 fn empty_unicode_and_linked_metadata_roundtrip() {
     let mut level = Level::default();
     level.set_tile(0, 0, 'X').unwrap();
@@ -93,6 +101,37 @@ fn source_inventory_floors_and_clamps() {
         "Error in function real()."
     );
     assert!(Level::parse_for_editor(&malformed_inventory).is_ok());
+}
+
+#[test]
+fn source_level_loader_reads_only_forty_cells_and_pads_short_rows() {
+    let mut lines: Vec<String> = Level::default()
+        .to_text()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    lines[0] = "1".repeat(39);
+    lines[1] = format!("{}X", "2".repeat(40));
+
+    let parsed = Level::parse(&lines.join("\n")).unwrap();
+    assert_eq!(&parsed.tiles[..39], &vec!['1'; 39]);
+    assert_eq!(parsed.tiles[39], '0', "the absent source cell is empty");
+    assert_eq!(&parsed.tiles[40..80], &vec!['2'; 40]);
+    assert_eq!(parsed.tiles.len(), LEVEL_WIDTH * LEVEL_HEIGHT);
+}
+
+#[test]
+fn source_level_loader_ignores_unknown_control_symbols_in_map_cells() {
+    let mut lines: Vec<String> = Level::default()
+        .to_text()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    lines[0].replace_range(..1, "\t");
+
+    let parsed = Level::parse(&lines.join("\n")).unwrap();
+    assert_eq!(parsed.get_tile(0, 0), Some('\t'));
+    assert!(tile_spawns('\t').is_empty());
 }
 
 #[test]

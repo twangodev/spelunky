@@ -1,8 +1,8 @@
 //! Original terrain Create-event treasure rolls and scrSetupWalls silhouettes.
 //!
 //! Tile instances are represented by invisible, centered metadata entities.
-//! Generated Lush/Temple Create children are already live before population;
-//! legacy descriptors and other terrain families retain deferred adapters.
+//! Custom destructible terrain Create children are live during loading;
+//! generated legacy descriptors retain deferred adapters where the source does.
 use crate::model::{Entity, Rng, Vec2, World};
 
 const UNDERGROUND: [(&str, f64, f64); 19] = [
@@ -580,6 +580,14 @@ pub(super) fn initialize(world: &mut World, rng: &mut Rng) {
 }
 
 pub(super) fn initialize_custom(world: &mut World, rng: &mut Rng) {
+    initialize_custom_with_context(world, rng, super::GenerationContext::default());
+}
+
+pub(super) fn initialize_custom_with_context(
+    world: &mut World,
+    rng: &mut Rng,
+    context: super::GenerationContext,
+) {
     // Classic runs each tile object's Create immediately from
     // scrCreateTileObj. Its RNG work therefore interleaves with neighboring
     // enemy and trap Create events in row-major room order.
@@ -621,7 +629,7 @@ pub(super) fn initialize_custom(world: &mut World, rng: &mut Rng) {
                         x,
                         y,
                         true,
-                        super::GenerationContext::default(),
+                        context,
                         city,
                         Some(creation_serial),
                     );
@@ -639,9 +647,15 @@ pub(super) fn initialize_custom(world: &mut World, rng: &mut Rng) {
                     object.as_str(),
                     "oBrick" | "oLush" | "oDark" | "oTemple" | "oIce"
                 ) {
-                    initialize_custom_instance(world, rng, id);
+                    initialize_custom_instance(world, rng, id, context);
                 } else {
                     crate::creation::initialize_entity_local(world, rng, id);
+                    if crate::catalog::is_a(&object, "oItem") {
+                        crate::items::initialize_inherited_depth(
+                            world.entity_mut(id).unwrap(),
+                            context.has_spectacles,
+                        );
+                    }
                 }
             }
         }
@@ -821,42 +835,43 @@ fn create_terrain_tile(
         sprite = format!("s{}", &object[1..]);
         gold = 0;
     }
-    let e = world.entity_mut(id).unwrap();
-    e.sprite.clear();
-    e.data.insert("terrain_initialized".into(), 1.0);
-    e.text.insert("terrain_sprite".into(), sprite);
-    if gold > 0 {
-        e.data.insert("gold_chunks".into(), 3.0);
-        e.data
-            .insert("gold_nuggets".into(), if gold == 2 { 1.0 } else { 0.0 });
+    let has_existing_destroy_treasure = world.entity(id).unwrap().text.contains_key("treasure");
+    {
+        let e = world.entity_mut(id).unwrap();
+        e.sprite.clear();
+        e.data.insert("terrain_initialized".into(), 1.0);
+        e.text.insert("terrain_sprite".into(), sprite);
+        if gold > 0 {
+            e.data.insert("gold_chunks".into(), 3.0);
+            e.data
+                .insert("gold_nuggets".into(), if gold == 2 { 1.0 } else { 0.0 });
+        }
+        if frozen {
+            e.data.insert("frozen_caveman".into(), 1.0);
+        }
     }
-    if frozen {
-        e.data.insert("frozen_caveman".into(), 1.0);
-    }
-    if !custom && matches!(object.as_str(), "oLush" | "oTemple") {
-        // Own Create births are independent of caller-assigned OWN Destroy
-        // treasure, including the R-template's Big Ruby. Do not record new
-        // deferred debt: clean/normal destruction must retain this child's
-        // identity, alarm and mutable state.
-        if let Some((name, dx, dy)) = treasure {
+    if let Some((name, dx, dy)) = treasure {
+        let custom_tile = custom
+            && custom_creation_serial.is_some()
+            && matches!(object.as_str(), "oBrick" | "oLush" | "oDark" | "oTemple");
+        let generated_live_child = !custom && matches!(object.as_str(), "oLush" | "oTemple");
+        if custom_tile || generated_live_child {
+            // Classic instance_create runs the child's Create immediately.
+            // Insert custom children after their parent because the loader's
+            // initial birth list was collected before nested Creates ran.
             let pos = Vec2::new(x as f64 * 16.0 + 8.0 + dx, y as f64 * 16.0 + 8.0 + dy);
-            let child = crate::creation::spawn_generated_terrain_child(
+            spawn_live_terrain_child(
                 world,
                 rng,
                 name,
                 pos,
                 context.has_spectacles,
+                custom_creation_serial,
             );
-            let child = world.entity_mut(child).unwrap();
-            if crate::catalog::is_a(name, "oItem") {
-                // scrGenerateItem(...,2) overwrites price AFTER Create.
-                child.data.insert("cost".into(), 0.0);
-                child.data.insert("forSale".into(), 0.0);
-            }
-        }
-    } else if !e.text.contains_key("treasure") {
-        // Existing custom/other-family and serialized metadata adapter.
-        if let Some((name, dx, dy)) = treasure {
+        } else if !has_existing_destroy_treasure {
+            // Legacy terrain metadata remains the adapter for generated
+            // families whose source birth ordering is still being modeled.
+            let e = world.entity_mut(id).unwrap();
             e.data.insert("embedded_treasure".into(), 1.0);
             e.data.insert("treasure_dx".into(), dx);
             e.data.insert("treasure_dy".into(), dy);
@@ -1442,7 +1457,34 @@ fn insert_birth_after(world: &mut World, id: u64, after_serial: u64) {
     }
 }
 
-fn initialize_custom_instance(world: &mut World, rng: &mut Rng, id: u64) {
+fn spawn_live_terrain_child(
+    world: &mut World,
+    rng: &mut Rng,
+    object: &str,
+    pos: Vec2,
+    has_spectacles: bool,
+    parent_serial: Option<u64>,
+) -> u64 {
+    let id =
+        crate::creation::spawn_generated_terrain_child(world, rng, object, pos, has_spectacles);
+    if let Some(parent_serial) = parent_serial {
+        insert_birth_after(world, id, parent_serial);
+    }
+    if crate::catalog::is_a(object, "oItem") {
+        // scrGenerateItem(...,2) applies these producer overrides after Create.
+        let child = world.entity_mut(id).unwrap();
+        child.data.insert("cost".into(), 0.0);
+        child.data.insert("forSale".into(), 0.0);
+    }
+    id
+}
+
+fn initialize_custom_instance(
+    world: &mut World,
+    rng: &mut Rng,
+    id: u64,
+    context: super::GenerationContext,
+) {
     // Custom compound symbols can overlap static terrain with pools or room
     // borders. Those additional terrain instances live outside tile storage
     // but still execute the same source Create events.
@@ -1492,7 +1534,14 @@ fn initialize_custom_instance(world: &mut World, rng: &mut Rng, id: u64) {
         }
     }
     if let Some((object, dx, dy)) = treasure {
-        world.spawn(object, Vec2::new(origin.x + 8.0 + dx, origin.y + 8.0 + dy));
+        spawn_live_terrain_child(
+            world,
+            rng,
+            object,
+            Vec2::new(origin.x + 8.0 + dx, origin.y + 8.0 + dy),
+            context.has_spectacles,
+            Some(creation_serial),
+        );
     }
     let entity = world.entity_mut(id).unwrap();
     entity.data.insert("terrain_initialized".into(), 1.0);

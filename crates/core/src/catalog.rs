@@ -344,12 +344,19 @@ impl CollisionMask {
         self.frame.is_some()
             && self.event_bounds.is_some()
             && (self.precise || self.rectangle)
-            && self.angle == 0.0
             && self.scale.x.is_finite()
             && self.scale.y.is_finite()
             && self.pos.x.is_finite()
             && self.pos.y.is_finite()
             && self.source_query_geometry().is_some()
+    }
+
+    /// The source mattock adapter still admits only unrotated mask metadata.
+    /// Explicit point/rectangle/axis-line queries have a separate rotated
+    /// sampler, but widening that adapter's selector must not change the
+    /// mattock's unsupported-transform fallback.
+    pub(crate) fn supports_source_unrotated_query_pixels(&self) -> bool {
+        self.angle == 0.0 && self.supports_source_query_pixels()
     }
 
     // Original 4AA958 unrotated cache and 48A9F4/48AB50 inverse sampling
@@ -430,6 +437,15 @@ impl CollisionMask {
     }
 
     fn source_query_pixel(&self, x: i32, y: i32) -> bool {
+        if self.angle != 0.0 {
+            // The source query kernels pass rotated instances through the same
+            // inverse pixel transform as automatic collision pairs. Rotated
+            // masks are currently supported only by event_geometry's positive
+            // unit-scale path, so the source-relative coordinates need no
+            // additional scale division here.
+            let (sin, cos) = self.angle.sin_cos();
+            return self.event_pixel(x, y, sin, cos);
+        }
         if self.scale.x.abs() == 1.0 && self.scale.y.abs() == 1.0 {
             let ix = self.origin[0].wrapping_add(if self.scale.x > 0.0 {
                 x
@@ -642,8 +658,9 @@ impl CollisionMask {
     /// Source axis-aligned `collision_line`: raw endpoints first meet the
     /// cached integer aggregate bbox, then clipped endpoints and instance
     /// origins round independently before selected-mask pixel sampling.
-    /// Fractional unit-scale placement and both unit mirrors are verified
-    /// against original GM8 instructions. Rotations retain the Rect adapter; nonzero finite unrotated scales use the native inverse sampler.
+    /// Fractional unit-scale placement, both unit mirrors, and positive
+    /// unit-scale rotations use the source query pixel sampler. Rotated mirrors
+    /// and non-unit rotated scales retain the Rect adapter.
     pub fn intersects_axis_line(
         &self,
         first: Vec2,
@@ -1596,6 +1613,53 @@ mod tests {
     }
 
     #[test]
+    fn rotated_source_queries_inverse_sample_alpha_but_bbox_queries_stay_rectangular() {
+        let arrow = instance_mask(
+            "oArrow",
+            "sArrowRight",
+            Vec2::new(100.0, 100.0),
+            0.0,
+            Vec2::new(1.0, 1.0),
+            -std::f64::consts::FRAC_PI_2,
+        );
+        assert!(arrow.supports_source_query_pixels());
+
+        // image_angle=90° rotates the arrow upward. The source inverse sampler
+        // maps (99,97) to transparent image pixel (7,3), while (99,98) maps
+        // to opaque image pixel (6,3).
+        let transparent = Vec2::new(99.0, 97.0);
+        let opaque = Vec2::new(99.0, 98.0);
+        for point in [transparent, opaque] {
+            assert!(arrow.contains(point, CollisionPrecision::BoundingBox));
+            assert!(arrow.intersects_rectangle(point, point, CollisionPrecision::BoundingBox));
+            assert!(arrow.intersects_axis_line(point, point, CollisionPrecision::BoundingBox));
+        }
+        assert!(!arrow.contains(transparent, CollisionPrecision::Precise));
+        assert!(!arrow.intersects_rectangle(transparent, transparent, CollisionPrecision::Precise));
+        assert!(!arrow.intersects_axis_line(transparent, transparent, CollisionPrecision::Precise));
+        assert!(arrow.contains(opaque, CollisionPrecision::Precise));
+        assert!(arrow.intersects_rectangle(opaque, opaque, CollisionPrecision::Precise));
+        assert!(arrow.intersects_axis_line(opaque, opaque, CollisionPrecision::Precise));
+    }
+
+    #[test]
+    fn rotated_query_support_does_not_expand_the_unrotated_mattock_adapter() {
+        let unit = Vec2::new(1.0, 1.0);
+        for angle in [-std::f64::consts::FRAC_PI_2, -std::f64::consts::TAU] {
+            let mask = instance_mask(
+                "oBlock",
+                "sBlock",
+                Vec2::new(100.0, 100.0),
+                0.0,
+                unit,
+                angle,
+            );
+            assert!(mask.supports_source_query_pixels());
+            assert!(!mask.supports_source_unrotated_query_pixels());
+        }
+    }
+
+    #[test]
     fn event_precision_preserves_explicit_queries_and_unsupported_transform_fallbacks() {
         let unit = Vec2::new(1.0, 1.0);
         let web = instance_mask(
@@ -2354,21 +2418,24 @@ mod tests {
                 scale,
                 angle,
             );
-            assert_eq!(mask.supports_source_query_pixels(), angle == 0.0);
-            // The three unrotated scales now use source pixels. Their selected
-            // WebBall center and this rectangle are opaque; legacy comparisons
-            // stay asserted, while genuine rotated fallbacks remain unsupported.
+            let supports_source_pixels = angle == 0.0 || scale == Vec2::new(1.0, 1.0);
+            assert_eq!(mask.supports_source_query_pixels(), supports_source_pixels);
+            // The unrotated scales use source pixels. Unsupported rotated
+            // transforms retain the legacy Rect fallback; positive unit-scale
+            // rotations use the source sampler tested above.
             let first = Vec2::new(75.0, 75.0);
             let second = Vec2::new(77.0, 77.0);
-            assert_eq!(
-                mask.intersects_rectangle(first, second, CollisionPrecision::Precise),
-                mask.intersects(Rect::new(75.0, 75.0, 3.0, 3.0), CollisionPrecision::Precise)
-            );
             let p = Vec2::new(80.0, 80.0);
-            assert_eq!(
-                mask.contains(p, CollisionPrecision::Precise),
-                mask.contains(p, CollisionPrecision::BoundingBox)
-            );
+            if angle == 0.0 || !supports_source_pixels {
+                assert_eq!(
+                    mask.intersects_rectangle(first, second, CollisionPrecision::Precise),
+                    mask.intersects(Rect::new(75.0, 75.0, 3.0, 3.0), CollisionPrecision::Precise)
+                );
+                assert_eq!(
+                    mask.contains(p, CollisionPrecision::Precise),
+                    mask.contains(p, CollisionPrecision::BoundingBox)
+                );
+            }
         }
         let fractional = instance_mask(
             "oWebBall",

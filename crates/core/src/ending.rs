@@ -1959,6 +1959,10 @@ pub(crate) fn player_animation_end(game: &mut Game) {
         game.flags.remove("cityOfGold");
     }
     if game.flags.contains("editor_test") {
+        // Classic Animation End clears run globals before returning a
+        // testLevel session to rLevelEditor. Keep editor_test itself so the
+        // host can route the transition to that editor.
+        game.clear_run_globals();
         game.state = RunState::Transition;
         return;
     }

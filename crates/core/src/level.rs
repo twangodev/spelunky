@@ -49,6 +49,13 @@ impl Level {
         Self::parse_with_editor_inventory(text, true)
     }
 
+    /// Parse a linked level using Classic's `scrLoadLevel(-1)` semantics.
+    /// Continuations retain the current run inventory, so malformed starting
+    /// inventory fields are not converted or rejected on this path.
+    pub fn parse_for_linked_load(text: &str) -> Result<Self, String> {
+        Self::parse_with_editor_inventory(text, true)
+    }
+
     fn parse_with_editor_inventory(
         text: &str,
         allow_invalid_inventory: bool,
@@ -66,18 +73,17 @@ impl Level {
         }
         let mut level = Self::default();
         level.tiles.clear();
-        for (row, line) in lines[..LEVEL_HEIGHT].iter().enumerate() {
-            if line.chars().count() != LEVEL_WIDTH {
-                return Err(format!(
-                    "Map row {} must contain exactly 40 characters",
-                    row + 1
-                ));
-            }
-            if line.chars().any(char::is_control) {
-                return Err(format!("Map row {} contains a control character", row + 1));
-            }
+        for line in &lines[..LEVEL_HEIGHT] {
+            // Classic always asks string_char_at for columns 1 through 40.
+            // Short lines therefore leave trailing cells empty, while columns
+            // after 40 are never read. Model empty cells as '0', the level
+            // format's no-tile marker.
+            let cells: Vec<char> = line.chars().take(LEVEL_WIDTH).collect();
             // Unknown symbols are preserved and ignored by the world builder, just as Classic.
-            level.tiles.extend(line.chars());
+            level.tiles.extend(cells.iter().copied());
+            level
+                .tiles
+                .extend(std::iter::repeat_n('0', LEVEL_WIDTH - cells.len()));
         }
         level.author = lines[32].into();
         level.music = lines[33].into();
@@ -109,9 +115,9 @@ impl Level {
                 }
             }
         }
-        if lines[cursor..].iter().any(|line| !line.is_empty()) {
-            return Err("Unexpected data after level metadata".into());
-        }
+        // Classic closes the file after the declared exit/sign records and
+        // never validates any trailing lines. Keep this parser permissive at
+        // the same boundary so harmless appended text does not reject a level.
         Ok(level)
     }
 
@@ -1094,5 +1100,34 @@ pub fn tile_spawns(tile: char) -> Vec<TileSpawn> {
             free_item: true,
         }],
         _ => vec![],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Level;
+
+    #[test]
+    fn linked_level_load_skips_start_inventory_conversion() {
+        let mut lines: Vec<String> = Level::default()
+            .to_text()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        lines[34] = "not-a-number".into();
+        lines[35] = "not-a-number".into();
+        lines[36] = "not-a-number".into();
+        let source = lines.join("\n");
+
+        assert!(Level::parse(&source).is_err());
+        let linked = Level::parse_for_linked_load(&source).unwrap();
+        assert_eq!(
+            (
+                linked.starting_life,
+                linked.starting_bombs,
+                linked.starting_ropes,
+            ),
+            (4, 4, 4)
+        );
     }
 }
