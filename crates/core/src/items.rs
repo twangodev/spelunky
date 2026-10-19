@@ -2063,7 +2063,7 @@ mod tests {
     }
 
     #[test]
-    fn game_step_bullet_destroy_of_held_fragile_item_respects_breakpieces_guard() {
+    fn game_step_bullet_destroy_of_held_fragile_item_preserves_pickup_type() {
         for (object, item_type) in [("oJar", "Jar"), ("oSkull", "Skull")] {
             for break_pieces in [false, true] {
                 let mut game = game();
@@ -2125,11 +2125,9 @@ mod tests {
 
                 assert!(game.world.entity(held).is_none(), "{object}");
                 assert_eq!(game.player.held, None, "{object}");
-                assert_eq!(
-                    game.player.pickup_item_type.is_empty(),
-                    break_pieces,
-                    "{object} Destroy's held-type clear follows the breakPieces guard"
-                );
+                // Jar/Skull Destroy clear the legacy `pickupItem` field under
+                // breakPieces; that field is distinct from pickupItemType.
+                assert_eq!(game.player.pickup_item_type, item_type, "{object}");
             }
         }
     }
