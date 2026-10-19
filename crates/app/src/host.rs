@@ -402,6 +402,19 @@ fn title_menu_action(
     }
 }
 
+fn settings_entry_stops_music(settings_return: Screen) -> bool {
+    settings_return != Screen::Pause
+}
+
+fn settings_audio_action_for_screen(
+    settings_return: Screen,
+    action: Option<SettingsAudioAction>,
+) -> Option<SettingsAudioAction> {
+    (settings_return != Screen::Pause)
+        .then_some(action)
+        .flatten()
+}
+
 impl App {
     fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
         let store = Store::load();
@@ -557,9 +570,11 @@ impl App {
             previous_screen,
             screen,
         ));
-        if entering_settings {
+        if entering_settings && settings_entry_stops_music(self.settings_return) {
             // Classic oSlider1's idle Step branch calls stopAllMusic while
             // rInit is open; the host stops the prior screen's track on entry.
+            // Settings opened over Pause are an in-game overlay, so retain the
+            // muted room track for the later Pause -> Playing transition.
             self.audio.stop_all_music();
         }
         self.apply_audio_policy();
@@ -1151,7 +1166,13 @@ impl App {
         }
     }
     fn apply_settings_audio_action(&mut self) {
-        match self.settings_ui.take_audio_action() {
+        // A preview would replace the paused room track; its matching
+        // StopAllMusic would leave resume silent. Keep the room track muted.
+        let action = settings_audio_action_for_screen(
+            self.settings_return,
+            self.settings_ui.take_audio_action(),
+        );
+        match action {
             Some(SettingsAudioAction::PreviewCave) => {
                 if let Some(game) = &mut self.game {
                     // Source playMusic(musCave, true) checks global.music and
@@ -4323,6 +4344,30 @@ mod tests {
             Screen::Pause,
             Screen::Settings
         ));
+    }
+
+    #[test]
+    fn settings_opened_from_pause_preserves_room_music_and_suppresses_slider_actions() {
+        use super::{
+            Screen, SettingsAudioAction, settings_audio_action_for_screen,
+            settings_entry_stops_music,
+        };
+
+        assert!(!settings_entry_stops_music(Screen::Pause));
+        assert!(settings_entry_stops_music(Screen::Title));
+        for action in [
+            SettingsAudioAction::PreviewCave,
+            SettingsAudioAction::StopAllMusic,
+        ] {
+            assert_eq!(
+                settings_audio_action_for_screen(Screen::Pause, Some(action)),
+                None
+            );
+            assert_eq!(
+                settings_audio_action_for_screen(Screen::Title, Some(action)),
+                Some(action)
+            );
+        }
     }
 
     #[test]
