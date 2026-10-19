@@ -125,6 +125,21 @@ fn real_custom_lush_start_and_m_on_have_distinct_source_selection() {
 }
 
 #[test]
+fn custom_music_codes_match_source_case_sensitively() {
+    let mut g = room();
+    let mut level = level::Level::default();
+    level.music = "lush".into();
+
+    g.load_custom(&level, "lowercase-music.lvl", "");
+
+    assert_eq!(g.data["custom_music"], 0.0);
+    assert_eq!(
+        g.source_music.take_commands(),
+        vec![play("musCave", true, true), frequency("musCave", 44_100)]
+    );
+}
+
+#[test]
 fn source_session_reaches_create_before_new_and_tutorial_generation() {
     let mut old = room();
     old.step(&InputFrame::default());

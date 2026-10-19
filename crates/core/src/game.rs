@@ -207,7 +207,8 @@ impl Game {
             .unwrap_or(self.world.entrance);
         self.data.insert(
             "custom_music".into(),
-            match level.music.to_uppercase().as_str() {
+            // Classic startMusic compares these authored codes exactly.
+            match level.music.as_str() {
                 "LUSH" => 1.0,
                 "ICE" => 2.0,
                 "TEMPLE" => 3.0,
