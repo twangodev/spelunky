@@ -14,6 +14,6 @@
     "deploy": "bun run --cwd web deploy",
     "assets:verify": "bun tools/export_assets.ts --verify && bun tools/export_catalog.ts --check && bun tools/export_collision_events.ts --check && bun tools/export_hub.ts --check && bun tools/export_cinematics.ts --check && bun tools/extract_templates.ts --check",
     "coverage:check": "bun tools/audit_coverage.ts --check",
-    "test:tools": "bun test tools"
+    "test:tools": "bun test tools && bun tools/test_audit_coverage_controls.ts"
   }
 }
