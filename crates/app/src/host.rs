@@ -602,7 +602,9 @@ impl App {
     /// the title screen, so a fresh title/editor entry must not revive the last
     /// document. Its preview still shares the game's source RNG stream.
     fn enter_fresh_editor(&mut self) {
+        self.refresh_custom_level_catalog();
         self.editor = fresh_editor_for_game(self.game.as_ref());
+        self.editor.begin_open_level_name(String::new());
         self.editor_play = false;
         self.source_message = None;
         self.drawn_source_message = None;
@@ -1376,6 +1378,9 @@ impl App {
         }
         match command {
             EditorCommand::None => {}
+            EditorCommand::OpenLevel { name } => {
+                open_editor_level_name(&mut self.editor, &self.custom_level_catalog, &name);
+            }
             EditorCommand::Back => {
                 self.flush_source_music();
                 if self.game.is_none() {
@@ -3395,6 +3400,36 @@ fn complete_editor_save(
         Err(error) => {
             editor.message(error);
             EditorCommand::None
+        }
+    }
+}
+
+fn open_editor_level_name(
+    editor: &mut EditorUi,
+    catalog: &std::collections::BTreeMap<String, String>,
+    name: &str,
+) {
+    // Classic lowercases the entered level name, then appends `.lvl`. Keeping
+    // an entered `.lvl` in the key is significant: it refers to `name.lvl.lvl`.
+    let name = name.to_ascii_lowercase();
+    let key = crate::editor_io::canonical_level_target_key(&name);
+    let filename = format!("{name}.lvl");
+    if let Some(source) = catalog.get(&key) {
+        if let Err(error) = editor.load(&filename, source) {
+            editor.message(format!("INVALID LEVEL: {error}"));
+            editor.begin_open_level_name(name.to_owned());
+        }
+        return;
+    }
+
+    // The Classic editor keeps its initial blank 40x32 grid when no matching
+    // file opens, then enters EDIT under the requested filename.
+    let blank = spelunky_core::level::Level::default().to_text();
+    match editor.load(&filename, &blank) {
+        Ok(()) => editor.message(format!("NEW {}", editor.level_name())),
+        Err(error) => {
+            editor.message(error);
+            editor.begin_open_level_name(name.to_owned());
         }
     }
 }
@@ -5511,6 +5546,47 @@ mod tests {
         };
         assert_eq!(text, spelunky_core::level::Level::default().to_text());
         assert_ne!(text, authored.to_text());
+    }
+
+    #[test]
+    fn f2_filename_prompt_loads_existing_catalog_entries_or_starts_a_named_blank() {
+        let mut known = spelunky_core::level::Level::default();
+        known.set_tile(3, 4, '1').unwrap();
+        let mut double_extension = spelunky_core::level::Level::default();
+        double_extension.set_tile(5, 6, 'X').unwrap();
+        let catalog = std::collections::BTreeMap::from([
+            ("known".into(), known.to_text()),
+            ("room.lvl".into(), double_extension.to_text()),
+        ]);
+
+        let mut existing = EditorUi::new();
+        existing.begin_open_level_name(String::new());
+        existing.key(KeyCode::KeyK, Some("KNOWN"), false);
+        let EditorCommand::OpenLevel { name } = existing.key(KeyCode::Enter, None, false) else {
+            panic!("Enter on a filename should ask the host to open it");
+        };
+        open_editor_level_name(&mut existing, &catalog, &name);
+        assert_eq!(existing.level_name(), "known.lvl");
+        let EditorCommand::Play(playtest) = existing.key(KeyCode::F5, None, false) else {
+            panic!("loaded editor document should remain playable");
+        };
+        assert_eq!(playtest.level.get_tile(3, 4), Some('1'));
+
+        let mut suffixed = EditorUi::new();
+        open_editor_level_name(&mut suffixed, &catalog, "ROOM.LVL");
+        assert_eq!(suffixed.level_name(), "room.lvl.lvl");
+        let EditorCommand::Play(playtest) = suffixed.key(KeyCode::F5, None, false) else {
+            panic!("double-extension catalog entry should load into the editor");
+        };
+        assert_eq!(playtest.level.get_tile(5, 6), Some('X'));
+
+        let mut missing = EditorUi::new();
+        open_editor_level_name(&mut missing, &catalog, "Fresh");
+        assert_eq!(missing.level_name(), "fresh.lvl");
+        let EditorCommand::Play(playtest) = missing.key(KeyCode::F5, None, false) else {
+            panic!("missing filename should create a blank editable document");
+        };
+        assert_eq!(playtest.level, spelunky_core::level::Level::default());
     }
 
     #[test]

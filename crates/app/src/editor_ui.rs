@@ -24,6 +24,7 @@ const ROWS: usize = 21;
 
 pub enum EditorCommand {
     None,
+    OpenLevel { name: String },
     Save { name: String, text: String },
     Export { name: String, text: String },
     Import,
@@ -52,6 +53,7 @@ enum PaletteGroup {
 
 #[derive(Clone, Copy)]
 enum Field {
+    OpenName,
     Author,
     Music,
     Life,
@@ -65,6 +67,7 @@ enum Field {
 impl Field {
     fn label(self) -> &'static str {
         match self {
+            Self::OpenName => "EDIT LEVEL FILE NAME",
             Self::Author => "AUTHOR",
             Self::Music => "MUSIC: CAVE/JUNGLE/ICE/TEMPLE",
             Self::Life => "STARTING LIFE (1-99)",
@@ -199,6 +202,14 @@ impl EditorUi {
         &self.name
     }
 
+    /// Begin Classic's F2 filename prompt. Enter asks the host to open the
+    /// named catalog entry, or to keep editing a blank document under that
+    /// name when no entry exists.
+    pub fn begin_open_level_name(&mut self, value: String) {
+        self.status.clear();
+        self.begin(Field::OpenName, value);
+    }
+
     /// Focus loss and leaving the editor terminate a stroke even when the
     /// operating system delivers no matching mouse-button release event.
     pub fn cancel_pointer(&mut self) {
@@ -234,7 +245,8 @@ impl EditorUi {
                     let entry = self.entry.take().unwrap();
                     if matches!(
                         entry.field,
-                        Field::Name
+                        Field::OpenName
+                            | Field::Name
                             | Field::Author
                             | Field::Music
                             | Field::Life
@@ -245,7 +257,21 @@ impl EditorUi {
                         return EditorCommand::Back;
                     }
                 }
-                KeyCode::Enter | KeyCode::NumpadEnter => self.commit_entry(),
+                KeyCode::Enter | KeyCode::NumpadEnter => {
+                    if self
+                        .entry
+                        .as_ref()
+                        .is_some_and(|entry| matches!(entry.field, Field::OpenName))
+                    {
+                        let entry = self.entry.take().unwrap();
+                        if !entry.value.is_empty() {
+                            return EditorCommand::OpenLevel { name: entry.value };
+                        }
+                        self.entry = Some(entry);
+                    } else {
+                        self.commit_entry();
+                    }
+                }
                 KeyCode::Tab => {
                     self.commit_entry();
                     if self.entry.is_none() {
@@ -496,7 +522,7 @@ impl EditorUi {
             // Classic appends typed characters and removes one at a time in
             // existing metadata, sign, and door strings. The host filename
             // prompt keeps its select-on-first-input convenience.
-            replace: matches!(field, Field::Name),
+            replace: matches!(field, Field::Name | Field::OpenName),
         });
     }
     fn metadata(&mut self) {
@@ -564,12 +590,17 @@ impl EditorUi {
         };
         let mut next = self.state.level.clone();
         let result: Result<(), String> = match entry.field {
+            Field::OpenName => {
+                self.entry = Some(entry);
+                return;
+            }
             Field::Name => file_name(&entry.value).map(|name| self.name = name),
             Field::Sign(id) | Field::Link(id) => {
                 self.state.set_preview_text(id, entry.value.clone())
             }
             field => {
                 let result = match field {
+                    Field::OpenName => unreachable!("open names are host commands"),
                     Field::Author => {
                         if entry.value.is_empty() {
                             Err("AUTHOR CANNOT BE EMPTY".to_owned())
@@ -948,15 +979,12 @@ impl EditorUi {
                 0.6,
                 WHITE,
             );
-            text(
-                quads,
-                atlas,
-                "ENTER APPLY  TAB NEXT FIELD  ESC CANCEL",
-                10.0,
-                126.0,
-                0.5,
-                WHITE,
-            );
+            let help = if matches!(entry.field, Field::OpenName) {
+                "ENTER OPEN OR CREATE   ESC TITLE"
+            } else {
+                "ENTER APPLY  TAB NEXT FIELD  ESC CANCEL"
+            };
+            text(quads, atlas, help, 10.0, 126.0, 0.5, WHITE);
             text(
                 quads,
                 atlas,
@@ -1120,6 +1148,33 @@ mod tests {
         ui.source_tick();
         ui.source_tick();
         assert_eq!(ui.pan, [0.0, 0.0], "top and left camera edges clamp");
+    }
+
+    #[test]
+    fn f2_filename_prompt_requires_a_name_and_routes_open_or_escape() {
+        let mut ui = EditorUi::new();
+        ui.begin_open_level_name(String::new());
+
+        assert!(matches!(
+            ui.key(KeyCode::Enter, None, false),
+            EditorCommand::None
+        ));
+        assert!(
+            ui.entry.is_some(),
+            "empty Enter keeps the filename prompt open"
+        );
+
+        ui.key(KeyCode::KeyM, Some("mine"), false);
+        assert!(matches!(
+            ui.key(KeyCode::Enter, None, false),
+            EditorCommand::OpenLevel { name } if name == "mine"
+        ));
+
+        ui.begin_open_level_name(String::new());
+        assert!(matches!(
+            ui.key(KeyCode::Escape, None, false),
+            EditorCommand::Back
+        ));
     }
 
     #[test]
