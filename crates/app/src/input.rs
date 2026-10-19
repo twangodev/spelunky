@@ -2,7 +2,7 @@
 
 use crate::controller::{self, Button as ControllerButton};
 use spelunky_core::InputFrame;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use winit::keyboard::KeyCode;
 
 const DEAD_ZONE: f32 = 0.25;
@@ -15,6 +15,28 @@ fn source_trigger_pressed(button: ControllerButton, pressed: bool, value: f32) -
             button,
             ControllerButton::LeftTrigger | ControllerButton::RightTrigger
         ) && value > 0.1)
+}
+
+/// Gilrs exposes separate trigger axes on most controllers, normalized to
+/// [-1, 1]. Some controllers expose the Classic signed Z axis as one mapping,
+/// with its positive and negative halves assigned to the two triggers.
+fn classic_trigger_axis_values(
+    left_z_mapped: bool,
+    right_z_mapped: bool,
+    left_z: Option<f32>,
+    right_z: Option<f32>,
+) -> [f32; 2] {
+    let separate_axis =
+        |sample: Option<f32>| sample.map_or(0.0, |value| ((value + 1.0) * 0.5).clamp(0.0, 1.0));
+    match (left_z_mapped, right_z_mapped) {
+        (true, false) => {
+            let value = left_z.unwrap_or(0.0);
+            [value.max(0.0), (-value).max(0.0)]
+        }
+        (false, true) => [0.0, separate_axis(right_z)],
+        (true, true) => [separate_axis(left_z), separate_axis(right_z)],
+        (false, false) => [0.0, 0.0],
+    }
 }
 
 #[cfg(any(test, target_arch = "wasm32"))]
@@ -115,6 +137,7 @@ pub struct InputState {
     gamepad_actions: Actions,
     controller_enabled: bool,
     controller_bindings: BTreeMap<String, String>,
+    gamepad_available: bool,
     primary_gamepad_connected: bool,
     controller_capture_held: bool,
     controller_capture_blocked: bool,
@@ -129,6 +152,8 @@ pub struct InputState {
     ui_edges: Vec<UiButton>,
     #[cfg(not(target_arch = "wasm32"))]
     gilrs: Option<gilrs::Gilrs>,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_extra_button_codes: HashMap<gilrs::GamepadId, [Option<gilrs::ev::Code>; 3]>,
 }
 
 impl Default for InputState {
@@ -142,6 +167,7 @@ impl Default for InputState {
             gamepad_actions: Actions::default(),
             controller_enabled: false,
             controller_bindings: controller::default_bindings(),
+            gamepad_available: false,
             primary_gamepad_connected: false,
             controller_capture_held: false,
             controller_capture_blocked: false,
@@ -156,11 +182,21 @@ impl Default for InputState {
             ui_edges: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             gilrs: gilrs::Gilrs::new().ok(),
+            #[cfg(not(target_arch = "wasm32"))]
+            native_extra_button_codes: HashMap::new(),
         }
     }
 }
 
 impl InputState {
+    pub fn controller_enabled(&self) -> bool {
+        self.controller_enabled
+    }
+
+    pub fn gamepad_available(&self) -> bool {
+        self.gamepad_available
+    }
+
     pub fn primary_gamepad_connected(&self) -> bool {
         self.primary_gamepad_connected
     }
@@ -254,6 +290,13 @@ impl InputState {
             self.blocked_gamepad_ui = 0;
             self.accept_gamepads(Actions::default(), 0);
         }
+    }
+
+    /// Applies the saved option during startup without treating controls held
+    /// at launch as newly enabled input. Classic polls its saved gamepad mode
+    /// on the first frame, so an already-held button is visible immediately.
+    pub fn initialize_controller_enabled(&mut self, enabled: bool) {
+        self.controller_enabled = enabled;
     }
 
     /// Raw physical controls are captured before menu navigation is translated
@@ -618,6 +661,7 @@ impl InputState {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn update_gamepad(&mut self) {
         let Some(mut gilrs) = self.gilrs.take() else {
+            self.gamepad_available = false;
             self.primary_gamepad_connected = false;
             self.accept_controller_capture(0);
             self.accept_controller_sample(Actions::default(), 0);
@@ -631,14 +675,15 @@ impl InputState {
             self.accept_controller_sample_with_direction_edges(actions, ui, press_allowed);
         }
         let (actions, ui, press_allowed, capture) = self.native_gamepads(&gilrs);
-        self.primary_gamepad_connected = gilrs.gamepads().next().is_some();
+        self.gamepad_available = gilrs.gamepads().next().is_some();
+        self.primary_gamepad_connected = self.gamepad_available;
         self.accept_controller_capture(capture);
         self.accept_controller_sample_with_direction_edges(actions, ui, press_allowed);
         self.gilrs = Some(gilrs);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn native_gamepads(&self, gilrs: &gilrs::Gilrs) -> (Actions, u8, u8, u32) {
+    fn native_gamepads(&mut self, gilrs: &gilrs::Gilrs) -> (Actions, u8, u8, u32) {
         use gilrs::{Axis, Button};
         // Gilrs IDs are stable device identities, not Classic joystick slots:
         // unplugging a pad can leave a gap and later devices receive higher IDs.
@@ -652,6 +697,7 @@ impl InputState {
             return (Actions::default(), 0, 0x0f, 0);
         };
         let pad = gamepads[slot].expect("selected native gamepad slot is connected");
+        let extra_codes = self.native_extra_button_codes(&pad);
         let mut capture = 0;
         let x = pad.value(Axis::LeftStickX);
         let y = pad.value(Axis::LeftStickY);
@@ -659,25 +705,53 @@ impl InputState {
         let right = x > DEAD_ZONE || pad.is_pressed(Button::DPadRight);
         let up = y > DEAD_ZONE || pad.is_pressed(Button::DPadUp);
         let down = y < -DEAD_ZONE || pad.is_pressed(Button::DPadDown);
+        let [left_trigger_axis, right_trigger_axis] = classic_trigger_axis_values(
+            pad.axis_code(Axis::LeftZ).is_some(),
+            pad.axis_code(Axis::RightZ).is_some(),
+            pad.axis_data(Axis::LeftZ).map(|axis| axis.value()),
+            pad.axis_data(Axis::RightZ).map(|axis| axis.value()),
+        );
         let mut held = 0;
         for button in controller::ALL {
-            let native = native_controller_button(button);
-            if source_trigger_pressed(
-                button,
-                pad.is_pressed(native),
-                pad.button_data(native).map_or(0.0, |data| data.value()),
-            ) {
+            let native_data = native_controller_button(button)
+                .and_then(|native| pad.button_data(native))
+                .or_else(|| {
+                    native_extra_slot(button)
+                        .and_then(|slot| extra_codes[slot])
+                        .and_then(|code| pad.state().button_data(code))
+                });
+            let native_pressed = native_controller_button(button)
+                .map(|native| pad.is_pressed(native))
+                .or_else(|| {
+                    native_extra_slot(button)
+                        .and_then(|slot| extra_codes[slot])
+                        .map(|code| pad.state().is_pressed(code))
+                })
+                .unwrap_or(false);
+            if native_data.is_none()
+                && !matches!(
+                    button,
+                    ControllerButton::LeftTrigger | ControllerButton::RightTrigger
+                )
+            {
+                continue;
+            }
+            let axis_value = match button {
+                ControllerButton::LeftTrigger => left_trigger_axis,
+                ControllerButton::RightTrigger => right_trigger_axis,
+                _ => 0.0,
+            };
+            let value = native_data.map_or(0.0, |data| data.value()).max(axis_value);
+            if source_trigger_pressed(button, native_pressed, value) {
                 held |= button.mask();
             }
             let capturing = if matches!(
                 button,
                 ControllerButton::LeftTrigger | ControllerButton::RightTrigger
             ) {
-                pad.button_data(native)
-                    .is_some_and(|data| data.value() > 0.1)
-                    || pad.is_pressed(native)
+                source_trigger_pressed(button, native_pressed, value)
             } else {
-                pad.is_pressed(native)
+                native_pressed
             };
             if capturing {
                 capture |= button.mask();
@@ -688,6 +762,27 @@ impl InputState {
         (actions, ui, press_allowed, capture)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn native_extra_button_codes(
+        &mut self,
+        pad: &gilrs::Gamepad<'_>,
+    ) -> [Option<gilrs::ev::Code>; 3] {
+        use gilrs::Button;
+
+        let slots = self
+            .native_extra_button_codes
+            .entry(pad.id())
+            .or_insert_with(|| [pad.button_code(Button::C), pad.button_code(Button::Z), None]);
+        let mut unknown_codes: Vec<_> = pad
+            .state()
+            .buttons()
+            .filter_map(|(code, _)| pad.axis_or_btn_name(code).is_none().then_some(code))
+            .collect();
+        unknown_codes.sort_by_key(gilrs::ev::Code::into_u32);
+        fill_native_extra_button_slots(slots, unknown_codes);
+        *slots
+    }
+
     #[cfg(target_arch = "wasm32")]
     pub fn update_gamepad(&mut self) {
         use wasm_bindgen::JsCast;
@@ -696,6 +791,7 @@ impl InputState {
         let capture = 0;
         let direction_press_allowed = 0x0f;
         self.primary_gamepad_connected = false;
+        self.gamepad_available = false;
         if let Some(pads) =
             web_sys::window().and_then(|window| window.navigator().get_gamepads().ok())
         {
@@ -709,6 +805,7 @@ impl InputState {
                 .collect();
             self.primary_gamepad_connected =
                 controller::classic_primary_gamepad_connected(slots.iter().copied());
+            self.gamepad_available = slots.iter().any(|slot| *slot <= 1);
             if let Some(slot) = controller::classic_gamepad_slot(slots.iter().copied()) {
                 let Ok(pad) = pads.get(slot as u32).dyn_into::<web_sys::Gamepad>() else {
                     self.accept_controller_capture(0);
@@ -754,9 +851,9 @@ fn first_two_connected_gamepads<T>(connected: impl IntoIterator<Item = T>) -> [O
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn native_controller_button(button: ControllerButton) -> gilrs::Button {
+fn native_controller_button(button: ControllerButton) -> Option<gilrs::Button> {
     use gilrs::Button;
-    match button {
+    Some(match button {
         ControllerButton::South => Button::South,
         ControllerButton::East => Button::East,
         ControllerButton::West => Button::West,
@@ -774,6 +871,34 @@ fn native_controller_button(button: ControllerButton) -> gilrs::Button {
         ControllerButton::DPadLeft => Button::DPadLeft,
         ControllerButton::DPadRight => Button::DPadRight,
         ControllerButton::Mode => Button::Mode,
+        ControllerButton::Extra1 | ControllerButton::Extra2 | ControllerButton::Extra3 => {
+            return None;
+        }
+    })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn native_extra_slot(button: ControllerButton) -> Option<usize> {
+    match button {
+        ControllerButton::Extra1 => Some(0),
+        ControllerButton::Extra2 => Some(1),
+        ControllerButton::Extra3 => Some(2),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fill_native_extra_button_slots<T: Copy + Eq>(
+    slots: &mut [Option<T>; 3],
+    codes: impl IntoIterator<Item = T>,
+) {
+    for code in codes {
+        if slots.iter().flatten().any(|current| *current == code) {
+            continue;
+        }
+        if let Some(slot) = slots.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(code);
+        }
     }
 }
 
@@ -810,6 +935,25 @@ mod tests {
             ),
             Some(0)
         );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_extra_controller_slots_map_to_gilrs_extra_buttons() {
+        assert_eq!(native_controller_button(ControllerButton::Extra1), None);
+        assert_eq!(native_controller_button(ControllerButton::Extra2), None);
+        assert_eq!(native_controller_button(ControllerButton::Extra3), None);
+        assert_eq!(native_extra_slot(ControllerButton::Extra1), Some(0));
+        assert_eq!(native_extra_slot(ControllerButton::Extra2), Some(1));
+        assert_eq!(native_extra_slot(ControllerButton::Extra3), Some(2));
+
+        let mut slots = [Some(10), Some(20), None];
+        fill_native_extra_button_slots(&mut slots, [20, 30, 40]);
+        assert_eq!(slots, [Some(10), Some(20), Some(30)]);
+
+        let mut raw_slots = [None; 3];
+        fill_native_extra_button_slots(&mut raw_slots, [30, 10]);
+        assert_eq!(raw_slots, [Some(30), Some(10), None]);
     }
 
     #[test]
@@ -878,6 +1022,74 @@ mod tests {
     }
 
     #[test]
+    fn native_trigger_axes_accept_separate_and_signed_classic_z_layouts() {
+        assert_eq!(
+            classic_trigger_axis_values(false, false, None, None),
+            [0.0, 0.0]
+        );
+        assert_eq!(
+            classic_trigger_axis_values(true, false, Some(0.6), None),
+            [0.6, 0.0]
+        );
+        assert_eq!(
+            classic_trigger_axis_values(true, false, Some(-0.7), None),
+            [0.0, 0.7]
+        );
+        assert_eq!(
+            classic_trigger_axis_values(true, true, Some(-0.2), Some(0.6)),
+            [0.4, 0.8]
+        );
+        assert_eq!(
+            classic_trigger_axis_values(false, true, None, Some(0.8)),
+            [0.0, 0.9]
+        );
+        // An axis mapping remains present before it has produced a sample.
+        // A released unipolar trigger normalizes to zero rather than being
+        // misidentified as the negative half of a signed shared axis.
+        assert_eq!(
+            classic_trigger_axis_values(true, true, Some(-1.0), None),
+            [0.0, 0.0]
+        );
+        let [_, right] = classic_trigger_axis_values(true, false, Some(-0.1), None);
+        assert!(!source_trigger_pressed(
+            ControllerButton::RightTrigger,
+            false,
+            right
+        ));
+        let [left, right] = classic_trigger_axis_values(true, false, Some(-0.11), None);
+        assert!(!source_trigger_pressed(
+            ControllerButton::LeftTrigger,
+            false,
+            left
+        ));
+        assert!(source_trigger_pressed(
+            ControllerButton::RightTrigger,
+            false,
+            right
+        ));
+    }
+
+    #[test]
+    fn startup_gamepad_availability_is_distinct_from_the_saved_preference() {
+        assert!(!startup_controller_enabled(false, false));
+        assert!(!startup_controller_enabled(false, true));
+        assert!(!startup_controller_enabled(true, false));
+        assert!(startup_controller_enabled(true, true));
+    }
+
+    #[test]
+    fn startup_controller_mode_accepts_controls_already_held_at_launch() {
+        let mut input = InputState::default();
+        input.initialize_controller_enabled(true);
+        let mut actions = Actions::default();
+        actions.set(Action::Jump, true);
+        input.accept_controller_sample(actions, 0);
+        let frame = input.take_tick();
+        assert!(frame.jump);
+        assert!(frame.jump_pressed);
+    }
+
+    #[test]
     fn browser_gamepad_raw_button_ordinals_work_without_a_standard_mapping() {
         // The browser may expose a connected joystick with mapping="".
         // GameMaker still queries numbered buttons (Jump defaults to button 2),
@@ -896,6 +1108,16 @@ mod tests {
         assert!(tick.jump && tick.jump_pressed);
         assert!(!tick.attack);
         assert_eq!(input.controller_pressed(), vec![ControllerButton::East]);
+
+        input.accept_browser_controller_sample(&[], [0.0, 0.0]);
+        input.take_tick();
+        let mut extra = vec![BrowserButtonSample::default(); 20];
+        extra[19] = BrowserButtonSample {
+            pressed: true,
+            value: 1.0,
+        };
+        input.accept_browser_controller_sample(&extra, [0.0, 0.0]);
+        assert_eq!(input.controller_pressed(), vec![ControllerButton::Extra3]);
 
         input.accept_browser_controller_sample(&[], [0.0, -1.0]);
         let tick = input.take_tick();
@@ -2121,4 +2343,8 @@ mod tests {
         assert_ne!(game.player.state, PlayerState::Climbing);
         assert!(game.player.vel.x > 0.0 && game.player.vel.y < 0.0);
     }
+}
+
+pub(crate) fn startup_controller_enabled(saved_setting: bool, gamepad_available: bool) -> bool {
+    saved_setting && gamepad_available
 }

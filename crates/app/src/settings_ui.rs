@@ -85,6 +85,33 @@ impl SettingsUi {
         self.controller_binding.is_some()
     }
 
+    pub fn controller_state_row_selected(&self) -> bool {
+        matches!(self.selected, CONTROLLER_INPUT | RESTORE)
+    }
+
+    pub fn key_with_runtime_controller(
+        &mut self,
+        key: KeyCode,
+        settings: &mut Settings,
+        controller_enabled: bool,
+    ) -> SettingsCommand {
+        if self.selected == CONTROLLER_INPUT
+            && matches!(
+                key,
+                KeyCode::ArrowLeft
+                    | KeyCode::ArrowRight
+                    | KeyCode::Enter
+                    | KeyCode::NumpadEnter
+                    | KeyCode::Space
+            )
+        {
+            // Classic changes the session global shown by the row. Preserve
+            // the saved preference until the user actually toggles it.
+            settings.controller_enabled = controller_enabled;
+        }
+        self.key(key, settings)
+    }
+
     /// Activate a clicked row. Source checkboxes and config buttons react to a
     /// mouse press; source sliders continue tracking the pointer while held.
     pub fn pointer_press(&mut self, x: f32, y: f32, settings: &mut Settings) -> SettingsCommand {
@@ -115,6 +142,22 @@ impl SettingsUi {
             return self.set_volume_from_pointer(index, x, settings);
         }
         self.adjust(settings, 1, true)
+    }
+
+    pub fn pointer_press_with_runtime_controller(
+        &mut self,
+        x: f32,
+        y: f32,
+        settings: &mut Settings,
+        controller_enabled: bool,
+    ) -> SettingsCommand {
+        if self.awaiting_binding() {
+            return SettingsCommand::None;
+        }
+        if settings_row_at(self.selected, x, y) == Some(CONTROLLER_INPUT) {
+            settings.controller_enabled = controller_enabled;
+        }
+        self.pointer_press(x, y, settings)
     }
 
     /// Update a source-style volume slider while the left mouse button is held.
@@ -719,6 +762,40 @@ mod tests {
         );
         assert!(!settings.controller_enabled);
         assert_eq!(row(CONTROLLER_INPUT, &settings).1, "OFF");
+    }
+
+    #[test]
+    fn runtime_controller_startup_state_preserves_saved_preference_until_changed() {
+        let mut menu = SettingsUi::new();
+        let mut settings = Settings::default();
+        settings.controller_enabled = true;
+        let session_enabled = false;
+
+        menu.key_with_runtime_controller(KeyCode::ArrowRight, &mut settings, session_enabled);
+        assert!(
+            settings.controller_enabled,
+            "ordinary settings edits preserve the saved preference"
+        );
+
+        for _ in 0..CONTROLLER_INPUT {
+            menu.key_with_runtime_controller(KeyCode::ArrowDown, &mut settings, session_enabled);
+        }
+        assert!(menu.controller_state_row_selected());
+        assert_eq!(
+            menu.key_with_runtime_controller(KeyCode::Enter, &mut settings, session_enabled),
+            SettingsCommand::Changed
+        );
+        assert!(
+            settings.controller_enabled,
+            "the row toggles from the displayed session state"
+        );
+
+        assert_eq!(
+            menu.key_with_runtime_controller(KeyCode::ArrowRight, &mut settings, true),
+            SettingsCommand::Changed
+        );
+        assert!(!settings.controller_enabled);
+        assert!(menu.controller_state_row_selected());
     }
 
     #[test]

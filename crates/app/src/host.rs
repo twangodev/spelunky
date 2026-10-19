@@ -428,7 +428,13 @@ impl App {
         let mut input = InputState::default();
         input.set_bindings(&store.data.settings.bindings);
         input.set_controller_bindings(&store.data.settings.controller_bindings);
-        input.set_controller_enabled(store.data.settings.controller_enabled);
+        // Classic suppresses the saved controller mode for this session when
+        // both supported joystick slots are empty at startup.
+        input.update_gamepad();
+        input.initialize_controller_enabled(crate::input::startup_controller_enabled(
+            store.data.settings.controller_enabled,
+            input.gamepad_available(),
+        ));
         let source_music = SourceMusicState::default();
         let mut game = Game::shell_with_music(
             wall_seed(),
@@ -536,7 +542,7 @@ impl App {
                 .map(|game| {
                     source_pause_summary(
                         game,
-                        self.store.data.settings.controller_enabled,
+                        self.input.controller_enabled(),
                         &self.store.data.custom_levels,
                     )
                 })
@@ -647,8 +653,6 @@ impl App {
         self.input.set_bindings(&settings.bindings);
         self.input
             .set_controller_bindings(&settings.controller_bindings);
-        self.input
-            .set_controller_enabled(settings.controller_enabled);
         self.audio.set_music_volume(settings.music_volume);
         self.audio
             .set_effect_volume("sndJump", settings.effects_volume);
@@ -956,7 +960,11 @@ impl App {
                 }
             }
             Screen::Settings => {
-                let command = self.settings_ui.key(key, &mut self.store.data.settings);
+                let command = self.settings_ui.key_with_runtime_controller(
+                    key,
+                    &mut self.store.data.settings,
+                    self.input.controller_enabled(),
+                );
                 self.apply_settings_command(command);
             }
             Screen::Editor => {
@@ -1162,7 +1170,13 @@ impl App {
     }
     fn apply_settings_command(&mut self, command: SettingsCommand) {
         match command {
-            SettingsCommand::Changed => self.settings_changed(),
+            SettingsCommand::Changed => {
+                if self.settings_ui.controller_state_row_selected() {
+                    self.input
+                        .set_controller_enabled(self.store.data.settings.controller_enabled);
+                }
+                self.settings_changed();
+            }
             SettingsCommand::Back => self.screen(self.settings_return),
             SettingsCommand::Fullscreen => self.fullscreen(),
             SettingsCommand::None => {}
@@ -2092,12 +2106,16 @@ impl App {
                 );
             }
             Screen::Editor => self.editor.draw(atlas, quads),
-            Screen::Settings => self.settings_ui.draw_with_gamepad(
-                atlas,
-                quads,
-                &self.store.data.settings,
-                Some(self.input.primary_gamepad_connected()),
-            ),
+            Screen::Settings => {
+                let mut settings = self.store.data.settings.clone();
+                settings.controller_enabled = self.input.controller_enabled();
+                self.settings_ui.draw_with_gamepad(
+                    atlas,
+                    quads,
+                    &settings,
+                    Some(self.input.primary_gamepad_connected()),
+                );
+            }
             Screen::Title => {
                 text(quads, atlas, "SPELUNKY", 64., 18., 2.8, GOLD);
                 text(quads, atlas, "CLASSIC / RUST", 88., 45., 1., WHITE);
@@ -2600,10 +2618,11 @@ impl App {
     fn pointer_press(&mut self) {
         match self.screen {
             Screen::Settings => {
-                let command = self.settings_ui.pointer_press(
+                let command = self.settings_ui.pointer_press_with_runtime_controller(
                     self.cursor[0],
                     self.cursor[1],
                     &mut self.store.data.settings,
+                    self.input.controller_enabled(),
                 );
                 self.apply_settings_command(command);
                 self.apply_settings_audio_action();

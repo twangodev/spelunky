@@ -3,7 +3,8 @@
 use std::collections::BTreeMap;
 
 /// Positions follow the browser standard gamepad layout, including its Mode
-/// button. Native adapters translate their named buttons into these positions.
+/// button, followed by Classic's three extra numbered-button slots. Native
+/// adapters translate their named buttons into these positions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Button {
@@ -24,9 +25,12 @@ pub enum Button {
     DPadLeft,
     DPadRight,
     Mode,
+    Extra1,
+    Extra2,
+    Extra3,
 }
 
-pub const ALL: [Button; 17] = [
+pub const ALL: [Button; 20] = [
     Button::South,
     Button::East,
     Button::West,
@@ -44,6 +48,9 @@ pub const ALL: [Button; 17] = [
     Button::DPadLeft,
     Button::DPadRight,
     Button::Mode,
+    Button::Extra1,
+    Button::Extra2,
+    Button::Extra3,
 ];
 
 impl Button {
@@ -66,6 +73,9 @@ impl Button {
             Self::DPadLeft => "DPadLeft",
             Self::DPadRight => "DPadRight",
             Self::Mode => "Mode",
+            Self::Extra1 => "Extra1",
+            Self::Extra2 => "Extra2",
+            Self::Extra3 => "Extra3",
         }
     }
 
@@ -88,6 +98,9 @@ impl Button {
             Self::DPadLeft => "D-PAD LEFT",
             Self::DPadRight => "D-PAD RIGHT",
             Self::Mode => "MODE",
+            Self::Extra1 => "EXTRA BUTTON 1",
+            Self::Extra2 => "EXTRA BUTTON 2",
+            Self::Extra3 => "EXTRA BUTTON 3",
         }
     }
 
@@ -180,6 +193,11 @@ mod tests {
         for unsupported in ["", "B1", "Button18", "south"] {
             assert_eq!(parse(unsupported), None);
         }
+        assert_eq!(
+            ALL.len(),
+            20,
+            "Classic captures joystick buttons 1 through 20"
+        );
     }
 
     #[test]
