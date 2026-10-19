@@ -66,8 +66,9 @@ fn has(flags: &BTreeSet<String>, name: &str) -> bool {
             // keeps it alive to suppress Lake routes later in the Jungle.
             "black_market" => {
                 flags.contains("blackMarket")
-                    || (flags.contains("genBlackMarket") && !flags.contains("made_black_market"))
+                    || (flags.contains("genBlackMarket") && !has(flags, "made_black_market"))
             }
+            "made_black_market" => flags.contains("madeBlackMarket"),
             "city_of_gold" => flags.contains("cityOfGold"),
             "snake_pit" => flags.contains("snakePit"),
             "alien_ship" => flags.contains("alienCraft"),
@@ -1758,14 +1759,31 @@ mod tests {
         // layout. It prevents later Jungle Lake routes even though
         // madeBlackMarket prevents the special layout from repeating.
         let flags = BTreeSet::from(["genBlackMarket".into(), "made_black_market".into()]);
+        let mut persisted_rng = Rng::new(0);
         let persisted = generate_campaign_result(
-            &mut Rng::new(0),
+            &mut persisted_rng,
             7,
             &flags,
             GenerationContext::default(),
             &mut GenerationState::fresh(&Rng::new(0)),
         );
         assert_eq!(persisted.world.name, "Jungle");
+
+        let source_named_flags =
+            BTreeSet::from(["genBlackMarket".into(), "madeBlackMarket".into()]);
+        let mut source_named_rng = Rng::new(0);
+        let source_named = generate_campaign_result(
+            &mut source_named_rng,
+            7,
+            &source_named_flags,
+            GenerationContext::default(),
+            &mut GenerationState::fresh(&Rng::new(0)),
+        );
+        assert_eq!(
+            source_named.world.name, "Jungle",
+            "Classic's madeBlackMarket flag must suppress another forced Market layout"
+        );
+        assert_eq!(source_named_rng.state_bits(), persisted_rng.state_bits());
     }
 
     #[test]
