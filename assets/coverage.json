@@ -1679,27 +1679,27 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 99,
+          "line": 98,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 190,
+          "line": 189,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 264,
+          "line": 263,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 579,
+          "line": 578,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 78,
+          "line": 77,
           "module": "crates/core/src/traps/moving.rs"
         }
       ],
@@ -2418,22 +2418,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 106,
+          "line": 105,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 181,
+          "line": 180,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 586,
+          "line": 585,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 85,
+          "line": 84,
           "module": "crates/core/src/traps/moving.rs"
         }
       ],
@@ -3104,27 +3104,27 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 104,
+          "line": 103,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 194,
+          "line": 193,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 354,
+          "line": 353,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 584,
+          "line": 583,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 83,
+          "line": 82,
           "module": "crates/core/src/traps/moving.rs"
         }
       ],
@@ -3455,22 +3455,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 107,
+          "line": 106,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 187,
+          "line": 186,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 583,
+          "line": 582,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 86,
+          "line": 85,
           "module": "crates/core/src/traps/moving.rs"
         }
       ],
@@ -5532,17 +5532,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 101,
+          "line": 100,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 585,
+          "line": 584,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 80,
+          "line": 79,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
@@ -7956,7 +7956,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 585,
+          "line": 584,
           "module": "crates/core/src/traps/moving.rs"
         }
       ],
@@ -8828,7 +8828,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 585,
+          "line": 584,
           "module": "crates/core/src/traps/moving.rs"
         }
       ],
@@ -9181,22 +9181,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 100,
+          "line": 99,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 161,
+          "line": 160,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 585,
+          "line": 584,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 79,
+          "line": 78,
           "module": "crates/core/src/traps/moving.rs"
         }
       ],
@@ -10744,22 +10744,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 98,
+          "line": 97,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 187,
+          "line": 186,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 580,
+          "line": 579,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 76,
+          "line": 75,
           "module": "crates/core/src/traps/moving.rs"
         }
       ],
@@ -10785,22 +10785,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 98,
+          "line": 97,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 187,
+          "line": 186,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 580,
+          "line": 579,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 77,
+          "line": 76,
           "module": "crates/core/src/traps/moving.rs"
         }
       ],
@@ -11527,17 +11527,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 102,
+          "line": 101,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 374,
+          "line": 373,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 81,
+          "line": 80,
           "module": "crates/core/src/traps/moving.rs"
         }
       ],
@@ -11916,17 +11916,17 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 103,
+          "line": 102,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 198,
+          "line": 197,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 82,
+          "line": 81,
           "module": "crates/core/src/traps/moving.rs"
         }
       ],
@@ -11946,22 +11946,22 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 105,
+          "line": 104,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 187,
+          "line": 186,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 585,
+          "line": 584,
           "module": "crates/core/src/traps/moving.rs"
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 84,
+          "line": 83,
           "module": "crates/core/src/traps/moving.rs"
         }
       ],

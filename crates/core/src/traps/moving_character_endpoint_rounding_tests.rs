@@ -50,12 +50,10 @@ fn controlled_side_push_includes_only_the_source_last_row_at_signed_half_ties() 
                     Vec2::new(direction, 0.0),
                     false,
                 );
-                let mut carried = false;
                 assert!(!move_solid(
                     &mut game,
                     &mut solid,
-                    Vec2::new(direction, 0.0),
-                    &mut carried
+                    Vec2::new(direction, 0.0)
                 ));
                 assert_eq!(
                     game.player.pos.x,
@@ -63,7 +61,6 @@ fn controlled_side_push_includes_only_the_source_last_row_at_signed_half_ties() 
                     "Y={y}, first_row={first_row}, direction={direction}, preset={preset:?}"
                 );
                 assert_eq!(solid.pos, Vec2::new(x + direction, first_row));
-                assert!(!carried);
             }
         }
     }
@@ -88,12 +85,10 @@ fn controlled_side_push_rounds_horizontal_offsets_before_sampling() {
                 Vec2::new(direction, 0.0),
                 false,
             );
-            let mut carried = false;
             assert!(!move_solid(
                 &mut game,
                 &mut solid,
-                Vec2::new(direction, 0.0),
-                &mut carried
+                Vec2::new(direction, 0.0)
             ));
             assert_eq!(
                 game.player.pos.x,
@@ -125,14 +120,8 @@ fn controlled_side_obstruction_uses_the_same_source_bottom_endpoint() {
                 );
                 let blocker_x = if direction > 0.0 { 101.0 } else { 75.0 };
                 game.spawn("oBlock", Vec2::new(blocker_x, blocker_row));
-                let mut carried = false;
                 assert_eq!(
-                    move_solid(
-                        &mut game,
-                        &mut solid,
-                        Vec2::new(direction, 0.0),
-                        &mut carried
-                    ),
+                    move_solid(&mut game, &mut solid, Vec2::new(direction, 0.0)),
                     blocked
                 );
                 let movement = if blocked { 0.0 } else { direction };
@@ -162,13 +151,7 @@ fn controlled_rising_underside_rounds_the_complete_signed_endpoint() {
                 Vec2::new(0.0, -1.0),
                 false,
             );
-            let mut carried = false;
-            assert!(!move_solid(
-                &mut game,
-                &mut solid,
-                Vec2::new(0.0, -1.0),
-                &mut carried
-            ));
+            assert!(!move_solid(&mut game, &mut solid, Vec2::new(0.0, -1.0)));
             assert_eq!(game.player.jump_time, if contact { 10 } else { 2 });
             assert_eq!(game.player.vel.y, if contact { -2.0 } else { -4.0 });
             assert_eq!(game.player.pos, Vec2::new(96.0, y));
@@ -194,13 +177,7 @@ fn controlled_downward_carry_rounds_character_top_two_before_sampling() {
                 Vec2::new(0.0, 1.0),
                 true,
             );
-            let mut carried = false;
-            assert!(!move_solid(
-                &mut game,
-                &mut solid,
-                Vec2::new(0.0, 1.0),
-                &mut carried
-            ));
+            assert!(!move_solid(&mut game, &mut solid, Vec2::new(0.0, 1.0)));
             assert_eq!(
                 game.player.pos,
                 Vec2::new(96.0, y + if contact { 1.0 } else { 0.0 })

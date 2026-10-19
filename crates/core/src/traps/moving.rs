@@ -9,7 +9,6 @@ pub(super) fn pre_tick(game: &mut Game) {
     // Source with(oMovingSolid), then with(oMoveableSolid), traverses the
     // engine instance arrays. Storage order may differ after reactivation.
     crate::dispatcher::register_instances(game);
-    let mut carried_horizontally = false;
     for parent in ["oMovingSolid", "oMoveableSolid"] {
         // Neither platform-pass body creates, destroys, or activates instances;
         // this fixed-count snapshot therefore preserves its live source order.
@@ -37,7 +36,7 @@ pub(super) fn pre_tick(game: &mut Game) {
                     }
                 }
                 let velocity = entity.vel;
-                move_solid(game, &mut entity, velocity, &mut carried_horizontally);
+                move_solid(game, &mut entity, velocity);
             } else {
                 // Source oMoveableSolid is a separate global gravity pass.
                 let view = game.simulation_view_rect();
@@ -807,8 +806,7 @@ fn smash(game: &mut Game, entity: &mut Entity) {
 /// Source global platform movement goes X then Y. It does not collide the
 /// moving solid with terrain; its own object Step handles those contacts.
 /// Only a side-pushed character blocked by another solid stops this pass.
-fn move_solid(game: &mut Game, entity: &mut Entity, delta: Vec2, carried: &mut bool) -> bool {
-    let can_carry = !*carried;
+fn move_solid(game: &mut Game, entity: &mut Entity, delta: Vec2) -> bool {
     let mut obstructed = false;
     let viscid =
         entity
@@ -843,7 +841,7 @@ fn move_solid(game: &mut Game, entity: &mut Entity, delta: Vec2, carried: &mut b
             let top_line = Rect::new(lb, bb, rb - lb + 1.0, 1.0);
             let bottom_line = Rect::new(lb, underside, rb - lb + 1.0, 1.0);
             let rider = if horizontal {
-                viscid && can_carry && entity.mask_intersects(top_line, CollisionPrecision::Precise)
+                viscid && entity.mask_intersects(top_line, CollisionPrecision::Precise)
             } else if step.y > 0.0 {
                 viscid
                     && entity.mask_intersects(
@@ -894,9 +892,6 @@ fn move_solid(game: &mut Game, entity: &mut Entity, delta: Vec2, carried: &mut b
                     game.player.pos.x += step.x;
                     game.player.pos.y += step.y;
                     game.player.grounded = true;
-                    if horizontal {
-                        *carried = true;
-                    }
                 } else if !horizontal && step.y < 0.0 {
                     obstructed = true;
                     break;
@@ -2459,6 +2454,32 @@ mod tests {
         assert_eq!(game.world.entity(id).unwrap().pos.x, 130.0);
         assert_eq!(game.player.health, 4.0);
     }
+
+    #[test]
+    fn overlapping_horizontal_moving_solids_each_carry_the_rider_in_source_order() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let first = game.world.spawn("oCeilingTrap", Vec2::new(96.0, 80.0));
+        let second = game.world.spawn("oCeilingTrap", Vec2::new(96.0, 80.0));
+        for id in [first, second] {
+            let solid = game.world.entity_mut(id).unwrap();
+            assert_eq!(solid.value("viscidTop"), 1.0);
+            solid.vel.x = 1.0;
+        }
+        game.player.pos = Vec2::new(96.0, 72.0);
+        game.player.vel = Vec2::new(0.0, 0.0);
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+
+        game.step(&crate::InputFrame::default());
+
+        assert_eq!(game.world.entity(first).unwrap().pos.x, 97.0);
+        assert_eq!(game.world.entity(second).unwrap().pos.x, 97.0);
+        assert_eq!(
+            game.player.pos.x, 98.0,
+            "Classic permits each moving-solid instance to carry the rider once"
+        );
+    }
+
     #[test]
     fn thin_ice_loses_sixty_thickness_over_thirty_standing_game_ticks() {
         let mut game = Game::shell(1, RulesPreset::Classic);
