@@ -864,7 +864,7 @@ impl App {
                     apply_source_suicide(game);
                 }
                 self.screen(Screen::Playing);
-                self.audio.stop_music();
+                self.audio.stop_all_music();
                 return;
             }
             Some(SourceHostControl::Quit) => {

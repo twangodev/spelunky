@@ -246,7 +246,8 @@ mod policy_tests {
 pub use backend::Audio;
 impl Audio {
     /// Source stopAllMusic addresses named resources, including literal
-    /// playSound(musTitle) voices. Existing F1 stop_music remains lane-local.
+    /// playSound(musTitle) voices. `stop_music` remains lane-local for host
+    /// transitions that do not represent a source stopAllMusic call.
     pub fn stop_all_music(&mut self) {
         self.stop_music();
         for name in MUSIC_RESOURCES {
