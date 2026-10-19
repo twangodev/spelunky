@@ -987,67 +987,95 @@ pub(crate) fn generate_campaign_result(
     // It is unrelated to the selected playable character.
     features.damsel = state.revision == crate::GenerationRevision::SourceClassicV2
         && has(&selected, "sacrifice_pit");
-    for row in 0..if has(&selected, "lake") { 5 } else { 4 } {
-        for col in 0..4 {
-            let start = row == 0 && col == path.start;
-            let end = row == 3 && col == path.end;
-            let (template, shop) = choose_room(
-                script,
-                script_name,
+    let room_order = if source_classic && area == Area::Boss {
+        // rOlmec.xml's static oRoom instance order is not spatial row-major:
+        // its two interior top rooms are declared after rows 1 and 2. Since
+        // each scrRoomGen5 callback draws and creates synchronously, dispatch
+        // them in resource order before continuing the shared RNG stream.
+        vec![
+            (0, 0),
+            (0, 3),
+            (1, 0),
+            (1, 1),
+            (1, 2),
+            (1, 3),
+            (2, 0),
+            (2, 1),
+            (2, 2),
+            (2, 3),
+            (0, 1),
+            (0, 2),
+            (3, 0),
+            (3, 1),
+            (3, 2),
+            (3, 3),
+        ]
+    } else {
+        (0..if has(&selected, "lake") { 5 } else { 4 })
+            .flat_map(|row| (0..4).map(move |col| (row, col)))
+            .collect()
+    };
+    for (row, col) in room_order {
+        #[cfg(test)]
+        source_room_dispatch_tests::observe(row, col);
+        let start = row == 0 && col == path.start;
+        let end = row == 3 && col == path.end;
+        let (template, shop) = choose_room(
+            script,
+            script_name,
+            rng,
+            path.rooms[row][col],
+            if row > 0 { path.rooms[row - 1][col] } else { 0 },
+            start,
+            end,
+            col,
+            row,
+            level,
+            &selected,
+            &mut features,
+            &world,
+            state.revision == crate::GenerationRevision::SourceClassicV2,
+        );
+        let expanded = expand(script, rng, template);
+        if area == Area::Boss && row == 3 && source_classic {
+            tiles::stamp_at_source_context(
+                &mut world,
                 rng,
-                path.rooms[row][col],
-                if row > 0 { path.rooms[row - 1][col] } else { 0 },
-                start,
-                end,
+                &expanded,
+                1 + col * 10,
+                37,
+                false,
+                false,
+                shop,
+                features.damsel,
+                context,
+            );
+        } else if area == Area::Boss && row == 3 {
+            tiles::stamp_at(
+                &mut world,
+                rng,
+                &expanded,
+                1 + col * 10,
+                37,
+                false,
+                false,
+                shop,
+            );
+        } else if state.revision == crate::GenerationRevision::SourceClassicV2 {
+            tiles::stamp_with_source_context(
+                &mut world,
+                rng,
+                &expanded,
                 col,
                 row,
-                level,
-                &selected,
-                &mut features,
-                &world,
-                state.revision == crate::GenerationRevision::SourceClassicV2,
+                start,
+                end,
+                shop,
+                features.damsel,
+                context,
             );
-            let expanded = expand(script, rng, template);
-            if area == Area::Boss && row == 3 && source_classic {
-                tiles::stamp_at_source_context(
-                    &mut world,
-                    rng,
-                    &expanded,
-                    1 + col * 10,
-                    37,
-                    false,
-                    false,
-                    shop,
-                    features.damsel,
-                    context,
-                );
-            } else if area == Area::Boss && row == 3 {
-                tiles::stamp_at(
-                    &mut world,
-                    rng,
-                    &expanded,
-                    1 + col * 10,
-                    37,
-                    false,
-                    false,
-                    shop,
-                );
-            } else if state.revision == crate::GenerationRevision::SourceClassicV2 {
-                tiles::stamp_with_source_context(
-                    &mut world,
-                    rng,
-                    &expanded,
-                    col,
-                    row,
-                    start,
-                    end,
-                    shop,
-                    features.damsel,
-                    context,
-                );
-            } else {
-                tiles::stamp(&mut world, rng, &expanded, col, row, start, end, shop);
-            }
+        } else {
+            tiles::stamp(&mut world, rng, &expanded, col, row, start, end, shop);
         }
     }
     let dark_roll_selected = if state.revision == crate::GenerationRevision::SourceClassicV2 {
@@ -1273,6 +1301,10 @@ fn source_boundaries(world: &mut World, rng: &mut Rng, lake: bool, city: bool) {
 #[cfg(test)]
 #[path = "generation/source_boundary_tests.rs"]
 mod source_boundary_tests;
+
+#[cfg(test)]
+#[path = "generation/source_room_dispatch_tests.rs"]
+mod source_room_dispatch_tests;
 
 fn boundary_tile(world: &mut World, x: usize, y: usize, object: &str) {
     world.set_tile(x, y, object);
