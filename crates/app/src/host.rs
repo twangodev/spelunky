@@ -957,7 +957,7 @@ impl App {
     }
     fn menu_key(&mut self, key: KeyCode) {
         let key = source_confirm_key(self.screen, &self.input, key);
-        if key == KeyCode::Escape {
+        if key == KeyCode::Escape && menu_escape_routes_back(self.screen) {
             if self.screen == Screen::Custom {
                 self.return_from_custom_selector();
                 return;
@@ -2955,10 +2955,13 @@ fn menu_confirm_requested(screen: Screen, key: KeyCode) -> bool {
     // Attack/Start into Enter before this point. Z and Space are Jump defaults,
     // not title-menu confirmation keys.
     if screen == Screen::Title {
-        key == KeyCode::Enter
+        matches!(key, KeyCode::Enter | KeyCode::Escape)
     } else {
         matches!(key, KeyCode::Enter | KeyCode::Space | KeyCode::KeyZ)
     }
+}
+fn menu_escape_routes_back(screen: Screen) -> bool {
+    screen != Screen::Title
 }
 fn source_paused_control(
     game: Option<&Game>,
@@ -4500,6 +4503,9 @@ mod tests {
         }
 
         assert!(menu_confirm_requested(Screen::Title, KeyCode::Enter));
+        assert!(menu_confirm_requested(Screen::Title, KeyCode::Escape));
+        assert!(!menu_escape_routes_back(Screen::Title));
+        assert!(menu_escape_routes_back(Screen::Pause));
         input.key(KeyCode::KeyX, true, false);
         let mapped_attack = source_confirm_key(Screen::Title, &input, KeyCode::KeyX);
         assert_eq!(mapped_attack, KeyCode::Enter);
