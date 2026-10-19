@@ -1761,6 +1761,144 @@ mod tests {
     }
 
     #[test]
+    fn natural_level_nine_moai_keeps_its_authored_wall_decorations() {
+        let mut game = crate::Game::shell(4, crate::RulesPreset::Classic);
+        game.world.level = 8;
+        game.flags.insert("no_dark_level".into());
+        game.next_level();
+
+        assert_eq!(game.world.level, 9);
+        assert!(
+            game.world
+                .entities
+                .iter()
+                .any(|entity| entity.object == "oMoai")
+        );
+        let inside = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oMoaiInside")
+            .expect("natural level-nine Moai room");
+        let decorations: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|entity| {
+                entity.object == "oGenerationDecoration"
+                    && entity.sprite == "bgAlienShip3"
+                    && entity.value("depth") == 150.0
+            })
+            .collect();
+        assert_eq!(decorations.len(), 2);
+        for (decoration, y_offset) in decorations.iter().zip([0.0, 16.0]) {
+            assert_eq!(
+                decoration.pos,
+                Vec2::new(inside.pos.x, inside.pos.y + y_offset)
+            );
+            assert_eq!(decoration.value("source_x"), 0.0);
+            assert_eq!(decoration.value("source_y"), 0.0);
+            assert_eq!(decoration.value("source_w"), 16.0);
+            assert_eq!(decoration.value("source_h"), 16.0);
+        }
+        let thin_ice = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oThinIce" && entity.pos == decorations[1].pos)
+            .expect("source births the second decoration before the ThinIce at that origin");
+        let moai_exit = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| {
+                entity.object == "oExit"
+                    && entity
+                        .text
+                        .get("type")
+                        .is_some_and(|kind| kind == "Moai Exit")
+            })
+            .expect("Moai room's authored exit");
+        let crown = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oCrown")
+            .expect("Moai room crown");
+        assert!(inside.creation_serial < decorations[0].creation_serial);
+        assert!(decorations[0].creation_serial < decorations[1].creation_serial);
+        assert!(decorations[1].creation_serial < thin_ice.creation_serial);
+        assert!(thin_ice.creation_serial < moai_exit.creation_serial);
+        assert!(moai_exit.creation_serial < crown.creation_serial);
+        assert_eq!(game.rng.state_bits(), 2_518_181_788);
+    }
+
+    #[test]
+    fn natural_level_nine_alien_front_uses_authored_background_depths() {
+        let mut game = crate::Game::shell(5, crate::RulesPreset::Classic);
+        game.world.level = 8;
+        game.flags.insert("made_moai".into());
+        game.flags.insert("no_dark_level".into());
+        game.next_level();
+
+        assert_eq!(game.world.level, 9);
+        assert_eq!(game.world.name, "Alien Ship");
+        let mut front = None;
+        'rows: for y in 0..game.world.height as i32 - 2 {
+            for x in 0..game.world.width as i32 {
+                let sprite = |y| {
+                    game.world
+                        .tile_sprite_metadata(x, y)
+                        .and_then(|entity| entity.text.get("terrain_sprite"))
+                        .map(String::as_str)
+                };
+                if sprite(y) == Some("sAlienFront")
+                    && sprite(y + 1) == Some("sAlienFront")
+                    && sprite(y + 2) == Some("sAlienFront2")
+                {
+                    front = Some((x, y));
+                    break 'rows;
+                }
+            }
+        }
+        let (x, y) = front.expect("natural Alien Ship has a three-tile front");
+        let depth_at = |y| {
+            let origin = Vec2::new(f64::from(x * 16), f64::from(y * 16));
+            game.world
+                .entities
+                .iter()
+                .find(|entity| {
+                    entity.object == "oGenerationDecoration"
+                        && entity.sprite == "bgAlienShip3"
+                        && entity.pos == origin
+                })
+                .map(|entity| entity.value("depth"))
+        };
+        assert_eq!(
+            [depth_at(y), depth_at(y + 1), depth_at(y + 2)],
+            [Some(9005.0), Some(160.0), Some(160.0)]
+        );
+        for row in [y, y + 1, y + 2] {
+            let origin = Vec2::new(f64::from(x * 16), f64::from(row * 16));
+            let decoration = game
+                .world
+                .entities
+                .iter()
+                .find(|entity| {
+                    entity.object == "oGenerationDecoration"
+                        && entity.sprite == "bgAlienShip3"
+                        && entity.pos == origin
+                })
+                .unwrap();
+            assert_eq!(decoration.value("source_x"), 0.0);
+            assert_eq!(decoration.value("source_y"), 0.0);
+            assert_eq!(decoration.value("source_w"), 16.0);
+            assert_eq!(decoration.value("source_h"), 16.0);
+        }
+        assert_eq!(game.rng.state_bits(), 2_491_910_436);
+    }
+
+    #[test]
     fn source_moai_eligibility_does_not_fall_through_to_other_ice_events() {
         for level in 9..=12 {
             let mut placed = false;

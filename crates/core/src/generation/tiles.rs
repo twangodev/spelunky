@@ -865,22 +865,22 @@ fn ice(
         b'Y' => {
             spawn(w, r, "oYeti", p);
         }
-        b'A' => ship(w, r, x, y, p, "sAlienTop"),
-        b'B' => ship(w, r, x, y, p, "sAlienFloor"),
+        b'A' => ship(w, r, x, y, p, "sAlienTop", 9005.0),
+        b'B' => ship(w, r, x, y, p, "sAlienFloor", 9005.0),
         b'b' => {
             if r.chance(1, 2) {
                 let obj = ground(Area::Ice, false, true, r);
                 room_terrain(w, r, x, y, obj, source_context);
             } else {
-                ship(w, r, x, y, p, "sAlienFloor");
+                ship(w, r, x, y, p, "sAlienFloor", 9005.0);
             }
         }
         b'C' => {
-            ship(w, r, x, y, p, "sAlienFront");
-            ship(w, r, x, y + 1, offset(p, 0.0, 16.0), "sAlienFront");
-            ship(w, r, x, y + 2, offset(p, 0.0, 32.0), "sAlienFront2");
+            ship(w, r, x, y, p, "sAlienFront", 9005.0);
+            ship(w, r, x, y + 1, offset(p, 0.0, 16.0), "sAlienFront", 160.0);
+            ship(w, r, x, y + 2, offset(p, 0.0, 32.0), "sAlienFront2", 160.0);
         }
-        b'D' => ship(w, r, x, y, p, "sAlienFront3"),
+        b'D' => ship(w, r, x, y, p, "sAlienFront3", 9005.0),
         b'E' => {
             let id = decoration(w, r, "bgAlienShip", p);
             let frame = if r.chance(1, 3) { 1.0 } else { 0.0 };
@@ -918,6 +918,16 @@ fn ice(
                 .unwrap()
                 .data
                 .insert("invincible".into(), 1.0);
+            for dy in [16.0, 32.0] {
+                super::terrain::decoration(
+                    w,
+                    "bgAlienShip3",
+                    offset(p, 16.0, dy),
+                    0.0,
+                    16.0,
+                    150.0,
+                );
+            }
             spawn(w, r, "oThinIce", offset(p, 16.0, 32.0));
             let id = spawn(w, r, "oExit", offset(p, 16.0, 48.0));
             w.entity_mut(id)
@@ -1245,14 +1255,24 @@ fn terrain_treasure(w: &mut World, x: usize, y: usize, treasure: &str) {
         .text
         .insert("treasure".into(), treasure.into());
 }
-fn ship(w: &mut World, r: &mut Rng, x: usize, y: usize, p: Vec2, sprite: &str) {
+fn ship(w: &mut World, r: &mut Rng, x: usize, y: usize, p: Vec2, sprite: &str, depth: f64) {
     w.set_tile(x, y, "oAlienShip");
     let id = terrain_property(w, x, y, "alien_ship", 1.0);
     w.entity_mut(id)
         .unwrap()
         .text
         .insert("terrain_sprite".into(), sprite.into());
-    decoration(w, r, "bgAlienShip3", p);
+    let id = decoration(w, r, "bgAlienShip3", p);
+    let entity = w.entity_mut(id).unwrap();
+    for (key, value) in [
+        ("source_x", 0.0),
+        ("source_y", 0.0),
+        ("source_w", 16.0),
+        ("source_h", 16.0),
+        ("depth", depth),
+    ] {
+        entity.data.insert(key.into(), value);
+    }
 }
 
 fn tree(w: &mut World, r: &mut Rng, x: usize, y: usize, p: Vec2, cemetery: bool) {
