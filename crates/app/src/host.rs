@@ -379,6 +379,29 @@ fn pause_transition_preserves_keyboard(previous: Screen, next: Screen) -> bool {
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TitleMenuAction {
+    StartClassicCampaign,
+    ConfirmSelection(usize),
+}
+
+fn title_menu_action(
+    physical_key: KeyCode,
+    mapped_key: KeyCode,
+    selection: usize,
+) -> Option<TitleMenuAction> {
+    // Classic oTitle handles Escape by restarting at the title-room rope
+    // start. In the redesigned app menu, that is the ordinary campaign route,
+    // independent of which row has focus or how Escape is rebound.
+    if physical_key == KeyCode::Escape {
+        Some(TitleMenuAction::StartClassicCampaign)
+    } else if mapped_key == KeyCode::Enter {
+        Some(TitleMenuAction::ConfirmSelection(selection))
+    } else {
+        None
+    }
+}
+
 impl App {
     fn new(proxy: EventLoopProxy<UserEvent>) -> Self {
         let store = Store::load();
@@ -956,7 +979,17 @@ impl App {
         configured_pause_key(&self.store.data.settings.bindings, key)
     }
     fn menu_key(&mut self, key: KeyCode) {
+        let physical_key = key;
         let key = source_confirm_key(self.screen, &self.input, key);
+        let title_action = if self.screen == Screen::Title {
+            title_menu_action(physical_key, key, self.selection)
+        } else {
+            None
+        };
+        if title_action == Some(TitleMenuAction::StartClassicCampaign) {
+            self.start_game(false);
+            return;
+        }
         if key == KeyCode::Escape && menu_escape_routes_back(self.screen) {
             if self.screen == Screen::Custom {
                 self.return_from_custom_selector();
@@ -1021,25 +1054,33 @@ impl App {
             }
             return;
         }
-        if !menu_confirm_requested(self.screen, key) {
+        let confirms = if self.screen == Screen::Title {
+            matches!(title_action, Some(TitleMenuAction::ConfirmSelection(_)))
+        } else {
+            menu_confirm_requested(self.screen, key)
+        };
+        if !confirms {
             return;
         }
         match self.screen {
-            Screen::Title => match self.selection {
-                0 => self.start_game(false),
-                1 => self.start_game(true),
-                2 => self.open_hub(spelunky_core::hub::HubKind::Title),
-                3 => self.screen(Screen::Custom),
-                4 => self.enter_fresh_editor(),
-                5 => self.screen(Screen::Shortcuts),
-                6 => {
-                    self.settings_return = Screen::Title;
-                    self.screen(Screen::Settings)
-                }
-                7 => self.screen(Screen::Records),
-                8 => self.screen(Screen::Stats),
-                9 => self.screen(Screen::About),
-                _ => self.fullscreen(),
+            Screen::Title => match title_action {
+                Some(TitleMenuAction::ConfirmSelection(selection)) => match selection {
+                    0 => self.start_game(false),
+                    1 => self.start_game(true),
+                    2 => self.open_hub(spelunky_core::hub::HubKind::Title),
+                    3 => self.screen(Screen::Custom),
+                    4 => self.enter_fresh_editor(),
+                    5 => self.screen(Screen::Shortcuts),
+                    6 => {
+                        self.settings_return = Screen::Title;
+                        self.screen(Screen::Settings)
+                    }
+                    7 => self.screen(Screen::Records),
+                    8 => self.screen(Screen::Stats),
+                    9 => self.screen(Screen::About),
+                    _ => self.fullscreen(),
+                },
+                Some(TitleMenuAction::StartClassicCampaign) | None => return,
             },
             Screen::Stats => match self.selection {
                 0 => self.import_classic_stats_dialog(),
@@ -2950,12 +2991,11 @@ fn source_confirm_key(screen: Screen, input: &InputState, key: KeyCode) -> KeyCo
 }
 
 fn menu_confirm_requested(screen: Screen, key: KeyCode) -> bool {
-    // The port title menu fronts Classic's oTitle room. That room's Step accepts
-    // Enter, Escape, the configured Attack edge, or Start; source mapping turns
-    // Attack/Start into Enter before this point. Z and Space are Jump defaults,
-    // not title-menu confirmation keys.
+    // The port title menu fronts Classic's title room. Direct selection
+    // confirmation is Enter; Attack/Start map to Enter before this point.
+    // Escape has a separate campaign route in `title_menu_action`.
     if screen == Screen::Title {
-        matches!(key, KeyCode::Enter | KeyCode::Escape)
+        key == KeyCode::Enter
     } else {
         matches!(key, KeyCode::Enter | KeyCode::Space | KeyCode::KeyZ)
     }
@@ -3365,6 +3405,11 @@ fn controller_menu_key(screen: Screen, button: UiButton, capturing: bool) -> Opt
         // Classic's title Step treats Start as an activation input. The host
         // title menu should confirm the selected entry instead of interpreting
         // Start as Escape/back.
+        return Some(KeyCode::Enter);
+    }
+    if screen == Screen::Title && button == UiButton::Cancel {
+        // East/Cancel is a port convenience, not Classic's hard-wired Escape
+        // key. Preserve its previous title-row confirmation behavior.
         return Some(KeyCode::Enter);
     }
     if screen == Screen::Custom && button == UiButton::Pause {
@@ -4488,8 +4533,9 @@ mod tests {
 
     #[test]
     fn title_menu_confirmation_matches_classic_enter_attack_and_start_routes() {
-        // Classic oTitle Step accepts Enter, Escape, checkAttackPressed(), and
-        // checkStartPressed(); the app maps Attack and controller Start to Enter.
+        // Classic oTitle accepts Enter, Escape, checkAttackPressed(), and
+        // checkStartPressed(); Escape starts the campaign route, while Attack
+        // and controller Start confirm the selected app-menu row.
         let mut input = InputState::default();
         input.set_bindings(&crate::storage::Settings::default().bindings);
 
@@ -4503,7 +4549,24 @@ mod tests {
         }
 
         assert!(menu_confirm_requested(Screen::Title, KeyCode::Enter));
-        assert!(menu_confirm_requested(Screen::Title, KeyCode::Escape));
+        assert!(!menu_confirm_requested(Screen::Title, KeyCode::Escape));
+        for selection in 0..11 {
+            assert_eq!(
+                title_menu_action(KeyCode::Escape, KeyCode::Enter, selection),
+                Some(TitleMenuAction::StartClassicCampaign),
+                "physical Escape must launch the Classic campaign regardless of row {selection} or Attack binding"
+            );
+        }
+        assert_eq!(
+            title_menu_action(KeyCode::Enter, KeyCode::Enter, 6),
+            Some(TitleMenuAction::ConfirmSelection(6)),
+            "Enter must continue to confirm the selected Settings row"
+        );
+        assert_eq!(
+            title_menu_action(KeyCode::KeyX, KeyCode::Enter, 6),
+            Some(TitleMenuAction::ConfirmSelection(6)),
+            "a configured Attack binding still confirms the selected row"
+        );
         assert!(!menu_escape_routes_back(Screen::Title));
         assert!(menu_escape_routes_back(Screen::Pause));
         input.key(KeyCode::KeyX, true, false);
@@ -4515,6 +4578,11 @@ mod tests {
             assert_eq!(mapped, KeyCode::Enter);
             assert!(menu_confirm_requested(Screen::Title, mapped));
         }
+        assert_eq!(
+            controller_menu_key(Screen::Title, UiButton::Cancel, false),
+            Some(KeyCode::Enter),
+            "the separate controller Cancel affordance keeps its existing title-row behavior"
+        );
     }
 
     #[test]
