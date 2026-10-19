@@ -3684,12 +3684,14 @@ fn custom_exit(
         .unwrap_or("")
         .to_owned();
     if target.is_empty() || target == "NONE" {
+        game.finish_custom_transition();
         spelunky_core::ending::begin_custom(game);
         return CustomExit::Finished;
     }
     let Some(source) = custom_level_source(levels, &target) else {
         // Source scrLoadLevel treats a missing continuation as the end of an
         // active adventure. Initial imports still report missing/invalid files.
+        game.finish_custom_transition();
         spelunky_core::ending::begin_custom(game);
         return CustomExit::Finished;
     };
@@ -7697,7 +7699,10 @@ mod tests {
         assert_eq!(game.world.name, "next");
         assert_eq!((game.player.health, game.player.bombs), (2.0, 1.0));
         game.flags.insert("custom_level:missing.lvl".into());
+        game.data.insert("pending_damsel_kisses".into(), 1.);
         assert_eq!(custom_exit(&mut game, &levels, false), CustomExit::Finished);
+        assert_eq!(game.player.health, 3.0);
+        assert!(!game.data.contains_key("pending_damsel_kisses"));
         assert_eq!(game.state, RunState::Ending);
         assert_eq!(
             game.ending.as_ref().unwrap().kind,
@@ -7706,7 +7711,11 @@ mod tests {
         assert!(campaign_record(&game).is_none());
         continue_custom(&mut game, &level, "next.lvl", "first.lvl");
         game.flags.remove("custom_level:missing.lvl");
+        game.flags.insert("custom_level:NONE".into());
+        game.data.insert("pending_damsel_kisses".into(), 1.);
         assert_eq!(custom_exit(&mut game, &levels, false), CustomExit::Finished);
+        assert_eq!(game.player.health, 4.0);
+        assert!(!game.data.contains_key("pending_damsel_kisses"));
         assert_eq!(game.state, RunState::Ending);
     }
     #[test]

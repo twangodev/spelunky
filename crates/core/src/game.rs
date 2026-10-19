@@ -159,6 +159,13 @@ impl Game {
         traps::initialize_level(self);
     }
 
+    /// Complete the authored custom-level transition reward when a run ends
+    /// instead of loading another linked room.
+    pub fn finish_custom_transition(&mut self) {
+        let kisses = self.take_pending_kisses();
+        self.apply_kisses(kisses);
+    }
+
     fn load_custom_room(
         &mut self,
         level: &level::Level,
