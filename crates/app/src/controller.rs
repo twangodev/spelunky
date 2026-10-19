@@ -143,6 +143,14 @@ pub(crate) fn classic_gamepad_slot(
     }
 }
 
+/// Classic warns when joystick 1 is absent even if gameplay can fall back to
+/// joystick 2.
+pub(crate) fn classic_primary_gamepad_connected(
+    connected_slots: impl IntoIterator<Item = usize>,
+) -> bool {
+    connected_slots.into_iter().any(|slot| slot == 0)
+}
+
 /// Missing or unsupported values keep the defaults. The source permits
 /// duplicate assignments, but has no controller-unbind operation.
 pub fn validated_bindings(bindings: &BTreeMap<String, String>) -> BTreeMap<String, String> {
@@ -199,5 +207,12 @@ mod tests {
         assert_eq!(classic_gamepad_slot([1]), Some(1));
         assert_eq!(classic_gamepad_slot([2]), None);
         assert_eq!(classic_gamepad_slot([1, 2]), Some(1));
+    }
+
+    #[test]
+    fn classic_warning_checks_pad_one_even_when_gameplay_falls_back_to_pad_two() {
+        assert!(!classic_primary_gamepad_connected([1]));
+        assert_eq!(classic_gamepad_slot([1]), Some(1));
+        assert!(classic_primary_gamepad_connected([0, 1]));
     }
 }

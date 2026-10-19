@@ -858,6 +858,9 @@ impl App {
             return;
         }
         let control = source_host_control(self.screen, self.game.as_ref(), key);
+        if control.is_some_and(SourceHostControl::stops_all_music) {
+            self.audio.stop_all_music();
+        }
         match control {
             Some(SourceHostControl::Suicide) => {
                 if let Some(game) = &mut self.game {
@@ -1267,29 +1270,24 @@ impl App {
         }
     }
     fn import_level(&mut self, name: String, contents: String) {
-        match spelunky_core::level::Level::parse(&contents) {
-            Ok(_) => {
-                let name = level_name(&name);
-                if let Some(game) = &self.game {
-                    self.editor.set_source_rng(game.rng.clone());
-                    self.editor.set_source_context(editor_preview_context(game));
-                }
-                let result = self.editor.load(&name, &contents);
-                if let Some(game) = &mut self.game {
-                    game.rng = self.editor.source_rng().clone();
-                }
-                if let Err(error) = result {
-                    self.toast(error);
-                    return;
-                }
-                self.store.data.custom_levels.insert(name.clone(), contents);
-                if let Err(error) = self.store.save() {
-                    self.toast(error)
-                } else {
-                    self.toast(format!("IMPORTED {name}"))
-                }
-            }
-            Err(error) => self.toast(format!("INVALID LEVEL: {error}")),
+        let name = level_name(&name);
+        if let Some(game) = &self.game {
+            self.editor.set_source_rng(game.rng.clone());
+            self.editor.set_source_context(editor_preview_context(game));
+        }
+        let result = self.editor.load(&name, &contents);
+        if let Some(game) = &mut self.game {
+            game.rng = self.editor.source_rng().clone();
+        }
+        if let Err(error) = result {
+            self.toast(format!("INVALID LEVEL: {error}"));
+            return;
+        }
+        self.store.data.custom_levels.insert(name.clone(), contents);
+        if let Err(error) = self.store.save() {
+            self.toast(error)
+        } else {
+            self.toast(format!("IMPORTED {name}"))
         }
     }
     fn import_dialog(&mut self) {
@@ -2094,9 +2092,12 @@ impl App {
                 );
             }
             Screen::Editor => self.editor.draw(atlas, quads),
-            Screen::Settings => self
-                .settings_ui
-                .draw(atlas, quads, &self.store.data.settings),
+            Screen::Settings => self.settings_ui.draw_with_gamepad(
+                atlas,
+                quads,
+                &self.store.data.settings,
+                Some(self.input.primary_gamepad_connected()),
+            ),
             Screen::Title => {
                 text(quads, atlas, "SPELUNKY", 64., 18., 2.8, GOLD);
                 text(quads, atlas, "CLASSIC / RUST", 88., 45., 1., WHITE);
@@ -2912,6 +2913,11 @@ enum SourceHostControl {
     Quit,
     Editor,
     CustomLevels,
+}
+impl SourceHostControl {
+    fn stops_all_music(self) -> bool {
+        matches!(self, Self::Editor | Self::CustomLevels)
+    }
 }
 fn source_host_control(
     screen: Screen,
@@ -5306,10 +5312,13 @@ mod tests {
             source_host_control(Screen::Title, None, KeyCode::F2),
             Some(SourceHostControl::Editor)
         );
+        assert!(SourceHostControl::Editor.stops_all_music());
         assert_eq!(
             source_host_control(Screen::Title, None, KeyCode::F3),
             Some(SourceHostControl::CustomLevels)
         );
+        assert!(SourceHostControl::CustomLevels.stops_all_music());
+        assert!(!SourceHostControl::Suicide.stops_all_music());
         for key in [KeyCode::F2, KeyCode::F3] {
             assert_eq!(source_host_control(Screen::Settings, None, key), None);
             assert_eq!(source_host_control(Screen::Custom, None, key), None);

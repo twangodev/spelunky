@@ -269,19 +269,17 @@ impl EditorState {
         self.commit(next, previews);
         Ok(())
     }
-    /// scrTestLevel/save gather text from surviving previews, independently of
-    /// levelArray. Unused imported trailing records remain a file adapter feature.
+    /// scrTestLevel/save gather text only from surviving preview instances,
+    /// independently of levelArray. Classic does not write unmatched records.
     pub fn document(&self) -> Level {
         let mut next = self.level.clone();
         for door in [true, false] {
             let mut records = Vec::new();
-            let mut grid_count = 0;
             for y in 0..LEVEL_HEIGHT {
                 for x in 0..LEVEL_WIDTH {
                     if !matches_record(self.level.get_tile(x, y).unwrap_or('0'), door) {
                         continue;
                     }
-                    grid_count += 1;
                     let id = if door {
                         door_at(&self.previews, x, y)
                     } else {
@@ -292,12 +290,6 @@ impl EditorState {
                     }
                 }
             }
-            let old = if door {
-                &self.level.exit_targets
-            } else {
-                &self.level.signs
-            };
-            records.extend(old.iter().skip(grid_count).cloned());
             if door {
                 next.exit_targets = records;
             } else {

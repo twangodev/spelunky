@@ -534,6 +534,20 @@ fn editing_keeps_unrelated_and_unused_custom_text_records() {
 }
 
 #[test]
+fn classic_editor_document_drops_custom_text_records_without_live_cells() {
+    let mut level = Level::default();
+    level.set_tile(5, 0, '@').unwrap();
+    level.set_tile(8, 0, 'I').unwrap();
+    level.exit_targets = vec!["linked.lvl".into(), "orphaned door".into()];
+    level.signs = vec!["live sign".into(), "orphaned sign".into()];
+
+    let editor = EditorState::new(level);
+    let written = editor.document();
+    assert_eq!(written.exit_targets, ["linked.lvl"]);
+    assert_eq!(written.signs, ["live sign"]);
+}
+
+#[test]
 fn compound_pool_keeps_overlapping_platform_and_water_in_actual_game_step() {
     use spelunky_core::{Game, InputFrame, RulesPreset, Vec2};
     let mut level = Level::default();

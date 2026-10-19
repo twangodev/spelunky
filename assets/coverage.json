@@ -5114,7 +5114,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 405,
+          "line": 410,
           "module": "crates/core/src/progression.rs"
         }
       ],
@@ -7803,7 +7803,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 357,
+          "line": 362,
           "module": "crates/core/src/progression.rs"
         }
       ],
@@ -12411,7 +12411,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 645,
+          "line": 650,
           "module": "crates/core/src/progression.rs"
         }
       ],
@@ -13162,7 +13162,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 809,
+          "line": 814,
           "module": "crates/core/src/progression.rs"
         }
       ],

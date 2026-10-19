@@ -115,6 +115,7 @@ pub struct InputState {
     gamepad_actions: Actions,
     controller_enabled: bool,
     controller_bindings: BTreeMap<String, String>,
+    primary_gamepad_connected: bool,
     controller_capture_held: bool,
     controller_capture_blocked: bool,
     controller_edges: Vec<ControllerButton>,
@@ -141,6 +142,7 @@ impl Default for InputState {
             gamepad_actions: Actions::default(),
             controller_enabled: false,
             controller_bindings: controller::default_bindings(),
+            primary_gamepad_connected: false,
             controller_capture_held: false,
             controller_capture_blocked: false,
             controller_edges: Vec::new(),
@@ -159,6 +161,10 @@ impl Default for InputState {
 }
 
 impl InputState {
+    pub fn primary_gamepad_connected(&self) -> bool {
+        self.primary_gamepad_connected
+    }
+
     /// Independent physical source key; remapping does not own this edge.
     /// An inactive controller discards it rather than replaying after resume.
     pub fn music_key(
@@ -612,6 +618,7 @@ impl InputState {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn update_gamepad(&mut self) {
         let Some(mut gilrs) = self.gilrs.take() else {
+            self.primary_gamepad_connected = false;
             self.accept_controller_capture(0);
             self.accept_controller_sample(Actions::default(), 0);
             return;
@@ -624,6 +631,7 @@ impl InputState {
             self.accept_controller_sample_with_direction_edges(actions, ui, press_allowed);
         }
         let (actions, ui, press_allowed, capture) = self.native_gamepads(&gilrs);
+        self.primary_gamepad_connected = gilrs.gamepads().next().is_some();
         self.accept_controller_capture(capture);
         self.accept_controller_sample_with_direction_edges(actions, ui, press_allowed);
         self.gilrs = Some(gilrs);
@@ -687,15 +695,21 @@ impl InputState {
         let ui = 0;
         let capture = 0;
         let direction_press_allowed = 0x0f;
+        self.primary_gamepad_connected = false;
         if let Some(pads) =
             web_sys::window().and_then(|window| window.navigator().get_gamepads().ok())
         {
-            let slots = [0_usize, 1].into_iter().filter(|slot| {
-                pads.get(*slot as u32)
-                    .dyn_into::<web_sys::Gamepad>()
-                    .is_ok_and(|pad| pad.connected())
-            });
-            if let Some(slot) = controller::classic_gamepad_slot(slots) {
+            let slots: Vec<_> = [0_usize, 1]
+                .into_iter()
+                .filter(|slot| {
+                    pads.get(*slot as u32)
+                        .dyn_into::<web_sys::Gamepad>()
+                        .is_ok_and(|pad| pad.connected())
+                })
+                .collect();
+            self.primary_gamepad_connected =
+                controller::classic_primary_gamepad_connected(slots.iter().copied());
+            if let Some(slot) = controller::classic_gamepad_slot(slots.iter().copied()) {
                 let Ok(pad) = pads.get(slot as u32).dyn_into::<web_sys::Gamepad>() else {
                     self.accept_controller_capture(0);
                     self.accept_controller_sample_with_direction_edges(actions, ui, 0x0f);

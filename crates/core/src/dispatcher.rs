@@ -1632,8 +1632,8 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
                 *game.data.entry("death_ticks".into()).or_default() += 1.0;
             }
             crate::traps::pre_tick(game);
-            crate::world_events::fluid_tick(game);
             crate::progression::game_step(game, input);
+            crate::world_events::fluid_tick(game);
         }
         if key == 553 && !level_done {
             level_done = true;

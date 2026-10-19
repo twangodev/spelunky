@@ -325,6 +325,16 @@ impl SettingsUi {
     }
 
     pub fn draw(&self, atlas: &Atlas, quads: &mut Vec<DrawQuad>, settings: &Settings) {
+        self.draw_with_gamepad(atlas, quads, settings, None);
+    }
+
+    pub fn draw_with_gamepad(
+        &self,
+        atlas: &Atlas,
+        quads: &mut Vec<DrawQuad>,
+        settings: &Settings,
+        primary_gamepad_connected: Option<bool>,
+    ) {
         scene::rect(quads, [0.0, 0.0, 320.0, 240.0], [0.01, 0.02, 0.04, 0.95]);
         scene::rect(quads, [8.0, 8.0, 304.0, 224.0], [0.05, 0.07, 0.11, 1.0]);
         scene::text(quads, atlas, "SETTINGS", 18.0, 18.0, 1.0, GOLD);
@@ -469,6 +479,19 @@ impl SettingsUi {
                 0.75,
                 MUTED,
             );
+            if primary_gamepad_connected == Some(false) {
+                // Classic oJoyConfig Draw shows this red warning when
+                // joystick_exists(1) is false.
+                scene::text(
+                    quads,
+                    atlas,
+                    "NO GAMEPAD FOUND!",
+                    32.0,
+                    171.0,
+                    0.75,
+                    [1.0, 0.0, 0.0, 1.0],
+                );
+            }
         }
     }
 }
@@ -637,6 +660,34 @@ mod tests {
         assert_eq!(
             menu.key(KeyCode::Enter, &mut settings),
             SettingsCommand::Back
+        );
+    }
+
+    #[test]
+    fn controller_wizard_shows_source_warning_only_without_a_connected_gamepad() {
+        let atlas = Atlas::load().unwrap();
+        let mut menu = SettingsUi::new();
+        let mut settings = Settings::default();
+        enter_controller_wizard(&mut menu, &mut settings);
+        let warning = atlas
+            .sprite("sFontSmall", ('N' as u32 - 32) as f64)
+            .unwrap();
+
+        let mut without_gamepad = Vec::new();
+        menu.draw_with_gamepad(&atlas, &mut without_gamepad, &settings, Some(false));
+        let warning_glyphs: Vec<_> = without_gamepad
+            .iter()
+            .filter(|quad| quad.rect[1] == 171.0 && quad.color == [1.0, 0.0, 0.0, 1.0])
+            .collect();
+        assert_eq!(warning_glyphs.len(), "NO GAMEPAD FOUND!".len());
+        assert!(warning_glyphs.iter().any(|quad| quad.uv == warning.uv));
+
+        let mut with_gamepad = Vec::new();
+        menu.draw_with_gamepad(&atlas, &mut with_gamepad, &settings, Some(true));
+        assert!(
+            !with_gamepad
+                .iter()
+                .any(|quad| quad.rect[1] == 171.0 && quad.color == [1.0, 0.0, 0.0, 1.0])
         );
     }
 

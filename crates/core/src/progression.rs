@@ -227,7 +227,12 @@ pub(crate) fn final_boss_step(game: &mut Game) {
     };
     let position = game.world.entities[index].pos;
     game.world.entities[index].alive = false;
-    game.world.spawn("oXEnd", position);
+    let exit = game.spawn("oXEnd", position);
+    if let Some(exit) = game.world.entity_mut(exit) {
+        // oXEnd has no own Create; it inherits these oDrawnSprite assignments.
+        exit.text.insert("type".into(), String::new());
+        exit.data.insert("blinkToggle".into(), 0.0);
+    }
     let (x, y) = ((position.x / 16.) as usize, (position.y / 16.) as usize + 1);
     let point = Vec2::new(x as f64 * 16.0, y as f64 * 16.0);
     let solid = crate::dispatcher::descendant_instances(game, "oSolid")
@@ -1513,8 +1518,10 @@ mod tests {
             .entities
             .iter()
             .find(|e| e.object == "oXEnd")
-            .unwrap()
-            .pos;
+            .unwrap();
+        assert_eq!(exit.text.get("type").map(String::as_str), Some(""));
+        assert_eq!(exit.value("blinkToggle"), 0.0);
+        let exit = exit.pos;
         assert_eq!(exit, Vec2::new(640., 544.));
         assert!(g.world.tile(40, 35).unwrap().is_solid());
         assert!(
