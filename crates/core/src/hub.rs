@@ -800,14 +800,15 @@ fn scores_step(game: &mut Game) {
         .collect();
     for id in ids {
         let mut button = game.world.entity(id).unwrap().clone();
-        // Source rectangle includes both end pixels:226..237,203..207.
-        let region = Rect::new(button.pos.x + 2., button.pos.y + 11., 12., 5.);
-        let pressed = game.world.tiles_collide(region, "oSolid")
-            || game.world.entities.iter().any(|entity| {
-                entity.alive
-                    && crate::catalog::is_a(&entity.object, "oSolid")
-                    && entity.sprite_bounds().intersects(region)
-            });
+        // Source collision_rectangle(x+2,y+11,x+13,y+15,oSolid,0,0)
+        // includes both endpoint pixels and queries active family members.
+        let pressed = game.world.rectangle_family_except(
+            Vec2::new(button.pos.x + 2.0, button.pos.y + 11.0),
+            Vec2::new(button.pos.x + 13.0, button.pos.y + 15.0),
+            "oSolid",
+            None,
+            CollisionPrecision::BoundingBox,
+        );
         if pressed && button.value("pushed") == 0. {
             button.data.insert("counter".into(), 20.);
             game.sound("sndClick", button.pos);
@@ -2013,6 +2014,30 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn scores_button_ignores_inactive_solid_collision_targets() {
+        for inactive_entity in [false, true] {
+            let mut g = Game::shell(13, RulesPreset::Classic);
+            g.world = World::new(20, 20, Area::Mines, 0);
+            let button = g.world.spawn("oButtonHighscore", Vec2::new(80.0, 80.0));
+            if inactive_entity {
+                let target = g.world.spawn("oBlock", Vec2::new(80.0, 80.0));
+                g.world.entity_mut(target).unwrap().engine_active = false;
+            } else {
+                g.world.set_tile(5, 5, "oBlock");
+                g.world.tiles[5 * g.world.width + 5].engine_active = false;
+            }
+
+            scores_step(&mut g);
+
+            assert_eq!(
+                g.world.entity(button).unwrap().value("pushed"),
+                0.0,
+                "source collision_rectangle must ignore inactive target; entity={inactive_entity}"
+            );
+        }
+    }
+
     #[test]
     fn scores_new_markers_match_source_flags_and_title_clears_them() {
         let mut g = Game::shell(14, RulesPreset::Classic);

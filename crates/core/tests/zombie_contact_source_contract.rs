@@ -1,7 +1,26 @@
 use spelunky_core::{Area, Game, InputFrame, PlayerState, RulesPreset, Vec2, World};
 
+const SOURCE_CHARACTER_COLLISION: &str = include_str!(
+    "../../../references/classic-1.1/Objects/Basis/oEnemy.events/Collision with oCharacter.xml"
+);
+
 #[test]
-fn grounded_player_above_zombie_receives_source_vertical_contact_knockback() {
+fn grounded_nonstomp_zombie_contact_matches_horizontal_only_source_contract() {
+    let (_, nonstomp) = SOURCE_CHARACTER_COLLISION
+        .split_once("else if (other.invincible == 0)")
+        .expect("SOURCE_PARENT_NONSTOMP_CONTACT_BRANCH");
+    let nonstomp = nonstomp
+        .split_once("</argument>")
+        .expect("SOURCE_PARENT_EVENT_BODY_END")
+        .0;
+    assert!(nonstomp.contains("other.invincible = 30;"));
+    assert!(nonstomp.contains("other.xVel = -6"));
+    assert!(nonstomp.contains("other.xVel = 6"));
+    assert!(
+        !nonstomp.contains("other.yVel"),
+        "SOURCE_PARENT_NONSTOMP_HAS_NO_VERTICAL_KNOCKBACK"
+    );
+
     let mut game = Game::shell(42, RulesPreset::Classic);
     game.world = World::new(20, 16, Area::Mines, 1);
     game.world.name = "rLevel".into();
@@ -9,8 +28,7 @@ fn grounded_player_above_zombie_receives_source_vertical_contact_knockback() {
         game.world.set_tile(x, 10, "oBlock");
     }
     // Keep the player grounded on a narrow ledge to the Zombie's right. The
-    // source generic oEnemy Character callback does not classify Standing as
-    // a stomp, but still applies yVel=-6 because player.y < enemy.y.
+    // inherited source callback does not classify Standing as a stomp.
     game.world.set_tile(7, 9, "oBlock");
     game.player.pos = Vec2::new(109.0, 136.0);
     game.player.previous_pos = game.player.pos;
@@ -31,5 +49,8 @@ fn grounded_player_above_zombie_receives_source_vertical_contact_knockback() {
     );
     assert_eq!(game.player.invincible, 30);
     assert_eq!(game.player.vel.x, 6.0);
-    assert_eq!(game.player.vel.y, -6.0, "SOURCE_PARENT_Y_KNOCKBACK");
+    assert_eq!(
+        game.player.vel.y, 0.0,
+        "SOURCE_NONSTOMP_NO_VERTICAL_KNOCKBACK"
+    );
 }
