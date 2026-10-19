@@ -533,8 +533,7 @@ fn ghost(game: &mut Game) {
         } else {
             view.x - 32.
         };
-        game.world
-            .spawn("oGhost", Vec2::new(x, view.y + (view.h / 2.).floor()));
+        game.spawn("oGhost", Vec2::new(x, view.y + (view.h / 2.).floor()));
         game.flags.insert("ghost_exists".into());
     }
 }
@@ -1350,6 +1349,26 @@ mod tests {
         assert!(!g.flags.contains("ghost_warning"));
         assert!(!g.flags.contains("ghost_exists"));
         assert!(!g.world.entities.iter().any(|e| e.object == "oGhost"));
+    }
+
+    #[test]
+    fn actual_ghost_spawn_runs_its_source_create_sound_in_the_same_step() {
+        let mut g = game(2);
+        g.data.insert("xtime".into(), 150030.);
+
+        g.step(&InputFrame::default());
+
+        g.world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oGhost")
+            .expect("ghost should spawn after the run clock expires");
+        assert!(
+            g.events
+                .iter()
+                .any(|event| matches!(event, GameEvent::Sound { name, .. } if name == "sndGhost")),
+            "oGhost Create plays sndGhost before its same-tick movement"
+        );
     }
 
     #[test]

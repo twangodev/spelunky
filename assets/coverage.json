@@ -12411,7 +12411,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 646,
+          "line": 645,
           "module": "crates/core/src/progression.rs"
         }
       ],
@@ -13162,7 +13162,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 810,
+          "line": 809,
           "module": "crates/core/src/progression.rs"
         }
       ],
