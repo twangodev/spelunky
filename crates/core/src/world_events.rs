@@ -577,6 +577,7 @@ pub(crate) fn spawn_runtime_object(game: &mut Game, object: &str, pos: Vec2) -> 
 /// Explicit dynamic variables assigned by Classic Create events. Keep these
 /// on the source revision so historical snapshots retain their old projection.
 fn source_create_variables(entity: &mut Entity) {
+    crate::creation::initialize_source_exit_create(entity);
     if entity.object == "oLava" {
         entity.text.insert("type".into(), "Lava".into());
     } else if catalog::is_a(&entity.object, "oWater") {
@@ -4060,6 +4061,18 @@ mod source_create_variable_tests {
             Some("Drip")
         );
         assert_eq!(game.world.entity(drip).unwrap().value("blinkToggle"), 0.0);
+
+        for (object, kind) in [
+            ("oEntrance", "Exit"),
+            ("oExit", "Exit"),
+            ("oXGold", "Exit"),
+            ("oXMarket", "Market Exit"),
+        ] {
+            let id = game.spawn(object, Vec2::new(144.0, 80.0));
+            let portal = game.world.entity(id).unwrap();
+            assert_eq!(portal.text.get("type").map(String::as_str), Some(kind));
+            assert_eq!(portal.text.get("leadsTo").map(String::as_str), Some(""));
+        }
     }
 
     #[test]
@@ -4072,12 +4085,17 @@ mod source_create_variable_tests {
             "oDrip",
             "oLeaf",
             "oIceBottom",
+            "oEntrance",
+            "oExit",
+            "oXGold",
+            "oXMarket",
         ] {
             let id = game.spawn(object, Vec2::new(80.0, 80.0));
             let entity = game.world.entity(id).unwrap();
             assert!(!entity.text.contains_key("type"), "{object}");
             assert!(!entity.data.contains_key("checked"), "{object}");
             assert!(!entity.data.contains_key("blinkToggle"), "{object}");
+            assert!(!entity.text.contains_key("leadsTo"), "{object}");
         }
     }
 }

@@ -101,6 +101,18 @@ pub(crate) fn initialize_source_jungle_market(entity: &mut crate::Entity) {
     }
 }
 
+/// `oEntrance` and the `oExit` family explicitly initialize these fields in
+/// Classic Create. Preserve producer writes made after synchronous Create.
+pub(crate) fn initialize_source_exit_create(entity: &mut crate::Entity) {
+    if entity.object == "oEntrance" || crate::catalog::is_a(&entity.object, "oExit") {
+        entity
+            .text
+            .entry("type".into())
+            .or_insert_with(|| "Exit".into());
+        entity.text.entry("leadsTo".into()).or_default();
+    }
+}
+
 pub(crate) fn initialize_entity_local(world: &mut World, rng: &mut Rng, id: u64) {
     let Some(index) = world.entities.iter().position(|e| e.id == id && e.alive) else {
         return;

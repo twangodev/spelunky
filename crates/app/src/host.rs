@@ -278,6 +278,7 @@ struct App {
     source_music: SourceMusicState,
     store: Store,
     custom_level_catalog: std::collections::BTreeMap<String, String>,
+    unreadable_custom_levels: std::collections::BTreeSet<String>,
     timing: HostTiming,
     scene_buffers: scene::SceneBuffers,
     profiler: Profiler,
@@ -487,6 +488,7 @@ impl App {
             source_music,
             store,
             custom_level_catalog,
+            unreadable_custom_levels: std::collections::BTreeSet::new(),
             timing: HostTiming::default(),
             scene_buffers: scene::SceneBuffers::default(),
             profiler: Profiler::default(),
@@ -697,12 +699,19 @@ impl App {
     }
     fn refresh_custom_level_catalog(&mut self) {
         self.custom_level_catalog = self.store.data.custom_levels.clone();
+        self.unreadable_custom_levels.clear();
         #[cfg(not(target_arch = "wasm32"))]
         match crate::editor_io::load_native_level_directory(std::path::Path::new("levels")) {
-            Ok((levels, warnings)) => {
-                self.custom_level_catalog.extend(levels);
-                let warning_count = warnings.len();
-                if let Some(warning) = warnings.into_iter().next() {
+            Ok(catalog) => {
+                for name in &catalog.unreadable {
+                    // A native file shadows save-data copies, even when the
+                    // current process cannot open it.
+                    self.custom_level_catalog.remove(name);
+                }
+                self.unreadable_custom_levels = catalog.unreadable;
+                self.custom_level_catalog.extend(catalog.levels);
+                let warning_count = catalog.warnings.len();
+                if let Some(warning) = catalog.warnings.into_iter().next() {
                     let message = if warning_count > 1 {
                         format!(
                             "{warning} ({} more unreadable level files)",
@@ -1163,7 +1172,14 @@ impl App {
                 }
             }
             Screen::Finished => 2,
-            Screen::Custom => visible_custom_level_names(&self.custom_level_catalog).len() + 2,
+            Screen::Custom => {
+                visible_custom_level_names(
+                    &self.custom_level_catalog,
+                    &self.unreadable_custom_levels,
+                )
+                .len()
+                    + 2
+            }
             _ => 1,
         };
         if self.screen == Screen::Custom && matches!(key, KeyCode::PageUp | KeyCode::PageDown) {
@@ -1184,9 +1200,18 @@ impl App {
             return;
         }
         if self.screen == Screen::Custom && key == KeyCode::KeyE {
-            let names = visible_custom_level_names(&self.custom_level_catalog);
+            let names = visible_custom_level_names(
+                &self.custom_level_catalog,
+                &self.unreadable_custom_levels,
+            );
             if let Some(name) = names.get(self.selection).cloned() {
-                let contents = self.custom_level_catalog[&name].clone();
+                if self.unreadable_custom_levels.contains(&name) {
+                    self.toast("NO SUCH LEVEL EXISTS!");
+                    return;
+                }
+                let Some(contents) = self.custom_level_catalog.get(&name).cloned() else {
+                    return;
+                };
                 if let Some(game) = &self.game {
                     self.editor.set_source_rng(game.rng.clone());
                     self.editor.set_source_context(editor_preview_context(game));
@@ -1290,7 +1315,10 @@ impl App {
                 }
             }
             Screen::Custom => {
-                let names = visible_custom_level_names(&self.custom_level_catalog);
+                let names = visible_custom_level_names(
+                    &self.custom_level_catalog,
+                    &self.unreadable_custom_levels,
+                );
                 if self.selection < names.len() {
                     self.play_custom(&names[self.selection], false)
                 } else if self.selection == names.len() {
@@ -1348,6 +1376,12 @@ impl App {
         }
     }
     fn play_custom(&mut self, name: &str, editor: bool) {
+        if self.unreadable_custom_levels.contains(name) {
+            // Classic enumerates this filename, then reports an open failure
+            // on selection while remaining in the custom-level selector.
+            self.toast("NO SUCH LEVEL EXISTS!");
+            return;
+        }
         self.flush_source_music();
         self.snapshot_lifetime_stats();
         self.source_message = None;
@@ -1435,6 +1469,7 @@ impl App {
             .data
             .custom_levels
             .insert(name.clone(), contents.clone());
+        self.unreadable_custom_levels.remove(&name);
         self.custom_level_catalog.insert(name.clone(), contents);
         if let Err(error) = self.store.save() {
             self.toast(error)
@@ -1560,6 +1595,7 @@ impl App {
                     .data
                     .custom_levels
                     .insert(key.clone(), text.clone());
+                self.unreadable_custom_levels.remove(&key);
                 self.custom_level_catalog.insert(key.clone(), text);
                 let result = self.store.save();
                 let command = complete_editor_save(&mut self.editor, &key, result);
@@ -2472,7 +2508,10 @@ impl App {
             }
             Screen::Custom => {
                 text(quads, atlas, "CUSTOM LEVELS", 74., 12., 1.5, GOLD);
-                let names = visible_custom_level_names(&self.custom_level_catalog);
+                let names = visible_custom_level_names(
+                    &self.custom_level_catalog,
+                    &self.unreadable_custom_levels,
+                );
                 let level_count = names.len();
                 let pages = level_count.div_ceil(CUSTOM_LEVELS_PER_PAGE).max(1);
                 let page = if self.selection < level_count {
@@ -2851,7 +2890,10 @@ impl App {
         if self.screen != Screen::Custom {
             return;
         }
-        let count = visible_custom_level_names(&self.custom_level_catalog).len() + 2;
+        let count =
+            visible_custom_level_names(&self.custom_level_catalog, &self.unreadable_custom_levels)
+                .len()
+                + 2;
         let Some(action) =
             custom_menu_pointer_action(self.selection, count, self.cursor[0], self.cursor[1])
         else {
@@ -2933,11 +2975,17 @@ fn custom_page_selection(selection: usize, level_count: usize, direction: isize)
     }
 }
 
-fn visible_custom_level_names(levels: &std::collections::BTreeMap<String, String>) -> Vec<String> {
+fn visible_custom_level_names(
+    levels: &std::collections::BTreeMap<String, String>,
+    unreadable: &std::collections::BTreeSet<String>,
+) -> Vec<String> {
     levels
         .keys()
+        .chain(unreadable.iter())
         .filter(|name| !name.starts_with('!') && !name.contains('/') && !name.contains('\\'))
         .cloned()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
         .collect()
 }
 
@@ -6158,7 +6206,7 @@ mod tests {
     }
 
     #[test]
-    fn custom_selector_hides_exclamation_prefixed_source_files() {
+    fn custom_selector_hides_internal_files_but_lists_unreadable_entries() {
         let levels = std::collections::BTreeMap::from([
             ("!internal.lvl".into(), "hidden".into()),
             ("alpha.lvl".into(), "visible".into()),
@@ -6166,10 +6214,12 @@ mod tests {
             ("beta.lvl".into(), "visible".into()),
             ("sub/room".into(), "linked only".into()),
         ]);
+        let unreadable = std::collections::BTreeSet::from(["unreadable.lvl".into()]);
         assert_eq!(
-            visible_custom_level_names(&levels),
-            ["alpha.lvl", "beta.lvl"]
+            visible_custom_level_names(&levels, &unreadable),
+            ["alpha.lvl", "beta.lvl", "unreadable.lvl"]
         );
+        assert!(!levels.contains_key("unreadable.lvl"));
     }
 
     #[test]
@@ -8599,7 +8649,7 @@ mod tests {
     fn hidden_source_custom_level_remains_available_to_authored_links() {
         let next = spelunky_core::level::Level::default();
         let levels = std::collections::BTreeMap::from([("!secret".into(), next.to_text())]);
-        assert!(visible_custom_level_names(&levels).is_empty());
+        assert!(visible_custom_level_names(&levels, &Default::default()).is_empty());
 
         let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
         load_custom(

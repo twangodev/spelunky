@@ -828,6 +828,7 @@ pub(crate) fn generate_campaign_result(
     if special::generate_special(&mut world, rng, flags) {
         if source_classic {
             initialize_generated_item_depths(&mut world, context.has_spectacles);
+            initialize_generated_source_exit_creates(&mut world);
         }
         world.fluid_dirty = false;
         return GeneratedLevel {
@@ -1132,6 +1133,7 @@ pub(crate) fn generate_campaign_result(
     terrain::finalize_generated(&mut world, state.revision);
     if source_classic {
         initialize_generated_item_depths(&mut world, context.has_spectacles);
+        initialize_generated_source_exit_creates(&mut world);
     }
     GeneratedLevel {
         world,
@@ -1146,6 +1148,15 @@ pub(crate) fn generate_campaign_result(
 fn initialize_generated_item_depths(world: &mut World, has_spectacles: bool) {
     for entity in &mut world.entities {
         crate::items::initialize_inherited_depth(entity, has_spectacles);
+    }
+}
+
+/// Generated worlds bypass `Game::spawn`, so project the source portal Create
+/// fields before the completed room becomes playable. Existing producer
+/// overrides (for example the Moai Exit type) remain authoritative.
+fn initialize_generated_source_exit_creates(world: &mut World) {
+    for entity in &mut world.entities {
+        crate::creation::initialize_source_exit_create(entity);
     }
 }
 
@@ -1782,6 +1793,34 @@ mod tests {
     }
 
     #[test]
+    fn source_generated_portals_have_their_classic_create_fields() {
+        let mut rng = Rng::new(0);
+        let mut state = GenerationState::fresh(&rng);
+        let generated = generate_campaign_result(
+            &mut rng,
+            1,
+            &BTreeSet::new(),
+            GenerationContext::default(),
+            &mut state,
+        );
+        let portals: Vec<_> = generated
+            .world
+            .entities
+            .iter()
+            .filter(|entity| {
+                entity.object == "oEntrance" || crate::catalog::is_a(&entity.object, "oExit")
+            })
+            .collect();
+
+        assert!(portals.iter().any(|entity| entity.object == "oEntrance"));
+        assert!(portals.iter().any(|entity| entity.object == "oExit"));
+        for portal in portals {
+            assert_eq!(portal.text.get("type").map(String::as_str), Some("Exit"));
+            assert_eq!(portal.text.get("leadsTo").map(String::as_str), Some(""));
+        }
+    }
+
+    #[test]
     fn spent_black_market_request_suppresses_lake_without_repeating_market() {
         // Seed zero's first canonical draw selects the source Lake branch.
         let mut lake_rng = Rng::new(0);
@@ -1896,6 +1935,7 @@ mod tests {
         assert!(decorations[1].creation_serial < thin_ice.creation_serial);
         assert!(thin_ice.creation_serial < moai_exit.creation_serial);
         assert!(moai_exit.creation_serial < crown.creation_serial);
+        assert_eq!(moai_exit.text.get("leadsTo").map(String::as_str), Some(""));
         assert_eq!(game.rng.state_bits(), 2_518_181_788);
     }
 

@@ -392,14 +392,15 @@ impl InputState {
         (actions, ui, press_allowed)
     }
 
-    /// Classic reads joystick button numbers directly. A browser with
-    /// `mapping=""` still exposes raw buttons and axes, so keep sampling that
-    /// joystick instead of discarding it.
+    /// Keep sampling raw browser button ordinals so users can bind them in the
+    /// controller setup. Only the Standard Gamepad mapping identifies axes and
+    /// d-pad button positions; an empty mapping cannot identify those controls.
     #[cfg(any(test, target_arch = "wasm32"))]
     fn accept_browser_controller_sample(
         &mut self,
         buttons: &[BrowserButtonSample],
         axes: [f32; 2],
+        standard_mapping: bool,
     ) {
         let mut held = 0;
         let mut capture = 0;
@@ -410,13 +411,17 @@ impl InputState {
                 capture |= button.mask();
             }
         }
-        let [x, y] = axes;
-        let directions = [
-            x < -DEAD_ZONE || held & ControllerButton::DPadLeft.mask() != 0,
-            x > DEAD_ZONE || held & ControllerButton::DPadRight.mask() != 0,
-            y < -DEAD_ZONE || held & ControllerButton::DPadUp.mask() != 0,
-            y > DEAD_ZONE || held & ControllerButton::DPadDown.mask() != 0,
-        ];
+        let directions = if standard_mapping {
+            let [x, y] = axes;
+            [
+                x < -DEAD_ZONE || held & ControllerButton::DPadLeft.mask() != 0,
+                x > DEAD_ZONE || held & ControllerButton::DPadRight.mask() != 0,
+                y < -DEAD_ZONE || held & ControllerButton::DPadUp.mask() != 0,
+                y > DEAD_ZONE || held & ControllerButton::DPadDown.mask() != 0,
+            ]
+        } else {
+            [false; 4]
+        };
         let (actions, ui, press_allowed) =
             self.portable_controller_with_direction_edges(held, directions);
         self.accept_controller_capture(capture);
@@ -835,9 +840,9 @@ impl InputState {
                     self.accept_controller_sample_with_direction_edges(actions, ui, 0x0f);
                     return;
                 };
-                // Select by source slot before checking connection. Classic
-                // reads joystick IDs and button numbers directly; an empty
-                // browser mapping still exposes raw controls for that slot.
+                // Select by source slot before checking connection. Raw button
+                // ordinals remain bindable, but only `standard` defines the
+                // axis and d-pad indices consumed as movement below.
                 if !pad.connected() {
                     self.accept_controller_capture(0);
                     self.accept_controller_sample_with_direction_edges(actions, ui, 0x0f);
@@ -858,7 +863,11 @@ impl InputState {
                 let axes = pad.axes();
                 let x = axes.get(0).as_f64().unwrap_or(0.0) as f32;
                 let y = axes.get(1).as_f64().unwrap_or(0.0) as f32;
-                self.accept_browser_controller_sample(&samples, [x, y]);
+                self.accept_browser_controller_sample(
+                    &samples,
+                    [x, y],
+                    pad.mapping() == web_sys::GamepadMappingType::Standard,
+                );
                 return;
             }
         }
@@ -1115,64 +1124,98 @@ mod tests {
     }
 
     #[test]
-    fn browser_gamepad_raw_button_ordinals_work_without_a_standard_mapping() {
+    fn browser_gamepad_unmapped_buttons_work_but_unknown_directions_are_not_guessed() {
         // The browser may expose a connected joystick with mapping="".
         // GameMaker still queries numbered buttons (Jump defaults to button 2),
-        // so the host must use those raw button positions rather than discard it.
+        // so preserve button ordinals for the configurable action bindings.
+        // The browser does not identify the stick or d-pad positions when its
+        // mapping is empty, so those positions must not be treated as standard.
         let mut input = InputState::default();
         input.set_controller_enabled(true);
-        input.accept_browser_controller_sample(&[], [0.0, 0.0]);
+        input.accept_browser_controller_sample(&[], [0.0, 0.0], false);
         input.take_tick();
         let mut buttons = vec![BrowserButtonSample::default(); 2];
         buttons[1] = BrowserButtonSample {
             pressed: true,
             value: 1.0,
         };
-        input.accept_browser_controller_sample(&buttons, [0.0, 0.0]);
+        input.accept_browser_controller_sample(&buttons, [0.0, 0.0], false);
         let tick = input.take_tick();
         assert!(tick.jump && tick.jump_pressed);
         assert!(!tick.attack);
         assert_eq!(input.controller_pressed(), vec![ControllerButton::East]);
 
-        input.accept_browser_controller_sample(&[], [0.0, 0.0]);
+        input.accept_browser_controller_sample(&[], [0.0, 0.0], false);
         input.take_tick();
         let mut extra = vec![BrowserButtonSample::default(); 20];
         extra[19] = BrowserButtonSample {
             pressed: true,
             value: 1.0,
         };
-        input.accept_browser_controller_sample(&extra, [0.0, 0.0]);
+        input.accept_browser_controller_sample(&extra, [0.0, 0.0], false);
         assert_eq!(input.controller_pressed(), vec![ControllerButton::Extra3]);
 
-        input.accept_browser_controller_sample(&[], [0.0, -1.0]);
+        input.accept_browser_controller_sample(&[], [0.0, -1.0], false);
         let tick = input.take_tick();
         assert!(!tick.jump);
-        assert!(tick.up);
-        assert!(tick.up_pressed);
+        assert!(!tick.up);
+        assert!(!tick.up_pressed);
+
+        let mut unknown_dpad = vec![BrowserButtonSample::default(); 13];
+        unknown_dpad[ControllerButton::DPadUp as usize] = BrowserButtonSample {
+            pressed: true,
+            value: 1.0,
+        };
+        input.accept_browser_controller_sample(&unknown_dpad, [0.0, 0.0], false);
+        assert!(!input.take_tick().up);
+        assert_eq!(input.controller_pressed(), vec![ControllerButton::DPadUp]);
+        input.accept_browser_controller_sample(&[], [0.0, 0.0], false);
+        input.take_tick();
 
         buttons[1] = BrowserButtonSample {
             pressed: false,
             value: 0.6,
         };
-        input.accept_browser_controller_sample(&buttons, [0.0, 0.0]);
+        input.accept_browser_controller_sample(&buttons, [0.0, 0.0], false);
         let tick = input.take_tick();
         assert!(tick.jump && tick.jump_pressed);
         assert_eq!(input.controller_pressed(), vec![ControllerButton::East]);
 
-        input.accept_browser_controller_sample(&[], [0.0, 0.0]);
+        input.accept_browser_controller_sample(&[], [0.0, 0.0], false);
         input.take_tick();
         let mut trigger = vec![BrowserButtonSample::default(); 7];
         trigger[ControllerButton::LeftTrigger as usize] = BrowserButtonSample {
             pressed: false,
             value: 0.2,
         };
-        input.accept_browser_controller_sample(&trigger, [0.0, 0.0]);
+        input.accept_browser_controller_sample(&trigger, [0.0, 0.0], false);
         let tick = input.take_tick();
         assert!(tick.bomb_pressed);
         assert_eq!(
             input.controller_pressed(),
             vec![ControllerButton::LeftTrigger]
         );
+    }
+
+    #[test]
+    fn browser_standard_gamepad_mapping_uses_canonical_stick_and_dpad() {
+        let mut input = InputState::default();
+        input.set_controller_enabled(true);
+
+        input.accept_browser_controller_sample(&[], [0.0, -1.0], true);
+        let stick = input.take_tick();
+        assert!(stick.up && stick.up_pressed);
+
+        input.accept_browser_controller_sample(&[], [0.0, 0.0], true);
+        input.take_tick();
+        let mut dpad = vec![BrowserButtonSample::default(); 16];
+        dpad[ControllerButton::DPadUp as usize] = BrowserButtonSample {
+            pressed: true,
+            value: 1.0,
+        };
+        input.accept_browser_controller_sample(&dpad, [0.0, 0.0], true);
+        let pov = input.take_tick();
+        assert!(pov.up && pov.up_pressed);
     }
 
     #[test]

@@ -275,13 +275,31 @@ pub(crate) fn canonical_level_sources_v2(
 /// them as authored linked destinations. Web levels continue to come from
 /// explicit user imports stored in the save data.
 #[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Default)]
+pub(crate) struct NativeLevelCatalog {
+    pub levels: std::collections::BTreeMap<String, String>,
+    /// Paths that Classic can enumerate, but the host could not read. They are
+    /// retained for the selector so failure occurs when the user selects them.
+    pub unreadable: std::collections::BTreeSet<String>,
+    pub warnings: Vec<String>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn load_native_level_directory(
     directory: &std::path::Path,
-) -> Result<(std::collections::BTreeMap<String, String>, Vec<String>), String> {
+) -> Result<NativeLevelCatalog, String> {
+    load_native_level_directory_with(directory, &|path| std::fs::read(path))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn load_native_level_directory_with(
+    directory: &std::path::Path,
+    read_file: &impl Fn(&std::path::Path) -> std::io::Result<Vec<u8>>,
+) -> Result<NativeLevelCatalog, String> {
     match std::fs::read_dir(directory) {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok((std::collections::BTreeMap::new(), Vec::new()));
+            return Ok(NativeLevelCatalog::default());
         }
         Err(error) => {
             return Err(format!(
@@ -292,36 +310,56 @@ pub(crate) fn load_native_level_directory(
     }
 
     let mut files = std::collections::BTreeMap::new();
-    let mut warnings = Vec::new();
-    read_native_level_files(directory, directory, &mut files, &mut warnings)?;
-    let mut levels = std::collections::BTreeMap::new();
+    let mut catalog = NativeLevelCatalog::default();
+    read_native_level_files(
+        directory,
+        directory,
+        &mut files,
+        &mut catalog.warnings,
+        read_file,
+    )?;
+    let mut normalized = std::collections::BTreeMap::new();
     for (name, contents) in files {
         let key = canonical_level_path_key(&name);
         if key.is_empty() {
             continue;
         }
-        match levels.entry(key.clone()) {
+        match normalized.entry(key.clone()) {
             std::collections::btree_map::Entry::Vacant(entry) => {
                 entry.insert(contents);
             }
             std::collections::btree_map::Entry::Occupied(mut entry)
                 if name == format!("{key}.lvl") =>
             {
-                entry.insert(contents);
+                let _ = entry.insert(contents);
             }
             std::collections::btree_map::Entry::Occupied(_) => {}
         }
     }
-    Ok((levels, warnings))
+    for (key, contents) in normalized {
+        match contents {
+            Ok(contents) => {
+                catalog.levels.insert(key, contents);
+            }
+            Err(()) => {
+                catalog.unreadable.insert(key);
+            }
+        }
+    }
+    Ok(catalog)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn read_native_level_files(
+fn read_native_level_files<F>(
     root: &std::path::Path,
     directory: &std::path::Path,
-    files: &mut std::collections::BTreeMap<String, String>,
+    files: &mut std::collections::BTreeMap<String, Result<String, ()>>,
     warnings: &mut Vec<String>,
-) -> Result<(), String> {
+    read_file: &F,
+) -> Result<(), String>
+where
+    F: Fn(&std::path::Path) -> std::io::Result<Vec<u8>>,
+{
     let entries = std::fs::read_dir(directory).map_err(|error| {
         format!(
             "Cannot list custom levels in {}: {error}",
@@ -345,7 +383,7 @@ fn read_native_level_files(
             .file_type()
             .map_err(|error| format!("Cannot inspect {}: {error}", path.display()))?;
         if file_type.is_dir() {
-            read_native_level_files(root, &path, files, warnings)?;
+            read_native_level_files(root, &path, files, warnings, read_file)?;
             continue;
         }
         if !file_type.is_file() {
@@ -365,14 +403,15 @@ fn read_native_level_files(
         else {
             continue;
         };
-        let contents = match std::fs::read_to_string(&path) {
-            Ok(contents) => contents,
+        let contents = match read_file(&path) {
+            Ok(contents) => Ok(String::from_utf8_lossy(&contents).into_owned()),
             Err(error) => {
                 // Classic enumerates level names without opening each file.
                 // A single unreadable level must not hide the rest of the
-                // catalog; defer its failure until that level is selected.
+                // catalog. Keep its path separately so it can be selected and
+                // report the failed open at the same point Classic does.
                 warnings.push(format!("Cannot read {}: {error}", path.display()));
-                continue;
+                Err(())
             }
         };
         // Retain the final extension until canonicalization. `file_stem()` on
@@ -457,7 +496,7 @@ mod tests {
         std::fs::write(directory.join("sub/Room.LVL"), "nested room").unwrap();
 
         assert_eq!(
-            load_native_level_directory(&directory).unwrap().0,
+            load_native_level_directory(&directory).unwrap().levels,
             std::collections::BTreeMap::from([
                 ("!hidden".into(), "hidden".into()),
                 ("foo".into(), "ordinary foo".into()),
@@ -470,7 +509,7 @@ mod tests {
         assert!(
             load_native_level_directory(&root.join("missing"))
                 .unwrap()
-                .0
+                .levels
                 .is_empty()
         );
         std::fs::remove_dir_all(root).unwrap();
@@ -478,7 +517,7 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn unreadable_native_level_does_not_hide_other_catalog_entries() {
+    fn native_catalog_retains_legacy_text_and_unreadable_level_names() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -489,16 +528,34 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("valid.lvl"), "readable level").unwrap();
-        std::fs::write(root.join("bad.lvl"), [0xff, 0xfe]).unwrap();
+        std::fs::write(root.join("legacy.lvl"), [0xff, 0xfe]).unwrap();
+        std::fs::write(root.join("unreadable.lvl"), "unreadable").unwrap();
 
-        let (levels, warnings) = load_native_level_directory(&root).unwrap();
+        let catalog = load_native_level_directory_with(&root, &|path| {
+            if path
+                .file_name()
+                .is_some_and(|name| name == "unreadable.lvl")
+            {
+                Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+            } else {
+                std::fs::read(path)
+            }
+        })
+        .unwrap();
 
         assert_eq!(
-            levels,
-            std::collections::BTreeMap::from([("valid".into(), "readable level".into())])
+            catalog.levels,
+            std::collections::BTreeMap::from([
+                ("legacy".into(), "��".into()),
+                ("valid".into(), "readable level".into()),
+            ])
         );
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("bad.lvl"));
+        assert_eq!(
+            catalog.unreadable,
+            std::collections::BTreeSet::from(["unreadable".into()])
+        );
+        assert_eq!(catalog.warnings.len(), 1);
+        assert!(catalog.warnings[0].contains("unreadable.lvl"));
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -522,7 +579,7 @@ mod tests {
         save_native_level_to(&directory, "sub/room.lvl", "nested room").unwrap();
 
         assert_eq!(
-            load_native_level_directory(&directory).unwrap().0,
+            load_native_level_directory(&directory).unwrap().levels,
             std::collections::BTreeMap::from([
                 ("bonus.lvl".into(), "double extension".into()),
                 ("room".into(), "edited room".into()),
