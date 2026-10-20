@@ -210,7 +210,20 @@ impl SaveData {
         data.version = SAVE_VERSION;
         // Newly introduced actions receive defaults; existing remaps and
         // deliberately empty (unbound) actions remain intact.
-        for (action, keys) in Settings::default().bindings {
+        let default_bindings = Settings::default().bindings;
+        if !data.settings.bindings.contains_key("exit") {
+            // Classic uses the same Up action at doors. Older Rust saves
+            // predate the separate Exit alias, so carry their Up remap forward.
+            let up = data
+                .settings
+                .bindings
+                .get("up")
+                .or_else(|| default_bindings.get("up"))
+                .cloned()
+                .expect("default settings include an Up binding");
+            data.settings.bindings.insert("exit".into(), up);
+        }
+        for (action, keys) in default_bindings {
             data.settings.bindings.entry(action).or_insert(keys);
         }
         data.settings.controller_bindings =
@@ -1360,5 +1373,34 @@ mod tests {
         assert!(!reopened.down_to_run);
         assert_eq!(reopened.rules, disabled.rules);
         assert_eq!(reopened.bindings, disabled.bindings);
+    }
+
+    #[test]
+    fn legacy_up_remap_is_used_for_new_door_binding() {
+        let data =
+            SaveData::from_json(r#"{"version":1,"settings":{"bindings":{"up":"KeyI"}}}"#).unwrap();
+        assert_eq!(data.settings.bindings["exit"], "KeyI");
+        let explicitly_rebound = SaveData::from_json(
+            r#"{"version":1,"settings":{"bindings":{"up":"KeyI","exit":"KeyO"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(explicitly_rebound.settings.bindings["exit"], "KeyO");
+        let up_unbound =
+            SaveData::from_json(r#"{"version":1,"settings":{"bindings":{"up":""}}}"#).unwrap();
+        assert_eq!(up_unbound.settings.bindings["exit"], "");
+
+        let mut input = crate::input::InputState::default();
+        input.set_bindings(&data.settings.bindings);
+        input.key(winit::keyboard::KeyCode::ArrowUp, true, false);
+        let former_default = input.take_tick();
+        assert!(!former_default.up);
+        assert!(!former_default.exit_pressed);
+
+        input.key(winit::keyboard::KeyCode::ArrowUp, false, false);
+        input.key(winit::keyboard::KeyCode::KeyI, true, false);
+        let remapped = input.take_tick();
+        assert!(remapped.up);
+        assert!(remapped.up_pressed);
+        assert!(remapped.exit_pressed);
     }
 }
