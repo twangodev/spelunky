@@ -28,6 +28,7 @@ pub enum EditorCommand {
     Save { name: String, text: String },
     Export { name: String, text: String },
     Import,
+    ImportDirectory,
     Play(EditorPlay),
     Back,
 }
@@ -160,6 +161,12 @@ impl EditorUi {
         self.pan = [0.0, 0.0];
         self.play_snapshot = None;
         self.status = format!("LOADED {}", self.name);
+        Ok(())
+    }
+
+    pub(crate) fn validate_source(source: &str) -> Result<(), String> {
+        Level::parse_for_editor(source)?;
+        raw_starting_inventory(source)?;
         Ok(())
     }
 
@@ -329,6 +336,7 @@ impl EditorUi {
                     };
                 }
                 KeyCode::KeyI | KeyCode::KeyO => return EditorCommand::Import,
+                KeyCode::KeyD => return EditorCommand::ImportDirectory,
                 KeyCode::KeyZ => {
                     self.state.undo();
                 }
@@ -811,7 +819,7 @@ impl EditorUi {
         text(
             quads,
             atlas,
-            "CTRL S SAVE / E EXPORT / I IMPORT",
+            "CTRL S SAVE / E EXPORT / I IMPORT / CTRL+D FOLDER",
             3.0,
             12.0,
             0.5,
@@ -1017,20 +1025,8 @@ fn raw_starting_inventory(source: &str) -> Result<[String; 3], String> {
 }
 
 fn file_name(name: &str) -> Result<String, String> {
-    let name = name.rsplit(['/', '\\']).next().unwrap_or("").trim();
-    let stem = if name.to_ascii_lowercase().ends_with(".lvl") {
-        &name[..name.len() - 4]
-    } else {
-        name
-    };
-    if stem.is_empty() || name == "." || name == ".." || name.chars().any(char::is_control) {
-        return Err("ENTER A VALID FILE NAME".into());
-    }
-    Ok(if name.to_ascii_lowercase().ends_with(".lvl") {
-        name.into()
-    } else {
-        format!("{name}.lvl")
-    })
+    crate::editor_io::relative_level_filename(name.trim())
+        .map_err(|_| "ENTER A VALID RELATIVE FILE NAME".into())
 }
 
 // Both tables are authored in the core preview model, independently of gameplay.
@@ -1653,7 +1649,8 @@ mod tests {
         for tile in ui.state.palette.clone() {
             ui.state.select(tile).unwrap();
         }
-        assert_eq!(file_name("../../map").unwrap(), "map.lvl");
+        assert_eq!(file_name("sub/map").unwrap(), "sub/map.lvl");
+        assert!(file_name("../../map").is_err());
         assert!(file_name("..").is_err());
         assert!(file_name(".lvl").is_err());
     }

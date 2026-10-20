@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use spelunky_core::{RngAlgorithm, RulesPreset};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const SAVE_VERSION: u32 = 1;
+pub const SAVE_VERSION: u32 = 2;
 #[cfg(target_arch = "wasm32")]
 const STORAGE_KEY: &str = "spelunky-rust.save";
 
@@ -201,8 +201,12 @@ impl SaveData {
         }
         let mut data: Self =
             serde_json::from_value(value).map_err(|error| format!("Invalid save data: {error}"))?;
-        data.custom_levels = crate::editor_io::canonical_level_sources(data.custom_levels);
-        // Version zero used the same fields without a required schema marker.
+        data.custom_levels = if version >= 2 {
+            crate::editor_io::canonical_level_sources_v2(data.custom_levels)
+        } else {
+            crate::editor_io::canonical_level_sources_v1(data.custom_levels)
+        };
+        // Versions zero and one used the same flat level-key format.
         data.version = SAVE_VERSION;
         // Newly introduced actions receive defaults; existing remaps and
         // deliberately empty (unbound) actions remain intact.
@@ -634,6 +638,27 @@ mod tests {
         assert_eq!(data.custom_levels["example"], "canonical file");
         assert_eq!(data.custom_levels["!hidden"], "hidden");
         assert_eq!(data.custom_levels["double.lvl"], "double extension");
+    }
+
+    #[test]
+    fn version_two_save_round_trip_preserves_nested_custom_level_paths() {
+        let mut data = SaveData::default();
+        data.custom_levels
+            .insert("start".into(), "start text".into());
+        data.custom_levels
+            .insert("sub/next".into(), "nested text".into());
+        data.custom_levels
+            .insert("sub/deep/room.lvl".into(), "double extension".into());
+
+        let json = data.to_json().unwrap();
+        assert!(json.contains("\"version\": 2"));
+        let decoded = SaveData::from_json(&json).unwrap();
+        assert_eq!(decoded.custom_levels["start"], "start text");
+        assert_eq!(decoded.custom_levels["sub/next"], "nested text");
+        assert_eq!(
+            decoded.custom_levels["sub/deep/room.lvl"],
+            "double extension"
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]

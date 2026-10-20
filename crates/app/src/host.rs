@@ -52,6 +52,8 @@ enum UserEvent {
     #[cfg(target_arch = "wasm32")]
     Imported(String, String),
     #[cfg(target_arch = "wasm32")]
+    ImportedDirectory(Vec<(String, String)>),
+    #[cfg(target_arch = "wasm32")]
     ImportError(String),
     #[cfg(target_arch = "wasm32")]
     StatsImported(String),
@@ -1092,6 +1094,11 @@ impl App {
             };
             return;
         }
+        #[cfg(target_arch = "wasm32")]
+        if self.screen == Screen::Custom && key == KeyCode::KeyF {
+            self.import_level_directory_dialog();
+            return;
+        }
         let count = match self.screen {
             Screen::Title => 11,
             Screen::Stats => 3,
@@ -1382,6 +1389,30 @@ impl App {
             self.toast(format!("IMPORTED {name}"))
         }
     }
+    #[cfg(target_arch = "wasm32")]
+    fn import_level_directory(&mut self, files: Vec<(String, String)>) {
+        let levels = match canonical_imported_level_sources(files) {
+            Ok(levels) => levels,
+            Err(error) => {
+                self.editor.message(error.clone());
+                self.toast(error);
+                return;
+            }
+        };
+        let count = levels.len();
+        let old_levels = self.store.data.custom_levels.clone();
+        let old_catalog = self.custom_level_catalog.clone();
+        self.store.data.custom_levels.extend(levels.clone());
+        self.custom_level_catalog.extend(levels);
+        if let Err(error) = self.store.save() {
+            self.store.data.custom_levels = old_levels;
+            self.custom_level_catalog = old_catalog;
+            self.editor.message(error.clone());
+            self.toast(error);
+        } else {
+            self.toast(format!("IMPORTED {count} LEVELS"));
+        }
+    }
     fn import_dialog(&mut self) {
         #[cfg(target_arch = "wasm32")]
         {
@@ -1400,6 +1431,19 @@ impl App {
         {
             self.toast("DROP A .LVL FILE ON THIS WINDOW TO IMPORT");
             self.editor.message("DROP A .LVL FILE ON THE WINDOW".into());
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn import_level_directory_dialog(&mut self) {
+        let proxy = self.proxy.clone();
+        if let Err(error) = crate::editor_io::choose_level_directory(move |result| {
+            let event = match result {
+                Ok(files) => UserEvent::ImportedDirectory(files),
+                Err(error) => UserEvent::ImportError(error),
+            };
+            let _ = proxy.send_event(event);
+        }) {
+            self.toast(error);
         }
     }
     fn editor_command(&mut self, command: EditorCommand) {
@@ -1439,8 +1483,21 @@ impl App {
                 self.open_hub(spelunky_core::hub::HubKind::Title);
             }
             EditorCommand::Import => self.import_dialog(),
+            EditorCommand::ImportDirectory => {
+                #[cfg(target_arch = "wasm32")]
+                self.import_level_directory_dialog();
+                #[cfg(not(target_arch = "wasm32"))]
+                self.editor
+                    .message("NATIVE LEVELS ARE READ FROM THE levels/ FOLDER".into());
+            }
             EditorCommand::Save { name, text } => {
-                let key = level_name(&name);
+                let key = match editor_level_key(&name) {
+                    Ok(key) => key,
+                    Err(error) => {
+                        complete_editor_save(&mut self.editor, &name, Err(error));
+                        return;
+                    }
+                };
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Err(error) = crate::editor_io::save_native_level(&name, &text) {
                     complete_editor_save(&mut self.editor, &name, Err(error));
@@ -2416,15 +2473,11 @@ impl App {
                         );
                     }
                 }
-                text(
-                    quads,
-                    atlas,
-                    "ENTER PLAY / E EDIT / PGUP-DN PAGE / DROP .LVL IMPORT",
-                    14.,
-                    223.,
-                    0.8,
-                    WHITE,
-                );
+                #[cfg(target_arch = "wasm32")]
+                let help = "ENTER PLAY / E EDIT / F IMPORT FOLDER / PGUP-DN PAGE";
+                #[cfg(not(target_arch = "wasm32"))]
+                let help = "ENTER PLAY / E EDIT / PGUP-DN PAGE / DROP .LVL IMPORT";
+                text(quads, atlas, help, 14., 223., 0.8, WHITE);
             }
             Screen::Records => {
                 text(quads, atlas, "RUN RECORDS", 88., 14., 1.5, GOLD);
@@ -3961,6 +4014,28 @@ fn wrap_message(value: &str, width: usize) -> Vec<String> {
 fn level_name(value: &str) -> String {
     crate::editor_io::canonical_level_key(value)
 }
+fn editor_level_key(value: &str) -> Result<String, String> {
+    let filename = crate::editor_io::relative_level_filename(value)?;
+    Ok(crate::editor_io::canonical_level_path_key(&filename))
+}
+fn canonical_imported_level_sources(
+    files: Vec<(String, String)>,
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let mut levels = std::collections::BTreeMap::new();
+    for (path, contents) in files {
+        let key = crate::editor_io::imported_level_key(&path)
+            .map_err(|error| format!("INVALID LEVEL PATH {path}: {error}"))?;
+        crate::editor_ui::EditorUi::validate_source(&contents)
+            .map_err(|error| format!("INVALID LEVEL {path}: {error}"))?;
+        if levels.insert(key.clone(), contents).is_some() {
+            return Err(format!("DUPLICATE LEVEL PATH: {key}"));
+        }
+    }
+    if levels.is_empty() {
+        return Err("NO .LVL FILES FOUND IN THE SELECTED FOLDER".into());
+    }
+    Ok(levels)
+}
 fn runtime_level_name(value: &str) -> String {
     if value.contains('/') || value.contains('\\') {
         crate::editor_io::canonical_level_path_key(value)
@@ -4124,6 +4199,8 @@ impl ApplicationHandler<UserEvent> for App {
             }
             #[cfg(target_arch = "wasm32")]
             UserEvent::Imported(name, text) => self.import_level(name, text),
+            #[cfg(target_arch = "wasm32")]
+            UserEvent::ImportedDirectory(files) => self.import_level_directory(files),
             #[cfg(target_arch = "wasm32")]
             UserEvent::ImportError(error) => {
                 self.editor.message(error.clone());
@@ -8291,6 +8368,61 @@ mod tests {
             CustomExit::Continued
         );
         assert_eq!(game.world.name, "sub/room");
+    }
+
+    #[test]
+    fn imported_nested_levels_survive_storage_and_keep_editor_save_path() {
+        let mut start = spelunky_core::level::Level::default();
+        start.next_level = "sub/next".into();
+        let mut next = spelunky_core::level::Level::default();
+        next.author = "NESTED TARGET".into();
+        let imported = canonical_imported_level_sources(vec![
+            ("start.lvl".into(), start.to_text()),
+            ("sub/next.lvl".into(), next.to_text()),
+        ])
+        .unwrap();
+        let mut save = crate::storage::SaveData::default();
+        save.custom_levels = imported;
+        let restored = crate::storage::SaveData::from_json(&save.to_json().unwrap()).unwrap();
+        assert!(restored.custom_levels.contains_key("start"));
+        assert!(restored.custom_levels.contains_key("sub/next"));
+
+        let mut editor = EditorUi::new();
+        open_editor_level_name(&mut editor, &restored.custom_levels, "sub/next");
+        assert_eq!(editor.level_name(), "sub/next.lvl");
+        let EditorCommand::Save { name, .. } = editor.key(KeyCode::KeyS, None, true) else {
+            panic!("nested editor level should save");
+        };
+        assert_eq!(editor_level_key(&name).unwrap(), "sub/next");
+
+        let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+        load_custom(&mut game, &start, "start.lvl", "");
+        game.flags.insert("custom_level:sub/next".into());
+        assert_eq!(
+            custom_exit(&mut game, &restored.custom_levels, false),
+            CustomExit::Continued
+        );
+        assert_eq!(game.world.name, "sub/next");
+        assert_eq!(
+            custom_level_source(&restored.custom_levels, "sub/next"),
+            Some(restored.custom_levels["sub/next"].as_str())
+        );
+    }
+
+    #[test]
+    fn directory_import_rejects_unsafe_and_duplicate_paths_before_importing() {
+        let valid = spelunky_core::level::Level::default().to_text();
+        assert!(
+            canonical_imported_level_sources(vec![("../escape.lvl".into(), valid.clone(),)])
+                .is_err()
+        );
+        assert!(
+            canonical_imported_level_sources(vec![
+                ("sub/room.lvl".into(), valid.clone()),
+                ("SUB/ROOM.LVL".into(), valid),
+            ])
+            .is_err()
+        );
     }
 
     #[test]
