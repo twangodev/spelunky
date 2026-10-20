@@ -2660,6 +2660,7 @@ impl App {
             alpha,
             self.store.data.settings.pixel_snap,
         );
+        snapshot["rendererReady"] = serde_json::Value::Bool(self.renderer.is_some());
         apply_viewport_snapshot(
             &mut snapshot,
             self.game.as_ref(),
@@ -4011,6 +4012,24 @@ fn wall_seed() -> u32 {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+fn set_browser_start_status(error: Option<&str>) {
+    let Some(status) = web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.get_element_by_id("status"))
+    else {
+        return;
+    };
+    if let Some(error) = error {
+        status.set_text_content(Some(error));
+        let _ = status.remove_attribute("hidden");
+        let _ = status.set_attribute("class", "error");
+    } else {
+        let _ = status.set_attribute("hidden", "");
+        let _ = status.remove_attribute("class");
+    }
+}
+
 impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
@@ -4037,7 +4056,10 @@ impl ApplicationHandler<UserEvent> for App {
         let window = match event_loop.create_window(attributes) {
             Ok(window) => Arc::new(window),
             Err(error) => {
-                self.toast(error.to_string());
+                let error = error.to_string();
+                #[cfg(target_arch = "wasm32")]
+                set_browser_start_status(Some(&error));
+                self.toast(error);
                 event_loop.exit();
                 return;
             }
@@ -4058,6 +4080,8 @@ impl ApplicationHandler<UserEvent> for App {
         let atlas = match Atlas::load() {
             Ok(atlas) => atlas,
             Err(error) => {
+                #[cfg(target_arch = "wasm32")]
+                set_browser_start_status(Some(&error));
                 self.toast(error);
                 event_loop.exit();
                 return;
@@ -4079,8 +4103,15 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             UserEvent::Ready(Ok((mut renderer, atlas))) => {
                 renderer.set_vsync(self.store.data.settings.vsync);
+                if let Some(window) = &self.window {
+                    let size = window.inner_size();
+                    renderer.resize(size.width, size.height);
+                }
+                self.timing.reset(self.now());
                 self.renderer = Some(renderer);
                 self.atlas = Some(atlas);
+                #[cfg(target_arch = "wasm32")]
+                set_browser_start_status(None);
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
@@ -4088,14 +4119,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Ready(Err(error)) => {
                 eprintln!("Graphics initialization failed: {error}");
                 #[cfg(target_arch = "wasm32")]
-                if let Some(status) = web_sys::window()
-                    .and_then(|w| w.document())
-                    .and_then(|d| d.get_element_by_id("status"))
-                {
-                    status.set_text_content(Some(&error));
-                    let _ = status.remove_attribute("hidden");
-                    let _ = status.set_attribute("class", "error");
-                }
+                set_browser_start_status(Some(&error));
                 event_loop.exit()
             }
             #[cfg(target_arch = "wasm32")]
@@ -4270,6 +4294,13 @@ impl ApplicationHandler<UserEvent> for App {
             },
             WindowEvent::RedrawRequested => {
                 let frame_started = self.now();
+                #[cfg(target_arch = "wasm32")]
+                if self.renderer.is_none() {
+                    // Renderer initialization is asynchronous in the browser.
+                    // Keep the source simulation frozen until the first renderer
+                    // is ready instead of consuming startup time in hidden frames.
+                    return;
+                }
                 #[cfg(target_arch = "wasm32")]
                 if !self
                     .presentation_cadence

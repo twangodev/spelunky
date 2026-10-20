@@ -122,10 +122,47 @@ function instrument() {
 }
 
 async function ready(page) {
-  await page.goto(base, { waitUntil: 'domcontentloaded' });
+  let releaseWasm;
+  let resolveWasmHandled;
+  let heldWasm = false;
+  const wasmGate = new Promise(resolve => { releaseWasm = resolve; });
+  const wasmHandled = new Promise(resolve => { resolveWasmHandled = resolve; });
+  const holdWasm = async route => {
+    if (heldWasm) {
+      await route.continue();
+      return;
+    }
+    heldWasm = true;
+    await wasmGate;
+    try {
+      await route.continue();
+    } finally {
+      resolveWasmHandled();
+    }
+  };
+  await page.route('**/*.wasm', holdWasm);
+  const wasmRequest = page.waitForRequest(request => new URL(request.url()).pathname.endsWith('.wasm'), { timeout: 120000 });
+  try {
+    await page.goto(base, { waitUntil: 'commit' });
+    await wasmRequest;
+    await page.setViewportSize({ width: 800, height: 600 });
+  } finally {
+    releaseWasm();
+    if (heldWasm) await wasmHandled;
+    await page.unroute('**/*.wasm', holdWasm);
+  }
   await page.waitForFunction(() => document.querySelector('#status')?.hidden || document.querySelector('#status.error'), null, { timeout: 120000 });
   assert.equal(await page.locator('#status').evaluate(element => element.hidden), true, await page.locator('#status').textContent());
-  await page.waitForFunction(() => window.__smoke.draws > 2, null, { timeout: 120000 });
+  await page.waitForFunction(() => {
+    const canvas = document.querySelector('#spelunky-canvas');
+    return window.__smoke.draws > 2 && window.__spelunkyTest?.rendererReady
+      && canvas?.width === 800 && canvas?.height === 600;
+  }, null, { timeout: 120000 });
+  assert.deepEqual(await page.evaluate(() => window.__rendererNotReadyFrames), [],
+    'The source simulation must not publish frames before the browser renderer is ready');
+  assert.deepEqual(await page.locator('#spelunky-canvas').evaluate(canvas => [canvas.width, canvas.height]), [800, 600],
+    'A viewport resize during async startup must be applied when the renderer becomes ready');
+  await page.setViewportSize({ width: 960, height: 720 });
   await page.locator('canvas').focus();
   return reachTitleMenu(page);
 }

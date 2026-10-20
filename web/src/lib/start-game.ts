@@ -6,7 +6,6 @@ export async function startGame(canvas: HTMLCanvasElement, status: HTMLParagraph
     const { default: init, start } = await import('virtual:spelunky');
     await init();
     await start();
-    status.hidden = true;
     canvas.focus();
   } catch (error) {
     status.classList.add('error');

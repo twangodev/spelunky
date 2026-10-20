@@ -4,12 +4,14 @@ import assert from 'node:assert/strict';
 export function installMovementTrace() {
   window.__SPELUNKY_TEST_MODE__ = true;
   window.__movementTrace = [];
+  window.__rendererNotReadyFrames = [];
   let current;
   let sequence = 0;
   Object.defineProperty(window, '__spelunkyTest', {
     configurable: true,
     get: () => current,
     set(value) {
+      if (value.rendererReady === false) window.__rendererNotReadyFrames.push(value.tick);
       current = { ...value, sequence: sequence++, observedAt: performance.now() };
       window.__movementTrace.push(current);
       if (window.__movementTrace.length > 1200) window.__movementTrace.shift();
