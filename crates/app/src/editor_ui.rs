@@ -233,7 +233,7 @@ impl EditorUi {
                 }
                 // Source Escape cancels EXIT, but leaves the editor from NEW.
                 KeyCode::Escape => {
-                    self.restart_document();
+                    self.restart_document(Field::Name);
                     EditorCommand::Back
                 }
                 _ => EditorCommand::None,
@@ -485,23 +485,25 @@ impl EditorUi {
         self.status.clear();
     }
 
-    fn restart_document(&mut self) {
+    fn restart_document(&mut self, filename_field: Field) {
         let context = self.state.previews.context;
         let rng = self.state.previews.rng.clone();
         let palette_progress = self.palette_progress;
         *self = Self::with_source_rng(context, rng);
         self.set_palette_progress(palette_progress);
-        self.begin(Field::Name, String::new());
+        self.begin(filename_field, String::new());
     }
 
     fn complete_confirmation(&mut self) -> EditorCommand {
         match self.confirmation {
             Some(Confirmation::Exit) => {
-                self.restart_document();
+                self.restart_document(Field::Name);
                 EditorCommand::Back
             }
             Some(Confirmation::New) => {
-                self.restart_document();
+                // Classic restarts into the filename prompt: an existing name
+                // opens that level, while a new name starts a blank document.
+                self.restart_document(Field::OpenName);
                 EditorCommand::None
             }
             None => EditorCommand::None,

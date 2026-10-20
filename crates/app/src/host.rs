@@ -5708,6 +5708,29 @@ mod tests {
             panic!("missing filename should create a blank editable document");
         };
         assert_eq!(playtest.level, spelunky_core::level::Level::default());
+
+        let mut restarted = EditorUi::new();
+        restarted
+            .load(
+                "previous.lvl",
+                &spelunky_core::level::Level::default().to_text(),
+            )
+            .unwrap();
+        restarted.key(KeyCode::KeyN, None, true);
+        assert!(matches!(
+            restarted.key(KeyCode::KeyN, None, false),
+            EditorCommand::None
+        ));
+        restarted.key(KeyCode::KeyK, Some("KNOWN"), false);
+        let EditorCommand::OpenLevel { name } = restarted.key(KeyCode::Enter, None, false) else {
+            panic!("Classic New restart must use the open-or-create filename prompt");
+        };
+        open_editor_level_name(&mut restarted, &catalog, &name);
+        assert_eq!(restarted.level_name(), "known.lvl");
+        let EditorCommand::Play(playtest) = restarted.key(KeyCode::F5, None, false) else {
+            panic!("New restart should load the existing level, not retain a blank draft");
+        };
+        assert_eq!(playtest.level.get_tile(3, 4), Some('1'));
     }
 
     #[test]
@@ -8873,7 +8896,11 @@ mod tests {
             EditorCommand::None
         ));
         editor.key(KeyCode::KeyF, Some("fresh"), false);
-        editor.key(KeyCode::Enter, None, false);
+        let EditorCommand::OpenLevel { name: fresh_name } = editor.key(KeyCode::Enter, None, false)
+        else {
+            panic!("successful New save restarts into the open-or-create prompt");
+        };
+        open_editor_level_name(&mut editor, &std::collections::BTreeMap::new(), &fresh_name);
         let EditorCommand::Save { name, text } = editor.key(KeyCode::KeyS, None, true) else {
             panic!("fresh save");
         };
