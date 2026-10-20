@@ -677,20 +677,7 @@ fn precise_collides_except(game: &Game, rect: Rect, excluded: u64) -> bool {
     debug_assert!(rect.w == 1.0 || rect.h == 1.0);
     let first = Vec2::new(rect.x, rect.y);
     let last = Vec2::new(rect.x + rect.w - 1.0, rect.y + rect.h - 1.0);
-    game.world
-        .tiles_line_active_precision(first, last, "oSolid", CollisionPrecision::Precise)
-        || game.world.entities.iter().any(|entity| {
-            entity.id != excluded
-                && entity.alive
-                && entity.engine_active
-                && entity.solid
-                && !entity.held
-                && entity.collision_mask().intersects_axis_line(
-                    first,
-                    last,
-                    CollisionPrecision::Precise,
-                )
-        })
+    game.world.solid_line_except(first, last, excluded)
 }
 
 fn collides_except(game: &Game, rect: Rect, excluded: u64) -> bool {
@@ -2477,6 +2464,27 @@ mod tests {
         assert_eq!(game.player.pos.x, 139.0);
         assert_eq!(game.world.entity(id).unwrap().pos.x, 130.0);
         assert_eq!(game.player.health, 4.0);
+    }
+
+    #[test]
+    fn moving_platform_does_not_carry_rider_through_held_osolid_entity() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let block = game.world.spawn("oBlock", Vec2::new(101.0, 64.0));
+        game.world.entity_mut(block).unwrap().held = true;
+        assert!(crate::catalog::is_a("oBlock", "oSolid"));
+
+        let platform = game.world.spawn("oCeilingTrap", Vec2::new(96.0, 80.0));
+        game.world.entity_mut(platform).unwrap().vel.x = 1.0;
+        game.player.pos = Vec2::new(96.0, 72.0);
+        game.player.vel = Vec2::new(0.0, 0.0);
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+
+        game.step(&crate::InputFrame::default());
+
+        assert_eq!(game.player.pos.x, 96.0);
+        assert_eq!(game.world.entity(platform).unwrap().pos.x, 97.0);
+        assert!(game.world.entity(block).is_some());
     }
 
     #[test]
