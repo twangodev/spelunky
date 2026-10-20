@@ -50,6 +50,8 @@ enum Screen {
 enum UserEvent {
     Ready(Result<(Renderer, Atlas), String>),
     #[cfg(target_arch = "wasm32")]
+    BrowserFullscreenChanged(bool),
+    #[cfg(target_arch = "wasm32")]
     Imported(String, String),
     #[cfg(target_arch = "wasm32")]
     ImportedDirectory(Vec<(String, String)>),
@@ -307,6 +309,8 @@ struct App {
     control: bool,
     #[cfg(target_arch = "wasm32")]
     browser_shortcuts: Option<crate::browser_shortcuts::BrowserShortcutModifiers>,
+    #[cfg(target_arch = "wasm32")]
+    browser_fullscreen_listener: Option<wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>>,
     message: String,
     message_until: f64,
     message_simulated: bool,
@@ -514,6 +518,8 @@ impl App {
             control: false,
             #[cfg(target_arch = "wasm32")]
             browser_shortcuts: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_fullscreen_listener: None,
             message: String::new(),
             message_until: 0.,
             message_simulated: false,
@@ -554,6 +560,7 @@ impl App {
     }
     #[cfg(target_arch = "wasm32")]
     fn resume_browser_lifecycle(&mut self) {
+        self.install_browser_fullscreen_listener();
         if let Some(document) = web_sys::window().and_then(|window| window.document()) {
             self.occluded = document.hidden();
             if let Ok(focused) = document.has_focus() {
@@ -567,6 +574,35 @@ impl App {
         {
             window.request_redraw();
         }
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn install_browser_fullscreen_listener(&mut self) {
+        use wasm_bindgen::JsCast;
+        if self.browser_fullscreen_listener.is_some() {
+            return;
+        }
+        let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+            return;
+        };
+        let proxy = self.proxy.clone();
+        let listener =
+            wasm_bindgen::closure::Closure::wrap(Box::new(move |_event: web_sys::Event| {
+                let _ = proxy.send_event(UserEvent::BrowserFullscreenChanged(
+                    browser_fullscreen_active(),
+                ));
+            }) as Box<dyn FnMut(web_sys::Event)>);
+        let callback = listener.as_ref().unchecked_ref();
+        if let Err(error) = document.add_event_listener_with_callback("fullscreenchange", callback)
+        {
+            self.toast(format!("Cannot observe fullscreen state: {error:?}"));
+            return;
+        }
+        // Safari's prefixed event is still used by older WebKit fullscreen APIs.
+        let _ = document.add_event_listener_with_callback("webkitfullscreenchange", callback);
+        self.browser_fullscreen_listener = Some(listener);
+        let _ = self.proxy.send_event(UserEvent::BrowserFullscreenChanged(
+            browser_fullscreen_active(),
+        ));
     }
     fn reset_room_timing(&mut self) {
         if let Some(game) = &mut self.game {
@@ -772,7 +808,6 @@ impl App {
         #[cfg(target_arch = "wasm32")]
         {
             toggle_browser_fullscreen();
-            self.store.data.settings.fullscreen = !self.store.data.settings.fullscreen;
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -789,6 +824,7 @@ impl App {
             }
             self.store.data.settings.fullscreen = fullscreen;
         }
+        #[cfg(not(target_arch = "wasm32"))]
         if let Err(error) = self.store.save() {
             self.toast(error);
         }
@@ -4170,6 +4206,8 @@ impl ApplicationHandler<UserEvent> for App {
             }
         }
         self.window = Some(window.clone());
+        #[cfg(target_arch = "wasm32")]
+        self.install_browser_fullscreen_listener();
         self.timing.reset(self.now());
         self.settings_changed();
         let atlas = match Atlas::load() {
@@ -4227,6 +4265,18 @@ impl ApplicationHandler<UserEvent> for App {
                 #[cfg(target_arch = "wasm32")]
                 set_browser_start_status(Some(&error));
                 event_loop.exit()
+            }
+            #[cfg(target_arch = "wasm32")]
+            UserEvent::BrowserFullscreenChanged(fullscreen) => {
+                if reconcile_fullscreen_preference(
+                    &mut self.store.data.settings.fullscreen,
+                    fullscreen,
+                ) {
+                    if let Err(error) = self.store.save() {
+                        self.toast(error);
+                    }
+                }
+                browser_fullscreen_succeeded();
             }
             #[cfg(target_arch = "wasm32")]
             UserEvent::Imported(name, text) => self.import_level(name, text),
@@ -4600,19 +4650,29 @@ fn toggle_browser_fullscreen() {
     let Some(document) = web_sys::window().and_then(|window| window.document()) else {
         return;
     };
-    let (target, method): (JsValue, &str) = if document.fullscreen_element().is_some() {
-        (document.clone().into(), "exitFullscreen")
+    let active = browser_fullscreen_active_for(&document);
+    let (target, methods): (JsValue, &[&str]) = if active {
+        (
+            document.clone().into(),
+            &["exitFullscreen", "webkitExitFullscreen"],
+        )
     } else if let Some(root) = document.document_element() {
-        (root.into(), "requestFullscreen")
+        (
+            root.into(),
+            &[
+                "requestFullscreen",
+                "webkitRequestFullscreen",
+                "webkitRequestFullScreen",
+            ],
+        )
     } else {
         return;
     };
     // web-sys 0.3.91's generated fullscreen methods discard the DOM Promise.
-    // Invoke the platform method directly to retain and handle its rejection,
-    // without depending on a shell-specific JavaScript global.
-    let result = js_sys::Reflect::get(&target, &method.into())
-        .and_then(|value| value.dyn_into::<js_sys::Function>())
-        .and_then(|function| function.call0(&target));
+    // Invoke the platform method directly to retain and handle its rejection.
+    // The fullscreenchange event, rather than the request itself, updates the
+    // saved setting so rejected requests cannot leave it out of sync.
+    let result = call_browser_fullscreen_method(&target, methods);
     match result {
         Ok(value) => {
             if let Ok(promise) = value.dyn_into::<js_sys::Promise>() {
@@ -4622,6 +4682,8 @@ fn toggle_browser_fullscreen() {
                     }
                     focus_browser_canvas();
                 });
+            } else {
+                focus_browser_canvas();
             }
         }
         Err(_) => {
@@ -4629,6 +4691,41 @@ fn toggle_browser_fullscreen() {
             focus_browser_canvas();
         }
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn call_browser_fullscreen_method(
+    target: &wasm_bindgen::JsValue,
+    methods: &[&str],
+) -> Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue> {
+    use wasm_bindgen::JsCast;
+    for method in methods {
+        let value = js_sys::Reflect::get(target, &(*method).into())?;
+        if let Ok(function) = value.dyn_into::<js_sys::Function>() {
+            return function.call0(target);
+        }
+    }
+    Err(wasm_bindgen::JsValue::from_str(
+        "Fullscreen API is unavailable",
+    ))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn browser_fullscreen_active() -> bool {
+    web_sys::window()
+        .and_then(|window| window.document())
+        .is_some_and(|document| browser_fullscreen_active_for(&document))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn browser_fullscreen_active_for(document: &web_sys::Document) -> bool {
+    use wasm_bindgen::JsValue;
+    if document.fullscreen_element().is_some() {
+        return true;
+    }
+    let document: JsValue = document.clone().into();
+    js_sys::Reflect::get(&document, &"webkitFullscreenElement".into())
+        .is_ok_and(|element| !element.is_null() && !element.is_undefined())
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -4640,6 +4737,18 @@ fn browser_fullscreen_failed() {
     {
         status.set_text_content(Some(MESSAGE));
         let _ = status.remove_attribute("hidden");
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn browser_fullscreen_succeeded() {
+    if let Some(status) = web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.get_element_by_id("fullscreen-status"))
+    {
+        let _ = status.set_attribute("hidden", "");
+        let _ = status.remove_attribute("class");
+        status.set_text_content(None);
     }
 }
 
@@ -4661,6 +4770,12 @@ fn focus_browser_canvas() {
 
 fn logical_pointer(x: f64, y: f64, width: u32, height: u32) -> [f32; 2] {
     Viewport::from_surface(width, height).logical_pointer(x, y)
+}
+
+fn reconcile_fullscreen_preference(saved: &mut bool, actual: bool) -> bool {
+    let changed = *saved != actual;
+    *saved = actual;
+    changed
 }
 
 /// Classic starts fullscreen. Browsers require a user gesture, so web startup
@@ -4777,6 +4892,16 @@ mod tests {
         assert_eq!(startup_fullscreen_attribute(false, false), None);
         assert_eq!(startup_fullscreen_attribute(true, true), None);
         assert_eq!(startup_fullscreen_attribute(true, false), None);
+    }
+
+    #[test]
+    fn fullscreen_preference_tracks_actual_browser_state_only_when_it_changes() {
+        let mut saved = true;
+        assert!(reconcile_fullscreen_preference(&mut saved, false));
+        assert!(!saved);
+        assert!(!reconcile_fullscreen_preference(&mut saved, false));
+        assert!(reconcile_fullscreen_preference(&mut saved, true));
+        assert!(saved);
     }
 
     #[test]
