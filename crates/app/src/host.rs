@@ -3924,8 +3924,11 @@ fn load_custom_catalog(
         &runtime_custom_level_name(name),
         previous,
     );
-    // The Classic level selector uppercases the selected name before load.
-    set_custom_previous_level(game, &runtime_level_name(name).to_ascii_uppercase());
+    // The Classic level selector uppercases the selected filename stem. Keep
+    // an embedded `.lvl` in names such as `room.lvl` (`room.lvl.lvl` on disk),
+    // because linked rooms compare this value verbatim when selecting the
+    // return entrance.
+    set_custom_previous_level(game, &runtime_custom_level_name(name).to_ascii_uppercase());
 }
 fn continue_custom(
     game: &mut Game,
@@ -7985,6 +7988,41 @@ mod tests {
                 .and_then(|text| spelunky_core::level::Level::parse(text).ok())
                 .map(|level| level.author),
             Some("DOUBLE EXTENSION".into())
+        );
+    }
+
+    #[test]
+    fn double_extension_custom_start_selects_the_authored_return_entrance() {
+        let mut linked = spelunky_core::level::Level::default();
+        linked.set_tile(1, 1, '@').unwrap();
+        linked.set_tile(15, 10, '@').unwrap();
+        linked.exit_targets = vec!["OTHER".into(), "ROOM.LVL".into()];
+        let levels = std::collections::BTreeMap::from([("next".into(), linked.to_text())]);
+
+        let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+        load_custom_catalog(
+            &mut game,
+            &spelunky_core::level::Level::default(),
+            "room.lvl",
+            "",
+        );
+        game.flags.insert("custom_level:NEXT".into());
+
+        assert_eq!(
+            game.flags
+                .iter()
+                .find_map(|flag| flag.strip_prefix("custom_previous_level:")),
+            Some("ROOM.LVL")
+        );
+        assert_eq!(
+            custom_exit(&mut game, &levels, false),
+            CustomExit::Continued
+        );
+        assert_eq!(game.world.name, "next");
+        assert_eq!(
+            game.player.pos,
+            spelunky_core::Vec2::new(264.0, 184.0),
+            "the double-extension selector name must match the authored return entrance"
         );
     }
 
