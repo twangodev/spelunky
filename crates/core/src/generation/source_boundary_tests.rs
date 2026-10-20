@@ -491,6 +491,9 @@ fn olmec_create_tape_precedes_boundaries_and_route_and_is_reused_by_authored_ins
             entity.value("spurt_counter"),
             f64::from(expected_timers[birth])
         );
+        assert_eq!(entity.text.get("type").map(String::as_str), Some("Lava"));
+        assert_eq!(entity.value("randNum"), 201.0);
+        assert_eq!(entity.image_speed(), 0.4);
         assert_eq!(entity.value("lava_initialized"), 1.0);
     }
 }

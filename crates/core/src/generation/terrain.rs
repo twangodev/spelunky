@@ -215,18 +215,26 @@ pub(super) fn create_source_boundary(
 /// Fresh SourceClassic room births have no caller overrides at this point.
 pub(super) fn create_source_room_lava(world: &mut World, rng: &mut Rng, id: u64) {
     let parent = world.entity_mut(id).expect("fresh Lava room birth");
-    assert_eq!(parent.object, "oLava");
-    assert_eq!(parent.value("lava_initialized"), 0.);
-    parent.text.insert("type".into(), "Lava".into());
-    parent.data.insert("spurt".into(), 0.);
-    // rand.gml's current-receiver local write precedes random()/return.
-    parent.data.insert("randNum".into(), 201.);
     let time = f64::from(100 + rng.range(201));
-    parent.data.insert("spurt_time".into(), time);
-    parent.data.insert("spurt_counter".into(), time);
+    initialize_source_lava_create(parent, time);
+}
+
+/// Finish the authored `oLava.Create` using its timer result. Boss-room Lava
+/// instances are created from the room resource before procedural generation;
+/// their source RNG results are taped first, then attached at their birth.
+pub(super) fn initialize_source_lava_create(entity: &mut Entity, time: f64) {
+    assert_eq!(entity.object, "oLava");
+    assert_eq!(entity.value("lava_initialized"), 0.);
+    entity.text.insert("type".into(), "Lava".into());
+    entity.data.insert("spurt".into(), 0.);
+    // rand.gml writes its requested range width to the current receiver.
+    entity.data.insert("randNum".into(), 201.);
+    entity.data.insert("spurt_time".into(), time);
+    entity.data.insert("spurt_counter".into(), time);
     // Separate following DND variable action in oLava's own Create.
-    parent.set_image_speed(0.4);
-    parent.data.insert("lava_initialized".into(), 1.);
+    entity.set_image_speed(0.4);
+    entity.data.insert("lava_initialized".into(), 1.);
+    entity.animation = 0.;
 }
 
 /// Complete the remaining room-script terrain constructors at actual birth.

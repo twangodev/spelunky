@@ -354,14 +354,13 @@ fn boss_arena(
             let x = 1 + position % 40;
             let y = 48 + position / 40;
             let id = world.spawn("oLava", Vec2::new(x as f64 * 16.0, y as f64 * 16.0));
-            // create_generated later completes the normal lava Create. The
-            // preset timer prevents it from drawing again and keeps each draw
-            // attached to the matching source instance.
-            world
-                .entity_mut(id)
-                .expect("new authored lava")
-                .data
-                .insert("spurt_time".into(), f64::from(tape.lava_spurt_times[birth]));
+            // The room resource's Lava Create precedes oGame and generation.
+            // Its timer was consumed in the source prefix tape; attach that
+            // result and finish the remaining Create state at this birth.
+            super::terrain::initialize_source_lava_create(
+                world.entity_mut(id).expect("new authored lava"),
+                f64::from(tape.lava_spurt_times[birth]),
+            );
         }
     } else {
         // HistoricalV1 retains its original producer order. This also keeps

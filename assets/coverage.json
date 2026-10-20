@@ -1807,32 +1807,32 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 313,
+          "line": 321,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 511,
+          "line": 519,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 809,
+          "line": 817,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 934,
+          "line": 942,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1312,
+          "line": 1320,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1517,
+          "line": 1525,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
@@ -3059,27 +3059,27 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 314,
+          "line": 322,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 523,
+          "line": 531,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 811,
+          "line": 819,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1323,
+          "line": 1331,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1519,
+          "line": 1527,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
@@ -4544,7 +4544,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 850,
+          "line": 858,
           "module": "crates/core/src/generation/terrain.rs"
         }
       ],
@@ -5502,12 +5502,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 552,
+          "line": 560,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 947,
+          "line": 955,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
@@ -6862,22 +6862,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 517,
+          "line": 525,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 810,
+          "line": 818,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1313,
+          "line": 1321,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1518,
+          "line": 1526,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
@@ -11815,22 +11815,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 315,
+          "line": 323,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 529,
+          "line": 537,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 940,
+          "line": 948,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1324,
+          "line": 1332,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
