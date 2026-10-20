@@ -808,6 +808,7 @@ pub(crate) fn generate_campaign_result(
             "marketChance history is outside the proved campaign domain with one-room draw headroom"
         );
     }
+    let source_classic = state.revision == crate::GenerationRevision::SourceClassicV2;
     let area = Area::for_level(level);
     let mut selected = flags.clone();
     if state.revision == crate::GenerationRevision::SourceClassicV2 {
@@ -825,6 +826,9 @@ pub(crate) fn generate_campaign_result(
     }
     let mut world = World::new(42, 34, area, level);
     if special::generate_special(&mut world, rng, flags) {
+        if source_classic {
+            initialize_generated_item_depths(&mut world, context.has_spectacles);
+        }
         world.fluid_dirty = false;
         return GeneratedLevel {
             world,
@@ -832,7 +836,6 @@ pub(crate) fn generate_campaign_result(
             cemetery_selected: false,
         };
     }
-    let source_classic = state.revision == crate::GenerationRevision::SourceClassicV2;
     // rOlmec's static Temples, Olmec, and Lava instances finish their Create
     // events before oGame.Create reaches scrInitLevel/scrLevelGen. Preserve
     // that RNG prefix now, then attach its results to the authored instances.
@@ -1127,10 +1130,22 @@ pub(crate) fn generate_campaign_result(
     #[cfg(test)]
     terrain::observe_init_cleanup(&world, true);
     terrain::finalize_generated(&mut world, state.revision);
+    if source_classic {
+        initialize_generated_item_depths(&mut world, context.has_spectacles);
+    }
     GeneratedLevel {
         world,
         dark_roll_selected,
         cemetery_selected: has(&selected, "cemetery"),
+    }
+}
+
+/// Generated worlds run local enemy/trap Creates as their producers execute,
+/// but are assembled outside `Game::spawn`, so inherited item Create depth
+/// must be projected from the same room context before the first Draw.
+fn initialize_generated_item_depths(world: &mut World, has_spectacles: bool) {
+    for entity in &mut world.entities {
+        crate::items::initialize_inherited_depth(entity, has_spectacles);
     }
 }
 
@@ -1738,6 +1753,31 @@ mod tests {
             let path = room_path(&mut actual, Area::Jungle, 5, &mut flags, true);
             assert_eq!((path.start, path.end), (0, 3));
             assert_eq!(actual.next_u64(), expected.next_u64(), "seed{seed}");
+        }
+    }
+
+    #[test]
+    fn source_generated_chests_have_inherited_depth_before_the_first_draw() {
+        for (has_spectacles, expected_depth) in [(false, 101.0), (true, 51.0)] {
+            let mut rng = Rng::new(0);
+            let mut state = GenerationState::fresh(&rng);
+            let generated = generate_campaign_result(
+                &mut rng,
+                1,
+                &BTreeSet::new(),
+                GenerationContext {
+                    has_spectacles,
+                    ..GenerationContext::default()
+                },
+                &mut state,
+            );
+            let chest = generated
+                .world
+                .entities
+                .iter()
+                .find(|entity| entity.alive && entity.object == "oChest")
+                .expect("seed-zero Mines level has a generated chest");
+            assert_eq!(chest.data.get("depth"), Some(&expected_depth));
         }
     }
 
