@@ -107,6 +107,22 @@ fn hide_player(game: &mut Game) {
     game.player.vel = Vec2::default();
 }
 
+/// Follow oPDummy3 with rIntro's runtime room_set_view deadzone. The generic
+/// gameplay camera is intentionally suspended while the opening controller is
+/// active, so mirror its source border rule here (including room-edge clamps).
+fn intro_camera_x(old: f64, actor: f64, room_width: f64) -> f64 {
+    const VIEW_WIDTH: f64 = 320.0;
+    const HORIZONTAL_BORDER: f64 = 128.0;
+
+    let mut desired = old;
+    if actor - HORIZONTAL_BORDER < old {
+        desired = actor - HORIZONTAL_BORDER;
+    } else if actor + HORIZONTAL_BORDER > old + VIEW_WIDTH {
+        desired = actor + HORIZONTAL_BORDER - VIEW_WIDTH;
+    }
+    desired.max(0.0).min(room_width - VIEW_WIDTH)
+}
+
 fn setup_intro_walls(game: &mut Game) {
     let ids: Vec<_> = game
         .world
@@ -632,7 +648,10 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     if let Some(id) = state.dummy {
         if let Some(e) = game.world.entity_mut(id) {
             if state.kind == OpeningKind::Intro {
-                game.camera = Vec2::new((e.pos.x - 160.).clamp(0., 640.), 0.);
+                game.camera = Vec2::new(
+                    intro_camera_x(game.camera.x, e.pos.x, game.world.width as f64 * 16.0),
+                    0.0,
+                );
             }
         }
     }
@@ -696,6 +715,48 @@ mod tests {
         game.capture_draw_view();
         begin_title(&mut game, 2);
         assert!(game.draw_view.is_none());
+    }
+
+    #[test]
+    fn intro_camera_uses_rintro_128px_deadzone_and_room_clamp() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        begin_intro(&mut game);
+        game.step(&InputFrame {
+            attack_pressed: true,
+            ..Default::default()
+        });
+        for _ in 0..30 {
+            if game.world.entities.iter().any(|e| e.object == "oPDummy3") {
+                break;
+            }
+            game.step(&InputFrame::default());
+        }
+        let id = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oPDummy3")
+            .expect("skipping the intro reveals its travelling dummy")
+            .id;
+
+        // The source camera stays at zero through x=192, then keeps the
+        // dummy at screen x=192 until it reaches the room's right clamp.
+        game.world.entity_mut(id).unwrap().pos.x = 190.0;
+        game.camera = Vec2::new(0.0, 0.0);
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().pos.x, 192.0);
+        assert_eq!(game.camera.x, 0.0);
+
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().pos.x, 194.0);
+        assert_eq!(game.camera.x, 2.0);
+
+        // At x=904 the deadzone would request camera x=712, but rIntro is
+        // only 960 pixels wide, so Classic clamps the view to x=640.
+        game.world.entity_mut(id).unwrap().pos.x = 902.0;
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(id).unwrap().pos.x, 904.0);
+        assert_eq!(game.camera.x, 640.0);
     }
     #[test]
     fn title_source_alarms_precede_live_player_and_ignore_movement() {

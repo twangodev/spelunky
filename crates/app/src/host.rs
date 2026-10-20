@@ -269,6 +269,8 @@ struct App {
     atlas: Option<Atlas>,
     input: InputState,
     audio: Audio,
+    #[cfg(target_arch = "wasm32")]
+    audio_activation_prompt: bool,
     source_music: SourceMusicState,
     store: Store,
     custom_level_catalog: std::collections::BTreeMap<String, String>,
@@ -410,6 +412,19 @@ fn title_menu_source_control(selection: usize) -> Option<SourceHostControl> {
     }
 }
 
+fn title_adventure_starts_tutorial(first_time: bool) -> bool {
+    first_time
+}
+
+/// The title's Start Adventure action stands in for Classic's `xSTART` portal.
+/// That portal clears `firstTime` as it sends a new profile to the tutorial;
+/// the separate Tutorial action leaves the flag alone.
+fn consume_title_start_onboarding(game: &mut Game, data: &mut crate::storage::SaveData) {
+    if game.flags.remove("first_time") {
+        data.first_time = false;
+    }
+}
+
 fn settings_entry_stops_music(settings_return: Screen) -> bool {
     settings_return != Screen::Pause
 }
@@ -461,6 +476,8 @@ impl App {
             atlas: None,
             input,
             audio,
+            #[cfg(target_arch = "wasm32")]
+            audio_activation_prompt: false,
             source_music,
             store,
             custom_level_catalog,
@@ -1137,7 +1154,15 @@ impl App {
         match self.screen {
             Screen::Title => match title_action {
                 Some(TitleMenuAction::ConfirmSelection(selection)) => match selection {
-                    0 => self.start_game(false),
+                    0 => {
+                        let first_time = self.store.data.first_time;
+                        self.start_game(title_adventure_starts_tutorial(first_time));
+                        if first_time {
+                            if let Some(game) = &mut self.game {
+                                consume_title_start_onboarding(game, &mut self.store.data);
+                            }
+                        }
+                    }
                     1 => self.start_game(true),
                     2 => self.open_hub(spelunky_core::hub::HubKind::Title),
                     3 | 4 => {
@@ -1709,8 +1734,15 @@ impl App {
         {
             self.settings_changed();
         }
-        if !buttons.is_empty() {
+        // A gamepad's first input may be a gameplay-only action with no UI
+        // edge. Poll it for the same audio hint, even though browser activation
+        // still requires a trusted key or pointer event.
+        if !buttons.is_empty() || !controller_buttons.is_empty() {
             self.audio.unlock();
+            #[cfg(target_arch = "wasm32")]
+            if !self.audio.is_unlocked() {
+                self.audio_activation_prompt = true;
+            }
         }
         if self.screen == Screen::Pause && self.focused && !self.occluded {
             let input = self.input.take_tick();
@@ -2573,6 +2605,19 @@ impl App {
                     GOLD,
                 );
             }
+        }
+        #[cfg(target_arch = "wasm32")]
+        if self.audio_activation_prompt && !self.audio.is_unlocked() {
+            rect(quads, [47., 210., 226., 18.], [0., 0., 0., 0.9]);
+            text(
+                quads,
+                atlas,
+                "CLICK OR PRESS A KEY FOR SOUND",
+                77.,
+                216.,
+                0.7,
+                GOLD,
+            );
         }
         offset_fixed_ui(&mut quads[ui_start..], viewport.ui_origin());
         if self.profiler.enabled {
@@ -4800,6 +4845,68 @@ mod tests {
             None,
             "Classic has no controller Cancel/East title activation"
         );
+    }
+
+    #[test]
+    fn title_start_consumes_onboarding_but_explicit_tutorial_preserves_it() {
+        let mut fresh = crate::storage::SaveData::default();
+        let mut first_run = if title_adventure_starts_tutorial(fresh.first_time) {
+            Game::tutorial(42, fresh.settings.rules)
+        } else {
+            Game::new(42, fresh.settings.rules)
+        };
+        hydrate_run(&mut first_run, &fresh);
+        assert!(first_run.flags.contains("tutorial"));
+        assert!(first_run.flags.contains("first_time"));
+        assert_eq!(first_run.world.level, 0);
+        consume_title_start_onboarding(&mut first_run, &mut fresh);
+        assert!(!first_run.flags.contains("first_time"));
+        assert!(!fresh.first_time);
+
+        // Leave the tutorial through its authored title door, then start a
+        // second adventure as the same profile would from the title menu.
+        for _ in 0..5 {
+            first_run.step(&spelunky_core::InputFrame::default());
+        }
+        first_run.step(&spelunky_core::InputFrame {
+            up: true,
+            ..Default::default()
+        });
+        for _ in 0..100 {
+            first_run.step(&spelunky_core::InputFrame::default());
+            if first_run.state == RunState::Transition {
+                break;
+            }
+        }
+        assert!(first_run.flags.contains("hub_destination:title"));
+        first_run.load_hub(spelunky_core::hub::HubKind::Title);
+        assert!(!title_adventure_starts_tutorial(fresh.first_time));
+        let mut next_adventure = Game::new(43, fresh.settings.rules);
+        hydrate_run(&mut next_adventure, &fresh);
+        assert!(!next_adventure.flags.contains("tutorial"));
+        assert!(!next_adventure.flags.contains("first_time"));
+        assert_eq!(next_adventure.world.level, 1);
+
+        // The distinct Tutorial menu action maps to Classic's xTUTORIAL door,
+        // which does not consume the first-use start-door sentinel.
+        let explicit_tutorial_save = crate::storage::SaveData::default();
+        let mut explicit_tutorial = Game::tutorial(44, explicit_tutorial_save.settings.rules);
+        hydrate_run(&mut explicit_tutorial, &explicit_tutorial_save);
+        assert!(explicit_tutorial.flags.contains("tutorial"));
+        assert!(explicit_tutorial.flags.contains("first_time"));
+        assert!(explicit_tutorial_save.first_time);
+
+        let mut established = crate::storage::SaveData::default();
+        established.first_time = false;
+        let mut campaign = if title_adventure_starts_tutorial(established.first_time) {
+            Game::tutorial(43, established.settings.rules)
+        } else {
+            Game::new(43, established.settings.rules)
+        };
+        hydrate_run(&mut campaign, &established);
+        assert!(!campaign.flags.contains("tutorial"));
+        assert!(!campaign.flags.contains("first_time"));
+        assert_eq!(campaign.world.level, 1);
     }
 
     #[test]

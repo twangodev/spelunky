@@ -986,7 +986,7 @@ pub(crate) fn player_actions(game: &mut Game, input: &InputFrame) {
         return;
     }
     if !(input.up || input.exit_pressed)
-        || !game.player.grounded
+        || !crate::player::source_platform_grounded(game)
         || game.player.is_stunned()
         || game.player.attack_timer > 0
     {
@@ -1312,6 +1312,7 @@ mod tests {
         let mut g = Game::shell(1, RulesPreset::Classic);
         g.world.level = level;
         g.player.grounded = true;
+        g.player.state = PlayerState::Standing;
         g.level_tick = 2;
         g
     }

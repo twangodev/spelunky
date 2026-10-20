@@ -1265,6 +1265,9 @@ mod backend {
                 last_update: 0.0,
             }
         }
+        pub fn is_unlocked(&self) -> bool {
+            self.unlocked.get()
+        }
         /// Try to resume after a browser-accepted user gesture. Only a fulfilled
         /// resume opens the playback gate; rejected attempts stay queued.
         pub fn unlock(&mut self) {

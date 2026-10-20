@@ -885,7 +885,7 @@ pub(crate) fn begin_title_exit(game: &mut Game) -> bool {
 }
 
 fn activate_portal(game: &mut Game) {
-    if !game.player.grounded
+    if !crate::player::source_platform_grounded(game)
         || game.player.health <= 0.0
         || game.player.state == PlayerState::Dead
         || game.state == RunState::Dead
@@ -1878,6 +1878,17 @@ mod tests {
         g.load_hub(kind);
         g
     }
+    fn portal_grounding_fixture(floor_end: usize) -> Game {
+        let mut g = Game::shell(31, RulesPreset::Classic);
+        g.world = World::new(40, 20, Area::Mines, 1);
+        g.flags.insert("hub".into());
+        g.flags.insert("hub_title".into());
+        for x in 0..floor_end {
+            g.world.set_tile(x, 12, "oTemple");
+        }
+        g.world.spawn("oXStart", Vec2::new(384., 176.));
+        g
+    }
     fn finish_portal(g: &mut Game) {
         for _ in 0..40 {
             if g.state != RunState::Ending {
@@ -2201,6 +2212,66 @@ mod tests {
             Some(HubPortal::Scores),
             "instance_place uses the active source-family receiver order"
         );
+    }
+
+    #[test]
+    fn game_step_title_portal_accepts_classic_ground_state_after_walkoff() {
+        let mut g = portal_grounding_fixture(24);
+        g.player.pos = Vec2::new(372., 184.);
+        g.player.previous_pos = g.player.pos;
+        g.player.state = PlayerState::Standing;
+        g.player.grounded = true;
+
+        let mut entered_at_walkoff = false;
+        for _ in 0..40 {
+            let mut probe = g.clone();
+            probe.step(&InputFrame {
+                right: true,
+                ..Default::default()
+            });
+            if !probe.player.grounded && crate::player::source_platform_grounded(&probe) {
+                g.step(&InputFrame {
+                    right: true,
+                    up: true,
+                    ..Default::default()
+                });
+                assert!(!g.player.grounded);
+                assert!(crate::player::source_platform_grounded(&g));
+                assert!((384. ..400.).contains(&g.player.pos.x));
+                assert_eq!(g.state, RunState::Ending);
+                assert!(g.player.is_exiting());
+                entered_at_walkoff = true;
+                break;
+            }
+            g = probe;
+        }
+        assert!(
+            entered_at_walkoff,
+            "fixture must walk off inside the portal"
+        );
+    }
+
+    #[test]
+    fn game_step_title_portal_waits_for_classic_landing_state() {
+        let mut g = portal_grounding_fixture(40);
+        g.player.pos = Vec2::new(392., 183.);
+        g.player.previous_pos = g.player.pos;
+        g.player.vel = Vec2::new(0., 1.);
+        g.player.state = PlayerState::Falling;
+
+        g.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+
+        assert!(
+            g.player.grounded,
+            "the post-move support probe sees the floor"
+        );
+        assert!(!crate::player::source_platform_grounded(&g));
+        assert_eq!(g.player.state, PlayerState::Falling);
+        assert_eq!(g.state, RunState::Playing);
+        assert!(!g.player.is_exiting());
     }
 
     #[test]
@@ -2674,6 +2745,7 @@ mod tests {
                 let bounds = g.world.entity(id).unwrap().bounds();
                 g.player.pos = Vec2::new(bounds.x + bounds.w / 2.0, bounds.y + bounds.h / 2.0);
                 g.player.grounded = true;
+                g.player.state = PlayerState::Standing;
                 if unlocked {
                     g.flags.insert(flag.into());
                 }
@@ -2706,6 +2778,7 @@ mod tests {
         g.player.pos = Vec2::new(88.0, 136.0);
         g.player.previous_pos = g.player.pos;
         g.player.grounded = true;
+        g.player.state = PlayerState::Standing;
         tick(
             &mut g,
             &InputFrame {
@@ -2758,6 +2831,7 @@ mod tests {
             .bounds();
         g.player.pos = Vec2::new(door.x + door.w / 2.0, door.y + door.h / 2.0);
         g.player.grounded = true;
+        g.player.state = PlayerState::Standing;
         tick(
             &mut g,
             &InputFrame {
@@ -3261,6 +3335,7 @@ mod tests {
         g.player.previous_pos = g.player.pos;
         g.player.vel = Vec2::default();
         g.player.grounded = true;
+        g.player.state = PlayerState::Standing;
         g.step(&InputFrame {
             up: true,
             ..Default::default()

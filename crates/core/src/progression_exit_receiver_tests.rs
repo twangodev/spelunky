@@ -91,3 +91,72 @@ fn actual_step_player_mask_overlap_alone_does_not_enable_exit_or_deposit() {
         }
     }
 }
+
+fn walkoff_exit_game() -> Game {
+    let mut game = Game::shell(23, RulesPreset::Classic);
+    for x in 0..5 {
+        game.world.set_tile(x, 4, "oTemple");
+    }
+    game.world.spawn("oExit", Vec2::new(80., 48.));
+    game.player.pos = Vec2::new(72., 56.);
+    game.player.previous_pos = game.player.pos;
+    game.player.state = crate::PlayerState::Standing;
+    game.player.grounded = true;
+    game
+}
+
+#[test]
+fn actual_step_exit_accepts_classic_ground_state_after_walking_off_support() {
+    let mut game = walkoff_exit_game();
+    let mut exited_at_walkoff = false;
+    for _ in 0..40 {
+        let mut probe = game.clone();
+        probe.step(&InputFrame {
+            right: true,
+            ..Default::default()
+        });
+        if !probe.player.grounded && crate::player::source_platform_grounded(&probe) {
+            // Replaying this source-grounded edge tick with Up must still be
+            // eligible even though the post-move support query is now false.
+            game.step(&InputFrame {
+                right: true,
+                up: true,
+                ..Default::default()
+            });
+            assert!(!game.player.grounded);
+            assert!(crate::player::source_platform_grounded(&game));
+            assert!((80. ..96.).contains(&game.player.pos.x));
+            assert_eq!(game.state, RunState::Ending);
+            exited_at_walkoff = true;
+            break;
+        }
+        game = probe;
+    }
+    assert!(exited_at_walkoff, "fixture must walk off inside the exit");
+}
+
+#[test]
+fn actual_step_exit_waits_for_classic_landing_state_even_if_post_move_support_exists() {
+    let mut game = Game::shell(29, RulesPreset::Classic);
+    for x in 0..game.world.width {
+        game.world.set_tile(x, 4, "oTemple");
+    }
+    game.world.spawn("oExit", Vec2::new(80., 48.));
+    game.player.pos = Vec2::new(88., 55.);
+    game.player.previous_pos = game.player.pos;
+    game.player.vel = Vec2::new(0., 1.);
+    game.player.state = crate::PlayerState::Falling;
+
+    game.step(&InputFrame {
+        up: true,
+        ..Default::default()
+    });
+
+    assert!(
+        game.player.grounded,
+        "the post-move support probe sees the floor"
+    );
+    assert!(!crate::player::source_platform_grounded(&game));
+    assert_eq!(game.player.state, crate::PlayerState::Falling);
+    assert_eq!(game.state, RunState::Playing);
+}

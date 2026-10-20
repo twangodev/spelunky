@@ -816,8 +816,7 @@ pub(crate) fn alarm(game: &mut Game, id: u64, index: u8) {
             }
         }
         ("oIceBottom", 0) => {
-            game.world
-                .spawn("oDrip", Vec2::new(e.pos.x + 8.0, e.pos.y + 4.0));
+            spawn_runtime_object(game, "oDrip", Vec2::new(e.pos.x + 8.0, e.pos.y + 4.0));
             e.alarms[0] = (20 + game.rng.range(381)) as i32;
         }
         _ => {}
@@ -3052,7 +3051,7 @@ mod tests {
         }
     }
     #[test]
-    fn ice_trim_drips_and_requires_ceiling_support() {
+    fn ice_trim_creates_initialized_drips_and_requires_ceiling_support() {
         let mut g = room();
         g.world.set_tile(5, 3, "oIce");
         let id = g.world.spawn("oIceBottom", Vec2::new(80.0, 64.0));
@@ -3062,7 +3061,14 @@ mod tests {
             .data
             .insert("drip_alarm".into(), 1.0);
         advance(&mut g);
-        assert!(g.world.entities.iter().any(|e| e.object == "oDrip"));
+        let drip = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oDrip")
+            .unwrap();
+        assert_eq!(drip.pos, Vec2::new(88.0, 68.0));
+        assert_eq!(drip.text.get("type").map(String::as_str), Some("Drip"));
         g.world.set_tile(5, 3, "");
         advance(&mut g);
         assert!(g.world.entity(id).is_none());
