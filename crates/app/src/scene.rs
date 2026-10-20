@@ -408,6 +408,22 @@ fn entity_mirrored(entity: &Entity, _name: &str) -> bool {
     }
 }
 
+fn entity_draw_depth(game: &Game, entity: &Entity, fallback: i32) -> i32 {
+    if let Some(depth) = entity.data.get("depth") {
+        return *depth as i32;
+    }
+    if game.generation_revision == spelunky_core::GenerationRevision::SourceClassicV2
+        && catalog::is_a(&entity.object, "oItem")
+    {
+        return if game.player.has("Spectacles") {
+            51
+        } else {
+            101
+        };
+    }
+    fallback
+}
+
 fn entity_draw_extras(
     layer: &mut Vec<DrawQuad>,
     game: &Game,
@@ -1041,10 +1057,7 @@ pub fn game_scene_in_view_into(
             }
         }
         entity_draw_extras(layer, game, entity, atlas, x, y, view);
-        let depth = entity.data.get("depth").map_or_else(
-            || definition.map_or(60, |def| def.depth),
-            |depth| *depth as i32,
-        );
+        let depth = entity_draw_depth(game, entity, definition.map_or(60, |def| def.depth));
         layers.push((
             f64::from(depth),
             0,

@@ -77,3 +77,58 @@ fn reactivated_older_ruby_draws_over_newer_ruby_at_the_same_source_depth() {
     assert_eq!(source_draw_order[1].1, older_ruby);
     assert!(source_draw_order[1].0 > source_draw_order[0].0);
 }
+
+#[test]
+fn source_items_use_inherited_depth_before_their_first_step() {
+    let atlas = Atlas::load().unwrap();
+    let item_uv = atlas.sprite("sCrate", 0.0).unwrap().uv;
+    let overlay_uv = atlas.sprite("sGoldBar", 0.0).unwrap().uv;
+
+    for spectacles in [false, true] {
+        let mut game = Game::shell(9, RulesPreset::Classic);
+        game.generation_revision = spelunky_core::GenerationRevision::SourceClassicV2;
+        game.world = World::new(42, 34, Area::Mines, 1);
+        let position = Vec2::new(160.0, 160.0);
+        game.world.spawn("oCrate", position);
+        let overlay = game.world.spawn("oGoldBar", position);
+        game.world
+            .entity_mut(overlay)
+            .unwrap()
+            .data
+            .insert("depth".into(), 150.0);
+        if spectacles {
+            game.player.equipment.insert("Spectacles".into());
+        }
+
+        // This is the initial presentation, before a tick creates the items'
+        // normal Step-assigned depth. At 51/101 the crate draws after depth150.
+        let quads = game_scene(&game, 1.0, false, &atlas);
+        let item_index = quads.iter().position(|quad| quad.uv == item_uv).unwrap();
+        let overlay_index = quads.iter().position(|quad| quad.uv == overlay_uv).unwrap();
+        assert!(
+            overlay_index < item_index,
+            "depth150 overlay must draw before the inherited-depth crate"
+        );
+    }
+
+    // HistoricalV1 keeps its previous catalog-depth fallback unchanged.
+    let mut historical = Game::shell(9, RulesPreset::Classic);
+    historical.generation_revision = spelunky_core::GenerationRevision::HistoricalV1;
+    historical.world = World::new(42, 34, Area::Mines, 1);
+    let position = Vec2::new(160.0, 160.0);
+    historical.world.spawn("oCrate", position);
+    let overlay = historical.world.spawn("oGoldBar", position);
+    historical
+        .world
+        .entity_mut(overlay)
+        .unwrap()
+        .data
+        .insert("depth".into(), 150.0);
+    let quads = game_scene(&historical, 1.0, false, &atlas);
+    let item_index = quads.iter().position(|quad| quad.uv == item_uv).unwrap();
+    let overlay_index = quads.iter().position(|quad| quad.uv == overlay_uv).unwrap();
+    assert!(
+        item_index < overlay_index,
+        "historical fallback remains at catalog depth900"
+    );
+}
