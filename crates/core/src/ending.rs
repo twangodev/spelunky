@@ -571,6 +571,18 @@ mod tests {
                 .unwrap()
                 .id;
             let x = g.world.entity(desert).unwrap().pos.x;
+            let upper_layers: Vec<_> = ["oDesertScroll2", "oDesertTopScroll"]
+                .into_iter()
+                .map(|object| {
+                    let entity = g
+                        .world
+                        .entities
+                        .iter()
+                        .find(|e| e.object == object)
+                        .unwrap_or_else(|| panic!("{object} is authored in the credits room"));
+                    (entity.id, entity.pos.x, object)
+                })
+                .collect();
             g.ending = Some(s);
             g.state = RunState::Ending;
             g.step(&InputFrame::default());
@@ -578,6 +590,13 @@ mod tests {
             assert_eq!(g.ending.as_ref().unwrap().music, "musCredits");
             assert!(!g.ending.as_ref().unwrap().music_looping);
             assert_eq!(g.world.entity(desert).unwrap().pos.x, x);
+            for (id, initial_x, object) in &upper_layers {
+                assert_eq!(
+                    g.world.entity(*id).unwrap().pos.x,
+                    *initial_x,
+                    "{object} waits for Alarm 1"
+                );
+            }
             assert_eq!(
                 g.ending.as_ref().unwrap().scrolling,
                 kind == EndingKind::Campaign
@@ -588,11 +607,31 @@ mod tests {
                 g.world.entity(desert).unwrap().pos.x,
                 x + if kind == EndingKind::Campaign { 1. } else { 0. }
             );
+            for (id, initial_x, object) in &upper_layers {
+                assert_eq!(
+                    g.world.entity(*id).unwrap().pos.x,
+                    *initial_x + if kind == EndingKind::Campaign { 1. } else { 0. },
+                    "{object} waits until the delayed Alarm 1 tick"
+                );
+            }
             g.step(&InputFrame::default());
             assert_eq!(
                 g.world.entity(desert).unwrap().pos.x,
                 x + if kind == EndingKind::Campaign { 2. } else { 1. }
             );
+            for (id, initial_x, object) in &upper_layers {
+                let entity = g.world.entity(*id).unwrap();
+                assert_eq!(
+                    entity.value("scroll"),
+                    1.0,
+                    "{object} scroll flag after its delayed Alarm 1"
+                );
+                assert_eq!(
+                    entity.pos.x,
+                    *initial_x + if kind == EndingKind::Campaign { 2. } else { 1. },
+                    "{object} starts on the delayed Alarm 1 tick"
+                );
+            }
         }
     }
     #[test]
@@ -1853,6 +1892,10 @@ fn init_actor(game: &mut Game, s: &mut EndingState, id: u64) {
         "oHeart" => {
             alarm(s, id, 0, 30);
         }
+        "oDesertScroll" | "oDesertScroll2" | "oDesertTopScroll" | "oShrubScroll"
+        | "oPalmTreeScroll" => {
+            e.data.insert("scroll".into(), 0.0);
+        }
         "oBGEnd3" => {
             e.pos.x -= 64.;
             e.previous_pos = e.pos;
@@ -1898,6 +1941,27 @@ fn spawn(game: &mut Game, s: &mut EndingState, object: &str, pos: Vec2) -> u64 {
     let id = game.world.spawn(object, pos);
     init_actor(game, s, id);
     id
+}
+fn set_credit_scroll(game: &mut Game, id: u64) {
+    if let Some(entity) = game.world.entity_mut(id) {
+        entity.data.insert("scroll".into(), 1.0);
+    }
+}
+fn enable_credit_scroll_layers(game: &mut Game, bottom_only: bool) {
+    for entity in &mut game.world.entities {
+        if !entity.alive {
+            continue;
+        }
+        if entity.object == "oDesertScroll"
+            || (!bottom_only
+                && matches!(
+                    entity.object.as_str(),
+                    "oDesertScroll2" | "oDesertTopScroll" | "oShrubScroll" | "oPalmTreeScroll"
+                ))
+        {
+            entity.data.insert("scroll".into(), 1.0);
+        }
+    }
 }
 fn add_carry_ornaments(game: &mut Game, s: &mut EndingState) {
     let Some(pos) = game
@@ -2321,7 +2385,8 @@ fn controller_alarm(game: &mut Game, s: &mut EndingState, i: usize) {
                         None
                     };
                     if let Some((object, pos)) = scenery {
-                        spawn(game, s, object, pos);
+                        let id = spawn(game, s, object, pos);
+                        set_credit_scroll(game, id);
                     }
                     for (object, y) in [
                         ("oDesertTopScroll", 176.),
@@ -2329,8 +2394,10 @@ fn controller_alarm(game: &mut Game, s: &mut EndingState, i: usize) {
                         ("oDesertScroll", 208.),
                         ("oDesertScroll", 224.),
                     ] {
-                        spawn(game, s, object, Vec2::new(-16., y));
+                        let id = spawn(game, s, object, Vec2::new(-16., y));
+                        set_credit_scroll(game, id);
                     }
+                    enable_credit_scroll_layers(game, false);
                     s.alarms[1] = 16;
                 }
             }
@@ -2616,7 +2683,7 @@ fn actor_step(game: &mut Game, s: &mut EndingState, e: &mut Entity, input: &Inpu
         }
         "oDesertScroll" | "oDesertScroll2" | "oDesertTopScroll" | "oShrubScroll"
         | "oPalmTreeScroll" => {
-            if s.scrolling {
+            if e.value("scroll") != 0.0 {
                 e.pos.x += 1.;
             }
             if e.pos.x > 320. {
@@ -3036,6 +3103,9 @@ fn controller_step(game: &mut Game, s: &mut EndingState, input: &InputFrame) {
                 s.alarms[2] = 20;
                 s.scroll_started = true;
                 s.scrolling = true;
+                // oCredits Step enables only existing bottom desert rows now;
+                // upper layers wait for the following Alarm 1 callback.
+                enable_credit_scroll_layers(game, true);
             }
             if s.fade_in {
                 if s.fade_level > 0. {

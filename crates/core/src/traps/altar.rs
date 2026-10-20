@@ -329,7 +329,8 @@ fn sacrifice_value(object: &str) -> Option<f64> {
         "oYeti" => 4.0,
         "oCaveman" | "oManTrap" => 2.0,
         "oSnake" | "oSpider" | "oGiantSpider" | "oBat" | "oSkeleton" | "oFrog" | "oFireFrog"
-        | "oVampire" | "oJiangShi" | "oAlien" | "oUfo" | "oScorpion" | "oMummy" => 1.0,
+        | "oMonkey" | "oTombLord" | "oYetiKing" | "oVampire" | "oJiangShi" | "oAlien" | "oUfo"
+        | "oScorpion" | "oMummy" => 1.0,
         _ => return None,
     })
 }
@@ -1834,6 +1835,28 @@ mod tests {
         game.step(&crate::InputFrame::default());
         assert!(game.world.entity(id).is_some());
         assert_eq!(game.data.get("favor"), None);
+    }
+
+    #[test]
+    fn inherited_enemy_offerings_include_monkey_tomb_lord_and_yeti_king() {
+        for object in ["oMonkey", "oTombLord", "oYetiKing"] {
+            let mut game = altar_room();
+            let id = game.spawn(object, Vec2::new(64.0, 48.0));
+            let enemy = game.world.entity_mut(id).unwrap();
+            enemy.state = 98;
+            enemy.vel = Vec2::default();
+            enemy.timer = 200;
+            enemy.data.insert("status".into(), 98.0);
+            enemy.data.insert("sacrifice_count".into(), 0.0);
+
+            game.step(&crate::InputFrame::default());
+
+            assert!(
+                game.world.entity(id).is_none(),
+                "{object} should be destroyed after completing its altar offering"
+            );
+            assert_eq!(game.data["favor"], 1.0, "{object} contributes source favor");
+        }
     }
 
     #[test]

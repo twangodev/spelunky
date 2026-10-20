@@ -1538,10 +1538,7 @@ impl App {
         if self.screen == Screen::Editor {
             if let Some(game) = &mut self.game {
                 game.rng = self.editor.source_rng().clone();
-                if self.editor.source_check_water() {
-                    game.flags.insert("check_water".into());
-                    game.flags.insert("checkWater".into());
-                }
+                apply_editor_water_check(game, self.editor.source_check_water());
             }
             for sound in self.editor.take_source_sounds() {
                 self.audio.play(sound, 0.0);
@@ -1623,6 +1620,7 @@ impl App {
                     &runtime_level_name(""),
                     test.starting_inventory,
                 );
+                apply_editor_water_check(&mut game, self.editor.source_check_water());
                 game.flags.insert("editor_test".into());
                 self.game = Some(game);
                 self.editor_play = true;
@@ -3682,6 +3680,16 @@ fn open_editor_level_name(
 fn prepare_editor_return(game: &mut Game) {
     game.flags.retain(|flag| !flag.starts_with("title_start:"));
     game.flags.insert("title_start:2".into());
+}
+
+fn apply_editor_water_check(game: &mut Game, pending: bool) {
+    if pending {
+        game.flags.insert("check_water".into());
+        game.flags.insert("checkWater".into());
+        // F5 constructs a fresh World, while Classic carries global.checkWater
+        // into oGame's first Step. The core's fluid pass is driven by this bit.
+        game.world.fluid_dirty = true;
+    }
 }
 
 fn capture_lifetime_stats(game: &Game, data: &mut crate::storage::SaveData) -> bool {
@@ -8493,6 +8501,61 @@ mod tests {
         );
         assert_eq!(game.player.previous_pos, game.player.pos);
         assert_eq!(game.previous_camera, game.camera);
+    }
+
+    #[test]
+    fn editor_playtest_carries_pending_solid_destroy_water_check_into_first_step() {
+        use super::{EditorCommand, EditorUi, apply_editor_water_check, runtime_level_name};
+        use spelunky_core::{Game, InputFrame, RulesPreset, level::Level};
+        use winit::keyboard::KeyCode;
+
+        let mut level = Level::default();
+        level.set_tile(2, 30, '@').unwrap();
+        level.set_tile(4, 2, '1').unwrap();
+        level.set_tile(8, 2, 'w').unwrap();
+
+        let mut editor = EditorUi::new();
+        editor.load("water-check.lvl", &level.to_text()).unwrap();
+        editor.pointer(36.0, 56.0, false, true);
+        editor.pointer(0.0, 0.0, false, false);
+        assert!(editor.source_check_water());
+
+        let EditorCommand::Play(test) = editor.key(KeyCode::F5, None, false) else {
+            panic!("F5 must start the authored level");
+        };
+        assert_eq!(test.level.get_tile(4, 2), Some('0'));
+        assert_eq!(test.level.get_tile(8, 2), Some('w'));
+        let mut game = Game::new(42, RulesPreset::Classic);
+        game.load_custom_editor_test(
+            &test.level,
+            &runtime_level_name(editor.level_name()),
+            &runtime_level_name(""),
+            test.starting_inventory,
+        );
+        assert!(
+            game.world
+                .tiles
+                .iter()
+                .any(|tile| tile.object == "oWaterSwim")
+        );
+        assert!(!game.world.fluid_dirty);
+
+        apply_editor_water_check(&mut game, editor.source_check_water());
+        assert!(game.world.fluid_dirty);
+        game.step(&InputFrame::default());
+        assert!(
+            !game
+                .world
+                .tiles
+                .iter()
+                .any(|tile| tile.object == "oWaterSwim")
+                && !game
+                    .world
+                    .entities
+                    .iter()
+                    .any(|entity| entity.alive && entity.object == "oWaterSwim"),
+            "the carried checkWater request must run on the first test-play step"
+        );
     }
     #[test]
     fn editor_live_preview_rebuilds_after_f5_and_an_ordinary_authored_door_exit() {

@@ -2,7 +2,7 @@
 //! Instances retain original GameMaker sprite origins; probes use collision centers.
 #[cfg(test)]
 use super::event_bounds;
-use super::{center, move_body};
+use super::{center, move_body, move_body_preserving_velocity};
 #[cfg(test)]
 use crate::model::PlayerState;
 use crate::model::{Area, CollisionPrecision, Entity, Game, Vec2, World};
@@ -259,7 +259,9 @@ fn die(game: &mut Game, e: &mut Entity) {
 }
 
 fn frog(game: &mut Game, e: &mut Entity) {
-    move_body(&game.world, e, 0.2);
+    // `moveTo` stops the displacement at a solid but leaves yVel intact;
+    // the Frog event then adds gravity even while its idle state is grounded.
+    move_body_preserving_velocity(&game.world, e, 0.2);
     if game.world.solid_point_active(
         Vec2::new(e.pos.x + 8.0, e.pos.y + 8.0),
         CollisionPrecision::BoundingBox,
@@ -1448,6 +1450,43 @@ mod tests {
         assert!((-4.0..=-2.0).contains(&e.vel.y));
         tick(&mut game, &mut e);
         assert_eq!(e.state, 2);
+    }
+
+    #[test]
+    fn frogs_keep_accumulated_fall_speed_while_idle_on_support() {
+        for object in ["oFrog", "oFireFrog"] {
+            let mut game = Game::shell(101, RulesPreset::Classic);
+            game.player.pos = Vec2::new(300.0, 300.0);
+            for x in 4..=7 {
+                game.world.set_tile(x, 5, "oBlock");
+            }
+            let mut frog = entity(object, Vec2::new(88.0, 72.0));
+            for _ in 0..50 {
+                tick(&mut game, &mut frog);
+            }
+
+            assert_eq!(frog.state, 0, "{object} remains idle");
+            assert_eq!(frog.pos.y, 64.0, "{object} stays supported");
+            assert!(
+                (frog.vel.y - 10.0).abs() < 1e-9,
+                "{object} keeps capped yVel: {}",
+                frog.vel.y
+            );
+
+            for x in 4..=7 {
+                game.world.set_tile(x, 5, "");
+            }
+            tick(&mut game, &mut frog);
+            assert_eq!(
+                frog.pos.y, 74.0,
+                "{object} immediately falls at stored speed"
+            );
+            assert!(
+                (frog.vel.y - 10.0).abs() < 1e-9,
+                "{object} remains speed-capped: {}",
+                frog.vel.y
+            );
+        }
     }
     #[test]
     fn piranha_pursues_only_swimming_player() {
