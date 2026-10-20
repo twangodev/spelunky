@@ -200,12 +200,12 @@ for (const [module,names] of Object.entries(equivalents)) {
 }
 // Title portal descendants are mapped through activate_portal's ordered
 // subtype table rather than object match arms, then resolve in Ending Animation End.
-const stateAdapters: [string,string,string[]][] = [['crates/core/src/opening.rs','begin_intro',['oIntro']],['crates/core/src/opening.rs','begin_title',['oTitle']],['crates/core/src/opening.rs','actor_step',['oPDummy3','oPDummy4']],['crates/core/src/hub.rs','activate_portal',['oXStart','oXScores','oXTutorial','oXTitle','oXEnd','oXShortcut5','oXShortcut9','oXShortcut13','oXSun','oXMoon','oXStars','oXChange','oXChange2']],['crates/core/src/hub.rs','scores_step',['oHighscores']]];
+const stateAdapters: [string,string,string[]][] = [['crates/core/src/opening.rs','begin_intro',['oIntro']],['crates/core/src/opening.rs','begin_title',['oTitle']],['crates/core/src/opening.rs','actor_step',['oPDummy3','oPDummy4']],['crates/core/src/hub.rs','activate_portal',['oXStart','oXScores','oXTutorial','oXTitle','oXEnd','oXShortcut5','oXShortcut9','oXShortcut13','oXSun','oXMoon','oXStars','oXChange','oXChange2']],['crates/core/src/hub.rs','scores_step',['oHighscores']],['crates/core/src/dispatcher.rs','level_step',['oLevel']],['crates/core/src/hub.rs','challenge_alarm',['oMoonRoom','oSunRoom','oStarsRoom']]];
 for (const [module, fn, names] of stateAdapters) { const line = functionLine(sources.get(join(root, module))!, fn); for (const name of names) add(name, { module, line, kind:'manually_reviewed_state_adapter' }); }
 const objects = new Map<string, any>(index.objects.map((o: any) => [o.name, o]));
 function isa(name: string, parent: string): boolean { for (let i = 0; i < 453; i++) { if (name === parent) return true; if (!objects.has(name)) return false; name = objects.get(name).parent; } return false; }
 const abstract = new Set('oBackdrop oCharacter oDetritus oDrawnSprite oEnemy oForeground oFrill oItem oLadder oMenu oMoveableSolid oMovingSolid oPlatform oRubblePiece oSolid oTreasure oWater'.split(' '));
-const rootHost = new Set('oCredits1 oCredits2 oCursObj oEnd oEnd2 oEnd3 oEndCustom oGame oGamepad oGlobals oHighscores oIntro oJoyConfig oKeyConfig oLevel oLevelEditor oLoadLevel oMoonRoom oMusic oRoom oScreen oStarsRoom oSunRoom oTitle oTransition'.split(' '));
+const rootHost = new Set('oCredits1 oCredits2 oCursObj oEnd oEnd2 oEnd3 oEndCustom oGame oGamepad oGlobals oHighscores oIntro oJoyConfig oKeyConfig oLevelEditor oLoadLevel oMusic oRoom oScreen oTitle oTransition'.split(' '));
 const rubbleModule = 'crates/core/src/world_events.rs', rubbleLine = inheritedRubbleLine(sources.get(join(root, rubbleModule))!);
 if (rubbleLine) for (const name of objects.keys()) if (isa(name, 'oRubblePiece')) add(name, { module:rubbleModule, line:rubbleLine, kind:'inherited_rubble_family_handler' });
 const records: any[] = [], terrainAdapterLine = functionLine(sources.get(join(root, 'crates/core/src/catalog.rs'))!, 'is_solid');

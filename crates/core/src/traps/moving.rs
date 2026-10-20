@@ -812,6 +812,12 @@ fn move_solid_with_carry(
     delta: Vec2,
     horizontal_carry_available: bool,
 ) -> (bool, bool) {
+    if !game.player.engine_active {
+        let tick = game.engine_time();
+        entity.pos.x += scheduled_delta(delta.x, tick);
+        entity.pos.y += scheduled_delta(delta.y, tick);
+        return (false, false);
+    }
     let mut obstructed = false;
     let mut carried_horizontally = false;
     let viscid =
@@ -1258,8 +1264,9 @@ fn ice_block(game: &mut Game, entity: &mut Entity) {
 
 fn thin_ice(game: &mut Game, entity: &mut Entity) {
     let mut thickness = entity.data.get("thickness").copied().unwrap_or(60.0);
-    if Rect::new(entity.pos.x, entity.pos.y - 1.0, 17.0, 3.0)
-        .intersects(game.player.sprite_bounds())
+    if game.player.engine_active
+        && Rect::new(entity.pos.x, entity.pos.y - 1.0, 17.0, 3.0)
+            .intersects(game.player.sprite_bounds())
     {
         thickness -= 2.0;
         if game.rng.range(100) == 0 {

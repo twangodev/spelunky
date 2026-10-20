@@ -81,6 +81,17 @@ fn has(flags: &BTreeSet<String>, name: &str) -> bool {
         }
 }
 
+/// `genBlackMarket` survives room transitions, but only becomes an active
+/// Market while generating the Jungle. Keep explicit per-room test/host flags
+/// compatible while scoping that run-persistent request to its source area.
+fn source_black_market_active(flags: &BTreeSet<String>, area: Area) -> bool {
+    flags.contains("black_market")
+        || flags.contains("blackMarket")
+        || (area == Area::Jungle
+            && flags.contains("genBlackMarket")
+            && !has(flags, "made_black_market"))
+}
+
 #[derive(Debug)]
 struct Path {
     rooms: [[u8; 4]; 5],
@@ -745,7 +756,7 @@ fn select_dark_level(
         && roll_won;
     // Source177 clears darkLevel, retaining hadDarkLevel from a winning roll.
     // Explicit dark is a standalone fixture option, applied after the draw.
-    let visible = !has(flags, "black_market") && (has(flags, "dark") || selected);
+    let visible = !source_black_market_active(flags, area) && (has(flags, "dark") || selected);
     (visible, selected)
 }
 
@@ -906,7 +917,12 @@ pub(crate) fn generate_campaign_result(
         // Explicit HistoricalV1 retains its old construction order and draws.
         world = World::new(42, height, area, level);
     }
-    world.name = if has(&selected, "black_market") {
+    let black_market = if source_classic {
+        source_black_market_active(&selected, area)
+    } else {
+        has(&selected, "black_market")
+    };
+    world.name = if black_market {
         "Black Market"
     } else if has(&selected, "city_of_gold") {
         "City of Gold"
@@ -1772,6 +1788,38 @@ mod tests {
             assert_eq!((path.start, path.end), (0, 3));
             assert_eq!(actual.next_u64(), expected.next_u64(), "seed{seed}");
         }
+    }
+
+    #[test]
+    fn pending_black_market_request_only_activates_in_the_jungle() {
+        let mut game = crate::Game::new_with_algorithm(
+            4,
+            crate::RulesPreset::Classic,
+            crate::RngAlgorithm::Gm8Lcg32V1,
+        )
+        .unwrap();
+        game.flags.remove("no_dark_level");
+        game.flags.insert("genBlackMarket".into());
+        game.data.insert("next_level".into(), 2.0);
+
+        game.next_level();
+
+        assert_eq!(game.world.area, Area::Mines);
+        assert_eq!(game.world.name, "Mines");
+        assert!(
+            game.world.dark,
+            "the pending request must not suppress Mines darkness"
+        );
+        assert!(
+            !game.flags.contains("made_black_market"),
+            "a non-Jungle level must not consume the run-persistent request"
+        );
+
+        game.data.insert("next_level".into(), 5.0);
+        game.next_level();
+        assert_eq!(game.world.area, Area::Jungle);
+        assert_eq!(game.world.name, "Black Market");
+        assert!(game.flags.contains("made_black_market"));
     }
 
     #[test]

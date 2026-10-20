@@ -103,6 +103,48 @@ fn platform_collision_queries_ignore_inactive_terrain_solids() {
 }
 
 #[test]
+fn moving_platform_does_not_carry_an_inactive_player() {
+    let mut game = room();
+    game.player.pos = Vec2::new(80.0, 72.0);
+    game.player.previous_pos = game.player.pos;
+    game.player.state = crate::PlayerState::Standing;
+    game.player.grounded = true;
+    game.player.engine_active = false;
+    let platform = game.world.spawn("oMovingSolid", Vec2::new(80.0, 80.0));
+    let entity = game.world.entity_mut(platform).unwrap();
+    entity.sprite = "sBlock".into();
+    entity.vel.x = 1.0;
+    entity.data.insert("viscidTop".into(), 1.0);
+    let player_pos = game.player.pos;
+
+    pre_tick(&mut game);
+
+    assert_eq!(game.player.pos, player_pos);
+    assert_eq!(game.world.entity(platform).unwrap().pos.x, 81.0);
+}
+
+#[test]
+fn thin_ice_does_not_thaw_from_an_inactive_player() {
+    let mut game = room();
+    game.player.pos = Vec2::new(88.0, 72.0);
+    game.player.engine_active = false;
+    let ice = game.world.spawn("oThinIce", Vec2::new(80.0, 80.0));
+    game.world
+        .entity_mut(ice)
+        .unwrap()
+        .data
+        .insert("thickness".into(), 60.0);
+    let rng_before = game.rng.state_bits();
+
+    step_instance(&mut game, Instance::Entity(ice));
+
+    let ice = game.world.entity(ice).unwrap();
+    assert_eq!(ice.value("thickness"), 60.0);
+    assert_eq!(ice.sprite, "sThinIce1");
+    assert_eq!(game.rng.state_bits(), rng_before);
+}
+
+#[test]
 fn smash_lava_queries_ignore_inactive_entity_and_terrain() {
     let mut game = room();
     let inactive = game.world.spawn("oLava", Vec2::new(80.0, 80.0));

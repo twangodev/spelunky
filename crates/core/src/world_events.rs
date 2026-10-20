@@ -34,6 +34,7 @@ pub(crate) fn fluid_tick(game: &mut Game) {
     let custom = game.flags.contains("custom");
     if game.world.area == crate::Area::Boss && !custom {
         game.world.fluid_dirty = false;
+        game.data.insert("water_counter".into(), 0.0);
         return;
     }
     // Canonical with(object) snapshots its count, but rereads the live
@@ -2637,6 +2638,19 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn dirty_boss_fluid_pass_resets_source_counter_before_skipping_water_work() {
+        let mut game = room();
+        game.world = World::new(20, 40, Area::Boss, 16);
+        game.world.fluid_dirty = true;
+        game.data.insert("water_counter".into(), 7.0);
+
+        fluid_tick(&mut game);
+
+        assert_eq!(game.data["water_counter"], 0.0);
+        assert!(!game.world.fluid_dirty);
     }
     #[test]
     fn fluid_pass_uses_prior_activation_and_fixed_descendant_count() {
