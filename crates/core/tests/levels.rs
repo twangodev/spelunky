@@ -15,16 +15,46 @@ fn old_level(suffix: &str) -> String {
 }
 
 #[test]
-fn old_optional_formats_and_original_zero_count_writer_bug() {
+fn old_optional_formats_and_source_zero_count_writer_behavior() {
     let oldest = Level::parse(&old_level("")).unwrap();
     assert_eq!(oldest.author, "");
     assert!(oldest.exit_targets.is_empty());
     for suffix in ["\n0", "\n00", "\n0\n0", "\n0\n0\n"] {
         assert_eq!(Level::parse(&old_level(suffix)).unwrap(), oldest);
     }
-    let signs = Level::parse(&old_level("\n02\nHELLO\n")).unwrap();
+    let signs = Level::parse(&old_level("\n0\n2\nHELLO\n")).unwrap();
     assert_eq!(signs.signs, ["HELLO", ""]);
     assert_eq!(Level::parse(&signs.to_text()).unwrap(), signs);
+}
+
+#[test]
+fn classic_zero_exit_sign_count_becomes_an_exit_target() {
+    // The Classic editor writes the zero exit count without a newline, so one
+    // sign produces the physical count line "01". scrLoadLevel reads that as
+    // one exit and consumes the sign text as its target.
+    let mut lines: Vec<String> = old_level("\n01\nLEGACY TARGET")
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    lines[0].replace_range(..2, "XI");
+
+    let level = Level::parse(&lines.join("\n")).unwrap();
+    assert_eq!(level.exit_targets, ["LEGACY TARGET"]);
+    assert!(level.signs.is_empty());
+
+    let world = level.to_world();
+    let exit = world
+        .entities
+        .iter()
+        .find(|entity| entity.object == "oExit")
+        .unwrap();
+    let sign = world
+        .entities
+        .iter()
+        .find(|entity| entity.object == "oMsgSign")
+        .unwrap();
+    assert_eq!(exit.text["leadsTo"], "LEGACY TARGET");
+    assert_eq!(sign.text["message"], "");
 }
 
 #[test]

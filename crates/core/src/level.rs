@@ -98,21 +98,12 @@ impl Level {
         if lines[cursor..].iter().any(|line| !line.is_empty()) {
             let first = lines[cursor];
             cursor += 1;
-            // Original writer omitted a newline after zero exits: 00, 01, 012, etc.
-            let merged_zero = first.len() > 1
-                && first.starts_with('0')
-                && first.bytes().all(|b| b.is_ascii_digit());
-            if merged_zero {
-                let count = parse_count(&first[1..], "sign")?;
+            let count = parse_count(first, "exit")?;
+            level.exit_targets = read_records(&lines, &mut cursor, count, "exit")?;
+            if lines[cursor..].iter().any(|line| !line.is_empty()) {
+                let count = parse_count(lines[cursor], "sign")?;
+                cursor += 1;
                 level.signs = read_records(&lines, &mut cursor, count, "sign")?;
-            } else {
-                let count = parse_count(first, "exit")?;
-                level.exit_targets = read_records(&lines, &mut cursor, count, "exit")?;
-                if lines[cursor..].iter().any(|line| !line.is_empty()) {
-                    let count = parse_count(lines[cursor], "sign")?;
-                    cursor += 1;
-                    level.signs = read_records(&lines, &mut cursor, count, "sign")?;
-                }
             }
         }
         // Classic closes the file after the declared exit/sign records and
