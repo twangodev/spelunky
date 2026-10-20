@@ -139,6 +139,10 @@ fn source_setup_ice_roll_and_actual_drip_birth_precede_temple_fringe() {
             GenerationRevision::SourceClassicV2,
             false,
         );
+        if let Some(child) = world.entities.iter().find(|e| e.object == "oIceBottom") {
+            assert_eq!(child.text.get("type").map(String::as_str), Some(""));
+            assert_eq!(child.value("blinkToggle"), 0.0);
+        }
         assert_eq!(emissions(&world, first), expected, "seed {seed}");
         assert_eq!(rng.state_bits(), u64::from(state), "seed {seed}");
     }

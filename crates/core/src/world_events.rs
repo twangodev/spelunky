@@ -527,6 +527,7 @@ pub(crate) fn create_instance(game: &mut Game, id: u64) {
     };
     let mut e = game.world.entities[index].clone();
     if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+        initialize_source_drawn_sprite_create(&mut e);
         crate::creation::initialize_source_jungle_market(&mut e);
     }
     create_local(
@@ -588,6 +589,16 @@ fn source_create_variables(entity: &mut Entity) {
             _ => "None",
         };
         entity.text.insert("type".into(), kind.into());
+    }
+}
+
+/// Inherited `oDrawnSprite.Create` assignments explicitly run for IceBottom
+/// and every `oRubblePiece` child in the source. HistoricalV1 keeps its older
+/// projection; SourceClassicV2 calls this before the child's own Create.
+pub(crate) fn initialize_source_drawn_sprite_create(entity: &mut Entity) {
+    if entity.object == "oIceBottom" || catalog::is_a(&entity.object, "oRubblePiece") {
+        entity.text.insert("type".into(), String::new());
+        entity.data.insert("blinkToggle".into(), 0.0);
     }
 }
 
@@ -3995,6 +4006,16 @@ mod source_create_variable_tests {
     #[test]
     fn source_create_assignments_cover_water_lava_and_rubble_families() {
         let mut game = Game::shell(13, RulesPreset::Classic);
+        let mut expected_rng = game.rng.clone();
+        let expected_ice_alarm = (20 + expected_rng.range(381)) as i32;
+        let expected_rng_state = expected_rng.state_bits();
+        let ice_bottom = game.spawn("oIceBottom", Vec2::new(72.0, 80.0));
+        let ice_bottom = game.world.entity(ice_bottom).unwrap();
+        assert_eq!(ice_bottom.text.get("type").map(String::as_str), Some(""));
+        assert_eq!(ice_bottom.value("blinkToggle"), 0.0);
+        assert_eq!(ice_bottom.alarms[0], expected_ice_alarm);
+        assert_eq!(game.rng.state_bits(), expected_rng_state);
+
         for object in ["oWater", "oWaterSwim"] {
             let id = game.spawn(object, Vec2::new(80.0, 80.0));
             let entity = game.world.entity(id).unwrap();
@@ -4026,6 +4047,7 @@ mod source_create_variable_tests {
                 Some(kind),
                 "{object}"
             );
+            assert_eq!(game.world.entity(id).unwrap().value("blinkToggle"), 0.0);
         }
         let drip = super::spawn_runtime_object(&mut game, "oDrip", Vec2::new(128.0, 80.0));
         assert_eq!(
@@ -4037,16 +4059,25 @@ mod source_create_variable_tests {
                 .map(String::as_str),
             Some("Drip")
         );
+        assert_eq!(game.world.entity(drip).unwrap().value("blinkToggle"), 0.0);
     }
 
     #[test]
     fn historical_create_projection_does_not_gain_source_only_variables() {
         let mut game = Game::legacy_shell(13, RulesPreset::Classic);
-        for object in ["oWaterSwim", "oLava", "oRubble", "oDrip", "oLeaf"] {
+        for object in [
+            "oWaterSwim",
+            "oLava",
+            "oRubble",
+            "oDrip",
+            "oLeaf",
+            "oIceBottom",
+        ] {
             let id = game.spawn(object, Vec2::new(80.0, 80.0));
             let entity = game.world.entity(id).unwrap();
             assert!(!entity.text.contains_key("type"), "{object}");
             assert!(!entity.data.contains_key("checked"), "{object}");
+            assert!(!entity.data.contains_key("blinkToggle"), "{object}");
         }
     }
 }

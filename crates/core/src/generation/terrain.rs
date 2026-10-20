@@ -1091,9 +1091,9 @@ fn setup_source_parents(
                 let below = Vec2::new(origin.x, origin.y + 16.);
                 if !setup_source_point(world, below, "oSolid") {
                     let child = world.spawn("oIceBottom", below);
-                    world
-                        .entity_mut(child)
-                        .unwrap()
+                    let entity = world.entity_mut(child).unwrap();
+                    crate::world_events::initialize_source_drawn_sprite_create(entity);
+                    entity
                         .data
                         .insert("drip_alarm".into(), f64::from(20 + rng.range(381)));
                 }
