@@ -15,6 +15,7 @@ import { installLightingProfile, installLightingSeedControl, installLightingProb
 import { runCinematicAcceptance } from './cinematics.mjs';
 import { installBloodProbe, runBloodAcceptance } from './blood.mjs';
 import { runCameraAcceptance } from './camera.mjs';
+import { installBfcacheTrace, runBfcacheAcceptance } from './lifecycle.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const webRoot = path.resolve(process.env.BROWSER_WEB_ROOT || path.join(root, 'web/dist'));
@@ -38,7 +39,7 @@ const report = {
   scope: 'Automated browser engine acceptance, optionally using a virtual display; no physical 240 Hz display or Safari application validation.',
   engines: [],
 };
-assert.ok(['full', 'gameplay', 'adversarial', 'movement', 'onboarding', 'lighting', 'cinematics', 'blood'].includes(report.suite), 'BROWSER_SUITE must be full, gameplay, adversarial, movement, onboarding, lighting, cinematics, or blood');
+assert.ok(['full', 'gameplay', 'adversarial', 'movement', 'onboarding', 'lighting', 'cinematics', 'blood', 'bfcache'].includes(report.suite), 'BROWSER_SUITE must be full, gameplay, adversarial, movement, onboarding, lighting, cinematics, blood, or bfcache');
 if (report.suite === 'gameplay') report.deferredChecks = ['Source-valid natural dark-room WebGL pixel acceptance runs separately; gameplay success does not imply lighting acceptance.'];
 await mkdir(artifacts, { recursive: true });
 await access(tools);
@@ -70,12 +71,18 @@ if (!base) {
         response.writeHead(204).end();
         return;
       }
+      if (pathname === '/__bfcache-away') {
+        response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' });
+        response.end('<!doctype html><title>BFCache navigation target</title><p>Navigation target</p>');
+        return;
+      }
       const filename = path.resolve(webRoot, `.${pathname === '/' ? '/index.html' : pathname}`);
       if (!filename.startsWith(`${webRoot}${path.sep}`) || !(await stat(filename)).isFile()) {
         response.writeHead(404).end();
         return;
       }
-      response.writeHead(200, { 'Content-Type': mime[path.extname(filename)] || 'application/octet-stream', 'Cache-Control': 'no-store' });
+      const cacheControl = path.extname(filename) === '.html' ? 'no-cache' : 'no-store';
+      response.writeHead(200, { 'Content-Type': mime[path.extname(filename)] || 'application/octet-stream', 'Cache-Control': cacheControl });
       createReadStream(filename).pipe(response);
     } catch {
       response.writeHead(404).end();
@@ -90,7 +97,7 @@ if (!base) {
 report.url = base;
 report.webRoot = webRoot;
 report.runnerSha256 = Object.fromEntries(await Promise.all(
-  ['smoke.mjs', 'movement.mjs', 'adversarial.mjs', 'lighting.mjs', 'cinematics.mjs', 'blood.mjs', 'camera.mjs'].map(async filename => [
+  ['smoke.mjs', 'movement.mjs', 'adversarial.mjs', 'lighting.mjs', 'cinematics.mjs', 'blood.mjs', 'camera.mjs', 'lifecycle.mjs'].map(async filename => [
     filename, createHash('sha256').update(await readFile(path.join(root, 'tests/browser', filename))).digest('hex'),
   ]),
 ));
@@ -260,7 +267,8 @@ try {
       result.checks.push('Wasm startup and real WebGL 2 draw calls');
 
       if (!['full', 'gameplay'].includes(report.suite)) {
-        if (report.suite === 'adversarial') await runAdversarialAcceptance({ page, result, screenshot });
+        if (report.suite === 'bfcache') await runBfcacheAcceptance({ page, base, result });
+        else if (report.suite === 'adversarial') await runAdversarialAcceptance({ page, result, screenshot });
         else if (report.suite === 'movement') await runMovementAcceptance({ page, result, screenshot });
         else if (report.suite === 'onboarding') await runOnboardingAcceptance({ page, result, screenshot });
         else if (report.suite === 'blood') await runBloodAcceptance({ page, result, screenshot });

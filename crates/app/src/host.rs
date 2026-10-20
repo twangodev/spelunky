@@ -552,6 +552,22 @@ impl App {
         self.apply_settings_audio_action();
         self.editor.cancel_pointer();
     }
+    #[cfg(target_arch = "wasm32")]
+    fn resume_browser_lifecycle(&mut self) {
+        if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+            self.occluded = document.hidden();
+            if let Ok(focused) = document.has_focus() {
+                self.focused = focused;
+            }
+        }
+        self.reset_timing();
+        self.apply_audio_policy();
+        if !self.occluded
+            && let Some(window) = &self.window
+        {
+            window.request_redraw();
+        }
+    }
     fn reset_room_timing(&mut self) {
         if let Some(game) = &mut self.game {
             resume_room_music(game);
@@ -2714,6 +2730,8 @@ impl App {
             self.store.data.settings.pixel_snap,
         );
         snapshot["rendererReady"] = serde_json::Value::Bool(self.renderer.is_some());
+        snapshot["hostFocused"] = serde_json::Value::Bool(self.focused);
+        snapshot["hostOccluded"] = serde_json::Value::Bool(self.occluded);
         apply_viewport_snapshot(
             &mut snapshot,
             self.game.as_ref(),
@@ -4108,6 +4126,8 @@ fn set_browser_start_status(error: Option<&str>) {
 impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
+            #[cfg(target_arch = "wasm32")]
+            self.resume_browser_lifecycle();
             return;
         }
         let attributes = Window::default_attributes()
@@ -4173,6 +4193,17 @@ impl ApplicationHandler<UserEvent> for App {
         pollster::block_on(task);
         #[cfg(target_arch = "wasm32")]
         wasm_bindgen_futures::spawn_local(task);
+    }
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            // A persisted page is frozen before it can process ordinary
+            // visibility events. Treat suspension as hidden and reconcile the
+            // actual document state when Winit reports Resumed.
+            self.occluded = true;
+            self.reset_timing();
+            self.apply_audio_policy();
+        }
     }
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
