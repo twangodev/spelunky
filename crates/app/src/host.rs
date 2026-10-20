@@ -1771,8 +1771,8 @@ impl App {
                 CustomExit::Editor => self.screen(Screen::Editor),
                 CustomExit::Finished => {}
                 CustomExit::Continued => self.reset_room_timing(),
-                CustomExit::Missing(target) => {
-                    self.toast(format!("LINKED LEVEL MISSING: {target}"));
+                CustomExit::Invalid { target, reason } => {
+                    self.toast(format!("LINKED LEVEL INVALID: {target} ({reason})"));
                     self.screen(Screen::Custom)
                 }
             }
@@ -3993,7 +3993,7 @@ enum CustomExit {
     Editor,
     Finished,
     Continued,
-    Missing(String),
+    Invalid { target: String, reason: String },
 }
 fn custom_exit(
     game: &mut Game,
@@ -4028,8 +4028,9 @@ fn custom_exit(
         spelunky_core::ending::begin_custom(game);
         return CustomExit::Finished;
     };
-    let Ok(level) = spelunky_core::level::Level::parse_for_linked_load(source) else {
-        return CustomExit::Missing(target);
+    let level = match spelunky_core::level::Level::parse_for_linked_load(source) {
+        Ok(level) => level,
+        Err(reason) => return CustomExit::Invalid { target, reason },
     };
     let previous = game
         .flags
@@ -8568,6 +8569,30 @@ mod tests {
         assert_eq!(game.player.health, 4.0);
         assert!(!game.data.contains_key("pending_damsel_kisses"));
         assert_eq!(game.state, RunState::Ending);
+    }
+
+    #[test]
+    fn malformed_existing_custom_link_is_reported_invalid_not_missing() {
+        let mut game = Game::new(42, spelunky_core::RulesPreset::Classic);
+        load_custom(
+            &mut game,
+            &spelunky_core::level::Level::default(),
+            "first.lvl",
+            "",
+        );
+        game.flags.insert("custom_level:broken".into());
+        let before = game.state_hash();
+        let levels = std::collections::BTreeMap::from([("broken".into(), String::new())]);
+
+        let result = custom_exit(&mut game, &levels, false);
+        assert!(matches!(
+            result,
+            CustomExit::Invalid { target, reason }
+                if target == "broken" && reason.contains("32 map rows")
+        ));
+        assert_eq!(game.state_hash(), before);
+        assert_eq!(game.world.name, "first");
+        assert!(game.ending.is_none());
     }
 
     #[test]
