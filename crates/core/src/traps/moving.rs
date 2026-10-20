@@ -9,6 +9,11 @@ pub(super) fn pre_tick(game: &mut Game) {
     // Source with(oMovingSolid), then with(oMoveableSolid), traverses the
     // engine instance arrays. Storage order may differ after reactivation.
     crate::dispatcher::register_instances(game);
+    // `gameStepEvent.gml` resets viscidMovementOk once before the moving-solid
+    // loop, then each nearby oMovingSolid resets a successful carry to zero
+    // before the next instance is visited. A single solid can still carry on
+    // every pixel in its own movement loop.
+    let mut horizontal_carry_available = true;
     for parent in ["oMovingSolid", "oMoveableSolid"] {
         // Neither platform-pass body creates, destroys, or activates instances;
         // this fixed-count snapshot therefore preserves its live source order.
@@ -36,7 +41,11 @@ pub(super) fn pre_tick(game: &mut Game) {
                     }
                 }
                 let velocity = entity.vel;
-                move_solid(game, &mut entity, velocity);
+                let (_, carried) =
+                    move_solid_with_carry(game, &mut entity, velocity, horizontal_carry_available);
+                if carried {
+                    horizontal_carry_available = false;
+                }
             } else {
                 // Source oMoveableSolid is a separate global gravity pass.
                 let view = game.simulation_view_rect();
@@ -807,7 +816,17 @@ fn smash(game: &mut Game, entity: &mut Entity) {
 /// moving solid with terrain; its own object Step handles those contacts.
 /// Only a side-pushed character blocked by another solid stops this pass.
 fn move_solid(game: &mut Game, entity: &mut Entity, delta: Vec2) -> bool {
+    move_solid_with_carry(game, entity, delta, true).0
+}
+
+fn move_solid_with_carry(
+    game: &mut Game,
+    entity: &mut Entity,
+    delta: Vec2,
+    horizontal_carry_available: bool,
+) -> (bool, bool) {
     let mut obstructed = false;
+    let mut carried_horizontally = false;
     let viscid =
         entity
             .data
@@ -841,7 +860,9 @@ fn move_solid(game: &mut Game, entity: &mut Entity, delta: Vec2) -> bool {
             let top_line = Rect::new(lb, bb, rb - lb + 1.0, 1.0);
             let bottom_line = Rect::new(lb, underside, rb - lb + 1.0, 1.0);
             let rider = if horizontal {
-                viscid && entity.mask_intersects(top_line, CollisionPrecision::Precise)
+                viscid
+                    && (horizontal_carry_available || carried_horizontally)
+                    && entity.mask_intersects(top_line, CollisionPrecision::Precise)
             } else if step.y > 0.0 {
                 viscid
                     && entity.mask_intersects(
@@ -892,6 +913,9 @@ fn move_solid(game: &mut Game, entity: &mut Entity, delta: Vec2) -> bool {
                     game.player.pos.x += step.x;
                     game.player.pos.y += step.y;
                     game.player.grounded = true;
+                    if horizontal {
+                        carried_horizontally = true;
+                    }
                 } else if !horizontal && step.y < 0.0 {
                     obstructed = true;
                     break;
@@ -908,7 +932,7 @@ fn move_solid(game: &mut Game, entity: &mut Entity, delta: Vec2) -> bool {
             entity.pos.y += step.y;
         }
     }
-    obstructed
+    (obstructed, carried_horizontally)
 }
 
 fn scheduled_delta(speed: f64, tick: u64) -> f64 {
@@ -2456,7 +2480,7 @@ mod tests {
     }
 
     #[test]
-    fn overlapping_horizontal_moving_solids_each_carry_the_rider_in_source_order() {
+    fn overlapping_horizontal_moving_solids_carry_the_rider_only_once_per_pass() {
         let mut game = Game::shell(1, RulesPreset::Classic);
         let first = game.world.spawn("oCeilingTrap", Vec2::new(96.0, 80.0));
         let second = game.world.spawn("oCeilingTrap", Vec2::new(96.0, 80.0));
@@ -2475,9 +2499,24 @@ mod tests {
         assert_eq!(game.world.entity(first).unwrap().pos.x, 97.0);
         assert_eq!(game.world.entity(second).unwrap().pos.x, 97.0);
         assert_eq!(
-            game.player.pos.x, 98.0,
-            "Classic permits each moving-solid instance to carry the rider once"
+            game.player.pos.x, 97.0,
+            "Classic resets viscidMovementOk after the first nearby solid"
         );
+    }
+
+    #[test]
+    fn one_horizontal_moving_solid_carries_the_rider_on_each_pixel() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let solid = game.world.spawn("oCeilingTrap", Vec2::new(96.0, 80.0));
+        game.world.entity_mut(solid).unwrap().vel.x = 3.0;
+        game.player.pos = Vec2::new(96.0, 72.0);
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+
+        game.step(&crate::InputFrame::default());
+
+        assert_eq!(game.world.entity(solid).unwrap().pos.x, 99.0);
+        assert_eq!(game.player.pos.x, 99.0);
     }
 
     #[test]
