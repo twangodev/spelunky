@@ -28,6 +28,21 @@ fn old_optional_formats_and_source_zero_count_writer_behavior() {
 }
 
 #[test]
+fn blank_exit_count_means_zero_and_keeps_sign_metadata_aligned() {
+    let level = Level::parse(&old_level("\n\n1\nHELLO")).unwrap();
+    assert!(level.exit_targets.is_empty());
+    assert_eq!(level.signs, ["HELLO"]);
+
+    let fractional = Level::parse(&old_level("\n1.5\nFIRST\nSECOND\n0")).unwrap();
+    assert_eq!(fractional.exit_targets, ["FIRST", "SECOND"]);
+    assert!(fractional.signs.is_empty());
+
+    let negative = Level::parse(&old_level("\n-1\n-1")).unwrap();
+    assert!(negative.exit_targets.is_empty());
+    assert!(negative.signs.is_empty());
+}
+
+#[test]
 fn classic_zero_exit_sign_count_becomes_an_exit_target() {
     // The Classic editor writes the zero exit count without a newline, so one
     // sign produces the physical count line "01". scrLoadLevel reads that as
@@ -426,7 +441,7 @@ fn malformed_user_input_cannot_panic() {
         &"x".repeat(4 * 1024 * 1024 + 1),
         &old_level("\n999999999999999999999999999999"),
         &old_level("\n2\nonly one"),
-        &old_level("\n0\n-1"),
+        &old_level("\n0\ninvalid"),
     ] {
         assert!(
             std::panic::catch_unwind(|| Level::parse(text))

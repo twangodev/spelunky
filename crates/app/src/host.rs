@@ -8131,6 +8131,7 @@ mod tests {
         lines[34] = "invalid-life".into();
         lines[35] = "invalid-bombs".into();
         lines[36] = "invalid-ropes".into();
+        lines[38].clear();
         let source = lines.join("\n");
         assert!(spelunky_core::level::Level::parse(&source).is_err());
         assert!(spelunky_core::level::Level::parse_for_linked_load(&source).is_ok());

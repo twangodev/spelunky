@@ -363,10 +363,15 @@ fn parse_inventory_for_mode(
     }
 }
 fn parse_count(text: &str, name: &str) -> Result<usize, String> {
-    let count: usize = text
-        .trim()
-        .parse()
-        .map_err(|_| format!("Invalid {name} count"))?;
+    let count = source_real(text).map_err(|_| format!("Invalid {name} count"))?;
+    // Classic uses `real()` and loops while the integer index is less than
+    // this value, so an empty count means zero and a positive fraction reads
+    // the next whole number of records.
+    let count = if count > 0.0 {
+        count.ceil() as usize
+    } else {
+        0
+    };
     // Classic permits unused records. Their count can exceed the number of
     // cells, especially after editing an imported file while preserving its
     // extra records. read_records bounds the count by the already size-limited
