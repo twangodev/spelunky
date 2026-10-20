@@ -443,7 +443,7 @@ pub(crate) fn gold_door_collision(
         }
         game.player.held = None;
         game.player.pickup_item_type.clear();
-        game.world.spawn("oXGold", door.pos);
+        crate::world_events::spawn_runtime_object(game, "oXGold", door.pos);
         game.sound("sndChestOpen", door.pos);
     } else {
         crate::enemies::shop_dialogue::say(
@@ -2054,6 +2054,8 @@ mod tests {
             .find(|entity| entity.object == "oXGold")
             .expect("the actual collision receiver creates the XGold");
         assert_eq!(opened.pos, Vec2::new(88.0, 48.0));
+        assert_eq!(opened.text.get("type").map(String::as_str), Some("Exit"));
+        assert_eq!(opened.text.get("leadsTo").map(String::as_str), Some(""));
     }
 
     #[test]

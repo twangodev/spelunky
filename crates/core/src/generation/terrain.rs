@@ -1616,6 +1616,16 @@ fn create_lava(entity: &mut Entity, rng: &mut Rng) {
     }
 }
 
+/// Authored room Lava runs its concrete source Create synchronously with the
+/// other room instances, before the room's `oBricks` SetupWalls callback.
+pub(super) fn initialize_authored_lava_create(world: &mut World, rng: &mut Rng, id: u64) {
+    let time = 100.0 + f64::from(rng.range(201));
+    initialize_source_lava_create(
+        world.entity_mut(id).expect("authored Lava Create receiver"),
+        time,
+    );
+}
+
 #[cfg(test)]
 #[path = "terrain_setup_order_tests.rs"]
 mod setup_order_tests;

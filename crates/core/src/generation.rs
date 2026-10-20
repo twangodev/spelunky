@@ -1208,6 +1208,13 @@ pub(crate) fn initialize_authored_setup_walls(
     true
 }
 
+/// Run one authored room's `oLava.Create` in its source instance-order slot.
+/// The later SetupWalls lava pass sees the initialized marker and does not
+/// consume the Create RNG a second time.
+pub(crate) fn initialize_authored_lava_create(world: &mut World, rng: &mut Rng, id: u64) {
+    terrain::initialize_authored_lava_create(world, rng, id);
+}
+
 /// The only authored oBricks room with this family is rSun (12 Vines).
 /// Its SetupWalls Vine pass runs even when the Brick fringe is disabled.
 pub(crate) fn initialize_hub_canopy(world: &mut World, revision: crate::GenerationRevision) {

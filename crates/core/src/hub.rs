@@ -2,7 +2,7 @@
 //! Room instances come from the original XML; source controllers use 30 Hz alarms.
 use crate::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,10 +60,23 @@ struct Instance {
     y: f64,
 }
 #[derive(Deserialize)]
+struct RoomTile {
+    background: String,
+    background_x: f64,
+    background_y: f64,
+    depth: f64,
+    height: f64,
+    width: f64,
+    x: f64,
+    y: f64,
+}
+#[derive(Deserialize)]
 struct Room {
     width: usize,
     height: usize,
     instances: Vec<Instance>,
+    #[serde(default)]
+    tiles: Vec<RoomTile>,
 }
 #[derive(Deserialize)]
 struct Rooms {
@@ -99,6 +112,25 @@ pub(crate) fn authored_world(name: &str) -> World {
             pos,
             matches!(name, "rSun" | "rMoon" | "rStars"),
         );
+    }
+    for tile in &room.tiles {
+        world
+            .add_generated_graphic_tile(GeneratedGraphicTileSpec {
+                background: tile.background.clone(),
+                source: [
+                    tile.background_x,
+                    tile.background_y,
+                    tile.width,
+                    tile.height,
+                ],
+                position: Vec2::new(tile.x, tile.y),
+                depth: tile.depth,
+                scale: Vec2::new(1.0, 1.0),
+                color: 0x00ff_ffff,
+                alpha: 1.0,
+                visible: true,
+            })
+            .expect("authored room graphic tile handle is available");
     }
     world
 }
@@ -421,6 +453,277 @@ pub(crate) fn initialize_brick_variants(game: &mut Game) {
     }
 }
 
+/// Run room-instance Create callbacks in the order stored by the authored
+/// room before SetupWalls and the first Step. `authored_world` represents
+/// static instances with terrain tiles plus metadata entities, so the source
+/// room list pairs those proxies back to each original room instance.
+fn initialize_authored_room_creates(game: &mut Game, kind: HubKind) -> bool {
+    let room = &rooms().rooms[kind.room()];
+    let mut entities_by_instance: HashMap<(String, u64, u64), Vec<_>> = HashMap::new();
+    let mut initial_entities = Vec::new();
+    for entity in game
+        .world
+        .entities
+        .iter()
+        .filter(|entity| entity.alive && entity.object != "oTerrainMetadata")
+    {
+        initial_entities.push((entity.creation_serial, entity.id));
+        entities_by_instance
+            .entry((
+                entity.object.clone(),
+                entity.pos.x.to_bits(),
+                entity.pos.y.to_bits(),
+            ))
+            .or_default()
+            .push((entity.creation_serial, entity.id));
+    }
+    for instances in entities_by_instance.values_mut() {
+        instances.sort_unstable();
+    }
+    let mut entities_by_instance: HashMap<_, VecDeque<_>> = entities_by_instance
+        .into_iter()
+        .map(|(key, instances)| (key, instances.into()))
+        .collect();
+    let mut metadata_by_origin: HashMap<(u64, u64), Vec<_>> = HashMap::new();
+    let mut initial_metadata = Vec::new();
+    for entity in game
+        .world
+        .entities
+        .iter()
+        .filter(|entity| entity.alive && entity.object == "oTerrainMetadata")
+    {
+        initial_metadata.push((entity.creation_serial, entity.id));
+        metadata_by_origin
+            .entry((
+                (entity.pos.x - 8.0).to_bits(),
+                (entity.pos.y - 8.0).to_bits(),
+            ))
+            .or_default()
+            .push((entity.creation_serial, entity.id));
+    }
+    for instances in metadata_by_origin.values_mut() {
+        instances.sort_unstable();
+    }
+    let mut metadata_by_origin: HashMap<_, VecDeque<_>> = metadata_by_origin
+        .into_iter()
+        .map(|(key, instances)| (key, instances.into()))
+        .collect();
+
+    let mut initialized_entities = HashSet::new();
+    let mut initialized_metadata = HashSet::new();
+    let mut authored_walls = false;
+    for instance in &room.instances {
+        if instance.object == "oPlayer1" {
+            continue;
+        }
+        let key = (
+            instance.object.clone(),
+            instance.x.to_bits(),
+            instance.y.to_bits(),
+        );
+        let entity_id = entities_by_instance
+            .get_mut(&key)
+            .and_then(VecDeque::pop_front)
+            .map(|(_, id)| id);
+        if let Some(id) = entity_id {
+            initialize_authored_entity_create(game, id);
+            initialized_entities.insert(id);
+            if instance.object == "oTitle"
+                && kind == HubKind::Title
+                && game.generation_revision == GenerationRevision::SourceClassicV2
+            {
+                initialize_title_created_bricks(
+                    game,
+                    &mut metadata_by_origin,
+                    &mut initialized_metadata,
+                );
+            }
+            if instance.object == "oBricks"
+                && game.generation_revision == GenerationRevision::SourceClassicV2
+            {
+                authored_walls = crate::generation::initialize_authored_setup_walls(
+                    &mut game.world,
+                    &mut game.rng,
+                    game.generation_revision,
+                    !game.flags.contains("low_graphics"),
+                    false,
+                    false,
+                );
+            }
+            if instance.object == "oSunRoom"
+                && game.generation_revision == GenerationRevision::SourceClassicV2
+            {
+                game.data
+                    .insert("hub_alarm0".into(), f64::from(200 + game.rng.range(101)));
+            }
+            continue;
+        }
+
+        let metadata_id = metadata_by_origin
+            .get_mut(&(instance.x.to_bits(), instance.y.to_bits()))
+            .and_then(VecDeque::pop_front)
+            .map(|(_, id)| id);
+        if let Some(metadata_id) = metadata_id {
+            initialize_authored_tile_create(game, &instance.object, metadata_id);
+            initialized_metadata.insert(metadata_id);
+        }
+        let x = (instance.x / 16.0) as usize;
+        let y = (instance.y / 16.0) as usize;
+        if x < game.world.width
+            && y < game.world.height
+            && game
+                .world
+                .tile(x as i32, y as i32)
+                .is_some_and(|tile| tile.object == instance.object)
+        {
+            crate::traps::create(
+                game,
+                crate::dispatcher::Instance::Terrain(y * game.world.width + x),
+            );
+        }
+    }
+
+    // Runtime unlocks and first-time title additions are appended after the
+    // authored room's Create sequence. They still need their own Create state.
+    let mut remaining_metadata: Vec<_> = initial_metadata
+        .into_iter()
+        .filter(|(_, id)| !initialized_metadata.contains(id))
+        .collect();
+    remaining_metadata.sort_unstable();
+    for (_, id) in remaining_metadata {
+        let Some(entity) = game.world.entity(id) else {
+            continue;
+        };
+        let x = ((entity.pos.x - 8.0) / 16.0) as i32;
+        let y = ((entity.pos.y - 8.0) / 16.0) as i32;
+        if let Some(object) = game.world.tile(x, y).map(|tile| tile.object.clone()) {
+            initialize_authored_tile_create(game, &object, id);
+        }
+    }
+    let mut remaining_entities: Vec<_> = initial_entities
+        .into_iter()
+        .filter(|(_, id)| !initialized_entities.contains(id))
+        .collect();
+    remaining_entities.sort_unstable();
+    for (_, id) in remaining_entities {
+        initialize_authored_entity_create(game, id);
+    }
+    authored_walls
+}
+
+/// `oTitle.Create` creates these barrier bricks synchronously before the
+/// authored `oBricks` instance runs SetupWalls. They are represented as
+/// appended tile metadata in `hub::world`, so initialize them at the title
+/// controller's source-order slot rather than after the room loop.
+fn initialize_title_created_bricks(
+    game: &mut Game,
+    metadata_by_origin: &mut HashMap<(u64, u64), VecDeque<(u64, u64)>>,
+    initialized_metadata: &mut HashSet<u64>,
+) {
+    let [shortcut_stage1, _, _] = shortcut_stages(&game.flags);
+    let mut origins: Vec<(f64, f64)> = Vec::new();
+    if !shortcut_stage1 {
+        origins.extend([(320.0, 96.0), (336.0, 96.0)]);
+    }
+    if game.flags.contains("first_time") {
+        origins.extend([(320.0, 160.0), (336.0, 160.0), (336.0, 176.0)]);
+    }
+    for (x, y) in origins {
+        let key = (x.to_bits(), y.to_bits());
+        let Some((_, metadata_id)) = metadata_by_origin
+            .get_mut(&key)
+            .and_then(VecDeque::pop_front)
+        else {
+            continue;
+        };
+        if !game
+            .world
+            .tile((x / 16.0) as i32, (y / 16.0) as i32)
+            .is_some_and(|tile| tile.object == "oBrick")
+        {
+            continue;
+        }
+        initialize_authored_tile_create(game, "oBrick", metadata_id);
+        initialized_metadata.insert(metadata_id);
+    }
+}
+
+fn initialize_authored_entity_create(game: &mut Game, id: u64) {
+    crate::enemies::create_instance(game, id);
+    crate::items::create_instance(game, id);
+    crate::world_events::create_instance(game, id);
+    crate::traps::create(game, crate::dispatcher::Instance::Entity(id));
+}
+
+fn initialize_authored_tile_create(game: &mut Game, object: &str, metadata_id: u64) {
+    match object {
+        "oBrick" => {
+            let chipped = game.rng.range(10) == 0;
+            let roll = 1 + game.rng.range(100);
+            if let Some(metadata) = game.world.entity_mut(metadata_id) {
+                metadata.data.insert("n".into(), f64::from(roll));
+                if metadata
+                    .text
+                    .get("terrain_sprite")
+                    .is_some_and(|sprite| sprite != "sBrick")
+                {
+                    return;
+                }
+                let (sprite, grade) = if roll < 20 {
+                    (Some("sBrickGold"), 1)
+                } else if roll < 30 {
+                    (Some("sBrickGoldBig"), 2)
+                } else if chipped {
+                    (Some("sBrick2"), 0)
+                } else {
+                    (None, 0)
+                };
+                if let Some(sprite) = sprite {
+                    metadata.text.insert("terrain_sprite".into(), sprite.into());
+                }
+                if grade > 0 {
+                    metadata.data.insert("gold_chunks".into(), 3.0);
+                    metadata
+                        .data
+                        .insert("gold_nuggets".into(), if grade == 2 { 1.0 } else { 0.0 });
+                }
+            }
+        }
+        "oDark" => {
+            let roll = 1 + game.rng.range(100);
+            let in_intro = game.world.name == "rIntro";
+            if let Some(metadata) = game.world.entity_mut(metadata_id) {
+                metadata.data.insert("n".into(), f64::from(roll));
+                if in_intro {
+                    return;
+                }
+                let (sprite, grade) = if roll < 20 {
+                    (Some("sDarkGold"), 1)
+                } else if roll < 30 {
+                    (Some("sDarkGoldBig"), 2)
+                } else {
+                    (None, 0)
+                };
+                if let Some(sprite) = sprite {
+                    metadata.text.insert("terrain_sprite".into(), sprite.into());
+                }
+                if grade > 0 {
+                    metadata.data.insert("gold_chunks".into(), 3.0);
+                    metadata
+                        .data
+                        .insert("gold_nuggets".into(), if grade == 2 { 1.0 } else { 0.0 });
+                }
+            }
+        }
+        "oLava" => crate::generation::initialize_authored_lava_create(
+            &mut game.world,
+            &mut game.rng,
+            metadata_id,
+        ),
+        _ => {}
+    }
+}
+
 /// Call after assigning/resetting the authored world. Preserves persistent unlocks.
 pub fn initialize(game: &mut Game, kind: HubKind) {
     game.flags.retain(|f| !f.starts_with("hub_") && f != "hub");
@@ -631,15 +934,19 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
             game.player.facing = -1;
         }
     }
-    initialize_brick_variants(game);
-    let authored_walls = crate::generation::initialize_authored_setup_walls(
-        &mut game.world,
-        &mut game.rng,
-        game.generation_revision,
-        !game.flags.contains("low_graphics"),
-        false,
-        false,
-    );
+    let authored_walls = if game.generation_revision == GenerationRevision::SourceClassicV2 {
+        initialize_authored_room_creates(game, kind)
+    } else {
+        initialize_brick_variants(game);
+        crate::generation::initialize_authored_setup_walls(
+            &mut game.world,
+            &mut game.rng,
+            game.generation_revision,
+            !game.flags.contains("low_graphics"),
+            false,
+            false,
+        )
+    };
     if !authored_walls {
         if !game.flags.contains("low_graphics") {
             crate::generation::initialize_hub_fringe(&mut game.world, &mut game.rng);
@@ -655,11 +962,14 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
         game.data.insert("baskets".into(), 0.0);
         game.data.insert("stars_kills".into(), 0.0);
         let hazard = if kind == HubKind::Sun {
-            200 + game.rng.range(101)
+            game.data
+                .get("hub_alarm0")
+                .copied()
+                .unwrap_or_else(|| f64::from(200 + game.rng.range(101)))
         } else {
-            100
+            100.0
         };
-        game.data.insert("hub_alarm0".into(), f64::from(hazard));
+        game.data.insert("hub_alarm0".into(), hazard);
         game.data.insert(
             "hub_alarm11".into(),
             if kind == HubKind::Stars { 110.0 } else { 100.0 },
@@ -679,6 +989,15 @@ pub fn initialize(game: &mut Game, kind: HubKind) {
         game.camera = Vec2::new(320.0, 0.0);
         game.previous_camera = game.camera;
         crate::opening::begin_title(game, title_start.unwrap_or(2));
+    }
+    if game.generation_revision == GenerationRevision::SourceClassicV2 {
+        // Authored room entities enter through World::spawn rather than
+        // Game::spawn, so apply the inherited oItem Create depth after the
+        // room's own setup while retaining any explicit producer override.
+        let has_spectacles = game.player.has("Spectacles");
+        for entity in &mut game.world.entities {
+            crate::items::initialize_inherited_depth(entity, has_spectacles);
+        }
     }
 }
 fn value(game: &Game, key: &str) -> f64 {
@@ -1878,6 +2197,513 @@ mod tests {
         g.load_hub(kind);
         g
     }
+
+    #[test]
+    fn authored_hubs_preserve_room_graphic_tiles() {
+        let expected = [
+            (
+                "rTitle",
+                "bgTitle",
+                [64.0, 0.0, 16.0, 16.0],
+                Vec2::new(32.0, 128.0),
+            ),
+            (
+                "rHighscores",
+                "bgTitle",
+                [16.0, 0.0, 16.0, 16.0],
+                Vec2::new(32.0, 48.0),
+            ),
+            (
+                "rHighscores",
+                "bgTitle",
+                [32.0, 0.0, 16.0, 16.0],
+                Vec2::new(64.0, 80.0),
+            ),
+            (
+                "rHighscores",
+                "bgTitle",
+                [48.0, 0.0, 16.0, 16.0],
+                Vec2::new(32.0, 112.0),
+            ),
+            (
+                "rHighscores",
+                "bgTitle",
+                [64.0, 0.0, 16.0, 16.0],
+                Vec2::new(64.0, 144.0),
+            ),
+            (
+                "rSun",
+                "bgSky",
+                [0.0, 0.0, 32.0, 32.0],
+                Vec2::new(144.0, 48.0),
+            ),
+            (
+                "rMoon",
+                "bgSky",
+                [32.0, 0.0, 32.0, 32.0],
+                Vec2::new(48.0, 48.0),
+            ),
+            (
+                "rStars",
+                "bgSky",
+                [64.0, 0.0, 32.0, 32.0],
+                Vec2::new(144.0, 64.0),
+            ),
+        ];
+        for room in ["rTitle", "rHighscores", "rSun", "rMoon", "rStars"] {
+            let world = authored_world(room);
+            let room_expected: Vec<_> = expected.iter().filter(|entry| entry.0 == room).collect();
+            assert_eq!(
+                world.generated_graphic_tiles.len(),
+                room_expected.len(),
+                "{room}"
+            );
+            for (actual, (_, background, source, position)) in
+                world.generated_graphic_tiles.iter().zip(room_expected)
+            {
+                assert_eq!(actual.graphic.background, *background, "{room}");
+                assert_eq!(actual.graphic.source, *source, "{room}");
+                assert_eq!(actual.graphic.position, *position, "{room}");
+                assert_eq!(actual.graphic.depth, 1_000_000.0, "{room}");
+                assert_eq!(actual.graphic.scale, Vec2::new(1.0, 1.0), "{room}");
+                assert_eq!(actual.graphic.color, 0x00ff_ffff, "{room}");
+                assert_eq!(actual.graphic.alpha, 1.0, "{room}");
+                assert!(actual.graphic.visible, "{room}");
+            }
+        }
+    }
+
+    #[test]
+    fn source_sun_room_runs_authored_create_rng_before_the_first_step() {
+        let seed = 19;
+        let mut expected = Game::try_shell(seed, RulesPreset::Classic).unwrap();
+        expected.world = world(HubKind::Sun, &expected.flags);
+        for instance in &rooms().rooms["rSun"].instances {
+            let center = Vec2::new(instance.x + 8.0, instance.y + 8.0);
+            let origin = Vec2::new(instance.x, instance.y);
+            match instance.object.as_str() {
+                "oArrowRepeaterL" | "oArrowRepeaterR" | "oSmashTrap" => {
+                    let x = (instance.x / 16.0) as usize;
+                    let y = (instance.y / 16.0) as usize;
+                    let terrain = expected
+                        .world
+                        .tile(x as i32, y as i32)
+                        .is_some_and(|tile| tile.object == instance.object);
+                    let receiver = if terrain {
+                        crate::dispatcher::Instance::Terrain(y * expected.world.width + x)
+                    } else {
+                        let id = expected
+                            .world
+                            .entities
+                            .iter()
+                            .find(|entity| {
+                                entity.alive
+                                    && entity.object == instance.object
+                                    && entity.pos == origin
+                            })
+                            .expect("authored trap instance")
+                            .id;
+                        crate::dispatcher::Instance::Entity(id)
+                    };
+                    crate::traps::create(&mut expected, receiver);
+                }
+                "oBrick" | "oDark" => {
+                    let id = expected
+                        .world
+                        .entities
+                        .iter()
+                        .find(|entity| {
+                            entity.alive
+                                && entity.object == "oTerrainMetadata"
+                                && entity.pos == center
+                        })
+                        .unwrap_or_else(|| panic!("{} metadata", instance.object))
+                        .id;
+                    initialize_authored_tile_create(&mut expected, &instance.object, id);
+                }
+                "oLava" => {
+                    let id = expected
+                        .world
+                        .entities
+                        .iter()
+                        .find(|entity| {
+                            entity.alive && entity.object == "oLava" && entity.pos == origin
+                        })
+                        .expect("authored Lava instance")
+                        .id;
+                    crate::world_events::create_instance(&mut expected, id);
+                }
+                "oBricks" => {
+                    assert!(crate::generation::initialize_authored_setup_walls(
+                        &mut expected.world,
+                        &mut expected.rng,
+                        expected.generation_revision,
+                        true,
+                        false,
+                        false,
+                    ));
+                }
+                "oSunRoom" => {
+                    expected.data.insert(
+                        "hub_alarm0".into(),
+                        f64::from(200 + expected.rng.range(101)),
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        let mut actual = Game::try_shell(seed, RulesPreset::Classic).unwrap();
+        actual.load_hub(HubKind::Sun);
+
+        for instance in &rooms().rooms["rSun"].instances {
+            let center = Vec2::new(instance.x + 8.0, instance.y + 8.0);
+            let origin = Vec2::new(instance.x, instance.y);
+            match instance.object.as_str() {
+                "oArrowRepeaterL" | "oArrowRepeaterR" => {
+                    let x = (instance.x / 16.0) as usize;
+                    let y = (instance.y / 16.0) as usize;
+                    let key = if actual
+                        .world
+                        .tile(x as i32, y as i32)
+                        .is_some_and(|tile| tile.object == instance.object)
+                    {
+                        format!("hazard:{}:fired", y * actual.world.width + x)
+                    } else {
+                        let id = actual
+                            .world
+                            .entities
+                            .iter()
+                            .find(|entity| {
+                                entity.alive
+                                    && entity.object == instance.object
+                                    && entity.pos == origin
+                            })
+                            .expect("authored repeater")
+                            .id;
+                        format!("hazard_entity:{id}:fired")
+                    };
+                    assert_eq!(actual.data.get(&key), expected.data.get(&key));
+                }
+                "oSmashTrap" => {
+                    let actual_trap = actual
+                        .world
+                        .entities
+                        .iter()
+                        .find(|entity| {
+                            entity.alive && entity.object == instance.object && entity.pos == origin
+                        })
+                        .expect("authored Smash Trap");
+                    let expected_trap = expected
+                        .world
+                        .entities
+                        .iter()
+                        .find(|entity| {
+                            entity.alive && entity.object == instance.object && entity.pos == origin
+                        })
+                        .expect("expected Smash Trap");
+                    assert_eq!(
+                        actual_trap.data.get("direction"),
+                        expected_trap.data.get("direction")
+                    );
+                }
+                "oBrick" | "oDark" => {
+                    let actual_terrain = actual
+                        .world
+                        .entities
+                        .iter()
+                        .find(|entity| {
+                            entity.alive
+                                && entity.object == "oTerrainMetadata"
+                                && entity.pos == center
+                        })
+                        .unwrap_or_else(|| panic!("{} metadata", instance.object));
+                    let expected_terrain = expected
+                        .world
+                        .entities
+                        .iter()
+                        .find(|entity| {
+                            entity.alive
+                                && entity.object == "oTerrainMetadata"
+                                && entity.pos == center
+                        })
+                        .expect("expected terrain metadata");
+                    assert_eq!(
+                        actual_terrain.data.get("n"),
+                        expected_terrain.data.get("n"),
+                        "{} at ({}, {})",
+                        instance.object,
+                        instance.x,
+                        instance.y
+                    );
+                }
+                "oLava" => {
+                    let actual_lava = actual
+                        .world
+                        .entities
+                        .iter()
+                        .find(|entity| {
+                            entity.alive && entity.object == "oLava" && entity.pos == origin
+                        })
+                        .expect("authored Lava");
+                    let expected_lava = expected
+                        .world
+                        .entities
+                        .iter()
+                        .find(|entity| {
+                            entity.alive && entity.object == "oLava" && entity.pos == origin
+                        })
+                        .expect("expected Lava");
+                    assert_eq!(
+                        actual_lava.data.get("spurt_time"),
+                        expected_lava.data.get("spurt_time"),
+                        "Lava at ({}, {})",
+                        instance.x,
+                        instance.y
+                    );
+                    assert_eq!(actual_lava.value("randNum"), 201.0);
+                    assert_eq!(
+                        actual_lava.text.get("type").map(String::as_str),
+                        Some("Lava")
+                    );
+                    assert_eq!(actual_lava.image_speed(), 0.4);
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(
+            actual.data.get("hub_alarm0"),
+            expected.data.get("hub_alarm0")
+        );
+        assert_eq!(actual.rng.state_bits(), expected.rng.state_bits());
+
+        let directions: Vec<_> = actual
+            .world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive && entity.object == "oSmashTrap")
+            .map(|entity| (entity.id, entity.value("direction")))
+            .collect();
+        let lava_times: Vec<_> = actual
+            .world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive && entity.object == "oLava")
+            .map(|entity| (entity.id, entity.value("spurt_time")))
+            .collect();
+        actual.step(&InputFrame::default());
+        for (id, direction) in directions {
+            assert_eq!(
+                actual.world.entity(id).unwrap().value("direction"),
+                direction
+            );
+        }
+        for (id, time) in lava_times {
+            assert_eq!(actual.world.entity(id).unwrap().value("spurt_time"), time);
+        }
+    }
+
+    #[test]
+    fn source_title_controller_bricks_run_before_setup_walls() {
+        let seed = 29;
+        for flags in [
+            BTreeSet::new(),
+            BTreeSet::from(["first_time".into()]),
+            BTreeSet::from(["shortcut_5".into()]),
+            BTreeSet::from(["first_time".into(), "shortcut_5".into()]),
+        ] {
+            let mut expected = Game::try_shell(seed, RulesPreset::Classic).unwrap();
+            expected.flags = flags.clone();
+            expected.world = world(HubKind::Title, &flags);
+
+            let mut entities_by_instance: HashMap<(String, u64, u64), VecDeque<u64>> =
+                HashMap::new();
+            for entity in expected
+                .world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.object != "oTerrainMetadata")
+            {
+                entities_by_instance
+                    .entry((
+                        entity.object.clone(),
+                        entity.pos.x.to_bits(),
+                        entity.pos.y.to_bits(),
+                    ))
+                    .or_default()
+                    .push_back(entity.id);
+            }
+            let mut metadata_by_origin: HashMap<(u64, u64), VecDeque<u64>> = HashMap::new();
+            for entity in expected
+                .world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.object == "oTerrainMetadata")
+            {
+                metadata_by_origin
+                    .entry((
+                        (entity.pos.x - 8.0).to_bits(),
+                        (entity.pos.y - 8.0).to_bits(),
+                    ))
+                    .or_default()
+                    .push_back(entity.id);
+            }
+
+            for instance in &rooms().rooms["rTitle"].instances {
+                if instance.object == "oPlayer1" {
+                    continue;
+                }
+                let entity_key = (
+                    instance.object.clone(),
+                    instance.x.to_bits(),
+                    instance.y.to_bits(),
+                );
+                if let Some(id) = entities_by_instance
+                    .get_mut(&entity_key)
+                    .and_then(VecDeque::pop_front)
+                {
+                    initialize_authored_entity_create(&mut expected, id);
+                    if instance.object == "oTitle" {
+                        let [shortcut_stage1, _, _] = shortcut_stages(&flags);
+                        let mut origins: Vec<(f64, f64)> = Vec::new();
+                        if !shortcut_stage1 {
+                            origins.extend([(320.0, 96.0), (336.0, 96.0)]);
+                        }
+                        if flags.contains("first_time") {
+                            origins.extend([(320.0, 160.0), (336.0, 160.0), (336.0, 176.0)]);
+                        }
+                        for (x, y) in origins {
+                            let id = metadata_by_origin
+                                .get_mut(&(x.to_bits(), y.to_bits()))
+                                .and_then(VecDeque::pop_front)
+                                .expect("controller-created title brick metadata");
+                            initialize_authored_tile_create(&mut expected, "oBrick", id);
+                        }
+                    }
+                    if instance.object == "oBricks" {
+                        assert!(crate::generation::initialize_authored_setup_walls(
+                            &mut expected.world,
+                            &mut expected.rng,
+                            expected.generation_revision,
+                            true,
+                            false,
+                            false,
+                        ));
+                    }
+                    continue;
+                }
+
+                let metadata_key = (instance.x.to_bits(), instance.y.to_bits());
+                if let Some(id) = metadata_by_origin
+                    .get_mut(&metadata_key)
+                    .and_then(VecDeque::pop_front)
+                {
+                    initialize_authored_tile_create(&mut expected, &instance.object, id);
+                    continue;
+                }
+
+                let x = (instance.x / 16.0) as usize;
+                let y = (instance.y / 16.0) as usize;
+                if x < expected.world.width
+                    && y < expected.world.height
+                    && expected
+                        .world
+                        .tile(x as i32, y as i32)
+                        .is_some_and(|tile| tile.object == instance.object)
+                {
+                    let index = y * expected.world.width + x;
+                    crate::traps::create(
+                        &mut expected,
+                        crate::dispatcher::Instance::Terrain(index),
+                    );
+                }
+            }
+
+            let mut actual = Game::try_shell(seed, RulesPreset::Classic).unwrap();
+            actual.flags = flags.clone();
+            actual.load_hub(HubKind::Title);
+            assert_eq!(
+                actual.rng.state_bits(),
+                expected.rng.state_bits(),
+                "{flags:?}"
+            );
+
+            let mut dynamic_bricks = Vec::new();
+            if !shortcut_stages(&flags)[0] {
+                dynamic_bricks.extend([(320.0, 96.0), (336.0, 96.0)]);
+            }
+            if flags.contains("first_time") {
+                dynamic_bricks.extend([(320.0, 160.0), (336.0, 160.0), (336.0, 176.0)]);
+            }
+            for (x, y) in dynamic_bricks {
+                let origin = Vec2::new(x + 8.0, y + 8.0);
+                let actual_metadata = actual
+                    .world
+                    .entities
+                    .iter()
+                    .find(|entity| {
+                        entity.alive && entity.object == "oTerrainMetadata" && entity.pos == origin
+                    })
+                    .expect("actual title brick metadata");
+                let expected_metadata = expected
+                    .world
+                    .entities
+                    .iter()
+                    .find(|entity| {
+                        entity.alive && entity.object == "oTerrainMetadata" && entity.pos == origin
+                    })
+                    .expect("expected title brick metadata");
+                assert_eq!(
+                    actual_metadata.data.get("n"),
+                    expected_metadata.data.get("n"),
+                    "brick at ({x}, {y}), flags {flags:?}"
+                );
+                assert_eq!(
+                    actual_metadata.text.get("terrain_sprite"),
+                    expected_metadata.text.get("terrain_sprite"),
+                    "brick sprite at ({x}, {y}), flags {flags:?}"
+                );
+                assert_eq!(
+                    actual_metadata.data.get("gold_chunks"),
+                    expected_metadata.data.get("gold_chunks"),
+                    "brick gold at ({x}, {y}), flags {flags:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn authored_challenge_items_keep_inherited_source_create_depth() {
+        for (kind, object) in [(HubKind::Moon, "oBow"), (HubKind::Stars, "oShotgun")] {
+            for (has_spectacles, expected_depth) in [(false, 101.0), (true, 51.0)] {
+                let mut game = Game::shell(7, RulesPreset::Classic);
+                if has_spectacles {
+                    game.player.equipment.insert("Spectacles".into());
+                }
+                game.load_hub(kind);
+
+                let item = game
+                    .world
+                    .entities
+                    .iter()
+                    .find(|entity| entity.object == object)
+                    .unwrap_or_else(|| panic!("{kind:?} has no authored {object}"));
+                assert_eq!(item.data.get("depth"), Some(&expected_depth));
+            }
+
+            let mut historical = Game::shell(7, RulesPreset::Classic);
+            historical.generation_revision = GenerationRevision::HistoricalV1;
+            historical.load_hub(kind);
+            let item = historical
+                .world
+                .entities
+                .iter()
+                .find(|entity| entity.object == object)
+                .unwrap_or_else(|| panic!("{kind:?} has no authored {object}"));
+            assert!(!item.data.contains_key("depth"));
+        }
+    }
+
     fn portal_grounding_fixture(floor_end: usize) -> Game {
         let mut g = Game::shell(31, RulesPreset::Classic);
         g.world = World::new(40, 20, Area::Mines, 1);

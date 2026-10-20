@@ -140,9 +140,11 @@ fn acquire_sale_damsel(game: &mut Game, id: u64) -> bool {
 }
 
 fn craps_keeper(game: &Game) -> bool {
+    // Classic checks for an active keeper instance here, even during the
+    // stunned death animation while its health is already zero.
     game.world.entities.iter().any(|e| {
         e.alive
-            && e.health > 0
+            && e.engine_active
             && crate::catalog::is_a(&e.object, "oShopkeeper")
             && e.text.get("style").is_some_and(|style| style == "Craps")
             && (
@@ -522,7 +524,7 @@ pub(crate) fn player_pay_step(game: &mut Game, input: &InputFrame) {
     }
     if !game.world.entities.iter().any(|keeper| {
         keeper.alive
-            && keeper.health > 0
+            && keeper.engine_active
             && crate::catalog::is_a(&keeper.object, "oShopkeeper")
             && keeper
                 .text
@@ -1242,6 +1244,49 @@ mod tests {
                 assert_eq!(g.player.money, 100000);
             }
         }
+    }
+
+    #[test]
+    fn actual_step_shop_services_still_run_while_keeper_death_animation_is_active() {
+        let (mut craps, _) = stepping_shop("oRock", "Craps");
+        craps.player.held = None;
+        let craps_keeper = craps
+            .world
+            .entities
+            .iter_mut()
+            .find(|entity| entity.object == "oShopkeeper")
+            .unwrap();
+        craps_keeper.health = 0;
+        craps_keeper.state = 98;
+        assert!(!craps.flags.contains("murderer"));
+        craps.player.money = 5_000;
+        craps.step(&InputFrame {
+            pay_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(craps.player.money, 3_500);
+        assert_eq!(craps.player.data.get("bet"), Some(&1_500.0));
+
+        let (mut kissing, damsel) = stepping_shop("oDamsel", "Kissing");
+        kissing.player.held = None;
+        kissing.world.entity_mut(damsel).unwrap().held = false;
+        kissing.world.entity_mut(damsel).unwrap().state = 5;
+        let kissing_keeper = kissing
+            .world
+            .entities
+            .iter_mut()
+            .find(|entity| entity.object == "oShopkeeper")
+            .unwrap();
+        kissing_keeper.health = 0;
+        kissing_keeper.state = 98;
+        assert!(!kissing.flags.contains("murderer"));
+        kissing.step(&InputFrame {
+            pay_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(kissing.player.health, 5.0);
+        assert_eq!(kissing.lifetime_stats.kisses_bought, 1);
+        assert_eq!(kissing.world.entity(damsel).unwrap().state, 6);
     }
 
     #[test]

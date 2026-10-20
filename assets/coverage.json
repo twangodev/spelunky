@@ -961,7 +961,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1705,
+          "line": 2024,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -1105,7 +1105,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1291,
+          "line": 1610,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -1279,7 +1279,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1661,
+          "line": 1667,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -1327,7 +1327,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1464,
+          "line": 1470,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -1837,6 +1837,11 @@
         },
         {
           "kind": "explicit_object_match_arm",
+          "line": 660,
+          "module": "crates/core/src/hub.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
           "line": 2409,
           "module": "crates/core/src/items/explosives.rs"
         }
@@ -1925,7 +1930,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1464,
+          "line": 1470,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -2026,7 +2031,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1464,
+          "line": 1470,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -3081,6 +3086,11 @@
           "kind": "explicit_object_match_arm",
           "line": 1527,
           "module": "crates/core/src/generation/terrain.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 692,
+          "module": "crates/core/src/hub.rs"
         },
         {
           "kind": "explicit_object_match_arm",
@@ -4185,7 +4195,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1669,
+          "line": 1675,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -4360,7 +4370,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1464,
+          "line": 1470,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -5450,7 +5460,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 793,
+          "line": 1112,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -6462,6 +6472,11 @@
           "module": "crates/core/src/ending.rs"
         },
         {
+          "kind": "explicit_object_match_arm",
+          "line": 718,
+          "module": "crates/core/src/hub.rs"
+        },
+        {
           "kind": "hazard_dispatch_registration",
           "line": 389,
           "module": "crates/core/src/traps.rs"
@@ -7055,7 +7070,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1669,
+          "line": 1675,
           "module": "crates/core/src/world_events.rs"
         }
       ],
@@ -8933,7 +8948,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1459,
+          "line": 1465,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -9272,7 +9287,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1623,
+          "line": 1942,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -9289,7 +9304,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1630,
+          "line": 1949,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -10858,7 +10873,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1463,
+          "line": 1469,
           "module": "crates/core/src/world_events.rs"
         },
         {
@@ -11672,7 +11687,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1841,
+          "line": 2160,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13116,7 +13131,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 887,
+          "line": 1206,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13133,7 +13148,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 887,
+          "line": 1206,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13150,7 +13165,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 887,
+          "line": 1206,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13208,7 +13223,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 887,
+          "line": 1206,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13225,7 +13240,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 887,
+          "line": 1206,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13242,7 +13257,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 887,
+          "line": 1206,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13259,7 +13274,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 887,
+          "line": 1206,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13276,7 +13291,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 887,
+          "line": 1206,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13293,7 +13308,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 887,
+          "line": 1206,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13310,7 +13325,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 887,
+          "line": 1206,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13327,7 +13342,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 887,
+          "line": 1206,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13344,7 +13359,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 887,
+          "line": 1206,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -13361,7 +13376,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 887,
+          "line": 1206,
           "module": "crates/core/src/hub.rs"
         }
       ],

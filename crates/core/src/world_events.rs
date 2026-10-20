@@ -1343,6 +1343,12 @@ fn initialize_lava(game: &mut Game, e: &mut Entity) {
         e.data.entry("spurt_time".into()).or_insert(time);
         e.data.entry("spurt_counter".into()).or_insert(time);
         e.data.entry("spurt".into()).or_insert(0.0);
+        if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+            e.text.insert("type".into(), "Lava".into());
+            // rand.gml stores the requested range width on its receiver.
+            e.data.insert("randNum".into(), 201.0);
+            e.set_image_speed(0.4);
+        }
         e.data.insert("lava_initialized".into(), 1.0);
     }
 }
@@ -4029,6 +4035,8 @@ mod source_create_variable_tests {
         assert_eq!(lava.text.get("type").map(String::as_str), Some("Lava"));
         assert!(!lava.data.contains_key("checked"));
         assert!((100.0..=300.0).contains(&lava.value("spurt_time")));
+        assert_eq!(lava.value("randNum"), 201.0);
+        assert_eq!(lava.image_speed(), 0.4);
 
         for (object, kind) in [
             ("oRubble", "None"),
@@ -4097,5 +4105,12 @@ mod source_create_variable_tests {
             assert!(!entity.data.contains_key("blinkToggle"), "{object}");
             assert!(!entity.text.contains_key("leadsTo"), "{object}");
         }
+
+        // Runtime births use the revision-aware path: a legacy Gold Door must
+        // retain raw World::spawn behavior instead of acquiring source Create.
+        let id = super::spawn_runtime_object(&mut game, "oXGold", Vec2::new(96.0, 80.0));
+        let gold_exit = game.world.entity(id).unwrap();
+        assert!(!gold_exit.text.contains_key("type"));
+        assert!(!gold_exit.text.contains_key("leadsTo"));
     }
 }
