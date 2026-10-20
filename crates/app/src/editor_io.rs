@@ -154,11 +154,11 @@ pub(crate) fn canonical_level_sources(
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn load_native_level_directory(
     directory: &std::path::Path,
-) -> Result<std::collections::BTreeMap<String, String>, String> {
+) -> Result<(std::collections::BTreeMap<String, String>, Vec<String>), String> {
     match std::fs::read_dir(directory) {
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(std::collections::BTreeMap::new());
+            return Ok((std::collections::BTreeMap::new(), Vec::new()));
         }
         Err(error) => {
             return Err(format!(
@@ -169,7 +169,8 @@ pub(crate) fn load_native_level_directory(
     }
 
     let mut files = std::collections::BTreeMap::new();
-    read_native_level_files(directory, directory, &mut files)?;
+    let mut warnings = Vec::new();
+    read_native_level_files(directory, directory, &mut files, &mut warnings)?;
     let mut levels = std::collections::BTreeMap::new();
     for (name, contents) in files {
         let key = canonical_level_path_key(&name);
@@ -188,7 +189,7 @@ pub(crate) fn load_native_level_directory(
             std::collections::btree_map::Entry::Occupied(_) => {}
         }
     }
-    Ok(levels)
+    Ok((levels, warnings))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -196,6 +197,7 @@ fn read_native_level_files(
     root: &std::path::Path,
     directory: &std::path::Path,
     files: &mut std::collections::BTreeMap<String, String>,
+    warnings: &mut Vec<String>,
 ) -> Result<(), String> {
     let entries = std::fs::read_dir(directory).map_err(|error| {
         format!(
@@ -220,7 +222,7 @@ fn read_native_level_files(
             .file_type()
             .map_err(|error| format!("Cannot inspect {}: {error}", path.display()))?;
         if file_type.is_dir() {
-            read_native_level_files(root, &path, files)?;
+            read_native_level_files(root, &path, files, warnings)?;
             continue;
         }
         if !file_type.is_file() {
@@ -240,8 +242,16 @@ fn read_native_level_files(
         else {
             continue;
         };
-        let contents = std::fs::read_to_string(&path)
-            .map_err(|error| format!("Cannot read {}: {error}", path.display()))?;
+        let contents = match std::fs::read_to_string(&path) {
+            Ok(contents) => contents,
+            Err(error) => {
+                // Classic enumerates level names without opening each file.
+                // A single unreadable level must not hide the rest of the
+                // catalog; defer its failure until that level is selected.
+                warnings.push(format!("Cannot read {}: {error}", path.display()));
+                continue;
+            }
+        };
         // Retain the final extension until canonicalization. `file_stem()` on
         // `foo.lvl.lvl` would already be `foo.lvl`, and stripping another
         // extension there would incorrectly merge it with `foo.lvl`. Relative
@@ -324,7 +334,7 @@ mod tests {
         std::fs::write(directory.join("sub/Room.LVL"), "nested room").unwrap();
 
         assert_eq!(
-            load_native_level_directory(&directory).unwrap(),
+            load_native_level_directory(&directory).unwrap().0,
             std::collections::BTreeMap::from([
                 ("!hidden".into(), "hidden".into()),
                 ("foo".into(), "ordinary foo".into()),
@@ -337,8 +347,35 @@ mod tests {
         assert!(
             load_native_level_directory(&root.join("missing"))
                 .unwrap()
+                .0
                 .is_empty()
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn unreadable_native_level_does_not_hide_other_catalog_entries() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spelunky-native-level-unreadable-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("valid.lvl"), "readable level").unwrap();
+        std::fs::write(root.join("bad.lvl"), [0xff, 0xfe]).unwrap();
+
+        let (levels, warnings) = load_native_level_directory(&root).unwrap();
+
+        assert_eq!(
+            levels,
+            std::collections::BTreeMap::from([("valid".into(), "readable level".into())])
+        );
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("bad.lvl"));
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -361,7 +398,7 @@ mod tests {
         save_native_level_to(&directory, "bonus.lvl.lvl", "double extension").unwrap();
 
         assert_eq!(
-            load_native_level_directory(&directory).unwrap(),
+            load_native_level_directory(&directory).unwrap().0,
             std::collections::BTreeMap::from([
                 ("bonus.lvl".into(), "double extension".into()),
                 ("room".into(), "edited room".into()),

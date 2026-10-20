@@ -628,7 +628,21 @@ impl App {
         self.custom_level_catalog = self.store.data.custom_levels.clone();
         #[cfg(not(target_arch = "wasm32"))]
         match crate::editor_io::load_native_level_directory(std::path::Path::new("levels")) {
-            Ok(levels) => self.custom_level_catalog.extend(levels),
+            Ok((levels, warnings)) => {
+                self.custom_level_catalog.extend(levels);
+                let warning_count = warnings.len();
+                if let Some(warning) = warnings.into_iter().next() {
+                    let message = if warning_count > 1 {
+                        format!(
+                            "{warning} ({} more unreadable level files)",
+                            warning_count - 1
+                        )
+                    } else {
+                        warning
+                    };
+                    self.toast(message);
+                }
+            }
             Err(error) => self.toast(error),
         }
     }
