@@ -254,7 +254,7 @@ pub(crate) fn canonical_level_sources_v2(
         } else {
             name.to_ascii_lowercase()
         };
-        if key.is_empty() || key == ".lvl" {
+        if key.is_empty() {
             continue;
         }
         match canonical.entry(key.clone()) {
@@ -561,6 +561,8 @@ mod tests {
         );
         assert!(strip_selected_directory("start.lvl").is_err());
         assert_eq!(imported_level_key("Start.LVL").unwrap(), "start");
+        assert_eq!(imported_level_key(".lvl.lvl").unwrap(), ".lvl");
+        assert!(imported_level_key(".lvl").is_err());
         assert_eq!(imported_level_key("Sub\\Next.LVL").unwrap(), "sub/next");
         assert_eq!(imported_level_key("sub/../Next.LVL").unwrap(), "next");
         for unsafe_path in [
@@ -579,11 +581,13 @@ mod tests {
         let levels = std::collections::BTreeMap::from([
             ("Sub\\Room".into(), "nested".into()),
             ("ROOM".into(), "root".into()),
+            (".lvl".into(), "double extension root".into()),
             ("../escape".into(), "unsafe".into()),
         ]);
         assert_eq!(
             canonical_level_sources_v2(levels),
             std::collections::BTreeMap::from([
+                (".lvl".into(), "double extension root".into()),
                 ("room".into(), "root".into()),
                 ("sub/room".into(), "nested".into()),
             ])

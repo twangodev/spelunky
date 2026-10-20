@@ -649,6 +649,8 @@ mod tests {
             .insert("sub/next".into(), "nested text".into());
         data.custom_levels
             .insert("sub/deep/room.lvl".into(), "double extension".into());
+        data.custom_levels
+            .insert(".lvl".into(), "double extension root".into());
 
         let json = data.to_json().unwrap();
         assert!(json.contains("\"version\": 2"));
@@ -659,6 +661,7 @@ mod tests {
             decoded.custom_levels["sub/deep/room.lvl"],
             "double extension"
         );
+        assert_eq!(decoded.custom_levels[".lvl"], "double extension root");
     }
 
     #[cfg(not(target_arch = "wasm32"))]
