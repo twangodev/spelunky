@@ -1001,6 +1001,17 @@ mod tests {
             "Start accelerates the tally without advancing source Attack-only dialogue"
         );
         assert!(g.ending.as_ref().unwrap().hurry_up);
+        g.step(&InputFrame {
+            up: true,
+            up_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            g.world.entity(tunnel).unwrap().value("donate"),
+            100.,
+            "oTransition accepts a direction press during the introductory line"
+        );
+        g.step(&InputFrame::default());
         let attack = InputFrame {
             attack_pressed: true,
             ..Default::default()
@@ -1008,28 +1019,29 @@ mod tests {
         g.step(&attack);
         assert_eq!(g.world.entity(tunnel).unwrap().value("talk"), 2.);
         g.step(&InputFrame {
+            up: true,
             up_pressed: true,
             ..Default::default()
         });
         assert_eq!(
             g.world.entity(tunnel).unwrap().value("donate"),
-            0.,
-            "donation selection reads held direction, not a direction edge"
+            200.,
+            "oTransition applies each fresh direction press immediately"
         );
         let up = InputFrame {
             up: true,
             ..Default::default()
         };
-        for _ in 0..20 {
+        for _ in 0..19 {
             g.step(&up);
         }
-        assert_eq!(g.world.entity(tunnel).unwrap().value("donate"), 0.);
+        assert_eq!(g.world.entity(tunnel).unwrap().value("donate"), 200.);
         g.step(&up);
-        assert_eq!(g.world.entity(tunnel).unwrap().value("donate"), 100.);
+        assert_eq!(g.world.entity(tunnel).unwrap().value("donate"), 300.);
         for _ in 0..79 {
             g.step(&up);
         }
-        assert_eq!(g.world.entity(tunnel).unwrap().value("donate"), 8000.);
+        assert_eq!(g.world.entity(tunnel).unwrap().value("donate"), 8200.);
         let before = g.world.entity(tunnel).unwrap().value("donate");
         g.step(&up);
         assert_eq!(
@@ -3068,6 +3080,29 @@ fn controller_step(game: &mut Game, s: &mut EndingState, input: &InputFrame) {
                     s.hurry_up = true;
                 }
             }
+            // oTransition handles fresh direction presses independently from
+            // oTunnelMan's held-key repeat. This also lets the player preselect
+            // an amount during the donor's introductory dialogue.
+            if let Some(tunnel) = game
+                .world
+                .entities
+                .iter_mut()
+                .find(|entity| entity.alive && entity.object == "oTunnelMan")
+            {
+                let stage = tunnel.value("tunnel_stage") as u8;
+                let remaining = game
+                    .data
+                    .get(&format!("tunnel{stage}_remaining"))
+                    .copied()
+                    .unwrap_or(f64::from(stage) * 100_000.);
+                let mut donate = tunnel.value("donate");
+                if input.up_pressed {
+                    donate = (donate + 100.).min(remaining).min(game.player.money as f64);
+                    tunnel.data.insert("donate".into(), donate);
+                } else if input.down_pressed {
+                    tunnel.data.insert("donate".into(), (donate - 100.).max(0.));
+                }
+            }
             if s.draw_loot == 2 && s.money_count < s.level_money {
                 s.money_count = if s.hurry_up {
                     s.level_money
@@ -3525,8 +3560,8 @@ mod ball2_cached_distance_tests {
     }
 }
 
-// The source uses checkUp/checkDown, which are held-state queries, and only
-// reads them while the donation dialogue is active.
+// oTunnelMan's Step uses checkUp/checkDown held-state queries only during the
+// donation dialogue. oTransition separately handles fresh direction presses.
 #[cfg(test)]
 mod explicit_transition_direction_edge_tests {
     use super::*;
@@ -3676,7 +3711,7 @@ mod direct_transition_action_compatibility {
                             ..Default::default()
                         },
                     );
-                    assert_eq!(game.world.entity(id).unwrap().value("donate"), 0.);
+                    assert_eq!(game.world.entity(id).unwrap().value("donate"), 100.);
                 }
                 advance(
                     &mut game,
@@ -3685,7 +3720,7 @@ mod direct_transition_action_compatibility {
                         ..Default::default()
                     },
                 );
-                assert_eq!(game.world.entity(id).unwrap().value("donate"), 100.);
+                assert_eq!(game.world.entity(id).unwrap().value("donate"), 200.);
                 advance(&mut game, &InputFrame::default());
                 advance(
                     &mut game,
@@ -3725,7 +3760,7 @@ mod direct_transition_action_compatibility {
                         ..Default::default()
                     },
                 );
-                assert_eq!(game.world.entity(id).unwrap().value("donate"), 300.);
+                assert_eq!(game.world.entity(id).unwrap().value("donate"), 400.);
             }
         }
     }

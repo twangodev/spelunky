@@ -6906,9 +6906,13 @@ mod tests {
         for _ in 0..20 {
             game.step(&up);
         }
-        assert_eq!(game.world.entity(tunnel).unwrap().value("donate"), 0.);
+        assert_eq!(
+            game.world.entity(tunnel).unwrap().value("donate"),
+            100.,
+            "the transition controller applies the initial direction press"
+        );
         game.step(&up);
-        assert_eq!(game.world.entity(tunnel).unwrap().value("donate"), 100.);
+        assert_eq!(game.world.entity(tunnel).unwrap().value("donate"), 200.);
         game.step(&input);
         assert_eq!(game.world.entity(tunnel).unwrap().value("talk"), 2.);
         assert_eq!(game.player.money, 100_000);

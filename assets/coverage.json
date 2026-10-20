@@ -762,12 +762,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1844,
+          "line": 1856,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2580,
+          "line": 2592,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -841,12 +841,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1794,
+          "line": 1806,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2459,
+          "line": 2471,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -1186,12 +1186,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1791,
+          "line": 1803,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2458,
+          "line": 2470,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -1876,7 +1876,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1861,
+          "line": 1873,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -1996,12 +1996,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1835,
+          "line": 1847,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2620,
+          "line": 2632,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -2072,12 +2072,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1812,
+          "line": 1824,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2558,
+          "line": 2570,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -2097,7 +2097,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2644,
+          "line": 2656,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -2203,12 +2203,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1820,
+          "line": 1832,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2558,
+          "line": 2570,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -2485,7 +2485,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2670,
+          "line": 2682,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -2783,7 +2783,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1862,
+          "line": 1874,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -2814,7 +2814,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1862,
+          "line": 1874,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3010,12 +3010,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1786,
+          "line": 1798,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2544,
+          "line": 2556,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3238,12 +3238,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1869,
+          "line": 1881,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2605,
+          "line": 2617,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3263,12 +3263,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1870,
+          "line": 1882,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2605,
+          "line": 2617,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3307,12 +3307,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1871,
+          "line": 1883,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2605,
+          "line": 2617,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3643,7 +3643,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1861,
+          "line": 1873,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3664,7 +3664,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1861,
+          "line": 1873,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3698,7 +3698,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1861,
+          "line": 1873,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3726,7 +3726,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1861,
+          "line": 1873,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3754,7 +3754,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2530,
+          "line": 2542,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -4564,7 +4564,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1861,
+          "line": 1873,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -5404,17 +5404,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1841,
+          "line": 1853,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2428,
+          "line": 2440,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2615,
+          "line": 2627,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -5646,12 +5646,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1849,
+          "line": 1861,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2589,
+          "line": 2601,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -6458,7 +6458,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1768,
+          "line": 1780,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -6548,17 +6548,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1858,
+          "line": 1870,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2427,
+          "line": 2439,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2504,
+          "line": 2516,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8230,17 +8230,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1771,
+          "line": 1783,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2350,
+          "line": 2362,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2449,
+          "line": 2461,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8268,17 +8268,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1776,
+          "line": 1788,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2405,
+          "line": 2417,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2450,
+          "line": 2462,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8346,7 +8346,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2451,
+          "line": 2463,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8366,7 +8366,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1781,
+          "line": 1793,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8452,12 +8452,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1872,
+          "line": 1884,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2606,
+          "line": 2618,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8883,12 +8883,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1808,
+          "line": 1820,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2531,
+          "line": 2543,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8908,12 +8908,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1835,
+          "line": 1847,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2616,
+          "line": 2628,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -10469,12 +10469,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1873,
+          "line": 1885,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2605,
+          "line": 2617,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -11578,7 +11578,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1855,
+          "line": 1867,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -12194,7 +12194,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1861,
+          "line": 1873,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -12262,12 +12262,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1808,
+          "line": 1820,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2531,
+          "line": 2543,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -12411,7 +12411,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2614,
+          "line": 2626,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -12763,12 +12763,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1829,
+          "line": 1841,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2629,
+          "line": 2641,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -12790,12 +12790,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 1826,
+          "line": 1838,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2550,
+          "line": 2562,
           "module": "crates/core/src/ending.rs"
         }
       ],
