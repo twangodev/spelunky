@@ -237,8 +237,8 @@ fn animation_callbacks_follow_depth_sorted_draw_order_and_exclude_newborns() {
 }
 
 #[test]
-fn camera_activation_includes_its_exact_right_edge_but_excludes_next_pixel() {
-    for (web_x, expected_active) in [(416.0, true), (417.0, false)] {
+fn camera_activation_uses_half_open_cached_bbox_at_its_exact_right_edge() {
+    for (web_x, expected_active) in [(415.0, true), (416.0, false), (417.0, false)] {
         let mut game = Game::shell(7, RulesPreset::Classic);
         game.player.pos = Vec2::new(40.0, 72.0);
         game.player.previous_pos = game.player.pos;
@@ -250,7 +250,7 @@ fn camera_activation_includes_its_exact_right_edge_but_excludes_next_pixel() {
         let id = game.world.spawn("oWeb", Vec2::new(web_x, 64.0));
         assert_eq!(game.world.entity(id).unwrap().sprite_bounds().x, web_x);
 
-        // Level553 uses camera0 + viewport320 + margin96 = inclusive x416.
+        // Level553 activates [camera0 - 96, camera0 + viewport320 + 96).
         step(&mut game);
         assert_eq!(
             game.world.entity(id).unwrap().engine_active,

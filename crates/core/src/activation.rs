@@ -107,7 +107,7 @@ impl Regions {
             || ALWAYS_ACTIVE
                 .iter()
                 .any(|parent| catalog::is_a(&entity.object, parent))
-            || self.instance_active(entity.sprite_bounds(), entity.pos)
+            || self.instance_active(entity.collision_mask().point_bounds(), entity.pos)
     }
 }
 
@@ -184,14 +184,15 @@ pub fn begin(game: &mut Game) -> FrozenEntities {
         let origin = Vec2::new(f64::from(x) * 16.0, f64::from(y) * 16.0);
         let (sprite, animation) =
             overrides[index].unwrap_or_else(|| (catalog::sprite(&tile.object).unwrap_or(""), 0.0));
-        let bounds = catalog::instance_sprite_bounds(
+        let bounds = catalog::instance_mask(
             &tile.object,
             sprite,
             origin,
             animation,
             Vec2::new(1.0, 1.0),
             0.0,
-        );
+        )
+        .point_bounds();
         let active = regions.instance_active(bounds, origin);
         terrain_active[index] = Some(active);
         if !active {
@@ -215,6 +216,29 @@ pub fn begin(game: &mut Game) -> FrozenEntities {
         }
     }
     frozen
+}
+
+#[cfg(test)]
+mod source_activation_bbox_tests {
+    use super::*;
+    use crate::RulesPreset;
+
+    #[test]
+    fn rounded_cached_mask_at_region_edge_is_deactivated() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.camera = Vec2::new(0.0, 17.0);
+        game.player.pos = Vec2::new(128.0, 128.0);
+        let id = game.world.spawn("oPushBlock", Vec2::new(160.0, 352.55));
+        let block = game.world.entity(id).unwrap();
+
+        assert_eq!(block.sprite_bounds().y, 352.55);
+        assert_eq!(block.collision_mask().point_bounds().y, 353.0);
+        assert!(!Regions::for_game(&game).entity_active(block));
+
+        let frozen = begin(&mut game);
+        assert!(game.world.entity(id).is_none());
+        assert!(frozen.entities.iter().any(|entity| entity.id == id));
+    }
 }
 
 /// Restore inactive instances without advancing any of their state. Surviving

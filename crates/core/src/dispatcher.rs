@@ -627,18 +627,12 @@ fn update_membership(game: &mut Game) {
 fn activation_contains(region: Rect, p: Vec2) -> bool {
     p.x >= region.x && p.x <= region.x + region.w && p.y >= region.y && p.y <= region.y + region.h
 }
-fn activation_intersects(region: Rect, b: Rect) -> bool {
-    b.x <= region.x + region.w
-        && b.x + b.w - 1.0 >= region.x
-        && b.y <= region.y + region.h
-        && b.y + b.h - 1.0 >= region.y
-}
 fn region_change(game: &mut Game, region: Rect, activate: bool, outside: bool) {
     restore_hidden(game);
     sync_newborns(game);
-    let player_bounds = game.player.sprite_bounds();
+    let player_bounds = game.player.collision_mask().point_bounds();
     let player_hit = if player_bounds.is_valid() {
-        activation_intersects(region, player_bounds)
+        region.intersects(player_bounds)
     } else {
         activation_contains(region, game.player.pos)
     };
@@ -666,16 +660,10 @@ fn region_change(game: &mut Game, region: Rect, activate: bool, outside: bool) {
             let p = Instance::Terrain(i).position(game);
             let (sprite, frame) =
                 overrides[i].unwrap_or_else(|| (catalog::sprite(&t.object).unwrap_or(""), 0.0));
-            let b = catalog::instance_sprite_bounds(
-                &t.object,
-                sprite,
-                p,
-                frame,
-                Vec2::new(1.0, 1.0),
-                0.0,
-            );
+            let b = catalog::instance_mask(&t.object, sprite, p, frame, Vec2::new(1.0, 1.0), 0.0)
+                .point_bounds();
             if b.is_valid() {
-                activation_intersects(region, b)
+                region.intersects(b)
             } else {
                 activation_contains(region, p)
             }
@@ -694,9 +682,9 @@ fn region_change(game: &mut Game, region: Rect, activate: bool, outside: bool) {
             metadata_index(game, e)
                 .map(|i| tile_hit[i])
                 .unwrap_or_else(|| {
-                    let b = e.sprite_bounds();
+                    let b = e.collision_mask().point_bounds();
                     if b.is_valid() {
-                        activation_intersects(region, b)
+                        region.intersects(b)
                     } else {
                         activation_contains(region, e.pos)
                     }
@@ -1854,6 +1842,39 @@ mod automatic_collision_tests {
             .find(|entity| entity.alive && entity.object == "oDiamond")
             .unwrap();
         assert_eq!(diamond.pos.x, 129.0, "source event uses moved receiver x");
+    }
+}
+
+#[cfg(test)]
+mod source_activation_bbox_tests {
+    use super::*;
+    use crate::{Area, RulesPreset, World};
+
+    #[test]
+    fn level_controller_uses_rounded_cached_bbox_at_half_open_region_edge() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.world = World::new(42, 34, Area::Mines, 1);
+        game.player.pos = Vec2::new(128.0, 128.0);
+        game.camera = Vec2::new(0.0, 17.0);
+        let id = game.spawn("oPushBlock", Vec2::new(160.0, 352.55));
+        let block = game.world.entity(id).unwrap();
+        let region = Rect::new(-96.0, -79.0, 512.0, 432.0);
+
+        assert_eq!(region.y + region.h, 353.0);
+        assert_eq!(block.sprite_bounds().y, 352.55);
+        assert_eq!(block.collision_mask().point_bounds().y, 353.0);
+        assert!(region.intersects(block.sprite_bounds()));
+        assert!(!region.intersects(block.collision_mask().point_bounds()));
+
+        level_step(&mut game);
+
+        assert!(
+            game.dispatcher
+                .hidden_entities()
+                .iter()
+                .any(|entity| entity.id == id && !entity.engine_active),
+            "Classic deactivates when the rounded cached bbox starts at the half-open region edge"
+        );
     }
 }
 
