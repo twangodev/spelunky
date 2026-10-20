@@ -1246,17 +1246,18 @@ impl App {
                 1 => self.export_classic_stats_report(),
                 _ => self.screen(Screen::Title),
             },
-            Screen::Pause => match self.selection {
-                0 => self.screen(Screen::Playing),
-                1 => {
-                    self.settings_return = Screen::Pause;
-                    self.screen(Screen::Settings)
+            Screen::Pause => {
+                match pause_menu_action(self.selection, self.editor_play, self.game.as_mut()) {
+                    PauseMenuAction::Resume => self.screen(Screen::Playing),
+                    PauseMenuAction::Settings => {
+                        self.settings_return = Screen::Pause;
+                        self.screen(Screen::Settings)
+                    }
+                    PauseMenuAction::Editor => self.screen(Screen::Editor),
+                    PauseMenuAction::Title => self.screen(Screen::Title),
+                    PauseMenuAction::Cheats => self.screen(Screen::Cheats),
                 }
-                2 if self.editor_play => self.screen(Screen::Editor),
-                2 => self.screen(Screen::Title),
-                3 if self.editor_play => self.screen(Screen::Title),
-                _ => self.screen(Screen::Cheats),
-            },
+            }
             Screen::Finished => match self.selection {
                 0 => {
                     if self.editor_play {
@@ -3195,6 +3196,35 @@ enum SourcePausedControl {
     Resume,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PauseMenuAction {
+    Resume,
+    Settings,
+    Editor,
+    Title,
+    Cheats,
+}
+
+fn pause_menu_action(
+    selection: usize,
+    editor_play: bool,
+    game: Option<&mut Game>,
+) -> PauseMenuAction {
+    match selection {
+        0 => PauseMenuAction::Resume,
+        1 => PauseMenuAction::Settings,
+        2 if editor_play => PauseMenuAction::Editor,
+        2 => {
+            if let Some(game) = game {
+                game.flags.insert("reset_run_on_hub".into());
+            }
+            PauseMenuAction::Title
+        }
+        3 if editor_play => PauseMenuAction::Title,
+        _ => PauseMenuAction::Cheats,
+    }
+}
+
 // Focus return must not discard a fresh ModifiersChanged event. Winit's web
 // focus callback does not resend modifiers; blur clears them separately.
 fn clear_control_on_focus_loss(control: &mut bool, focused: bool) {
@@ -4816,6 +4846,54 @@ mod tests {
             Screen::Pause,
             Screen::Settings
         ));
+    }
+
+    #[test]
+    fn returning_from_pause_to_title_clears_campaign_gear_before_challenge_routes() {
+        use super::{PauseMenuAction, pause_menu_action};
+        use spelunky_core::{Game, RulesPreset, hub::HubKind};
+
+        let mut game = Game::new(42, RulesPreset::Classic);
+        game.player.health = 2.0;
+        game.player.bombs = 19.0;
+        game.player.ropes = 23.0;
+        game.player.money = 9876;
+        game.player.equipment.insert("Jetpack".into());
+        game.flags.insert("cityOfGold".into());
+        game.data.insert("time".into(), 12_345.0);
+
+        assert_eq!(
+            pause_menu_action(2, false, Some(&mut game)),
+            PauseMenuAction::Title
+        );
+        game.load_hub(HubKind::Title);
+        assert!(!game.player.has("Jetpack"));
+        assert_eq!(game.player.health, 4.0);
+        assert_eq!(game.player.bombs, 4.0);
+        assert_eq!(game.player.ropes, 4.0);
+        assert_eq!(game.player.money, 0);
+        assert!(!game.flags.contains("cityOfGold"));
+
+        // The authored title Scores portal is the route to challenge rooms.
+        game.load_hub(HubKind::Scores);
+        game.load_hub(HubKind::Sun);
+        assert_eq!(game.player.health, 8.0);
+        assert_eq!(game.player.bombs, 4.0);
+        assert_eq!(game.player.ropes, 4.0);
+        assert_eq!(game.player.money, 0);
+        assert!(!game.player.has("Jetpack"));
+
+        let mut editor_game = Game::new(43, RulesPreset::Classic);
+        assert_eq!(
+            pause_menu_action(2, true, Some(&mut editor_game)),
+            PauseMenuAction::Editor
+        );
+        assert!(!editor_game.flags.contains("reset_run_on_hub"));
+        assert_eq!(
+            pause_menu_action(3, true, Some(&mut editor_game)),
+            PauseMenuAction::Title
+        );
+        assert!(!editor_game.flags.contains("reset_run_on_hub"));
     }
 
     #[test]
