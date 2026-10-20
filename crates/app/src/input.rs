@@ -149,6 +149,7 @@ pub struct InputState {
     gamepad_held: Actions,
     frame: InputFrame,
     gamepad_ui: u8,
+    // Cardinal joystick directions before Classic's diagonal holds are added.
     gamepad_direction_press_allowed: u8,
     blocked_gamepad_ui: u8,
     ui_edges: Vec<UiButton>,
@@ -584,9 +585,16 @@ impl InputState {
                     && !self.gamepad_held.has(action)
                     && direction_press_allowed(action))
         };
+        let source_diagonal_release = |action| {
+            matches!(
+                action,
+                Action::Up | Action::Down | Action::Left | Action::Right
+            ) && !direction_press_allowed(action)
+        };
         let released = |action| {
             (!keyboard.has(action) && self.keyboard_held.has(action))
-                || (!self.gamepad_actions.has(action) && self.gamepad_held.has(action))
+                || (self.gamepad_held.has(action)
+                    && (!self.gamepad_actions.has(action) || source_diagonal_release(action)))
         };
         self.frame.left_released |= released(Action::Left);
         self.frame.right_released |= released(Action::Right);
@@ -1168,7 +1176,7 @@ mod tests {
     }
 
     #[test]
-    fn diagonal_directions_hold_for_motion_without_cardinal_press_edges() {
+    fn diagonal_directions_hold_motion_and_keep_source_release_edges() {
         for (diagonal, cardinal, is_up) in [
             (
                 [false, true, true, false],
@@ -1189,13 +1197,28 @@ mod tests {
             assert_eq!(tick.up, is_up);
             assert_eq!(tick.down, !is_up);
             assert!(!tick.up_pressed && !tick.down_pressed);
+            assert!(
+                !tick.right_released,
+                "first diagonal sample has no prior edge"
+            );
             assert!(input.ui_pressed().is_empty());
 
-            // Classic recalculates cardinal edges before applying diagonal
-            // holds, so changing NE to N or SE to S remains held as well.
+            // Classic clears cardinal direction releases before applying its
+            // diagonal holds. Right therefore stays held while also reporting
+            // a release edge on every stable NE/SE sample.
+            let (actions, ui, edges) = input.portable_controller_with_direction_edges(0, diagonal);
+            input.accept_gamepads_with_direction_edges(actions, ui, edges);
+            let tick = input.take_tick();
+            assert!(tick.right && tick.right_released);
+            assert_eq!(tick.up, is_up);
+            assert_eq!(tick.down, !is_up);
+
+            // Changing NE to N or SE to S keeps the vertical direction held.
             let (actions, ui, edges) = input.portable_controller_with_direction_edges(0, cardinal);
             input.accept_gamepads_with_direction_edges(actions, ui, edges);
             let tick = input.take_tick();
+            assert!(!tick.right);
+            assert!(tick.right_released);
             assert_eq!(tick.up, is_up);
             assert_eq!(tick.down, !is_up);
             assert!(!tick.up_pressed && !tick.down_pressed);
