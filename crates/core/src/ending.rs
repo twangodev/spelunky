@@ -1007,6 +1007,15 @@ mod tests {
         };
         g.step(&attack);
         assert_eq!(g.world.entity(tunnel).unwrap().value("talk"), 2.);
+        g.step(&InputFrame {
+            up_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            g.world.entity(tunnel).unwrap().value("donate"),
+            0.,
+            "donation selection reads held direction, not a direction edge"
+        );
         let up = InputFrame {
             up: true,
             ..Default::default()
@@ -1014,12 +1023,13 @@ mod tests {
         for _ in 0..20 {
             g.step(&up);
         }
-        assert_eq!(g.world.entity(tunnel).unwrap().value("donate"), 100.);
+        assert_eq!(g.world.entity(tunnel).unwrap().value("donate"), 0.);
         g.step(&up);
-        assert_eq!(g.world.entity(tunnel).unwrap().value("donate"), 200.);
-        for _ in 21..100 {
+        assert_eq!(g.world.entity(tunnel).unwrap().value("donate"), 100.);
+        for _ in 0..79 {
             g.step(&up);
         }
+        assert_eq!(g.world.entity(tunnel).unwrap().value("donate"), 8000.);
         let before = g.world.entity(tunnel).unwrap().value("donate");
         g.step(&up);
         assert_eq!(
@@ -3265,12 +3275,6 @@ fn tunnel_step(game: &mut Game, s: &mut EndingState, e: &mut Entity, input: &Inp
         .copied()
         .unwrap_or(stage as f64 * 100_000.);
     let mut donate = e.value("donate");
-    if input.up_pressed {
-        donate += 100.;
-    } else if input.down_pressed {
-        donate -= 100.;
-    }
-    donate = donate.max(0.).min(remaining).min(game.player.money as f64);
     let talk = e.value("talk") as u8;
     if input.attack_pressed {
         if talk == 1 {
@@ -3521,40 +3525,98 @@ mod ball2_cached_distance_tests {
     }
 }
 
-// Exercise source donation edges independently of aggregate held controls.
+// The source uses checkUp/checkDown, which are held-state queries, and only
+// reads them while the donation dialogue is active.
 #[cfg(test)]
 mod explicit_transition_direction_edge_tests {
     use super::*;
     use crate::RulesPreset;
     #[test]
-    fn transition_selection_keeps_short_and_second_device_direction_presses() {
+    fn tunnel_selection_requires_the_active_dialogue_and_a_held_direction() {
         for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
-            for (up, held) in [(true, false), (true, true), (false, false), (false, true)] {
+            for talk in [0., 1.] {
                 let mut game = Game::shell(7, rules);
                 game.player.money = 1000;
                 game.data.insert("tunnel1_remaining".into(), 1000.);
                 let mut state =
                     EndingState::new(&game, EndingKind::Transition, EndingStage::Transition);
-                state.previous_up = up && held;
-                state.previous_down = !up && held;
                 let mut actor = Entity::new(900, "oTunnelMan", Vec2::new(104., 184.));
                 actor.data.insert("tunnel_stage".into(), 1.);
-                actor.data.insert("talk".into(), 1.);
+                actor.data.insert("talk".into(), talk);
                 actor.data.insert("donate".into(), 300.);
                 let input = InputFrame {
-                    up: up && held,
-                    down: !up && held,
-                    up_pressed: up,
-                    down_pressed: !up,
+                    up: true,
+                    up_pressed: true,
                     ..Default::default()
                 };
                 tunnel_step(&mut game, &mut state, &mut actor, &input);
-                assert_eq!(
-                    actor.value("donate"),
-                    if up { 400. } else { 200. },
-                    "explicit source edge up={up}, aggregate held={held}"
-                );
+                assert_eq!(actor.value("donate"), 300., "talk state {talk}");
             }
+
+            let mut game = Game::shell(7, rules);
+            game.player.money = 1000;
+            game.data.insert("tunnel1_remaining".into(), 1000.);
+            let mut state =
+                EndingState::new(&game, EndingKind::Transition, EndingStage::Transition);
+            let mut actor = Entity::new(900, "oTunnelMan", Vec2::new(104., 184.));
+            actor.data.insert("tunnel_stage".into(), 1.);
+            actor.data.insert("talk".into(), 2.);
+            actor.data.insert("donate".into(), 300.);
+
+            tunnel_step(
+                &mut game,
+                &mut state,
+                &mut actor,
+                &InputFrame {
+                    up_pressed: true,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(actor.value("donate"), 300., "edge without held direction");
+
+            tunnel_step(
+                &mut game,
+                &mut state,
+                &mut actor,
+                &InputFrame {
+                    up: true,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(actor.value("donate"), 300., "held direction repeat delay");
+        }
+    }
+
+    #[test]
+    fn tunnel_selection_matches_source_repeat_boundaries() {
+        for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+            let mut game = Game::shell(7, rules);
+            game.player.money = 100_000;
+            game.data.insert("tunnel1_remaining".into(), 100_000.);
+            let mut state =
+                EndingState::new(&game, EndingKind::Transition, EndingStage::Transition);
+            let mut actor = Entity::new(900, "oTunnelMan", Vec2::new(104., 184.));
+            actor.data.insert("tunnel_stage".into(), 1.);
+            actor.data.insert("talk".into(), 2.);
+            actor.data.insert("donate".into(), 0.);
+            let up = InputFrame {
+                up: true,
+                ..Default::default()
+            };
+
+            for _ in 0..20 {
+                tunnel_step(&mut game, &mut state, &mut actor, &up);
+            }
+            assert_eq!(actor.value("donate"), 0.);
+            tunnel_step(&mut game, &mut state, &mut actor, &up);
+            assert_eq!(actor.value("donate"), 100.);
+
+            for _ in 0..79 {
+                tunnel_step(&mut game, &mut state, &mut actor, &up);
+            }
+            assert_eq!(actor.value("donate"), 8000.);
+            tunnel_step(&mut game, &mut state, &mut actor, &up);
+            assert_eq!(actor.value("donate"), 9000.);
         }
     }
 }
@@ -3568,7 +3630,6 @@ mod direct_transition_action_compatibility {
         game.player.money = 1000;
         game.data.insert("tunnel1_remaining".into(), 1000.);
         let mut state = EndingState::new(&game, EndingKind::Transition, EndingStage::Transition);
-        // Initial source-room creation, not a mid-run actor/state rewrite.
         enter(
             &mut game,
             &mut state,
@@ -3589,10 +3650,17 @@ mod direct_transition_action_compatibility {
         (game, id)
     }
     #[test]
-    fn direct_cinematic_and_game_step_keep_held_only_selection_compatibility() {
+    fn direct_cinematic_and_game_step_match_source_donation_controls() {
         for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
             for direct in [false, true] {
                 let (mut game, id) = configured_transition(rules);
+                // Use the source-created actor in its donation subdialogue so
+                // both stepping paths exercise the same held controls.
+                game.world
+                    .entity_mut(id)
+                    .unwrap()
+                    .data
+                    .insert("talk".into(), 2.);
                 let advance = |game: &mut Game, input: &InputFrame| {
                     if direct {
                         tick(game, input);
@@ -3600,7 +3668,7 @@ mod direct_transition_action_compatibility {
                         game.step(input);
                     }
                 };
-                for _ in 0..3 {
+                for _ in 0..20 {
                     advance(
                         &mut game,
                         &InputFrame {
@@ -3608,8 +3676,16 @@ mod direct_transition_action_compatibility {
                             ..Default::default()
                         },
                     );
-                    assert_eq!(game.world.entity(id).unwrap().value("donate"), 100.);
+                    assert_eq!(game.world.entity(id).unwrap().value("donate"), 0.);
                 }
+                advance(
+                    &mut game,
+                    &InputFrame {
+                        up: true,
+                        ..Default::default()
+                    },
+                );
+                assert_eq!(game.world.entity(id).unwrap().value("donate"), 100.);
                 advance(&mut game, &InputFrame::default());
                 advance(
                     &mut game,
@@ -3618,7 +3694,16 @@ mod direct_transition_action_compatibility {
                         ..Default::default()
                     },
                 );
-                assert_eq!(game.world.entity(id).unwrap().value("donate"), 0.);
+                for _ in 1..20 {
+                    advance(
+                        &mut game,
+                        &InputFrame {
+                            down: true,
+                            ..Default::default()
+                        },
+                    );
+                }
+                assert_eq!(game.world.entity(id).unwrap().value("donate"), 100.);
                 advance(
                     &mut game,
                     &InputFrame {
@@ -3627,7 +3712,12 @@ mod direct_transition_action_compatibility {
                     },
                 );
                 assert_eq!(game.world.entity(id).unwrap().value("donate"), 0.);
-                // A short explicit press survives aggregate-held=false.
+
+                game.world
+                    .entity_mut(id)
+                    .unwrap()
+                    .data
+                    .insert("donate".into(), 300.);
                 advance(
                     &mut game,
                     &InputFrame {
@@ -3635,7 +3725,7 @@ mod direct_transition_action_compatibility {
                         ..Default::default()
                     },
                 );
-                assert_eq!(game.world.entity(id).unwrap().value("donate"), 100.);
+                assert_eq!(game.world.entity(id).unwrap().value("donate"), 300.);
             }
         }
     }

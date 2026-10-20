@@ -6868,10 +6868,15 @@ mod tests {
         assert!(attack.attack_pressed);
         game.step(&attack);
         assert_eq!(game.world.entity(tunnel).unwrap().value("talk"), 2.);
-        game.step(&InputFrame {
+        let up = InputFrame {
             up: true,
             ..Default::default()
-        });
+        };
+        for _ in 0..20 {
+            game.step(&up);
+        }
+        assert_eq!(game.world.entity(tunnel).unwrap().value("donate"), 0.);
+        game.step(&up);
         assert_eq!(game.world.entity(tunnel).unwrap().value("donate"), 100.);
         game.step(&input);
         assert_eq!(game.world.entity(tunnel).unwrap().value("talk"), 2.);
