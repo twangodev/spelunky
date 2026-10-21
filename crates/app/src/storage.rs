@@ -136,6 +136,10 @@ pub struct SaveData {
     /// profiles and must not replay onboarding.
     #[serde(default = "existing_save_first_time")]
     pub first_time: bool,
+    /// Classic checks highscore reset sentinels during global creation. Defer
+    /// the matching first-time onboarding until the next process launch.
+    #[serde(default)]
+    pub highscores_reset_on_next_launch: bool,
     pub settings: Settings,
     pub records: Vec<Record>,
     /// Original lifetime counters are independent of run records and unlocks.
@@ -163,6 +167,7 @@ impl Default for SaveData {
         Self {
             version: SAVE_VERSION,
             first_time: true,
+            highscores_reset_on_next_launch: false,
             settings: Settings::default(),
             records: Vec::new(),
             lifetime_stats: Default::default(),
@@ -334,11 +339,17 @@ impl Store {
 
     fn from_read(result: Result<Option<String>, String>) -> Self {
         match result.and_then(|json| json.map(|json| SaveData::from_json(&json)).transpose()) {
-            Ok(data) => Self {
-                data: data.unwrap_or_default(),
-                warning: None,
-                overwrite_blocked: false,
-            },
+            Ok(data) => {
+                let mut data = data.unwrap_or_default();
+                if data.highscores_reset_on_next_launch {
+                    data.first_time = true;
+                }
+                Self {
+                    data,
+                    warning: None,
+                    overwrite_blocked: false,
+                }
+            }
             Err(error) => Self {
                 data: SaveData {
                     first_time: false,
@@ -696,8 +707,7 @@ fn import_classic_gamepad_cfg(settings: &mut Settings, contents: &str) -> bool {
     for (index, action) in ACTIONS {
         let button = config_line(contents, index)
             .and_then(classic_config_number)
-            .and_then(|button| button.checked_sub(1))
-            .and_then(|index| crate::controller::ALL.get(index as usize))
+            .and_then(classic_gamepad_button)
             .map(|button| button.name());
         if let Some(button) = button {
             settings
@@ -707,6 +717,21 @@ fn import_classic_gamepad_cfg(settings: &mut Settings, contents: &str) -> bool {
         }
     }
     imported
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn classic_gamepad_button(value: i32) -> Option<crate::controller::Button> {
+    use crate::controller::Button;
+
+    match value {
+        // Classic's checkJoyButton returns these for the positive and negative
+        // halves of the signed joystick Z axis. The native and browser input
+        // adapters expose those halves as left and right trigger inputs.
+        -1 => Some(Button::LeftTrigger),
+        -2 => Some(Button::RightTrigger),
+        1.. => crate::controller::ALL.get((value - 1) as usize).copied(),
+        _ => None,
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1063,6 +1088,24 @@ mod tests {
     }
 
     #[test]
+    fn highscore_reset_replays_onboarding_only_after_a_new_store_load() {
+        let mut current = SaveData::default();
+        current.first_time = false;
+        current.highscores_reset_on_next_launch = true;
+
+        let reopened = Store::from_read(Ok(Some(current.to_json().unwrap())));
+        assert!(reopened.data.first_time);
+        assert!(reopened.data.highscores_reset_on_next_launch);
+
+        let mut consumed = reopened.data;
+        consumed.first_time = false;
+        consumed.highscores_reset_on_next_launch = false;
+        let next = Store::from_read(Ok(Some(consumed.to_json().unwrap())));
+        assert!(!next.data.first_time);
+        assert!(!next.data.highscores_reset_on_next_launch);
+    }
+
+    #[test]
     fn unreadable_storage_does_not_install_fresh_profile_onboarding() {
         for result in [
             Ok(Some("invalid".into())),
@@ -1285,6 +1328,21 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn classic_gamepad_config_imports_signed_trigger_axis_bindings() {
+        let settings = apply_classic_settings_files(None, None, Some("-1\n-2\n0\n-3\n-1\n-2\n"))
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(settings.controller_bindings["jump"], "LeftTrigger");
+        assert_eq!(settings.controller_bindings["attack"], "RightTrigger");
+        assert_eq!(settings.controller_bindings["cycle"], "West");
+        assert_eq!(settings.controller_bindings["run"], "LeftShoulder");
+        assert_eq!(settings.controller_bindings["bomb"], "LeftTrigger");
+        assert_eq!(settings.controller_bindings["rope"], "RightTrigger");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     fn classic_config_missing_defaults_and_malformed_values_are_safe() {
         let defaults = Settings::default();
         assert!(
@@ -1296,7 +1354,7 @@ mod tests {
             apply_classic_settings_files(
                 Some("bad\n\nnope\n?\n3\nNaN\nInfinity\n"),
                 Some("not a key\n999999\n-1\n38.5\n"),
-                Some("-1\n21\n0\n"),
+                Some("-3\n21\n0\n"),
             )
             .unwrap()
             .is_none()

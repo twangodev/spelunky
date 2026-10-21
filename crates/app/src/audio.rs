@@ -575,7 +575,7 @@ mod backend {
             if self.current == Some(name) {
                 self.current = None;
             }
-            self.music_with_mixer(mixer, name, looping);
+            self.music_with_mixer_policy(mixer, name, looping, false);
         }
         /// Empty name fades out. Repeating a selection never restarts a completed one-shot.
         pub fn music(&mut self, name: &str, looping: bool) {
@@ -592,6 +592,15 @@ mod backend {
             self.music_with_mixer(&mixer, name, looping);
         }
         fn music_with_mixer(&mut self, mixer: &rodio::mixer::Mixer, name: &str, looping: bool) {
+            self.music_with_mixer_policy(mixer, name, looping, true);
+        }
+        fn music_with_mixer_policy(
+            &mut self,
+            mixer: &rodio::mixer::Mixer,
+            name: &str,
+            looping: bool,
+            fade_in: bool,
+        ) {
             let Some((name, bytes)) = asset(name) else {
                 return;
             };
@@ -610,12 +619,12 @@ mod backend {
                 else {
                     return;
                 };
-                self.start_music_source(mixer, name, source);
+                self.start_music_source_policy(mixer, name, source, fade_in);
             } else {
                 let Ok(source) = Decoder::try_from(Cursor::new(bytes)) else {
                     return;
                 };
-                self.start_music_source(mixer, name, source);
+                self.start_music_source_policy(mixer, name, source, fade_in);
             }
         }
         fn start_music_source<S>(
@@ -626,8 +635,21 @@ mod backend {
         ) where
             S: Source + Send + 'static,
         {
-            for track in &mut self.tracks {
-                track.target = 0.0;
+            self.start_music_source_policy(mixer, name, source, true);
+        }
+        fn start_music_source_policy<S>(
+            &mut self,
+            mixer: &rodio::mixer::Mixer,
+            name: &'static str,
+            source: S,
+            fade_in: bool,
+        ) where
+            S: Source + Send + 'static,
+        {
+            if fade_in {
+                for track in &mut self.tracks {
+                    track.target = 0.0;
+                }
             }
             // Rapid transitions should not accumulate an unbounded number of decoders.
             while self.tracks.len() >= 3 {
@@ -637,7 +659,8 @@ mod backend {
             sink.set_speed(
                 self.music_frequencies.get(name).copied().unwrap_or(44_100) as f32 / 44_100.0,
             );
-            sink.set_volume(0.0);
+            let gain = if fade_in { 0.0 } else { 1.0 };
+            sink.set_volume(gain * effective_music_volume(self.music_volume, self.music_muted));
             sink.append(source);
             if self.paused {
                 sink.pause();
@@ -645,7 +668,7 @@ mod backend {
             self.tracks.push(Track {
                 name,
                 sink,
-                gain: 0.0,
+                gain,
                 target: 1.0,
             });
             self.current = Some(name);
@@ -957,6 +980,25 @@ mod backend {
             );
             assert_eq!(audio.tracks[0].sink.speed(), 0.5);
         }
+
+        #[test]
+        fn source_music_starts_at_configured_gain_without_fading_existing_tracks() {
+            let (mixer, _output) = rodio::mixer::mixer(2, 44_100);
+            let mut audio = headless_audio();
+            audio.set_volumes(0.4, 0.8);
+            audio.music_with_mixer(&mixer, "title", true);
+            audio.tracks[0].gain = 1.0;
+            audio.tracks[0].sink.set_volume(0.4);
+
+            audio.source_music_with_mixer(&mixer, "cave", true, true);
+
+            assert_eq!(audio.tracks.len(), 2);
+            assert_eq!(audio.tracks[0].target, 1.0);
+            assert_eq!(audio.tracks[1].gain, 1.0);
+            assert_eq!(audio.tracks[1].target, 1.0);
+            assert_eq!(audio.tracks[1].sink.volume(), 0.4);
+        }
+
         #[test]
         fn source_stop_all_reaches_music_effect_resources_without_changing_f1_stop() {
             let (selected, mut selected_output) = rodio::mixer::mixer(2, 44_100);
@@ -1335,7 +1377,7 @@ mod backend {
         queued: VecDeque<(&'static str, f32)>,
         effects: Vec<Effect>,
         tracks: Vec<Track>,
-        requested_music: Option<(&'static str, bool)>,
+        requested_music: Option<(&'static str, bool, bool)>,
         current_music: Option<&'static str>,
         music_volume: f32,
         effects_volume: f32,
@@ -1596,7 +1638,7 @@ mod backend {
                     .any(|track| track.name == name && track.end > now)
                 || (self
                     .requested_music
-                    .is_some_and(|(pending, _)| pending == name)
+                    .is_some_and(|(pending, _, _)| pending == name)
                     && self.current_music != Some(name))
             {
                 return;
@@ -1604,7 +1646,8 @@ mod backend {
             if self.current_music == Some(name) {
                 self.current_music = None;
             }
-            self.music(name, looping);
+            self.requested_music = Some((name, looping, false));
+            self.decode(name);
         }
         pub fn music(&mut self, name: &str, looping: bool) {
             if name.is_empty() {
@@ -1614,7 +1657,7 @@ mod backend {
                     track.target = 0.0;
                 }
             } else if let Some((name, _)) = asset(name) {
-                self.requested_music = Some((name, looping));
+                self.requested_music = Some((name, looping, true));
                 self.decode(name);
             }
         }
@@ -1788,7 +1831,7 @@ mod backend {
                 end: context.current_time() + buffer.duration() / f64::from(rate),
             });
         }
-        fn start_music(&mut self, name: &'static str, looping: bool) {
+        fn start_music(&mut self, name: &'static str, looping: bool, fade_in: bool) {
             let Some(context) = &self.context else {
                 return;
             };
@@ -1805,7 +1848,10 @@ mod backend {
             source.playback_rate().set_value(
                 self.music_frequencies.get(name).copied().unwrap_or(44_100) as f32 / 44_100.0,
             );
-            gain_node.gain().set_value(0.0);
+            let gain = if fade_in { 0.0 } else { 1.0 };
+            gain_node
+                .gain()
+                .set_value(gain * effective_music_volume(self.music_volume, self.music_muted));
             if source.connect_with_audio_node(&gain_node).is_err()
                 || gain_node
                     .connect_with_audio_node(&context.destination())
@@ -1814,8 +1860,10 @@ mod backend {
             {
                 return;
             }
-            for track in &mut self.tracks {
-                track.target = 0.0;
+            if fade_in {
+                for track in &mut self.tracks {
+                    track.target = 0.0;
+                }
             }
             while self.tracks.len() >= 3 {
                 let old = self.tracks.remove(0);
@@ -1826,7 +1874,7 @@ mod backend {
                 name,
                 source,
                 gain_node,
-                gain: 0.0,
+                gain,
                 target: 1.0,
                 end: if looping {
                     f64::INFINITY
@@ -1858,10 +1906,10 @@ mod backend {
                     false
                 }
             });
-            if let Some((name, looping)) = self.requested_music {
+            if let Some((name, looping, fade_in)) = self.requested_music {
                 if self.current_music != Some(name) {
                     self.decode(name);
-                    self.start_music(name, looping);
+                    self.start_music(name, looping, fade_in);
                 }
             }
             let count = self.queued.len();
@@ -1926,8 +1974,8 @@ mod backend {
             );
             let pending_music = self
                 .requested_music
-                .filter(|(name, _)| self.current_music != Some(*name))
-                .map(|(name, _)| name);
+                .filter(|(name, _, _)| self.current_music != Some(*name))
+                .map(|(name, _, _)| name);
             self.cache.borrow_mut().buffers.retain(|name, _| {
                 keep_decoded_buffer(
                     name,
@@ -1971,7 +2019,7 @@ mod backend {
             audio.source_music("musTitle", false, false);
             audio.play("sndFlame", 0.0);
             audio.source_music("musCave", true, true);
-            assert_eq!(audio.requested_music, Some(("cave", true)));
+            assert_eq!(audio.requested_music, Some(("cave", true, false)));
             audio.stop_music();
             assert!(audio.queued.iter().any(|(name, _)| *name == "title"));
             audio.source_music("musCave", true, true);
@@ -2033,13 +2081,24 @@ mod backend {
             );
             audio.stop_all_music();
             audio.source_music("musTitle", true, true);
-            assert_eq!(audio.requested_music, Some(("title", true)));
+            assert_eq!(audio.requested_music, Some(("title", true, false)));
             audio.source_music("musTitle", false, true);
             assert_eq!(
                 audio.requested_music,
-                Some(("title", true)),
+                Some(("title", true, false)),
                 "pending decode blocks duplicate playMusic"
             );
+        }
+
+        #[test]
+        fn source_music_starts_without_a_fade_while_host_music_keeps_its_fade() {
+            let mut audio = pending_audio();
+            audio.source_music("musCave", true, true);
+            assert_eq!(audio.requested_music, Some(("cave", true, false)));
+
+            audio.stop_music();
+            audio.music("musTitle", true);
+            assert_eq!(audio.requested_music, Some(("title", true, true)));
         }
 
         #[test]
@@ -2061,7 +2120,7 @@ mod backend {
                 audio.queued.iter().copied().collect::<Vec<_>>(),
                 vec![("flame", -1.0)]
             );
-            assert_eq!(audio.requested_music, Some(("cave", true)));
+            assert_eq!(audio.requested_music, Some(("cave", true, true)));
             // Decode completion can only cache data: a new explicit play is
             // required to enqueue this resource after cancellation.
             audio.play_if_idle("sndBowPull", 0.5);
@@ -2080,7 +2139,7 @@ mod backend {
             audio.set_music_frequency("global.musCave", 22_050);
             audio.music("cave.ogg", true);
             audio.music("musCave", true);
-            assert_eq!(audio.requested_music, Some(("cave", true)));
+            assert_eq!(audio.requested_music, Some(("cave", true, true)));
             assert_eq!(audio.music_frequencies["cave"], 22_050);
             audio.set_music_frequency("musCave", 44_100);
             assert_eq!(audio.music_frequencies["cave"], 44_100);

@@ -480,6 +480,7 @@ fn title_adventure_starts_tutorial(first_time: bool) -> bool {
 fn consume_title_start_onboarding(game: &mut Game, data: &mut crate::storage::SaveData) {
     if game.flags.remove("first_time") {
         data.first_time = false;
+        data.highscores_reset_on_next_launch = false;
     }
 }
 
@@ -862,6 +863,13 @@ impl App {
             .set_effect_volume("sndJump", settings.effects_volume);
         if let Some(renderer) = &mut self.renderer {
             renderer.set_vsync(settings.vsync);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(window) = &self.window {
+            let currently_fullscreen = window.fullscreen().is_some();
+            if settings.fullscreen != currently_fullscreen {
+                window.set_fullscreen(fullscreen_attribute(settings.fullscreen));
+            }
         }
         if let Some(game) = &mut self.game {
             game.set_graphics_high(graphics_high);
@@ -3875,6 +3883,7 @@ fn consume_highscores_reset(game: &mut Game, data: &mut crate::storage::SaveData
     }
     data.records.clear();
     data.challenge_records.clear();
+    data.highscores_reset_on_next_launch = true;
     data.unlocks.retain(|flag| {
         !flag.starts_with("unlock_")
             && !flag.starts_with("trophy_")
@@ -3930,6 +3939,7 @@ fn record_improvements(record: &Record, records: &[Record]) -> std::collections:
 fn consume_onboarding(game: &mut Game, data: &mut crate::storage::SaveData) {
     if game.flags.remove("onboarding_consumed") {
         data.first_time = false;
+        data.highscores_reset_on_next_launch = false;
     }
 }
 fn source_elapsed_ms(game: &Game) -> u64 {
@@ -5050,11 +5060,15 @@ fn startup_fullscreen_attribute(
     browser_requires_gesture: bool,
     saved_preference: bool,
 ) -> Option<Fullscreen> {
-    if browser_requires_gesture || !saved_preference {
+    if browser_requires_gesture {
         None
     } else {
-        Some(Fullscreen::Borderless(None))
+        fullscreen_attribute(saved_preference)
     }
+}
+
+fn fullscreen_attribute(saved_preference: bool) -> Option<Fullscreen> {
+    saved_preference.then_some(Fullscreen::Borderless(None))
 }
 
 #[cfg(test)]
@@ -7506,6 +7520,8 @@ mod tests {
         assert!(consume_highscores_reset(&mut game, &mut save));
         assert!(!consume_highscores_reset(&mut game, &mut save));
         assert!(save.records.is_empty());
+        assert!(!save.first_time, "reset takes effect next process launch");
+        assert!(save.highscores_reset_on_next_launch);
         assert!(save.challenge_records.is_empty());
         assert_eq!(
             save.unlocks,
@@ -7515,6 +7531,11 @@ mod tests {
         assert_eq!(save.tunnel_remaining["tunnel1_remaining"], 100_001);
         assert_eq!(save.tunnel_remaining["tunnel2_remaining"], 200_001);
         let reopened = crate::storage::SaveData::from_json(&save.to_json().unwrap()).unwrap();
+        assert!(
+            !reopened.first_time,
+            "the current session remains established"
+        );
+        assert!(reopened.highscores_reset_on_next_launch);
         let mut next = Game::shell(8, reopened.settings.rules);
         hydrate_run(&mut next, &reopened);
         assert_eq!(
