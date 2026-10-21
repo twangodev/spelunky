@@ -227,8 +227,10 @@ fn tutorial() -> World {
     world
 }
 
-// The original sign wording is retained where independent of rebinding. Dynamic
-// key names become semantic control names, so hints remain true for controllers.
+// The portable core seeds dynamic tutorial labels with semantic action names.
+// Native and web hosts replace those names from active bindings after creating
+// the tutorial, matching the source sign Create event without platform input in
+// core generation.
 fn tutorial_sign(x: i32, y: i32) -> (u32, &'static str, &'static str) {
     match (x, y) {
         (32, 64) => (

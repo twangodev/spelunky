@@ -869,6 +869,7 @@ impl App {
         if tutorial {
             game.player.bombs = 0.0;
             game.player.ropes = 2.0;
+            self.input.apply_tutorial_sign_labels(&mut game);
         }
         self.game = Some(game);
         self.editor_play = false;
@@ -881,6 +882,9 @@ impl App {
         self.drawn_source_message = None;
         if let Some(game) = &mut self.game {
             game.start_from_hub(tutorial, level);
+            if tutorial {
+                self.input.apply_tutorial_sign_labels(game);
+            }
             donation_ui::hydrate(game, &self.store.data.tunnel_remaining);
         } else {
             self.start_game(tutorial);

@@ -496,6 +496,76 @@ impl InputState {
         }
     }
 
+    fn source_action_label(&self, action: &str) -> String {
+        if self.controller_enabled {
+            if let Some(button) = self
+                .controller_bindings
+                .get(action)
+                .and_then(|value| controller::parse(value))
+            {
+                return format!("B{}", button as u8 + 1);
+            }
+        }
+        self.action_label(action)
+    }
+
+    /// Classic's tutorial sign Create event embeds the active control labels in
+    /// its text. Core generation stays host-independent, so the host applies
+    /// those labels after creating the tutorial and before its first step.
+    pub(crate) fn apply_tutorial_sign_labels(&self, game: &mut spelunky_core::Game) {
+        if !game.flags.contains("tutorial") {
+            return;
+        }
+
+        let jump = self.source_action_label("jump");
+        let attack = self.source_action_label("attack");
+        let item = self.source_action_label("cycle");
+        let run = self.source_action_label("run");
+        for entity in &mut game.world.entities {
+            if entity.object != "oMsgSign" {
+                continue;
+            }
+            let Some(index) = entity.data.get("tutorial_sign").copied() else {
+                continue;
+            };
+            let (first, second) = match index as u32 {
+                1 => (format!("PRESS {jump} TO JUMP."), String::new()),
+                3 => (format!("PRESS {attack} TO USE YOUR WHIP."), String::new()),
+                5 => (
+                    format!("HOLD UP AND PRESS {attack} TO OPEN CHESTS."),
+                    String::new(),
+                ),
+                9 => (
+                    format!("DUCK AND PRESS {attack} TO PICK UP ITEMS."),
+                    String::new(),
+                ),
+                10 => (
+                    format!("PRESS {attack} TO THROW OR USE ITEMS."),
+                    "HOLD UP TO THROW HIGH AND DOWN TO DROP.".into(),
+                ),
+                11 => (
+                    format!("PRESS {item} TO SELECT YOUR ROPE AND"),
+                    format!("{attack} TO USE IT."),
+                ),
+                12 => (
+                    format!("CROUCH AND PRESS {attack}"),
+                    "TO THROW A ROPE DOWN A LEDGE.".into(),
+                ),
+                13 => (
+                    format!("TO RUN, HOLD DOWN {attack} OR {run}."),
+                    String::new(),
+                ),
+                15 => (
+                    format!("PRESS {item} TO SELECT BOMBS AND"),
+                    format!("PRESS {attack} TO USE IT."),
+                ),
+                _ => continue,
+            };
+            entity.text.insert("message".into(), first);
+            entity.text.insert("message2".into(), second);
+        }
+    }
+
     pub fn take_tick(&mut self) -> InputFrame {
         let frame = self.frame;
         self.frame.clear_edges();
@@ -1891,6 +1961,103 @@ mod tests {
         assert_eq!(input.action_label("missing"), "UNBOUND");
         input.set_bindings(&BTreeMap::from([("attack".into(), "Invalid".into())]));
         assert_eq!(input.action_label("attack"), "X");
+    }
+
+    #[test]
+    fn tutorial_signs_use_active_bindings_and_source_line_breaks() {
+        let mut input = InputState::default();
+        input.set_bindings(&BTreeMap::from([
+            ("jump".into(), "KeyM".into()),
+            ("attack".into(), "KeyJ".into()),
+            ("cycle".into(), "KeyR".into()),
+            ("run".into(), "ShiftRight".into()),
+        ]));
+        let mut game = spelunky_core::Game::tutorial(42, spelunky_core::RulesPreset::Classic);
+        input.apply_tutorial_sign_labels(&mut game);
+
+        fn sign(game: &spelunky_core::Game, index: u32) -> &spelunky_core::Entity {
+            game.world
+                .entities
+                .iter()
+                .find(|entity| entity.data.get("tutorial_sign") == Some(&(index as f64)))
+                .expect("authored tutorial sign")
+        }
+        assert_eq!(sign(&game, 1).text["message"], "PRESS M TO JUMP.");
+        assert_eq!(sign(&game, 3).text["message"], "PRESS J TO USE YOUR WHIP.");
+        assert_eq!(
+            sign(&game, 5).text["message"],
+            "HOLD UP AND PRESS J TO OPEN CHESTS."
+        );
+        assert_eq!(
+            sign(&game, 9).text["message"],
+            "DUCK AND PRESS J TO PICK UP ITEMS."
+        );
+        assert_eq!(
+            sign(&game, 10).text["message"],
+            "PRESS J TO THROW OR USE ITEMS."
+        );
+        assert_eq!(
+            sign(&game, 10).text["message2"],
+            "HOLD UP TO THROW HIGH AND DOWN TO DROP."
+        );
+        assert_eq!(
+            sign(&game, 11).text["message"],
+            "PRESS R TO SELECT YOUR ROPE AND"
+        );
+        assert_eq!(sign(&game, 11).text["message2"], "J TO USE IT.");
+        assert_eq!(sign(&game, 12).text["message"], "CROUCH AND PRESS J");
+        assert_eq!(
+            sign(&game, 12).text["message2"],
+            "TO THROW A ROPE DOWN A LEDGE."
+        );
+        assert_eq!(
+            sign(&game, 13).text["message"],
+            "TO RUN, HOLD DOWN J OR SHIFT."
+        );
+        assert_eq!(
+            sign(&game, 15).text["message"],
+            "PRESS R TO SELECT BOMBS AND"
+        );
+        assert_eq!(sign(&game, 15).text["message2"], "PRESS J TO USE IT.");
+
+        let jump_sign = sign(&game, 1).pos;
+        game.player.pos = jump_sign;
+        game.player.previous_pos = jump_sign;
+        game.player.vel = spelunky_core::Vec2::default();
+        game.player.state = spelunky_core::PlayerState::Standing;
+        game.player.grounded = true;
+        game.step(&spelunky_core::InputFrame::default());
+        assert!(game.events.iter().any(|event| matches!(
+            event,
+            spelunky_core::GameEvent::Dialogue(message) if message.first == "PRESS M TO JUMP."
+        )));
+
+        input.set_controller_bindings(&crate::controller::default_bindings());
+        input.set_controller_enabled(true);
+        let mut controller_game =
+            spelunky_core::Game::tutorial(42, spelunky_core::RulesPreset::Classic);
+        input.apply_tutorial_sign_labels(&mut controller_game);
+        let controller_sign = |index: u32| {
+            controller_game
+                .world
+                .entities
+                .iter()
+                .find(|entity| entity.data.get("tutorial_sign") == Some(&(index as f64)))
+                .expect("authored tutorial sign")
+        };
+        assert_eq!(controller_sign(1).text["message"], "PRESS B2 TO JUMP.");
+        assert_eq!(
+            controller_sign(3).text["message"],
+            "PRESS B1 TO USE YOUR WHIP."
+        );
+        assert_eq!(
+            controller_sign(11).text["message"],
+            "PRESS B3 TO SELECT YOUR ROPE AND"
+        );
+        assert_eq!(
+            controller_sign(13).text["message"],
+            "TO RUN, HOLD DOWN B1 OR B5."
+        );
     }
 
     #[test]
