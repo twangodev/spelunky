@@ -2229,6 +2229,7 @@ mod tests {
         let id = g.world.spawn("oShopkeeper", Vec2::new(96.0, 82.0));
         g.step(&InputFrame::default());
         assert_eq!(g.world.entity(id).unwrap().health, 0);
+        assert_eq!(g.world.entity(id).unwrap().value("dead"), 1.0);
         assert_eq!(g.lifetime_stats.enemy_kills[19], 1);
         assert_eq!(g.data["shopkeepers"], 1.0);
         assert_eq!(g.data["kills"], 1.0);
@@ -2238,6 +2239,28 @@ mod tests {
         }
         assert_eq!(g.lifetime_stats.enemy_kills[19], 1);
         assert_eq!(g.data["kills"], 1.0);
+    }
+
+    #[test]
+    fn actual_step_stars_room_shopkeeper_death_only_updates_challenge_kills() {
+        let mut g = actual_room();
+        g.world.name = "rStars".into();
+        g.flags.insert("hub".into());
+        g.flags.insert("hub_stars".into());
+        let id = g.world.spawn("oShopkeeper2", Vec2::new(96.0, 96.0));
+        g.world.entity_mut(id).unwrap().health = 0;
+
+        g.step(&InputFrame::default());
+
+        let keeper = g.world.entity(id).unwrap();
+        assert_eq!(keeper.value("dead"), 1.0);
+        assert_eq!(g.data["stars_kills"], 1.0);
+        assert_eq!(g.data.get("kills"), None);
+        assert_eq!(g.data.get("shopkeepers"), None);
+        assert_eq!(g.lifetime_stats.enemy_kills[19], 0);
+        assert!(!g.flags.contains("murderer"));
+        assert!(!g.flags.contains("shopkeepers_angry"));
+        assert!(!g.world.entities.iter().any(|e| e.object == "oGoldNugget"));
     }
 
     #[test]
@@ -2313,6 +2336,7 @@ mod tests {
         assert_eq!(g.data["shopkeepers"], 1.0);
         assert_eq!(g.data["kills"], 1.0);
         assert_eq!(g.lifetime_stats.enemy_kills[19], 1);
+        assert!(g.flags.contains("murderer"));
         for _ in 0..5 {
             g.step(&InputFrame::default());
         }
