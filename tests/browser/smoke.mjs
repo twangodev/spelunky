@@ -61,11 +61,13 @@ report.bundle = {
   nativeSha256: createHash('sha256').update(await readFile(tools)).digest('hex'),
 };
 const native = [];
-for (const seed of ['42', '1337']) {
-  for (const ticks of [100, 600]) {
-    for (const rules of ['classic', 'assisted']) {
-      const result = JSON.parse(execFileSync(tools, ['replay', seed, String(ticks), rules], { encoding: 'utf8' }));
-      native.push({ seed, ticks, rules, result });
+if (['full', 'gameplay'].includes(report.suite)) {
+  for (const seed of ['42', '1337']) {
+    for (const ticks of [100, 600]) {
+      for (const rules of ['classic', 'assisted']) {
+        const result = JSON.parse(execFileSync(tools, ['replay', seed, String(ticks), rules], { encoding: 'utf8' }));
+        native.push({ seed, ticks, rules, result });
+      }
     }
   }
 }

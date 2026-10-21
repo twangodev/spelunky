@@ -131,15 +131,11 @@ impl Record {
 #[serde(default)]
 pub struct SaveData {
     pub version: u32,
-    /// Keep first-run onboarding alive across saves made before the player
-    /// enters the Start portal. Older saves without this field are established
-    /// profiles and must not replay onboarding.
+    /// Runtime first-launch state. Classic writes its highscore reset
+    /// sentinels during global creation, so a saved profile is established on
+    /// the next process even if the player never entered the Start portal.
     #[serde(default = "existing_save_first_time")]
     pub first_time: bool,
-    /// Classic checks highscore reset sentinels during global creation. Defer
-    /// the matching first-time onboarding until the next process launch.
-    #[serde(default)]
-    pub highscores_reset_on_next_launch: bool,
     pub settings: Settings,
     pub records: Vec<Record>,
     /// Original lifetime counters are independent of run records and unlocks.
@@ -167,7 +163,6 @@ impl Default for SaveData {
         Self {
             version: SAVE_VERSION,
             first_time: true,
-            highscores_reset_on_next_launch: false,
             settings: Settings::default(),
             records: Vec::new(),
             lifetime_stats: Default::default(),
@@ -303,6 +298,7 @@ pub struct Store {
 impl Store {
     pub fn load() -> Self {
         let stored = read();
+        let new_profile = matches!(&stored, Ok(None));
         #[cfg(not(target_arch = "wasm32"))]
         let should_import_settings = should_import_classic_settings(&stored);
         #[cfg(not(target_arch = "wasm32"))]
@@ -331,7 +327,10 @@ impl Store {
         };
         #[cfg(target_arch = "wasm32")]
         let imported_settings = false;
-        if imported || imported_settings {
+        // Classic initializes its highscore sentinels on the first process
+        // launch. Persist the established next-process state while keeping
+        // `store.data.first_time` true for this live session.
+        if imported || imported_settings || new_profile {
             let _ = store.save();
         }
         store
@@ -340,9 +339,10 @@ impl Store {
     fn from_read(result: Result<Option<String>, String>) -> Self {
         match result.and_then(|json| json.map(|json| SaveData::from_json(&json)).transpose()) {
             Ok(data) => {
+                let has_persisted_save = data.is_some();
                 let mut data = data.unwrap_or_default();
-                if data.highscores_reset_on_next_launch {
-                    data.first_time = true;
+                if has_persisted_save {
+                    data.first_time = false;
                 }
                 Self {
                     data,
@@ -407,12 +407,18 @@ impl Store {
                 .clone()
                 .unwrap_or_else(|| "Save overwrite blocked".into()));
         }
-        let result = self.data.to_json().and_then(|json| write(&json));
+        let result = self.persistence_json().and_then(|json| write(&json));
         match &result {
             Ok(()) => self.warning = None,
             Err(error) => self.warning = Some(error.clone()),
         }
         result
+    }
+
+    fn persistence_json(&self) -> Result<String, String> {
+        let mut persisted = self.data.clone();
+        persisted.first_time = false;
+        persisted.to_json()
     }
 
     /// Adds a completed run without mixing Classic and Assisted rule identities.
@@ -1059,20 +1065,23 @@ mod tests {
     }
 
     #[test]
-    fn first_time_onboarding_survives_settings_saves_until_consumed() {
+    fn first_time_is_current_process_only_after_highscore_sentinels_are_saved() {
         let fresh = Store::from_read(Ok(None));
         assert!(fresh.data.first_time);
-        let json = fresh.data.to_json().unwrap();
-        assert!(json.contains("\"first_time\": true"));
+        let json = fresh.persistence_json().unwrap();
+        assert!(json.contains("\"first_time\": false"));
+        assert!(fresh.data.first_time, "saving must not change this process");
         let restarted = Store::from_read(Ok(Some(json)));
-        assert!(restarted.data.first_time);
+        assert!(!restarted.data.first_time);
         assert!(restarted.data.records.is_empty());
         assert!(restarted.data.unlocks.is_empty());
 
-        let mut consumed = restarted.data;
-        consumed.first_time = false;
-        let consumed_json = consumed.to_json().unwrap();
-        assert!(!Store::from_read(Ok(Some(consumed_json))).data.first_time);
+        let old_first_run = r#"{"version":1,"first_time":true}"#;
+        assert!(
+            !Store::from_read(Ok(Some(old_first_run.into())))
+                .data
+                .first_time
+        );
 
         for legacy in ["{}", r#"{"version":0}"#, r#"{"version":1}"#] {
             assert!(
@@ -1088,21 +1097,15 @@ mod tests {
     }
 
     #[test]
-    fn highscore_reset_replays_onboarding_only_after_a_new_store_load() {
+    fn legacy_reset_marker_does_not_replay_onboarding() {
         let mut current = SaveData::default();
         current.first_time = false;
-        current.highscores_reset_on_next_launch = true;
-
-        let reopened = Store::from_read(Ok(Some(current.to_json().unwrap())));
-        assert!(reopened.data.first_time);
-        assert!(reopened.data.highscores_reset_on_next_launch);
-
-        let mut consumed = reopened.data;
-        consumed.first_time = false;
-        consumed.highscores_reset_on_next_launch = false;
-        let next = Store::from_read(Ok(Some(consumed.to_json().unwrap())));
-        assert!(!next.data.first_time);
-        assert!(!next.data.highscores_reset_on_next_launch);
+        let json = current.to_json().unwrap().replace(
+            "\"first_time\": false",
+            "\"first_time\": false, \"highscores_reset_on_next_launch\": true",
+        );
+        let reopened = Store::from_read(Ok(Some(json)));
+        assert!(!reopened.data.first_time);
     }
 
     #[test]

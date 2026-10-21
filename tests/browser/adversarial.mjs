@@ -317,12 +317,44 @@ async function walkToAuthoredStart(page) {
 }
 
 export async function runOnboardingAcceptance({ page, result, screenshot }) {
-  const entry = { name: 'fresh-authored-start-onboarding', status: 'failed' };
+  const entry = { name: 'first-launch-and-restart-onboarding', status: 'failed' };
   result.adversarial ??= [];
   result.adversarial.push(entry);
+
+  // Classic writes its highscore sentinels during global creation, before the
+  // player enters Start. A clean process restart therefore skips first-time
+  // onboarding even if the new player never used the portal.
+  await enterOriginalHub(page);
+  entry.initialHub = await snapshot(page);
+  const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem('spelunky-rust.save')));
+  assert.equal(persisted?.first_time, false, 'The next process must see initialized highscore sentinels');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await reachTitleMenu(page);
+  await enterOriginalHub(page);
+  entry.restartedAdventure = await walkToAuthoredStart(page);
+  assert.equal(entry.restartedAdventure.world.level, 1,
+    'A restart before entering Start must not replay first-time onboarding');
+  await page.keyboard.press('Escape');
+  await state(page, 'Pause');
+  await press(page, 'ArrowDown', 2);
+  await page.keyboard.press('Enter');
+
+  // Start again with a fresh profile to cover the first process itself.
+  await page.evaluate(() => sessionStorage.setItem('__spelunky_clear_save_on_next_load', '1'));
+  await page.context().addInitScript(() => {
+    if (sessionStorage.getItem('__spelunky_clear_save_on_next_load') === '1') {
+      localStorage.clear();
+      sessionStorage.removeItem('__spelunky_clear_save_on_next_load');
+    }
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await reachTitleMenu(page);
   await enterOriginalHub(page);
   entry.freshHub = await snapshot(page);
   assert.equal(entry.freshHub.player.x, 600);
+  const freshPersisted = await page.evaluate(() => JSON.parse(localStorage.getItem('spelunky-rust.save')));
+  assert.equal(freshPersisted?.first_time, false,
+    'Persisting the initial highscore sentinels must not consume the live process flag');
   await screenshot(page, 'fresh-onboarding-hub', result);
   entry.tutorial = await walkToAuthoredStart(page);
   assert.equal(entry.tutorial.world.level, 0, 'Fresh authored Start must route to Tutorial');
@@ -342,5 +374,5 @@ export async function runOnboardingAcceptance({ page, result, screenshot }) {
   assert.equal(entry.campaign.player.ropes, 4);
   await screenshot(page, 'consumed-onboarding-campaign', result);
   entry.status = 'passed';
-  result.checks.push('Fresh authored Start routes to Tutorial with 0 bombs/2 ropes; consumed Start routes to campaign through actual hub walking');
+  result.checks.push('Fresh Start enters Tutorial; persisted sentinel state skips onboarding after restart; consumed Start enters campaign through actual hub walking');
 }

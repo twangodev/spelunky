@@ -475,12 +475,12 @@ fn title_adventure_starts_tutorial(first_time: bool) -> bool {
 }
 
 /// The title's Start Adventure action stands in for Classic's `xSTART` portal.
-/// That portal clears `firstTime` as it sends a new profile to the tutorial;
-/// the separate Tutorial action leaves the flag alone.
+/// That portal clears `firstTime` for this process; the persisted profile is
+/// already marked as past its one-time startup by Store's serialized form.
+/// The separate Tutorial action leaves the current process flag alone.
 fn consume_title_start_onboarding(game: &mut Game, data: &mut crate::storage::SaveData) {
     if game.flags.remove("first_time") {
         data.first_time = false;
-        data.highscores_reset_on_next_launch = false;
     }
 }
 
@@ -3883,7 +3883,6 @@ fn consume_highscores_reset(game: &mut Game, data: &mut crate::storage::SaveData
     }
     data.records.clear();
     data.challenge_records.clear();
-    data.highscores_reset_on_next_launch = true;
     data.unlocks.retain(|flag| {
         !flag.starts_with("unlock_")
             && !flag.starts_with("trophy_")
@@ -3939,7 +3938,6 @@ fn record_improvements(record: &Record, records: &[Record]) -> std::collections:
 fn consume_onboarding(game: &mut Game, data: &mut crate::storage::SaveData) {
     if game.flags.remove("onboarding_consumed") {
         data.first_time = false;
-        data.highscores_reset_on_next_launch = false;
     }
 }
 fn source_elapsed_ms(game: &Game) -> u64 {
@@ -7520,8 +7518,10 @@ mod tests {
         assert!(consume_highscores_reset(&mut game, &mut save));
         assert!(!consume_highscores_reset(&mut game, &mut save));
         assert!(save.records.is_empty());
-        assert!(!save.first_time, "reset takes effect next process launch");
-        assert!(save.highscores_reset_on_next_launch);
+        assert!(
+            !save.first_time,
+            "clearing scores does not replay onboarding"
+        );
         assert!(save.challenge_records.is_empty());
         assert_eq!(
             save.unlocks,
@@ -7535,7 +7535,6 @@ mod tests {
             !reopened.first_time,
             "the current session remains established"
         );
-        assert!(reopened.highscores_reset_on_next_launch);
         let mut next = Game::shell(8, reopened.settings.rules);
         hydrate_run(&mut next, &reopened);
         assert_eq!(
