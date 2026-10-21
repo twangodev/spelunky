@@ -3886,6 +3886,9 @@ fn session_exit_action(is_browser: bool) -> SessionExitAction {
         SessionExitAction::CloseApplication
     }
 }
+fn browser_frame_is_needed(ended: bool) -> bool {
+    !ended
+}
 fn finish_title_credits(
     game: &mut Option<Game>,
     data: &mut crate::storage::SaveData,
@@ -4775,6 +4778,9 @@ impl ApplicationHandler<UserEvent> for App {
                 Err(error) => self.toast(format!("IMPORT FAILED: {error}")),
             },
             WindowEvent::RedrawRequested => {
+                if !browser_frame_is_needed(self.browser_ended) {
+                    return;
+                }
                 let frame_started = self.now();
                 #[cfg(target_arch = "wasm32")]
                 if self.renderer.is_none() {
@@ -4878,6 +4884,9 @@ impl ApplicationHandler<UserEvent> for App {
             // Winit's web request_redraw is requestAnimationFrame. Keep one RAF
             // chain instead of polling browser tasks between display frames.
             event_loop.set_control_flow(ControlFlow::Wait);
+            if !browser_frame_is_needed(self.browser_ended) {
+                return;
+            }
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
@@ -5133,6 +5142,17 @@ mod tests {
         assert_eq!(
             session_exit_action(false),
             SessionExitAction::CloseApplication
+        );
+    }
+
+    #[test]
+    fn browser_terminal_notice_parks_future_frames() {
+        use super::browser_frame_is_needed;
+
+        assert!(browser_frame_is_needed(false));
+        assert!(
+            !browser_frame_is_needed(true),
+            "the final end-card frame is rendered before the next scheduling decision"
         );
     }
 
