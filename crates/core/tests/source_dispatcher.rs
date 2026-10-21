@@ -237,6 +237,38 @@ fn animation_callbacks_follow_depth_sorted_draw_order_and_exclude_newborns() {
 }
 
 #[test]
+fn solid_webball_contact_rolls_back_both_participants_to_frame_start() {
+    let mut game = Game::shell(7, RulesPreset::Classic);
+    game.world = World::new(40, 30, Area::Mines, 1);
+    game.player.pos = Vec2::new(400.0, 152.0);
+    game.player.previous_pos = game.player.pos;
+    game.player.state = PlayerState::Standing;
+    game.player.grounded = true;
+
+    let basketball = game.spawn("oBasketball", Vec2::new(100.0, 100.0));
+    let web_ball = game.spawn("oWebBall", Vec2::new(110.0, 100.0));
+    game.world.entity_mut(basketball).unwrap().vel = Vec2::new(2.0, 0.0);
+    game.world.entity_mut(web_ball).unwrap().vel = Vec2::new(-2.0, 0.0);
+    let basketball_start = game.world.entity(basketball).unwrap().pos;
+    let web_ball_start = game.world.entity(web_ball).unwrap().pos;
+
+    game.step(&InputFrame::default());
+
+    let basketball = game.world.entity(basketball).unwrap();
+    let web_ball = game.world.entity(web_ball).unwrap();
+    assert_eq!(web_ball.sprite, "sWebCreate");
+    assert_eq!(web_ball.vel, Vec2::default());
+    assert_eq!(
+        basketball.pos, basketball_start,
+        "a solid participant rolls both instances back to their frame-start poses"
+    );
+    assert_eq!(
+        web_ball.pos, web_ball_start,
+        "the callback runs after both participants have been rolled back"
+    );
+}
+
+#[test]
 fn camera_activation_uses_half_open_cached_bbox_at_its_exact_right_edge() {
     for (web_x, expected_active) in [(415.0, true), (416.0, false), (417.0, false)] {
         let mut game = Game::shell(7, RulesPreset::Classic);

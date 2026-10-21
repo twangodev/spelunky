@@ -935,10 +935,12 @@ fn complete(game: &mut Game, door_id: u64) {
         {
             game.flags.remove("wanted");
         }
-        game.data.insert(
-            "next_level".into(),
-            game.world.level.saturating_add(1) as f64,
-        );
+        let next_level = game.world.level.saturating_add(1);
+        // Classic increments global.currLevel in Player Step before the Exit
+        // animation and transition room run. `next_level` drives the port's
+        // room loader; keep the source-global mirror in sync at that same edge.
+        game.data.insert("currLevel".into(), f64::from(next_level));
+        game.data.insert("next_level".into(), f64::from(next_level));
     }
     game.events.push(GameEvent::LevelComplete);
     crate::music::stop_all(game);
@@ -1770,6 +1772,44 @@ mod tests {
         g.player.held = Some(id);
         (g, id)
     }
+    #[test]
+    fn actual_step_exit_advances_source_level_before_transition_load() {
+        let (mut game, _) = carried_exit("oRock");
+        game.data.insert("currLevel".into(), 1.);
+        game.data.insert("levelType".into(), 0.);
+
+        game.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+
+        assert_eq!(game.state, RunState::Ending);
+        assert_eq!(game.data["currLevel"], 2.);
+        assert_eq!(game.data["next_level"], 2.);
+        assert_eq!(game.data["levelType"], 0.);
+
+        // Let the actual exit animation and transition tally finish through
+        // Game::step, then apply the same next-room setup used by the host.
+        for _ in 0..180 {
+            if game.state == RunState::Transition {
+                break;
+            }
+            game.step(&InputFrame {
+                attack_pressed: true,
+                ..Default::default()
+            });
+        }
+        assert_eq!(game.state, RunState::Transition);
+        assert_eq!(game.world.name, "rTransition1");
+        assert_eq!(game.data["currLevel"], 2.);
+        assert_eq!(game.data["levelType"], 0.);
+
+        game.next_level();
+        assert_eq!(game.world.level, 2);
+        assert_eq!(game.data["currLevel"], 2.);
+        assert_eq!(game.data["levelType"], 0.);
+    }
+
     #[test]
     fn actual_step_carries_light_items_but_drops_heavy_bodies_at_centered_exit() {
         for object in ["oRock", "oSkull", "oShotgun", "oSceptre"] {

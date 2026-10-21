@@ -730,6 +730,23 @@ pub fn activate_object(game: &mut Game, object: &str) {
     drop(family_matches);
     update_membership(game);
 }
+/// Reactivate every room instance, matching GameMaker's `instance_activate_all`.
+/// Pause resume calls this before the next Alarm phase; the level controller
+/// can cull offscreen instances again later in that same tick.
+pub fn activate_all(game: &mut Game) {
+    restore_hidden(game);
+    sync_newborns(game);
+    game.player.engine_active = true;
+    for entity in &mut game.world.entities {
+        entity.engine_active = true;
+    }
+    for tile in &mut game.world.tiles {
+        if !tile.object.is_empty() {
+            tile.engine_active = true;
+        }
+    }
+    update_membership(game);
+}
 pub fn descendant_instances(game: &Game, parent: &str) -> Vec<Instance> {
     // The query has no callbacks: index this immutable storage once instead of
     // searching all actors for every registered identity. Retain both first
@@ -1157,25 +1174,32 @@ fn collision(game: &mut Game, this: Instance, other: Instance) {
         }
     }
 }
-fn collision_with_solid_response(game: &mut Game, this: Instance, other: Instance) {
-    let this_object = source_object(game, this);
-    let other_object = source_object(game, other);
-    // Game Maker 8's automatic solid response is local to a nonempty Collision
-    // callback: it backs up the receiver only when that callback's `other` is
-    // solid, runs the body, then reapplies the receiver's motion. A no-event
-    // direction has no response even when its target is solid.
-    if !collision_events::has_event(&this_object, &other_object) {
-        return;
+fn automatic_collision_pair(game: &mut Game, a: Instance, b: Instance) {
+    // GM8 applies automatic solid response once per accepted pair, outside the
+    // directional event wrappers. If either participant is solid, both are
+    // rewound before either Collision body; after both bodies, movement for
+    // both is replayed if either participant remains solid.
+    if source_solid(game, a) || source_solid(game, b) {
+        restore_previous(game, a);
+        restore_previous(game, b);
     }
-    let other_is_solid = source_solid(game, other);
-    if other_is_solid {
-        restore_previous(game, this);
+
+    collision(game, a, b);
+    if !matches!(
+        game.state,
+        crate::RunState::Transition | crate::RunState::Won
+    ) {
+        collision(game, b, a);
     }
-    collision(game, this, other);
-    if other_is_solid {
-        replay_motion(game, this);
-        if intersects(game, this, other) {
-            restore_previous(game, this);
+
+    if source_solid(game, a) || source_solid(game, b) {
+        replay_motion(game, a);
+        replay_motion(game, b);
+        // GM's overlap helper rejects actors marked for destruction, even
+        // though they remain in physical storage until the post-End-Step pass.
+        if alive(game, a) && alive(game, b) && intersects(game, a, b) {
+            restore_previous(game, a);
+            restore_previous(game, b);
         }
     }
 }
@@ -1284,14 +1308,13 @@ fn auto_collisions(game: &mut Game) {
                 {
                     continue;
                 }
-                collision_with_solid_response(game, a, b);
+                automatic_collision_pair(game, a, b);
                 if matches!(
                     game.state,
                     crate::RunState::Transition | crate::RunState::Won
                 ) {
                     return;
                 }
-                collision_with_solid_response(game, b, a);
             }
         }
     }
@@ -1786,15 +1809,16 @@ mod automatic_collision_tests {
     use crate::{Area, PlayerState, RulesPreset, World};
 
     #[test]
-    fn one_sided_collision_with_solid_keeps_the_nonreceiver_motion() {
+    fn one_sided_collision_with_solid_rolls_back_both_participants() {
         let mut game = Game::shell(5, RulesPreset::Classic);
         game.world = World::new(24, 18, Area::Mines, 1);
         game.player.pos = Vec2::new(24.0, 24.0);
         game.player.state = PlayerState::Standing;
 
         // oRuby's source descriptor is GM-solid. oWeb has only a Collision
-        // with oTreasure body, which zeros other's velocity; Ruby's own Step
-        // moves it before that one-sided callback runs.
+        // with oTreasure body, which zeros the Ruby's custom velocity. GM8's
+        // pair-level response still rewinds both actors before that one-sided
+        // callback, even though Ruby declares no reverse event.
         let web = game.spawn("oWeb", Vec2::new(120.0, 120.0));
         let ruby = game.spawn("oRuby", Vec2::new(120.0, 120.0));
         game.world.entity_mut(ruby).unwrap().vel = Vec2::new(1.0, 0.0);
@@ -1811,20 +1835,26 @@ mod automatic_collision_tests {
             "oWeb's source Collision zeros other velocity"
         );
         assert_eq!(
-            ruby.pos.x, 121.0,
-            "the solid target keeps its Step movement"
+            ruby.pos.x, 120.0,
+            "solid pair response restores the target to its frame-start pose"
+        );
+        assert_eq!(
+            game.world.entity(web).unwrap().pos.x,
+            120.0,
+            "solid pair response restores the event receiver too"
         );
     }
 
     #[test]
-    fn one_sided_collision_with_nonsolid_other_keeps_receiver_motion_until_destroy() {
+    fn solid_large_gem_is_rewound_before_its_one_sided_ghost_collision() {
         let mut game = Game::shell(5, RulesPreset::Classic);
         game.world = World::new(24, 18, Area::Mines, 1);
         game.player.pos = Vec2::new(24.0, 24.0);
         game.player.state = PlayerState::Standing;
 
-        // Big gems receive a source Collision with oGhost; Ghost is non-solid.
-        // The event creates its Diamond at the gem's post-Step coordinates.
+        // Big gems are solid; Ghost is not. GM8 rewinds both participants
+        // before the one-sided Collision callback, so the Diamond is born at
+        // the gem's frame-start coordinates even though that callback destroys it.
         let ghost = game.spawn("oGhost", Vec2::new(120.0, 120.0));
         game.world.entity_mut(ghost).unwrap().state = 0;
         let gem = game.spawn("oRubyBig", Vec2::new(128.0, 128.0));
@@ -1841,7 +1871,10 @@ mod automatic_collision_tests {
             .iter()
             .find(|entity| entity.alive && entity.object == "oDiamond")
             .unwrap();
-        assert_eq!(diamond.pos.x, 129.0, "source event uses moved receiver x");
+        assert_eq!(
+            diamond.pos.x, 128.0,
+            "source solid-pair response rewinds the gem before its callback"
+        );
     }
 }
 
@@ -1875,6 +1908,62 @@ mod source_activation_bbox_tests {
                 .any(|entity| entity.id == id && !entity.engine_active),
             "Classic deactivates when the rounded cached bbox starts at the half-open region edge"
         );
+    }
+}
+
+#[cfg(test)]
+mod pause_resume_activation_tests {
+    use super::*;
+    use crate::{Area, PlayerState, RulesPreset, World};
+
+    #[test]
+    fn resumed_offscreen_spider_runs_its_due_alarm_before_level_reculls_it() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.world = World::new(80, 34, Area::Mines, 1);
+        game.world.name = "rLevel".into();
+        game.player.pos = Vec2::new(200.0, 120.0);
+        game.player.state = PlayerState::Standing;
+        game.camera = Vec2::default();
+        game.set_simulation_view_extent(320.0, 240.0).unwrap();
+
+        let spider = game.spawn("oSpider", Vec2::new(1000.0, 120.0));
+        let entity = game.world.entity_mut(spider).unwrap();
+        entity.state = 2;
+        entity.alarms[0] = 1;
+
+        // The level controller culls the distant actor after its Alarm phase.
+        // The due alarm is one frame away, as if the player paused after that
+        // tick's Alarm phase and Level controller cull.
+        level_step(&mut game);
+        let frozen = game
+            .dispatcher
+            .hidden_entities()
+            .iter()
+            .find(|entity| entity.id == spider)
+            .expect("offscreen spider should be stored as inactive");
+        assert!(!frozen.engine_active);
+        assert_eq!(frozen.alarms[0], 1);
+
+        activate_all(&mut game);
+        assert!(is_active(&game, Instance::Entity(spider)));
+
+        game.step(&InputFrame::default());
+
+        // Spider Alarm 0 sets state 1 before its ordinary Step, then the
+        // later level resource deactivates it again because it is still far.
+        let resumed = game
+            .world
+            .entity(spider)
+            .or_else(|| {
+                game.dispatcher
+                    .hidden_entities()
+                    .iter()
+                    .find(|entity| entity.id == spider)
+            })
+            .expect("spider remains present after the resumed tick");
+        assert_eq!(resumed.state, 1);
+        assert_eq!(resumed.alarms[0], 0);
+        assert!(!resumed.engine_active);
     }
 }
 

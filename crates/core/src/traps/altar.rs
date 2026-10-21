@@ -1838,24 +1838,75 @@ mod tests {
     }
 
     #[test]
-    fn inherited_enemy_offerings_include_monkey_tomb_lord_and_yeti_king() {
+    fn inherited_enemy_offering_countdown_starts_for_monkey_tomb_lord_and_yeti_king() {
         for object in ["oMonkey", "oTombLord", "oYetiKing"] {
             let mut game = altar_room();
+            // The first countdown tick only needs the left altar. Keep its
+            // adjacent right half out of this fixture because Tomb Lord's
+            // child Step kills itself when its center point enters oSolid.
+            game.world
+                .entities
+                .retain(|entity| entity.object != "oSacAltarRight");
+            let id = game.spawn(object, Vec2::new(64.0, 48.0));
+            let enemy = game.world.entity_mut(id).unwrap();
+            assert_eq!(
+                enemy.data.get("sacrifice_count").copied().unwrap_or(20.0),
+                20.0,
+                "{object} starts with oEnemy's source sacCount"
+            );
+            enemy.state = 98;
+            enemy.vel = Vec2::default();
+            enemy.timer = 200;
+            game.step(&crate::InputFrame::default());
+
+            let enemy = game.world.entity(id).unwrap_or_else(|| {
+                panic!("{object} should survive its first altar tick in the left-only fixture")
+            });
+            assert_eq!(
+                enemy.value("sacrifice_count"),
+                19.0,
+                "{object} inherits oEnemy's first stationary altar countdown tick"
+            );
+            assert_eq!(
+                game.data.get("favor"),
+                None,
+                "{object} is not sacrificed yet"
+            );
+        }
+    }
+
+    #[test]
+    fn inherited_enemy_offering_follows_child_status_and_velocity_on_later_steps() {
+        for (object, expected_state, expected_count) in [
+            ("oMonkey", 0, 19.0),
+            ("oTombLord", 1, 19.0),
+            ("oYetiKing", 98, 20.0),
+        ] {
+            let mut game = altar_room();
+            game.world
+                .entities
+                .retain(|entity| entity.object != "oSacAltarRight");
             let id = game.spawn(object, Vec2::new(64.0, 48.0));
             let enemy = game.world.entity_mut(id).unwrap();
             enemy.state = 98;
             enemy.vel = Vec2::default();
             enemy.timer = 200;
-            enemy.data.insert("status".into(), 98.0);
-            enemy.data.insert("sacrifice_count".into(), 0.0);
 
             game.step(&crate::InputFrame::default());
-
-            assert!(
-                game.world.entity(id).is_none(),
-                "{object} should be destroyed after completing its altar offering"
+            let enemy = game.world.entity(id).unwrap();
+            assert_eq!(
+                enemy.state, expected_state,
+                "{object} child status after tick 1"
             );
-            assert_eq!(game.data["favor"], 1.0, "{object} contributes source favor");
+            assert_eq!(enemy.value("sacrifice_count"), 19.0, "{object} tick 1");
+
+            game.step(&crate::InputFrame::default());
+            let enemy = game.world.entity(id).unwrap();
+            assert_eq!(
+                enemy.value("sacrifice_count"),
+                expected_count,
+                "{object} tick 2"
+            );
         }
     }
 

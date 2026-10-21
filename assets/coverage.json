@@ -3866,7 +3866,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 204,
+          "line": 214,
           "module": "crates/core/src/game.rs"
         }
       ],
@@ -6074,7 +6074,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 744,
+          "line": 766,
           "module": "crates/core/src/game.rs"
         },
         {
@@ -6700,7 +6700,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 855,
+          "line": 872,
           "module": "crates/core/src/dispatcher.rs"
         }
       ],
@@ -6851,7 +6851,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 750,
+          "line": 772,
           "module": "crates/core/src/game.rs"
         },
         {
@@ -7766,7 +7766,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 753,
+          "line": 775,
           "module": "crates/core/src/game.rs"
         },
         {
@@ -8890,7 +8890,7 @@
         },
         {
           "kind": "source_player_phase_adapter",
-          "line": 933,
+          "line": 950,
           "module": "crates/core/src/dispatcher.rs"
         }
       ],
@@ -13234,7 +13234,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 756,
+          "line": 778,
           "module": "crates/core/src/game.rs"
         },
         {

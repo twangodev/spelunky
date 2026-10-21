@@ -607,24 +607,11 @@ impl InputState {
         self.controller_edges.clear();
     }
 
-    /// Pause deactivates the Classic instances without changing the physical
-    /// keyboard state. Keep keyboard levels for the reactivated Step while
-    /// dropping edges and requiring held controller actions to return neutral.
-    pub fn clear_gameplay_preserving_keyboard(&mut self) {
-        self.blocked_gamepad_actions.0 |= self.gamepad_actions.0;
-        self.gamepad_actions = Actions::default();
-        self.gamepad_held = Actions::default();
-        self.frame = InputFrame {
-            left: self.keyboard_held.has(Action::Left),
-            right: self.keyboard_held.has(Action::Right),
-            up: self.keyboard_held.has(Action::Up),
-            down: self.keyboard_held.has(Action::Down),
-            run: self.keyboard_held.has(Action::Run),
-            jump: self.keyboard_held.has(Action::Jump),
-            attack: self.keyboard_held.has(Action::Attack),
-            exit: self.keyboard_held.has(Action::Exit),
-            ..InputFrame::default()
-        };
+    /// Pause deactivates the Classic gameplay instances while the gamepad
+    /// object continues polling. Preserve sampled gameplay levels for the
+    /// reactivated Step, but discard edges so pause/menu actions cannot replay.
+    pub fn clear_gameplay_preserving_levels(&mut self) {
+        self.frame.clear_edges();
         self.ui_edges.clear();
         self.controller_edges.clear();
     }
@@ -2074,7 +2061,7 @@ mod tests {
         assert!(held.exit);
         assert!(!held.exit_pressed);
 
-        input.clear_gameplay_preserving_keyboard();
+        input.clear_gameplay_preserving_levels();
         let after_pause = input.take_tick();
         assert!(after_pause.exit);
         assert!(!after_pause.exit_pressed);
@@ -2386,9 +2373,9 @@ mod tests {
         assert!(entering_pause.right && entering_pause.jump);
         assert!(entering_pause.jump_pressed);
 
-        // Classic reactivates the same instances, so keyboard_check still sees
-        // the physical key level on the next active Step.
-        input.clear_gameplay_preserving_keyboard();
+        // Classic reactivates the same instances, so the next active Step sees
+        // the same physical keyboard and controller levels.
+        input.clear_gameplay_preserving_levels();
 
         let resumed = input.take_tick();
         assert!(resumed.right, "held ArrowRight should survive pause");
@@ -2401,25 +2388,40 @@ mod tests {
     }
 
     #[test]
-    fn pause_deactivation_keeps_controller_release_guard_and_keyboard_level() {
+    fn pause_deactivation_preserves_gameplay_levels_and_clears_start_edges() {
         let mut input = InputState::default();
         let mut actions = Actions::default();
         actions.set(Action::Jump, true);
-        input.accept_gamepads(actions, 0);
+        input.accept_gamepads(actions, 1 << 6);
         input.key(KeyCode::ArrowRight, true, false);
-        input.take_tick();
+        let before_pause = input.take_tick();
+        assert!(before_pause.right && before_pause.jump);
+        assert!(before_pause.jump_pressed);
+        assert_eq!(input.ui_pressed(), [UiButton::Pause]);
 
-        input.clear_gameplay_preserving_keyboard();
+        input.clear_gameplay_preserving_levels();
         let resumed = input.take_tick();
-        assert!(resumed.right);
-        assert!(!resumed.jump && !resumed.jump_pressed);
+        assert!(resumed.right && resumed.jump);
+        assert!(!resumed.jump_pressed, "resume must not replay a jump edge");
+        assert!(
+            input.ui_pressed().is_empty(),
+            "resume must clear Start edges"
+        );
 
-        input.accept_gamepads(actions, 0);
-        assert!(!input.take_tick().jump);
+        input.accept_gamepads(actions, 1 << 6);
+        let still_held = input.take_tick();
+        assert!(still_held.right && still_held.jump);
+        assert!(!still_held.jump_pressed);
+        assert!(
+            input.ui_pressed().is_empty(),
+            "held Start must stay latched"
+        );
+
         input.accept_gamepads(Actions::default(), 0);
-        input.take_tick();
-        input.accept_gamepads(actions, 0);
+        assert!(input.take_tick().jump_released);
+        input.accept_gamepads(actions, 1 << 6);
         assert!(input.take_tick().jump_pressed);
+        assert_eq!(input.ui_pressed(), [UiButton::Pause]);
     }
 
     #[test]

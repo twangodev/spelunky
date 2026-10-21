@@ -30,6 +30,16 @@ fn source_follow_axis(old: f64, actor: f64, border: f64, extent: f64, room: f64)
     f64::from(desired)
 }
 
+fn campaign_level_type(level: u32) -> u32 {
+    match level {
+        5..=8 => 1,
+        9..=12 => 2,
+        13..=15 => 3,
+        16 => 4,
+        _ => 0,
+    }
+}
+
 impl Game {
     pub fn new(seed: u32, rules: RulesPreset) -> Self {
         Self::generate_first_room(Self::shell(seed, rules))
@@ -602,6 +612,12 @@ impl Game {
         self.player.equipment.clear();
         if tutorial {
             self.flags.insert("tutorial".into());
+            // The authored xSTART/xTUTORIAL branches set currLevel to zero
+            // before entering rTutorial. This room bypasses scrInitLevel, so
+            // publish the matching source globals here instead of leaving
+            // them absent after the run-data reset above.
+            self.data.insert("currLevel".into(), 0.0);
+            self.data.insert("levelType".into(), 0.0);
             self.player.bombs = 0.0;
             self.player.ropes = 2.0;
             self.world = generation::tutorial();
@@ -624,6 +640,12 @@ impl Game {
     }
 
     fn generate_campaign_room(&mut self, level: u32) {
+        // scrInitLevel publishes these source globals before generating the
+        // room. Keep the serialized source namespace aligned with `World`,
+        // including direct hub starts and ordinary transition loads.
+        self.data.insert("currLevel".into(), f64::from(level));
+        self.data
+            .insert("levelType".into(), f64::from(campaign_level_type(level)));
         let context = generation::GenerationContext {
             has_spectacles: self.player.has("Spectacles"),
             has_cemetery: false,
@@ -1147,6 +1169,49 @@ mod tests {
             "the previous level's Yeti flag must be cleared before new room generation"
         );
     }
+    #[test]
+    fn campaign_level_type_matches_authored_scr_init_level_ranges() {
+        for (level, expected_type) in [
+            (1, 0),
+            (2, 0),
+            (4, 0),
+            (5, 1),
+            (8, 1),
+            (9, 2),
+            (12, 2),
+            (13, 3),
+            (15, 3),
+            (16, 4),
+        ] {
+            assert_eq!(campaign_level_type(level), expected_type, "level {level}");
+        }
+    }
+
+    #[test]
+    fn direct_campaign_room_setup_publishes_source_level_globals() {
+        let mut game = Game::shell(17, RulesPreset::Classic);
+        for (level, expected_type) in [(2, 0.), (5, 1.), (9, 2.), (13, 3.), (16, 4.)] {
+            game.start_from_hub(false, level);
+            assert_eq!(game.world.level, level);
+            assert_eq!(game.data["currLevel"], f64::from(level));
+            assert_eq!(game.data["levelType"], expected_type, "level {level}");
+        }
+    }
+
+    #[test]
+    fn tutorial_start_publishes_zero_level_globals_after_clearing_run_data() {
+        let mut game = Game::shell(17, RulesPreset::Classic);
+        game.data.insert("currLevel".into(), 13.0);
+        game.data.insert("levelType".into(), 3.0);
+        game.start_from_hub(true, 1);
+
+        assert_eq!(game.world.name, "Tutorial Cave");
+        assert!(game.flags.contains("tutorial"));
+        assert_eq!(game.world.level, 0);
+        assert_eq!(game.data["currLevel"], 0.0);
+        assert_eq!(game.data["levelType"], 0.0);
+    }
+
     fn flat_game() -> Game {
         let mut game = Game::shell(7, RulesPreset::Classic);
         for x in 0..game.world.width {

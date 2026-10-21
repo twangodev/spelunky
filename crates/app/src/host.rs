@@ -370,10 +370,10 @@ fn replace_host_toast(
     *simulated = false;
 }
 
-/// The host retires blocked physical input without advancing the simulation.
-fn reset_gameplay_input(input: &mut InputState, game: Option<&mut Game>, preserve_keyboard: bool) {
-    if preserve_keyboard {
-        input.clear_gameplay_preserving_keyboard();
+/// Reset gameplay input without advancing the simulation.
+fn reset_gameplay_input(input: &mut InputState, game: Option<&mut Game>, preserve_levels: bool) {
+    if preserve_levels {
+        input.clear_gameplay_preserving_levels();
     } else {
         input.clear_gameplay();
     }
@@ -382,11 +382,19 @@ fn reset_gameplay_input(input: &mut InputState, game: Option<&mut Game>, preserv
     }
 }
 
-fn pause_transition_preserves_keyboard(previous: Screen, next: Screen) -> bool {
+fn pause_transition_preserves_gameplay_levels(previous: Screen, next: Screen) -> bool {
     matches!(
         (previous, next),
         (Screen::Playing, Screen::Pause) | (Screen::Pause, Screen::Playing)
     )
+}
+
+fn reactivate_instances_after_pause(previous: Screen, next: Screen, game: Option<&mut Game>) {
+    if previous == Screen::Pause && next == Screen::Playing {
+        if let Some(game) = game {
+            spelunky_core::dispatcher::activate_all(game);
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -545,15 +553,15 @@ impl App {
         }
     }
     fn reset_timing(&mut self) {
-        self.reset_timing_with_keyboard(false);
+        self.reset_timing_with_gameplay_levels(false);
     }
-    fn reset_timing_with_keyboard(&mut self, preserve_keyboard: bool) {
+    fn reset_timing_with_gameplay_levels(&mut self, preserve_levels: bool) {
         self.cinematic_action = false;
         self.credits_keyboard_skip = false;
         self.pause_start_requested = false;
         self.donation_confirm = false;
         self.timing.reset(self.now());
-        reset_gameplay_input(&mut self.input, self.game.as_mut(), preserve_keyboard);
+        reset_gameplay_input(&mut self.input, self.game.as_mut(), preserve_levels);
         self.mouse_left = false;
         self.mouse_right = false;
         self.settings_ui.cancel_pointer();
@@ -617,6 +625,7 @@ impl App {
     }
     fn screen(&mut self, screen: Screen) {
         let previous_screen = self.screen;
+        reactivate_instances_after_pause(previous_screen, screen, self.game.as_mut());
         let entering_settings = screen == Screen::Settings && self.screen != Screen::Settings;
         if screen == Screen::Custom && previous_screen != Screen::Custom {
             self.refresh_custom_level_catalog();
@@ -658,7 +667,7 @@ impl App {
         } else {
             0
         };
-        self.reset_timing_with_keyboard(pause_transition_preserves_keyboard(
+        self.reset_timing_with_gameplay_levels(pause_transition_preserves_gameplay_levels(
             previous_screen,
             screen,
         ));
@@ -2521,15 +2530,44 @@ impl App {
                 } else {
                     pages
                 };
+                let page_label = format!("PAGE {page}/{pages}");
+                let label_width = page_label.chars().count() as f32 * 8.0 * 0.65;
+                let label_scale = (CUSTOM_PAGE_LABEL_MAX_WIDTH / label_width).min(0.65);
+                let label_width = page_label.chars().count() as f32 * 8.0 * label_scale;
+                let label_x = (CUSTOM_PAGE_PREV_RIGHT + CUSTOM_PAGE_NEXT_LEFT - label_width) / 2.0;
+                let page_start = custom_menu_start(self.selection, level_count);
+                let current_page = page_start / CUSTOM_LEVELS_PER_PAGE;
+                if current_page > 0 {
+                    text(
+                        quads,
+                        atlas,
+                        "<",
+                        CUSTOM_PAGE_PREV_TEXT_X,
+                        CUSTOM_PAGE_CONTROL_Y,
+                        0.7,
+                        GOLD,
+                    );
+                }
                 text(
                     quads,
                     atlas,
-                    &format!("PAGE {page}/{pages}"),
-                    260.,
-                    14.,
-                    0.6,
+                    &page_label,
+                    label_x,
+                    CUSTOM_PAGE_CONTROL_Y,
+                    label_scale,
                     WHITE,
                 );
+                if current_page + 1 < pages {
+                    text(
+                        quads,
+                        atlas,
+                        ">",
+                        CUSTOM_PAGE_NEXT_TEXT_X,
+                        CUSTOM_PAGE_CONTROL_Y,
+                        0.7,
+                        GOLD,
+                    );
+                }
                 let start = custom_menu_start(self.selection, level_count);
                 let end = (start + CUSTOM_LEVELS_PER_PAGE).min(level_count);
                 for (slot, index) in (start..end).enumerate() {
@@ -2568,10 +2606,10 @@ impl App {
                     }
                 }
                 #[cfg(target_arch = "wasm32")]
-                let help = "ENTER PLAY / E EDIT / F IMPORT FOLDER / PGUP-DN PAGE";
+                let help = "ENTER PLAY / E EDIT / F IMPORT / PGUP-DN OR CLICK < >";
                 #[cfg(not(target_arch = "wasm32"))]
-                let help = "ENTER PLAY / E EDIT / PGUP-DN PAGE / DROP .LVL IMPORT";
-                text(quads, atlas, help, 14., 223., 0.8, WHITE);
+                let help = "ENTER PLAY / E EDIT / DROP .LVL / PGUP-DN OR CLICK < >";
+                text(quads, atlas, help, 14., 223., 0.65, WHITE);
             }
             Screen::Records => {
                 text(quads, atlas, "RUN RECORDS", 88., 14., 1.5, GOLD);
@@ -2903,6 +2941,12 @@ impl App {
         };
         match action {
             CustomPointerAction::Select(index) => self.selection = index,
+            CustomPointerAction::PreviousPage => {
+                self.selection = custom_page_selection(self.selection, count - 2, -1)
+            }
+            CustomPointerAction::NextPage => {
+                self.selection = custom_page_selection(self.selection, count - 2, 1)
+            }
             CustomPointerAction::Import => {
                 self.selection = count - 2;
                 self.import_dialog();
@@ -2939,12 +2983,24 @@ const CUSTOM_ROW_HEIGHT: f32 = 14.0;
 const CUSTOM_ROW_STEP: f32 = 15.0;
 const CUSTOM_LEVELS_PER_PAGE: usize = 10;
 const CUSTOM_VISIBLE_ROWS: usize = CUSTOM_LEVELS_PER_PAGE + 2;
+const CUSTOM_PAGE_CONTROL_Y: f32 = 14.0;
+const CUSTOM_PAGE_CONTROL_TOP: f32 = 10.0;
+const CUSTOM_PAGE_CONTROL_BOTTOM: f32 = 27.0;
+const CUSTOM_PAGE_PREV_LEFT: f32 = 230.0;
+const CUSTOM_PAGE_PREV_RIGHT: f32 = 248.0;
+const CUSTOM_PAGE_PREV_TEXT_X: f32 = 234.0;
+const CUSTOM_PAGE_NEXT_LEFT: f32 = 302.0;
+const CUSTOM_PAGE_NEXT_RIGHT: f32 = 320.0;
+const CUSTOM_PAGE_NEXT_TEXT_X: f32 = 306.0;
+const CUSTOM_PAGE_LABEL_MAX_WIDTH: f32 = CUSTOM_PAGE_NEXT_LEFT - CUSTOM_PAGE_PREV_RIGHT;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CustomPointerAction {
     Select(usize),
     Import,
     Back,
+    PreviousPage,
+    NextPage,
 }
 
 fn custom_menu_start(selection: usize, level_count: usize) -> usize {
@@ -3018,6 +3074,19 @@ fn custom_menu_pointer_action(
     x: f32,
     y: f32,
 ) -> Option<CustomPointerAction> {
+    if (CUSTOM_PAGE_CONTROL_TOP..CUSTOM_PAGE_CONTROL_BOTTOM).contains(&y) {
+        let level_count = count.saturating_sub(2);
+        let page_start = custom_menu_start(selection, level_count);
+        let current_page = page_start / CUSTOM_LEVELS_PER_PAGE;
+        let last_page = level_count.saturating_sub(1) / CUSTOM_LEVELS_PER_PAGE;
+        if (CUSTOM_PAGE_PREV_LEFT..CUSTOM_PAGE_PREV_RIGHT).contains(&x) && current_page > 0 {
+            return Some(CustomPointerAction::PreviousPage);
+        }
+        if (CUSTOM_PAGE_NEXT_LEFT..CUSTOM_PAGE_NEXT_RIGHT).contains(&x) && current_page < last_page
+        {
+            return Some(CustomPointerAction::NextPage);
+        }
+    }
     let index = custom_menu_row_at(selection, count, x, y)?;
     Some(match index {
         index if index + 1 == count => CustomPointerAction::Back,
@@ -4888,25 +4957,44 @@ fn startup_fullscreen_attribute(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn pause_reactivation_transitions_keep_keyboard_levels() {
-        use super::{Screen, pause_transition_preserves_keyboard};
+    fn pause_reactivation_transitions_keep_gameplay_levels() {
+        use super::{Screen, pause_transition_preserves_gameplay_levels};
 
-        assert!(pause_transition_preserves_keyboard(
+        assert!(pause_transition_preserves_gameplay_levels(
             Screen::Playing,
             Screen::Pause
         ));
-        assert!(pause_transition_preserves_keyboard(
+        assert!(pause_transition_preserves_gameplay_levels(
             Screen::Pause,
             Screen::Playing
         ));
-        assert!(!pause_transition_preserves_keyboard(
+        assert!(!pause_transition_preserves_gameplay_levels(
             Screen::Title,
             Screen::Playing
         ));
-        assert!(!pause_transition_preserves_keyboard(
+        assert!(!pause_transition_preserves_gameplay_levels(
             Screen::Pause,
             Screen::Settings
         ));
+    }
+
+    #[test]
+    fn only_pause_resume_reactivates_source_instances() {
+        use super::{Screen, reactivate_instances_after_pause};
+        use spelunky_core::{Game, RulesPreset, Vec2};
+
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        let spider = game.spawn("oSpider", Vec2::new(600.0, 120.0));
+        game.world.entity_mut(spider).unwrap().engine_active = false;
+
+        reactivate_instances_after_pause(Screen::Pause, Screen::Playing, Some(&mut game));
+
+        assert!(game.world.entity(spider).unwrap().engine_active);
+        game.world.entity_mut(spider).unwrap().engine_active = false;
+
+        reactivate_instances_after_pause(Screen::Title, Screen::Playing, Some(&mut game));
+
+        assert!(!game.world.entity(spider).unwrap().engine_active);
     }
 
     #[test]
@@ -6199,6 +6287,58 @@ mod tests {
         assert_eq!(custom_menu_pointer_action(0, total_rows, 30.0, 54.0), None);
         assert_eq!(custom_menu_pointer_action(0, 2, 30.0, 77.0), None);
         assert_eq!(custom_menu_pointer_action(0, total_rows, 30.0, 223.0), None);
+    }
+
+    #[test]
+    fn custom_menu_pointer_page_controls_reach_later_levels_and_disable_at_edges() {
+        let level_count = 23;
+        let total_rows = level_count + 2;
+        let previous = (CUSTOM_PAGE_PREV_LEFT + 1.0, CUSTOM_PAGE_CONTROL_TOP + 1.0);
+        let next = (CUSTOM_PAGE_NEXT_LEFT + 1.0, CUSTOM_PAGE_CONTROL_TOP + 1.0);
+
+        let mut selection = 0;
+        assert_eq!(
+            custom_menu_pointer_action(selection, total_rows, previous.0, previous.1),
+            None,
+            "source deactivates PageUp on the first page"
+        );
+        assert_eq!(
+            custom_menu_pointer_action(selection, total_rows, next.0, next.1),
+            Some(CustomPointerAction::NextPage)
+        );
+        selection = custom_page_selection(selection, level_count, 1);
+        assert_eq!(selection, 10);
+        assert_eq!(
+            custom_menu_pointer_action(selection, total_rows, 30.0, 47.0),
+            Some(CustomPointerAction::Select(10)),
+            "the first row on the next page selects source level eleven"
+        );
+
+        assert_eq!(
+            custom_menu_pointer_action(selection, total_rows, previous.0, previous.1),
+            Some(CustomPointerAction::PreviousPage)
+        );
+        assert_eq!(
+            custom_menu_pointer_action(selection, total_rows, next.0, next.1),
+            Some(CustomPointerAction::NextPage)
+        );
+        selection = custom_page_selection(selection, level_count, 1);
+        assert_eq!(selection, 20);
+        assert_eq!(
+            custom_menu_pointer_action(selection, total_rows, previous.0, previous.1),
+            Some(CustomPointerAction::PreviousPage)
+        );
+        assert_eq!(
+            custom_menu_pointer_action(selection, total_rows, next.0, next.1),
+            None,
+            "source deactivates PageDown on the last page"
+        );
+
+        assert_eq!(
+            custom_menu_pointer_action(0, 2, next.0, next.1),
+            None,
+            "a selector with no levels has no active page controls"
+        );
     }
 
     #[test]

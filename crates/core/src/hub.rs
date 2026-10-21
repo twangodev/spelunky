@@ -1019,7 +1019,7 @@ fn record(game: &mut Game, key: &str, score: f64) {
 /// oPlayer1's start-door branch, before inventory actions and hurt queries.
 pub(crate) fn player_portal_actions(game: &mut Game, input: &InputFrame) {
     if (game.flags.contains("hub") || game.flags.contains("tutorial"))
-        && (input.up || input.exit_pressed)
+        && (input.up || input.exit || input.exit_pressed)
     {
         activate_portal(game);
     }
@@ -4027,6 +4027,62 @@ mod tests {
         assert_eq!(g.player.health, 4.0);
         assert_eq!(g.player.money, 0);
         assert!(g.player.equipment.is_empty());
+    }
+
+    #[test]
+    fn held_exit_binding_activates_title_portal_after_landing() {
+        let mut g = loaded(HubKind::Title);
+        let door = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oXStart")
+            .unwrap()
+            .pos;
+        let start = Vec2::new(door.x, door.y - 32.0);
+        g.player.pos = start;
+        g.player.previous_pos = start;
+        g.player.vel = Vec2::default();
+        g.player.state = PlayerState::Falling;
+        g.player.grounded = false;
+
+        // Enter is independently bound to Exit. Its press edge occurs while
+        // airborne, then the held level must remain effective on landing.
+        g.step(&InputFrame {
+            exit: true,
+            exit_pressed: true,
+            ..Default::default()
+        });
+        assert_eq!(g.state, RunState::Playing);
+        assert!(!crate::player::source_platform_grounded(&g));
+
+        let mut landed = false;
+        for _ in 0..30 {
+            g.step(&InputFrame {
+                exit: true,
+                ..Default::default()
+            });
+            landed |= crate::player::source_platform_grounded(&g);
+            if g.state == RunState::Ending {
+                break;
+            }
+        }
+
+        assert!(landed, "player should land while Exit remains held");
+        assert!(
+            g.world.entities.iter().any(|e| {
+                e.object == "oXStart"
+                    && e.mask_contains(g.player.pos, crate::CollisionPrecision::BoundingBox)
+            }),
+            "player should be standing in the authored start portal: {:?}",
+            g.player.pos
+        );
+        let ending = g
+            .ending
+            .as_ref()
+            .expect("held Exit should activate the portal after landing");
+        assert_eq!(ending.kind, crate::ending::EndingKind::HubPortal);
+        assert_eq!(ending.portal, Some(HubPortal::Start));
     }
 
     #[test]
