@@ -656,6 +656,11 @@ impl Game {
         } else {
             self.data.get("marketChance").copied().unwrap_or(160.0)
         };
+        let probabilities = if historical {
+            generation::SourceProbabilities::default()
+        } else {
+            generation::SourceProbabilities::from_globals(&self.data)
+        };
         // Invalid edited/synthetic histories are rejected BEFORE procedural
         // generation starts; neither signed state nor random draws are clamped.
         assert!(
@@ -671,6 +676,7 @@ impl Game {
             market_chance: market as i32,
             made_market_entrance: self.flags.contains("made_market_entrance")
                 || self.flags.contains("madeMarketEntrance"),
+            probabilities,
         };
         if !historical {
             generation::reset_dark_history(&mut self.flags, level);
@@ -952,6 +958,26 @@ mod campaign_cemetery_runtime_flag_tests {
                 .iter()
                 .any(|entity| { entity.alive && entity.object == "oGhost" })
         );
+    }
+}
+
+#[cfg(test)]
+mod source_probability_global_tests {
+    use crate::{Game, RulesPreset};
+
+    #[test]
+    fn serialized_campaign_probability_override_controls_the_next_room() {
+        let mut game = Game::shell(0, RulesPreset::Classic);
+        game.world.level = 6;
+        game.data.insert("probLake".into(), 1.0);
+
+        let serialized = serde_json::to_value(&game).unwrap();
+        let mut restored: Game = serde_json::from_value(serialized).unwrap();
+        restored.next_level();
+
+        assert_eq!(restored.world.level, 7);
+        assert_eq!(restored.world.name, "Lake");
+        assert_eq!(restored.data.get("probLake"), Some(&1.0));
     }
 }
 

@@ -18,6 +18,7 @@ fn state(chance: i32) -> super::super::super::GenerationState {
         revision: GenerationRevision::SourceClassicV2,
         market_chance: chance,
         made_market_entrance: false,
+        probabilities: super::super::super::SourceProbabilities::default(),
     }
 }
 fn run(

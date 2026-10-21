@@ -92,18 +92,122 @@ fn source_black_market_active(flags: &BTreeSet<String>, area: Area) -> bool {
             && !has(flags, "made_black_market"))
 }
 
+/// Mutable source globals that select optional campaign layouts. These values
+/// live in `Game::data` in serialized snapshots, so SourceClassicV2 generation
+/// reads them at each room boundary instead of treating the stock defaults as
+/// constants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SourceProbabilities {
+    pub dark_level: i32,
+    pub snake_pit: i32,
+    pub cemetery: i32,
+    pub lake: i32,
+    pub yeti_lair: i32,
+    pub alien: i32,
+    pub sacrifice_pit: i32,
+}
+
+const MAX_SOURCE_PROBABILITY_WIDTH: i64 = 1 << 21;
+
+impl Default for SourceProbabilities {
+    fn default() -> Self {
+        Self {
+            dark_level: 12,
+            snake_pit: 8,
+            cemetery: 10,
+            lake: 10,
+            yeti_lair: 6,
+            alien: 10,
+            sacrifice_pit: 8,
+        }
+    }
+}
+
+impl SourceProbabilities {
+    pub(crate) fn from_globals(globals: &BTreeMap<String, f64>) -> Self {
+        fn read(globals: &BTreeMap<String, f64>, name: &str, default: i32) -> i32 {
+            let value = globals.get(name).copied().unwrap_or(f64::from(default));
+            assert!(
+                value.is_finite() && value.fract() == 0.0,
+                "source probability {name} must be a finite integer"
+            );
+            assert!(
+                (-MAX_SOURCE_PROBABILITY_WIDTH as f64..=MAX_SOURCE_PROBABILITY_WIDTH as f64)
+                    .contains(&value),
+                "source probability {name} is outside the supported source_rand width"
+            );
+            value as i32
+        }
+
+        let defaults = Self::default();
+        Self {
+            dark_level: read(globals, "probDarkLevel", defaults.dark_level),
+            snake_pit: read(globals, "probSnakePit", defaults.snake_pit),
+            cemetery: read(globals, "probCemetary", defaults.cemetery),
+            lake: read(globals, "probLake", defaults.lake),
+            yeti_lair: read(globals, "probYetiLair", defaults.yeti_lair),
+            alien: read(globals, "probAlien", defaults.alien),
+            sacrifice_pit: read(globals, "probSacPit", defaults.sacrifice_pit),
+        }
+    }
+
+    fn validate(self) {
+        for (name, value) in [
+            ("probDarkLevel", self.dark_level),
+            ("probSnakePit", self.snake_pit),
+            ("probCemetary", self.cemetery),
+            ("probLake", self.lake),
+            ("probYetiLair", self.yeti_lair),
+            ("probAlien", self.alien),
+            ("probSacPit", self.sacrifice_pit),
+        ] {
+            assert!(
+                i64::from(value).abs() <= MAX_SOURCE_PROBABILITY_WIDTH,
+                "source probability {name} is outside the supported source_rand width"
+            );
+        }
+    }
+}
+
+/// Evaluate the source expression `rand(1, global.prob*) == 1` while
+/// consuming exactly one canonical RNG draw, including zero and signed widths.
+fn source_probability_roll(rng: &mut Rng, denominator: i32) -> bool {
+    rng.source_rand(1, denominator)
+        .expect("source probability was validated before generation")
+        == 1
+}
+
 #[derive(Debug)]
 struct Path {
     rooms: [[u8; 4]; 5],
     start: usize,
     end: usize,
 }
+#[cfg(test)]
 fn room_path(
     rng: &mut Rng,
     area: Area,
     level: u32,
     flags: &mut BTreeSet<String>,
     source_classic: bool,
+) -> Path {
+    room_path_with_probabilities(
+        rng,
+        area,
+        level,
+        flags,
+        source_classic,
+        SourceProbabilities::default(),
+    )
+}
+
+fn room_path_with_probabilities(
+    rng: &mut Rng,
+    area: Area,
+    level: u32,
+    flags: &mut BTreeSet<String>,
+    source_classic: bool,
+    probabilities: SourceProbabilities,
 ) -> Path {
     let start = rng.range(4) as usize;
     // scrLevelGen draws this candidate even outside Temple and before the
@@ -133,7 +237,8 @@ fn room_path(
     // The source creates a sacrifice shaft before constructing the main path.
     // The source condition is eager even outside Temple, but the Market
     // early return above never reaches it. HistoricalV1 retains its old tape.
-    let sacrifice_roll = source_classic && rng.chance(1, 8);
+    let sacrifice_roll =
+        source_classic && source_probability_roll(rng, probabilities.sacrifice_pit);
     if area == Area::Temple
         && (has(flags, "sacrifice_pit")
             || if source_classic {
@@ -223,7 +328,8 @@ fn room_path(
             for col in 0..4 {
                 // Every visited source condition evaluates rand, including
                 // cells whose occupied room guards prevent a pit.
-                let snake_roll = source_classic && rng.chance(1, 8);
+                let snake_roll =
+                    source_classic && source_probability_roll(rng, probabilities.snake_pit);
                 if (row..row + 3).all(|r| path.rooms[r][col] == 0)
                     && (has(flags, "snake_pit")
                         || if source_classic {
@@ -291,7 +397,7 @@ fn room_path(
             flags.insert("moai".into());
         }
     } else {
-        let alien_roll = source_classic && rng.chance(1, 10);
+        let alien_roll = source_classic && source_probability_roll(rng, probabilities.alien);
         if area == Area::Ice
             && (has(flags, "alien_ship")
                 || (!has(flags, "yeti_lair")
@@ -314,7 +420,7 @@ fn room_path(
             }
             flags.insert("alien_ship".into());
         } else {
-            let yeti_roll = source_classic && rng.chance(1, 6);
+            let yeti_roll = source_classic && source_probability_roll(rng, probabilities.yeti_lair);
             if area == Area::Ice
                 && (has(flags, "yeti_lair")
                     || if source_classic {
@@ -707,6 +813,7 @@ pub(crate) struct GenerationState {
     pub revision: crate::GenerationRevision,
     pub market_chance: i32,
     pub made_market_entrance: bool,
+    pub probabilities: SourceProbabilities,
 }
 impl GenerationState {
     pub(crate) fn fresh(rng: &Rng) -> Self {
@@ -717,6 +824,7 @@ impl GenerationState {
             },
             market_chance: 160,
             made_market_entrance: false,
+            probabilities: SourceProbabilities::default(),
         }
     }
 }
@@ -738,15 +846,26 @@ pub(crate) struct GeneratedLevel {
     pub cemetery_selected: bool,
 }
 
+#[cfg(test)]
 fn select_dark_level(
     rng: &mut Rng,
     level: u32,
     area: Area,
     flags: &BTreeSet<String>,
 ) -> (bool, bool) {
+    select_dark_level_with_probability(rng, level, area, flags, 12)
+}
+
+fn select_dark_level_with_probability(
+    rng: &mut Rng,
+    level: u32,
+    area: Area,
+    flags: &BTreeSet<String>,
+    probability: i32,
+) -> (bool, bool) {
     // scrInitLevel170: GM8 evaluates every Boolean operand, including this
     // rand when any earlier eligibility guard is false. Stock probability is12.
-    let roll_won = rand(rng, 1, 12) == 1;
+    let roll_won = source_probability_roll(rng, probability);
     let selected = !has(flags, "had_dark_level")
         && !has(flags, "no_dark_level")
         && level != 0
@@ -760,10 +879,21 @@ fn select_dark_level(
     (visible, selected)
 }
 
+#[cfg(test)]
 fn select_cemetery(rng: &mut Rng, area: Area, forced: bool, source_classic: bool) -> bool {
+    select_cemetery_with_probability(rng, area, forced, source_classic, 10)
+}
+
+fn select_cemetery_with_probability(
+    rng: &mut Rng,
+    area: Area,
+    forced: bool,
+    source_classic: bool,
+    probability: i32,
+) -> bool {
     // scrInitLevel149 reaches this rand for every area. Explicit fixture flags
     // do not suppress that source call; HistoricalV1 retains its old tape.
-    let roll = source_classic && rng.chance(1, 10);
+    let roll = source_classic && source_probability_roll(rng, probability);
     area == Area::Jungle
         && !forced
         && if source_classic {
@@ -818,6 +948,7 @@ pub(crate) fn generate_campaign_result(
             (MIN_SUPPORTED_MARKET_CHANCE..=(1 << 21)).contains(&state.market_chance),
             "marketChance history is outside the proved campaign domain with one-room draw headroom"
         );
+        state.probabilities.validate();
     }
     let source_classic = state.revision == crate::GenerationRevision::SourceClassicV2;
     let area = Area::for_level(level);
@@ -831,7 +962,11 @@ pub(crate) fn generate_campaign_result(
         // oTransition's Lake route checks genBlackMarket independently of
         // madeBlackMarket, so a spent Market request still suppresses Lakes.
         && !selected.contains("genBlackMarket")
-        && rng.chance(1, 10)
+        && if source_classic {
+            source_probability_roll(rng, state.probabilities.lake)
+        } else {
+            rng.chance(1, 10)
+        }
     {
         selected.insert("lake".into());
     }
@@ -898,7 +1033,14 @@ pub(crate) fn generate_campaign_result(
         #[cfg(test)]
         source_boundary_tests::observe_before_path(&world, rng);
     }
-    let path = room_path(rng, area, level, &mut selected, source_classic);
+    let path = room_path_with_probabilities(
+        rng,
+        area,
+        level,
+        &mut selected,
+        source_classic,
+        state.probabilities,
+    );
     if source_classic && (1..=16).contains(&level) {
         // Preserve the selected grid before room Create/population callbacks.
         // Source isInShop reads these markers throughout gameplay, even after
@@ -906,7 +1048,13 @@ pub(crate) fn generate_campaign_result(
         // authored tutorial/custom/hub contexts do not establish this grid.
         world.source_room_path = Some(path.rooms);
     }
-    if select_cemetery(rng, area, has(&selected, "cemetery"), source_classic) {
+    if select_cemetery_with_probability(
+        rng,
+        area,
+        has(&selected, "cemetery"),
+        source_classic,
+        state.probabilities.cemetery,
+    ) {
         selected.insert("cemetery".into());
     }
     let context = GenerationContext {
@@ -1100,7 +1248,13 @@ pub(crate) fn generate_campaign_result(
         }
     }
     let dark_roll_selected = if state.revision == crate::GenerationRevision::SourceClassicV2 {
-        let (visible, selected_roll) = select_dark_level(rng, level, area, &selected);
+        let (visible, selected_roll) = select_dark_level_with_probability(
+            rng,
+            level,
+            area,
+            &selected,
+            state.probabilities.dark_level,
+        );
         world.dark = visible;
         selected_roll
     } else {
@@ -1788,6 +1942,147 @@ mod tests {
             assert_eq!((path.start, path.end), (0, 3));
             assert_eq!(actual.next_u64(), expected.next_u64(), "seed{seed}");
         }
+    }
+
+    #[test]
+    fn source_probability_globals_drive_each_optional_campaign_branch() {
+        let globals = BTreeMap::from([
+            ("probDarkLevel".into(), 1.0),
+            ("probSnakePit".into(), 1.0),
+            ("probCemetary".into(), 1.0),
+            ("probLake".into(), 1.0),
+            ("probYetiLair".into(), 1.0),
+            ("probAlien".into(), 1.0),
+            ("probSacPit".into(), 1.0),
+        ]);
+        let probabilities = SourceProbabilities::from_globals(&globals);
+        assert_eq!(
+            probabilities,
+            SourceProbabilities {
+                dark_level: 1,
+                snake_pit: 1,
+                cemetery: 1,
+                lake: 1,
+                yeti_lair: 1,
+                alien: 1,
+                sacrifice_pit: 1,
+            }
+        );
+        assert_eq!(
+            SourceProbabilities::from_globals(&BTreeMap::new()),
+            SourceProbabilities::default()
+        );
+
+        let (dark, dark_roll_selected) = select_dark_level_with_probability(
+            &mut Rng::new(0),
+            2,
+            Area::Mines,
+            &BTreeSet::new(),
+            probabilities.dark_level,
+        );
+        assert!(dark && dark_roll_selected);
+        assert!(select_cemetery_with_probability(
+            &mut Rng::new(0),
+            Area::Jungle,
+            false,
+            true,
+            probabilities.cemetery,
+        ));
+
+        let mut lake_state = GenerationState::fresh(&Rng::new(0));
+        lake_state.probabilities = probabilities;
+        let lake = generate_campaign_result(
+            &mut Rng::new(0),
+            7,
+            &BTreeSet::from(["made_black_market".into()]),
+            GenerationContext::default(),
+            &mut lake_state,
+        );
+        assert_eq!(lake.world.name, "Lake");
+
+        let mut found_snake_pit = false;
+        for seed in 0..128 {
+            let mut flags = BTreeSet::new();
+            room_path_with_probabilities(
+                &mut Rng::new(seed),
+                Area::Mines,
+                2,
+                &mut flags,
+                true,
+                probabilities,
+            );
+            if flags.contains("snake_pit") {
+                found_snake_pit = true;
+                break;
+            }
+        }
+        assert!(
+            found_snake_pit,
+            "probSnakePit=1 should select an available pit"
+        );
+
+        let mut temple_flags = BTreeSet::new();
+        room_path_with_probabilities(
+            &mut Rng::new(0),
+            Area::Temple,
+            13,
+            &mut temple_flags,
+            true,
+            probabilities,
+        );
+        assert!(temple_flags.contains("sacrifice_pit"));
+
+        let made_moai = BTreeSet::from(["made_moai".into()]);
+        let mut alien_flags = made_moai.clone();
+        room_path_with_probabilities(
+            &mut Rng::new(0),
+            Area::Ice,
+            9,
+            &mut alien_flags,
+            true,
+            probabilities,
+        );
+        assert!(alien_flags.contains("alien_ship"));
+
+        let mut yeti_probabilities = probabilities;
+        yeti_probabilities.alien = 1 << 21;
+        let found_yeti = (0..128).any(|seed| {
+            let mut flags = made_moai.clone();
+            room_path_with_probabilities(
+                &mut Rng::new(seed),
+                Area::Ice,
+                9,
+                &mut flags,
+                true,
+                yeti_probabilities,
+            );
+            flags.contains("yeti_lair")
+        });
+        assert!(
+            found_yeti,
+            "probYetiLair=1 should select when Alien Ship does not"
+        );
+    }
+
+    #[test]
+    fn invalid_source_probability_is_rejected_before_generation_draws() {
+        let mut rng = Rng::new(42);
+        let before = rng.state_bits();
+        let mut state = GenerationState::fresh(&rng);
+        state.probabilities.dark_level = (1 << 21) + 1;
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            generate_campaign_result(
+                &mut rng,
+                2,
+                &BTreeSet::new(),
+                GenerationContext::default(),
+                &mut state,
+            )
+        }));
+
+        assert!(result.is_err());
+        assert_eq!(rng.state_bits(), before);
     }
 
     #[test]

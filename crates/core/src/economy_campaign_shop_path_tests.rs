@@ -203,6 +203,7 @@ fn shop_grid_roundtrips_but_absent_historical_wire_shape_and_fallback_are_unchan
             revision: crate::GenerationRevision::HistoricalV1,
             market_chance: 160,
             made_market_entrance: false,
+            probabilities: crate::generation::SourceProbabilities::default(),
         };
         let world = crate::generation::generate_with_campaign(
             &mut rng,

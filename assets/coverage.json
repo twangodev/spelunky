@@ -1891,7 +1891,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1207,
+          "line": 1361,
           "module": "crates/core/src/generation.rs"
         }
       ],
@@ -6074,7 +6074,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 766,
+          "line": 772,
           "module": "crates/core/src/game.rs"
         },
         {
@@ -6851,7 +6851,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 772,
+          "line": 778,
           "module": "crates/core/src/game.rs"
         },
         {
@@ -7766,7 +7766,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 775,
+          "line": 781,
           "module": "crates/core/src/game.rs"
         },
         {
@@ -13239,7 +13239,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 778,
+          "line": 784,
           "module": "crates/core/src/game.rs"
         },
         {
