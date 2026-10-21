@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -19,6 +19,7 @@ import { installBfcacheTrace, runBfcacheAcceptance } from './lifecycle.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const webRoot = path.resolve(process.env.BROWSER_WEB_ROOT || path.join(root, 'web/dist'));
+const wasmPackage = path.resolve(process.env.SPELUNKY_WASM_PACKAGE || path.join(root, 'target/web-pkg'));
 const artifacts = path.resolve(process.env.BROWSER_ARTIFACTS || path.join(root, 'artifacts/browser'));
 const tools = process.env.SPELUNKY_TOOLS || path.join(root, 'target/debug/spelunky-tools');
 const require = createRequire(import.meta.url);
@@ -43,10 +44,20 @@ assert.ok(['full', 'gameplay', 'adversarial', 'movement', 'onboarding', 'lightin
 if (report.suite === 'gameplay') report.deferredChecks = ['Source-valid natural dark-room WebGL pixel acceptance runs separately; gameplay success does not imply lighting acceptance.'];
 await mkdir(artifacts, { recursive: true });
 await access(tools);
+const appWasmDir = path.join(webRoot, '_app/immutable/assets');
+const appWasmFiles = (await readdir(appWasmDir)).filter(name => /^spelunky_bg\..+\.wasm$/.test(name));
+assert.equal(appWasmFiles.length, 1, 'The production bundle must contain exactly one generated Spelunky Wasm module');
+const appWasmBytes = await readFile(path.join(appWasmDir, appWasmFiles[0]));
+const replayWasmBytes = await readFile(path.join(wasmPackage, 'spelunky_bg.wasm'));
+const appWasmSha256 = createHash('sha256').update(appWasmBytes).digest('hex');
+const replayWasmSha256 = createHash('sha256').update(replayWasmBytes).digest('hex');
+assert.equal(replayWasmSha256, appWasmSha256,
+  'Native/Wasm replay diagnostics must load the same Wasm bytes that the production app serves');
 report.bundle = {
-  wasmSha256: createHash('sha256').update(await readFile(path.join(webRoot, 'pkg/spelunky_bg.wasm'))).digest('hex'),
+  wasmSha256: appWasmSha256,
+  replayWasmSha256,
   htmlSha256: createHash('sha256').update(await readFile(path.join(webRoot, 'index.html'))).digest('hex'),
-  bindingsSha256: createHash('sha256').update(await readFile(path.join(webRoot, 'pkg/spelunky.js'))).digest('hex'),
+  bindingsSha256: createHash('sha256').update(await readFile(path.join(wasmPackage, 'spelunky.js'))).digest('hex'),
   nativeSha256: createHash('sha256').update(await readFile(tools)).digest('hex'),
 };
 const native = [];
@@ -253,6 +264,18 @@ try {
       }
       const page = await context.newPage();
       activePage = page;
+      await page.route('**/__replay/**', async route => {
+        const filename = path.basename(new URL(route.request().url()).pathname);
+        if (!['spelunky.js', 'spelunky_bg.wasm'].includes(filename)) {
+          await route.abort();
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: filename.endsWith('.wasm') ? 'application/wasm' : 'text/javascript',
+          body: await readFile(path.join(wasmPackage, filename)),
+        });
+      });
       page.on('pageerror', error => result.errors.push(String(error)));
       page.on('console', message => {
         if (message.type() === 'error') result.consoleErrors.push(message.text());
@@ -285,13 +308,13 @@ try {
       }
 
       result.replays = await page.evaluate(async cases => {
-        const module = await import('./pkg/spelunky.js');
+        const module = await import('/__replay/spelunky.js');
         await module.default();
         return cases.map(({ seed, ticks, rules }) => JSON.parse(module.replay(seed, ticks, rules === 'assisted')));
       }, native);
       assert.deepEqual(result.replays, native.map(entry => entry.result));
       const invalid = await page.evaluate(async () => {
-        const module = await import('./pkg/spelunky.js');
+        const module = await import('/__replay/spelunky.js');
         await module.default();
         return [['invalid', 1, false], ['42', 100001, false]].map(args => {
           try { module.replay(...args); return false; } catch { return true; }
