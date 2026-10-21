@@ -1765,20 +1765,12 @@ impl App {
                 self.open_hub(spelunky_core::hub::HubKind::Scores);
             }
             EndingKind::TitleCredits => {
-                self.snapshot_lifetime_stats();
-                if let Some(game) = &mut self.game {
-                    game.flags.remove("app_exit_requested");
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    self.exit_requested = true;
-                }
-                #[cfg(target_arch = "wasm32")]
-                {
-                    self.flush_source_music();
-                    self.game = None;
-                    self.screen(Screen::Title);
-                }
+                finish_title_credits(
+                    &mut self.game,
+                    &mut self.store.data,
+                    &mut self.exit_requested,
+                );
+                self.flush_source_music();
             }
             EndingKind::Transition => self.transition(),
             EndingKind::HubPortal => {
@@ -3863,6 +3855,19 @@ fn capture_lifetime_stats(game: &Game, data: &mut crate::storage::SaveData) -> b
     data.lifetime_stats = game.lifetime_stats.clone();
     true
 }
+fn finish_title_credits(
+    game: &mut Option<Game>,
+    data: &mut crate::storage::SaveData,
+    exit_requested: &mut bool,
+) {
+    if let Some(game) = game.as_ref() {
+        capture_lifetime_stats(game, data);
+    }
+    if let Some(game) = game.as_mut() {
+        game.flags.remove("app_exit_requested");
+    }
+    *exit_requested = true;
+}
 fn snapshot_exit_stats(game: Option<&Game>, data: &mut crate::storage::SaveData) -> bool {
     game.is_some_and(|game| capture_lifetime_stats(game, data))
 }
@@ -5071,6 +5076,28 @@ fn fullscreen_attribute(saved_preference: bool) -> Option<Fullscreen> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn title_credits_completion_exits_without_reopening_the_title_menu() {
+        use super::finish_title_credits;
+        use spelunky_core::{Game, RulesPreset, RunState, statistics::LifetimeCounter};
+
+        let mut save = crate::storage::SaveData::default();
+        let mut game = Game::shell(19, RulesPreset::Classic);
+        game.state = RunState::Ending;
+        game.flags.insert("app_exit_requested".into());
+        game.lifetime_stats.increment(LifetimeCounter::TotalChests);
+        let mut game = Some(game);
+        let mut exit_requested = false;
+
+        finish_title_credits(&mut game, &mut save, &mut exit_requested);
+
+        assert!(exit_requested);
+        let game = game.expect("the terminal source game remains available for exit persistence");
+        assert_eq!(game.state, RunState::Ending);
+        assert!(!game.flags.contains("app_exit_requested"));
+        assert_eq!(save.lifetime_stats.total_chests, 1);
+    }
+
     #[test]
     fn pause_reactivation_transitions_keep_gameplay_levels() {
         use super::{Screen, pause_transition_preserves_gameplay_levels};
