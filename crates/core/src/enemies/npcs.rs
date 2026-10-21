@@ -722,7 +722,6 @@ fn damsel(game: &mut Game, e: &mut Entity) {
     }
     match e.state {
         0 => {
-            e.vel.x = 0.0;
             e.set_sprite(if game.flags.contains("character_damsel") {
                 "sStandLeft"
             } else {
