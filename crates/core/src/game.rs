@@ -183,7 +183,12 @@ impl Game {
         previous: &str,
         starting_inventory: Option<[f64; 3]>,
     ) {
+        // Classic keeps roomPath as a global across scrLoadLevel(-1): custom
+        // loads neither initialize nor replace it. A fresh run starts with
+        // the zero grid established by scrInitLevel.
+        let source_room_path = self.world.source_room_path.unwrap_or([[0; 4]; 5]);
         self.world = level.to_world();
+        self.world.source_room_path = Some(source_room_path);
         generation::initialize_custom_terrain_with_context(
             &mut self.world,
             &mut self.rng,
@@ -626,7 +631,9 @@ impl Game {
                 self.flags.insert("used_shortcut".into());
             }
             self.flags.insert("no_dark_level".into());
-            self.generate_campaign_room(level.clamp(1, 16));
+            // Shortcut portals call `room_goto(rLevel)` directly. Classic only
+            // evaluates the Jungle Lake lottery from `oTransition`.
+            self.generate_campaign_room_for_route(level.clamp(1, 16), false);
         }
         self.reset_position();
         traps::initialize_level(self);
@@ -640,6 +647,10 @@ impl Game {
     }
 
     fn generate_campaign_room(&mut self, level: u32) {
+        self.generate_campaign_room_for_route(level, true);
+    }
+
+    fn generate_campaign_room_for_route(&mut self, level: u32, source_transition: bool) {
         // scrInitLevel publishes these source globals before generating the
         // room. Keep the serialized source namespace aligned with `World`,
         // including direct hub starts and ordinary transition loads.
@@ -695,12 +706,13 @@ impl Game {
         if !historical {
             generation::reset_dark_history(&mut self.flags, level);
         }
-        let generated = generation::generate_campaign_result(
+        let generated = generation::generate_campaign_result_for_route(
             &mut self.rng,
             level,
             &self.flags,
             context,
             &mut state,
+            source_transition,
         );
         if generated.dark_roll_selected {
             self.flags.insert("had_dark_level".into());
@@ -1196,6 +1208,20 @@ mod tests {
         assert_eq!(game.player.pos, game.player.previous_pos);
         assert_eq!(game.camera, game.previous_camera);
     }
+
+    #[test]
+    fn ordinary_jungle_transition_keeps_source_lake_lottery() {
+        // With this exact incoming RNG state, source rand(1, probLake) wins.
+        let mut game = Game::shell(0, RulesPreset::Classic);
+        game.world.level = 4;
+        game.data.insert("next_level".into(), 5.0);
+
+        game.next_level();
+
+        assert_eq!(game.world.level, 5);
+        assert_eq!(game.world.name, "Lake");
+    }
+
     #[test]
     fn transition_clears_prior_ice_special_before_generating_next_level() {
         let mut start = Game::shell(0, RulesPreset::Classic);

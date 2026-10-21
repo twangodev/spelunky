@@ -243,3 +243,45 @@ fn source_shop_query_keeps_player_tx_ty_and_authored_contexts_unreconstructed() 
         assert!(!wire.as_object().unwrap().contains_key("source_room_path"));
     }
 }
+
+#[test]
+fn custom_loads_keep_classic_global_shop_path_for_armed_bomb_warnings() {
+    use crate::{Game, InputFrame};
+
+    let level = crate::level::Level::default();
+
+    // A fresh Classic context begins with scrInitLevel's zeroed roomPath;
+    // a custom keeper by itself does not turn that room into a shop.
+    let mut fresh = Game::shell(123, RulesPreset::Classic);
+    fresh.load_custom(&level, "fresh", "");
+    assert_eq!(fresh.world.source_room_path, Some([[0; 4]; 5]));
+    let keeper = fresh.world.spawn("oShopkeeper", Vec2::new(240.0, 208.0));
+    let bomb = fresh.world.spawn("oBomb", Vec2::new(232.0, 208.0));
+    crate::items::explosives::arm_bomb(fresh.world.entity_mut(bomb).unwrap());
+    fresh.step(&crate::InputFrame::default());
+    assert_eq!(fresh.world.entity(keeper).unwrap().value("angered"), 0.0);
+    assert!(!fresh.flags.contains("wanted"));
+
+    // A generated campaign's global grid survives a custom load and linked
+    // custom transition. The keeper cannot synthesize shop membership where
+    // Classic's stale roomPath contains an ordinary-route marker.
+    let mut linked = Game::shell(123, RulesPreset::Classic);
+    let flags = std::collections::BTreeSet::from(["black_market".to_owned()]);
+    linked.world = crate::generation::generate(&mut linked.rng, 5, &flags);
+    let nonshop_path = linked.world.source_room_path.unwrap();
+    assert_eq!(nonshop_path, MARKET_PATH);
+    linked.load_custom(&level, "first", "");
+    assert_eq!(linked.world.source_room_path, Some(nonshop_path));
+    linked.continue_custom(&level, "second", "first");
+    assert_eq!(linked.world.source_room_path, Some(nonshop_path));
+    assert!(
+        crate::economy::in_shop(&linked, Vec2::new(240.0, 80.0)),
+        "the stale Classic grid still classifies its shop room as a shop"
+    );
+    let keeper = linked.world.spawn("oShopkeeper", Vec2::new(80.0, 80.0));
+    let bomb = linked.world.spawn("oBomb", Vec2::new(72.0, 80.0));
+    crate::items::explosives::arm_bomb(linked.world.entity_mut(bomb).unwrap());
+    linked.step(&InputFrame::default());
+    assert_eq!(linked.world.entity(keeper).unwrap().value("angered"), 0.0);
+    assert!(!linked.flags.contains("wanted"));
+}

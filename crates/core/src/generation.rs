@@ -941,6 +941,20 @@ pub(crate) fn generate_campaign_result(
     context: GenerationContext,
     state: &mut GenerationState,
 ) -> GeneratedLevel {
+    generate_campaign_result_for_route(rng, level, flags, context, state, true)
+}
+
+/// Generate a campaign room reached either from an ordinary source transition
+/// or directly from a hub shortcut. Classic only rolls for the Jungle Lake in
+/// `oTransition`; shortcuts enter `rLevel`/`scrInitLevel` directly.
+pub(crate) fn generate_campaign_result_for_route(
+    rng: &mut Rng,
+    level: u32,
+    flags: &BTreeSet<String>,
+    context: GenerationContext,
+    state: &mut GenerationState,
+    source_transition: bool,
+) -> GeneratedLevel {
     let area = Area::for_level(level);
     // Validate before room construction, callbacks, or RNG draws. Historical
     // serialized state remains historical even if its RNG is canonical.
@@ -974,7 +988,7 @@ pub(crate) fn generate_campaign_result(
         // madeBlackMarket, so a spent Market request still suppresses Lakes.
         && !selected.contains("genBlackMarket")
         && if source_classic {
-            source_probability_roll(rng, state.probabilities.lake)
+            source_transition && source_probability_roll(rng, state.probabilities.lake)
         } else {
             rng.chance(1, 10)
         }

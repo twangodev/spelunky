@@ -2186,7 +2186,10 @@ fn static_targets(game: &mut Game) {
 mod tests {
     use super::*;
     fn challenge(kind: HubKind) -> Game {
-        let mut g = Game::shell(7, RulesPreset::Classic);
+        challenge_with_seed(kind, 7)
+    }
+    fn challenge_with_seed(kind: HubKind, seed: u32) -> Game {
+        let mut g = Game::shell(seed, RulesPreset::Classic);
         g.world = world(kind, &g.flags);
         g.player.pos = g.world.entrance;
         initialize(&mut g, kind);
@@ -3594,7 +3597,9 @@ mod tests {
 
     #[test]
     fn authored_level_five_shortcut_works_without_a_tunnel_unlock() {
-        let mut g = challenge(HubKind::Title);
+        // Seed zero makes the source Lake lottery win. Reset after hub Create
+        // callbacks so this portal regression exercises that exact draw.
+        let mut g = challenge_with_seed(HubKind::Title, 0);
         assert!(!shortcut_stages(&g.flags)[0]);
         assert!(g.world.entities.iter().any(|e| e.object == "oXShortcut5"));
 
@@ -3615,8 +3620,10 @@ mod tests {
         assert!(g.player.is_exiting());
         finish_portal(&mut g);
         assert!(g.flags.contains("hub_destination:shortcut5"));
+        g.rng = crate::Rng::new_canonical(0);
         g.start_from_hub(false, 5);
         assert_eq!(g.world.level, 5);
+        assert_eq!(g.world.name, "Jungle");
         assert!(g.flags.contains("used_shortcut"));
         assert_eq!(g.state, RunState::Playing);
     }

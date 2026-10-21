@@ -141,6 +141,10 @@ impl HostTiming {
         self.history_ready = false;
         self.alpha_sample = None;
     }
+    fn reset_for_suspension(&mut self, now: f64, input: &mut InputState) {
+        self.reset(now);
+        input.clear_for_suspension();
+    }
     fn begin_frame(&mut self, now: f64) -> HostFrame {
         let frame = HostFrame {
             sampled_at: now,
@@ -604,6 +608,21 @@ impl App {
     fn reset_timing(&mut self) {
         self.reset_timing_with_gameplay_levels(false);
     }
+    fn reset_timing_for_suspension(&mut self) {
+        self.cinematic_action = false;
+        self.credits_keyboard_skip = false;
+        self.pause_start_requested = false;
+        self.donation_confirm = false;
+        let now = self.now();
+        // Preserve Game's normalized controller levels too; the source gamepad
+        // Step did not run while the room was frozen.
+        self.timing.reset_for_suspension(now, &mut self.input);
+        self.mouse_left = false;
+        self.mouse_right = false;
+        self.settings_ui.cancel_pointer();
+        self.apply_settings_audio_action();
+        self.editor.cancel_pointer();
+    }
     fn reset_timing_with_gameplay_levels(&mut self, preserve_levels: bool) {
         self.cinematic_action = false;
         self.credits_keyboard_skip = false;
@@ -626,7 +645,7 @@ impl App {
                 self.focused = focused;
             }
         }
-        self.reset_timing();
+        self.reset_timing_for_suspension();
         self.apply_audio_policy();
         if !self.occluded
             && let Some(window) = &self.window
@@ -4566,7 +4585,7 @@ impl ApplicationHandler<UserEvent> for App {
             // visibility events. Treat suspension as hidden and reconcile the
             // actual document state when Winit reports Resumed.
             self.occluded = true;
-            self.reset_timing();
+            self.reset_timing_for_suspension();
             self.apply_audio_policy();
         }
     }
@@ -4664,23 +4683,23 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::Focused(focused) => {
+                let focus_changed = self.focused != focused;
                 self.focused = focused;
                 self.mouse_left = false;
                 self.mouse_right = false;
                 clear_control_on_focus_loss(&mut self.control, focused);
                 // Source freezeOnLoseFocus suspends simulation without changing
                 // the explicit pause state. Focus return resumes the same screen.
-                self.reset_timing();
-                if !focused {
-                    self.input.clear();
+                if focus_changed {
+                    self.reset_timing_for_suspension();
                 }
                 self.apply_audio_policy()
             }
             WindowEvent::Occluded(occluded) => {
+                let occlusion_changed = self.occluded != occluded;
                 self.occluded = occluded;
-                self.reset_timing();
-                if occluded {
-                    self.input.clear();
+                if occlusion_changed {
+                    self.reset_timing_for_suspension();
                 }
                 self.apply_audio_policy();
             }
@@ -8031,6 +8050,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn host_suspension_reset_discards_keyboard_state_and_elapsed_time() {
+        let mut input = InputState::default();
+        input.key(KeyCode::ArrowRight, true, false);
+        assert!(input.take_tick().right);
+        let mut timing = HostTiming::default();
+        timing.reset(10.0);
+        let sampled_before_resume = timing.begin_frame(50.0);
+        timing.reset_for_suspension(50.0, &mut input);
+        assert_eq!(timing.advance(sampled_before_resume).ticks, 0);
+
+        let first_frame = timing.begin_frame(50.001);
+        assert!((first_frame.elapsed - 0.001).abs() < 1e-9);
+        assert_eq!(input.take_tick(), spelunky_core::InputFrame::default());
+    }
+
     fn camera_follow_fixture() -> Game {
         use spelunky_core::{RulesPreset, Vec2, World};
         let mut game = Game::shell(7, RulesPreset::Classic);
@@ -9826,10 +9861,10 @@ mod tests {
             );
             assert_eq!(serde_json::to_vec(&game).unwrap(), before);
         }
-        // Existing focus-loss/reset policy deliberately retires old input.
+        // The source freeze reset retires keyboard input without turning a
+        // previously neutral controller into a blocked held control.
         input.key(KeyCode::KeyX, true, false);
-        input.clear();
-        timing.reset(3.0);
+        timing.reset_for_suspension(3.0, &mut input);
         assert!(
             adaptive_tick_boundary(
                 &mut timing,

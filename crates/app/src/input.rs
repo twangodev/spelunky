@@ -685,13 +685,26 @@ impl InputState {
     pub fn clear(&mut self) {
         self.clear_gameplay();
         self.gamepad_ui = 0;
-        // Focus may have been lost before a controller press or release was
-        // sampled. Require neutral input rather than treating the first poll
-        // on return as a new menu confirmation or gameplay action.
+        // Require neutral input after a full reset rather than treating the
+        // first poll as a fresh menu confirmation or gameplay action. Focus
+        // suspension uses `clear_for_suspension` to preserve source samples.
         self.blocked_gamepad_ui = u8::MAX;
         self.blocked_gamepad_actions = Actions(u16::MAX);
         self.controller_capture_blocked = true;
         self.block_browser_direction_capture();
+    }
+
+    /// Freeze clears keyboard state and queued edges while retaining the last
+    /// controller sample. Classic's gamepad object also stops stepping while
+    /// unfocused, so the first poll after resume compares against that sample:
+    /// newly held controls press, while controls already held stay held.
+    pub fn clear_for_suspension(&mut self) {
+        self.keys.clear();
+        self.keyboard_held = Actions::default();
+        self.frame = InputFrame::default();
+        self.ui_edges.clear();
+        self.controller_edges.clear();
+        self.browser_direction_edges.clear();
     }
 
     /// Clear gameplay at screen transitions while keeping controller menu
@@ -2715,9 +2728,9 @@ mod tests {
     }
 
     #[test]
-    fn focus_return_does_not_resume_or_act_from_unobserved_controller_holds() {
+    fn full_input_clear_blocks_unobserved_controller_holds_until_release() {
         let mut input = InputState::default();
-        input.clear(); // Focus loss; no controller state is known here.
+        input.clear(); // Explicit full reset; no controller state is retained.
         let mut actions = Actions::default();
         actions.set(Action::Jump, true);
         actions.set(Action::Attack, true);
@@ -2731,6 +2744,82 @@ mod tests {
         assert_eq!(input.ui_pressed(), [UiButton::Confirm, UiButton::Pause]);
         let tick = input.take_tick();
         assert!(tick.jump_pressed && tick.attack_pressed);
+    }
+
+    #[test]
+    fn suspension_preserves_preexisting_controller_holds_without_replaying_press_edges() {
+        let mut input = InputState::default();
+        let mut actions = Actions::default();
+        actions.set(Action::Jump, true);
+        actions.set(Action::Attack, true);
+        let menu = (1 << 4) | (1 << 6);
+
+        input.accept_gamepads(actions, menu);
+        let before = input.take_tick();
+        assert!(before.jump_pressed && before.attack_pressed);
+        assert_eq!(input.ui_pressed(), [UiButton::Confirm, UiButton::Pause]);
+
+        // Focus loss and return both clear keyboard/queued input, but neither
+        // samples the controller while the source game is frozen.
+        input.clear_for_suspension();
+        input.clear_for_suspension();
+        let stale = input.take_tick();
+        assert_eq!(stale, InputFrame::default());
+
+        // The first resumed poll sees the same levels as the final active poll.
+        input.accept_gamepads(actions, menu);
+        let still_held = input.take_tick();
+        assert!(still_held.jump && still_held.attack);
+        assert!(!still_held.jump_pressed && !still_held.attack_pressed);
+        assert!(input.ui_pressed().is_empty());
+
+        input.accept_gamepads(Actions::default(), 0);
+        assert!(input.take_tick().jump_released);
+        input.accept_gamepads(actions, menu);
+        let fresh = input.take_tick();
+        assert!(fresh.jump_pressed && fresh.attack_pressed);
+        assert_eq!(input.ui_pressed(), [UiButton::Confirm, UiButton::Pause]);
+    }
+
+    #[test]
+    fn first_controller_press_during_suspension_is_seen_on_the_resume_poll() {
+        let mut input = InputState::default();
+        input.accept_gamepads(Actions::default(), 0);
+        input.take_tick();
+
+        input.clear_for_suspension();
+        input.clear_for_suspension();
+
+        let mut actions = Actions::default();
+        actions.set(Action::Jump, true);
+        actions.set(Action::Attack, true);
+        input.accept_gamepads(actions, (1 << 4) | (1 << 6));
+        let resumed = input.take_tick();
+        assert!(resumed.jump_pressed && resumed.attack_pressed);
+        assert_eq!(input.ui_pressed(), [UiButton::Confirm, UiButton::Pause]);
+
+        // Settings' raw-button capture follows the same last-sample rule.
+        input.accept_controller_capture(0);
+        input.controller_pressed();
+        input.clear_for_suspension();
+        input.clear_for_suspension();
+        input.accept_controller_capture(ControllerButton::South.mask());
+        assert_eq!(input.controller_pressed(), [ControllerButton::South]);
+    }
+
+    #[test]
+    fn suspension_drops_keyboard_edges_but_allows_a_fresh_key_press_after_return() {
+        let mut input = InputState::default();
+        input.key(KeyCode::KeyZ, true, false);
+        assert!(input.take_tick().jump_pressed);
+
+        input.clear_for_suspension();
+        input.clear_for_suspension();
+        assert_eq!(input.take_tick(), InputFrame::default());
+
+        input.key(KeyCode::KeyZ, true, false);
+        let fresh = input.take_tick();
+        assert!(fresh.jump && fresh.jump_pressed);
     }
 
     #[test]

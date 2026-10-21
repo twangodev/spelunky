@@ -601,9 +601,9 @@ pub struct World {
     /// A destroyed solid requests the source global water/lava drainage pass.
     #[serde(default)]
     pub fluid_dirty: bool,
-    /// Campaign room-path markers captured by SourceClassic generation.
-    /// Missing historical/custom context retains its prior shop adapter; no
-    /// keeper-derived grid is reconstructed or serialized on those worlds.
+    /// The SourceClassic global roomPath grid: set by campaign generation
+    /// and retained across custom loads. Historical snapshots without a grid
+    /// retain the prior shop adapter until a custom load seeds this state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_room_path: Option<[[u8; 4]; 5]>,
 }
