@@ -1917,7 +1917,7 @@ mod tests {
         game.player.previous_pos = game.player.pos;
         game.player.grounded = true;
         game.player.state = PlayerState::Standing;
-        let market_exit = game.world.spawn("oXMarket", game.player.pos);
+        game.world.spawn("oXMarket", game.player.pos);
         game.step(&InputFrame {
             up: true,
             ..Default::default()
@@ -1964,7 +1964,15 @@ mod tests {
             market_exit_query
         );
         assert_eq!(game.data["next_level"], 7.);
-        assert!(game.world.entity(market_exit).is_none());
+        // World-local entity IDs may be reused after next_level replaces the
+        // World, so assert the consumed Market entrance by its source type.
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|entity| entity.alive && entity.object == "oXMarket")
+        );
 
         game.next_level();
         assert_eq!(game.world.level, 7);

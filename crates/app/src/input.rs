@@ -209,6 +209,8 @@ pub struct InputState {
     #[cfg(not(target_arch = "wasm32"))]
     gilrs: Option<gilrs::Gilrs>,
     #[cfg(not(target_arch = "wasm32"))]
+    discard_queued_gamepad_events: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     native_extra_button_codes: HashMap<gilrs::GamepadId, [Option<gilrs::ev::Code>; 3]>,
 }
 
@@ -246,6 +248,8 @@ impl Default for InputState {
             ui_edges: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             gilrs: gilrs::Gilrs::new().ok(),
+            #[cfg(not(target_arch = "wasm32"))]
+            discard_queued_gamepad_events: false,
             #[cfg(not(target_arch = "wasm32"))]
             native_extra_button_codes: HashMap::new(),
         }
@@ -705,6 +709,12 @@ impl InputState {
         self.ui_edges.clear();
         self.controller_edges.clear();
         self.browser_direction_edges.clear();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // Gilrs can retain events produced while the source game is frozen.
+            // Resume from its current state instead of replaying those edges.
+            self.discard_queued_gamepad_events = true;
+        }
     }
 
     /// Clear gameplay at screen transitions while keeping controller menu
@@ -873,18 +883,45 @@ impl InputState {
             return;
         };
         // Sampling after every queued event preserves a press/release pair that
-        // arrives between two presentation frames.
+        // arrives between two presentation frames. After suspension, Classic
+        // has not polled during the frozen interval, so consume the backend's
+        // backlog and compare only its final state with the last active sample.
+        let discard_queued_events = self.discard_queued_gamepad_events;
+        let mut event_samples = Vec::new();
         while gilrs.next_event().is_some() {
-            let (actions, ui, press_allowed, capture) = self.native_gamepads(&gilrs);
-            self.accept_controller_capture(capture);
-            self.accept_controller_sample_with_direction_edges(actions, ui, press_allowed);
+            if !discard_queued_events {
+                event_samples.push(self.native_gamepads(&gilrs));
+            }
         }
-        let (actions, ui, press_allowed, capture) = self.native_gamepads(&gilrs);
+        let final_sample = self.native_gamepads(&gilrs);
         self.gamepad_available = gilrs.gamepads().next().is_some();
         self.primary_gamepad_connected = self.gamepad_available;
+        self.accept_native_gamepad_samples(event_samples, final_sample);
+        self.gilrs = Some(gilrs);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn accept_native_gamepad_samples(
+        &mut self,
+        queued_samples: impl IntoIterator<Item = (Actions, u8, u8, u32)>,
+        final_sample: (Actions, u8, u8, u32),
+    ) {
+        let discard_queued_events = std::mem::take(&mut self.discard_queued_gamepad_events);
+        if !discard_queued_events {
+            for sample in queued_samples {
+                self.accept_native_gamepad_sample(sample);
+            }
+        }
+        self.accept_native_gamepad_sample(final_sample);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn accept_native_gamepad_sample(
+        &mut self,
+        (actions, ui, press_allowed, capture): (Actions, u8, u8, u32),
+    ) {
         self.accept_controller_capture(capture);
         self.accept_controller_sample_with_direction_edges(actions, ui, press_allowed);
-        self.gilrs = Some(gilrs);
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -2805,6 +2842,29 @@ mod tests {
         input.clear_for_suspension();
         input.accept_controller_capture(ControllerButton::South.mask());
         assert_eq!(input.controller_pressed(), [ControllerButton::South]);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_gamepad_backlog_is_discarded_after_suspension() {
+        let mut input = InputState::default();
+        input.set_controller_enabled(true);
+        let neutral = (Actions::default(), 0, 0x0f, 0);
+        let start_pressed = (Actions::default(), 1 << 6, 0x0f, 0);
+        input.accept_native_gamepad_samples([], neutral);
+        input.take_tick();
+        input.ui_pressed();
+
+        input.clear_for_suspension();
+        // Gilrs can report both transitions that happened while the game was
+        // frozen. Only the final neutral state should be observed on resume.
+        input.accept_native_gamepad_samples([start_pressed, neutral], neutral);
+        assert!(input.ui_pressed().is_empty());
+        assert!(input.controller_pressed().is_empty());
+
+        // A new press after the resume sample remains a normal fresh edge.
+        input.accept_native_gamepad_samples([start_pressed], start_pressed);
+        assert_eq!(input.ui_pressed(), [UiButton::Pause]);
     }
 
     #[test]

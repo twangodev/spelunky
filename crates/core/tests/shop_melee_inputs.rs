@@ -9,6 +9,9 @@ fn room(rules: RulesPreset) -> Game {
     }
     let mut game = Game::shell(1, rules);
     game.load_custom(&level, "shop-melee-source", "");
+    let mut source_room_path = [[0; 4]; 5];
+    source_room_path[0][0] = 4;
+    game.world.source_room_path = Some(source_room_path);
     assert_eq!(game.player.pos, Vec2::new(104.0, 120.0));
     game
 }
@@ -39,6 +42,13 @@ fn acquire(game: &mut Game, id: u64) {
     neutral(game, 1);
 }
 
+fn isolate_keeper_melee(game: &mut Game, id: u64) {
+    let keeper = game.world.entity_mut(id).unwrap();
+    // Shotgun bullets bypass player invulnerability in Classic, so suppress
+    // this unrelated follow-up while observing the melee collision itself.
+    keeper.data.insert("has_gun".into(), 0.0);
+}
+
 fn blood_create(rng: &mut Rng) -> (Vec2, f64) {
     (
         Vec2::new(rng.unit() * 4.0 - rng.unit() * 4.0, -1.0 - rng.unit() * 2.0),
@@ -47,6 +57,8 @@ fn blood_create(rng: &mut Rng) -> (Vec2, f64) {
 }
 
 fn first_hit(game: &mut Game, keeper: u64, expected_weapon: &str) -> (Entity, Entity, Rng) {
+    // Contact invulnerability isolates melee blood behavior from retaliation.
+    game.player.invincible = 999;
     assert_eq!(
         game.world.entity(keeper).unwrap().value("hit_cooldown"),
         0.0
@@ -61,7 +73,8 @@ fn first_hit(game: &mut Game, keeper: u64, expected_weapon: &str) -> (Entity, En
         });
         assert_eq!(
             game.player.health, 4.0,
-            "hit fixture must retain ordinary player health"
+            "hit fixture must retain health with invincibility {}",
+            game.player.invincible
         );
         let actor = game
             .world
@@ -123,7 +136,17 @@ fn first_hit(game: &mut Game, keeper: u64, expected_weapon: &str) -> (Entity, En
             "no earlier Blood producer"
         );
     }
-    panic!("ordinary inputs failed to contact keeper with {expected_weapon}");
+    panic!(
+        "ordinary inputs failed to contact keeper with {expected_weapon}; player {:?} facing {}, keeper {:?}, weapons {:?}",
+        game.player.pos,
+        game.player.facing,
+        game.world.entity(keeper),
+        game.world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive && entity.object == expected_weapon)
+            .collect::<Vec<_>>()
+    );
 }
 
 fn bloods(game: &Game) -> Vec<&Entity> {
@@ -176,6 +199,7 @@ fn ordinary_machete_pickup_hits_keeper_front_and_rear_with_guarded_blood() {
                 "oShopkeeper",
                 Vec2::new(if rear { 80.0 } else { 120.0 }, 112.0),
             );
+            isolate_keeper_melee(&mut game, keeper);
             assert_eq!(game.world.entity(keeper).unwrap().health, 20);
             neutral(&mut game, 2);
             acquire(&mut game, machete);
@@ -230,6 +254,7 @@ fn ordinary_plain_whip_front_and_rear_bump_keeper_without_damage_or_blood() {
                 "oShopkeeper",
                 Vec2::new(if rear { 80.0 } else { 120.0 }, 112.0),
             );
+            isolate_keeper_melee(&mut game, keeper);
             neutral(&mut game, 2);
             let (actor, _, mut before) =
                 first_hit(&mut game, keeper, if rear { "oWhipPre" } else { "oWhip" });
@@ -250,6 +275,7 @@ fn ordinary_mattock_front_and_rear_bump_keeper_without_damage_or_blood() {
                 "oShopkeeper",
                 Vec2::new(if rear { 80.0 } else { 120.0 }, 112.0),
             );
+            isolate_keeper_melee(&mut game, keeper);
             neutral(&mut game, 2);
             acquire(&mut game, mattock);
             let (actor, _, mut before) = first_hit(
@@ -272,8 +298,13 @@ fn keeper_melee_preserves_other_idle_keeper_and_runs_only_own_attack_consequence
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         for machete in [false, true] {
             let mut game = room(rules);
+            let mut source_room_path = [[0; 4]; 5];
+            source_room_path[0][0] = 4;
+            source_room_path[0][1] = 4;
+            game.world.source_room_path = Some(source_room_path);
             let weapon = machete.then(|| game.spawn("oMachete", game.player.pos));
             let keeper = game.spawn("oShopkeeper", Vec2::new(120.0, 112.0));
+            isolate_keeper_melee(&mut game, keeper);
             let other = game.spawn("oShopkeeper", Vec2::new(240.0, 112.0));
             let stock = game.spawn("oJetpack", Vec2::new(288.0, 120.0));
             // Controlled initial shop stock, preceding every Step; actors otherwise retain source Creates.
@@ -341,6 +372,7 @@ fn controlled_initial_keeper_machete_budget_exhaustion_respects_bloodless_and_ca
                 actor.data.insert("bloodless".into(), f64::from(bloodless));
                 actor.data.insert("counts_as_kill".into(), 0.0);
                 actor.data.insert("environmental_death".into(), 1.0);
+                isolate_keeper_melee(&mut game, keeper);
                 if cap {
                     for x in 0..16 {
                         game.spawn("oDetritus", Vec2::new(176.0 + f64::from(x) * 2.0, 48.0));

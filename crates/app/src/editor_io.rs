@@ -37,7 +37,8 @@ pub(crate) fn save_native_level(name: &str, text: &str) -> Result<(), String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn save_native_level_to(directory: &std::path::Path, name: &str, text: &str) -> Result<(), String> {
-    let filename = relative_level_filename(name)?;
+    // Classic writes `string_lower(levelName) + ".lvl"` on every platform.
+    let filename = relative_level_filename(&name.to_lowercase())?;
     std::fs::create_dir_all(directory).map_err(|error| {
         format!(
             "Cannot create custom level directory {}: {error}",
@@ -576,12 +577,18 @@ mod tests {
 
         save_native_level_to(&directory, "room.lvl", "edited room").unwrap();
         save_native_level_to(&directory, "bonus.lvl.lvl", "double extension").unwrap();
-        save_native_level_to(&directory, "sub/room.lvl", "nested room").unwrap();
+        save_native_level_to(&directory, "Sub/Room.LVL", "nested room").unwrap();
+        save_native_level_to(&directory, "MiXeD.LvL", "lowercase filename").unwrap();
+
+        assert!(directory.join("sub/room.lvl").is_file());
+        assert!(directory.join("mixed.lvl").is_file());
+        assert!(!directory.join("MiXeD.LvL").exists());
 
         assert_eq!(
             load_native_level_directory(&directory).unwrap().levels,
             std::collections::BTreeMap::from([
                 ("bonus.lvl".into(), "double extension".into()),
+                ("mixed".into(), "lowercase filename".into()),
                 ("room".into(), "edited room".into()),
                 ("sub/room".into(), "nested room".into()),
             ])

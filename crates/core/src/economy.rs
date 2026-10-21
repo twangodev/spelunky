@@ -160,6 +160,20 @@ fn craps_keeper(game: &Game) -> bool {
     })
 }
 
+fn craps_room(game: &Game) -> bool {
+    if game.world.name == "Black Market"
+        || game.flags.contains("black_market")
+        || game.flags.contains("blackMarket")
+    {
+        let (x, y) = room(game.player.pos);
+        return game
+            .world
+            .source_room_path
+            .is_some_and(|path| path[y as usize][x as usize] == 5);
+    }
+    craps_keeper(game)
+}
+
 fn high_end_prize(game: &mut Game) -> &'static str {
     // scrGenerateItem set 1 uses sequential conditional draws.
     for (object, denominator) in [
@@ -505,7 +519,7 @@ pub(crate) fn player_pay_step(game: &mut Game, input: &InputFrame) {
             game.data.insert("message_timer".into(), 80.);
         }
     }
-    if craps_keeper(game) {
+    if craps_room(game) {
         if wanted {
             return;
         }
@@ -1287,6 +1301,37 @@ mod tests {
         assert_eq!(kissing.player.health, 5.0);
         assert_eq!(kissing.lifetime_stats.kisses_bought, 1);
         assert_eq!(kissing.world.entity(damsel).unwrap().state, 6);
+    }
+
+    #[test]
+    fn actual_step_black_market_craps_uses_room_path_with_remote_keeper() {
+        let mut game = Game::shell(19, RulesPreset::Classic);
+        let mut path = [[0; 4]; 5];
+        path[2][1] = 4;
+        path[2][2] = 5;
+        game.world.source_room_path = Some(path);
+        game.world.name = "Black Market".into();
+        game.player.pos = Vec2::new(376., 304.);
+        game.player.previous_pos = game.player.pos;
+        game.player.grounded = true;
+        game.player.money = 5000;
+        let keeper = game.world.spawn("oShopkeeper", Vec2::new(216., 304.));
+        game.world
+            .entity_mut(keeper)
+            .unwrap()
+            .text
+            .insert("style".into(), "General".into());
+
+        game.step(&InputFrame::default());
+        assert!(game.world.entity(keeper).unwrap().engine_active);
+        assert_eq!(room(game.player.pos), (2, 2));
+        game.step(&InputFrame {
+            pay_pressed: true,
+            ..Default::default()
+        });
+
+        assert_eq!(game.player.money, 3500);
+        assert_eq!(game.player.data.get("bet"), Some(&1500.0));
     }
 
     #[test]

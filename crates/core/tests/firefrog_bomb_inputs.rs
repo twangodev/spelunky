@@ -21,6 +21,9 @@ fn room(rules: RulesPreset, shop: bool, water: bool, trap: bool) -> (Game, u64) 
     let mut game = Game::shell(42, rules);
     game.load_custom(&level, "frog-bomb-own-step", "");
     if shop {
+        let mut source_room_path = [[0; 4]; 5];
+        source_room_path[1][0] = 4;
+        game.world.source_room_path = Some(source_room_path);
         // Authored '!' means PATROL and independently attacks nearby players.
         // This initial source Create is IDLE; all later changes use real inputs.
         let keeper = game.spawn(

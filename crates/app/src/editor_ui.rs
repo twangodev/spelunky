@@ -591,6 +591,9 @@ impl EditorUi {
             self.entry = None;
             self.confirmation = None;
             self.cursor = None;
+            // rLevelEditor is nonpersistent and reopens at its source view
+            // origin when the test level returns.
+            self.pan = [0.0, 0.0];
             self.cancel_pointer();
         }
     }
@@ -1620,6 +1623,7 @@ mod tests {
         let saved: Vec<_> = ui.document_text().lines().map(str::to_owned).collect();
         assert_eq!(&saved[34..37], &["0.75", "12.9", "1000.25"]);
 
+        ui.pan = [32.0, -16.0];
         let EditorCommand::Play(test) = ui.key(KeyCode::F5, None, false) else {
             panic!("F5 must launch editor test play");
         };
@@ -1630,6 +1634,7 @@ mod tests {
 
         ui.return_from_playtest();
         assert_eq!(ui.document_text(), saved.join("\n"));
+        assert_eq!(ui.pan, [0.0, 0.0]);
     }
     #[test]
     fn import_failure_preserves_document_and_palette_is_complete() {

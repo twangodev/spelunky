@@ -1379,7 +1379,7 @@ fn fire_frog_bomb_tail(game: &mut Game, bomb: &mut Entity) {
 }
 
 fn warn_shopkeeper(game: &mut Game, bomb: &mut Entity) {
-    // oBomb own Step continues after inherited Item destruction.
+    // oBomb owns the armed-shop warning after inherited item work.
     if bomb.object != "oBomb" || bomb.value("armed") == 0.0 {
         return;
     }

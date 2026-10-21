@@ -376,6 +376,29 @@ mod backend {
         name: &'static str,
         sink: SpatialSink,
     }
+    type NativeEffectSource = rodio::source::Buffered<Decoder<Cursor<&'static [u8]>>>;
+
+    fn native_effect_sources() -> &'static HashMap<&'static str, NativeEffectSource> {
+        static SOURCES: std::sync::OnceLock<HashMap<&'static str, NativeEffectSource>> =
+            std::sync::OnceLock::new();
+        SOURCES.get_or_init(|| {
+            ASSETS
+                .iter()
+                .copied()
+                .filter(|(name, _)| !is_music_resource(name))
+                .filter_map(|(name, bytes)| {
+                    let source = Decoder::try_from(Cursor::new(bytes)).ok()?.buffered();
+                    // Decode the full effect once before the first play. Clones
+                    // share Rodio's immutable sample spans and start at frame 0.
+                    let cached = source.clone();
+                    let mut decode = source;
+                    while decode.next().is_some() {}
+                    Some((name, cached))
+                })
+                .collect()
+        })
+    }
+
     pub struct Audio {
         stream: Option<OutputStream>,
         effects: Vec<Effect>,
@@ -397,6 +420,9 @@ mod backend {
     }
     impl Audio {
         pub fn new() -> Self {
+            // Classic's SS_LoadSound mode 0 loads WAV effects into memory at
+            // startup. Keep OGG music on the streaming path below.
+            let _ = native_effect_sources();
             let stream = OutputStreamBuilder::open_default_stream()
                 .ok()
                 .map(|mut stream| {
@@ -420,6 +446,7 @@ mod backend {
         }
         pub fn unlock(&mut self) {}
         pub fn sfx_preload_ready(&self) -> bool {
+            let _ = native_effect_sources();
             true
         }
         pub fn play(&mut self, name: &str, position: f32) {
@@ -453,9 +480,14 @@ mod backend {
             if only_if_idle && self.effects.iter().any(|effect| effect.name == name) {
                 return;
             }
-            let Ok(source) = Decoder::try_from(Cursor::new(bytes)) else {
-                return;
+            let source = if is_music_resource(name) {
+                None
+            } else {
+                native_effect_sources().get(name).cloned()
             };
+            if !is_music_resource(name) && source.is_none() {
+                return;
+            }
             if self.effects.len() >= MAX_EFFECTS {
                 self.effects.remove(0).sink.stop();
             }
@@ -484,7 +516,11 @@ mod backend {
                     self.music_frequencies.get(name).copied().unwrap_or(44_100) as f32 / 44_100.0,
                 );
             }
-            sink.append(source);
+            if let Some(source) = source {
+                sink.append(source);
+            } else if let Ok(source) = Decoder::try_from(Cursor::new(bytes)) {
+                sink.append(source);
+            }
             self.effects.push(Effect { name, sink });
         }
         /// Cancel matching effect voices only; music is a separate resource lane.
@@ -811,6 +847,19 @@ mod backend {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn native_effect_samples_are_predecoded_and_music_stays_streamed() {
+            let sources = native_effect_sources();
+            assert_eq!(sources.len(), effect_assets().count());
+            assert!(!sources.contains_key("title"));
+
+            let mut first_play = sources["explosion"].clone();
+            let mut overlapping_play = sources["explosion"].clone();
+            let first_sample = first_play.next().expect("explosion sample");
+            assert_eq!(overlapping_play.next(), Some(first_sample));
+            assert!(sources["explosion"].total_duration().is_some());
+        }
 
         fn headless_audio() -> Audio {
             Audio {
