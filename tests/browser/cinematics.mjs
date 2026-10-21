@@ -1,6 +1,6 @@
 // Source-authored cinematic routes reached through UI and real keyboard input.
 import assert from 'node:assert/strict';
-import { snapshot, state, press, reachTitleMenu, restoreDefaultSettings } from './movement.mjs';
+import { snapshot, state, press, reachTitleMenu, restoreDefaultSettings, openEditor } from './movement.mjs';
 import { importDocument, startCustom, walkThroughNextDoor, continueTransition, level } from './adversarial.mjs';
 
 export async function runCinematicAcceptance({ page, result, screenshot }) {
@@ -8,8 +8,7 @@ export async function runCinematicAcceptance({ page, result, screenshot }) {
   await page.reload({ waitUntil: 'domcontentloaded' });
   await reachTitleMenu(page);
   await page.locator('canvas').focus();
-  await page.keyboard.press('F2');
-  await state(page, 'Editor');
+  await openEditor(page, 'cinematics');
   const name = '000-browser-final-cinematic';
   await importDocument(page, name, level({ health: 9, next: 'NONE' }));
   result.cinematics = [];
@@ -52,7 +51,15 @@ export async function runCinematicAcceptance({ page, result, screenshot }) {
   await page.locator('canvas').focus();
   await press(page, 'ArrowDown', 2);
   await page.keyboard.press('Enter');
-  await page.waitForFunction(() => window.__spelunkyTest?.world?.name === 'rTitle', null, { timeout: 10000 });
+  // Entering the authored Title world starts its own opening animation. The
+  // world is assigned before the dummy player is placed at the rope, so wait
+  // for the actual playable state before checking the authored start position.
+  await page.waitForFunction(() => {
+    const current = window.__spelunkyTest;
+    return current?.world?.name === 'rTitle'
+      && !current.opening
+      && current.player?.x === 600;
+  }, null, { timeout: 15000 });
   const credits = { name: 'authored-rope-title-credits', status: 'failed', hub: await snapshot(page) };
   result.cinematics.push(credits);
   assert.equal(credits.hub.player.x, 600);

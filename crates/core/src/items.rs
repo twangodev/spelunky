@@ -2449,7 +2449,7 @@ mod tests {
     }
 
     #[test]
-    fn game_step_treasure_uses_pre_move_floor_contact_without_item_bounce() {
+    fn game_step_treasure_keeps_active_state_after_source_status_assignment() {
         let mut game = game();
         for x in 0..game.world.width {
             game.world.set_tile(x, 4, "oBlock");
@@ -2463,6 +2463,22 @@ mod tests {
         game.step(&InputFrame::default());
         assert_eq!(game.world.entity(gold).unwrap().pos.y, 60.0);
         assert_eq!(game.world.entity(gold).unwrap().vel.y, 0.0);
+        assert_eq!(game.world.entity(gold).unwrap().state, 1);
+
+        // Classic assigns `status = STATIC` here, but the Step guard reads
+        // the distinct `state` variable. With support gone, state stays ACTIVE
+        // and gravity resumes on every Step.
+        game.world.set_tile(6, 4, "");
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(gold).unwrap().pos.y, 60.0);
+        assert_eq!(game.world.entity(gold).unwrap().vel.y, 0.6);
+        assert_eq!(game.world.entity(gold).unwrap().state, 1);
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(gold).unwrap().vel.y, 1.2);
+        assert_eq!(game.world.entity(gold).unwrap().state, 1);
+        game.step(&InputFrame::default());
+        assert_eq!(game.world.entity(gold).unwrap().pos.y, 61.0);
+        assert_eq!(game.world.entity(gold).unwrap().state, 1);
     }
 
     #[test]

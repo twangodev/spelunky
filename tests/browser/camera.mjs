@@ -1,6 +1,6 @@
 // Live camera-follow regression through imported terrain and ordinary input.
 import assert from 'node:assert/strict';
-import { snapshot, state, restoreDefaultSettings, returnToEditor } from './movement.mjs';
+import { snapshot, state, restoreDefaultSettings, returnToEditor, openEditor } from './movement.mjs';
 import { importDocument } from './adversarial.mjs';
 
 function fixture() {
@@ -32,8 +32,7 @@ export async function runCameraAcceptance({ page, result, screenshot }) {
     scope: 'Actual redraw telemetry shares production presentation endpoints. Ordinary imported corridor and Right input; independent interpolation/anchor/endpoint continuity checks, preserving frozen source Draw sprite/frame. Observed software-browser alpha samples do not certify physical240Hz.' };
   await restoreDefaultSettings(page);
   await page.setViewportSize({ width: 320, height: 240 });
-  await page.keyboard.press('F2');
-  await state(page, 'Editor');
+  await openEditor(page, 'camera-follow');
   const name = 'camera-follow-corridor';
   await importDocument(page, name, fixture());
   await page.keyboard.press('F5');

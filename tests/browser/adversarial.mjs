@@ -1,6 +1,6 @@
 // Imported Classic levels and real keyboard input; telemetry is read-only.
 import assert from 'node:assert/strict';
-import { snapshot, state, press, reachTitleMenu, returnToEditor, restoreDefaultSettings } from './movement.mjs';
+import { snapshot, state, press, reachTitleMenu, returnToEditor, restoreDefaultSettings, openEditor } from './movement.mjs';
 
 export function level({ start = 6, floor = '1', health = 9, bombs = 2, ropes = 3, arrow = false,
   next = 'NONE', entrances, exit = 7, targets = [] } = {}) {
@@ -15,6 +15,7 @@ export function level({ start = 6, floor = '1', health = 9, bombs = 2, ropes = 3
 
 export async function importDocument(page, name, text) {
   const chooser = page.waitForEvent('filechooser', { timeout: 10000 });
+  await page.locator('canvas').focus();
   await page.keyboard.press('Control+i');
   await (await chooser).setFiles({ name: `${name}.lvl`, mimeType: 'text/plain', buffer: Buffer.from(text) });
   await page.waitForFunction(({ name, text }) => JSON.parse(localStorage.getItem('spelunky-rust.save'))?.custom_levels?.[name] === text,
@@ -129,8 +130,7 @@ export async function runAdversarialAcceptance({ page, result, screenshot }) {
   await page.reload({ waitUntil: 'domcontentloaded' });
   await reachTitleMenu(page);
   await page.locator('canvas').focus();
-  await page.keyboard.press('F2');
-  await state(page, 'Editor');
+  await openEditor(page, 'adversarial');
 
   for (const side of ['left', 'right']) {
     const name = `boundary-${side}`;
@@ -202,9 +202,9 @@ export async function runAdversarialAcceptance({ page, result, screenshot }) {
 
   const first = '000-browser-a';
   const second = '000-browser-b';
-  const firstText = level({ targets: ['NONE', `${second.toUpperCase()}.LVL`] });
+  const firstText = level({ targets: ['NONE', second.toUpperCase()] });
   const secondText = level({ entrances: [2, 14], exit: 17, health: 1, bombs: 0, ropes: 0,
-    targets: ['NONE', `${first.toUpperCase()}.LVL`, `${first.toUpperCase()}.LVL`] });
+    targets: ['NONE', first.toUpperCase(), first.toUpperCase()] });
   await importDocument(page, second, secondText);
   await importDocument(page, first, firstText);
   const editor = { name: 'editor-exit-priority', status: 'failed' };
@@ -221,7 +221,7 @@ export async function runAdversarialAcceptance({ page, result, screenshot }) {
   result.adversarial.push(linked);
   await startCustom(page, first);
   linked.start = await snapshot(page);
-  await page.keyboard.press('b');
+  await page.keyboard.press('a'); // Default bomb binding is KeyA.
   await page.waitForFunction(() => window.__spelunkyTest.player.bombs === 1, null, { timeout: 10000 });
   linked.spent = await snapshot(page);
   await walkThroughNextDoor(page);
@@ -245,8 +245,7 @@ export async function runAdversarialAcceptance({ page, result, screenshot }) {
   await page.reload({ waitUntil: 'domcontentloaded' });
   await reachTitleMenu(page);
   await page.locator('canvas').focus();
-  await page.keyboard.press('F2');
-  await state(page, 'Editor');
+  await openEditor(page, 'adversarial-death');
   const death = { name: 'lethal-arrow-death-reveal', status: 'failed' };
   result.adversarial.push(death);
   await importDocument(page, 'death-arrow', level({ health: 1, arrow: true, exit: null }));
@@ -294,8 +293,15 @@ async function enterOriginalHub(page) {
   await page.locator('canvas').focus();
   await press(page, 'ArrowDown', 2);
   await page.keyboard.press('Enter');
-  await page.waitForFunction(() => window.__spelunkyTest?.screen === 'Playing' && window.__spelunkyTest.world.name === 'rTitle',
-    null, { timeout: 10000 });
+  // Loading rTitle precedes completion of its authored opening; the player is
+  // positioned at the start only after the opening has settled.
+  await page.waitForFunction(() => {
+    const current = window.__spelunkyTest;
+    return current?.screen === 'Playing'
+      && current.world?.name === 'rTitle'
+      && !current.opening
+      && current.player?.x === 600;
+  }, null, { timeout: 15000 });
 }
 
 async function walkToAuthoredStart(page) {

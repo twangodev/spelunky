@@ -118,7 +118,11 @@ impl Renderer {
         {
             return Err("Sprite atlas exceeds the adapter's texture size limit".into());
         }
-        let limits = wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter_limits);
+        let limits = if cfg!(target_arch = "wasm32") {
+            webgl2_device_limits(&adapter_limits)
+        } else {
+            wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter_limits)
+        };
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
@@ -478,6 +482,17 @@ fn viewport(width: u32, height: u32) -> [f32; 4] {
     [0.0, 0.0, width as f32, height as f32]
 }
 
+fn webgl2_device_limits(adapter_limits: &wgpu::Limits) -> wgpu::Limits {
+    let mut limits =
+        wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter_limits.clone());
+    // The shared WebGL2 defaults request eight color attachments, but some
+    // adapters expose fewer. This renderer only uses one color attachment.
+    limits.max_color_attachments = limits
+        .max_color_attachments
+        .min(adapter_limits.max_color_attachments);
+    limits
+}
+
 #[cfg(test)]
 fn append_quad(vertices: &mut Vec<Vertex>, quad: &DrawQuad) {
     append_quad_in_view(vertices, quad, Viewport::canonical());
@@ -726,6 +741,24 @@ pub(crate) mod tests {
     fn viewport_covers_the_entire_surface() {
         assert_eq!(viewport(1920, 1080), [0.0, 0.0, 1920.0, 1080.0]);
         assert_eq!(viewport(800, 800), [0.0, 0.0, 800.0, 800.0]);
+    }
+
+    #[test]
+    fn webgl2_limits_respect_adapter_color_attachment_cap() {
+        let adapter_limits = wgpu::Limits {
+            max_color_attachments: 6,
+            ..wgpu::Limits::downlevel_webgl2_defaults()
+        };
+
+        let requested = webgl2_device_limits(&adapter_limits);
+
+        assert_eq!(requested.max_color_attachments, 6);
+        assert_eq!(requested.max_vertex_attributes, 16);
+        assert_eq!(
+            requested.max_texture_dimension_2d,
+            adapter_limits.max_texture_dimension_2d
+        );
+        assert!(requested.check_limits(&adapter_limits));
     }
 
     #[test]

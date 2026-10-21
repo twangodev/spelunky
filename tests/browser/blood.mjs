@@ -1,6 +1,6 @@
 // Actual snake-whip input and production framebuffer pixels, not injected effects.
 import assert from 'node:assert/strict';
-import { snapshot, state, reachTitleMenu } from './movement.mjs';
+import { snapshot, state, reachTitleMenu, openEditor } from './movement.mjs';
 import { importDocument } from './adversarial.mjs';
 
 export function installBloodProbe() {
@@ -104,8 +104,7 @@ export async function runBloodAcceptance({ page, result, screenshot }) {
   await page.setViewportSize({ width: 320, height: 240 });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await reachTitleMenu(page);
-  await page.keyboard.press('F2');
-  await state(page, 'Editor');
+  await openEditor(page, 'blood');
   await importDocument(page, 'natural-snake-blood', fixture());
   await page.keyboard.press('F5');
   await page.waitForFunction(() => window.__spelunkyTest?.screen === 'Playing' && window.__spelunkyTest.player.grounded,

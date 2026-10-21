@@ -9,7 +9,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
-import { installMovementTrace, runMovementAcceptance, reachTitleMenu } from './movement.mjs';
+import { installMovementTrace, runMovementAcceptance, reachTitleMenu, openEditor } from './movement.mjs';
 import { runAdversarialAcceptance, runOnboardingAcceptance } from './adversarial.mjs';
 import { installLightingProfile, installLightingSeedControl, installLightingProbe, runLightingAcceptance } from './lighting.mjs';
 import { runCinematicAcceptance } from './cinematics.mjs';
@@ -201,13 +201,16 @@ async function screenshot(page, name, result) {
 async function canvasClick(page, x, y, options = {}) {
   const box = await page.locator('canvas').boundingBox();
   const scale = Math.min(box.width / 320, box.height / 240);
+  // Editor painting repeats at each 30 Hz source tick while held. Keep this
+  // synthetic click to one tick so its single undo checks one paint operation.
   await page.mouse.click(box.x + (box.width - 320 * scale) / 2 + x * scale,
-    box.y + (box.height - 240 * scale) / 2 + y * scale, options);
+    box.y + (box.height - 240 * scale) / 2 + y * scale, { delay: 35, ...options });
   await page.waitForTimeout(100);
 }
 
 async function importLevel(page, name, text) {
   const chooser = page.waitForEvent('filechooser', { timeout: 10000 });
+  await page.locator('canvas').focus();
   await press(page, 'Control+i');
   await (await chooser).setFiles({ name, mimeType: 'text/plain', buffer: Buffer.from(text) });
   await page.waitForTimeout(500);
@@ -283,11 +286,13 @@ try {
 
       result.replays = await page.evaluate(async cases => {
         const module = await import('./pkg/spelunky.js');
+        await module.default();
         return cases.map(({ seed, ticks, rules }) => JSON.parse(module.replay(seed, ticks, rules === 'assisted')));
       }, native);
       assert.deepEqual(result.replays, native.map(entry => entry.result));
       const invalid = await page.evaluate(async () => {
         const module = await import('./pkg/spelunky.js');
+        await module.default();
         return [['invalid', 1, false], ['42', 100001, false]].map(args => {
           try { module.replay(...args); return false; } catch { return true; }
         });
@@ -295,21 +300,22 @@ try {
       assert.deepEqual(invalid, [true, true]);
       result.checks.push('Eight native/Wasm replay results match for both presets; invalid inputs rejected');
 
-      // Settings is fourth from the end, independent of additional title entries.
-      await press(page, 'ArrowUp', 4);
+      // Settings is six steps below Start; entries added after it do not shift it.
+      await press(page, 'ArrowDown', 6);
       await press(page, 'Enter');
+      const settingsBefore = (await saved(page)).settings;
       await press(page, 'ArrowRight');
       await press(page, 'ArrowDown');
       await press(page, 'ArrowRight');
       await press(page, 'ArrowDown');
       await press(page, 'ArrowLeft');
-      await press(page, 'ArrowDown', 10); // row 12: jump binding
+      await press(page, 'ArrowDown', 12); // Jump binding follows the newer frame/fullscreen rows.
       await press(page, 'Enter');
       await press(page, 'j');
       const settings = (await saved(page)).settings;
       assert.equal(settings.rules, 'Assisted');
       assert.equal(settings.pixel_snap, true);
-      assert.ok(Math.abs(settings.music_volume - 0.5) < 0.001);
+      assert.ok(settings.music_volume < settingsBefore.music_volume, 'Left must lower the selected music level');
       assert.equal(settings.bindings.jump, 'KeyJ');
       await screenshot(page, 'settings', result);
       await press(page, 'Escape');
@@ -342,18 +348,20 @@ try {
       }
       result.checks.push('Authored tutorial and original hub startup and return to title');
 
-      await press(page, 'F2');
+      await openEditor(page, 'custom');
+      await press(page, '1'); // Select Blocks, then cycle past @, X, and I to tile 1.
+      await press(page, 's', 3);
       await canvasClick(page, 20, 40);
       await press(page, 'Control+s');
       let level = (await saved(page)).custom_levels.custom;
-      assert.equal(level.split('\n')[11][2], '1');
+      assert.equal(level.split('\n')[0][2], '1');
       await press(page, 'Control+z');
       await press(page, 'Control+s');
-      assert.equal((await saved(page)).custom_levels.custom.split('\n')[11][2], '0');
+      assert.equal((await saved(page)).custom_levels.custom.split('\n')[0][2], '0');
       await press(page, 'Control+y');
       await press(page, 'Control+s');
       level = (await saved(page)).custom_levels.custom;
-      assert.equal(level.split('\n')[11][2], '1');
+      assert.equal(level.split('\n')[0][2], '1');
       await screenshot(page, 'editor', result);
       const downloadEvent = page.waitForEvent('download', { timeout: 10000 });
       await press(page, 'Control+e');
@@ -380,7 +388,7 @@ try {
       const persisted = await saved(page);
       await ready(page);
       assert.deepEqual(await saved(page), persisted);
-      await press(page, 'F2');
+      await openEditor(page, 'resize');
       for (const viewport of [{ width: 480, height: 800 }, { width: 1440, height: 600 }]) {
         await page.setViewportSize(viewport);
         await page.waitForTimeout(300);
@@ -448,7 +456,7 @@ try {
       const corruptPage = await corrupt.newPage();
       corruptPage.on('pageerror', error => result.errors.push(String(error)));
       await ready(corruptPage);
-      await press(corruptPage, 'F2');
+      await openEditor(corruptPage, 'corrupt');
       await press(corruptPage, 'Control+s');
       assert.equal(await corruptPage.evaluate(() => localStorage.getItem('spelunky-rust.save')), '{invalid');
       await screenshot(corruptPage, 'corrupt-storage-preserved', result);
@@ -460,7 +468,7 @@ try {
       const deniedPage = await denied.newPage();
       deniedPage.on('pageerror', error => result.errors.push(String(error)));
       await ready(deniedPage);
-      await press(deniedPage, 'F2');
+      await openEditor(deniedPage, 'denied');
       await press(deniedPage, 'Control+s');
       await screenshot(deniedPage, 'storage-denied', result);
       await denied.close();

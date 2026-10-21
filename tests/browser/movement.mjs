@@ -93,6 +93,14 @@ export async function press(page, key, count = 1) {
   }
 }
 
+export async function openEditor(page, name = 'custom') {
+  await page.locator('canvas').focus();
+  await page.keyboard.press('F2');
+  await state(page, 'Editor');
+  await page.keyboard.type(name);
+  await press(page, 'Enter');
+}
+
 export async function returnToEditor(page) {
   await page.keyboard.press('Escape');
   await state(page, 'Pause');
@@ -103,6 +111,7 @@ export async function returnToEditor(page) {
 
 async function importFixture(page, side, name) {
   const chooser = page.waitForEvent('filechooser', { timeout: 10000 });
+  await page.locator('canvas').focus();
   await page.keyboard.press('Control+i');
   await (await chooser).setFiles({ name: `${name}.lvl`, mimeType: 'text/plain', buffer: Buffer.from(fixture(side)) });
   await page.waitForFunction(name => {
@@ -159,7 +168,7 @@ export async function restoreDefaultSettings(page) {
   await page.locator('canvas').focus();
   // A new app instance starts the settings cursor at row zero. Restore defaults
   // through the actual menu to use Classic rules, unsnapped motion, and Z jump.
-  await press(page, 'ArrowUp', 4);
+  await press(page, 'ArrowDown', 6);
   await page.keyboard.press('Enter');
   await state(page, 'Settings');
   await press(page, 'ArrowUp', 2);
@@ -182,7 +191,7 @@ export async function runMovementAcceptance({ page, result, screenshot }) {
       await page.reload({ waitUntil: 'domcontentloaded' });
       await reachTitleMenu(page);
       await page.locator('canvas').focus();
-      await press(page, 'ArrowUp', 4);
+      await press(page, 'ArrowDown', 6);
       await page.keyboard.press('Enter');
       await state(page, 'Settings');
       await page.keyboard.press('ArrowRight');
@@ -190,8 +199,7 @@ export async function runMovementAcceptance({ page, result, screenshot }) {
       await page.keyboard.press('Escape');
       await state(page, 'Title');
     }
-    await page.keyboard.press('F2');
-    await state(page, 'Editor');
+    await openEditor(page, 'movement');
     for (const side of ['right', 'left']) {
       const repeats = rules === 'Classic' ? 2 : 1;
       for (let attempt = 0; attempt < repeats; attempt++) {
