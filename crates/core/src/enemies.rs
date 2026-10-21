@@ -59,6 +59,8 @@ pub(crate) fn on_spawn(world: &mut World, id: u64) {
         return;
     };
     let pos = Vec2::new(emitter.pos.x, emitter.pos.y + 16.0);
+    // GameMaker's instance_exists ignores deactivated instances, matching the
+    // active engine slice represented here by engine_active.
     if !world
         .entities
         .iter()

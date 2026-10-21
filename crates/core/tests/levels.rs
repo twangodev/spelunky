@@ -172,11 +172,38 @@ fn source_level_loader_ignores_unknown_control_symbols_in_map_cells() {
         .lines()
         .map(str::to_owned)
         .collect();
-    lines[0].replace_range(..1, "\t");
+    lines[0] = format!("\t\u{0001}\u{007f}{}", "0".repeat(LEVEL_WIDTH - 3));
 
     let parsed = Level::parse(&lines.join("\n")).unwrap();
     assert_eq!(parsed.get_tile(0, 0), Some('\t'));
+    assert_eq!(parsed.get_tile(1, 0), Some('\u{0001}'));
+    assert_eq!(parsed.get_tile(2, 0), Some('\u{007f}'));
     assert!(tile_spawns('\t').is_empty());
+    assert!(tile_spawns('\u{0001}').is_empty());
+    assert!(tile_spawns('\u{007f}').is_empty());
+
+    // scrTestLevel and the editor's Y-save both write levelArray cells
+    // directly. A no-op editor save therefore preserves an ignored symbol.
+    let editor = EditorState::new(parsed);
+    let saved = editor.document().to_text();
+    let reloaded = Level::parse(&saved).unwrap();
+    assert_eq!(
+        &reloaded.tiles[..LEVEL_WIDTH],
+        &editor.document().tiles[..LEVEL_WIDTH],
+        "all 40 source columns survive an import, editor save, and reload"
+    );
+    assert_eq!(reloaded.get_tile(0, 0), Some('\t'));
+    assert_eq!(reloaded.get_tile(1, 0), Some('\u{0001}'));
+    assert_eq!(reloaded.get_tile(2, 0), Some('\u{007f}'));
+
+    // Keep the public in-memory tile vector from injecting extra map rows.
+    let mut malformed = Level::default();
+    malformed.tiles[0] = '\n';
+    assert_eq!(malformed.to_text().lines().count(), LEVEL_HEIGHT + 8);
+    assert_eq!(
+        malformed.to_text().lines().next().unwrap().chars().next(),
+        Some('0')
+    );
 }
 
 #[test]

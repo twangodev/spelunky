@@ -17,6 +17,7 @@ fn state(chance: i32) -> super::super::super::GenerationState {
     super::super::super::GenerationState {
         revision: GenerationRevision::SourceClassicV2,
         market_chance: chance,
+        gold_chance: 160,
         made_market_entrance: false,
         probabilities: super::super::super::SourceProbabilities::default(),
     }

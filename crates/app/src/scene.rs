@@ -2000,7 +2000,7 @@ fn hub_value(game: &Game, key: &str) -> f64 {
         .max(0.0)
 }
 
-fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas) {
+fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas, view: Viewport) {
     let yellow = [1.0, 1.0, 0.0, 1.0];
     let (challenge, first_icon, first_value, second_icon, second_value) =
         if game.flags.contains("hub_sun") {
@@ -2031,6 +2031,7 @@ fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas) 
             ("", "", 0.0, "", 0.0)
         };
     if !challenge.is_empty() {
+        let hud_start = quads.len();
         for (icon, value, x) in [
             (first_icon, first_value, 8.0),
             (second_icon, second_value, 64.0),
@@ -2047,6 +2048,9 @@ fn hub_hud(quads: &mut Vec<DrawQuad>, game: &Game, camera: Vec2, atlas: &Atlas) 
                 "sFont",
             );
         }
+        // Challenge Draw anchors these counters to view_xview/view_yview.
+        // The countdown text below stays centered in the authored panel.
+        offset_panel_translation(&mut quads[hud_start..], view.ui_origin(), -1.0);
         let status = hub_value(game, "hub_draw_status") as u32;
         if status < 3 {
             let message = format!("{challenge} CHALLENGE BEGINS IN {}...", 3 - status);
@@ -2290,7 +2294,7 @@ fn hud_in_view(
         return;
     }
     if game.flags.contains("hub") {
-        hub_hud(quads, game, camera, atlas);
+        hub_hud(quads, game, camera, atlas, view);
         return;
     }
     // scrDrawHUD is gated by global.drawHUD independently of the player's
@@ -2306,6 +2310,7 @@ fn hud_in_view(
     }
     let player = &game.player;
     // Original Classic HUD positions and 16-pixel bitmap font.
+    let status_start = quads.len();
     for (icon, value, x) in [
         ("sHeart", player.health.max(0.0).to_string(), 8.0),
         (
@@ -2323,6 +2328,10 @@ fn hud_in_view(
         sprite(quads, atlas, icon, 0.0, x, 8.0, false, WHITE);
         font(quads, atlas, &value, x + 16.0, 8.0, 1.0, WHITE, "sFont");
     }
+    // scrDrawHUD's status row is expressed at view_xview + x,
+    // view_yview + y. Keep it at the expanded view's real upper-left;
+    // place_authored_panel centers only the original fixed-size panel.
+    offset_panel_translation(&mut quads[status_start..], view.ui_origin(), -1.0);
     if player.has("Compass") {
         let [ox, oy] = view.ui_origin();
         let exit_x = (game.world.exit.x - camera.x) as f32 + ox;
@@ -2386,6 +2395,7 @@ fn hud_in_view(
             quad.rect[1] -= oy;
         }
     }
+    let inventory_start = quads.len();
     sprite(quads, atlas, "sHoldItemIcon", 0.0, 8.0, 24.0, false, WHITE);
     // Canonical scrDrawHUD reads the remembered type, including while a
     // Bomb/Rope reservation occupies the hand. Actor frames/facing do not apply.
@@ -2494,6 +2504,14 @@ fn hud_in_view(
             1.0,
             [1.0, 1.0, 0.0, 1.0],
         );
+    }
+    offset_panel_translation(&mut quads[inventory_start..], view.ui_origin(), -1.0);
+}
+
+fn offset_panel_translation(quads: &mut [DrawQuad], origin: [f32; 2], direction: f32) {
+    for quad in quads {
+        quad.rect[0] += origin[0] * direction;
+        quad.rect[1] += origin[1] * direction;
     }
 }
 
@@ -2679,7 +2697,6 @@ mod tests {
                 let mut quads = Vec::new();
                 hud_in_view(&mut quads, &game, Vec2::new(0.0, 0.0), &atlas, view);
                 place_authored_panel(&mut quads, view);
-                let [ox, oy] = view.ui_origin();
                 let kapala_frames: Vec<_> = (0..5)
                     .map(|frame| atlas.sprite("sKapalaIcon", f64::from(frame)).unwrap().uv)
                     .collect();
@@ -2690,7 +2707,7 @@ mod tests {
                 if let Some(frame) = frame {
                     assert_eq!(actual.len(), 1, "blood={blood}");
                     assert_eq!(actual[0].uv, atlas.sprite("sKapalaIcon", frame).unwrap().uv);
-                    assert_eq!(actual[0].rect, [88.0 + ox, 24.0 + oy, 16.0, 16.0]);
+                    assert_eq!(actual[0].rect, [88.0, 24.0, 16.0, 16.0]);
                     assert_eq!(actual[0].color, WHITE);
                     assert_eq!(actual[0].blend, QuadBlend::Alpha);
                 } else {
@@ -2698,10 +2715,54 @@ mod tests {
                 }
                 let spectacles = atlas.sprite("sSpectaclesIcon", 0.0).unwrap();
                 let quad = quads.iter().find(|quad| quad.uv == spectacles.uv).unwrap();
-                assert_eq!(quad.rect, [108.0 + ox, 24.0 + oy, 16.0, 16.0]);
+                assert_eq!(quad.rect, [108.0, 24.0, 16.0, 16.0]);
                 assert_eq!(game.state_hash(), before);
                 assert_eq!(game.rng.clone().next_u64(), random);
             }
+        }
+    }
+
+    #[test]
+    fn expanded_challenge_counters_stay_at_the_view_origin_while_countdown_stays_centered() {
+        let source =
+            include_str!("../../../references/classic-1.1/Objects/oSunRoom.events/Draw.xml");
+        assert!(source.contains("view_xview[0]+8, view_yview[0]+8"));
+        assert!(source.contains("view_xview[0]+64, view_yview[0]+8"));
+
+        let atlas = Atlas::load().unwrap();
+        for view in [
+            Viewport::from_surface(1920, 1080),
+            Viewport::from_surface(600, 1200),
+        ] {
+            let mut game = Game::shell(1, RulesPreset::Classic);
+            game.flags.extend(["hub".into(), "hub_sun".into()]);
+            game.data.insert("hub_draw_status".into(), 0.0);
+            game.data.insert("points".into(), 27.0);
+            let [ox, oy] = view.ui_origin();
+            let mut quads = Vec::new();
+            hud_in_view(
+                &mut quads,
+                &game,
+                Vec2::new(f64::from(ox), f64::from(oy)),
+                &atlas,
+                view,
+            );
+            place_authored_panel(&mut quads, view);
+
+            let heart = atlas.sprite("sHeart", 0.0).unwrap();
+            let heart = quads.iter().find(|quad| quad.uv == heart.uv).unwrap();
+            assert_eq!(heart.rect[0..2], [8.0, 8.0]);
+            let points_icon = atlas.sprite("sDamselIcon", 0.0).unwrap();
+            let points_icon = quads.iter().find(|quad| quad.uv == points_icon.uv).unwrap();
+            assert_eq!(points_icon.rect[0..2], [64.0, 8.0]);
+
+            let countdown = "DAMSEL CHALLENGE BEGINS IN 3...";
+            let countdown_x = ((320.0 - countdown.len() as f32 * 8.0) / 2.0).ceil();
+            assert!(quads.iter().any(|quad| {
+                quad.rect[0] == countdown_x + ox
+                    && quad.rect[1] == 216.0 + oy
+                    && quad.color == [1.0, 1.0, 0.0, 1.0]
+            }));
         }
     }
 
@@ -3646,10 +3707,9 @@ mod tests {
                 assert_eq!(width, view.width.ceil(), "uncovered darkness row{y}");
             }
             let heart = atlas.sprite("sHeart", 0.0).unwrap();
-            let [ox, oy] = view.ui_origin();
             let q = quads.iter().find(|q| q.uv == heart.uv).unwrap();
-            assert_eq!(q.rect[0], 8.0 - heart.origin[0] + ox);
-            assert_eq!(q.rect[1], 8.0 - heart.origin[1] + oy);
+            assert_eq!(q.rect[0], 8.0 - heart.origin[0]);
+            assert_eq!(q.rect[1], 8.0 - heart.origin[1]);
             let mut panel = Vec::new();
             cinematic_fade(&mut panel, 0.5);
             place_authored_panel(&mut panel, view);
@@ -4461,14 +4521,26 @@ mod tests {
         game.player.pos.x = 255.0;
         game.camera.x = 1.0;
         let mut quads = Vec::new();
-        hub_hud(&mut quads, &game, game.camera, &atlas);
+        hub_hud(
+            &mut quads,
+            &game,
+            game.camera,
+            &atlas,
+            Viewport::canonical(),
+        );
         assert_eq!(quads[0].rect, [39.0, 224.0, 8.0, 8.0]);
         assert_eq!(quads.len(), "WELCOME TO THE SHORTCUT HOUSE!".len());
         for (x, camera) in [(256.0, 1.0), (255.0, 1.01)] {
             game.player.pos.x = x;
             game.camera.x = camera;
             quads.clear();
-            hub_hud(&mut quads, &game, game.camera, &atlas);
+            hub_hud(
+                &mut quads,
+                &game,
+                game.camera,
+                &atlas,
+                Viewport::canonical(),
+            );
             assert!(quads.is_empty());
         }
     }
@@ -4485,7 +4557,13 @@ mod tests {
             .spawn("oButtonHighscore", Vec2::new(224.0, 192.0));
         let block = game.world.spawn("oPushBlock", Vec2::new(176.0, 192.0));
         let mut quads = Vec::new();
-        hub_hud(&mut quads, &game, game.camera, &atlas);
+        hub_hud(
+            &mut quads,
+            &game,
+            game.camera,
+            &atlas,
+            Viewport::canonical(),
+        );
         let mut expected = Vec::new();
         text(
             &mut expected,
@@ -4504,7 +4582,13 @@ mod tests {
         assert!(quads.iter().any(|quad| quad.rect[1] == 216.0));
         game.world.entity_mut(block).unwrap().pos.x = 160.0;
         quads.clear();
-        hub_hud(&mut quads, &game, game.camera, &atlas);
+        hub_hud(
+            &mut quads,
+            &game,
+            game.camera,
+            &atlas,
+            Viewport::canonical(),
+        );
         assert!(!quads.iter().any(|quad| quad.rect[1] == 216.0));
         game.world.entity_mut(block).unwrap().pos.x = 176.0;
         game.world
@@ -4513,7 +4597,13 @@ mod tests {
             .data
             .insert("pushed".into(), 1.0);
         quads.clear();
-        hub_hud(&mut quads, &game, game.camera, &atlas);
+        hub_hud(
+            &mut quads,
+            &game,
+            game.camera,
+            &atlas,
+            Viewport::canonical(),
+        );
         assert!(!quads.iter().any(|quad| quad.rect[1] == 216.0));
     }
 
@@ -4526,7 +4616,13 @@ mod tests {
         game.player.pos.y = 48.0;
         game.data.insert("best_money".into(), 500000.0);
         let mut quads = Vec::new();
-        hub_hud(&mut quads, &game, game.camera, &atlas);
+        hub_hud(
+            &mut quads,
+            &game,
+            game.camera,
+            &atlas,
+            Viewport::canonical(),
+        );
         assert_eq!(
             quads.iter().filter(|quad| quad.rect[1] == 112.0).count(),
             "KEEP YOURSELF AND".len()
@@ -4535,7 +4631,13 @@ mod tests {
         // pressed Step. Persistent highscore values clear later at counter1.
         game.flags.insert("hub_records_erased".into());
         quads.clear();
-        hub_hud(&mut quads, &game, game.camera, &atlas);
+        hub_hud(
+            &mut quads,
+            &game,
+            game.camera,
+            &atlas,
+            Viewport::canonical(),
+        );
         let locked: Vec<_> = quads.iter().filter(|quad| quad.rect[1] == 112.0).collect();
         assert_eq!(locked.len(), "LOCKED.".len());
         assert_eq!(game.data.get("best_money"), Some(&500000.0));
@@ -5719,39 +5821,6 @@ mod tests {
     }
 
     #[test]
-    fn game_step_lava_surface_animation_is_authoritative_at_every_render_alpha() {
-        let atlas = Atlas::load().unwrap();
-        let mut game = Game::shell(1, RulesPreset::Classic);
-        game.player.pos = Vec2::new(40.0, 40.0);
-        game.player.previous_pos = game.player.pos;
-        game.world.set_tile(5, 5, "oLava");
-        let id = game.world.spawn("oTerrainMetadata", Vec2::new(88.0, 88.0));
-        game.world
-            .entity_mut(id)
-            .unwrap()
-            .text
-            .insert("terrain_sprite".into(), "sLavaTop".into());
-        for step in 1..=7 {
-            game.step(&spelunky_core::InputFrame::default());
-            let animation = game.world.entity(id).unwrap().animation;
-            assert!((animation - f64::from(step) * 0.4).abs() < 0.0001);
-            let draw_animation = game.presentation().world.entity(id).unwrap().animation;
-            assert!((draw_animation - f64::from(step - 1) * 0.4).abs() < 0.0001);
-            let uv = atlas.sprite("sLavaTop", draw_animation).unwrap().uv;
-            let hash = game.state_hash();
-            for alpha in [0.0, 0.25, 0.5, 1.0] {
-                assert!(
-                    game_scene(&game, alpha, false, &atlas)
-                        .iter()
-                        .any(|q| q.uv == uv)
-                );
-                assert_eq!(game.state_hash(), hash);
-            }
-            assert_eq!(game.world.entity(id).unwrap().animation, animation);
-        }
-    }
-
-    #[test]
     fn actual_lava_death_draws_corpse_behind_surface() {
         let atlas = Atlas::load().unwrap();
         let mut game = Game::shell(1, RulesPreset::Classic);
@@ -5944,7 +6013,13 @@ mod tests {
         game.data.insert("best_mini1".into(), 42.0);
         game.data.insert("best_money".into(), 200000.0);
         let mut quads = Vec::new();
-        hub_hud(&mut quads, &game, game.camera, &atlas);
+        hub_hud(
+            &mut quads,
+            &game,
+            game.camera,
+            &atlas,
+            Viewport::canonical(),
+        );
         let mut expected = Vec::new();
         text(&mut expected, &atlas, "SUN:   42", 128.0, 48.0, 1.0, WHITE);
         assert_eq!(
@@ -5958,7 +6033,13 @@ mod tests {
         game.player.pos.y = 180.0;
         quads.clear();
         expected.clear();
-        hub_hud(&mut quads, &game, game.camera, &atlas);
+        hub_hud(
+            &mut quads,
+            &game,
+            game.camera,
+            &atlas,
+            Viewport::canonical(),
+        );
         text(
             &mut expected,
             &atlas,

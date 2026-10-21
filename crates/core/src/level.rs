@@ -121,7 +121,13 @@ impl Level {
                 (0..LEVEL_WIDTH)
                     .map(|x| {
                         self.get_tile(x, y)
-                            .filter(|c| !c.is_control())
+                            // The Classic editor writes each levelArray cell
+                            // verbatim. Unknown control symbols (for example,
+                            // a tab imported from a hand-edited row) create no
+                            // object, but remain in the file after save. Only
+                            // line separators would corrupt the fixed 40x32
+                            // layout if supplied through the public tile vec.
+                            .filter(|c| !matches!(c, '\n' | '\r'))
                             .unwrap_or('0')
                     })
                     .collect(),

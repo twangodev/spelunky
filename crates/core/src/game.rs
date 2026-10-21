@@ -656,6 +656,11 @@ impl Game {
         } else {
             self.data.get("marketChance").copied().unwrap_or(160.0)
         };
+        let gold = if historical {
+            160.0
+        } else {
+            self.data.get("goldChance").copied().unwrap_or(160.0)
+        };
         let probabilities = if historical {
             generation::SourceProbabilities::default()
         } else {
@@ -671,9 +676,18 @@ impl Game {
                         .contains(&market)),
             "marketChance history is outside the proved integer campaign domain with one-room draw headroom"
         );
+        assert!(
+            historical
+                || (gold.is_finite()
+                    && gold.fract() == 0.0
+                    && (f64::from(generation::MIN_SUPPORTED_SOURCE_CHANCE)..=f64::from(1 << 21))
+                        .contains(&gold)),
+            "goldChance history is outside the proved integer campaign domain with one-room draw headroom"
+        );
         let mut state = generation::GenerationState {
             revision: self.generation_revision,
             market_chance: market as i32,
+            gold_chance: gold as i32,
             made_market_entrance: self.flags.contains("made_market_entrance")
                 || self.flags.contains("madeMarketEntrance"),
             probabilities,
@@ -718,6 +732,8 @@ impl Game {
         if !historical {
             self.data
                 .insert("marketChance".into(), f64::from(state.market_chance));
+            self.data
+                .insert("goldChance".into(), f64::from(state.gold_chance));
             if state.made_market_entrance {
                 self.flags.insert("made_market_entrance".into());
             }
@@ -980,6 +996,10 @@ mod source_probability_global_tests {
         assert_eq!(restored.data.get("probLake"), Some(&1.0));
     }
 }
+
+#[cfg(test)]
+#[path = "source_gold_chance_tests.rs"]
+mod source_gold_chance_tests;
 
 #[cfg(test)]
 mod boss_terrain_spectacles_context_tests {

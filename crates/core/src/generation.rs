@@ -806,12 +806,16 @@ pub(crate) struct GenerationContext {
 /// The signed range is the independently proved source_rand domain, not a
 /// source global clamp. Historical generation never reads or writes it.
 pub(crate) const MAX_JUNGLE_PRIMARY_RECEIVERS: i32 = 22_812;
-pub(crate) const MIN_SUPPORTED_MARKET_CHANCE: i32 = -(1 << 21) + MAX_JUNGLE_PRIMARY_RECEIVERS;
+pub(crate) const MIN_SUPPORTED_SOURCE_CHANCE: i32 = -(1 << 21) + MAX_JUNGLE_PRIMARY_RECEIVERS;
+pub(crate) const MIN_SUPPORTED_MARKET_CHANCE: i32 = MIN_SUPPORTED_SOURCE_CHANCE;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct GenerationState {
     pub revision: crate::GenerationRevision,
     pub market_chance: i32,
+    /// `goldChance` survives room transitions; Level 14 decrements it for
+    /// every failed ordinary Gold Entrance candidate.
+    pub gold_chance: i32,
     pub made_market_entrance: bool,
     pub probabilities: SourceProbabilities,
 }
@@ -823,6 +827,7 @@ impl GenerationState {
                 crate::RngAlgorithm::Gm8Lcg32V1 => crate::GenerationRevision::SourceClassicV2,
             },
             market_chance: 160,
+            gold_chance: 160,
             made_market_entrance: false,
             probabilities: SourceProbabilities::default(),
         }
@@ -936,6 +941,7 @@ pub(crate) fn generate_campaign_result(
     context: GenerationContext,
     state: &mut GenerationState,
 ) -> GeneratedLevel {
+    let area = Area::for_level(level);
     // Validate before room construction, callbacks, or RNG draws. Historical
     // serialized state remains historical even if its RNG is canonical.
     if state.revision == crate::GenerationRevision::SourceClassicV2 {
@@ -948,10 +954,15 @@ pub(crate) fn generate_campaign_result(
             (MIN_SUPPORTED_MARKET_CHANCE..=(1 << 21)).contains(&state.market_chance),
             "marketChance history is outside the proved campaign domain with one-room draw headroom"
         );
+        if area == Area::Temple && level == 14 {
+            assert!(
+                (MIN_SUPPORTED_SOURCE_CHANCE..=(1 << 21)).contains(&state.gold_chance),
+                "goldChance history is outside the proved campaign domain with one-room draw headroom"
+            );
+        }
         state.probabilities.validate();
     }
     let source_classic = state.revision == crate::GenerationRevision::SourceClassicV2;
-    let area = Area::for_level(level);
     let mut selected = flags.clone();
     if state.revision == crate::GenerationRevision::SourceClassicV2 {
         reset_dark_history(&mut selected, level);

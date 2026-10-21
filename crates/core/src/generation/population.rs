@@ -995,7 +995,8 @@ fn temple_population(
     water: &WaterMasks,
     state: &mut TreasureState,
     gen_tomb_lord: bool,
-    gold_chance: &mut u32,
+    gold_chance: &mut i32,
+    source_classic: bool,
 ) -> bool {
     // Canonical with(object) captures the initial descendant count; births
     // append beyond it and Destroy marks rather than compacts the list. This
@@ -1039,12 +1040,23 @@ fn temple_population(
             && world.level == 14
             && !made_gold
         {
-            if rng.chance(1, *gold_chance) {
+            let gold_roll = if source_classic {
+                rng.source_rand(1, *gold_chance)
+                    .expect("goldChance was validated before source generation")
+                    == 1
+            } else {
+                rng.chance(1, *gold_chance as u32)
+            };
+            if gold_roll {
                 spawn_at(world, rng, "oGoldDoor", above);
                 protect_gold_door_support(world, receiver.instance);
                 made_gold = true;
             } else {
-                *gold_chance = gold_chance.saturating_sub(1).max(1);
+                if source_classic {
+                    *gold_chance -= 1;
+                } else {
+                    *gold_chance = gold_chance.saturating_sub(1).max(1);
+                }
             }
         } else if receiver.kind != "Tree"
             && receiver.kind != "Altar"
@@ -1232,7 +1244,7 @@ fn populate_internal(
     rng: &mut Rng,
     flags: &BTreeSet<String>,
     context: super::GenerationContext,
-    campaign: Option<&mut super::GenerationState>,
+    mut campaign: Option<&mut super::GenerationState>,
     room_path: Option<&[[u8; 4]; 5]>,
 ) {
     if world.area == Area::Boss {
@@ -1258,6 +1270,7 @@ fn populate_internal(
     let source_classic = campaign
         .as_ref()
         .is_some_and(|state| state.revision == crate::GenerationRevision::SourceClassicV2);
+    let mut gold_chance = campaign.as_ref().map_or(160, |state| state.gold_chance);
     let water = WaterMasks::new(world);
     let cemetery = flag(flags, &["cemetery", "cemetary"]);
     let market = flag(flags, &["black_market", "blackMarket"]);
@@ -1287,7 +1300,6 @@ fn populate_internal(
     let giant_spider = world.area == Area::Mines && rng.chance(1, 6);
     let tomb_lord = world.area == Area::Temple && (world.level == 13 || rng.chance(1, 4));
     let mut market_chance = 160_u32;
-    let mut gold_chance = 160_u32;
     if world.area == Area::Jungle
         && let Some(campaign) = campaign
     {
@@ -1323,7 +1335,18 @@ fn populate_internal(
         None
     };
     let made_gold = world.area == Area::Temple
-        && temple_population(world, rng, &water, &mut state, tomb_lord, &mut gold_chance);
+        && temple_population(
+            world,
+            rng,
+            &water,
+            &mut state,
+            tomb_lord,
+            &mut gold_chance,
+            source_classic,
+        );
+    if let Some(campaign) = campaign.as_deref_mut() {
+        campaign.gold_chance = gold_chance;
+    }
     for support in &supports {
         let x = support.x;
         let y = support.y;

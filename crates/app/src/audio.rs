@@ -175,6 +175,11 @@ fn is_music_resource(name: &str) -> bool {
 }
 
 #[cfg(any(test, target_arch = "wasm32"))]
+fn keep_decoded_buffer(name: &'static str, active_voice: bool, pending_music: bool) -> bool {
+    !is_music_resource(name) || active_voice || pending_music
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
 fn effect_assets() -> impl Iterator<Item = (&'static str, &'static [u8])> {
     ASSETS
         .iter()
@@ -331,6 +336,14 @@ mod policy_tests {
             queue.into_iter().collect::<Vec<_>>(),
             [("jump", 0.0), ("whip", 0.5)]
         );
+    }
+
+    #[test]
+    fn streamed_music_buffers_live_only_for_active_or_pending_voices() {
+        assert!(keep_decoded_buffer("jump", false, false));
+        assert!(!keep_decoded_buffer("cave", false, false));
+        assert!(keep_decoded_buffer("cave", true, false));
+        assert!(keep_decoded_buffer("cave", false, true));
     }
 }
 
@@ -1874,12 +1887,53 @@ mod backend {
                 );
             }
             self.tracks.retain(|track| {
-                let keep = track.target > 0.0 || track.gain > 0.0;
+                // Source music is loaded as a stream. A completed one-shot
+                // must release its AudioBufferSourceNode even though its gain
+                // target remains one; looping sources use an infinite end.
+                let keep = track.end > now && (track.target > 0.0 || track.gain > 0.0);
                 if !keep {
                     let _ = AudioScheduledSourceNode::stop(track.source.unchecked_ref());
+                    let _ = track.source.disconnect();
                     let _ = track.gain_node.disconnect();
                 }
                 keep
+            });
+
+            // Classic marks all eight OGG music resources as streamed. Web
+            // Audio decodes a requested OGG into PCM, so retain that decoded
+            // buffer only while a source/queued request needs it. The source
+            // node owns its buffer for active playback; releasing this cache
+            // entry lets ended or crossfaded tracks be collected instead of
+            // accumulating roughly 141 MB after visiting every area.
+            let mut active_music = HashSet::new();
+            active_music.extend(
+                self.tracks
+                    .iter()
+                    .filter(|track| track.end > now)
+                    .map(|track| track.name),
+            );
+            active_music.extend(
+                self.effects
+                    .iter()
+                    .filter(|effect| effect.end > now)
+                    .map(|effect| effect.name),
+            );
+            active_music.extend(
+                self.queued
+                    .iter()
+                    .map(|(name, _)| *name)
+                    .filter(|name| is_music_resource(name)),
+            );
+            let pending_music = self
+                .requested_music
+                .filter(|(name, _)| self.current_music != Some(*name))
+                .map(|(name, _)| name);
+            self.cache.borrow_mut().buffers.retain(|name, _| {
+                keep_decoded_buffer(
+                    name,
+                    active_music.contains(name),
+                    pending_music == Some(*name),
+                )
             });
         }
     }

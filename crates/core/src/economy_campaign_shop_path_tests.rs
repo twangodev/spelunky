@@ -202,6 +202,7 @@ fn shop_grid_roundtrips_but_absent_historical_wire_shape_and_fallback_are_unchan
         let mut state = crate::generation::GenerationState {
             revision: crate::GenerationRevision::HistoricalV1,
             market_chance: 160,
+            gold_chance: 160,
             made_market_entrance: false,
             probabilities: crate::generation::SourceProbabilities::default(),
         };

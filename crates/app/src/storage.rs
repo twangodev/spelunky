@@ -299,6 +299,8 @@ impl Store {
     pub fn load() -> Self {
         let stored = read();
         #[cfg(not(target_arch = "wasm32"))]
+        let should_import_settings = should_import_classic_settings(&stored);
+        #[cfg(not(target_arch = "wasm32"))]
         let should_check_classic_stats = should_import_classic_stats(&stored);
         #[cfg(not(target_arch = "wasm32"))]
         let legacy = if should_check_classic_stats {
@@ -310,7 +312,21 @@ impl Store {
         let legacy: Result<Option<String>, String> = Ok(None);
 
         let (mut store, imported) = Self::from_read_and_classic_stats(stored, legacy);
-        if imported {
+        #[cfg(not(target_arch = "wasm32"))]
+        let imported_settings = if should_import_settings {
+            match read_classic_settings_from_dirs(&classic_settings_directories()) {
+                Ok(Some(settings)) => {
+                    store.data.settings = settings;
+                    true
+                }
+                Ok(None) | Err(_) => false,
+            }
+        } else {
+            false
+        };
+        #[cfg(target_arch = "wasm32")]
+        let imported_settings = false;
+        if imported || imported_settings {
             let _ = store.save();
         }
         store
@@ -431,6 +447,13 @@ fn should_import_classic_stats(stored: &Result<Option<String>, String>) -> bool 
     }
 }
 
+/// Classic config is only the source of settings for a new Rust profile. Any
+/// existing Rust JSON, including an unreadable/future save, takes precedence.
+#[cfg(not(target_arch = "wasm32"))]
+fn should_import_classic_settings(stored: &Result<Option<String>, String>) -> bool {
+    matches!(stored, Ok(None))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn read_classic_stats_file() -> Result<Option<String>, String> {
     match std::fs::read_to_string("stats.txt") {
@@ -438,6 +461,252 @@ fn read_classic_stats_file() -> Result<Option<String>, String> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(format!("Cannot read classic stats.txt: {error}")),
     }
+}
+
+/// Classic resolves its three configuration files relative to the process
+/// working directory. Also inspect the native save roots so an install that
+/// kept these files beside `save.json` can migrate them after the port moved
+/// its save into the platform's user-data directory.
+#[cfg(not(target_arch = "wasm32"))]
+fn classic_settings_directories() -> Vec<std::path::PathBuf> {
+    let mut directories = Vec::new();
+    if let Ok(directory) = std::env::current_dir() {
+        directories.push(directory);
+    }
+    for save_path in [path().ok(), legacy_path().ok()].into_iter().flatten() {
+        if let Some(directory) = save_path.parent() {
+            directories.push(directory.to_owned());
+        }
+    }
+    directories.dedup();
+    directories
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn read_classic_settings_from_dirs(
+    directories: &[std::path::PathBuf],
+) -> Result<Option<Settings>, String> {
+    fn first_file(
+        directories: &[std::path::PathBuf],
+        name: &str,
+    ) -> Result<Option<String>, String> {
+        for directory in directories {
+            match std::fs::read_to_string(directory.join(name)) {
+                Ok(contents) => return Ok(Some(contents)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("Cannot read Classic {name}: {error}")),
+            }
+        }
+        Ok(None)
+    }
+
+    let settings_file = first_file(directories, "settings.cfg")?;
+    let keys_file = first_file(directories, "keys.cfg")?;
+    let gamepad_file = first_file(directories, "gamepad.cfg")?;
+    apply_classic_settings_files(
+        settings_file.as_deref(),
+        keys_file.as_deref(),
+        gamepad_file.as_deref(),
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn apply_classic_settings_files(
+    settings_file: Option<&str>,
+    keys_file: Option<&str>,
+    gamepad_file: Option<&str>,
+) -> Result<Option<Settings>, String> {
+    let mut settings = Settings::default();
+    let mut imported = false;
+    if let Some(contents) = settings_file {
+        imported |= import_classic_settings_cfg(&mut settings, contents);
+    }
+    if let Some(contents) = keys_file {
+        imported |= import_classic_keys_cfg(&mut settings, contents);
+    }
+    if let Some(contents) = gamepad_file {
+        imported |= import_classic_gamepad_cfg(&mut settings, contents);
+    }
+    Ok(imported.then_some(settings))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn config_line(contents: &str, index: usize) -> Option<&str> {
+    contents.lines().nth(index).map(str::trim)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn classic_config_number(value: &str) -> Option<i32> {
+    let value = value.parse::<f64>().ok()?;
+    (value.is_finite()
+        && value.fract() == 0.0
+        && value >= i32::MIN as f64
+        && value <= i32::MAX as f64)
+        .then_some(value as i32)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn classic_bool(value: Option<&str>) -> Option<bool> {
+    classic_config_number(value?).map(|number| number != 0)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn import_classic_settings_cfg(settings: &mut Settings, contents: &str) -> bool {
+    let mut imported = false;
+    if let Some(value) = classic_bool(config_line(contents, 0)) {
+        settings.fullscreen = value;
+        imported = true;
+    }
+    if let Some(value) = classic_bool(config_line(contents, 1)) {
+        settings.graphics_high = value;
+        imported = true;
+    }
+    if let Some(value) = classic_bool(config_line(contents, 2)) {
+        settings.down_to_run = value;
+        imported = true;
+    }
+    if let Some(value) = classic_bool(config_line(contents, 3)) {
+        settings.controller_enabled = value;
+        imported = true;
+    }
+
+    // Classic's scale is superseded by the port's adaptive viewport. Preserve
+    // its audible volume curve: (2000 + 8000 * (level / 18)) / 10000.
+    for (index, target) in [(5, "music"), (6, "effects")] {
+        let level = config_line(contents, index)
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|level| level.is_finite());
+        if let Some(level) = level {
+            let level = level.clamp(0.0, 17.0);
+            let volume = 0.2 + 0.8 * (level / 18.0);
+            match target {
+                "music" => settings.music_volume = volume,
+                "effects" => settings.effects_volume = volume,
+                _ => unreachable!(),
+            }
+            imported = true;
+        }
+    }
+    imported
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn classic_key_binding(code: i32) -> Option<String> {
+    let binding = match code {
+        0 => return Some(String::new()),
+        8 => "Backspace".to_owned(),
+        9 => "Tab".to_owned(),
+        13 => "Enter".to_owned(),
+        16 => "ShiftLeft,ShiftRight".to_owned(),
+        17 => "ControlLeft,ControlRight".to_owned(),
+        18 => "AltLeft,AltRight".to_owned(),
+        19 => "Pause".to_owned(),
+        20 => "CapsLock".to_owned(),
+        27 => "Escape".to_owned(),
+        32 => "Space".to_owned(),
+        33 => "PageUp".to_owned(),
+        34 => "PageDown".to_owned(),
+        35 => "End".to_owned(),
+        36 => "Home".to_owned(),
+        37 => "ArrowLeft".to_owned(),
+        38 => "ArrowUp".to_owned(),
+        39 => "ArrowRight".to_owned(),
+        40 => "ArrowDown".to_owned(),
+        44 => "PrintScreen".to_owned(),
+        45 => "Insert".to_owned(),
+        46 => "Delete".to_owned(),
+        91 => "SuperLeft".to_owned(),
+        92 => "SuperRight".to_owned(),
+        93 => "ContextMenu".to_owned(),
+        106 => "NumpadMultiply".to_owned(),
+        107 => "NumpadAdd".to_owned(),
+        109 => "NumpadSubtract".to_owned(),
+        110 => "NumpadDecimal".to_owned(),
+        111 => "NumpadDivide".to_owned(),
+        144 => "NumLock".to_owned(),
+        145 => "ScrollLock".to_owned(),
+        186 => "Semicolon".to_owned(),
+        187 => "Equal".to_owned(),
+        188 => "Comma".to_owned(),
+        189 => "Minus".to_owned(),
+        190 => "Period".to_owned(),
+        191 => "Slash".to_owned(),
+        192 => "Backquote".to_owned(),
+        219 => "BracketLeft".to_owned(),
+        220 => "Backslash".to_owned(),
+        221 => "BracketRight".to_owned(),
+        222 => "Quote".to_owned(),
+        226 => "IntlBackslash".to_owned(),
+        48..=57 => format!("Digit{}", code - 48),
+        65..=90 => format!("Key{}", char::from_u32(code as u32)?.to_ascii_uppercase()),
+        96..=105 => format!("Numpad{}", code - 96),
+        112..=135 => format!("F{}", code - 111),
+        _ => return None,
+    };
+    Some(binding)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn import_classic_keys_cfg(settings: &mut Settings, contents: &str) -> bool {
+    const ACTIONS: [(usize, &str); 12] = [
+        (0, "up"),
+        (1, "down"),
+        (2, "left"),
+        (3, "right"),
+        (4, "jump"),
+        (5, "attack"),
+        (6, "cycle"),
+        (7, "run"),
+        (8, "bomb"),
+        (9, "rope"),
+        (10, "flare"),
+        (11, "pay"),
+    ];
+    let mut imported = false;
+    for (index, action) in ACTIONS {
+        let binding = config_line(contents, index)
+            .and_then(classic_config_number)
+            .and_then(classic_key_binding);
+        if let Some(binding) = binding {
+            settings.bindings.insert(action.into(), binding.clone());
+            if action == "up" {
+                // Classic uses its Up key for door exits as well.
+                settings.bindings.insert("exit".into(), binding);
+            }
+            imported = true;
+        }
+    }
+    imported
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn import_classic_gamepad_cfg(settings: &mut Settings, contents: &str) -> bool {
+    const ACTIONS: [(usize, &str); 9] = [
+        (0, "jump"),
+        (1, "attack"),
+        (2, "cycle"),
+        (3, "run"),
+        (4, "bomb"),
+        (5, "rope"),
+        (6, "flare"),
+        (7, "pay"),
+        (8, "start"),
+    ];
+    let mut imported = false;
+    for (index, action) in ACTIONS {
+        let button = config_line(contents, index)
+            .and_then(classic_config_number)
+            .and_then(|button| button.checked_sub(1))
+            .and_then(|index| crate::controller::ALL.get(index as usize))
+            .map(|button| button.name());
+        if let Some(button) = button {
+            settings
+                .controller_bindings
+                .insert(action.into(), button.into());
+            imported = true;
+        }
+    }
+    imported
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -955,6 +1224,170 @@ mod tests {
 
         assert!((settings.music_volume - source_default).abs() < f32::EPSILON);
         assert!((settings.effects_volume - source_default).abs() < f32::EPSILON);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn classic_install_config_fixtures_import_settings_keys_and_gamepad_bindings() {
+        let settings = apply_classic_settings_files(
+            Some(include_str!(
+                "../../../references/original/game/settings.cfg"
+            )),
+            Some(include_str!("../../../references/original/game/keys.cfg")),
+            Some(include_str!(
+                "../../../references/original/game/gamepad.cfg"
+            )),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert!(!settings.fullscreen);
+        assert!(settings.graphics_high);
+        assert!(!settings.down_to_run);
+        assert!(settings.controller_enabled);
+        let classic_volume = 0.2 + 0.8 * (15.0 / 18.0);
+        assert!((settings.music_volume - classic_volume).abs() < f32::EPSILON);
+        assert!((settings.effects_volume - classic_volume).abs() < f32::EPSILON);
+        for (action, key) in [
+            ("up", "ArrowUp"),
+            ("exit", "ArrowUp"),
+            ("down", "ArrowDown"),
+            ("left", "ArrowLeft"),
+            ("right", "ArrowRight"),
+            ("jump", "KeyZ"),
+            ("attack", "KeyX"),
+            ("cycle", "KeyC"),
+            ("run", "ShiftLeft,ShiftRight"),
+            ("bomb", "KeyA"),
+            ("rope", "KeyS"),
+            ("flare", "KeyF"),
+            ("pay", "KeyP"),
+        ] {
+            assert_eq!(settings.bindings[action], key, "keyboard action {action}");
+        }
+        for (action, button) in [
+            ("jump", "East"),
+            ("attack", "South"),
+            ("cycle", "West"),
+            ("run", "LeftShoulder"),
+            ("bomb", "LeftTrigger"),
+            ("rope", "RightTrigger"),
+            ("flare", "North"),
+            ("pay", "RightShoulder"),
+            ("start", "Start"),
+        ] {
+            assert_eq!(
+                settings.controller_bindings[action], button,
+                "gamepad action {action}"
+            );
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn classic_config_missing_defaults_and_malformed_values_are_safe() {
+        let defaults = Settings::default();
+        assert!(
+            apply_classic_settings_files(None, None, None)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            apply_classic_settings_files(
+                Some("bad\n\nnope\n?\n3\nNaN\nInfinity\n"),
+                Some("not a key\n999999\n-1\n38.5\n"),
+                Some("-1\n21\n0\n"),
+            )
+            .unwrap()
+            .is_none()
+        );
+
+        let partial = apply_classic_settings_files(
+            Some("bad\n0\n?\n0\n3\nnot-volume\n17\n"),
+            Some("38\nnope\n0\n38.5\n90\n"),
+            Some("2\n999\n3.0\n0\n"),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(partial.fullscreen, "malformed fullscreen keeps its default");
+        assert!(!partial.graphics_high);
+        assert!(
+            partial.down_to_run,
+            "malformed run preference keeps its default"
+        );
+        assert!(!partial.controller_enabled);
+        assert_eq!(partial.music_volume, defaults.music_volume);
+        let max_classic_volume = 0.2 + 0.8 * (17.0 / 18.0);
+        assert!((partial.effects_volume - max_classic_volume).abs() < f32::EPSILON);
+        assert_eq!(partial.bindings["up"], "ArrowUp");
+        assert_eq!(partial.bindings["down"], defaults.bindings["down"]);
+        assert_eq!(partial.bindings["left"], "");
+        assert_eq!(partial.bindings["right"], defaults.bindings["right"]);
+        assert_eq!(partial.bindings["jump"], "KeyZ");
+        assert_eq!(partial.controller_bindings["jump"], "East");
+        assert_eq!(partial.controller_bindings["attack"], "South");
+        assert_eq!(partial.controller_bindings["cycle"], "West");
+        assert_eq!(
+            partial.controller_bindings["run"],
+            defaults.controller_bindings["run"]
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn existing_rust_json_always_prevents_classic_settings_import() {
+        let current = SaveData::default().to_json().unwrap();
+        for stored in [
+            Ok(Some(current)),
+            Ok(Some("not json".to_owned())),
+            Ok(Some(r#"{"version":99}"#.to_owned())),
+            Err("save read failed".to_owned()),
+        ] {
+            assert!(!should_import_classic_settings(&stored));
+        }
+        assert!(should_import_classic_settings(&Ok(None)));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn classic_config_search_uses_working_directory_before_save_root_and_combines_files() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spelunky-classic-config-migration-{}-{stamp}",
+            std::process::id()
+        ));
+        let working = root.join("classic-install");
+        let save_root = root.join("user-data/spelunky-rust");
+        std::fs::create_dir_all(&working).unwrap();
+        std::fs::create_dir_all(&save_root).unwrap();
+        std::fs::write(
+            working.join("settings.cfg"),
+            include_str!("../../../references/original/game/settings.cfg"),
+        )
+        .unwrap();
+        std::fs::write(
+            save_root.join("keys.cfg"),
+            include_str!("../../../references/original/game/keys.cfg"),
+        )
+        .unwrap();
+        std::fs::write(
+            save_root.join("gamepad.cfg"),
+            include_str!("../../../references/original/game/gamepad.cfg"),
+        )
+        .unwrap();
+
+        let settings = read_classic_settings_from_dirs(&[working, save_root])
+            .unwrap()
+            .unwrap();
+        assert!(!settings.fullscreen);
+        assert_eq!(settings.bindings["jump"], "KeyZ");
+        assert_eq!(settings.controller_bindings["start"], "Start");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
