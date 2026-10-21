@@ -1181,6 +1181,28 @@ mod tests {
         assert_eq!(g.player.bombs, 7.0);
         assert!(g.world.entity(id).is_none());
     }
+
+    #[test]
+    fn held_free_bag_is_consumed_after_its_sale_price_clears() {
+        let (mut game, id) = stepping_shop("oBombBag", "Bomb");
+        game.player.bombs = 4.0;
+        game.data.insert("thiefLevel".into(), 1.0);
+
+        game.step(&InputFrame::default());
+
+        assert_eq!(game.world.entity(id).unwrap().value("cost"), 0.0);
+        assert_eq!(game.player.held, Some(id));
+        assert_eq!(game.player.bombs, 4.0);
+
+        game.step(&InputFrame {
+            attack_pressed: true,
+            ..Default::default()
+        });
+
+        assert_eq!(game.player.bombs, 7.0);
+        assert_eq!(game.player.held, None);
+        assert!(game.world.entity(id).is_none());
+    }
     #[test]
     fn hub_shopkeeper_flags_do_not_create_campaign_bounty() {
         let (mut g, _) = shop();

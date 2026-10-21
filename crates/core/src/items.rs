@@ -845,6 +845,14 @@ fn use_held_item(game: &mut Game, id: u64, input: &InputFrame) {
         explosives::use_held_rope(game, id, input);
         return;
     }
+    if game
+        .world
+        .entity(id)
+        .is_some_and(|item| item.value("cost") == 0.0)
+        && collectibles::grant(game, id)
+    {
+        return;
+    }
     if matches!(object.as_str(), "oMachete" | "oMattock") && game.player.attack_timer > 0 {
         return;
     }

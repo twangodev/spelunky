@@ -56,7 +56,7 @@ pub(crate) fn fluid_tick(game: &mut Game) {
             continue;
         }
         let origin = instance.position(game);
-        if !custom && origin.y >= 512.0 {
+        if game.world.name != "rLoadLevel" && origin.y >= 512.0 {
             continue;
         }
         let id = match instance {
@@ -2610,10 +2610,11 @@ mod tests {
                 .count(),
             4
         );
-        for (boss, custom, y, expected) in [
-            (true, false, 80.0, 1),
-            (false, false, 512.0, 1),
-            (false, true, 512.0, 0),
+        for (boss, custom, load_level, y, expected) in [
+            (true, false, false, 80.0, 1),
+            (false, false, false, 512.0, 1),
+            (false, true, false, 512.0, 1),
+            (false, false, true, 512.0, 0),
         ] {
             let mut g = room();
             g.world = World::new(20, 40, if boss { Area::Boss } else { Area::Jungle }, 5);
@@ -2622,6 +2623,9 @@ mod tests {
             }
             if custom {
                 g.flags.insert("custom".into());
+            }
+            if load_level {
+                g.world.name = "rLoadLevel".into();
             }
             if y >= 512.0 {
                 g.camera.y = y - 160.0;

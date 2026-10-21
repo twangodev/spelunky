@@ -61,7 +61,7 @@ pub(super) fn pre_tick(game: &mut Game) {
                         game,
                         &mut entity,
                         Vec2::new(0.0, speed.ceil()),
-                        CollisionPrecision::BoundingBox,
+                        CollisionPrecision::Precise,
                     ) {
                         if speed > 0.6 {
                             game.sound("sndThud", entity.pos);
@@ -1870,6 +1870,23 @@ mod tests {
                 expected_countdown
             );
         }
+    }
+
+    #[test]
+    fn falling_push_block_uses_precise_solid_contact_mask() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        game.world = crate::World::new(40, 40, crate::Area::Mines, 1);
+        game.player.pos = Vec2::new(300.0, 200.0);
+        let block = game.spawn("oPushBlock", Vec2::new(65.0, 64.0));
+        game.spawn("oDarkFall", Vec2::new(80.0, 80.0));
+
+        game.step(&crate::InputFrame::default());
+
+        assert_eq!(
+            game.world.entity(block).unwrap().pos.y,
+            65.0,
+            "the transparent top-left pixel of sDarkFall must not stop the block"
+        );
     }
 
     #[test]

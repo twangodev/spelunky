@@ -984,6 +984,12 @@ impl World {
             let Some(tile) = self.tile(x, y) else {
                 continue;
             };
+            if tile
+                .source_metadata_id
+                .is_some_and(|source_id| source_id != metadata.id)
+            {
+                continue;
+            }
             let index = y as usize * self.width + x as usize;
             let bit = 1_u64 << (index % 64);
             if overrides[index / 64] & bit != 0 {
@@ -2157,6 +2163,34 @@ mod geometry_tests {
         assert!(world.collides(Rect::new(170.0, 50.0, 1.0, 1.0)));
         assert!(!world.tiles_point(Vec2::new(31.9995, 50.0), "oSolid"));
         assert!(!world.tiles_point(Vec2::new(f64::NAN, 50.0), "oSolid"));
+    }
+
+    #[test]
+    fn tile_collision_queries_use_the_bound_source_metadata_instance() {
+        let mut world = World::new(40, 12, Area::Mines, 1);
+        world.set_tile(2, 3, "oBlock");
+        let decoy = world.spawn("oTerrainMetadata", Vec2::new(40.0, 56.0));
+        world
+            .entity_mut(decoy)
+            .unwrap()
+            .text
+            .insert("terrain_sprite".into(), "sThinIce1".into());
+        let selected = world.spawn("oTerrainMetadata", Vec2::new(40.0, 56.0));
+        world
+            .entity_mut(selected)
+            .unwrap()
+            .text
+            .insert("terrain_sprite".into(), "sBlock".into());
+        let tile_index = 3 * world.width + 2;
+        world.tiles[tile_index].source_metadata_id = Some(selected);
+        let point = Vec2::new(35.0, 57.0);
+
+        assert!(
+            world
+                .tile_collision_mask(2, 3)
+                .contains(point, CollisionPrecision::Precise)
+        );
+        assert!(world.tiles_point_precision(point, "oSolid", CollisionPrecision::Precise));
     }
 
     #[test]
