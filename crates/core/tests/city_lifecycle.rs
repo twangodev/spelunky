@@ -86,6 +86,7 @@ fn enter_city_through_gold_door() -> Game {
     game.next_level();
     assert_eq!(game.world.level, 15);
     assert_eq!(game.world.name, "City of Gold");
+    assert_eq!(game.data.get("cleanSolids"), Some(&0.0));
     assert!(game.flags.contains("cityOfGold"));
     assert!(!game.flags.contains("custom"));
     game

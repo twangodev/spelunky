@@ -65,6 +65,8 @@ enum UserEvent {
     #[cfg(target_arch = "wasm32")]
     BrowserFullscreenChanged(bool),
     #[cfg(target_arch = "wasm32")]
+    BrowserWindowFocusChanged(bool),
+    #[cfg(target_arch = "wasm32")]
     Imported(String, String),
     #[cfg(target_arch = "wasm32")]
     ImportedDirectory(Vec<(String, String)>),
@@ -378,6 +380,8 @@ struct App {
     browser_shortcuts: Option<crate::browser_shortcuts::BrowserShortcutModifiers>,
     #[cfg(target_arch = "wasm32")]
     browser_fullscreen_listener: Option<wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>>,
+    #[cfg(target_arch = "wasm32")]
+    browser_focus_listener: Option<wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>>,
     message: String,
     message_until: f64,
     message_simulated: bool,
@@ -650,6 +654,8 @@ impl App {
             browser_shortcuts: None,
             #[cfg(target_arch = "wasm32")]
             browser_fullscreen_listener: None,
+            #[cfg(target_arch = "wasm32")]
+            browser_focus_listener: None,
             message: String::new(),
             message_until: 0.,
             message_simulated: false,
@@ -690,6 +696,19 @@ impl App {
         self.apply_settings_audio_action();
         self.editor.cancel_pointer();
     }
+    fn set_focused(&mut self, focused: bool) {
+        let focus_changed = self.focused != focused;
+        self.focused = focused;
+        self.mouse_left = false;
+        self.mouse_right = false;
+        clear_control_on_focus_loss(&mut self.control, focused);
+        // Source freezeOnLoseFocus suspends simulation without changing the
+        // explicit pause state. Focus return resumes the same screen.
+        if focus_changed {
+            self.reset_timing_for_suspension();
+        }
+        self.apply_audio_policy();
+    }
     fn reset_timing_with_gameplay_levels(&mut self, preserve_levels: bool) {
         self.cinematic_action = false;
         self.credits_keyboard_skip = false;
@@ -706,6 +725,7 @@ impl App {
     #[cfg(target_arch = "wasm32")]
     fn resume_browser_lifecycle(&mut self) {
         self.install_browser_fullscreen_listener();
+        self.install_browser_focus_listener();
         if let Some(document) = web_sys::window().and_then(|window| window.document()) {
             self.occluded = document.hidden();
             if let Ok(document_focused) = document.has_focus() {
@@ -731,6 +751,49 @@ impl App {
         {
             window.request_redraw();
         }
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn install_browser_focus_listener(&mut self) {
+        use wasm_bindgen::JsCast;
+        use winit::platform::web::WindowExtWebSys;
+
+        if self.browser_focus_listener.is_some() {
+            return;
+        }
+        let Some(browser_window) = web_sys::window() else {
+            return;
+        };
+        let Some(document) = browser_window.document() else {
+            return;
+        };
+        let Some(canvas) = self.window.as_ref().and_then(|window| window.canvas()) else {
+            return;
+        };
+        let canvas: web_sys::Element = canvas.unchecked_into();
+        let proxy = self.proxy.clone();
+        let listener =
+            wasm_bindgen::closure::Closure::wrap(Box::new(move |event: web_sys::Event| {
+                // The canvas can remain the active DOM element while its
+                // browser window loses OS focus. On return, resume only when
+                // the document and the game's canvas both own focus.
+                let focused = event.type_() == "focus"
+                    && document.has_focus().unwrap_or(false)
+                    && document
+                        .active_element()
+                        .is_some_and(|active_element| active_element == canvas);
+                let _ = proxy.send_event(UserEvent::BrowserWindowFocusChanged(focused));
+            }) as Box<dyn FnMut(web_sys::Event)>);
+        let callback = listener.as_ref().unchecked_ref();
+        if let Err(error) = browser_window.add_event_listener_with_callback("blur", callback) {
+            self.toast(format!("Cannot observe browser focus state: {error:?}"));
+            return;
+        }
+        if let Err(error) = browser_window.add_event_listener_with_callback("focus", callback) {
+            let _ = browser_window.remove_event_listener_with_callback("blur", callback);
+            self.toast(format!("Cannot observe browser focus state: {error:?}"));
+            return;
+        }
+        self.browser_focus_listener = Some(listener);
     }
     #[cfg(target_arch = "wasm32")]
     fn install_browser_fullscreen_listener(&mut self) {
@@ -4625,7 +4688,10 @@ impl ApplicationHandler<UserEvent> for App {
         }
         self.window = Some(window.clone());
         #[cfg(target_arch = "wasm32")]
-        self.install_browser_fullscreen_listener();
+        {
+            self.install_browser_fullscreen_listener();
+            self.install_browser_focus_listener();
+        }
         self.timing.reset(self.now());
         self.settings_changed();
         let atlas = match Atlas::load() {
@@ -4697,6 +4763,8 @@ impl ApplicationHandler<UserEvent> for App {
                 browser_fullscreen_succeeded();
             }
             #[cfg(target_arch = "wasm32")]
+            UserEvent::BrowserWindowFocusChanged(focused) => self.set_focused(focused),
+            #[cfg(target_arch = "wasm32")]
             UserEvent::Imported(name, text) => self.import_level(name, text),
             #[cfg(target_arch = "wasm32")]
             UserEvent::ImportedDirectory(files) => self.import_level_directory(files),
@@ -4754,19 +4822,7 @@ impl ApplicationHandler<UserEvent> for App {
                     self.cursor = logical_pointer(x, y, size.width, size.height);
                 }
             }
-            WindowEvent::Focused(focused) => {
-                let focus_changed = self.focused != focused;
-                self.focused = focused;
-                self.mouse_left = false;
-                self.mouse_right = false;
-                clear_control_on_focus_loss(&mut self.control, focused);
-                // Source freezeOnLoseFocus suspends simulation without changing
-                // the explicit pause state. Focus return resumes the same screen.
-                if focus_changed {
-                    self.reset_timing_for_suspension();
-                }
-                self.apply_audio_policy()
-            }
+            WindowEvent::Focused(focused) => self.set_focused(focused),
             WindowEvent::Occluded(occluded) => {
                 let occlusion_changed = self.occluded != occluded;
                 self.occluded = occluded;

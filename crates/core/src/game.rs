@@ -729,6 +729,12 @@ impl Game {
             }
         }
         self.world = generated.world;
+        if !historical {
+            // scrInitLevel runs scrEntityGen after terrain setup. Its final
+            // statement clears global.cleanSolids after population, so the
+            // exit-animation setting cannot leak into the newly loaded room.
+            self.data.insert("cleanSolids".into(), 0.0);
+        }
         // scrLevelGen sets global.madeMoai as soon as it schedules a Moai
         // room. Persist that source side effect with the generated room so a
         // hub start at level 9 suppresses another Moai on level 10.

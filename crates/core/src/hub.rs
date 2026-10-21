@@ -3393,6 +3393,106 @@ mod tests {
         }
     }
     #[test]
+    fn game_step_sun_portal_keeps_clean_solids_for_brick_destruction() {
+        let mut g = Game::shell(23, RulesPreset::Classic);
+        g.flags
+            .extend(["unlock_sun".into(), "character_tunnelman".into()]);
+        g.load_hub(HubKind::Scores);
+        let portal = g
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oXSun")
+            .expect("unlocked Sun portal")
+            .pos;
+        // Give the actual Game::step portal check authored-style support under
+        // the controlled player position, then activate the real portal.
+        for x in 1..=3 {
+            g.world.set_tile(x, 4, "oBlock");
+        }
+        g.player.pos = Vec2::new(portal.x + 8.0, portal.y + 8.0);
+        g.player.previous_pos = g.player.pos;
+        g.player.state = PlayerState::Standing;
+        g.player.grounded = true;
+        g.step(&InputFrame {
+            up: true,
+            ..InputFrame::default()
+        });
+        assert!(g.player.is_exiting(), "Game::step starts the portal exit");
+        assert_eq!(g.ending.as_ref().unwrap().portal, Some(HubPortal::Sun));
+        finish_portal(&mut g);
+        assert!(g.flags.contains("hub_destination:sun"));
+        assert_eq!(g.data.get("cleanSolids"), Some(&1.0));
+
+        // The host's portal handoff creates the authored challenge room while
+        // preserving globals written by the departing Animation End.
+        g.load_hub(HubKind::Sun);
+        assert_eq!(g.world.name, "rSun");
+        assert_eq!(g.data.get("cleanSolids"), Some(&1.0));
+        assert!(g.flags.contains("character_tunnelman"));
+
+        // Match the established source mattock Animation End fixture while
+        // keeping the portal-created Sun room and its clean global active.
+        for x in 4..=7 {
+            g.world.set_tile(x, 10, "oBlock");
+        }
+        g.world.set_tile(6, 9, "oBrick");
+        let rubble_before = g
+            .world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive && entity.object.starts_with("oRubble"))
+            .count();
+        g.player.pos = Vec2::new(80.0, 152.0);
+        g.player.previous_pos = g.player.pos;
+        g.player.state = PlayerState::Standing;
+        g.player.grounded = true;
+        g.player.facing = 1;
+        g.player.attack_timer = 12;
+        g.player.set_sprite("sTunnelAttackL");
+        let hit_id = g.world.spawn("oMattockHit", Vec2::new(96.0, 152.0));
+        let hit = g.world.entity_mut(hit_id).unwrap();
+        hit.set_sprite("sMattockHitR");
+        hit.animation = (crate::catalog::sprite_frame_count(&hit.sprite) - 1) as f64 + 0.5;
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.tile(6, 9).unwrap().object, "");
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.object.starts_with("oRubble"))
+                .count(),
+            rubble_before,
+            "the mattock destroys a brick without emitting rubble"
+        );
+
+        // Exercise the source brick-destruction callback on the authored
+        // challenge-room brick at (80, 176), using a real Game::step blast.
+        for x in 4..=7 {
+            g.world.set_tile(x, 10, "");
+        }
+        assert_eq!(g.world.tile(5, 11).unwrap().object, "oBrick");
+        g.player.cheat_invulnerable = true;
+        let rubble_before = g
+            .world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive && entity.object.starts_with("oRubble"))
+            .count();
+        g.world.spawn("oExplosion", Vec2::new(88.0, 184.0));
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.tile(5, 11).unwrap().object, "");
+        assert_eq!(
+            g.world
+                .entities
+                .iter()
+                .filter(|entity| entity.alive && entity.object.starts_with("oRubble"))
+                .count(),
+            rubble_before,
+            "the source exit cleanup flag suppresses brick rubble"
+        );
+    }
+    #[test]
     fn moon_contact_damage_does_not_invent_a_stun() {
         let mut g = loaded(HubKind::Moon);
         for _ in 0..70 {

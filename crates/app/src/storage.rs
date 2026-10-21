@@ -95,7 +95,9 @@ pub struct Record {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elapsed_ms: Option<u64>,
     /// Shortcut wins count toward score and wins, but never fastest time.
-    #[serde(default = "eligible_legacy_record")]
+    /// Saves predating this field cannot identify shortcut runs, so missing
+    /// eligibility is conservatively excluded from fastest-time gates.
+    #[serde(default = "ineligible_legacy_record")]
     pub fastest_eligible: bool,
     pub won: bool,
     #[serde(default)]
@@ -104,8 +106,8 @@ pub struct Record {
     pub rescues: u32,
 }
 
-fn eligible_legacy_record() -> bool {
-    true
+fn ineligible_legacy_record() -> bool {
+    false
 }
 
 fn existing_save_first_time() -> bool {
@@ -1198,6 +1200,7 @@ mod tests {
         assert_eq!(decoded.records[1].kills, 15);
         assert_eq!(decoded.records[1].rescues, 3);
         assert_eq!(decoded.records[0].elapsed_ms(), 27_000);
+        assert!(decoded.records[0].fastest_eligible);
         assert!(!decoded.records[1].fastest_eligible);
         assert_eq!(decoded.custom_levels, data.custom_levels);
         assert_eq!(decoded.unlocks, data.unlocks);
@@ -1560,7 +1563,7 @@ mod tests {
                 assert_eq!(record.simulation_version, 0);
                 assert_eq!(record.kills, 0);
                 assert_eq!(record.rescues, 0);
-                assert!(record.fastest_eligible);
+                assert!(!record.fastest_eligible);
                 assert_eq!(record.elapsed_ms(), record.ticks * 1_000 / 30);
                 assert_eq!(record.elapsed_seconds(), record.ticks / 30);
             }
@@ -1580,11 +1583,26 @@ mod tests {
         .unwrap();
         assert_eq!(legacy.records[0].elapsed_ms(), 600_000);
         assert_eq!(legacy.records[0].elapsed_seconds(), 600);
+        assert!(!legacy.records[0].fastest_eligible);
 
         let mut explicit = legacy.records[0].clone();
         explicit.elapsed_ms = Some(540_000);
         assert_eq!(explicit.elapsed_ms(), 540_000);
         assert_eq!(explicit.elapsed_seconds(), 540);
+    }
+
+    #[test]
+    fn missing_legacy_win_eligibility_is_conservative_and_explicit_values_survive() {
+        let record = |eligibility: &str| {
+            let json = format!(
+                r#"{{"version":1,"records":[{{"seed":42,"rules":"Classic","score":4000,"level":16,"ticks":18000,{eligibility}"won":true}}]}}"#
+            );
+            SaveData::from_json(&json).unwrap().records.remove(0)
+        };
+
+        assert!(!record("").fastest_eligible);
+        assert!(record(r#""fastest_eligible":true,"#).fastest_eligible);
+        assert!(!record(r#""fastest_eligible":false,"#).fastest_eligible);
     }
 
     #[test]
@@ -1652,7 +1670,7 @@ mod tests {
             assert_eq!(reopened.records[0].rng_algorithm, RngAlgorithm::Gm8Lcg32V1);
             assert_eq!(reopened.records[0].simulation_version, simulation_version);
             assert_eq!(reopened.records[0].seed, u64::from(u32::MAX));
-            assert!(reopened.records[0].fastest_eligible);
+            assert!(!reopened.records[0].fastest_eligible);
         }
         for (seed, metadata) in [
             (

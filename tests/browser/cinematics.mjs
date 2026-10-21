@@ -84,8 +84,15 @@ export async function runCinematicAcceptance({ page, result, screenshot }) {
   await page.keyboard.down('x'); // Actual bound attack: source Credits accepts held attack.
   try { await state(page, 'Title'); } finally { await page.keyboard.up('x'); }
   credits.returned = await snapshot(page);
-  assert.equal(credits.returned.player, null);
+  assert.equal(credits.returned.state, 'Ending');
+  assert.equal(credits.returned.world.name, 'rCredits1');
+  assert.equal(credits.returned.ending.stage, 'Complete');
+  await page.waitForFunction(() => {
+    const status = document.querySelector('#status');
+    return status?.classList.contains('ended')
+      && status.textContent === 'The game has ended. You may close or reload this tab.';
+  }, null, { timeout: 5000 });
   await screenshot(page, 'title-after-rope-credits', result);
   credits.status = 'passed';
-  result.checks.push('Linked custom source transitions, final custom bonus summary/Scores, and authored Title rope→Credits1→browser Title');
+  result.checks.push('Linked custom source transitions, final custom bonus summary/Scores, and authored Title rope→Credits1→browser end card');
 }

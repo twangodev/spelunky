@@ -2028,6 +2028,10 @@ pub(crate) fn player_animation_end(game: &mut Game) {
     let collect = game.data.remove("collect").unwrap_or(0.).max(0.) as u32;
     game.player.money = game.player.money.saturating_add(collect);
     game.player.held = None;
+    // Classic writes global.cleanSolids at the end of every Player Animation
+    // End exit branch. Keep it before portal completion, which may return for
+    // an in-place character change or hand control to a direct hub destination.
+    game.data.insert("cleanSolids".into(), 1.0);
     if let Some(portal) = s.portal {
         if portal == crate::hub::HubPortal::End {
             // Classic xEND follows the shared exit animation directly into

@@ -65,9 +65,43 @@ async function runResumeFocusRegression({ page, result }) {
   result.checks.push('persisted pageshow restores focus from the active DOM element, not stale Winit canvas focus');
 }
 
+async function runWindowFocusRegression({ page, result }) {
+  await page.locator('#spelunky-canvas').focus();
+  await page.waitForFunction(() => window.__spelunkyTest?.hostFocused === true, null, { timeout: 5000 });
+
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await page.waitForFunction(() => window.__spelunkyTest?.hostFocused === false, null, { timeout: 5000 });
+  const blurred = await snapshot(page);
+  await page.waitForTimeout(200);
+  const paused = await snapshot(page);
+  assert.equal(paused.hostFocused, false);
+  assert.equal(paused.tick, blurred.tick, 'A browser window blur must freeze the source simulation');
+
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await page.waitForFunction(() => window.__spelunkyTest?.hostFocused === true, null, { timeout: 5000 });
+  await page.waitForFunction(tick => window.__spelunkyTest?.tick > tick, paused.tick, { timeout: 5000 });
+
+  // A browser window focus is insufficient when the user has moved DOM focus
+  // to another control; the canvas must own focus before gameplay resumes.
+  await page.locator('#attribution a').focus();
+  await page.waitForFunction(() => window.__spelunkyTest?.hostFocused === false, null, { timeout: 5000 });
+  const linkFocused = await snapshot(page);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await page.waitForTimeout(200);
+  const stillPaused = await snapshot(page);
+  assert.equal(stillPaused.hostFocused, false);
+  assert.equal(stillPaused.tick, linkFocused.tick, 'Window focus must not resume while a link owns DOM focus');
+
+  await page.locator('#spelunky-canvas').focus();
+  await page.waitForFunction(() => window.__spelunkyTest?.hostFocused === true, null, { timeout: 5000 });
+  await page.waitForFunction(tick => window.__spelunkyTest?.tick > tick, linkFocused.tick, { timeout: 5000 });
+  result.checks.push('browser window blur freezes simulation and focus resumes only with the canvas active');
+}
+
 export async function runResumeFocusAcceptance({ page, result }) {
   await enterPlaying(page);
   await runResumeFocusRegression({ page, result });
+  await runWindowFocusRegression({ page, result });
 }
 
 export async function runBfcacheAcceptance({ page, base, result }) {
