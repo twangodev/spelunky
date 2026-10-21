@@ -756,7 +756,17 @@ impl EditorUi {
         let pressed = left && !self.pointer_left;
         let released = !left && self.pointer_left;
         self.pointer_left = left;
-        if self.confirmation.is_some() || self.entry.is_some() || !x.is_finite() || !y.is_finite() {
+        if !x.is_finite() || !y.is_finite() {
+            return EditorCommand::None;
+        }
+        let cell = ((0.0..240.0).contains(&x) && (MAP_Y..204.0).contains(&y)).then(|| {
+            (
+                (x / CELL + self.pan[0]).floor() as usize,
+                ((y - MAP_Y) / CELL + self.pan[1]).floor() as usize,
+            )
+        });
+        self.cursor = cell;
+        if self.confirmation.is_some() || self.entry.is_some() {
             return EditorCommand::None;
         }
         let over_new = (280.0..317.0).contains(&x) && (10.0..23.0).contains(&y);
@@ -773,12 +783,7 @@ impl EditorUi {
             self.stroke = None;
             return EditorCommand::None;
         }
-        if (0.0..240.0).contains(&x) && (MAP_Y..204.0).contains(&y) {
-            let cell = (
-                (x / CELL + self.pan[0]).floor() as usize,
-                ((y - MAP_Y) / CELL + self.pan[1]).floor() as usize,
-            );
-            self.cursor = Some(cell);
+        if let Some(cell) = cell {
             let result = if left || right {
                 let erase = right && !left;
                 self.stroke = Some((cell.0, cell.1, erase));
@@ -1840,6 +1845,20 @@ mod tests {
             sign.key(KeyCode::Escape, None, false),
             EditorCommand::None
         ));
+        assert!(sign.entry.is_none());
+    }
+
+    #[test]
+    fn moving_pointer_out_of_map_clears_sign_text_target() {
+        let mut sign = EditorUi::new();
+        sign.state.set_tile(0, 0, 'I').unwrap();
+        sign.pointer(4.0, 40.0, false, false);
+        assert_eq!(sign.cursor, Some((0, 0)));
+
+        sign.pointer(250.0, 40.0, false, false);
+        assert_eq!(sign.cursor, None);
+        sign.key(KeyCode::KeyE, None, false);
+
         assert!(sign.entry.is_none());
     }
 

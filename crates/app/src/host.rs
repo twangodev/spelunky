@@ -641,8 +641,11 @@ impl App {
         self.install_browser_fullscreen_listener();
         if let Some(document) = web_sys::window().and_then(|window| window.document()) {
             self.occluded = document.hidden();
-            if let Ok(focused) = document.has_focus() {
-                self.focused = focused;
+            if let Ok(document_focused) = document.has_focus() {
+                let canvas_focused = document
+                    .active_element()
+                    .is_some_and(|element| element.id() == "spelunky-canvas");
+                self.focused = document_focused && canvas_focused;
             }
         }
         self.reset_timing_for_suspension();
