@@ -173,6 +173,34 @@ const MUSIC_RESOURCES: [&str; 8] = [
 fn is_music_resource(name: &str) -> bool {
     MUSIC_RESOURCES.contains(&name)
 }
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn effect_assets() -> impl Iterator<Item = (&'static str, &'static [u8])> {
+    ASSETS
+        .iter()
+        .copied()
+        .filter(|(name, _)| !is_music_resource(name))
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn effect_assets_ready(mut is_terminal: impl FnMut(&'static str) -> bool) -> bool {
+    effect_assets().all(|(name, _)| is_terminal(name))
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn effect_preload_ready(
+    preload_required: bool,
+    context_available: bool,
+    is_terminal: impl FnMut(&'static str) -> bool,
+) -> bool {
+    !preload_required || !context_available || effect_assets_ready(is_terminal)
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn require_effect_preload_if_available(required: bool, context_available: bool) -> bool {
+    required || context_available
+}
+
 fn effective_music_volume(music: f32, music_muted: bool) -> f32 {
     if music_muted { 0.0 } else { music }
 }
@@ -315,6 +343,9 @@ mod backend {
             }
         }
         pub fn unlock(&mut self) {}
+        pub fn sfx_preload_ready(&self) -> bool {
+            true
+        }
         pub fn play(&mut self, name: &str, position: f32) {
             let Some(mixer) = self.stream.as_ref().map(|stream| stream.mixer().clone()) else {
                 return;
@@ -1224,6 +1255,7 @@ mod backend {
     pub struct Audio {
         context: Option<AudioContext>,
         cache: Rc<RefCell<Cache>>,
+        sfx_preload_required: bool,
         queued: VecDeque<(&'static str, f32)>,
         effects: Vec<Effect>,
         tracks: Vec<Track>,
@@ -1246,9 +1278,12 @@ mod backend {
     }
     impl Audio {
         pub fn new() -> Self {
-            Self {
-                context: AudioContext::new().ok(),
+            let context = AudioContext::new().ok();
+            let sfx_preload_required = context.is_some();
+            let audio = Self {
+                context,
                 cache: Rc::default(),
+                sfx_preload_required,
                 queued: VecDeque::new(),
                 effects: Vec::new(),
                 tracks: Vec::new(),
@@ -1263,16 +1298,43 @@ mod backend {
                 unlocked: Rc::new(Cell::new(false)),
                 paused: false,
                 last_update: 0.0,
-            }
+            };
+            audio.preload_effects();
+            audio
         }
         pub fn is_unlocked(&self) -> bool {
             self.unlocked.get()
+        }
+        /// Keep gameplay from advancing until every effect has decoded or failed.
+        /// A missing context fails open; `unlock` arms the gate if it later
+        /// succeeds in creating one.
+        pub fn sfx_preload_ready(&self) -> bool {
+            let cache = self.cache.borrow();
+            effect_preload_ready(self.sfx_preload_required, self.context.is_some(), |name| {
+                cache.buffers.contains_key(name) || cache.failed.contains(name)
+            })
+        }
+        fn preload_effects(&self) {
+            if self.context.is_some() {
+                for (name, _) in effect_assets() {
+                    self.decode(name);
+                }
+            }
         }
         /// Try to resume after a browser-accepted user gesture. Only a fulfilled
         /// resume opens the playback gate; rejected attempts stay queued.
         pub fn unlock(&mut self) {
             if self.context.is_none() {
                 self.context = AudioContext::new().ok();
+                if self.context.is_some() {
+                    // Context creation can fail before a user gesture. If the
+                    // gesture recovers it, wait for this first decode batch.
+                    self.sfx_preload_required = require_effect_preload_if_available(
+                        self.sfx_preload_required,
+                        self.context.is_some(),
+                    );
+                    self.preload_effects();
+                }
             }
             if let Some(context) = &self.context {
                 if !self.paused {
@@ -1759,6 +1821,7 @@ mod backend {
             Audio {
                 context: None, // Queue tests do not construct a browser audio device.
                 cache: Rc::default(),
+                sfx_preload_required: false,
                 queued: VecDeque::new(),
                 effects: Vec::new(),
                 tracks: Vec::new(),
@@ -1858,6 +1921,12 @@ mod backend {
         #[test]
         fn stop_removes_pending_alias_requests_without_cancelling_other_resources() {
             let mut audio = pending_audio();
+            assert!(audio.sfx_preload_ready(), "missing context must fail open");
+            audio.sfx_preload_required = true;
+            assert!(
+                audio.sfx_preload_ready(),
+                "context loss must not deadlock the startup gate"
+            );
             audio.play("sndBowPull", 0.0);
             audio.play("bowpull.wav", 1.0);
             audio.play("sndFlame", -1.0);
@@ -1918,7 +1987,10 @@ mod tests {
     fn original_sound_and_music_aliases_resolve_to_embedded_assets() {
         let source =
             include_str!("../../../references/classic-1.1/Objects/oMusic.events/Create.xml");
+        let effects: std::collections::HashSet<_> = effect_assets().map(|(name, _)| name).collect();
+        assert!(MUSIC_RESOURCES.iter().all(|name| !effects.contains(name)));
         let mut count = 0;
+        let mut source_effects = std::collections::HashSet::new();
         for line in source
             .lines()
             .filter(|line| line.contains("= SS_LoadSound("))
@@ -1934,10 +2006,56 @@ mod tests {
             let (stem, bytes) = asset(alias).unwrap_or_else(|| panic!("missing {alias}"));
             assert_eq!(stem, filename.split('.').next().unwrap());
             assert!(!bytes.is_empty());
+            if line.trim_end().ends_with(", 0);") {
+                source_effects.insert(stem);
+            }
             count += 1;
         }
+        assert!(
+            source_effects.is_subset(&effects),
+            "all Classic nonstreamed sounds must be in the startup preload set"
+        );
         assert!(count >= 60);
         assert!(asset("unknown").is_none());
+    }
+
+    #[test]
+    fn effect_preload_waits_for_every_effect_but_not_music() {
+        let effect_names: Vec<_> = effect_assets().map(|(name, _)| name).collect();
+        assert!(!effect_names.is_empty());
+
+        let terminal: std::collections::HashSet<_> = effect_names
+            .iter()
+            .copied()
+            .take(effect_names.len() - 1)
+            .collect();
+        assert!(!effect_assets_ready(|name| terminal.contains(name)));
+
+        let terminal: std::collections::HashSet<_> = effect_names.into_iter().collect();
+        assert!(effect_assets_ready(|name| terminal.contains(name)));
+    }
+
+    #[test]
+    fn failed_decodes_are_terminal_and_unavailable_contexts_fail_open() {
+        let effect_names: Vec<_> = effect_assets().map(|(name, _)| name).collect();
+        let failed = *effect_names.last().expect("embedded effects");
+        let decoded: std::collections::HashSet<_> = effect_names
+            .iter()
+            .copied()
+            .filter(|name| *name != failed)
+            .collect();
+        assert!(effect_preload_ready(true, true, |name| {
+            decoded.contains(name) || name == failed
+        }));
+        assert!(effect_preload_ready(true, false, |_| false));
+
+        let recovered_requirement = require_effect_preload_if_available(false, true);
+        assert!(recovered_requirement);
+        assert!(
+            !effect_preload_ready(recovered_requirement, true, |_| false),
+            "successful context recovery must wait for its first decode batch"
+        );
+        assert!(!require_effect_preload_if_available(false, false));
     }
     #[test]
     fn sanitizes_public_volume_and_pan_values() {

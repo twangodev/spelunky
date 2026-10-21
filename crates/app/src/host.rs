@@ -203,6 +203,48 @@ fn render_clock_running(
                 && game.is_some_and(|game| game.state == RunState::Dead)))
 }
 
+fn simulation_clock_running(
+    screen: Screen,
+    focused: bool,
+    occluded: bool,
+    game: Option<&Game>,
+    sfx_preload_ready: bool,
+) -> bool {
+    sfx_preload_ready && render_clock_running(screen, focused, occluded, game)
+}
+
+fn ui_tick_clock_running(screen: Screen, focused: bool, occluded: bool) -> bool {
+    focused && !occluded && matches!(screen, Screen::Settings | Screen::Editor | Screen::Donation)
+}
+
+fn apply_sfx_startup_gate(
+    screen: Screen,
+    sfx_preload_ready: bool,
+    preload_was_ready: &mut bool,
+    now: f64,
+    timing: &mut HostTiming,
+    input: &mut InputState,
+) {
+    let gameplay_screen = matches!(screen, Screen::Playing | Screen::Finished);
+    if !sfx_preload_ready {
+        // The intro is already a live Game when App::new returns. Discard
+        // gameplay edges and elapsed time while its SFX warm-up completes.
+        if gameplay_screen {
+            input.clear_gameplay();
+            timing.reset(now);
+        }
+        *preload_was_ready = false;
+    } else {
+        if gameplay_screen && !*preload_was_ready {
+            // The HostFrame was sampled before readiness was checked. Retire
+            // it so time spent waiting for the final decode cannot become a
+            // gameplay tick on the ready edge.
+            timing.reset(now);
+        }
+        *preload_was_ready = true;
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn native_window_is_presentable(focused: bool, occluded: bool, width: u32, height: u32) -> bool {
     focused && !occluded && width > 0 && height > 0
@@ -280,6 +322,7 @@ struct App {
     custom_level_catalog: std::collections::BTreeMap<String, String>,
     unreadable_custom_levels: std::collections::BTreeSet<String>,
     timing: HostTiming,
+    sfx_preload_was_ready: bool,
     scene_buffers: scene::SceneBuffers,
     profiler: Profiler,
     game: Option<Game>,
@@ -464,6 +507,7 @@ impl App {
             store.data.settings.music_volume,
             store.data.settings.effects_volume,
         );
+        let sfx_preload_was_ready = audio.sfx_preload_ready();
         let mut input = InputState::default();
         input.set_bindings(&store.data.settings.bindings);
         input.set_controller_bindings(&store.data.settings.controller_bindings);
@@ -498,6 +542,7 @@ impl App {
             custom_level_catalog,
             unreadable_custom_levels: std::collections::BTreeSet::new(),
             timing: HostTiming::default(),
+            sfx_preload_was_ready,
             scene_buffers: scene::SceneBuffers::default(),
             profiler: Profiler::default(),
             game: Some(game),
@@ -2004,7 +2049,18 @@ impl App {
                 }
             }
         }
-        if self.screen == Screen::Settings && self.focused && !self.occluded {
+        let sfx_preload_ready = self.audio.sfx_preload_ready();
+        apply_sfx_startup_gate(
+            self.screen,
+            sfx_preload_ready,
+            &mut self.sfx_preload_was_ready,
+            now,
+            &mut self.timing,
+            &mut self.input,
+        );
+        if ui_tick_clock_running(self.screen, self.focused, self.occluded)
+            && self.screen == Screen::Settings
+        {
             let frame = self
                 .timing
                 .advance_with_presentation_cap(host_frame, self.store.data.settings.frame_cap);
@@ -2014,7 +2070,9 @@ impl App {
                 }
             }
         }
-        if self.screen == Screen::Editor && self.focused && !self.occluded {
+        if ui_tick_clock_running(self.screen, self.focused, self.occluded)
+            && self.screen == Screen::Editor
+        {
             let frame = self
                 .timing
                 .advance_with_presentation_cap(host_frame, self.store.data.settings.frame_cap);
@@ -2026,7 +2084,9 @@ impl App {
                 }
             }
         }
-        if self.screen == Screen::Donation && self.focused && !self.occluded {
+        if ui_tick_clock_running(self.screen, self.focused, self.occluded)
+            && self.screen == Screen::Donation
+        {
             let frame = self
                 .timing
                 .advance_with_presentation_cap(host_frame, self.store.data.settings.frame_cap);
@@ -2049,7 +2109,13 @@ impl App {
             }
         }
         if self.screen == Screen::Playing
-            && render_clock_running(self.screen, self.focused, self.occluded, self.game.as_ref())
+            && simulation_clock_running(
+                self.screen,
+                self.focused,
+                self.occluded,
+                self.game.as_ref(),
+                sfx_preload_ready,
+            )
         {
             let frame = self
                 .timing
@@ -2144,7 +2210,13 @@ impl App {
             }
         }
         if self.screen == Screen::Finished
-            && render_clock_running(self.screen, self.focused, self.occluded, self.game.as_ref())
+            && simulation_clock_running(
+                self.screen,
+                self.focused,
+                self.occluded,
+                self.game.as_ref(),
+                sfx_preload_ready,
+            )
         {
             let frame = self
                 .timing
@@ -4648,11 +4720,12 @@ impl ApplicationHandler<UserEvent> for App {
                 // Sample once after simulation; scene and diagnostics share this fraction.
                 let alpha = self.timing.render_alpha(
                     self.now(),
-                    render_clock_running(
+                    simulation_clock_running(
                         self.screen,
                         self.focused,
                         self.occluded,
                         self.game.as_ref(),
+                        self.audio.sfx_preload_ready(),
                     ),
                 );
                 let timer = Stamp::start(profile);
@@ -6953,6 +7026,113 @@ mod tests {
         assert_eq!(actual, snapped);
     }
     use super::*;
+
+    #[test]
+    fn sfx_warmup_freezes_the_initial_intro_without_replaying_time_or_input() {
+        let mut timing = HostTiming::default();
+        timing.reset(1.0);
+        let mut preload_was_ready = false;
+        let stale_frame = timing.begin_frame(8.0);
+        let mut input = InputState::default();
+        input.key(KeyCode::KeyZ, true, false);
+
+        apply_sfx_startup_gate(
+            Screen::Playing,
+            false,
+            &mut preload_was_ready,
+            8.0,
+            &mut timing,
+            &mut input,
+        );
+        let game = camera_follow_fixture();
+        assert!(!simulation_clock_running(
+            Screen::Playing,
+            true,
+            false,
+            Some(&game),
+            false,
+        ));
+        assert_eq!(input.take_tick(), spelunky_core::InputFrame::default());
+        assert_eq!(
+            timing.advance(stale_frame).ticks,
+            0,
+            "pre-warmup elapsed time belongs to the old clock generation"
+        );
+
+        let ready_after_a_full_tick =
+            timing.begin_frame(8.0 + 1.0 / 240.0 + 1.0 / f64::from(spelunky_core::TICK_RATE));
+        apply_sfx_startup_gate(
+            Screen::Playing,
+            true,
+            &mut preload_was_ready,
+            ready_after_a_full_tick.sampled_at,
+            &mut timing,
+            &mut input,
+        );
+        assert_eq!(
+            timing.advance(ready_after_a_full_tick).ticks,
+            0,
+            "the ready-edge frame must not count the interval spent waiting for decode"
+        );
+        assert!(preload_was_ready);
+        assert!(simulation_clock_running(
+            Screen::Playing,
+            true,
+            false,
+            Some(&game),
+            true,
+        ));
+        let one_tick_after_ready = timing.begin_frame(
+            ready_after_a_full_tick.sampled_at + 1.0 / f64::from(spelunky_core::TICK_RATE) + 0.001,
+        );
+        assert_eq!(timing.advance(one_tick_after_ready).ticks, 1);
+    }
+
+    #[test]
+    fn sfx_warmup_does_not_stop_settings_editor_or_donation_ticks() {
+        for screen in [Screen::Settings, Screen::Editor, Screen::Donation] {
+            assert!(ui_tick_clock_running(screen, true, false), "{screen:?}");
+        }
+        assert!(!ui_tick_clock_running(Screen::Settings, false, false));
+        assert!(!ui_tick_clock_running(Screen::Editor, true, true));
+
+        let mut timing = HostTiming::default();
+        timing.reset(2.0);
+        let generation = timing.generation;
+        let mut preload_was_ready = false;
+        let mut input = InputState::default();
+        input.key(KeyCode::KeyZ, true, false);
+        apply_sfx_startup_gate(
+            Screen::Editor,
+            false,
+            &mut preload_was_ready,
+            3.0,
+            &mut timing,
+            &mut input,
+        );
+        assert_eq!(timing.generation, generation);
+        assert_ne!(input.take_tick(), spelunky_core::InputFrame::default());
+    }
+
+    #[test]
+    fn sfx_warmup_gates_dead_run_simulation_until_terminal() {
+        let mut game = camera_follow_fixture();
+        game.state = RunState::Dead;
+        assert!(!simulation_clock_running(
+            Screen::Finished,
+            true,
+            false,
+            Some(&game),
+            false,
+        ));
+        assert!(simulation_clock_running(
+            Screen::Finished,
+            true,
+            false,
+            Some(&game),
+            true,
+        ));
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
