@@ -122,6 +122,10 @@ pub struct InputFrame {
     pub flare_pressed: bool,
     pub cycle_pressed: bool,
     pub pay_pressed: bool,
+    /// Held state for the port's independent Enter Door binding. Classic
+    /// checks its Up action continuously while grounded at an exit.
+    #[serde(default)]
+    pub exit: bool,
     pub exit_pressed: bool,
 }
 impl InputFrame {

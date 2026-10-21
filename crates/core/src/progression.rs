@@ -985,7 +985,7 @@ pub(crate) fn player_actions(game: &mut Game, input: &InputFrame) {
     if game.state != RunState::Playing || !game.is_level() {
         return;
     }
-    if !(input.up || input.exit_pressed)
+    if !(input.up || input.exit || input.exit_pressed)
         || !crate::player::source_platform_grounded(game)
         || game.player.is_stunned()
         || game.player.attack_timer > 0

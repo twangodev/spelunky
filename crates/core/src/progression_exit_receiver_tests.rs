@@ -52,6 +52,43 @@ fn actual_step_exit_gate_and_receiver_are_independent_in_source_family_order() {
 }
 
 #[test]
+fn actual_step_held_exit_binding_survives_airborne_press_until_landing() {
+    let mut game = Game::shell(41, RulesPreset::Classic);
+    for x in 0..game.world.width {
+        game.world.set_tile(x, 4, "oTemple");
+    }
+    game.world.spawn("oExit", Vec2::new(80., 48.));
+    game.player.pos = Vec2::new(88., 32.);
+    game.player.previous_pos = game.player.pos;
+    game.player.vel = Vec2::default();
+    game.player.state = crate::PlayerState::Falling;
+    game.player.grounded = false;
+    game.player.attack_timer = 0;
+
+    // The physical Enter edge arrives while the Player is above the door and
+    // is consumed on this first simulation tick. Classic keeps sampling its
+    // held Up value, so it exits once the Player lands with the key held.
+    game.step(&InputFrame {
+        exit: true,
+        exit_pressed: true,
+        ..InputFrame::default()
+    });
+    assert_eq!(game.state, RunState::Playing);
+    assert!(!crate::player::source_platform_grounded(&game));
+
+    for _ in 0..40 {
+        if game.state != RunState::Playing {
+            break;
+        }
+        game.step(&InputFrame {
+            exit: true,
+            ..InputFrame::default()
+        });
+    }
+    assert_eq!(game.state, RunState::Ending);
+}
+
+#[test]
 fn actual_step_passive_damsel_deposit_uses_the_independent_mask_receiver() {
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         for reverse_storage in [false, true] {

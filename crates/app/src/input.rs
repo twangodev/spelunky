@@ -552,6 +552,7 @@ impl InputState {
             run: self.keyboard_held.has(Action::Run),
             jump: self.keyboard_held.has(Action::Jump),
             attack: self.keyboard_held.has(Action::Attack),
+            exit: self.keyboard_held.has(Action::Exit),
             ..InputFrame::default()
         };
         self.ui_edges.clear();
@@ -624,6 +625,7 @@ impl InputState {
         self.frame.run = next.has(Action::Run);
         self.frame.jump = next.has(Action::Jump);
         self.frame.attack = next.has(Action::Attack);
+        self.frame.exit = next.has(Action::Exit);
         self.keyboard_held = keyboard;
         self.gamepad_held = self.gamepad_actions;
     }
@@ -1862,6 +1864,7 @@ mod tests {
             "up_pressed",
             "down_pressed",
             "attack_released",
+            "exit",
         ] {
             old.as_object_mut().unwrap().remove(name);
         }
@@ -1888,6 +1891,30 @@ mod tests {
         assert_eq!(input.action_label("missing"), "UNBOUND");
         input.set_bindings(&BTreeMap::from([("attack".into(), "Invalid".into())]));
         assert_eq!(input.action_label("attack"), "X");
+    }
+
+    #[test]
+    fn exit_binding_remains_held_after_its_press_edge_is_consumed() {
+        let mut input = InputState::default();
+        input.set_bindings(&BTreeMap::from([("exit".into(), "Enter".into())]));
+        input.key(KeyCode::Enter, true, false);
+
+        let first = input.take_tick();
+        assert!(first.exit);
+        assert!(first.exit_pressed);
+
+        let held = input.take_tick();
+        assert!(held.exit);
+        assert!(!held.exit_pressed);
+
+        input.clear_gameplay_preserving_keyboard();
+        let after_pause = input.take_tick();
+        assert!(after_pause.exit);
+        assert!(!after_pause.exit_pressed);
+
+        input.key(KeyCode::Enter, false, false);
+        let released = input.take_tick();
+        assert!(!released.exit);
     }
 
     #[test]
