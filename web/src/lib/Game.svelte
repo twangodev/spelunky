@@ -43,6 +43,7 @@
   #fullscreen-status { position: fixed; top: max(.75rem, env(safe-area-inset-top)); right: max(.75rem, env(safe-area-inset-right)); z-index: 2; max-width: min(24rem, calc(100vw - 1rem)); margin: 0; padding: .5rem .65rem; background: #211813; border: 1px solid #b67d4a; color: #eee; font-size: .8rem; }
   #status { position: absolute; max-width: 36rem; padding: 1.25rem; text-align: center; }
   :global(#status.error) { background: #211813; border: 1px solid #b67d4a; }
+  :global(#status.ended) { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; box-sizing: border-box; width: 100vw; height: 100vh; height: 100dvh; max-width: none; margin: 0; padding: 2rem; background: #111; color: #eee; font-size: 1.1rem; }
   #attribution { position: absolute; right: .5rem; bottom: .3rem; margin: 0; font-size: .7rem; color: #ccc; }
   a { color: inherit; }
 </style>

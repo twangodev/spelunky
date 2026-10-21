@@ -341,6 +341,7 @@ struct App {
     credits_keyboard_skip: bool,
     pause_start_requested: bool,
     exit_requested: bool,
+    browser_ended: bool,
     focused: bool,
     occluded: bool,
     next_frame: f64,
@@ -563,6 +564,7 @@ impl App {
             credits_keyboard_skip: false,
             pause_start_requested: false,
             exit_requested: false,
+            browser_ended: false,
             focused: true,
             occluded: false,
             next_frame: 0.,
@@ -669,6 +671,22 @@ impl App {
         self.credits_keyboard_skip = false;
         self.timing.reset(self.now());
         self.input.clear_edges();
+    }
+    fn request_app_exit(&mut self) {
+        match session_exit_action(cfg!(target_arch = "wasm32")) {
+            SessionExitAction::CloseApplication => self.exit_requested = true,
+            SessionExitAction::ShowBrowserEndCard => {
+                self.exit_requested = false;
+                self.browser_ended = true;
+                self.persist_exit_state();
+                self.screen(Screen::Title);
+                #[cfg(target_arch = "wasm32")]
+                set_browser_ended_status();
+            }
+        }
+        self.input.clear();
+        self.audio.stop_music();
+        self.audio.pause(true);
     }
     fn screen(&mut self, screen: Screen) {
         let previous_screen = self.screen;
@@ -795,10 +813,7 @@ impl App {
                 self.audio.stop_all_music();
             }
             SourceHostControl::Quit => {
-                self.exit_requested = true;
-                self.input.clear();
-                self.audio.stop_music();
-                self.audio.pause(true);
+                self.request_app_exit();
             }
             SourceHostControl::Editor => self.enter_fresh_editor(),
             SourceHostControl::CustomLevels => self.enter_custom_levels(),
@@ -1055,6 +1070,9 @@ impl App {
         self.open_hub(spelunky_core::hub::HubKind::Scores);
     }
     fn key(&mut self, key: KeyCode, text_value: Option<&str>, shortcut_control: Option<bool>) {
+        if self.browser_ended {
+            return;
+        }
         if key == KeyCode::F7
             && !(self.screen == Screen::Settings && self.settings_ui.awaiting_binding())
         {
@@ -1771,6 +1789,7 @@ impl App {
                     &mut self.exit_requested,
                 );
                 self.flush_source_music();
+                self.request_app_exit();
             }
             EndingKind::Transition => self.transition(),
             EndingKind::HubPortal => {
@@ -1910,6 +1929,9 @@ impl App {
             .collect()
     }
     fn update(&mut self) {
+        if self.browser_ended {
+            return;
+        }
         self.flush_source_music();
         if !matches!(self.screen, Screen::Playing | Screen::Finished) {
             let pressed = self.input.take_music_pressed();
@@ -1974,10 +1996,7 @@ impl App {
                         }
                     }
                     SourcePausedControl::Quit => {
-                        self.exit_requested = true;
-                        self.input.clear();
-                        self.audio.stop_music();
-                        self.audio.pause(true);
+                        self.request_app_exit();
                         return;
                     }
                     SourcePausedControl::Resume => self.screen(Screen::Playing),
@@ -3855,6 +3874,18 @@ fn capture_lifetime_stats(game: &Game, data: &mut crate::storage::SaveData) -> b
     data.lifetime_stats = game.lifetime_stats.clone();
     true
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionExitAction {
+    CloseApplication,
+    ShowBrowserEndCard,
+}
+fn session_exit_action(is_browser: bool) -> SessionExitAction {
+    if is_browser {
+        SessionExitAction::ShowBrowserEndCard
+    } else {
+        SessionExitAction::CloseApplication
+    }
+}
 fn finish_title_credits(
     game: &mut Option<Game>,
     data: &mut crate::storage::SaveData,
@@ -4435,6 +4466,21 @@ fn set_browser_start_status(error: Option<&str>) {
         let _ = status.set_attribute("hidden", "");
         let _ = status.remove_attribute("class");
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn set_browser_ended_status() {
+    let Some(status) = web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.get_element_by_id("status"))
+    else {
+        return;
+    };
+    status.set_text_content(Some(
+        "The game has ended. You may close or reload this tab.",
+    ));
+    let _ = status.remove_attribute("hidden");
+    let _ = status.set_attribute("class", "ended");
 }
 
 impl ApplicationHandler<UserEvent> for App {
@@ -5076,6 +5122,20 @@ fn fullscreen_attribute(saved_preference: bool) -> Option<Fullscreen> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn browser_session_exit_keeps_the_page_alive_for_a_terminal_notice() {
+        use super::{SessionExitAction, session_exit_action};
+
+        assert_eq!(
+            session_exit_action(true),
+            SessionExitAction::ShowBrowserEndCard
+        );
+        assert_eq!(
+            session_exit_action(false),
+            SessionExitAction::CloseApplication
+        );
+    }
+
     #[test]
     fn title_credits_completion_exits_without_reopening_the_title_menu() {
         use super::finish_title_credits;
