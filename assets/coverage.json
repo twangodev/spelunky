@@ -92,7 +92,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 332,
+          "line": 334,
           "module": "crates/core/src/traps/altar.rs"
         }
       ],
@@ -1060,7 +1060,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 331,
+          "line": 333,
           "module": "crates/core/src/traps/altar.rs"
         }
       ],
@@ -2354,7 +2354,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 330,
+          "line": 332,
           "module": "crates/core/src/traps/altar.rs"
         }
       ],
@@ -4064,7 +4064,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 331,
+          "line": 333,
           "module": "crates/core/src/traps/altar.rs"
         }
       ],
@@ -4520,7 +4520,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 331,
+          "line": 333,
           "module": "crates/core/src/traps/altar.rs"
         }
       ],
@@ -4762,7 +4762,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 331,
+          "line": 333,
           "module": "crates/core/src/traps/altar.rs"
         }
       ],
@@ -5370,7 +5370,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 328,
+          "line": 330,
           "module": "crates/core/src/traps/altar.rs"
         }
       ],
@@ -7286,7 +7286,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 330,
+          "line": 332,
           "module": "crates/core/src/traps/altar.rs"
         }
       ],
@@ -7892,7 +7892,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 332,
+          "line": 334,
           "module": "crates/core/src/traps/altar.rs"
         }
       ],
@@ -10196,7 +10196,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 327,
+          "line": 329,
           "module": "crates/core/src/traps/altar.rs"
         }
       ],
@@ -10295,6 +10295,11 @@
           "kind": "enemy_dispatch_registration",
           "line": 81,
           "module": "crates/core/src/enemies.rs"
+        },
+        {
+          "kind": "explicit_object_match_arm",
+          "line": 329,
+          "module": "crates/core/src/traps/altar.rs"
         }
       ],
       "note": "Direct dispatch or registered generic handler exists; source behavior and runtime acceptance are not complete.",
@@ -10583,7 +10588,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 331,
+          "line": 333,
           "module": "crates/core/src/traps/altar.rs"
         }
       ],
@@ -10964,7 +10969,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 331,
+          "line": 333,
           "module": "crates/core/src/traps/altar.rs"
         }
       ],
@@ -11311,7 +11316,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 331,
+          "line": 333,
           "module": "crates/core/src/traps/altar.rs"
         }
       ],
@@ -12201,7 +12206,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 332,
+          "line": 334,
           "module": "crates/core/src/traps/altar.rs"
         }
       ],
@@ -12735,7 +12740,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 332,
+          "line": 334,
           "module": "crates/core/src/traps/altar.rs"
         }
       ],
@@ -13648,7 +13653,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 329,
+          "line": 331,
           "module": "crates/core/src/traps/altar.rs"
         }
       ],
@@ -13738,7 +13743,7 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 332,
+          "line": 334,
           "module": "crates/core/src/traps/altar.rs"
         }
       ],

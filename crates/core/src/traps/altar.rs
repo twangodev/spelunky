@@ -324,7 +324,9 @@ pub(crate) fn offering_entity(game: &mut Game, entity: &mut crate::Entity) {
 fn sacrifice_value(object: &str) -> Option<f64> {
     Some(match object {
         "oDamsel" => 8.0,
-        "oShopkeeper" => 12.0,
+        // `oShopkeeper2` inherits both the source Create-time favor value and
+        // the oEnemy sacrifice Step from its `oShopkeeper` parent.
+        "oShopkeeper" | "oShopkeeper2" => 12.0,
         "oHawkman" => 6.0,
         "oYeti" => 4.0,
         "oCaveman" | "oManTrap" => 2.0,
@@ -1908,6 +1910,22 @@ mod tests {
                 "{object} tick 2"
             );
         }
+    }
+
+    #[test]
+    fn inherited_shopkeeper2_offering_uses_parent_favor_and_step() {
+        let mut game = altar_room();
+        let id = game.spawn("oShopkeeper2", Vec2::new(64.0, 48.0));
+        let keeper = game.world.entity_mut(id).unwrap();
+        keeper.state = 98;
+        keeper.vel = Vec2::default();
+        keeper.timer = 200;
+        keeper.data.insert("sacrifice_count".into(), 0.0);
+
+        game.step(&crate::InputFrame::default());
+
+        assert!(game.world.entity(id).is_none());
+        assert_eq!(game.data["favor"], 12.0);
     }
 
     #[test]
