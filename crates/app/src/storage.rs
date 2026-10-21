@@ -24,6 +24,9 @@ pub struct Settings {
     pub bindings: BTreeMap<String, String>,
     /// Classic controller actions map to portable physical button names.
     pub controller_bindings: BTreeMap<String, String>,
+    /// Raw controls calibrated for directions on browser gamepads whose
+    /// layout the browser does not recognize. Standard pads ignore these.
+    pub browser_direction_bindings: crate::controller::BrowserDirectionBindings,
     /// Classic `global.gamepadOn`: controller input is opt-in and saved.
     pub controller_enabled: bool,
     /// Classic starts fullscreen and saves the user's display preference.
@@ -66,6 +69,7 @@ impl Default for Settings {
             frame_cap: None,
             bindings,
             controller_bindings: crate::controller::default_bindings(),
+            browser_direction_bindings: crate::controller::BrowserDirectionBindings::default(),
             controller_enabled: false,
             fullscreen: true,
         }
@@ -965,6 +969,10 @@ mod tests {
                 data.settings.controller_bindings,
                 crate::controller::default_bindings()
             );
+            assert_eq!(
+                data.settings.browser_direction_bindings,
+                crate::controller::BrowserDirectionBindings::default()
+            );
             assert!(!data.settings.controller_enabled);
             if json != "{}" {
                 assert_eq!(data.settings.bindings["jump"], "KeyJ");
@@ -983,6 +991,18 @@ mod tests {
         data.settings
             .controller_bindings
             .insert("start".into(), "Mode".into());
+        data.settings.browser_direction_bindings = crate::controller::BrowserDirectionBindings {
+            left: Some(crate::controller::BrowserGamepadControl::Axis {
+                index: 2,
+                positive: false,
+            }),
+            right: Some(crate::controller::BrowserGamepadControl::Axis {
+                index: 2,
+                positive: true,
+            }),
+            up: Some(crate::controller::BrowserGamepadControl::Button { index: 16 }),
+            down: Some(crate::controller::BrowserGamepadControl::Button { index: 17 }),
+        };
         data.settings.bindings.insert("jump".into(), "KeyJ".into());
         data.unlocks.insert("shortcut_5".into());
         data.challenge_records.insert("mini1".into(), 37);
@@ -990,6 +1010,10 @@ mod tests {
         assert_eq!(
             decoded.settings.controller_bindings,
             data.settings.controller_bindings
+        );
+        assert_eq!(
+            decoded.settings.browser_direction_bindings,
+            data.settings.browser_direction_bindings
         );
         assert!(decoded.settings.controller_enabled);
         assert_eq!(decoded.settings.bindings, data.settings.bindings);

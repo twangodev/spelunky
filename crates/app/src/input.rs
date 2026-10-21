@@ -6,6 +6,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use winit::keyboard::KeyCode;
 
 const DEAD_ZONE: f32 = 0.25;
+#[cfg(any(test, target_arch = "wasm32"))]
+const DIRECTION_CAPTURE_THRESHOLD: f32 = 0.5;
 
 // Classic's trigger mappings use joystick_zpos beyond +/-0.1 for both
 // configuration and gameplay, independently of the provider's digital flag.
@@ -57,6 +59,51 @@ fn browser_button_pressed(button: ControllerButton, sample: BrowserButtonSample)
         0.5
     };
     sample.pressed || sample.value > threshold
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn browser_gamepad_control_pressed(
+    control: controller::BrowserGamepadControl,
+    buttons: &[BrowserButtonSample],
+    axes: &[f32],
+) -> bool {
+    match control {
+        controller::BrowserGamepadControl::Axis { index, positive } => {
+            let value = axes.get(index as usize).copied().unwrap_or(0.0);
+            if positive {
+                value > DEAD_ZONE
+            } else {
+                value < -DEAD_ZONE
+            }
+        }
+        controller::BrowserGamepadControl::Button { index } => buttons
+            .get(index as usize)
+            .is_some_and(|sample| sample.pressed || sample.value > DIRECTION_CAPTURE_THRESHOLD),
+    }
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn active_browser_direction_controls(
+    buttons: &[BrowserButtonSample],
+    axes: &[f32],
+) -> Vec<controller::BrowserGamepadControl> {
+    let mut active = Vec::new();
+    for (index, value) in axes.iter().copied().enumerate() {
+        if value.abs() > DIRECTION_CAPTURE_THRESHOLD {
+            active.push(controller::BrowserGamepadControl::Axis {
+                index: index as u32,
+                positive: value > 0.0,
+            });
+        }
+    }
+    for (index, sample) in buttons.iter().copied().enumerate() {
+        if sample.pressed || sample.value > DIRECTION_CAPTURE_THRESHOLD {
+            active.push(controller::BrowserGamepadControl::Button {
+                index: index as u32,
+            });
+        }
+    }
+    active
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,6 +191,12 @@ pub struct InputState {
     controller_capture_held: bool,
     controller_capture_blocked: bool,
     controller_edges: Vec<ControllerButton>,
+    browser_direction_bindings: controller::BrowserDirectionBindings,
+    #[cfg(any(test, target_arch = "wasm32"))]
+    browser_direction_capture_held: bool,
+    #[cfg(any(test, target_arch = "wasm32"))]
+    browser_direction_capture_blocked: bool,
+    browser_direction_edges: Vec<controller::BrowserGamepadControl>,
     blocked_gamepad_actions: Actions,
     keyboard_held: Actions,
     gamepad_held: Actions,
@@ -177,6 +230,12 @@ impl Default for InputState {
             controller_capture_held: false,
             controller_capture_blocked: false,
             controller_edges: Vec::new(),
+            browser_direction_bindings: controller::BrowserDirectionBindings::default(),
+            #[cfg(any(test, target_arch = "wasm32"))]
+            browser_direction_capture_held: false,
+            #[cfg(any(test, target_arch = "wasm32"))]
+            browser_direction_capture_blocked: false,
+            browser_direction_edges: Vec::new(),
             blocked_gamepad_actions: Actions::default(),
             keyboard_held: Actions::default(),
             gamepad_held: Actions::default(),
@@ -279,6 +338,14 @@ impl InputState {
         self.clear();
     }
 
+    pub fn set_browser_direction_bindings(
+        &mut self,
+        bindings: controller::BrowserDirectionBindings,
+    ) {
+        self.browser_direction_bindings = bindings;
+        self.clear();
+    }
+
     /// Classic defaults controller input off and only polls gameplay/menu
     /// controls while its `global.gamepadOn` option is enabled.
     pub fn set_controller_enabled(&mut self, enabled: bool) {
@@ -316,6 +383,10 @@ impl InputState {
     /// to keyboard keys. Classic accepts one control per all-neutral stroke.
     pub fn controller_pressed(&mut self) -> Vec<ControllerButton> {
         std::mem::take(&mut self.controller_edges)
+    }
+
+    pub fn browser_direction_pressed(&mut self) -> Vec<controller::BrowserGamepadControl> {
+        std::mem::take(&mut self.browser_direction_edges)
     }
 
     fn controller_binding(&self, action: &str) -> ControllerButton {
@@ -392,14 +463,14 @@ impl InputState {
         (actions, ui, press_allowed)
     }
 
-    /// Keep sampling raw browser button ordinals so users can bind them in the
-    /// controller setup. Only the Standard Gamepad mapping identifies axes and
-    /// d-pad button positions; an empty mapping cannot identify those controls.
+    /// Keep action-button ordinals for the controller setup. Directional
+    /// controls use the canonical layout when available, or user-calibrated
+    /// raw controls when the browser reports no mapping.
     #[cfg(any(test, target_arch = "wasm32"))]
     fn accept_browser_controller_sample(
         &mut self,
         buttons: &[BrowserButtonSample],
-        axes: [f32; 2],
+        axes: &[f32],
         standard_mapping: bool,
     ) {
         let mut held = 0;
@@ -412,7 +483,8 @@ impl InputState {
             }
         }
         let directions = if standard_mapping {
-            let [x, y] = axes;
+            let x = axes.first().copied().unwrap_or(0.0);
+            let y = axes.get(1).copied().unwrap_or(0.0);
             [
                 x < -DEAD_ZONE || held & ControllerButton::DPadLeft.mask() != 0,
                 x > DEAD_ZONE || held & ControllerButton::DPadRight.mask() != 0,
@@ -420,13 +492,42 @@ impl InputState {
                 y > DEAD_ZONE || held & ControllerButton::DPadDown.mask() != 0,
             ]
         } else {
-            [false; 4]
+            std::array::from_fn(|direction| {
+                self.browser_direction_bindings
+                    .get(direction)
+                    .is_some_and(|control| browser_gamepad_control_pressed(control, buttons, axes))
+            })
         };
+        let active_direction_controls = active_browser_direction_controls(buttons, axes);
+        self.accept_browser_direction_capture(&active_direction_controls);
         let (actions, ui, press_allowed) =
             self.portable_controller_with_direction_edges(held, directions);
         self.accept_controller_capture(capture);
         self.accept_controller_sample_with_direction_edges(actions, ui, press_allowed);
     }
+
+    #[cfg(any(test, target_arch = "wasm32"))]
+    fn accept_browser_direction_capture(&mut self, active: &[controller::BrowserGamepadControl]) {
+        if active.is_empty() {
+            self.browser_direction_capture_held = false;
+            self.browser_direction_capture_blocked = false;
+        } else if !self.browser_direction_capture_held {
+            // A single physical stroke identifies one binding. Simultaneous
+            // controls are ambiguous, so require an all-neutral retry.
+            if active.len() == 1 && !self.browser_direction_capture_blocked {
+                self.browser_direction_edges.push(active[0]);
+            }
+            self.browser_direction_capture_held = true;
+        }
+    }
+
+    #[cfg(any(test, target_arch = "wasm32"))]
+    fn block_browser_direction_capture(&mut self) {
+        self.browser_direction_capture_blocked = true;
+    }
+
+    #[cfg(not(any(test, target_arch = "wasm32")))]
+    fn block_browser_direction_capture(&mut self) {}
 
     fn accept_controller_capture(&mut self, held: u32) {
         if held == 0 {
@@ -578,6 +679,7 @@ impl InputState {
         self.frame.clear_edges();
         self.ui_edges.clear();
         self.controller_edges.clear();
+        self.browser_direction_edges.clear();
     }
 
     pub fn clear(&mut self) {
@@ -589,6 +691,7 @@ impl InputState {
         self.blocked_gamepad_ui = u8::MAX;
         self.blocked_gamepad_actions = Actions(u16::MAX);
         self.controller_capture_blocked = true;
+        self.block_browser_direction_capture();
     }
 
     /// Clear gameplay at screen transitions while keeping controller menu
@@ -605,6 +708,7 @@ impl InputState {
         self.frame = InputFrame::default();
         self.ui_edges.clear();
         self.controller_edges.clear();
+        self.browser_direction_edges.clear();
     }
 
     /// Pause deactivates the Classic gameplay instances while the gamepad
@@ -614,6 +718,7 @@ impl InputState {
         self.frame.clear_edges();
         self.ui_edges.clear();
         self.controller_edges.clear();
+        self.browser_direction_edges.clear();
     }
 
     /// Controller navigation edges only; the host handles keyboard menu keys.
@@ -904,33 +1009,37 @@ impl InputState {
                 // axis and d-pad indices consumed as movement below.
                 if !pad.connected() {
                     self.accept_controller_capture(0);
+                    self.accept_browser_direction_capture(&[]);
                     self.accept_controller_sample_with_direction_edges(actions, ui, 0x0f);
                     return;
                 }
                 let buttons = pad.buttons();
-                let samples: [BrowserButtonSample; controller::ALL.len()] =
-                    std::array::from_fn(|index| {
+                let samples: Vec<BrowserButtonSample> = (0..buttons.length())
+                    .map(|index| {
                         buttons
-                            .get(index as u32)
+                            .get(index)
                             .dyn_into::<web_sys::GamepadButton>()
                             .map(|button| BrowserButtonSample {
                                 pressed: button.pressed(),
                                 value: button.value() as f32,
                             })
                             .unwrap_or_default()
-                    });
+                    })
+                    .collect();
                 let axes = pad.axes();
-                let x = axes.get(0).as_f64().unwrap_or(0.0) as f32;
-                let y = axes.get(1).as_f64().unwrap_or(0.0) as f32;
+                let axes: Vec<f32> = (0..axes.length())
+                    .map(|index| axes.get(index).as_f64().unwrap_or(0.0) as f32)
+                    .collect();
                 self.accept_browser_controller_sample(
                     &samples,
-                    [x, y],
+                    &axes,
                     pad.mapping() == web_sys::GamepadMappingType::Standard,
                 );
                 return;
             }
         }
         self.accept_controller_capture(capture);
+        self.accept_browser_direction_capture(&[]);
         self.accept_controller_sample_with_direction_edges(actions, ui, direction_press_allowed);
     }
 }
@@ -1187,34 +1296,33 @@ mod tests {
         // The browser may expose a connected joystick with mapping="".
         // GameMaker still queries numbered buttons (Jump defaults to button 2),
         // so preserve button ordinals for the configurable action bindings.
-        // The browser does not identify the stick or d-pad positions when its
-        // mapping is empty, so those positions must not be treated as standard.
+        // With no user calibration, raw axes and d-pad positions stay neutral.
         let mut input = InputState::default();
         input.set_controller_enabled(true);
-        input.accept_browser_controller_sample(&[], [0.0, 0.0], false);
+        input.accept_browser_controller_sample(&[], &[0.0, 0.0], false);
         input.take_tick();
         let mut buttons = vec![BrowserButtonSample::default(); 2];
         buttons[1] = BrowserButtonSample {
             pressed: true,
             value: 1.0,
         };
-        input.accept_browser_controller_sample(&buttons, [0.0, 0.0], false);
+        input.accept_browser_controller_sample(&buttons, &[0.0, 0.0], false);
         let tick = input.take_tick();
         assert!(tick.jump && tick.jump_pressed);
         assert!(!tick.attack);
         assert_eq!(input.controller_pressed(), vec![ControllerButton::East]);
 
-        input.accept_browser_controller_sample(&[], [0.0, 0.0], false);
+        input.accept_browser_controller_sample(&[], &[0.0, 0.0], false);
         input.take_tick();
         let mut extra = vec![BrowserButtonSample::default(); 20];
         extra[19] = BrowserButtonSample {
             pressed: true,
             value: 1.0,
         };
-        input.accept_browser_controller_sample(&extra, [0.0, 0.0], false);
+        input.accept_browser_controller_sample(&extra, &[0.0, 0.0], false);
         assert_eq!(input.controller_pressed(), vec![ControllerButton::Extra3]);
 
-        input.accept_browser_controller_sample(&[], [0.0, -1.0], false);
+        input.accept_browser_controller_sample(&[], &[0.0, -1.0], false);
         let tick = input.take_tick();
         assert!(!tick.jump);
         assert!(!tick.up);
@@ -1225,35 +1333,47 @@ mod tests {
             pressed: true,
             value: 1.0,
         };
-        input.accept_browser_controller_sample(&unknown_dpad, [0.0, 0.0], false);
+        input.accept_browser_controller_sample(&unknown_dpad, &[0.0, 0.0], false);
         assert!(!input.take_tick().up);
         assert_eq!(input.controller_pressed(), vec![ControllerButton::DPadUp]);
-        input.accept_browser_controller_sample(&[], [0.0, 0.0], false);
+        input.accept_browser_controller_sample(&[], &[0.0, 0.0], false);
         input.take_tick();
 
         buttons[1] = BrowserButtonSample {
             pressed: false,
             value: 0.6,
         };
-        input.accept_browser_controller_sample(&buttons, [0.0, 0.0], false);
+        input.accept_browser_controller_sample(&buttons, &[0.0, 0.0], false);
         let tick = input.take_tick();
         assert!(tick.jump && tick.jump_pressed);
         assert_eq!(input.controller_pressed(), vec![ControllerButton::East]);
 
-        input.accept_browser_controller_sample(&[], [0.0, 0.0], false);
+        input.accept_browser_controller_sample(&[], &[0.0, 0.0], false);
         input.take_tick();
         let mut trigger = vec![BrowserButtonSample::default(); 7];
         trigger[ControllerButton::LeftTrigger as usize] = BrowserButtonSample {
             pressed: false,
             value: 0.2,
         };
-        input.accept_browser_controller_sample(&trigger, [0.0, 0.0], false);
+        input.accept_browser_controller_sample(&trigger, &[0.0, 0.0], false);
         let tick = input.take_tick();
         assert!(tick.bomb_pressed);
         assert_eq!(
             input.controller_pressed(),
             vec![ControllerButton::LeftTrigger]
         );
+
+        input.set_controller_bindings(&BTreeMap::from([("attack".into(), "Extra3".into())]));
+        input.accept_browser_controller_sample(&[], &[0.0, 0.0], false);
+        input.take_tick();
+        let mut remapped = vec![BrowserButtonSample::default(); 20];
+        remapped[ControllerButton::Extra3 as usize] = BrowserButtonSample {
+            pressed: true,
+            value: 1.0,
+        };
+        input.accept_browser_controller_sample(&remapped, &[0.0, 0.0], false);
+        let tick = input.take_tick();
+        assert!(tick.attack && tick.attack_pressed);
     }
 
     #[test]
@@ -1261,20 +1381,129 @@ mod tests {
         let mut input = InputState::default();
         input.set_controller_enabled(true);
 
-        input.accept_browser_controller_sample(&[], [0.0, -1.0], true);
+        let mut custom = controller::BrowserDirectionBindings::default();
+        custom.set(0, controller::BrowserGamepadControl::Button { index: 20 });
+        input.set_browser_direction_bindings(custom);
+        input.accept_browser_controller_sample(&[], &[0.0, 0.0], true);
+        input.take_tick();
+
+        input.accept_browser_controller_sample(&[], &[0.0, -1.0], true);
         let stick = input.take_tick();
         assert!(stick.up && stick.up_pressed);
+        assert!(!stick.left);
 
-        input.accept_browser_controller_sample(&[], [0.0, 0.0], true);
+        input.accept_browser_controller_sample(&[], &[0.0, 0.0], true);
         input.take_tick();
         let mut dpad = vec![BrowserButtonSample::default(); 16];
         dpad[ControllerButton::DPadUp as usize] = BrowserButtonSample {
             pressed: true,
             value: 1.0,
         };
-        input.accept_browser_controller_sample(&dpad, [0.0, 0.0], true);
+        input.accept_browser_controller_sample(&dpad, &[0.0, 0.0], true);
         let pov = input.take_tick();
         assert!(pov.up && pov.up_pressed);
+    }
+
+    #[test]
+    fn browser_calibrated_directions_capture_raw_controls_and_keep_release_edges() {
+        let mut input = InputState::default();
+        input.set_controller_enabled(true);
+        let mut bindings = controller::BrowserDirectionBindings::default();
+        bindings.set(
+            0,
+            controller::BrowserGamepadControl::Axis {
+                index: 2,
+                positive: false,
+            },
+        );
+        bindings.set(
+            1,
+            controller::BrowserGamepadControl::Axis {
+                index: 2,
+                positive: true,
+            },
+        );
+        bindings.set(
+            2,
+            controller::BrowserGamepadControl::Axis {
+                index: 0,
+                positive: true,
+            },
+        );
+        bindings.set(3, controller::BrowserGamepadControl::Button { index: 23 });
+        input.set_browser_direction_bindings(bindings);
+
+        let neutral = vec![BrowserButtonSample::default(); 24];
+        input.accept_browser_controller_sample(&neutral, &[0.0, 0.0, 0.0], false);
+        input.take_tick();
+        assert!(input.browser_direction_pressed().is_empty());
+
+        input.accept_browser_controller_sample(&neutral, &[0.0, 0.0, -1.0], false);
+        let left = input.take_tick();
+        assert!(left.left);
+        input.accept_browser_controller_sample(&neutral, &[0.0, 0.0, -1.0], false);
+        assert!(!input.take_tick().left_released);
+        input.accept_browser_controller_sample(&neutral, &[0.0, 0.0, 0.0], false);
+        let released_left = input.take_tick();
+        assert!(!released_left.left);
+        assert!(released_left.left_released);
+
+        input.accept_browser_controller_sample(&neutral, &[0.0, 0.0, 1.0], false);
+        assert!(input.take_tick().right);
+        input.accept_browser_controller_sample(&neutral, &[0.0, 0.0, 0.0], false);
+        let released_right = input.take_tick();
+        assert!(!released_right.right);
+        assert!(released_right.right_released);
+
+        input.accept_browser_controller_sample(&neutral, &[1.0, 0.0, 0.0], false);
+        assert!(input.take_tick().up);
+        let mut down = neutral.clone();
+        down[23] = BrowserButtonSample {
+            pressed: true,
+            value: 1.0,
+        };
+        input.accept_browser_controller_sample(&down, &[0.0, 0.0, 0.0], false);
+        let tick = input.take_tick();
+        assert!(tick.down);
+        assert!(!tick.up);
+        input.accept_browser_controller_sample(&neutral, &[0.0, 0.0, 0.0], false);
+        assert!(!input.take_tick().down);
+    }
+
+    #[test]
+    fn browser_direction_capture_is_single_control_and_requires_neutral_between_strokes() {
+        let mut input = InputState::default();
+        input.accept_browser_controller_sample(&[], &[0.0, 0.0], false);
+        assert!(input.browser_direction_pressed().is_empty());
+
+        input.accept_browser_controller_sample(&[], &[-0.8, 0.8], false);
+        assert!(input.browser_direction_pressed().is_empty());
+        input.accept_browser_controller_sample(&[], &[-0.8, 0.0], false);
+        assert!(input.browser_direction_pressed().is_empty());
+        input.accept_browser_controller_sample(&[], &[0.0, 0.0], false);
+
+        input.accept_browser_controller_sample(&[], &[-0.8, 0.0], false);
+        assert_eq!(
+            input.browser_direction_pressed(),
+            vec![controller::BrowserGamepadControl::Axis {
+                index: 0,
+                positive: false,
+            }]
+        );
+        input.accept_browser_controller_sample(&[], &[-0.9, 0.0], false);
+        assert!(input.browser_direction_pressed().is_empty());
+        input.accept_browser_controller_sample(&[], &[0.0, 0.0], false);
+
+        let mut buttons = vec![BrowserButtonSample::default(); 25];
+        buttons[24] = BrowserButtonSample {
+            pressed: true,
+            value: 1.0,
+        };
+        input.accept_browser_controller_sample(&buttons, &[0.0, 0.0], false);
+        assert_eq!(
+            input.browser_direction_pressed(),
+            vec![controller::BrowserGamepadControl::Button { index: 24 }]
+        );
     }
 
     #[test]

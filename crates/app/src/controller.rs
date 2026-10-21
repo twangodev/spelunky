@@ -2,6 +2,8 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 /// Positions follow the browser standard gamepad layout, including its Mode
 /// button, followed by Classic's three extra numbered-button slots. Native
 /// adapters translate their named buttons into these positions.
@@ -28,6 +30,60 @@ pub enum Button {
     Extra1,
     Extra2,
     Extra3,
+}
+
+/// A raw browser gamepad control selected by the user for an unmapped pad.
+/// Standard-mapped pads continue to use the browser's canonical layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BrowserGamepadControl {
+    Axis { index: u32, positive: bool },
+    Button { index: u32 },
+}
+
+impl BrowserGamepadControl {
+    pub fn label(self) -> String {
+        match self {
+            Self::Axis { index, positive } => {
+                format!("AXIS {index} {}", if positive { "+" } else { "-" })
+            }
+            Self::Button { index } => format!("BUTTON {index}"),
+        }
+    }
+}
+
+/// Per-direction raw controls used only when a browser gamepad has no
+/// recognized layout. Missing fields in older saves keep all four unbound.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct BrowserDirectionBindings {
+    pub left: Option<BrowserGamepadControl>,
+    pub right: Option<BrowserGamepadControl>,
+    pub up: Option<BrowserGamepadControl>,
+    pub down: Option<BrowserGamepadControl>,
+}
+
+impl BrowserDirectionBindings {
+    pub fn get(self, direction: usize) -> Option<BrowserGamepadControl> {
+        match direction {
+            0 => self.left,
+            1 => self.right,
+            2 => self.up,
+            3 => self.down,
+            _ => None,
+        }
+    }
+
+    pub fn set(&mut self, direction: usize, control: BrowserGamepadControl) {
+        let slot = match direction {
+            0 => &mut self.left,
+            1 => &mut self.right,
+            2 => &mut self.up,
+            3 => &mut self.down,
+            _ => return,
+        };
+        *slot = Some(control);
+    }
 }
 
 pub const ALL: [Button; 20] = [

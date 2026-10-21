@@ -201,6 +201,39 @@ fn require_effect_preload_if_available(required: bool, context_available: bool) 
     required || context_available
 }
 
+#[cfg(any(test, target_arch = "wasm32"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EffectSchedule {
+    Immediate,
+    Deferred,
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn effect_schedule(
+    context_available: bool,
+    unlocked: bool,
+    buffer_ready: bool,
+    queue_empty: bool,
+) -> EffectSchedule {
+    if context_available && unlocked && buffer_ready && queue_empty {
+        EffectSchedule::Immediate
+    } else {
+        EffectSchedule::Deferred
+    }
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
+fn defer_effect(
+    queue: &mut std::collections::VecDeque<(&'static str, f32)>,
+    name: &'static str,
+    position: f32,
+) {
+    if queue.len() >= MAX_EFFECTS {
+        queue.pop_front();
+    }
+    queue.push_back((name, position));
+}
+
 fn effective_music_volume(music: f32, music_muted: bool) -> f32 {
     if music_muted { 0.0 } else { music }
 }
@@ -267,6 +300,36 @@ mod policy_tests {
         assert!(
             resumed_unlock_state(unlocked, false),
             "a failed redundant resume does not undo a prior successful unlock"
+        );
+    }
+
+    #[test]
+    fn unlocked_decoded_effect_starts_immediately_when_queue_is_empty() {
+        assert_eq!(
+            effect_schedule(true, true, true, true),
+            EffectSchedule::Immediate
+        );
+    }
+
+    #[test]
+    fn effects_defer_until_ready_and_never_overtake_queued_requests() {
+        for (context_available, unlocked, buffer_ready, queue_empty) in [
+            (false, true, true, true),
+            (true, false, true, true),
+            (true, true, false, true),
+            (true, true, true, false),
+        ] {
+            assert_eq!(
+                effect_schedule(context_available, unlocked, buffer_ready, queue_empty),
+                EffectSchedule::Deferred
+            );
+        }
+
+        let mut queue = std::collections::VecDeque::from([("jump", 0.0)]);
+        defer_effect(&mut queue, "whip", 0.5);
+        assert_eq!(
+            queue.into_iter().collect::<Vec<_>>(),
+            [("jump", 0.0), ("whip", 0.5)]
         );
     }
 }
@@ -1393,10 +1456,17 @@ mod backend {
                 return;
             };
             self.decode(name);
-            if self.queued.len() >= MAX_EFFECTS {
-                self.queued.pop_front();
+            let position = pan(position);
+            let buffer_ready = self.cache.borrow().buffers.contains_key(name);
+            match effect_schedule(
+                self.context.is_some(),
+                self.unlocked.get(),
+                buffer_ready,
+                self.queued.is_empty(),
+            ) {
+                EffectSchedule::Immediate => self.start_effect(name, position),
+                EffectSchedule::Deferred => defer_effect(&mut self.queued, name, position),
             }
-            self.queued.push_back((name, pan(position)));
         }
         /// Gate on the audio clock and pending playback, so asynchronous decode
         /// cannot turn repeated per-tick requests into a burst of duplicates.

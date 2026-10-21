@@ -28,6 +28,11 @@ const CONTROLLER_INPUT: usize = 8;
 const GRAPHICS_DETAIL: usize = CONTROLLER_INPUT + 1;
 const FIRST_BINDING: usize = GRAPHICS_DETAIL + 1;
 const CONFIGURE_CONTROLLER: usize = FIRST_BINDING + ACTIONS.len();
+#[cfg(target_arch = "wasm32")]
+const CONFIGURE_DIRECTIONS: usize = CONFIGURE_CONTROLLER + 1;
+#[cfg(target_arch = "wasm32")]
+const RESTORE: usize = CONFIGURE_DIRECTIONS + 1;
+#[cfg(not(target_arch = "wasm32"))]
 const RESTORE: usize = CONFIGURE_CONTROLLER + 1;
 const BACK: usize = RESTORE + 1;
 const ROWS: usize = BACK + 1;
@@ -65,6 +70,7 @@ pub struct SettingsUi {
     selected: usize,
     binding: Option<usize>,
     controller_binding: Option<usize>,
+    controller_direction_binding: Option<usize>,
     unsupported_key: bool,
     volume_drag: Option<usize>,
     audio_action: Option<SettingsAudioAction>,
@@ -78,11 +84,17 @@ impl SettingsUi {
     }
 
     pub fn awaiting_binding(&self) -> bool {
-        self.binding.is_some() || self.awaiting_controller_binding()
+        self.binding.is_some()
+            || self.awaiting_controller_binding()
+            || self.awaiting_direction_binding()
     }
 
     pub fn awaiting_controller_binding(&self) -> bool {
         self.controller_binding.is_some()
+    }
+
+    pub fn awaiting_direction_binding(&self) -> bool {
+        self.controller_direction_binding.is_some()
     }
 
     pub fn controller_state_row_selected(&self) -> bool {
@@ -256,15 +268,43 @@ impl SettingsUi {
         SettingsCommand::Changed
     }
 
+    pub fn controller_direction(
+        &mut self,
+        control: crate::controller::BrowserGamepadControl,
+        settings: &mut Settings,
+    ) -> SettingsCommand {
+        let Some(index) = self.controller_direction_binding else {
+            return SettingsCommand::None;
+        };
+        settings.browser_direction_bindings.set(index, control);
+        self.advance_controller_direction_binding(index);
+        SettingsCommand::Changed
+    }
+
+    #[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+    pub fn begin_browser_direction_calibration(&mut self) {
+        self.controller_direction_binding = Some(0);
+    }
+
     fn advance_controller_binding(&mut self, index: usize) {
         self.controller_binding =
             (index + 1 < crate::controller::ACTIONS.len()).then_some(index + 1);
+    }
+
+    fn advance_controller_direction_binding(&mut self, index: usize) {
+        self.controller_direction_binding = (index + 1 < 4).then_some(index + 1);
     }
 
     pub fn key(&mut self, key: KeyCode, settings: &mut Settings) -> SettingsCommand {
         if let Some(index) = self.controller_binding {
             if key == KeyCode::Escape {
                 self.advance_controller_binding(index);
+            }
+            return SettingsCommand::None;
+        }
+        if let Some(index) = self.controller_direction_binding {
+            if key == KeyCode::Escape {
+                self.advance_controller_direction_binding(index);
             }
             return SettingsCommand::None;
         }
@@ -360,6 +400,11 @@ impl SettingsUi {
                 self.controller_binding = Some(0);
                 return SettingsCommand::None;
             }
+            #[cfg(target_arch = "wasm32")]
+            CONFIGURE_DIRECTIONS if confirm => {
+                self.begin_browser_direction_calibration();
+                return SettingsCommand::None;
+            }
             RESTORE if confirm => *settings = Settings::default(),
             BACK if confirm => return SettingsCommand::Back,
             _ => return SettingsCommand::None,
@@ -441,6 +486,8 @@ impl SettingsUi {
             GRAPHICS_DETAIL => "LOW REDUCES SOURCE-GATED DECORATION AND EFFECTS.",
             FIRST_BINDING..CONFIGURE_CONTROLLER => "ENTER: REPLACE KEYS FOR THIS ACTION.",
             CONFIGURE_CONTROLLER => "ENTER: CONFIGURE CONTROLLER BUTTONS.",
+            #[cfg(target_arch = "wasm32")]
+            CONFIGURE_DIRECTIONS => "UNMAPPED WEB PADS ONLY. STANDARD PADS KEEP DEFAULTS.",
             RESTORE => "RESTORES SETTINGS. RECORDS ARE PRESERVED.",
             _ => "RETURN TO THE PREVIOUS MENU.",
         };
@@ -525,6 +572,54 @@ impl SettingsUi {
             if primary_gamepad_connected == Some(false) {
                 // Classic oJoyConfig Draw shows this red warning when
                 // joystick_exists(1) is false.
+                scene::text(
+                    quads,
+                    atlas,
+                    "NO GAMEPAD FOUND!",
+                    32.0,
+                    171.0,
+                    0.75,
+                    [1.0, 0.0, 0.0, 1.0],
+                );
+            }
+        }
+        if let Some(index) = self.controller_direction_binding {
+            let label = ["LEFT", "RIGHT", "UP", "DOWN"][index];
+            let current = settings
+                .browser_direction_bindings
+                .get(index)
+                .map_or_else(|| "UNBOUND".into(), |control| control.label());
+            scene::rect(quads, [20.0, 66.0, 280.0, 112.0], [0.02, 0.03, 0.06, 1.0]);
+            scene::text(quads, atlas, "MOVE INPUT FOR", 32.0, 78.0, 1.0, GOLD);
+            scene::text(quads, atlas, label, 32.0, 96.0, 1.0, WHITE);
+            scene::text(
+                quads,
+                atlas,
+                &format!("{} / 4   CURRENT: {current}", index + 1),
+                32.0,
+                116.0,
+                0.75,
+                MUTED,
+            );
+            scene::text(
+                quads,
+                atlas,
+                "MOVE ONE DIRECTION. ESC TO KEEP.",
+                32.0,
+                138.0,
+                0.75,
+                WHITE,
+            );
+            scene::text(
+                quads,
+                atlas,
+                "RELEASE ALL CONTROLS BEFORE NEXT DIRECTION.",
+                32.0,
+                158.0,
+                0.75,
+                MUTED,
+            );
+            if primary_gamepad_connected == Some(false) {
                 scene::text(
                     quads,
                     atlas,
@@ -633,6 +728,8 @@ fn row(index: usize, settings: &Settings) -> (String, String) {
             )
         }
         CONFIGURE_CONTROLLER => ("CONFIGURE CONTROLLER", "ENTER".into()),
+        #[cfg(target_arch = "wasm32")]
+        CONFIGURE_DIRECTIONS => ("CALIBRATE GAMEPAD DIRECTIONS", "ENTER".into()),
         RESTORE => ("RESTORE DEFAULTS", "ENTER".into()),
         _ => ("BACK", "ENTER".into()),
     };
@@ -731,6 +828,63 @@ mod tests {
             !with_gamepad
                 .iter()
                 .any(|quad| quad.rect[1] == 171.0 && quad.color == [1.0, 0.0, 0.0, 1.0])
+        );
+    }
+
+    #[test]
+    fn browser_direction_wizard_captures_four_raw_controls_and_escape_keeps_current() {
+        let mut menu = SettingsUi::new();
+        let mut settings = Settings::default();
+        menu.begin_browser_direction_calibration();
+        let controls = [
+            crate::controller::BrowserGamepadControl::Axis {
+                index: 2,
+                positive: false,
+            },
+            crate::controller::BrowserGamepadControl::Axis {
+                index: 2,
+                positive: true,
+            },
+            crate::controller::BrowserGamepadControl::Button { index: 17 },
+            crate::controller::BrowserGamepadControl::Button { index: 18 },
+        ];
+        for (index, control) in controls.into_iter().enumerate() {
+            assert!(menu.awaiting_binding() && menu.awaiting_direction_binding());
+            assert_eq!(
+                menu.controller_direction(control, &mut settings),
+                SettingsCommand::Changed
+            );
+            assert_eq!(
+                menu.awaiting_direction_binding(),
+                index + 1 < controls.len()
+            );
+        }
+        assert_eq!(
+            settings.browser_direction_bindings.get(0),
+            Some(controls[0])
+        );
+        assert_eq!(
+            settings.browser_direction_bindings.get(1),
+            Some(controls[1])
+        );
+        assert_eq!(
+            settings.browser_direction_bindings.get(2),
+            Some(controls[2])
+        );
+        assert_eq!(
+            settings.browser_direction_bindings.get(3),
+            Some(controls[3])
+        );
+
+        menu.controller_direction_binding = Some(0);
+        assert_eq!(
+            menu.key(KeyCode::Escape, &mut settings),
+            SettingsCommand::None
+        );
+        assert_eq!(menu.controller_direction_binding, Some(1));
+        assert_eq!(
+            settings.browser_direction_bindings.get(0),
+            Some(controls[0])
         );
     }
 

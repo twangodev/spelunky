@@ -511,6 +511,7 @@ impl App {
         let mut input = InputState::default();
         input.set_bindings(&store.data.settings.bindings);
         input.set_controller_bindings(&store.data.settings.controller_bindings);
+        input.set_browser_direction_bindings(store.data.settings.browser_direction_bindings);
         // Classic suppresses the saved controller mode for this session when
         // both supported joystick slots are empty at startup.
         input.update_gamepad();
@@ -854,6 +855,8 @@ impl App {
         self.input.set_bindings(&settings.bindings);
         self.input
             .set_controller_bindings(&settings.controller_bindings);
+        self.input
+            .set_browser_direction_bindings(settings.browser_direction_bindings);
         self.audio.set_music_volume(settings.music_volume);
         self.audio
             .set_effect_volume("sndJump", settings.effects_volume);
@@ -1925,16 +1928,24 @@ impl App {
             self.input.update_gamepad();
         }
         let controller_buttons = self.input.controller_pressed();
+        let browser_direction_controls = self.input.browser_direction_pressed();
         let mut buttons = self.input.ui_pressed();
-        if self.screen == Screen::Settings
-            && settings_controller_frame(
+        if self.screen == Screen::Settings {
+            let controller_changed = settings_controller_frame(
                 &mut self.settings_ui,
                 &mut self.store.data.settings,
                 &controller_buttons,
                 &mut buttons,
-            )
-        {
-            self.settings_changed();
+            );
+            let directions_changed = settings_browser_direction_frame(
+                &mut self.settings_ui,
+                &mut self.store.data.settings,
+                &browser_direction_controls,
+                &mut buttons,
+            );
+            if controller_changed || directions_changed {
+                self.settings_changed();
+            }
         }
         // A gamepad's first input may be a gameplay-only action with no UI
         // edge. Poll it for the same audio hint, even though browser activation
@@ -4035,6 +4046,25 @@ fn settings_controller_frame(
     changed
 }
 
+fn settings_browser_direction_frame(
+    ui: &mut SettingsUi,
+    settings: &mut crate::storage::Settings,
+    controls: &[crate::controller::BrowserGamepadControl],
+    menu: &mut Vec<UiButton>,
+) -> bool {
+    let capture = ui.awaiting_direction_binding();
+    let mut changed = false;
+    if capture {
+        for &control in controls {
+            changed |= ui.controller_direction(control, settings) == SettingsCommand::Changed;
+        }
+    }
+    if capture || ui.awaiting_binding() {
+        menu.clear();
+    }
+    changed
+}
+
 fn apply_cinematic_start(input: &mut spelunky_core::InputFrame, pending: &mut bool) {
     input.start_pressed |= std::mem::take(pending);
 }
@@ -5829,6 +5859,72 @@ mod tests {
         ));
         assert_eq!(settings.controller_bindings, before);
         assert!(ui.awaiting_controller_binding());
+    }
+
+    #[test]
+    fn browser_direction_capture_flows_through_settings_host_and_round_trips() {
+        let mut ui = SettingsUi::new();
+        let mut settings = crate::storage::Settings::default();
+        ui.begin_browser_direction_calibration();
+        let controls = [
+            crate::controller::BrowserGamepadControl::Axis {
+                index: 3,
+                positive: false,
+            },
+            crate::controller::BrowserGamepadControl::Axis {
+                index: 3,
+                positive: true,
+            },
+            crate::controller::BrowserGamepadControl::Button { index: 16 },
+            crate::controller::BrowserGamepadControl::Button { index: 17 },
+        ];
+        for (index, control) in controls.into_iter().enumerate() {
+            let mut menu = vec![UiButton::Up, UiButton::Confirm];
+            // Keyboard navigation must not move the settings cursor while
+            // the direction wizard is waiting for a raw gamepad control.
+            assert!(!settings_browser_direction_frame(
+                &mut ui,
+                &mut settings,
+                &[],
+                &mut menu
+            ));
+            assert!(menu.is_empty(), "calibration leaked menu navigation");
+
+            let mut menu = vec![UiButton::Up, UiButton::Confirm];
+            assert!(settings_browser_direction_frame(
+                &mut ui,
+                &mut settings,
+                &[control],
+                &mut menu
+            ));
+            assert!(menu.is_empty(), "direction capture leaked menu input");
+            assert_eq!(
+                settings.browser_direction_bindings.get(index),
+                Some(control)
+            );
+            assert_eq!(ui.awaiting_direction_binding(), index + 1 < controls.len());
+        }
+        let save = crate::storage::SaveData {
+            settings,
+            ..Default::default()
+        };
+        let reopened = crate::storage::SaveData::from_json(&save.to_json().unwrap()).unwrap();
+        assert_eq!(
+            reopened.settings.browser_direction_bindings.get(0),
+            Some(controls[0])
+        );
+        assert_eq!(
+            reopened.settings.browser_direction_bindings.get(1),
+            Some(controls[1])
+        );
+        assert_eq!(
+            reopened.settings.browser_direction_bindings.get(2),
+            Some(controls[2])
+        );
+        assert_eq!(
+            reopened.settings.browser_direction_bindings.get(3),
+            Some(controls[3])
+        );
     }
 
     #[test]
