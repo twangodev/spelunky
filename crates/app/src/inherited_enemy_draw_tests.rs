@@ -1,5 +1,6 @@
 //! Literal oEnemy/Shopkeeper Draw geometry; source-configured and full-Step cases.
 use super::*;
+use crate::atlas::quad_matches_sprite_transition;
 use spelunky_core::{InputFrame, RulesPreset, World};
 
 fn room(seed: u32, rules: RulesPreset) -> Game {
@@ -21,11 +22,6 @@ fn assert_source_body(game: &Game, id: u64, right: bool, atlas: &Atlas) {
     let actor = draw.world.entity(id).expect("visible live Draw receiver");
     let image = atlas.sprite(&actor.sprite, actor.animation).unwrap();
     assert_eq!(image.origin, [0.0, 0.0]);
-    let mut expected_uv = image.uv;
-    if right {
-        expected_uv[0] += expected_uv[2];
-        expected_uv[2] = -expected_uv[2];
-    }
     let before = game.state_hash();
     let random = game.rng.clone().next_u64();
     for alpha in [0.0, 0.5, 1.0] {
@@ -33,7 +29,20 @@ fn assert_source_body(game: &Game, id: u64, right: bool, atlas: &Atlas) {
             let quads = game_scene(game, alpha, snap, atlas);
             let body = quads
                 .iter()
-                .find(|q| q.uv == expected_uv)
+                .find(|q| {
+                    let animation_alpha = if draw.flags.contains("render_discontinuity") {
+                        0.0
+                    } else {
+                        alpha.clamp(0.0, 1.0)
+                    };
+                    quad_matches_sprite_transition(
+                        atlas,
+                        q,
+                        &actor.sprite,
+                        actor.animation + actor.image_speed() * animation_alpha,
+                        right,
+                    )
+                })
                 .expect("SOURCE_INHERITED_DRAW_FACING_UV");
             let alpha = if draw.flags.contains("render_discontinuity") {
                 1.0

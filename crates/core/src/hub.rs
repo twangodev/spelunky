@@ -3044,6 +3044,46 @@ mod tests {
     }
 
     #[test]
+    fn game_step_opens_chest_at_pre_snap_position_before_title_portal_transition() {
+        let mut g = Game::shell(9, RulesPreset::Classic);
+        g.world = World::new(40, 20, Area::Mines, 1);
+        g.flags.insert("hub".into());
+        g.flags.insert("hub_title".into());
+        for x in 0..g.world.width {
+            g.world.set_tile(x, 12, "oTemple");
+        }
+
+        // Player Step opens chests before it starts an oXStart exit. This chest
+        // contains the player's origin before the source door snap, but not
+        // after the snap from x=389 to x=392.
+        let chest = g.world.spawn("oChest", Vec2::new(384.0, 177.0));
+        g.world.spawn("oXStart", Vec2::new(384.0, 176.0));
+        g.player.pos = Vec2::new(389.0, 184.0);
+        g.player.previous_pos = g.player.pos;
+        g.player.grounded = true;
+        g.player.state = PlayerState::Standing;
+        assert!(
+            g.world
+                .entity(chest)
+                .unwrap()
+                .mask_contains(g.player.pos, crate::CollisionPrecision::BoundingBox)
+        );
+
+        g.step(&InputFrame {
+            up: true,
+            attack_pressed: true,
+            ..Default::default()
+        });
+
+        assert!(g.player.is_exiting());
+        assert_eq!(g.player.pos.x, 392.0);
+        assert_eq!(g.world.entity(chest).unwrap().sprite, "sChestOpen");
+        assert!(g.world.entities.iter().any(|entity| {
+            entity.alive && matches!(entity.object.as_str(), "oEmerald" | "oSapphire" | "oRuby")
+        }));
+    }
+
+    #[test]
     fn game_step_title_portal_accepts_classic_ground_state_after_walkoff() {
         let mut g = portal_grounding_fixture(24);
         g.player.pos = Vec2::new(372., 184.);

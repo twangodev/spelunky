@@ -845,14 +845,6 @@ fn use_held_item(game: &mut Game, id: u64, input: &InputFrame) {
         explosives::use_held_rope(game, id, input);
         return;
     }
-    if game
-        .world
-        .entity(id)
-        .is_some_and(|item| item.value("cost") == 0.0)
-        && collectibles::grant(game, id)
-    {
-        return;
-    }
     if matches!(object.as_str(), "oMachete" | "oMattock") && game.player.attack_timer > 0 {
         return;
     }
@@ -2161,6 +2153,21 @@ mod tests {
             assert_eq!(game.world.entity(cape).is_none(), expected_cape);
             assert_eq!(game.events.iter().filter(|event|matches!(event,GameEvent::Collected{object,..}if object=="oCapePickup")).count(),usize::from(expected_cape));
         }
+    }
+
+    #[test]
+    fn game_step_free_bomb_bag_grants_immediately_on_pickup() {
+        let mut game = pickup_query_fixture();
+        let bag = game.spawn("oBombBag", Vec2::new(76.0, 76.0));
+        let item = game.world.entity_mut(bag).unwrap();
+        item.data.insert("cost".into(), 0.0);
+        item.data.insert("forSale".into(), 0.0);
+
+        game.step(&pickup_query_input());
+
+        assert_eq!(game.player.bombs, 7.0);
+        assert_eq!(game.player.held, None);
+        assert!(game.world.entity(bag).is_none());
     }
 
     #[test]

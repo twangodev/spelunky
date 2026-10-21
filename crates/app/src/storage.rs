@@ -119,7 +119,12 @@ fn legacy_record_algorithm() -> RngAlgorithm {
 impl Record {
     pub fn elapsed_ms(&self) -> u64 {
         self.elapsed_ms
-            .unwrap_or_else(|| self.ticks.saturating_mul(30))
+            // Earlier Rust saves stored simulation ticks and treated them as
+            // 30 ticks per second in records and fastest-time gates. Preserve
+            // that duration when reading those historical records.
+            .unwrap_or_else(|| {
+                u64::try_from(u128::from(self.ticks) * 1_000 / 30).unwrap_or(u64::MAX)
+            })
     }
 
     pub fn elapsed_seconds(&self) -> u64 {
@@ -1556,7 +1561,8 @@ mod tests {
                 assert_eq!(record.kills, 0);
                 assert_eq!(record.rescues, 0);
                 assert!(record.fastest_eligible);
-                assert_eq!(record.elapsed_ms(), record.ticks * 30);
+                assert_eq!(record.elapsed_ms(), record.ticks * 1_000 / 30);
+                assert_eq!(record.elapsed_seconds(), record.ticks / 30);
             }
             assert_eq!(data.records[0].rules, RulesPreset::Classic);
             assert_eq!(data.records[1].rules, RulesPreset::Assisted);
@@ -1564,6 +1570,21 @@ mod tests {
             assert_eq!(decoded.records[0].score, 4000);
             assert_eq!(decoded.records[1].score, 8000);
         }
+    }
+
+    #[test]
+    fn legacy_record_clock_preserves_the_30_ticks_per_second_highscore_duration() {
+        let legacy = SaveData::from_json(
+            r#"{"version":1,"records":[{"seed":42,"rules":"Classic","score":4000,"level":16,"ticks":18000,"won":true}]}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.records[0].elapsed_ms(), 600_000);
+        assert_eq!(legacy.records[0].elapsed_seconds(), 600);
+
+        let mut explicit = legacy.records[0].clone();
+        explicit.elapsed_ms = Some(540_000);
+        assert_eq!(explicit.elapsed_ms(), 540_000);
+        assert_eq!(explicit.elapsed_seconds(), 540);
     }
 
     #[test]

@@ -601,7 +601,7 @@ impl InputState {
         }
     }
 
-    fn source_action_label(&self, action: &str) -> String {
+    pub(crate) fn source_action_label(&self, action: &str) -> String {
         if self.controller_enabled {
             if let Some(button) = self
                 .controller_bindings

@@ -1183,7 +1183,7 @@ mod tests {
     }
 
     #[test]
-    fn held_free_bag_is_consumed_after_its_sale_price_clears() {
+    fn attacking_with_freed_held_bag_throws_then_player_step_collects_it() {
         let (mut game, id) = stepping_shop("oBombBag", "Bomb");
         game.player.bombs = 4.0;
         game.data.insert("thiefLevel".into(), 1.0);
@@ -1194,6 +1194,8 @@ mod tests {
         assert_eq!(game.player.held, Some(id));
         assert_eq!(game.player.bombs, 4.0);
 
+        // scrUseItem's generic fallback throws first; Player Step's later
+        // free-supply collision then collects the bag at its carried position.
         game.step(&InputFrame {
             attack_pressed: true,
             ..Default::default()
@@ -1202,6 +1204,18 @@ mod tests {
         assert_eq!(game.player.bombs, 7.0);
         assert_eq!(game.player.held, None);
         assert!(game.world.entity(id).is_none());
+        let thrown = game
+            .events
+            .iter()
+            .position(|event| matches!(event, GameEvent::Sound { name, .. } if name == "sndThrow"));
+        let collected = game.events.iter().position(
+            |event| matches!(event, GameEvent::Sound { name, .. } if name == "sndPickup"),
+        );
+        assert!(
+            thrown
+                .zip(collected)
+                .is_some_and(|(thrown, collected)| thrown < collected)
+        );
     }
     #[test]
     fn hub_shopkeeper_flags_do_not_create_campaign_bounty() {

@@ -2,7 +2,11 @@
 //! The paired old-source arm alone uses cfg(adaptive_view_baseline) to avoid
 //! requiring a new API; its Game.step implementation remains unchanged.
 //! All24 registrations are independent; a failed Classic case cannot hide Assisted.
-use crate::{atlas::Atlas, scene::game_scene_in_view, viewport::Viewport};
+use crate::{
+    atlas::{Atlas, quad_matches_sprite_transition},
+    scene::game_scene_in_view,
+    viewport::Viewport,
+};
 use spelunky_core::{Entity, Game, InputFrame, RngAlgorithm, RulesPreset, RunState, Vec2};
 
 fn configure(game: &mut Game, view: Viewport) {
@@ -65,11 +69,13 @@ fn rendered(game: &Game, id: u64, view: Viewport, alpha: f64, atlas: &Atlas) -> 
     // mirrored compensation preserves their world top-left, in both facings.
     assert_eq!(frame.size, [16.0, 16.0]);
     assert_eq!(frame.origin, [0.0, 0.0]);
-    let alpha = if draw.flags.contains("render_discontinuity") {
-        1.0
+    let discontinuity = draw.flags.contains("render_discontinuity");
+    let animation_alpha = if discontinuity {
+        0.0
     } else {
-        alpha
+        alpha.clamp(0.0, 1.0)
     };
+    let alpha = if discontinuity { 1.0 } else { alpha };
     let camera = view.camera(
         draw.previous_camera.lerp(draw.camera, alpha),
         draw.world.width as f64 * 16.0,
@@ -84,21 +90,34 @@ fn rendered(game: &Game, id: u64, view: Viewport, alpha: f64, atlas: &Atlas) -> 
         (position.x - camera.x) as f32,
         (position.y - camera.y) as f32,
     ];
+    let animation = entity.animation + entity.image_speed() * animation_alpha;
+    let rendered_frame = atlas
+        .sprite(&entity.sprite, animation)
+        .expect("presentation source sprite");
     let hash = game.state_hash();
     let draw_hash = draw.state_hash();
     let rng = game.rng.clone().next_u64();
     let quads = game_scene_in_view(game, alpha, false, atlas, view);
     let found = quads.iter().any(|q| {
-        let uv = [
-            q.uv[0].min(q.uv[0] + q.uv[2]),
-            q.uv[1],
-            q.uv[2].abs(),
-            q.uv[3],
-        ];
-        uv.iter().zip(frame.uv).all(|(a, b)| (*a - b).abs() < 1e-6)
-            && (q.rect[0] - expected[0]).abs() < 1e-4
+        quad_matches_sprite_transition(
+            atlas,
+            q,
+            &entity.sprite,
+            animation,
+            q.uv[2].is_sign_negative(),
+        ) && {
+            let uv = [
+                q.uv[0].min(q.uv[0] + q.uv[2]),
+                q.uv[1],
+                q.uv[2].abs(),
+                q.uv[3],
+            ];
+            uv.iter()
+                .zip(rendered_frame.uv)
+                .all(|(a, b)| (*a - b).abs() < 1e-6)
+        } && (q.rect[0] - expected[0]).abs() < 1e-4
             && (q.rect[1] - expected[1]).abs() < 1e-4
-            && q.rect[2..] == frame.size
+            && q.rect[2..] == rendered_frame.size
     });
     assert_eq!(
         game.state_hash(),

@@ -29,6 +29,19 @@ use winit::{
 const WHITE: [f32; 4] = [1.0, 0.95, 0.85, 1.0];
 const GOLD: [f32; 4] = [1.0, 0.78, 0.30, 1.0];
 const ABOUT_CONTROL_HINT: &str = "C CYCLE, A BOMB, S ROPE, F FLARE";
+const TITLE_MENU_ITEMS: [&str; 11] = [
+    "START ADVENTURE",
+    "TUTORIAL",
+    "PLAY ORIGINAL HUB",
+    "CUSTOM LEVELS",
+    "LEVEL EDITOR",
+    "SHORTCUTS",
+    "SETTINGS / CONTROLS",
+    "HIGH SCORES",
+    "EXTENDED STATS",
+    "ABOUT / LICENSE",
+    "FULLSCREEN",
+];
 #[cfg(target_arch = "wasm32")]
 const PAUSE_MENU_STATE_EVENT: &str = "spelunky-pause-menu-state";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -254,6 +267,11 @@ fn native_window_is_presentable(focused: bool, occluded: bool, width: u32, heigh
     focused && !occluded && width > 0 && height > 0
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
+fn browser_resume_focus(document_focused: bool, active_element_is_canvas: bool) -> bool {
+    document_focused && active_element_is_canvas
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AudioPolicy {
     pause_all: bool,
@@ -451,6 +469,55 @@ enum TitleMenuAction {
     ConfirmSelection(usize),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TitleMenuConfirm {
+    StartAdventure,
+    Tutorial,
+    OpenHub(spelunky_core::hub::HubKind),
+    SourceControl(SourceHostControl),
+    Shortcuts,
+    Settings,
+    ExtendedStats,
+    About,
+    Fullscreen,
+}
+
+fn title_menu_confirm(selection: usize) -> Option<TitleMenuConfirm> {
+    use spelunky_core::hub::HubKind;
+
+    Some(match selection {
+        0 => TitleMenuConfirm::StartAdventure,
+        1 => TitleMenuConfirm::Tutorial,
+        2 => TitleMenuConfirm::OpenHub(HubKind::Title),
+        3 | 4 => TitleMenuConfirm::SourceControl(title_menu_source_control(selection)?),
+        5 => TitleMenuConfirm::Shortcuts,
+        6 => TitleMenuConfirm::Settings,
+        7 => TitleMenuConfirm::OpenHub(HubKind::Scores),
+        8 => TitleMenuConfirm::ExtendedStats,
+        9 => TitleMenuConfirm::About,
+        10 => TitleMenuConfirm::Fullscreen,
+        _ => return None,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StatsMenuAction {
+    Import,
+    Export,
+    RunHistory,
+    Back,
+}
+
+fn stats_menu_action(selection: usize) -> Option<StatsMenuAction> {
+    Some(match selection {
+        0 => StatsMenuAction::Import,
+        1 => StatsMenuAction::Export,
+        2 => StatsMenuAction::RunHistory,
+        3 => StatsMenuAction::Back,
+        _ => return None,
+    })
+}
+
 fn title_menu_action(
     physical_key: KeyCode,
     mapped_key: KeyCode,
@@ -642,10 +709,19 @@ impl App {
         if let Some(document) = web_sys::window().and_then(|window| window.document()) {
             self.occluded = document.hidden();
             if let Ok(document_focused) = document.has_focus() {
-                let canvas_focused = document
-                    .active_element()
-                    .is_some_and(|element| element.id() == "spelunky-canvas");
-                self.focused = document_focused && canvas_focused;
+                use wasm_bindgen::JsCast;
+                use winit::platform::web::WindowExtWebSys;
+
+                let canvas_focused = self
+                    .window
+                    .as_ref()
+                    .and_then(|window| window.canvas())
+                    .zip(document.active_element())
+                    .is_some_and(|(canvas, active_element)| {
+                        let canvas: web_sys::Element = canvas.unchecked_into();
+                        active_element == canvas
+                    });
+                self.focused = browser_resume_focus(document_focused, canvas_focused);
             }
         }
         self.reset_timing_for_suspension();
@@ -1258,6 +1334,7 @@ impl App {
             }
             match self.screen {
                 Screen::Pause => self.screen(Screen::Playing),
+                Screen::Records => self.screen(Screen::Stats),
                 Screen::Finished if self.editor_play => self.screen(Screen::Editor),
                 Screen::Finished if self.is_hub() => self.return_from_challenge(),
                 _ => self.screen(Screen::Title),
@@ -1270,8 +1347,8 @@ impl App {
             return;
         }
         let count = match self.screen {
-            Screen::Title => 11,
-            Screen::Stats => 3,
+            Screen::Title => TITLE_MENU_ITEMS.len(),
+            Screen::Stats => 4,
             Screen::Shortcuts => self.shortcuts().len() + 1,
             Screen::Pause => {
                 if self.editor_play {
@@ -1346,40 +1423,42 @@ impl App {
         }
         match self.screen {
             Screen::Title => match title_action {
-                Some(TitleMenuAction::ConfirmSelection(selection)) => match selection {
-                    0 => {
-                        let first_time = self.store.data.first_time;
-                        self.start_game(title_adventure_starts_tutorial(first_time));
-                        if first_time {
-                            if let Some(game) = &mut self.game {
-                                consume_title_start_onboarding(game, &mut self.store.data);
+                Some(TitleMenuAction::ConfirmSelection(selection)) => {
+                    match title_menu_confirm(selection) {
+                        Some(TitleMenuConfirm::StartAdventure) => {
+                            let first_time = self.store.data.first_time;
+                            self.start_game(title_adventure_starts_tutorial(first_time));
+                            if first_time {
+                                if let Some(game) = &mut self.game {
+                                    consume_title_start_onboarding(game, &mut self.store.data);
+                                }
                             }
                         }
-                    }
-                    1 => self.start_game(true),
-                    2 => self.open_hub(spelunky_core::hub::HubKind::Title),
-                    3 | 4 => {
-                        if let Some(control) = title_menu_source_control(selection) {
-                            self.dispatch_source_host_control(control);
+                        Some(TitleMenuConfirm::Tutorial) => self.start_game(true),
+                        Some(TitleMenuConfirm::OpenHub(kind)) => self.open_hub(kind),
+                        Some(TitleMenuConfirm::SourceControl(control)) => {
+                            self.dispatch_source_host_control(control)
                         }
+                        Some(TitleMenuConfirm::Shortcuts) => self.screen(Screen::Shortcuts),
+                        Some(TitleMenuConfirm::Settings) => {
+                            self.settings_return = Screen::Title;
+                            self.screen(Screen::Settings)
+                        }
+                        Some(TitleMenuConfirm::ExtendedStats) => self.screen(Screen::Stats),
+                        Some(TitleMenuConfirm::About) => self.screen(Screen::About),
+                        Some(TitleMenuConfirm::Fullscreen) => self.fullscreen(),
+                        None => {}
                     }
-                    5 => self.screen(Screen::Shortcuts),
-                    6 => {
-                        self.settings_return = Screen::Title;
-                        self.screen(Screen::Settings)
-                    }
-                    7 => self.screen(Screen::Records),
-                    8 => self.screen(Screen::Stats),
-                    9 => self.screen(Screen::About),
-                    _ => self.fullscreen(),
-                },
+                }
                 Some(TitleMenuAction::OpenTitleHub) | None => return,
             },
-            Screen::Stats => match self.selection {
-                0 => self.import_classic_stats_dialog(),
-                1 => self.export_classic_stats_report(),
-                _ => self.screen(Screen::Title),
+            Screen::Stats => match stats_menu_action(self.selection) {
+                Some(StatsMenuAction::Import) => self.import_classic_stats_dialog(),
+                Some(StatsMenuAction::Export) => self.export_classic_stats_report(),
+                Some(StatsMenuAction::RunHistory) => self.screen(Screen::Records),
+                Some(StatsMenuAction::Back) | None => self.screen(Screen::Title),
             },
+            Screen::Records => self.screen(Screen::Stats),
             Screen::Pause => {
                 match pause_menu_action(self.selection, self.editor_play, self.game.as_mut()) {
                     PauseMenuAction::Resume => self.screen(Screen::Playing),
@@ -2392,11 +2471,7 @@ impl App {
                         || (game.flags.contains("hub_moon")
                             && game.data.get("timer").copied().unwrap_or(0.0) < 0.0)
                 }) {
-                    let hint = source_game_over_hint(
-                        game,
-                        self.editor_play,
-                        &self.input.action_label("attack"),
-                    );
+                    let hint = source_game_over_hint_for_input(game, self.editor_play, &self.input);
                     scene::game_over_overlay(quads, atlas, game, &hint);
                 }
             }
@@ -2495,26 +2570,7 @@ impl App {
             Screen::Title => {
                 text(quads, atlas, "SPELUNKY", 64., 18., 2.8, GOLD);
                 text(quads, atlas, "CLASSIC / RUST", 88., 45., 1., WHITE);
-                self.menu(
-                    quads,
-                    atlas,
-                    &[
-                        "START ADVENTURE",
-                        "TUTORIAL",
-                        "PLAY ORIGINAL HUB",
-                        "CUSTOM LEVELS",
-                        "LEVEL EDITOR",
-                        "SHORTCUTS",
-                        "SETTINGS / CONTROLS",
-                        "RECORDS",
-                        "EXTENDED STATS",
-                        "ABOUT / LICENSE",
-                        "FULLSCREEN",
-                    ],
-                    72.,
-                    60.,
-                    14.,
-                );
+                self.menu(quads, atlas, &TITLE_MENU_ITEMS, 72., 60., 14.);
                 text(
                     quads,
                     atlas,
@@ -2774,7 +2830,15 @@ impl App {
                         WHITE,
                     );
                 }
-                text(quads, atlas, "ESC / ENTER BACK", 102., 220., 0.8, WHITE);
+                text(
+                    quads,
+                    atlas,
+                    "ESC / ENTER BACK TO STATS",
+                    77.,
+                    220.,
+                    0.8,
+                    WHITE,
+                );
             }
             Screen::Stats => {
                 let stats = &self.store.data.lifetime_stats;
@@ -2808,6 +2872,7 @@ impl App {
                             "IMPORT CLASSIC STATS.TXT"
                         },
                         "EXPORT STATS.TXT",
+                        "RUN HISTORY",
                         "BACK",
                     ],
                     63.,
@@ -4157,6 +4222,10 @@ fn source_game_over_hint(game: &Game, editor_play: bool, attack: &str) -> String
     format!("PRESS {attack} {destination}")
 }
 
+fn source_game_over_hint_for_input(game: &Game, editor_play: bool, input: &InputState) -> String {
+    source_game_over_hint(game, editor_play, &input.source_action_label("attack"))
+}
+
 fn campaign_record(game: &Game) -> Option<Record> {
     if ["custom", "hub", "cheats_used"]
         .iter()
@@ -5153,6 +5222,23 @@ fn fullscreen_attribute(saved_preference: bool) -> Option<Fullscreen> {
 
 #[cfg(test)]
 mod tests {
+    use crate::atlas::quad_matches_sprite_transition;
+
+    #[test]
+    fn browser_resume_requires_the_document_and_canvas_to_be_focused() {
+        use super::browser_resume_focus;
+
+        assert!(browser_resume_focus(true, true));
+        assert!(
+            !browser_resume_focus(false, true),
+            "a focused canvas in a document without window focus is not active"
+        );
+        assert!(
+            !browser_resume_focus(true, false),
+            "a focused document with another active element must not resume canvas input"
+        );
+    }
+
     #[test]
     fn browser_session_exit_keeps_the_page_alive_for_a_terminal_notice() {
         use super::{SessionExitAction, session_exit_action};
@@ -5582,6 +5668,55 @@ mod tests {
             controller_menu_key(Screen::Title, UiButton::Cancel, false),
             None,
             "Classic has no controller Cancel/East title activation"
+        );
+    }
+
+    #[test]
+    fn title_high_scores_and_run_history_keep_their_distinct_destinations() {
+        use super::{
+            Screen, StatsMenuAction, TITLE_MENU_ITEMS, TitleMenuConfirm, menu_escape_routes_back,
+            stats_menu_action, title_menu_confirm,
+        };
+        use spelunky_core::hub::HubKind;
+
+        assert_eq!(TITLE_MENU_ITEMS[7], "HIGH SCORES");
+        assert_eq!(
+            title_menu_confirm(7),
+            Some(TitleMenuConfirm::OpenHub(HubKind::Scores))
+        );
+        assert_eq!(title_menu_confirm(8), Some(TitleMenuConfirm::ExtendedStats));
+        assert_eq!(stats_menu_action(2), Some(StatsMenuAction::RunHistory));
+        assert_eq!(stats_menu_action(3), Some(StatsMenuAction::Back));
+        assert_eq!(title_menu_confirm(11), None);
+        assert!(menu_escape_routes_back(Screen::Records));
+    }
+
+    #[test]
+    fn game_over_hints_use_classic_numbered_controller_buttons() {
+        use super::{InputState, source_game_over_hint_for_input};
+        use spelunky_core::{Game, RulesPreset};
+        use std::collections::BTreeMap;
+
+        let game = Game::shell(1, RulesPreset::Classic);
+        let mut input = InputState::default();
+        input.set_controller_enabled(true);
+        input.set_controller_bindings(&BTreeMap::from([("attack".into(), "South".into())]));
+        assert_eq!(
+            source_game_over_hint_for_input(&game, false, &input),
+            "PRESS B1 FOR HIGH SCORES."
+        );
+
+        input.set_controller_bindings(&BTreeMap::from([("attack".into(), "Extra3".into())]));
+        assert_eq!(
+            source_game_over_hint_for_input(&game, false, &input),
+            "PRESS B20 FOR HIGH SCORES."
+        );
+
+        input.set_controller_enabled(false);
+        input.set_bindings(&BTreeMap::from([("attack".into(), "KeyJ".into())]));
+        assert_eq!(
+            source_game_over_hint_for_input(&game, false, &input),
+            "PRESS J FOR HIGH SCORES."
         );
     }
 
@@ -8097,14 +8232,21 @@ mod tests {
     ) -> [f64; 2] {
         let player = &game.presentation().player;
         let frame = atlas.sprite(&player.sprite, player.animation).unwrap();
-        let mut uv = frame.uv;
         let mirrored = player.facing > 0;
-        if mirrored {
-            uv[0] += uv[2];
-            uv[2] = -uv[2];
-        }
+        let discontinuity = game.presentation().flags.contains("render_discontinuity");
+        let animation_alpha = if discontinuity {
+            0.0
+        } else {
+            alpha.clamp(0.0, 1.0)
+        };
         let quads = scene::game_scene_in_view(game, alpha, pixel_snap, atlas, viewport);
-        let quad = quads.iter().find(|quad| quad.uv == uv).unwrap();
+        let animation = player.animation + player.image_speed() * animation_alpha;
+        let quad = quads
+            .iter()
+            .find(|quad| {
+                quad_matches_sprite_transition(atlas, quad, &player.sprite, animation, mirrored)
+            })
+            .unwrap();
         [
             f64::from(
                 quad.rect[0]

@@ -24,7 +24,7 @@ export function installBfcacheTrace() {
   document.addEventListener('visibilitychange', event => record('visibilitychange', event));
 }
 
-export async function runBfcacheAcceptance({ page, base, result }) {
+async function enterPlaying(page) {
   const start = await snapshot(page);
   assert.equal(start.screen, 'Title');
   assert.equal(start.hostOccluded, false);
@@ -33,6 +33,47 @@ export async function runBfcacheAcceptance({ page, base, result }) {
   await page.waitForFunction(() => window.__spelunkyTest?.screen === 'Playing', null, { timeout: 15000 });
   const playing = await snapshot(page);
   await page.waitForFunction(tick => window.__spelunkyTest?.tick >= tick + 3, playing.tick, { timeout: 10000 });
+}
+
+async function runResumeFocusRegression({ page, result }) {
+  // Simulate a restored document whose DOM focus and Winit's cached canvas
+  // focus disagree. Dispatching persisted pageshow exercises the same Winit
+  // Resumed path as BFCache without depending on browser cache eligibility.
+  await page.locator('#spelunky-canvas').focus();
+  await page.waitForFunction(() => window.__spelunkyTest?.hostFocused === true, null, { timeout: 5000 });
+  await page.locator('#attribution a').focus();
+  await page.waitForFunction(() => window.__spelunkyTest?.hostFocused === false, null, { timeout: 5000 });
+  const focusBeforeResume = await page.evaluate(() => ({
+    documentFocused: document.hasFocus(),
+    activeElementIsLicense: document.activeElement?.matches('#attribution a') === true,
+  }));
+  assert.equal(focusBeforeResume.documentFocused, true);
+  assert.equal(focusBeforeResume.activeElementIsLicense, true);
+  await page.evaluate(() => {
+    // Winit's canvas focus handler updates its cached state even though a
+    // synthetic event leaves document.activeElement on the license link.
+    document.querySelector('#spelunky-canvas').dispatchEvent(new FocusEvent('focus'));
+  });
+  await page.waitForFunction(() => window.__spelunkyTest?.hostFocused === true, null, { timeout: 5000 });
+  assert.equal(await page.evaluate(() => document.activeElement?.matches('#attribution a') === true), true);
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
+  await page.waitForFunction(() => window.__spelunkyTest?.hostFocused === false, null, { timeout: 5000 });
+  assert.equal(await page.evaluate(() => document.hasFocus()), true);
+  assert.equal(await page.evaluate(() => document.activeElement?.matches('#attribution a') === true), true);
+  await page.locator('#spelunky-canvas').focus();
+  await page.waitForFunction(() => window.__spelunkyTest?.hostFocused === true, null, { timeout: 5000 });
+  result.checks.push('persisted pageshow restores focus from the active DOM element, not stale Winit canvas focus');
+}
+
+export async function runResumeFocusAcceptance({ page, result }) {
+  await enterPlaying(page);
+  await runResumeFocusRegression({ page, result });
+}
+
+export async function runBfcacheAcceptance({ page, base, result }) {
+  await enterPlaying(page);
+  await runResumeFocusRegression({ page, result });
+
   await page.evaluate(installBfcacheTrace);
   await page.addInitScript(installBfcacheTrace);
 

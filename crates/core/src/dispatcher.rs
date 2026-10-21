@@ -970,9 +970,13 @@ fn player_step(game: &mut Game, input: &InputFrame) {
     crate::hub::begin_title_exit(game);
     crate::player::tick(game, input);
     crate::items::player_attack_step(game, input);
-    crate::hub::player_portal_actions(game, input);
     crate::economy::player_held_step(game);
     let container_consumed = crate::items::player_containers(game, input);
+    // Classic resolves held-item theft and chest/crate interaction at the
+    // Player's current origin before its oXStart portal branch snaps the actor
+    // into the exit animation. Keep the authored hub/tutorial portal after
+    // those source actions, just like the ordinary oExit branch below.
+    crate::hub::player_portal_actions(game, input);
     // Game Over reads the physical edge independently of the consumed cached
     // action key. Containers execute before its possible room transition.
     crate::progression::player_actions(game, input);

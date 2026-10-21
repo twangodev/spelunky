@@ -3,6 +3,9 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
+#[cfg(test)]
+use crate::renderer::DrawQuad;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AtlasFrame {
     pub uv: [f32; 4],
@@ -125,6 +128,34 @@ impl Atlas {
         frames.get(index).copied()
     }
 
+    /// Resolve a fractional display index to the adjacent frames for a smooth
+    /// presentation blend. The game's image index and Animation End events
+    /// remain on their authoritative fixed simulation ticks.
+    pub fn sprite_transition(
+        &self,
+        name: &str,
+        frame: f64,
+    ) -> Option<(AtlasFrame, AtlasFrame, f32)> {
+        let current = self.sprite(name, frame)?;
+        if !frame.is_finite() {
+            return Some((current, current, 0.0));
+        }
+        let mix = (frame - frame.floor()) as f32;
+        if mix == 0.0 {
+            return Some((current, current, 0.0));
+        }
+        let next = self.sprite(name, frame.floor() + 1.0)?;
+        // A shared destination rectangle keeps both atlas samples registered
+        // to the same sprite origin while blending their pixels.
+        if current.size != next.size || current.origin != next.origin {
+            return Some((current, current, 0.0));
+        }
+        if current.uv == next.uv {
+            return Some((current, current, 0.0));
+        }
+        Some((current, next, mix))
+    }
+
     /// A source tile_add rectangle within a background image.
     pub fn region(&self, name: &str, source: [u32; 4]) -> Option<AtlasFrame> {
         let mut frame = self.sprite(name, 0.0)?;
@@ -145,6 +176,32 @@ impl Atlas {
         frame.bounds = [0, 0, width as i32 - 1, height as i32 - 1];
         Some(frame)
     }
+}
+
+/// Match the precise two-frame presentation sample emitted by the scene
+/// builder. Tests use this instead of identifying animated sprites by only
+/// the first atlas UV, which remains unchanged while the blended pose moves
+/// through a 30 Hz source interval.
+#[cfg(test)]
+pub(crate) fn quad_matches_sprite_transition(
+    atlas: &Atlas,
+    quad: &DrawQuad,
+    sprite: &str,
+    animation: f64,
+    mirrored: bool,
+) -> bool {
+    let Some((current, next, mix)) = atlas.sprite_transition(sprite, animation) else {
+        return false;
+    };
+    let mut current_uv = current.uv;
+    let mut next_uv = next.uv;
+    if mirrored {
+        current_uv[0] += current_uv[2];
+        current_uv[2] = -current_uv[2];
+        next_uv[0] += next_uv[2];
+        next_uv[2] = -next_uv[2];
+    }
+    quad.uv == current_uv && quad.next_uv == next_uv && (quad.frame_mix - mix).abs() <= f32::EPSILON
 }
 
 #[cfg(test)]
@@ -179,6 +236,26 @@ mod tests {
         assert_eq!(
             atlas.sprite("sRunLeft", -1.0),
             atlas.sprite("sRunLeft", count - 1.0)
+        );
+    }
+
+    #[test]
+    fn fractional_display_index_blends_the_next_registered_subimage() {
+        let atlas = Atlas::load().unwrap();
+        let first = atlas.sprite("sRunLeft", 2.0).unwrap();
+        let next = atlas.sprite("sRunLeft", 3.0).unwrap();
+        let (actual, actual_next, mix) = atlas.sprite_transition("sRunLeft", 2.25).unwrap();
+        assert_eq!(actual.uv, first.uv);
+        assert_eq!(actual_next.uv, next.uv);
+        assert_eq!(mix, 0.25);
+
+        let (wrapped, wrapped_next, mix) = atlas.sprite_transition("sRunLeft", 5.5).unwrap();
+        assert_eq!(wrapped.uv, atlas.sprite("sRunLeft", 5.0).unwrap().uv);
+        assert_eq!(wrapped_next.uv, atlas.sprite("sRunLeft", 0.0).unwrap().uv);
+        assert_eq!(mix, 0.5);
+        assert_eq!(
+            atlas.sprite_transition("sRunLeft", f64::NAN).unwrap().2,
+            0.0
         );
     }
 }

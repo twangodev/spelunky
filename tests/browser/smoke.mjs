@@ -15,7 +15,7 @@ import { installLightingProfile, installLightingSeedControl, installLightingProb
 import { runCinematicAcceptance } from './cinematics.mjs';
 import { installBloodProbe, runBloodAcceptance } from './blood.mjs';
 import { runCameraAcceptance } from './camera.mjs';
-import { installBfcacheTrace, runBfcacheAcceptance } from './lifecycle.mjs';
+import { installBfcacheTrace, runBfcacheAcceptance, runResumeFocusAcceptance } from './lifecycle.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const webRoot = path.resolve(process.env.BROWSER_WEB_ROOT || path.join(root, 'web/dist'));
@@ -40,7 +40,7 @@ const report = {
   scope: 'Automated browser engine acceptance, optionally using a virtual display; no physical 240 Hz display or Safari application validation.',
   engines: [],
 };
-assert.ok(['full', 'gameplay', 'adversarial', 'movement', 'onboarding', 'lighting', 'cinematics', 'blood', 'bfcache'].includes(report.suite), 'BROWSER_SUITE must be full, gameplay, adversarial, movement, onboarding, lighting, cinematics, blood, or bfcache');
+assert.ok(['full', 'gameplay', 'adversarial', 'movement', 'onboarding', 'lighting', 'cinematics', 'blood', 'bfcache', 'resume-focus'].includes(report.suite), 'BROWSER_SUITE must be full, gameplay, adversarial, movement, onboarding, lighting, cinematics, blood, bfcache, or resume-focus');
 if (report.suite === 'gameplay') report.deferredChecks = ['Source-valid natural dark-room WebGL pixel acceptance runs separately; gameplay success does not imply lighting acceptance.'];
 await mkdir(artifacts, { recursive: true });
 await access(tools);
@@ -296,6 +296,7 @@ try {
 
       if (!['full', 'gameplay'].includes(report.suite)) {
         if (report.suite === 'bfcache') await runBfcacheAcceptance({ page, base, result });
+        else if (report.suite === 'resume-focus') await runResumeFocusAcceptance({ page, result });
         else if (report.suite === 'adversarial') await runAdversarialAcceptance({ page, result, screenshot });
         else if (report.suite === 'movement') await runMovementAcceptance({ page, result, screenshot });
         else if (report.suite === 'onboarding') await runOnboardingAcceptance({ page, result, screenshot });

@@ -285,14 +285,17 @@ fn sprite_in_view(
     color: [f32; 4],
     view: Viewport,
 ) {
-    let Some(frame) = atlas.sprite(name, frame) else {
+    let Some((frame, next_frame, frame_mix)) = atlas.sprite_transition(name, frame) else {
         return;
     };
     let [width, height] = frame.size;
     let mut uv = frame.uv;
+    let mut next_uv = next_frame.uv;
     let left = if mirrored {
         uv[0] += uv[2];
         uv[2] = -uv[2];
+        next_uv[0] += next_uv[2];
+        next_uv[2] = -next_uv[2];
         x + frame.origin[0] - width
     } else {
         x - frame.origin[0]
@@ -310,6 +313,8 @@ fn sprite_in_view(
     quads.push(DrawQuad {
         rect: [left, y - frame.origin[1], width, height],
         uv,
+        next_uv,
+        frame_mix,
         color,
         ..DrawQuad::default()
     });
@@ -332,6 +337,14 @@ fn screen(previous: Vec2, current: Vec2, camera: Vec2, alpha: f64, pixel_snap: b
         result = result.map(f32::round);
     }
     result
+}
+
+fn presentation_animation(animation: f64, image_speed: f64, alpha: f64) -> f64 {
+    if animation.is_finite() && image_speed.is_finite() && alpha.is_finite() {
+        animation + image_speed * alpha.clamp(0.0, 1.0)
+    } else {
+        animation
+    }
 }
 
 fn entity_sprite<'a>(atlas: &Atlas, entity: &'a Entity) -> Option<&'a str> {
@@ -431,6 +444,7 @@ fn entity_draw_extras(
     atlas: &Atlas,
     x: f32,
     y: f32,
+    animation_alpha: f64,
     view: Viewport,
 ) {
     let sprite =
@@ -475,7 +489,7 @@ fn entity_draw_extras(
                     layer,
                     atlas,
                     name,
-                    entity.animation,
+                    presentation_animation(entity.animation, entity.image_speed(), animation_alpha),
                     x + 4.0,
                     y + 2.0,
                     false,
@@ -562,8 +576,9 @@ fn entity_draw_extras(
     }
 }
 
-/// Alpha interpolates positions only. Sprite frames and all HUD values are
-/// simulation state, so presentation never changes gameplay or animation speed.
+/// Position and visible subimage interpolation use render alpha. The source
+/// image index, Animation End callbacks and HUD values remain simulation state;
+/// only rendered pixels blend toward the next subimage.
 /// Default Scene's atlas-backed generated graphic projection. This is a
 /// presentation adapter, not a native tile raster/culling or conversion proof.
 /// Unsupported nonfinite/fractional/negative crop data stays in model storage
@@ -701,6 +716,11 @@ pub fn game_scene_in_view_into(
     } else {
         1.0
     };
+    let animation_alpha = if game.flags.contains("render_discontinuity") {
+        0.0
+    } else {
+        alpha
+    };
     let canonical_camera = interpolated(game.previous_camera, game.camera, alpha);
     let expanded = view.width != 320.0 || view.height != 240.0;
     // Canonical helper preserves authored room framing, including small rooms.
@@ -809,11 +829,12 @@ pub fn game_scene_in_view_into(
                 (
                     entity.text["terrain_sprite"].as_str(),
                     entity.animation,
+                    entity.image_speed(),
                     entity.data.get("depth").map(|depth| *depth as i32),
                 )
             });
         let Some(name) = override_sprite
-            .map(|(name, _, _)| name)
+            .map(|(name, _, _, _)| name)
             .or_else(|| catalog::sprite(&tile.object))
             .or_else(|| {
                 (tile.object == "oSolid").then_some(match game.world.area {
@@ -838,14 +859,16 @@ pub fn game_scene_in_view_into(
             layer,
             atlas,
             name,
-            override_sprite.map_or(0.0, |(_, frame, _)| frame),
+            override_sprite.map_or(0.0, |(_, animation, speed, _)| {
+                presentation_animation(animation, speed, animation_alpha)
+            }),
             x,
             y,
             false,
             WHITE,
         );
         let depth = override_sprite
-            .and_then(|(_, _, depth)| depth)
+            .and_then(|(_, _, _, depth)| depth)
             .unwrap_or_else(|| definition.map_or(100, |def| def.depth));
         layers.push((f64::from(depth), 1, index as u64, layer_start..layer.len()));
     }
@@ -1031,7 +1054,7 @@ pub fn game_scene_in_view_into(
             layer,
             atlas,
             name,
-            entity.animation,
+            presentation_animation(entity.animation, entity.image_speed(), animation_alpha),
             entity_draw_x(&entity.object, x, mirror),
             y,
             mirror,
@@ -1056,7 +1079,7 @@ pub fn game_scene_in_view_into(
                 ];
             }
         }
-        entity_draw_extras(layer, game, entity, atlas, x, y, view);
+        entity_draw_extras(layer, game, entity, atlas, x, y, animation_alpha, view);
         let depth = entity_draw_depth(game, entity, definition.map_or(60, |def| def.depth));
         layers.push((
             f64::from(depth),
@@ -1139,7 +1162,7 @@ pub fn game_scene_in_view_into(
             layer,
             atlas,
             name,
-            player.animation,
+            presentation_animation(player.animation, player.image_speed(), animation_alpha),
             x,
             y,
             player.facing > 0,
@@ -2517,6 +2540,60 @@ fn offset_panel_translation(quads: &mut [DrawQuad], origin: [f32; 2], direction:
 
 #[cfg(test)]
 mod tests {
+    use crate::atlas::quad_matches_sprite_transition;
+
+    fn presentation_animation_alpha(game: &Game, alpha: f64) -> f64 {
+        let draw = game.presentation();
+        if draw.flags.contains("render_discontinuity") {
+            0.0
+        } else if alpha.is_finite() {
+            alpha.clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
+    }
+
+    fn presentation_player_frame_matches(
+        game: &Game,
+        quad: &DrawQuad,
+        atlas: &Atlas,
+        alpha: f64,
+    ) -> bool {
+        let player = &game.presentation().player;
+        quad_matches_sprite_transition(
+            atlas,
+            quad,
+            &player.sprite,
+            presentation_animation(
+                player.animation,
+                player.image_speed(),
+                presentation_animation_alpha(game, alpha),
+            ),
+            player.facing > 0,
+        )
+    }
+
+    fn presentation_entity_frame_matches(
+        game: &Game,
+        entity: &Entity,
+        quad: &DrawQuad,
+        atlas: &Atlas,
+        alpha: f64,
+        mirrored: bool,
+    ) -> bool {
+        quad_matches_sprite_transition(
+            atlas,
+            quad,
+            &entity.sprite,
+            presentation_animation(
+                entity.animation,
+                entity.image_speed(),
+                presentation_animation_alpha(game, alpha),
+            ),
+            mirrored,
+        )
+    }
+
     // Author a legal room, then use only actual tick inputs. No midrun player,
     // image-index, animation-speed or controller-counter assignments.
     fn natural_duck_to_hang_callback(right: bool) -> Game {
@@ -2575,15 +2652,10 @@ mod tests {
         let player = &game.presentation().player;
         let frame = atlas.sprite(&player.sprite, player.animation).unwrap();
         let mirrored = player.facing > 0;
-        let mut uv = frame.uv;
-        if mirrored {
-            uv[0] += uv[2];
-            uv[2] = -uv[2];
-        }
         let quads = game_scene(game, alpha, false, atlas);
         let quad = quads
             .iter()
-            .find(|quad| quad.uv == uv)
+            .find(|quad| presentation_player_frame_matches(game, quad, atlas, alpha))
             .expect("source last Draw frame absent");
         [
             f64::from(
@@ -3179,21 +3251,10 @@ mod tests {
         panic!("natural collectible Blood did not reach the Kapala player: {preset:?}");
     }
 
-    fn source_player_uv(game: &Game, atlas: &Atlas) -> [f32; 4] {
-        let player = &game.presentation().player;
-        let mut uv = atlas.sprite(&player.sprite, player.animation).unwrap().uv;
-        if player.facing > 0 {
-            uv[0] += uv[2];
-            uv[2] = -uv[2];
-        }
-        uv
-    }
-
     fn assert_source_player_color(game: &Game, atlas: &Atlas, color: [f32; 4]) {
         let live = game.state_hash();
         let draw = game.presentation().state_hash();
         let random = game.rng.clone().next_u64();
-        let uv = source_player_uv(game, atlas);
         for view in [
             Viewport::canonical(),
             Viewport::from_surface(1920, 1080),
@@ -3201,7 +3262,10 @@ mod tests {
         ] {
             for alpha in [0.0, 0.125, 0.5, 0.875, 1.0] {
                 let quads = game_scene_in_view(game, alpha, false, atlas, view);
-                let player: Vec<_> = quads.iter().filter(|quad| quad.uv == uv).collect();
+                let player: Vec<_> = quads
+                    .iter()
+                    .filter(|quad| presentation_player_frame_matches(game, quad, atlas, alpha))
+                    .collect();
                 assert_eq!(
                     player.len(),
                     1,
@@ -3336,12 +3400,13 @@ mod tests {
                         }
                         draw.player.data.insert("blink_toggle".into(), 1.0);
                         let hidden = game_scene(&draw, 0.5, false, &atlas);
-                        for uv in [
-                            source_player_uv(&draw, &atlas),
-                            back_uv,
-                            side_uv,
-                            atlas.sprite(arrow, 0.0).unwrap().uv,
-                        ] {
+                        assert!(
+                            !hidden.iter().any(|quad| {
+                                presentation_player_frame_matches(&draw, quad, &atlas, 0.5)
+                            }),
+                            "blink must hide source player layer"
+                        );
+                        for uv in [back_uv, side_uv, atlas.sprite(arrow, 0.0).unwrap().uv] {
                             assert!(
                                 !hidden.iter().any(|q| q.uv == uv),
                                 "blink must hide source player layer"
@@ -3390,15 +3455,71 @@ mod tests {
         game
     }
 
+    #[test]
+    fn high_refresh_draws_blend_sprite_frames_without_advancing_source_state() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = adaptive_room();
+        game.player.set_sprite("sRunLeft");
+        game.player.facing = -1;
+        game.player.animation = 0.25;
+        game.player.set_image_speed(1.0);
+        let state_hash = game.state_hash();
+        let draw_hash = game.presentation().state_hash();
+        let frame_zero = atlas.sprite("sRunLeft", 0.0).unwrap().uv;
+        let frame_one = atlas.sprite("sRunLeft", 1.0).unwrap().uv;
+        let mut blends = Vec::new();
+        let mut render_alpha = Vec::new();
+
+        // A 30 Hz renderer samples only the tick boundary. A 240 Hz renderer
+        // samples every 1/8 of that interval; all samples share identical
+        // authoritative simulation and Draw snapshots.
+        let tick_boundary = game_scene(&game, 0.0, false, &atlas);
+        let tick_actor = tick_boundary
+            .iter()
+            .find(|quad| quad.uv == frame_zero && quad.next_uv == frame_one)
+            .expect("player sprite frame pair missing");
+        assert_eq!(tick_actor.frame_mix, 0.25);
+        for sample in 0..240 {
+            let alpha = f64::from(sample) / 240.0;
+            let quads = game_scene(&game, alpha, false, &atlas);
+            let actor = quads
+                .iter()
+                .find(|quad| {
+                    (quad.uv == frame_zero || quad.uv == frame_one)
+                        && (quad.next_uv == frame_one
+                            || quad.next_uv == atlas.sprite("sRunLeft", 2.0).unwrap().uv)
+                })
+                .expect("interpolated player sprite missing");
+            blends.push(actor.frame_mix.to_bits());
+            render_alpha.push(alpha);
+        }
+        assert_eq!(blends.len(), 240);
+        assert!(blends.windows(2).all(|pair| pair[0] != pair[1]));
+        assert_eq!(render_alpha[120], 0.5);
+        assert_eq!(game.state_hash(), state_hash);
+        assert_eq!(game.presentation().state_hash(), draw_hash);
+    }
+
     fn quad_bytes(
         quads: &[DrawQuad],
-    ) -> Vec<([u32; 4], [u32; 4], [u32; 4], u32, [u32; 2], QuadBlend)> {
+    ) -> Vec<(
+        [u32; 4],
+        [u32; 4],
+        [u32; 4],
+        u32,
+        [u32; 4],
+        u32,
+        [u32; 2],
+        QuadBlend,
+    )> {
         quads
             .iter()
             .map(|q| {
                 (
                     q.rect.map(f32::to_bits),
                     q.uv.map(f32::to_bits),
+                    q.next_uv.map(f32::to_bits),
+                    q.frame_mix.to_bits(),
                     q.color.map(f32::to_bits),
                     q.rotation.to_bits(),
                     q.pivot.map(f32::to_bits),
@@ -4002,7 +4123,12 @@ mod tests {
                     ];
                     let quad = quads
                         .iter()
-                        .find(|quad| quad.uv == frame.uv && quad.rect == expected)
+                        .find(|quad| {
+                            quad.rect == expected
+                                && presentation_entity_frame_matches(
+                                    &game, entity, quad, &atlas, alpha, false,
+                                )
+                        })
                         .expect("natural death blood has its own interpolated scene quad");
                     assert_eq!(quad.color, WHITE);
                     assert_eq!(quad.blend, QuadBlend::Alpha);
@@ -4039,12 +4165,13 @@ mod tests {
             let draw = game.presentation().world.entity(id).unwrap();
             assert_eq!(draw.sprite, "sPoof");
             assert!((draw.animation - f64::from(tick - 1) * 0.4).abs() < 0.00001);
-            let frame = atlas.sprite("sPoof", draw.animation).unwrap();
             let hash = game.state_hash();
             let draw_hash = game.presentation().state_hash();
             for alpha in [0.0, 0.5, 1.0] {
                 let quads = game_scene(&game, alpha, false, &atlas);
-                assert!(quads.iter().any(|quad| quad.uv == frame.uv));
+                assert!(quads.iter().any(|quad| {
+                    presentation_entity_frame_matches(&game, draw, quad, &atlas, alpha, false)
+                }));
                 assert_eq!(game.state_hash(), hash);
                 assert_eq!(game.presentation().state_hash(), draw_hash);
             }
@@ -4057,7 +4184,7 @@ mod tests {
         assert!(
             game_scene(&game, 1.0, false, &atlas)
                 .iter()
-                .all(|quad| quad.uv != last_frame.uv)
+                .all(|quad| quad.uv != last_frame.uv && quad.next_uv != last_frame.uv)
         );
     }
 
@@ -4090,16 +4217,17 @@ mod tests {
                 catalog::sprite_frame_count(&draw.sprite),
             );
             assert!((live.animation - expected).abs() < 0.00001);
-            let frame = atlas.sprite(&draw.sprite, draw.animation).unwrap();
-            let mut uv = frame.uv;
-            uv[0] += uv[2];
-            uv[2] = -uv[2];
             let hash = game.state_hash();
             let draw_hash = game.presentation().state_hash();
             for alpha in [0.0, 0.5, 1.0] {
                 let position = entity_position(game.presentation(), draw, alpha);
                 let quads = game_scene(&game, alpha, false, &atlas);
-                let quad = quads.iter().find(|quad| quad.uv == uv).unwrap();
+                let quad = quads
+                    .iter()
+                    .find(|quad| {
+                        presentation_entity_frame_matches(&game, draw, quad, &atlas, alpha, true)
+                    })
+                    .unwrap();
                 assert_eq!(quad.rect[0], position.x as f32 - 8.0);
                 assert_eq!(game.state_hash(), hash);
                 assert_eq!(game.presentation().state_hash(), draw_hash);
@@ -4161,15 +4289,12 @@ mod tests {
             {
                 let frame = draw.animation.floor() as u32;
                 visible_frames.push(frame);
-                let uv = atlas.sprite("sWebCreate", draw.animation).unwrap().uv;
                 let hash = game.state_hash();
                 let draw_hash = game.presentation().state_hash();
                 for alpha in [0.0, 0.5, 1.0] {
-                    assert!(
-                        game_scene(&game, alpha, false, &atlas)
-                            .iter()
-                            .any(|quad| quad.uv == uv)
-                    );
+                    assert!(game_scene(&game, alpha, false, &atlas).iter().any(|quad| {
+                        presentation_entity_frame_matches(&game, draw, quad, &atlas, alpha, false)
+                    }));
                     assert_eq!(game.state_hash(), hash);
                     assert_eq!(game.presentation().state_hash(), draw_hash);
                 }
@@ -4193,12 +4318,9 @@ mod tests {
         game.step(&spelunky_core::InputFrame::default());
         assert!(game.presentation().world.entity(ball).is_none());
         let draw = game.presentation().world.entity(web).unwrap();
-        let uv = atlas.sprite(&draw.sprite, draw.animation).unwrap().uv;
-        assert!(
-            game_scene(&game, 1.0, false, &atlas)
-                .iter()
-                .any(|quad| quad.uv == uv)
-        );
+        assert!(game_scene(&game, 1.0, false, &atlas).iter().any(|quad| {
+            presentation_entity_frame_matches(&game, draw, quad, &atlas, 1.0, false)
+        }));
     }
 
     #[test]
@@ -5297,10 +5419,11 @@ mod tests {
             let hand = game.world.entity(hand).unwrap();
             let draw = game.presentation().world.entity(hand.id).unwrap();
             assert!((draw.animation - f64::from(step - 1) * 0.5).abs() < 0.00001);
-            let frame = atlas.sprite("sHintPoint", draw.animation).unwrap();
             let quad = game_scene(&game, 1.0, false, &atlas)
                 .into_iter()
-                .find(|q| q.uv == frame.uv)
+                .find(|quad| {
+                    presentation_entity_frame_matches(&game, draw, quad, &atlas, 1.0, false)
+                })
                 .expect("source half-frame animation");
             assert_eq!(quad.rect, [64.0, 144.0, 16.0, 16.0]);
             assert_eq!(hand.sprite, "sHintPoint");
@@ -5900,14 +6023,26 @@ mod tests {
         game.camera = Vec2::new(8.0, 0.0);
         let id = game.world.spawn("oWhip", Vec2::new(64.0, 40.0));
         game.world.entity_mut(id).unwrap().sprite = "sWhipRight".into();
-        let whip_uv = atlas.sprite("sWhipRight", 0.0).unwrap().uv;
-        let mut player_uv = atlas.sprite("sAttackLeft", 0.0).unwrap().uv;
-        player_uv[0] += player_uv[2];
-        player_uv[2] = -player_uv[2];
         for alpha in [0.0, 0.125, 0.25, 0.5, 0.875, 1.0] {
             let quads = game_scene(&game, alpha, false, &atlas);
-            let player = quads.iter().find(|quad| quad.uv == player_uv).unwrap();
-            let whip = quads.iter().find(|quad| quad.uv == whip_uv).unwrap();
+            let player = quads
+                .iter()
+                .find(|quad| presentation_player_frame_matches(&game, quad, &atlas, alpha))
+                .unwrap();
+            let whip_entity = game.world.entity(id).unwrap();
+            let whip = quads
+                .iter()
+                .find(|quad| {
+                    presentation_entity_frame_matches(
+                        &game,
+                        whip_entity,
+                        quad,
+                        &atlas,
+                        alpha,
+                        false,
+                    )
+                })
+                .unwrap();
             assert_eq!(whip.rect[0] - player.rect[0], 16.0);
         }
         assert_eq!(game.player.pos, Vec2::new(48.0, 40.0));

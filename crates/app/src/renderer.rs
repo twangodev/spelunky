@@ -32,6 +32,10 @@ pub struct DrawQuad {
     /// Atlas u, v, width, height in normalized coordinates.
     /// `[0.0; 4]` samples the atlas's white first texel for solid colors.
     pub uv: [f32; 4],
+    /// Optional next animation frame used for presentation-time blending.
+    pub next_uv: [f32; 4],
+    /// Blend from `uv` to `next_uv`; zero keeps the source frame discrete.
+    pub frame_mix: f32,
     pub color: [f32; 4],
     /// Clockwise radians in the screen's downward-positive coordinate system.
     pub rotation: f32,
@@ -45,12 +49,19 @@ pub struct DrawQuad {
 struct Vertex {
     position: [f32; 2],
     uv: [f32; 2],
+    next_uv: [f32; 2],
+    frame_mix: f32,
     color: [f32; 4],
 }
 
 impl Vertex {
-    const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
-        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4];
+    const ATTRIBUTES: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+        0 => Float32x2,
+        1 => Float32x2,
+        2 => Float32x2,
+        3 => Float32,
+        4 => Float32x4
+    ];
 
     fn layout() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
@@ -501,6 +512,7 @@ fn append_quad(vertices: &mut Vec<Vertex>, quad: &DrawQuad) {
 fn append_quad_in_view(vertices: &mut Vec<Vertex>, quad: &DrawQuad, view: Viewport) {
     let [x, y, width, height] = quad.rect;
     let [u, v, uv_width, uv_height] = quad.uv;
+    let [next_u, next_v, next_uv_width, next_uv_height] = quad.next_uv;
     let [pivot_x, pivot_y] = quad.pivot;
     let (sin, cos) = quad.rotation.sin_cos();
     let vertex = |dx: f32, dy: f32| {
@@ -514,6 +526,8 @@ fn append_quad_in_view(vertices: &mut Vec<Vertex>, quad: &DrawQuad, view: Viewpo
                 1.0 - world_y * 2.0 / view.height,
             ],
             uv: [u + uv_width * dx, v + uv_height * dy],
+            next_uv: [next_u + next_uv_width * dx, next_v + next_uv_height * dy],
+            frame_mix: quad.frame_mix,
             color: quad.color,
         }
     };
@@ -545,6 +559,21 @@ pub(crate) mod tests {
         srgb_texture: bool,
         viewport: Viewport,
     ) -> Vec<u8> {
+        gpu_pixels_with_atlas(quads, srgb_texture, viewport, &[255; 4], [1, 1])
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn gpu_pixels_with_atlas(
+        quads: &[DrawQuad],
+        srgb_texture: bool,
+        viewport: Viewport,
+        atlas_rgba: &[u8],
+        atlas_size: [u32; 2],
+    ) -> Vec<u8> {
+        assert_eq!(
+            atlas_rgba.len(),
+            atlas_size[0] as usize * atlas_size[1] as usize * 4
+        );
         let width = viewport.surface_width;
         let height = viewport.surface_height;
         let stride = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
@@ -572,10 +601,10 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
             let atlas = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("white atlas texel"),
+                label: Some("test sprite atlas"),
                 size: wgpu::Extent3d {
-                    width: 1,
-                    height: 1,
+                    width: atlas_size[0],
+                    height: atlas_size[1],
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -587,11 +616,11 @@ pub(crate) mod tests {
             });
             queue.write_texture(
                 atlas.as_image_copy(),
-                &[255; 4],
+                atlas_rgba,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(4),
-                    rows_per_image: Some(1),
+                    bytes_per_row: Some(atlas_size[0] * 4),
+                    rows_per_image: Some(atlas_size[1]),
                 },
                 atlas.size(),
             );
@@ -831,6 +860,7 @@ pub(crate) mod tests {
             uv: [0.2, 0.3, 0.1, 0.15],
             color: [0.5, 0.75, 1.0, 0.25],
             blend: QuadBlend::Alpha,
+            ..DrawQuad::default()
         };
         let mut vertices = Vec::new();
         append_quad(&mut vertices, &quad);
@@ -853,5 +883,26 @@ pub(crate) mod tests {
         assert_eq!(vertices[0].uv, [0.2, 0.3]);
         assert!((vertices[5].uv[0] - 0.3).abs() < 1e-6);
         assert!((vertices[5].uv[1] - 0.45).abs() < 1e-6);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn shader_blends_adjacent_animation_frames_at_the_requested_fraction() {
+        let quad = DrawQuad {
+            rect: [0.0, 0.0, 320.0, 240.0],
+            uv: [0.0, 0.0, 0.5, 1.0],
+            next_uv: [0.5, 0.0, 0.5, 1.0],
+            frame_mix: 0.5,
+            color: [1.0; 4],
+            ..DrawQuad::default()
+        };
+        let pixels = gpu_pixels_with_atlas(
+            &[quad],
+            false,
+            Viewport::canonical(),
+            &[255, 0, 0, 255, 0, 0, 255, 255],
+            [2, 1],
+        );
+        assert_eq!(pixels[0..4], [128, 0, 128, 255]);
     }
 }

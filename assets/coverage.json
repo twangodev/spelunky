@@ -521,7 +521,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 397,
+          "line": 405,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -564,7 +564,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 398,
+          "line": 406,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -607,7 +607,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 393,
+          "line": 401,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -645,7 +645,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 395,
+          "line": 403,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -682,7 +682,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 394,
+          "line": 402,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -720,7 +720,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 396,
+          "line": 404,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -4851,12 +4851,12 @@
       "handlers": [
         {
           "kind": "instance_event_family_registration",
-          "line": 46,
+          "line": 47,
           "module": "crates/core/src/traps.rs"
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 178,
+          "line": 186,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -5507,7 +5507,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 934,
+          "line": 957,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -6020,7 +6020,7 @@
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 47,
+          "line": 48,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -6207,7 +6207,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1905,
+          "line": 1928,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -6280,7 +6280,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1905,
+          "line": 1928,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -6493,7 +6493,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 389,
+          "line": 397,
           "module": "crates/core/src/traps.rs"
         },
         {
@@ -9865,7 +9865,7 @@
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 49,
+          "line": 50,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -9886,7 +9886,7 @@
       "handlers": [
         {
           "kind": "instance_event_family_registration",
-          "line": 50,
+          "line": 51,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -11045,7 +11045,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 400,
+          "line": 408,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -11087,7 +11087,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 401,
+          "line": 409,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -11163,7 +11163,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 399,
+          "line": 407,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -11195,7 +11195,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 402,
+          "line": 410,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -11456,8 +11456,13 @@
       "category": "gameplay",
       "handlers": [
         {
+          "kind": "instance_event_family_registration",
+          "line": 46,
+          "module": "crates/core/src/traps.rs"
+        },
+        {
           "kind": "hazard_dispatch_registration",
-          "line": 388,
+          "line": 396,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -12041,7 +12046,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1907,
+          "line": 1930,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -12282,7 +12287,7 @@
         },
         {
           "kind": "instance_event_family_registration",
-          "line": 48,
+          "line": 49,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -12870,7 +12875,7 @@
       "handlers": [
         {
           "kind": "hazard_dispatch_registration",
-          "line": 390,
+          "line": 398,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -12894,7 +12899,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 391,
+          "line": 399,
           "module": "crates/core/src/traps.rs"
         }
       ],
@@ -12935,7 +12940,7 @@
         },
         {
           "kind": "hazard_dispatch_registration",
-          "line": 392,
+          "line": 400,
           "module": "crates/core/src/traps.rs"
         }
       ],

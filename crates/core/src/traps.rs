@@ -43,6 +43,7 @@ pub(crate) fn handles(object: &str) -> bool {
         || matches!(
             object,
             "oWeb"
+                | "oSpikes"
                 | "oGiantTikiHead"
                 | "oKaliHead"
                 | "oTrapBlock"
@@ -65,6 +66,13 @@ pub(crate) fn init_entity(entity: &mut Entity) {
     if entity.object == "oTrapBlock" {
         entity.data.entry("dying".into()).or_insert(0.);
         entity.data.entry("deathTimer".into()).or_insert(0.);
+    }
+    if entity.object == "oSpikes" {
+        // oSpikes inherits oDrawnSprite Create, then explicitly sets
+        // invincible=false in its own Create event.
+        entity.text.insert("type".into(), String::new());
+        entity.data.insert("blinkToggle".into(), 0.);
+        entity.data.insert("invincible".into(), 0.);
     }
     entity.data.insert("traps_fixed_initialized".into(), 1.);
 }
@@ -1111,6 +1119,26 @@ mod tests {
         tick(&mut g);
         assert!(g.player.health <= 0.0);
     }
+
+    #[test]
+    fn runtime_spikes_create_applies_drawn_sprite_inherited_state() {
+        let mut game = room();
+        let id = game.spawn("oSpikes", Vec2::new(256.0, 160.0));
+
+        let spikes = game.world.entity(id).unwrap();
+        assert_eq!(spikes.text.get("type").map(String::as_str), Some(""));
+        assert_eq!(spikes.value("blinkToggle"), 0.0);
+        assert_eq!(spikes.value("invincible"), 0.0);
+        assert_eq!(spikes.value("traps_create_initialized"), 1.0);
+
+        game.step(&crate::InputFrame::default());
+
+        let spikes = game.world.entity(id).unwrap();
+        assert_eq!(spikes.text.get("type").map(String::as_str), Some(""));
+        assert_eq!(spikes.value("blinkToggle"), 0.0);
+        assert_eq!(spikes.value("invincible"), 0.0);
+    }
+
     #[test]
     fn actual_yeti_zero_timer_throw_is_impaled_on_its_first_descending_overlap() {
         // oPlayer1 Step: colSpikes && yVel > 0 && (fallTimer > 4 || stunned).

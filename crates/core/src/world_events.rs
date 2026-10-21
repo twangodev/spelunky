@@ -56,7 +56,7 @@ pub(crate) fn fluid_tick(game: &mut Game) {
             continue;
         }
         let origin = instance.position(game);
-        if game.world.name != "rLoadLevel" && origin.y >= 512.0 {
+        if !game.is_load_level() && origin.y >= 512.0 {
             continue;
         }
         let id = match instance {
@@ -2613,7 +2613,7 @@ mod tests {
         for (boss, custom, load_level, y, expected) in [
             (true, false, false, 80.0, 1),
             (false, false, false, 512.0, 1),
-            (false, true, false, 512.0, 1),
+            (false, true, false, 512.0, 0),
             (false, false, true, 512.0, 0),
         ] {
             let mut g = room();
@@ -2623,6 +2623,9 @@ mod tests {
             }
             if custom {
                 g.flags.insert("custom".into());
+                // Classic plays custom files in rLoadLevel. The Rust adapter
+                // keeps the authored filename as the world's visible name.
+                g.world.name = "bottom-row-custom.lvl".into();
             }
             if load_level {
                 g.world.name = "rLoadLevel".into();
@@ -2642,6 +2645,60 @@ mod tests {
                 expected
             );
         }
+    }
+
+    fn bottom_row_custom_water_pool() -> crate::level::Level {
+        let mut level = crate::level::Level::default();
+        level.set_tile(3, 31, '1').unwrap();
+        level.set_tile(4, 31, 'w').unwrap();
+        level.set_tile(5, 31, '1').unwrap();
+        level
+    }
+
+    fn break_bottom_row_pool_wall_and_drain(game: &mut Game, name: &str) {
+        assert_eq!(game.world.name, name);
+        assert!(
+            game.world
+                .tile(5, 32)
+                .is_some_and(|tile| tile.object == "oWaterSwim")
+        );
+        // oSolid Destroy is the source checkWater trigger. Its next oGame
+        // Step runs before the player and drains this y=512 water in rLoadLevel.
+        assert!(crate::items::explosives::destroy_terrain_self(game, 4, 32));
+        assert!(game.world.fluid_dirty);
+        game.step(&InputFrame::default());
+        assert!(
+            game.world
+                .tile(5, 32)
+                .is_some_and(|tile| tile.object.is_empty()),
+            "{name}"
+        );
+        assert_eq!(game.data["water_counter"], 1.0, "{name}");
+        assert!(game.world.fluid_dirty, "{name}");
+        game.step(&InputFrame::default());
+        assert_eq!(game.data["water_counter"], 0.0, "{name}");
+        assert!(!game.world.fluid_dirty, "{name}");
+    }
+
+    #[test]
+    fn initial_custom_load_drains_bottom_row_water_in_rloadlevel() {
+        let mut game = room();
+        let level = bottom_row_custom_water_pool();
+        game.load_custom(&level, "initial-bottom-row.lvl", "");
+        // oLoadLevel Create runs scrLoadLevel() and builds the map in rLoadLevel.
+        break_bottom_row_pool_wall_and_drain(&mut game, "initial-bottom-row.lvl");
+    }
+
+    #[test]
+    fn linked_custom_load_drains_bottom_row_water_in_rloadlevel() {
+        let mut game = room();
+        let first = crate::level::Level::default();
+        game.load_custom(&first, "initial.lvl", "");
+        let linked = bottom_row_custom_water_pool();
+        game.continue_custom(&linked, "linked-bottom-row.lvl", "initial.lvl");
+        // oTransition Step returns to rLoadLevel; oLoadLevel Create calls
+        // scrLoadLevel(-1), so the linked room has the same bottom-row rule.
+        break_bottom_row_pool_wall_and_drain(&mut game, "linked-bottom-row.lvl");
     }
 
     #[test]

@@ -175,8 +175,8 @@ fn is_music_resource(name: &str) -> bool {
 }
 
 #[cfg(any(test, target_arch = "wasm32"))]
-fn keep_decoded_buffer(name: &'static str, active_voice: bool, pending_music: bool) -> bool {
-    !is_music_resource(name) || active_voice || pending_music
+fn needs_pcm_decode(name: &str) -> bool {
+    !is_music_resource(name)
 }
 
 #[cfg(any(test, target_arch = "wasm32"))]
@@ -336,14 +336,6 @@ mod policy_tests {
             queue.into_iter().collect::<Vec<_>>(),
             [("jump", 0.0), ("whip", 0.5)]
         );
-    }
-
-    #[test]
-    fn streamed_music_buffers_live_only_for_active_or_pending_voices() {
-        assert!(keep_decoded_buffer("jump", false, false));
-        assert!(!keep_decoded_buffer("cave", false, false));
-        assert!(keep_decoded_buffer("cave", true, false));
-        assert!(keep_decoded_buffer("cave", false, true));
     }
 }
 
@@ -1386,6 +1378,7 @@ mod backend {
 #[cfg(target_arch = "wasm32")]
 mod backend {
     use super::*;
+    use js_sys::Reflect;
     use std::{
         cell::{Cell, RefCell},
         collections::{HashMap, HashSet, VecDeque},
@@ -1394,8 +1387,9 @@ mod backend {
     use wasm_bindgen::JsCast;
     use wasm_bindgen_futures::{JsFuture, spawn_local};
     use web_sys::{
-        AudioBuffer, AudioBufferSourceNode, AudioContext, AudioScheduledSourceNode, GainNode,
-        StereoPannerNode,
+        AudioBuffer, AudioBufferSourceNode, AudioContext, AudioNode, AudioScheduledSourceNode,
+        Blob, BlobPropertyBag, GainNode, HtmlAudioElement, HtmlMediaElement,
+        MediaElementAudioSourceNode, StereoPannerNode, Url,
     };
 
     #[derive(Default)]
@@ -1406,22 +1400,158 @@ mod backend {
     }
     struct Effect {
         name: &'static str,
-        source: AudioBufferSourceNode,
+        source: PlaybackSource,
         gain: GainNode,
         panner: StereoPannerNode,
         end: f64,
     }
     struct Track {
         name: &'static str,
-        source: AudioBufferSourceNode,
+        source: PlaybackSource,
         gain_node: GainNode,
         gain: f32,
         target: f32,
         end: f64,
     }
+    enum PlaybackSource {
+        Buffer(AudioBufferSourceNode),
+        Streamed(StreamedPlayback),
+    }
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum StreamState {
+        Pending,
+        Playing,
+        Paused,
+        Finished,
+    }
+    struct StreamedPlayback {
+        element: HtmlAudioElement,
+        source: MediaElementAudioSourceNode,
+        state: Rc<Cell<StreamState>>,
+        generation: Rc<Cell<u64>>,
+    }
+    impl StreamedPlayback {
+        fn play(&self) {
+            self.state.set(StreamState::Pending);
+            let generation = self.generation.get().wrapping_add(1);
+            self.generation.set(generation);
+            let media: &HtmlMediaElement = self.element.unchecked_ref();
+            let Ok(promise) = media.play() else {
+                self.state.set(StreamState::Finished);
+                return;
+            };
+            let state = Rc::clone(&self.state);
+            let current_generation = Rc::clone(&self.generation);
+            spawn_local(async move {
+                let started = JsFuture::from(promise).await.is_ok();
+                if current_generation.get() == generation && state.get() == StreamState::Pending {
+                    state.set(if started {
+                        StreamState::Playing
+                    } else {
+                        StreamState::Finished
+                    });
+                }
+            });
+        }
+        fn pause(&self) {
+            if self.state.get() == StreamState::Finished {
+                return;
+            }
+            self.generation.set(self.generation.get().wrapping_add(1));
+            self.state.set(StreamState::Paused);
+            let media: &HtmlMediaElement = self.element.unchecked_ref();
+            let _ = media.pause();
+        }
+        fn resume(&self) {
+            if self.state.get() == StreamState::Paused {
+                self.play();
+            }
+        }
+        fn stop(&self) {
+            self.generation.set(self.generation.get().wrapping_add(1));
+            self.state.set(StreamState::Finished);
+            let media: &HtmlMediaElement = self.element.unchecked_ref();
+            let _ = media.pause();
+        }
+        fn disconnect(&self) {
+            self.stop();
+            let _ = self.source.disconnect();
+            let media: &HtmlMediaElement = self.element.unchecked_ref();
+            media.set_src("");
+            media.load();
+        }
+        fn is_finished(&self) -> bool {
+            let media: &HtmlMediaElement = self.element.unchecked_ref();
+            self.state.get() == StreamState::Finished || media.ended()
+        }
+        fn set_playback_rate(&self, rate: f32) {
+            let media: &HtmlMediaElement = self.element.unchecked_ref();
+            media.set_playback_rate(f64::from(rate));
+        }
+    }
+    impl PlaybackSource {
+        fn stop(&self) {
+            match self {
+                Self::Buffer(source) => {
+                    let _ = AudioScheduledSourceNode::stop(source.unchecked_ref());
+                }
+                Self::Streamed(source) => source.stop(),
+            }
+        }
+        fn disconnect(&self) {
+            match self {
+                Self::Buffer(source) => {
+                    let _ = source.disconnect();
+                }
+                Self::Streamed(source) => source.disconnect(),
+            }
+        }
+        fn pause(&self) {
+            if let Self::Streamed(source) = self {
+                source.pause();
+            }
+        }
+        fn resume(&self) {
+            if let Self::Streamed(source) = self {
+                source.resume();
+            }
+        }
+        fn is_finished(&self, end: f64, now: f64) -> bool {
+            match self {
+                Self::Buffer(_) => end <= now,
+                Self::Streamed(source) => source.is_finished(),
+            }
+        }
+        fn set_playback_rate(&self, rate: f32) {
+            match self {
+                Self::Buffer(source) => source.playback_rate().set_value(rate),
+                Self::Streamed(source) => source.set_playback_rate(rate),
+            }
+        }
+        fn audio_node(&self) -> &AudioNode {
+            match self {
+                Self::Buffer(source) => source.unchecked_ref(),
+                Self::Streamed(source) => source.source.unchecked_ref(),
+            }
+        }
+        fn start(&self) -> Result<(), wasm_bindgen::JsValue> {
+            match self {
+                Self::Buffer(source) => source.start(),
+                Self::Streamed(source) => {
+                    source.play();
+                    if source.state.get() == StreamState::Finished {
+                        Err(wasm_bindgen::JsValue::NULL)
+                    } else {
+                        Ok(())
+                    }
+                }
+            }
+        }
+    }
     pub struct Audio {
         context: Option<AudioContext>,
         cache: Rc<RefCell<Cache>>,
+        music_urls: HashMap<&'static str, String>,
         sfx_preload_required: bool,
         queued: VecDeque<(&'static str, f32)>,
         effects: Vec<Effect>,
@@ -1450,6 +1580,7 @@ mod backend {
             let audio = Self {
                 context,
                 cache: Rc::default(),
+                music_urls: HashMap::new(),
                 sfx_preload_required,
                 queued: VecDeque::new(),
                 effects: Vec::new(),
@@ -1516,6 +1647,9 @@ mod backend {
             }
         }
         fn decode(&self, name: &'static str) {
+            if !needs_pcm_decode(name) {
+                return;
+            }
             let Some(context) = &self.context else {
                 return;
             };
@@ -1552,6 +1686,51 @@ mod backend {
                 }
             });
         }
+        fn music_object_url(&mut self, name: &'static str) -> Option<String> {
+            if let Some(url) = self.music_urls.get(name) {
+                return Some(url.clone());
+            }
+            let (_, bytes) = asset(name)?;
+            let parts = js_sys::Array::new();
+            let data = js_sys::Uint8Array::from(bytes);
+            parts.push(data.as_ref());
+            let options = BlobPropertyBag::new();
+            options.set_type("audio/ogg");
+            let blob =
+                Blob::new_with_u8_array_sequence_and_options(parts.as_ref(), &options).ok()?;
+            let url = Url::create_object_url_with_blob(&blob).ok()?;
+            self.music_urls.insert(name, url.clone());
+            Some(url)
+        }
+        fn create_streamed_source(
+            &mut self,
+            name: &'static str,
+            looping: bool,
+            rate: f32,
+        ) -> Option<PlaybackSource> {
+            let url = self.music_object_url(name)?;
+            let context = self.context.as_ref()?;
+            let element = HtmlAudioElement::new().ok()?;
+            let media: &HtmlMediaElement = element.unchecked_ref();
+            media.set_preload("auto");
+            media.set_loop(looping);
+            media.set_playback_rate(f64::from(rate));
+            let media_value: &wasm_bindgen::JsValue = media.as_ref();
+            let _ = Reflect::set(
+                media_value,
+                &wasm_bindgen::JsValue::from_str("preservesPitch"),
+                &wasm_bindgen::JsValue::FALSE,
+            );
+            media.set_src(&url);
+            media.load();
+            let source = context.create_media_element_source(media).ok()?;
+            Some(PlaybackSource::Streamed(StreamedPlayback {
+                element,
+                source,
+                state: Rc::new(Cell::new(StreamState::Pending)),
+                generation: Rc::new(Cell::new(0)),
+            }))
+        }
         pub fn play(&mut self, name: &str, position: f32) {
             if self.paused {
                 return;
@@ -1559,9 +1738,13 @@ mod backend {
             let Some((name, _)) = asset(name) else {
                 return;
             };
-            self.decode(name);
             let position = pan(position);
-            let buffer_ready = self.cache.borrow().buffers.contains_key(name);
+            let buffer_ready = if needs_pcm_decode(name) {
+                self.decode(name);
+                self.cache.borrow().buffers.contains_key(name)
+            } else {
+                true
+            };
             match effect_schedule(
                 self.context.is_some(),
                 self.unlocked.get(),
@@ -1583,10 +1766,9 @@ mod backend {
                 .as_ref()
                 .map_or(0.0, AudioContext::current_time);
             if self.queued.iter().any(|(queued, _)| *queued == name)
-                || self
-                    .effects
-                    .iter()
-                    .any(|effect| effect.name == name && effect.end > now)
+                || self.effects.iter().any(|effect| {
+                    effect.name == name && !effect.source.is_finished(effect.end, now)
+                })
             {
                 return;
             }
@@ -1602,8 +1784,8 @@ mod backend {
             self.effects.retain(|effect| {
                 if effect.name == name {
                     effect.gain.gain().set_value(0.0);
-                    let _ = AudioScheduledSourceNode::stop(effect.source.unchecked_ref());
-                    let _ = effect.source.disconnect();
+                    effect.source.stop();
+                    effect.source.disconnect();
                     let _ = effect.panner.disconnect();
                     let _ = effect.gain.disconnect();
                     false
@@ -1619,7 +1801,7 @@ mod backend {
                 self.sound_pans.insert(name, pan(position));
             }
         }
-        /// Persist positive source frequency through deferred music decoding.
+        /// Persist positive source frequency through deferred streamed playback.
         pub fn set_music_frequency(&mut self, name: &str, hz: u32) {
             let Some((name, _)) = asset(name) else {
                 return;
@@ -1634,7 +1816,7 @@ mod backend {
                 .map_or(0.0, AudioContext::current_time);
             for track in &mut self.tracks {
                 if track.name == name {
-                    track.source.playback_rate().set_value(hz as f32 / 44_100.0);
+                    track.source.set_playback_rate(hz as f32 / 44_100.0);
                     track.end =
                         now + (track.end - now).max(0.0) * f64::from(old_hz) / f64::from(hz);
                 }
@@ -1655,10 +1837,7 @@ mod backend {
                 .map_or(0.0, AudioContext::current_time);
             for effect in &mut self.effects {
                 if effect.name == name && is_music_resource(name) {
-                    effect
-                        .source
-                        .playback_rate()
-                        .set_value(hz as f32 / 44_100.0);
+                    effect.source.set_playback_rate(hz as f32 / 44_100.0);
                     effect.end =
                         now + (effect.end - now).max(0.0) * f64::from(old_hz) / f64::from(hz);
                 }
@@ -1677,14 +1856,13 @@ mod backend {
                 .as_ref()
                 .map_or(0.0, AudioContext::current_time);
             if self.queued.iter().any(|(queued, _)| *queued == name)
-                || self
-                    .effects
-                    .iter()
-                    .any(|effect| effect.name == name && effect.end > now)
+                || self.effects.iter().any(|effect| {
+                    effect.name == name && !effect.source.is_finished(effect.end, now)
+                })
                 || self
                     .tracks
                     .iter()
-                    .any(|track| track.name == name && track.end > now)
+                    .any(|track| track.name == name && !track.source.is_finished(track.end, now))
                 || (self
                     .requested_music
                     .is_some_and(|(pending, _, _)| pending == name)
@@ -1696,7 +1874,6 @@ mod backend {
                 self.current_music = None;
             }
             self.requested_music = Some((name, looping, false));
-            self.decode(name);
         }
         pub fn music(&mut self, name: &str, looping: bool) {
             if name.is_empty() {
@@ -1707,7 +1884,6 @@ mod backend {
                 }
             } else if let Some((name, _)) = asset(name) {
                 self.requested_music = Some((name, looping, true));
-                self.decode(name);
             }
         }
         /// Source `stopAllMusic`, without waiting for a presentation-driven
@@ -1718,8 +1894,8 @@ mod backend {
             self.current_music = None;
             for track in self.tracks.drain(..) {
                 track.gain_node.gain().set_value(0.0);
-                let _ = AudioScheduledSourceNode::stop(track.source.unchecked_ref());
-                let _ = track.source.disconnect();
+                track.source.stop();
+                track.source.disconnect();
                 let _ = track.gain_node.disconnect();
             }
         }
@@ -1810,6 +1986,20 @@ mod backend {
                 return;
             }
             self.paused = paused;
+            for effect in &self.effects {
+                if paused {
+                    effect.source.pause();
+                } else {
+                    effect.source.resume();
+                }
+            }
+            for track in &self.tracks {
+                if paused {
+                    track.source.pause();
+                } else {
+                    track.source.resume();
+                }
+            }
             if let Some(context) = &self.context {
                 self.last_update = context.current_time();
                 let result = if paused {
@@ -1827,20 +2017,33 @@ mod backend {
             }
         }
         fn start_effect(&mut self, name: &'static str, position: f32) {
-            let Some(context) = &self.context else {
+            let Some(context) = self.context.clone() else {
                 return;
             };
-            let Some(buffer) = self.cache.borrow().buffers.get(name).cloned() else {
+            let now = context.current_time();
+            let rate = if is_music_resource(name) {
+                self.music_frequencies.get(name).copied().unwrap_or(44_100) as f32 / 44_100.0
+            } else {
+                1.0
+            };
+            let source = if is_music_resource(name) {
+                self.create_streamed_source(name, false, rate)
+            } else {
+                let buffer = self.cache.borrow().buffers.get(name).cloned();
+                buffer.and_then(|buffer| {
+                    let source = context.create_buffer_source().ok()?;
+                    source.set_buffer(Some(&buffer));
+                    source.playback_rate().set_value(rate);
+                    Some(PlaybackSource::Buffer(source))
+                })
+            };
+            let Some(source) = source else {
                 return;
             };
-            let (Ok(source), Ok(gain), Ok(panner)) = (
-                context.create_buffer_source(),
-                context.create_gain(),
-                context.create_stereo_panner(),
-            ) else {
+            let (Ok(gain), Ok(panner)) = (context.create_gain(), context.create_stereo_panner())
+            else {
                 return;
             };
-            source.set_buffer(Some(&buffer));
             gain.gain().set_value(resource_volume_with_override(
                 name,
                 self.music_volume,
@@ -1848,27 +2051,36 @@ mod backend {
                 self.music_muted,
                 self.effect_volume_overrides.get(name).copied(),
             ));
-            let rate = if is_music_resource(name) {
-                self.music_frequencies.get(name).copied().unwrap_or(44_100) as f32 / 44_100.0
-            } else {
-                1.0
-            };
-            source.playback_rate().set_value(rate);
             panner
                 .pan()
                 .set_value(self.sound_pans.get(name).copied().unwrap_or(position));
-            if source.connect_with_audio_node(&panner).is_err()
+            if source
+                .audio_node()
+                .connect_with_audio_node(&panner)
+                .is_err()
                 || panner.connect_with_audio_node(&gain).is_err()
                 || gain
                     .connect_with_audio_node(&context.destination())
                     .is_err()
                 || source.start().is_err()
             {
+                source.disconnect();
+                let _ = panner.disconnect();
+                let _ = gain.disconnect();
                 return;
             }
+            let end = match &source {
+                PlaybackSource::Buffer(buffer) => {
+                    now + buffer
+                        .buffer()
+                        .map_or(0.0, |buffer| buffer.duration() / f64::from(rate))
+                }
+                PlaybackSource::Streamed(_) => f64::INFINITY,
+            };
             if self.effects.len() >= MAX_EFFECTS {
                 let old = self.effects.remove(0);
-                let _ = AudioScheduledSourceNode::stop(old.source.unchecked_ref());
+                old.source.stop();
+                old.source.disconnect();
                 let _ = old.gain.disconnect();
                 let _ = old.panner.disconnect();
             }
@@ -1877,36 +2089,36 @@ mod backend {
                 source,
                 gain,
                 panner,
-                end: context.current_time() + buffer.duration() / f64::from(rate),
+                end,
             });
         }
         fn start_music(&mut self, name: &'static str, looping: bool, fade_in: bool) {
-            let Some(context) = &self.context else {
+            let Some(context) = self.context.clone() else {
                 return;
             };
-            let Some(buffer) = self.cache.borrow().buffers.get(name).cloned() else {
+            let rate =
+                self.music_frequencies.get(name).copied().unwrap_or(44_100) as f32 / 44_100.0;
+            let Some(source) = self.create_streamed_source(name, looping, rate) else {
                 return;
             };
-            let (Ok(source), Ok(gain_node)) =
-                (context.create_buffer_source(), context.create_gain())
-            else {
+            let Ok(gain_node) = context.create_gain() else {
                 return;
             };
-            source.set_buffer(Some(&buffer));
-            source.set_loop(looping);
-            source.playback_rate().set_value(
-                self.music_frequencies.get(name).copied().unwrap_or(44_100) as f32 / 44_100.0,
-            );
             let gain = if fade_in { 0.0 } else { 1.0 };
             gain_node
                 .gain()
                 .set_value(gain * effective_music_volume(self.music_volume, self.music_muted));
-            if source.connect_with_audio_node(&gain_node).is_err()
+            if source
+                .audio_node()
+                .connect_with_audio_node(&gain_node)
+                .is_err()
                 || gain_node
                     .connect_with_audio_node(&context.destination())
                     .is_err()
                 || source.start().is_err()
             {
+                source.disconnect();
+                let _ = gain_node.disconnect();
                 return;
             }
             if fade_in {
@@ -1916,7 +2128,8 @@ mod backend {
             }
             while self.tracks.len() >= 3 {
                 let old = self.tracks.remove(0);
-                let _ = AudioScheduledSourceNode::stop(old.source.unchecked_ref());
+                old.source.stop();
+                old.source.disconnect();
                 let _ = old.gain_node.disconnect();
             }
             self.tracks.push(Track {
@@ -1925,13 +2138,7 @@ mod backend {
                 gain_node,
                 gain,
                 target: 1.0,
-                end: if looping {
-                    f64::INFINITY
-                } else {
-                    context.current_time()
-                        + buffer.duration() * 44_100.0
-                            / f64::from(self.music_frequencies.get(name).copied().unwrap_or(44_100))
-                },
+                end: f64::INFINITY,
             });
             self.current_music = Some(name);
         }
@@ -1946,9 +2153,10 @@ mod backend {
                 return;
             }
             self.effects.retain(|effect| {
-                if effect.end > now {
+                if !effect.source.is_finished(effect.end, now) {
                     true
                 } else {
+                    effect.source.stop();
                     let _ = effect.source.disconnect();
                     let _ = effect.panner.disconnect();
                     let _ = effect.gain.disconnect();
@@ -1957,14 +2165,13 @@ mod backend {
             });
             if let Some((name, looping, fade_in)) = self.requested_music {
                 if self.current_music != Some(name) {
-                    self.decode(name);
                     self.start_music(name, looping, fade_in);
                 }
             }
             let count = self.queued.len();
             for _ in 0..count {
                 if let Some((name, position)) = self.queued.pop_front() {
-                    if self.cache.borrow().buffers.contains_key(name) {
+                    if !needs_pcm_decode(name) || self.cache.borrow().buffers.contains_key(name) {
                         self.start_effect(name, position);
                     } else if !self.cache.borrow().failed.contains(name) {
                         self.decode(name);
@@ -1984,53 +2191,14 @@ mod backend {
                 );
             }
             self.tracks.retain(|track| {
-                // Source music is loaded as a stream. A completed one-shot
-                // must release its AudioBufferSourceNode even though its gain
-                // target remains one; looping sources use an infinite end.
-                let keep = track.end > now && (track.target > 0.0 || track.gain > 0.0);
+                let keep = !track.source.is_finished(track.end, now)
+                    && (track.target > 0.0 || track.gain > 0.0);
                 if !keep {
-                    let _ = AudioScheduledSourceNode::stop(track.source.unchecked_ref());
+                    track.source.stop();
                     let _ = track.source.disconnect();
                     let _ = track.gain_node.disconnect();
                 }
                 keep
-            });
-
-            // Classic marks all eight OGG music resources as streamed. Web
-            // Audio decodes a requested OGG into PCM, so retain that decoded
-            // buffer only while a source/queued request needs it. The source
-            // node owns its buffer for active playback; releasing this cache
-            // entry lets ended or crossfaded tracks be collected instead of
-            // accumulating roughly 141 MB after visiting every area.
-            let mut active_music = HashSet::new();
-            active_music.extend(
-                self.tracks
-                    .iter()
-                    .filter(|track| track.end > now)
-                    .map(|track| track.name),
-            );
-            active_music.extend(
-                self.effects
-                    .iter()
-                    .filter(|effect| effect.end > now)
-                    .map(|effect| effect.name),
-            );
-            active_music.extend(
-                self.queued
-                    .iter()
-                    .map(|(name, _)| *name)
-                    .filter(|name| is_music_resource(name)),
-            );
-            let pending_music = self
-                .requested_music
-                .filter(|(name, _, _)| self.current_music != Some(*name))
-                .map(|(name, _, _)| name);
-            self.cache.borrow_mut().buffers.retain(|name, _| {
-                keep_decoded_buffer(
-                    name,
-                    active_music.contains(name),
-                    pending_music == Some(*name),
-                )
             });
         }
     }
@@ -2042,6 +2210,7 @@ mod backend {
             Audio {
                 context: None, // Queue tests do not construct a browser audio device.
                 cache: Rc::default(),
+                music_urls: HashMap::new(),
                 sfx_preload_required: false,
                 queued: VecDeque::new(),
                 effects: Vec::new(),
@@ -2200,10 +2369,15 @@ mod backend {
     impl Drop for Audio {
         fn drop(&mut self) {
             for track in &self.tracks {
-                let _ = AudioScheduledSourceNode::stop(track.source.unchecked_ref());
+                track.source.stop();
+                track.source.disconnect();
             }
             for effect in &self.effects {
-                let _ = AudioScheduledSourceNode::stop(effect.source.unchecked_ref());
+                effect.source.stop();
+                effect.source.disconnect();
+            }
+            for url in self.music_urls.values() {
+                let _ = Url::revoke_object_url(url);
             }
             if let Some(context) = &self.context {
                 let _ = context.close();
@@ -2215,6 +2389,21 @@ mod backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn classic_music_assets_skip_web_pcm_decoding() {
+        for name in MUSIC_RESOURCES {
+            assert!(
+                !needs_pcm_decode(name),
+                "{name} should use streamed playback"
+            );
+            assert!(asset(name).is_some_and(|(stem, bytes)| stem == name && !bytes.is_empty()));
+        }
+        assert!(
+            needs_pcm_decode("jump"),
+            "WAV effects still use decoded buffers"
+        );
+    }
+
     #[test]
     fn original_sound_and_music_aliases_resolve_to_embedded_assets() {
         let source =
@@ -2238,6 +2427,16 @@ mod tests {
             let (stem, bytes) = asset(alias).unwrap_or_else(|| panic!("missing {alias}"));
             assert_eq!(stem, filename.split('.').next().unwrap());
             assert!(!bytes.is_empty());
+            if filename.ends_with(".ogg") {
+                assert!(
+                    line.trim_end().ends_with(", 1);"),
+                    "{alias} must use Classic stream mode"
+                );
+                assert!(
+                    !needs_pcm_decode(stem),
+                    "{alias} must skip whole-file PCM decoding"
+                );
+            }
             if line.trim_end().ends_with(", 0);") {
                 source_effects.insert(stem);
             }
