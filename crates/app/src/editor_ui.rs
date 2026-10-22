@@ -70,7 +70,7 @@ impl Field {
         match self {
             Self::OpenName => "EDIT LEVEL FILE NAME",
             Self::Author => "AUTHOR",
-            Self::Music => "MUSIC: CAVE/JUNGLE/ICE/TEMPLE",
+            Self::Music => "MUSIC: LUSH/ICE/TEMPLE/BOSS (ELSE CAVE)",
             Self::Life => "STARTING LIFE (1-99)",
             Self::Bombs => "STARTING BOMBS (0-99)",
             Self::Ropes => "STARTING ROPES (0-99)",
