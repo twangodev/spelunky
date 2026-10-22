@@ -622,6 +622,7 @@ fn source_create_variables(entity: &mut Entity) {
         "oLava" => {
             entity.text.insert("type".into(), "Lava".into());
         }
+        "oBigTreasure" => initialize_source_big_treasure_create(entity),
         "oOlmec" => initialize_source_olmec_create(entity),
         "oWater" | "oWaterSwim" => {
             entity.text.insert("type".into(), "Water".into());
@@ -829,6 +830,7 @@ fn source_create_variables(entity: &mut Entity) {
 /// Runtime Create uses the same projection after the ordinary item adapter.
 pub(crate) fn initialize_source_item_create(entity: &mut Entity) {
     match entity.object.as_str() {
+        "oBall" | "oBall2" => initialize_source_ball_create(entity),
         "oGoldBar" | "oGoldNugget" | "oDiamond" | "oEmeraldBig" | "oSapphireBig" | "oRubyBig" => {
             initialize_source_treasure_motion(entity);
             set_source_collision_bounds(entity, [-4.0, -4.0, 4.0, 4.0]);
@@ -1073,6 +1075,34 @@ fn set_source_collision_bounds(entity: &mut Entity, bounds: [f64; 4]) {
     {
         entity.data.insert(name.into(), value);
     }
+}
+
+/// `oBigTreasure.Create` initializes a source item before the ending adapter
+/// starts driving its motion. Keep these explicit fields synchronized with
+/// the cinematic entity state used by the Rust step adapter.
+pub(crate) fn initialize_source_big_treasure_create(entity: &mut Entity) {
+    entity.text.insert("type".into(), "Big Treasure".into());
+    entity.vel = Vec2::new(0.0, 0.0);
+    initialize_source_motion_fields(entity);
+    set_source_collision_bounds(entity, [0.0, 0.0, 32.0, 32.0]);
+    entity.data.insert("myGrav".into(), 0.6);
+    entity.data.insert("trigger".into(), 1.0);
+}
+
+pub(crate) fn initialize_source_ball_create(entity: &mut Entity) {
+    entity.text.insert("type".into(), "Ball".into());
+    entity.data.entry("blinkToggle".into()).or_insert(0.0);
+    initialize_source_motion_fields(entity);
+    set_source_collision_bounds(entity, [-5.0, -5.0, 5.0, 5.0]);
+    entity.data.insert("heavy".into(), 1.0);
+    entity.data.insert("myGrav".into(), 1.0);
+}
+
+pub(crate) fn initialize_source_ending_silhouette_create(entity: &mut Entity) {
+    entity.vel = Vec2::new(-6.0, -8.0);
+    entity.data.insert("xVel".into(), -6.0);
+    entity.data.insert("yVel".into(), -8.0);
+    entity.data.insert("myGrav".into(), 0.6);
 }
 
 /// Population cannot dispatch through Game::spawn; run the same explicit

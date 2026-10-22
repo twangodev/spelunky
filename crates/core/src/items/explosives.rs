@@ -1959,7 +1959,6 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
                 // Collision callbacks run on every overlapping frame. In
                 // particular an overlapping blast resets this short fuse again.
                 entity.sprite = "sBombArmed".into();
-                entity.data.insert("armed".into(), 1.0);
                 entity.data.insert("attached_id".into(), 0.0);
                 entity.timer = 4 + game.rng.range(5);
                 if entity.pos.y < explosion.pos.y {
@@ -3554,13 +3553,14 @@ mod tests {
     }
 
     #[test]
-    fn chain_reaction_arms_an_unarmed_bomb() {
+    fn chain_reaction_does_not_arm_an_unarmed_bomb() {
         let mut g = game();
         let bomb = g.world.spawn("oBomb", Vec2::new(88.0, 88.0));
         init_entity(g.world.entity_mut(bomb).unwrap());
         explode(&mut g, Vec2::new(88.0, 88.0));
         let bomb = g.world.entity(bomb).unwrap();
-        assert_eq!(bomb.value("armed"), 1.0);
+        assert_eq!(bomb.value("armed"), 0.0);
+        assert_eq!(bomb.sprite, "sBombArmed");
         assert!((4..=8).contains(&bomb.timer));
     }
 

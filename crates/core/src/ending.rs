@@ -166,6 +166,212 @@ mod tests {
     }
 
     #[test]
+    fn source_big_treasure_create_and_chest_alarm_keep_source_motion_fields() {
+        let mut game = game();
+        game.generation_revision = crate::model::GenerationRevision::SourceClassicV2;
+        let mut ending = EndingState::new(&game, EndingKind::Campaign, EndingStage::Landing);
+        game.world.spawn("oBigChest", Vec2::new(200.0, 200.0));
+        let dummy = game.world.spawn("oPDummy", Vec2::new(160.0, 200.0));
+
+        actor_alarm(&mut game, &mut ending, dummy, 1);
+
+        let treasure_id = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oBigTreasure")
+            .expect("the chest alarm creates its treasure")
+            .id;
+        let treasure = game.world.entity(treasure_id).unwrap();
+        assert_eq!(
+            treasure.text.get("type").map(String::as_str),
+            Some("Big Treasure")
+        );
+        assert_eq!(treasure.vel, Vec2::new(-3.0, -4.0));
+        assert_eq!(treasure.value("xVel"), -3.0);
+        assert_eq!(treasure.value("yVel"), -4.0);
+        assert_eq!(treasure.value("xAcc"), 0.0);
+        assert_eq!(treasure.value("yAcc"), 0.0);
+        assert_eq!(treasure.value("collision_left"), 0.0);
+        assert_eq!(treasure.value("collision_top"), 0.0);
+        assert_eq!(treasure.value("collision_right"), 32.0);
+        assert_eq!(treasure.value("collision_bottom"), 32.0);
+        assert_eq!(treasure.value("myGrav"), 0.6);
+        assert_eq!(treasure.value("trigger"), 1.0);
+
+        let mut moved = treasure.clone();
+        actor_step(&mut game, &mut ending, &mut moved, &InputFrame::default());
+        assert_eq!(moved.pos, Vec2::new(197.0, 196.0));
+        assert_eq!(moved.value("xVel"), -3.0);
+        assert!((moved.value("yVel") + 3.4).abs() < 1e-12);
+    }
+
+    #[test]
+    fn source_ending_spawn_runs_only_declared_drawn_sprite_inheritance() {
+        let mut game = game();
+        game.generation_revision = crate::model::GenerationRevision::SourceClassicV2;
+        let mut ending = EndingState::new(&game, EndingKind::Campaign, EndingStage::Transition);
+
+        for object in [
+            "oPDummy5",
+            "oCape",
+            "oDamselKiss",
+            "oHeart",
+            "oPoof",
+            "oPDummy2",
+            "oBurn",
+            "oSprite",
+            "oDesertScroll",
+            "oDesertScroll2",
+        ] {
+            let id = spawn(&mut game, &mut ending, object, Vec2::new(80.0, 80.0));
+            let born = game.world.entity(id).unwrap();
+            assert_eq!(
+                born.text.get("type").map(String::as_str),
+                Some(""),
+                "{object}"
+            );
+            assert_eq!(born.value("blinkToggle"), 0.0, "{object}");
+        }
+
+        let id = spawn(
+            &mut game,
+            &mut ending,
+            "oShrubScroll",
+            Vec2::new(80.0, 80.0),
+        );
+        let not_inherited = game.world.entity(id).unwrap();
+        assert!(!not_inherited.text.contains_key("type"));
+        assert!(!not_inherited.data.contains_key("blinkToggle"));
+
+        let id = spawn(&mut game, &mut ending, "oBall2", Vec2::new(80.0, 80.0));
+        let ball = game.world.entity(id).unwrap();
+        assert_eq!(ball.text.get("type").map(String::as_str), Some("Ball"));
+        assert_eq!(ball.value("blinkToggle"), 0.0);
+    }
+
+    #[test]
+    fn source_volcano_lava_spray_carries_authored_platform_and_treasure_motion() {
+        let mut game = game();
+        game.generation_revision = crate::model::GenerationRevision::SourceClassicV2;
+        load_room(&mut game, "rEnd");
+        let mut ending = EndingState::new(&game, EndingKind::Campaign, EndingStage::Volcano);
+
+        let platform = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oEndPlat")
+            .unwrap()
+            .clone();
+        let dummy_id = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oPDummy")
+            .unwrap()
+            .id;
+        actor_alarm(&mut game, &mut ending, dummy_id, 1);
+        let treasure_id = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oBigTreasure")
+            .expect("the rEnd Big Chest alarm creates the carried treasure")
+            .id;
+        {
+            let treasure = game.world.entity_mut(treasure_id).unwrap();
+            treasure.pos = Vec2::new(500.0, 80.0);
+            treasure.previous_pos = treasure.pos;
+        }
+
+        let bounds = platform.sprite_bounds();
+        let probe = Vec2::new(bounds.x + bounds.w / 2.0, bounds.y + bounds.h / 2.0);
+        assert!(
+            object_at(&game, probe, "oEndPlat"),
+            "rEnd's authored platform mask"
+        );
+        let mut spray = Entity::new(900, "oLavaSpray", Vec2::new(probe.x, probe.y + 3.0));
+        spray.vel.y = -2.0;
+        spray.data.insert("y_acc".into(), 0.0);
+
+        actor_step(&mut game, &mut ending, &mut spray, &InputFrame::default());
+
+        assert_eq!(game.world.entity(platform.id).unwrap().value("yVel"), -2.0);
+        assert_eq!(game.world.entity(dummy_id).unwrap().value("yVel"), -2.0);
+        let treasure = game.world.entity(treasure_id).unwrap();
+        assert_eq!(treasure.vel.y, -2.0);
+        assert_eq!(treasure.value("yVel"), -2.0);
+        assert_eq!(treasure.value("gravity"), 0.0);
+        assert_eq!(treasure.value("myGrav"), 0.0);
+
+        let mut next_step = treasure.clone();
+        let starting_y = next_step.pos.y;
+        treasure_step(&mut game, &mut ending, &mut next_step);
+        assert_eq!(next_step.pos.y, starting_y - 2.0);
+        assert_eq!(next_step.vel.y, -2.0, "myGrav=0 prevents stale gravity");
+        assert_eq!(next_step.value("yVel"), -2.0);
+    }
+
+    #[test]
+    fn source_kali_ball_birth_projects_inherited_and_child_create_fields() {
+        let mut game = game();
+        game.generation_revision = crate::model::GenerationRevision::SourceClassicV2;
+        game.data.insert("kali_punish".into(), 2.0);
+        let dummy = game.world.spawn("oPDummy", Vec2::new(240.0, 184.0));
+        let mut ending = EndingState::new(&game, EndingKind::Transition, EndingStage::Transition);
+
+        add_carry_ornaments(&mut game, &mut ending);
+
+        let ball = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oBall2")
+            .expect("Kali punishment creates the carried Ball")
+            .clone();
+        assert_eq!(ball.text.get("type").map(String::as_str), Some("Ball"));
+        assert_eq!(ball.value("blinkToggle"), 0.0);
+        assert_eq!(ball.value("xVel"), 0.0);
+        assert_eq!(ball.value("yVel"), 0.0);
+        assert_eq!(ball.value("xAcc"), 0.0);
+        assert_eq!(ball.value("yAcc"), 0.0);
+        assert_eq!(ball.value("collision_left"), -5.0);
+        assert_eq!(ball.value("collision_top"), -5.0);
+        assert_eq!(ball.value("collision_right"), 5.0);
+        assert_eq!(ball.value("collision_bottom"), 5.0);
+        assert_eq!(ball.value("heavy"), 1.0);
+        assert_eq!(ball.value("myGrav"), 1.0);
+        assert!(game.world.entity(dummy).is_some());
+    }
+
+    #[test]
+    fn source_ending_silhouettes_step_from_their_create_motion_fields() {
+        let mut game = game();
+        game.generation_revision = crate::model::GenerationRevision::SourceClassicV2;
+        let mut ending = EndingState::new(&game, EndingKind::Campaign, EndingStage::Volcano);
+
+        for object in ["oPlayerSil", "oTreasureSil"] {
+            let id = spawn(&mut game, &mut ending, object, Vec2::new(240.0, 132.0));
+            let mut silhouette = game.world.entity(id).unwrap().clone();
+            assert_eq!(silhouette.value("xVel"), -6.0);
+            assert_eq!(silhouette.value("yVel"), -8.0);
+            assert_eq!(silhouette.value("myGrav"), 0.6);
+
+            actor_step(
+                &mut game,
+                &mut ending,
+                &mut silhouette,
+                &InputFrame::default(),
+            );
+
+            assert_eq!(silhouette.pos, Vec2::new(234.0, 124.0));
+            assert!((silhouette.value("xVel") + 5.9).abs() < 1e-12);
+            assert!((silhouette.value("yVel") + 7.4).abs() < 1e-12);
+        }
+    }
+
+    #[test]
     fn actual_tutorial_rock_pickup_clears_transition_state_and_all_dummy_copies() {
         let mut game = Game::tutorial(73, RulesPreset::Classic);
         // Controlled player placement at the existing tutorial Rock. Pickup,
@@ -1840,6 +2046,9 @@ fn init_actor(game: &mut Game, s: &mut EndingState, id: u64) {
             e.data.insert("animation_speed".into(), 0.5);
         }
         "oBigTreasure" => {
+            if game.generation_revision == crate::model::GenerationRevision::SourceClassicV2 {
+                crate::world_events::initialize_source_big_treasure_create(e);
+            }
             e.data.insert("gravity".into(), 0.6);
         }
         "oBall2" => {
@@ -1855,10 +2064,16 @@ fn init_actor(game: &mut Game, s: &mut EndingState, id: u64) {
             ] {
                 e.data.insert(key.into(), value);
             }
+            if game.generation_revision == crate::model::GenerationRevision::SourceClassicV2 {
+                crate::world_events::initialize_source_ball_create(e);
+            }
         }
         "oPlayerSil" | "oTreasureSil" => {
             e.vel = Vec2::new(-6., -8.);
             e.data.insert("gravity".into(), 0.6);
+            if game.generation_revision == crate::model::GenerationRevision::SourceClassicV2 {
+                crate::world_events::initialize_source_ending_silhouette_create(e);
+            }
         }
         "oCamel" => {
             if damsel {
@@ -1939,6 +2154,25 @@ fn init_actor(game: &mut Game, s: &mut EndingState, id: u64) {
 }
 fn spawn(game: &mut Game, s: &mut EndingState, object: &str, pos: Vec2) -> u64 {
     let id = game.world.spawn(object, pos);
+    if game.generation_revision == crate::model::GenerationRevision::SourceClassicV2
+        && matches!(
+            object,
+            "oPDummy5"
+                | "oCape"
+                | "oDamselKiss"
+                | "oHeart"
+                | "oPoof"
+                | "oPDummy2"
+                | "oBurn"
+                | "oSprite"
+                | "oDesertScroll"
+                | "oDesertScroll2"
+        )
+    {
+        if let Some(actor) = game.world.entity_mut(id) {
+            crate::world_events::initialize_source_drawn_sprite_create(actor);
+        }
+    }
     init_actor(game, s, id);
     id
 }
@@ -2442,7 +2676,13 @@ fn actor_alarm(game: &mut Game, s: &mut EndingState, id: u64, i: usize) {
                     chest.sprite = "sBigChestOpen".into();
                     let pos = chest.pos;
                     let treasure = spawn(game, s, "oBigTreasure", pos);
-                    game.world.entity_mut(treasure).unwrap().vel = Vec2::new(-3., -4.);
+                    let treasure = game.world.entity_mut(treasure).unwrap();
+                    treasure.vel = Vec2::new(-3., -4.);
+                    if game.generation_revision == crate::model::GenerationRevision::SourceClassicV2
+                    {
+                        treasure.data.insert("xVel".into(), -3.0);
+                        treasure.data.insert("yVel".into(), -4.0);
+                    }
                 }
                 game.sound("sndClick", pos);
                 alarm(s, id, 2, 20);
@@ -2541,6 +2781,10 @@ fn actor_step(game: &mut Game, s: &mut EndingState, e: &mut Entity, input: &Inpu
         "oBigTreasure" => treasure_step(game, s, e),
         "oBall2" => {
             crate::items::tick_single_item_body(game, e);
+            if e.data.contains_key("myGrav") {
+                e.data.insert("xVel".into(), e.vel.x);
+                e.data.insert("yVel".into(), e.vel.y);
+            }
             let family = crate::dispatcher::descendant_instances(game, "oPDummy");
             let mut targets: Vec<_> = game
                 .world
@@ -2596,8 +2840,18 @@ fn actor_step(game: &mut Game, s: &mut EndingState, e: &mut Entity, input: &Inpu
                         "oEndPlat" | "oPDummy" | "oBigTreasure"
                     ) {
                         carried.vel.y = e.vel.y;
+                        if game.generation_revision
+                            == crate::model::GenerationRevision::SourceClassicV2
+                        {
+                            carried.data.insert("yVel".into(), e.vel.y);
+                        }
                         if carried.object == "oBigTreasure" {
                             carried.data.insert("gravity".into(), 0.);
+                            if game.generation_revision
+                                == crate::model::GenerationRevision::SourceClassicV2
+                            {
+                                carried.data.insert("myGrav".into(), 0.);
+                            }
                         }
                     }
                 }
@@ -2612,13 +2866,22 @@ fn actor_step(game: &mut Game, s: &mut EndingState, e: &mut Entity, input: &Inpu
         }
         "oEndPlat" => e.pos.y += e.vel.y,
         "oPlayerSil" | "oTreasureSil" => {
+            let source_motion_fields = e.data.contains_key("myGrav");
+            if source_motion_fields {
+                e.vel.x = e.value("xVel");
+                e.vel.y = e.value("yVel");
+            }
             e.pos.x += e.vel.x;
             e.pos.y += e.vel.y;
             if e.vel.x < 0. {
                 e.vel.x += 0.1;
             }
             if e.vel.y < 6. {
-                e.vel.y += 0.6;
+                e.vel.y += e.data.get("myGrav").copied().unwrap_or(0.6);
+            }
+            if source_motion_fields {
+                e.data.insert("xVel".into(), e.vel.x);
+                e.data.insert("yVel".into(), e.vel.y);
             }
             if e.object == "oTreasureSil" && e.pos.y > 240. {
                 enter(game, s, EndingStage::Landing, "rEnd3");
@@ -2952,10 +3215,20 @@ fn landing_step(game: &mut Game, s: &mut EndingState, e: &mut Entity) {
     }
 }
 fn treasure_step(game: &mut Game, s: &mut EndingState, e: &mut Entity) {
+    let source_motion_fields = e.data.contains_key("xVel") && e.data.contains_key("yVel");
+    if source_motion_fields {
+        e.vel.x = e.value("xVel");
+        e.vel.y = e.value("yVel");
+    }
+    let gravity = e
+        .data
+        .get("myGrav")
+        .copied()
+        .unwrap_or_else(|| e.value("gravity"));
     e.pos.x += e.vel.x;
     e.pos.y += e.vel.y;
     if e.vel.y < 6. {
-        e.vel.y += e.value("gravity");
+        e.vel.y += gravity;
     }
     let top = solid_edge(&game.world, Rect::new(e.pos.x, e.pos.y - 1., 32., 1.), e.id);
     let left = solid_edge(&game.world, Rect::new(e.pos.x - 1., e.pos.y, 1., 32.), e.id);
@@ -2998,6 +3271,10 @@ fn treasure_step(game: &mut Game, s: &mut EndingState, e: &mut Entity) {
     {
         e.pos.y -= 1.;
         e.vel.y = 0.;
+    }
+    if source_motion_fields {
+        e.data.insert("xVel".into(), e.vel.x);
+        e.data.insert("yVel".into(), e.vel.y);
     }
 }
 
