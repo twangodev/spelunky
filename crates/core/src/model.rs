@@ -1474,6 +1474,36 @@ impl ViewTarget {
     }
 }
 
+/// Previous source Draw samples used only to smooth selected visual effects
+/// between fixed simulation ticks. This is deliberately omitted from replay
+/// and save state.
+#[derive(Debug, Clone, Default)]
+pub struct RenderHistory {
+    pub player_red_color: f64,
+    pub web_alpha: BTreeMap<u64, f64>,
+}
+impl RenderHistory {
+    fn from_game(game: &Game) -> Self {
+        let web_alpha = game
+            .world
+            .entities
+            .iter()
+            .chain(game.dispatcher.hidden_entities())
+            .filter(|entity| entity.object == "oWeb")
+            .map(|entity| {
+                (
+                    entity.id,
+                    entity.data.get("image_alpha").copied().unwrap_or(1.0),
+                )
+            })
+            .collect();
+        Self {
+            player_red_color: game.player.data.get("red_color").copied().unwrap_or(0.0),
+            web_alpha,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Game {
     /// Persistent source globals plus an outbox that survives event clearing.
@@ -1482,6 +1512,9 @@ pub struct Game {
     /// Immutable state observed by the source Draw phase, before Animation.
     #[serde(skip)]
     pub draw_view: Option<Box<Game>>,
+    /// Render-only source samples; never part of serialized simulation state.
+    #[serde(skip)]
+    pub render_history: RenderHistory,
     pub seed: u64,
     pub tick: u64,
     pub level_tick: u64,
@@ -1542,6 +1575,18 @@ impl Game {
     }
     pub fn presentation(&self) -> &Game {
         self.draw_view.as_deref().unwrap_or(self)
+    }
+    pub(crate) fn capture_render_history(&mut self) {
+        let history = if self.flags.contains("render_discontinuity") {
+            RenderHistory::from_game(self)
+        } else {
+            self.draw_view
+                .as_deref()
+                .map(|draw| RenderHistory::from_game(draw.presentation()))
+                .unwrap_or_else(|| RenderHistory::from_game(self))
+        };
+        self.render_history = history;
+        self.draw_view = None;
     }
     pub fn capture_draw_view(&mut self) {
         self.draw_view = None;
@@ -1652,6 +1697,7 @@ impl Game {
         };
         Self {
             draw_view: None,
+            render_history: RenderHistory::default(),
             seed,
             tick: 0,
             level_tick: 0,

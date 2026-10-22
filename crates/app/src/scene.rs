@@ -1026,12 +1026,24 @@ pub fn game_scene_in_view_into(
             continue;
         }
         let mirror = entity_mirrored(entity, name);
-        let alpha = entity
+        let source_alpha = entity
             .data
             .get("image_alpha")
             .copied()
             .unwrap_or(1.0)
-            .clamp(0.0, 1.0) as f32;
+            .clamp(0.0, 1.0);
+        let alpha = if entity.object == "oWeb" {
+            let previous_alpha = game
+                .render_history
+                .web_alpha
+                .get(&entity.id)
+                .copied()
+                .unwrap_or(source_alpha)
+                .clamp(0.0, 1.0);
+            interpolate_effect(previous_alpha, source_alpha, alpha).clamp(0.0, 1.0) as f32
+        } else {
+            source_alpha as f32
+        };
         if matches!(entity.object.as_str(), "oPDummy" | "oPDummy2")
             && game.player.has("Jetpack")
             && !matches!(
@@ -1152,11 +1164,12 @@ pub fn game_scene_in_view_into(
             "sStandLeft"
         };
         let red = player.data.get("red_color").copied().unwrap_or(0.0);
-        let color = if red > 0.0 && !back_jetpack {
-            let [r, g, b] = source_mask_rgb(200.0 + red, 0.0, 0.0);
-            [r as f32, g as f32, b as f32, 1.0]
-        } else {
+        let color = if back_jetpack {
             WHITE
+        } else {
+            let previous = player_tint(game.render_history.player_red_color);
+            let current = player_tint(red);
+            interpolate_color(previous, current, alpha)
         };
         sprite(
             layer,
@@ -1918,6 +1931,43 @@ fn source_mask_rgb(red: f64, green: f64, blue: f64) -> [f64; 3] {
         .wrapping_add((green.round_ties_even() as i64).wrapping_mul(256))
         .wrapping_add((blue.round_ties_even() as i64).wrapping_mul(65536));
     [0, 8, 16].map(|shift| ((packed >> shift) & 255) as f64 / 255.0)
+}
+
+fn player_tint(red: f64) -> [f32; 4] {
+    if red > 0.0 {
+        let [r, g, b] = source_mask_rgb(200.0 + red, 0.0, 0.0);
+        [r as f32, g as f32, b as f32, 1.0]
+    } else {
+        WHITE
+    }
+}
+
+fn interpolate_color(previous: [f32; 4], current: [f32; 4], alpha: f64) -> [f32; 4] {
+    let alpha = if alpha.is_finite() {
+        alpha.clamp(0.0, 1.0) as f32
+    } else {
+        1.0
+    };
+    if alpha == 0.0 {
+        return previous;
+    }
+    if alpha == 1.0 {
+        return current;
+    }
+    std::array::from_fn(|channel| {
+        previous[channel] + (current[channel] - previous[channel]) * alpha
+    })
+}
+
+fn interpolate_effect(previous: f64, current: f64, alpha: f64) -> f64 {
+    if !previous.is_finite() || !current.is_finite() || !alpha.is_finite() {
+        return current;
+    }
+    match alpha.clamp(0.0, 1.0) {
+        0.0 => previous,
+        1.0 => current,
+        alpha => previous + (current - previous) * alpha,
+    }
 }
 
 fn source_light(object: &str) -> Option<(f64, f64, f64)> {
@@ -3251,10 +3301,16 @@ mod tests {
         panic!("natural collectible Blood did not reach the Kapala player: {preset:?}");
     }
 
-    fn assert_source_player_color(game: &Game, atlas: &Atlas, color: [f32; 4]) {
+    fn assert_source_player_color(game: &Game, atlas: &Atlas, color: [f32; 4], bypass_tint: bool) {
         let live = game.state_hash();
         let draw = game.presentation().state_hash();
         let random = game.rng.clone().next_u64();
+        let previous_red = game.presentation().render_history.player_red_color;
+        let previous = if bypass_tint || previous_red <= 0.0 {
+            WHITE
+        } else {
+            [(200.0 + previous_red) as f32 / 255.0, 0.0, 0.0, 1.0]
+        };
         for view in [
             Viewport::canonical(),
             Viewport::from_surface(1920, 1080),
@@ -3271,7 +3327,17 @@ mod tests {
                     1,
                     "frozen character frame missing or duplicated"
                 );
-                assert_eq!(player[0].color, color, "source redColor at alpha={alpha}");
+                let expected = if bypass_tint {
+                    WHITE
+                } else {
+                    std::array::from_fn(|channel| {
+                        previous[channel] + (color[channel] - previous[channel]) * alpha as f32
+                    })
+                };
+                assert_eq!(
+                    player[0].color, expected,
+                    "interpolated source redColor at alpha={alpha}"
+                );
             }
         }
         assert_eq!(game.state_hash(), live);
@@ -3280,11 +3346,93 @@ mod tests {
     }
 
     #[test]
+    fn source_kapala_tint_interpolates_between_draw_samples_without_advancing_state() {
+        let atlas = Atlas::load().unwrap();
+        let game = natural_kapala_flash(RulesPreset::Classic);
+        let draw = game.presentation();
+        let previous_red = draw.render_history.player_red_color;
+        let current_red = draw.player.data["red_color"];
+        assert_eq!(previous_red, 0.0);
+        assert!(current_red > previous_red);
+        let before = game.state_hash();
+        let draw_before = draw.state_hash();
+        let random = game.rng.clone().next_u64();
+        let mut colors = Vec::new();
+
+        for alpha in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let quads = game_scene(&game, alpha, false, &atlas);
+            let player = quads
+                .iter()
+                .find(|quad| presentation_player_frame_matches(&game, quad, &atlas, alpha))
+                .expect("player tint frame missing");
+            colors.push(player.color);
+        }
+
+        assert_eq!(colors[0], WHITE, "previous Draw sample is untinted");
+        assert_eq!(
+            colors[4],
+            [(200.0 + current_red) as f32 / 255.0, 0.0, 0.0, 1.0],
+            "current Draw sample retains the source color"
+        );
+        assert!(colors.windows(2).all(|pair| pair[0][1] > pair[1][1]));
+        assert_ne!(colors[2], colors[0]);
+        assert_ne!(colors[2], colors[4]);
+        assert_eq!(game.state_hash(), before);
+        assert_eq!(game.presentation().state_hash(), draw_before);
+        assert_eq!(game.rng.clone().next_u64(), random);
+    }
+
+    #[test]
+    fn dying_web_alpha_interpolates_between_draw_samples_without_advancing_state() {
+        let atlas = Atlas::load().unwrap();
+        let mut game = adaptive_room();
+        let web_id = game.spawn("oWeb", Vec2::new(200.0, 160.0));
+        {
+            let web = game.world.entity_mut(web_id).unwrap();
+            web.data.insert("life".into(), 6.0);
+            web.data.insert("dying".into(), 1.0);
+        }
+        game.step(&spelunky_core::InputFrame::default());
+        game.step(&spelunky_core::InputFrame::default());
+
+        let draw = game.presentation();
+        let web = draw.world.entity(web_id).expect("web must remain alive");
+        let previous = draw.render_history.web_alpha[&web_id];
+        let current = web.data["image_alpha"];
+        assert!((previous - 0.5).abs() < 1.0e-9);
+        assert!(current < previous, "source web alpha must be fading");
+        let state = game.state_hash();
+        let draw_state = draw.state_hash();
+        let random = game.rng.clone().next_u64();
+        let mut opacities = Vec::new();
+
+        for alpha in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let quads = game_scene(&game, alpha, false, &atlas);
+            let web_quad = quads
+                .iter()
+                .find(|quad| {
+                    presentation_entity_frame_matches(&game, web, quad, &atlas, alpha, false)
+                })
+                .expect("web sprite missing from scene");
+            let expected = (previous + (current - previous) * alpha) as f32;
+            assert!((web_quad.color[3] - expected).abs() < 1.0e-6);
+            opacities.push(web_quad.color[3]);
+        }
+
+        assert!(opacities.windows(2).all(|pair| pair[0] > pair[1]));
+        assert_ne!(opacities[2], opacities[0]);
+        assert_ne!(opacities[2], opacities[4]);
+        assert_eq!(game.state_hash(), state);
+        assert_eq!(game.presentation().state_hash(), draw_state);
+        assert_eq!(game.rng.clone().next_u64(), random);
+    }
+
+    #[test]
     fn source_kapala_real_blood_collection_tints_frozen_character_and_naturally_fades() {
         let atlas = Atlas::load().unwrap();
         for preset in [RulesPreset::Classic, RulesPreset::Assisted] {
             let neutral = adaptive_room();
-            assert_source_player_color(&neutral, &atlas, WHITE);
+            assert_source_player_color(&neutral, &atlas, WHITE, false);
             let mut game = natural_kapala_flash(preset);
             let red = game.presentation().player.data["red_color"];
             assert!(red > 0.0 && red <= 55.0 && red % 5.0 == 0.0);
@@ -3293,6 +3441,7 @@ mod tests {
                 &game,
                 &atlas,
                 [(200.0 + red) as f32 / 255.0, 0.0, 0.0, 1.0],
+                false,
             );
             let mut faded = false;
             for _ in 0..240 {
@@ -3303,7 +3452,7 @@ mod tests {
                 }
             }
             assert!(faded, "ordinary source pulse never finished: {preset:?}");
-            assert_source_player_color(&game, &atlas, WHITE);
+            assert_source_player_color(&game, &atlas, WHITE, false);
 
             let mut without_kapala = adaptive_room();
             without_kapala.rules = preset;
@@ -3331,7 +3480,7 @@ mod tests {
                     .unwrap_or(0.0),
                 0.0
             );
-            assert_source_player_color(&without_kapala, &atlas, WHITE);
+            assert_source_player_color(&without_kapala, &atlas, WHITE, false);
         }
     }
 
@@ -3372,6 +3521,7 @@ mod tests {
                             } else {
                                 [(200.0 + red) as f32 / 255.0, 0.0, 0.0, 1.0]
                             },
+                            exception,
                         );
                         let quads = game_scene(&draw, 0.5, false, &atlas);
                         let back_uv = atlas.sprite("sJetpackBack", 0.0).unwrap().uv;

@@ -6207,7 +6207,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1928,
+          "line": 1978,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -6280,7 +6280,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1928,
+          "line": 1978,
           "module": "crates/app/src/scene.rs"
         }
       ],
@@ -12046,7 +12046,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1930,
+          "line": 1980,
           "module": "crates/app/src/scene.rs"
         }
       ],

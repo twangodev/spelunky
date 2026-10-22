@@ -411,7 +411,7 @@ impl Game {
         let frame = self.normalize_direction_releases(input);
         let frame = self.normalize_action_edges(&frame);
         let input = &frame;
-        self.draw_view = None;
+        self.capture_render_history();
         if self.opening.is_some() {
             opening::tick(self, input);
             return;
