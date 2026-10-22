@@ -960,6 +960,7 @@ const SOURCE_CREATE_MAKE_ACTIVE: &[&str] = &[
     "oBall",
     "oBall2",
     "oBasketball",
+    "oBlood",
     "oBone",
     "oBigTreasure",
     "oBomb",
@@ -987,6 +988,7 @@ const SOURCE_CREATE_MAKE_ACTIVE: &[&str] = &[
     "oFireFrogArmed",
     "oFireFrogBomb",
     "oFishBone",
+    "oFlame",
     "oFlare",
     "oFlareCrate",
     "oFrog",
@@ -2112,6 +2114,11 @@ pub(crate) fn spawn_detritus(game: &mut Game, object: &str, pos: Vec2) -> u64 {
     let id = game.world.spawn(object, pos);
     let mut e = game.world.entity(id).unwrap().clone();
     initialize_detritus(game, &mut e);
+    if game.generation_revision == crate::GenerationRevision::SourceClassicV2
+        && source_uses_make_active(object)
+    {
+        initialize_source_motion_fields(&mut e);
+    }
     let index = game.world.entities.iter().position(|e| e.id == id).unwrap();
     game.world.entities[index] = e;
     id
@@ -4757,6 +4764,39 @@ mod source_create_variable_tests {
         for key in ["xVel", "yVel", "xAcc", "yAcc"] {
             assert_eq!(generated_skull.value(key), 0.0, "generated {key}");
         }
+    }
+
+    #[test]
+    fn source_detritus_materializes_inherited_make_active_motion_fields() {
+        let assert_motion_fields = |entity: &crate::Entity| {
+            for (key, expected) in [
+                ("xVel", entity.vel.x),
+                ("yVel", entity.vel.y),
+                ("xAcc", 0.0),
+                ("yAcc", 0.0),
+            ] {
+                assert_eq!(
+                    entity.data.get(key),
+                    Some(&expected),
+                    "{} {key}",
+                    entity.object
+                );
+            }
+        };
+
+        let mut runtime_game = Game::shell(37, RulesPreset::Classic);
+        runtime_game.generation_revision = crate::GenerationRevision::SourceClassicV2;
+        for (index, object) in ["oBlood", "oBone", "oFlame"].into_iter().enumerate() {
+            let id = runtime_game.spawn(object, Vec2::new(48.0 + index as f64 * 24.0, 80.0));
+            assert_motion_fields(runtime_game.world.entity(id).unwrap());
+        }
+
+        let mut producer_game = Game::shell(41, RulesPreset::Classic);
+        producer_game.generation_revision = crate::GenerationRevision::SourceClassicV2;
+        let blood_id = super::spawn_detritus(&mut producer_game, "oBlood", Vec2::new(80.0, 80.0));
+        assert_motion_fields(producer_game.world.entity(blood_id).unwrap());
+        let bone_id = super::spawn_detritus(&mut producer_game, "oBone", Vec2::new(104.0, 80.0));
+        assert_motion_fields(producer_game.world.entity(bone_id).unwrap());
     }
 
     #[test]
