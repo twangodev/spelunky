@@ -1329,16 +1329,19 @@ fn mantrap_collision(game: &mut Game, e: &mut Entity, other: crate::dispatcher::
             }
         }
     }
+    if family == "oDamsel" && held {
+        game.player.held = None;
+        game.player.pickup_item_type.clear();
+    }
     if let Some(victim) = game.world.entity_mut(id) {
         victim.alive = false;
         if family == "oShopkeeper" {
             victim.data.insert("has_gun".into(), 0.0);
         }
     }
-    if family == "oDamsel" && held {
-        game.player.held = None;
-        game.player.pickup_item_type.clear();
-    }
+    // `instance_destroy()` in the source collision runs Destroy immediately.
+    // In particular, a Damsel clears an attached bomb before its later End Step.
+    super::finish_actor_destroy(game, id);
     true
 }
 
@@ -3237,6 +3240,50 @@ mod tests {
         assert!(observed_blood_phase && observed_sleep && observed_stun && recovered);
         assert_eq!(game.player.health, 4.0);
         assert_eq!(game.state, crate::RunState::Playing);
+    }
+
+    #[test]
+    fn game_step_mantrap_damsel_destroy_clears_sticky_bomb_before_end_step() {
+        fn setup(mantrap_eats: bool) -> (Game, u64, u64) {
+            let mut game = collision_room();
+            let trap = game.spawn(
+                "oManTrap",
+                if mantrap_eats {
+                    Vec2::new(112.0, 144.0)
+                } else {
+                    Vec2::new(370.0, 144.0)
+                },
+            );
+            game.world.entity_mut(trap).unwrap().vel = Vec2::default();
+            let damsel = game.spawn("oDamsel", Vec2::new(118.0, 144.0));
+            game.world.entity_mut(damsel).unwrap().vel.x = -2.0;
+            let bomb = game.spawn("oBomb", Vec2::new(110.0, 136.0));
+            let attached = game.world.entity_mut(bomb).unwrap();
+            attached.data.insert("attached_id".into(), damsel as f64);
+            attached.data.insert("sticky_x".into(), 8.0);
+            attached.data.insert("sticky_y".into(), 8.0);
+            game.world
+                .entity_mut(damsel)
+                .unwrap()
+                .data
+                .insert("bomb_id".into(), bomb as f64);
+            (game, damsel, bomb)
+        }
+
+        let (mut eaten, damsel, bomb) = setup(true);
+        eaten.step(&crate::InputFrame::default());
+        assert!(eaten.world.entity(damsel).is_none());
+        let detached_bomb = eaten.world.entity(bomb).unwrap();
+        assert_eq!(detached_bomb.value("attached_id"), 0.0);
+        assert_eq!(detached_bomb.pos.x, 110.0);
+
+        let (mut control, damsel, bomb) = setup(false);
+        control.step(&crate::InputFrame::default());
+        let moved_damsel = control.world.entity(damsel).unwrap();
+        let following_bomb = control.world.entity(bomb).unwrap();
+        assert!(moved_damsel.pos.x < 118.0);
+        assert_eq!(following_bomb.value("attached_id"), damsel as f64);
+        assert_eq!(following_bomb.pos.x, moved_damsel.pos.x - 8.0);
     }
 
     #[test]

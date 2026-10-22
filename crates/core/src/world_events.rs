@@ -1907,6 +1907,25 @@ fn initialize_lava(game: &mut Game, e: &mut Entity) {
     }
 }
 
+/// Authored cinematic rooms bypass ordinary instance creation. Preserve the
+/// source `oLava.Create` fields and shared RNG draw for those room instances.
+pub(crate) fn initialize_source_lava_create(game: &mut Game, id: u64) {
+    if game.generation_revision != crate::GenerationRevision::SourceClassicV2 {
+        return;
+    }
+    let Some(index) = game
+        .world
+        .entities
+        .iter()
+        .position(|entity| entity.id == id && entity.object == "oLava")
+    else {
+        return;
+    };
+    let mut lava = game.world.entities[index].clone();
+    initialize_lava(game, &mut lava);
+    game.world.entities[index] = lava;
+}
+
 fn lava(game: &mut Game, e: &mut Entity, terrain: bool) {
     initialize_lava(game, e);
     let origin = if terrain {

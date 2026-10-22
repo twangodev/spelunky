@@ -962,6 +962,7 @@ mod tests {
     #[test]
     fn authored_chamber_lava_uses_its_source_create_animation_speed() {
         let mut g = game();
+        g.generation_revision = crate::model::GenerationRevision::SourceClassicV2;
         let mut s = EndingState::new(&g, EndingKind::Campaign, EndingStage::Chamber);
         enter(&mut g, &mut s, EndingStage::Chamber, "rEnd");
         let lava = g
@@ -971,12 +972,51 @@ mod tests {
             .find(|entity| entity.object == "oLava")
             .expect("rEnd has animated lava instances")
             .id;
-        assert_eq!(g.world.entity(lava).unwrap().value("animation_speed"), 0.4);
+        let lava_entity = g.world.entity(lava).unwrap();
+        assert_eq!(lava_entity.value("animation_speed"), 0.4);
+        assert_eq!(
+            lava_entity.text.get("type").map(String::as_str),
+            Some("Lava")
+        );
+        assert_eq!(lava_entity.value("lava_initialized"), 1.0);
+        assert!((100.0..=300.0).contains(&lava_entity.value("spurt_time")));
+        assert_eq!(
+            lava_entity.value("spurt_counter"),
+            lava_entity.value("spurt_time")
+        );
         g.ending = Some(s);
 
         let before = g.world.entity(lava).unwrap().animation;
         g.step(&InputFrame::default());
         assert_eq!(g.world.entity(lava).unwrap().animation, before + 0.4);
+    }
+
+    #[test]
+    fn authored_lava_create_consumes_one_source_rng_draw_per_instance_in_room_order() {
+        let mut g = game();
+        g.generation_revision = crate::model::GenerationRevision::SourceClassicV2;
+        let first = g.world.spawn("oLava", Vec2::new(32.0, 48.0));
+        let second = g.world.spawn("oLava", Vec2::new(64.0, 48.0));
+        let mut expected = g.rng.clone();
+        let first_time = 100 + expected.range(201);
+        let second_time = 100 + expected.range(201);
+        let next = expected.next_u64();
+        let instances = serde_json::json!([
+            {"object": "oLava", "x": 32.0, "y": 48.0},
+            {"object": "oLava", "x": 64.0, "y": 48.0}
+        ]);
+
+        initialize_room_terrain_creates(&mut g, instances.as_array().unwrap());
+
+        assert_eq!(
+            g.world.entity(first).unwrap().value("spurt_time"),
+            first_time as f64
+        );
+        assert_eq!(
+            g.world.entity(second).unwrap().value("spurt_time"),
+            second_time as f64
+        );
+        assert_eq!(g.rng.next_u64(), next);
     }
     #[test]
     fn higher_resource_newborn_steps_and_animation_follow_the_source_phases() {
@@ -1915,6 +1955,26 @@ fn initialize_room_terrain_creates(game: &mut Game, instances: &[serde_json::Val
     };
     for instance in instances {
         let object = instance["object"].as_str().unwrap();
+        if object == "oLava" {
+            let pos = Vec2::new(
+                instance["x"].as_f64().unwrap(),
+                instance["y"].as_f64().unwrap(),
+            );
+            if let Some(id) = game
+                .world
+                .entities
+                .iter()
+                .find(|entity| {
+                    entity.object == "oLava"
+                        && entity.pos == pos
+                        && entity.value("lava_initialized") == 0.0
+                })
+                .map(|entity| entity.id)
+            {
+                crate::world_events::initialize_source_lava_create(game, id);
+            }
+            continue;
+        }
         if !matches!(
             object,
             "oBrick" | "oLush" | "oDark" | "oTemple" | "oIce" | "oBlock"
