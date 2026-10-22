@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /** Nineteen real Rust-snippet scanner controls; no Rust compilation or parity claim. */
 import assert from 'node:assert/strict';
-import { readFileSync,writeFileSync,mkdtempSync } from 'node:fs';
+import { readFileSync,writeFileSync,mkdtempSync,rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname,join,resolve } from 'node:path';
 import { pathToFileURL,fileURLToPath } from 'node:url';
@@ -35,8 +35,11 @@ function check(name:string,body:()=>void){body();results.push(name);console.log(
 const registration=(key:string,names:string[])=>{const text=fixtures[key];assert.deepEqual(h.registeredObjects(text,'handles'),expected(text,names));};
 const arms=(key:string,names:string[])=>{const text=fixtures[key];assert.deepEqual(h.objectMatchArms(text),expected(text,names));};
 check('import_loading_excludes_all_generator_execution',()=>{
- const dir=mkdtempSync(join(tmpdir(),'spelunky-bun-coverage-import-control-'));const copy=join(dir,'scanner.ts');writeFileSync(copy,readFileSync(scanner));
- const command=[process.execPath,'-e',`await import(${JSON.stringify(pathToFileURL(copy).href)}); console.log('IMPORTED_HELPERS_ONLY');`];const r=Bun.spawnSync(command,{stdout:'pipe',stderr:'pipe'});assert.equal(r.exitCode,0,new TextDecoder().decode(r.stderr));assert.equal(new TextDecoder().decode(r.stdout),'IMPORTED_HELPERS_ONLY\n');
+ const dir=mkdtempSync(join(tmpdir(),'spelunky-bun-coverage-import-control-'));
+ try {
+  const copy=join(dir,'scanner.ts');writeFileSync(copy,readFileSync(scanner));
+  const command=[process.execPath,'-e',`await import(${JSON.stringify(pathToFileURL(copy).href)}); console.log('IMPORTED_HELPERS_ONLY');`];const r=Bun.spawnSync(command,{stdout:'pipe',stderr:'pipe'});assert.equal(r.exitCode,0,new TextDecoder().decode(r.stderr));assert.equal(new TextDecoder().decode(r.stdout),'IMPORTED_HELPERS_ONLY\n');
+ } finally { rmSync(dir,{recursive:true,force:true}); }
 });
 check('negative_registration_excludes_items',()=>registration('negative_registration_does_not_count_excluded_item_objects',['oWhip']));
 check('multiline_parenthesized_negative',()=>registration('multiline_parenthesized_negative_registration_is_not_positive',['oWhip','oWhipPre']));
