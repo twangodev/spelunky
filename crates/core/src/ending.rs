@@ -248,6 +248,11 @@ mod tests {
         let ball = game.world.entity(id).unwrap();
         assert_eq!(ball.text.get("type").map(String::as_str), Some("Ball"));
         assert_eq!(ball.value("blinkToggle"), 0.0);
+
+        let id = spawn(&mut game, &mut ending, "oChain2", Vec2::new(80.0, 80.0));
+        let chain = game.world.entity(id).unwrap();
+        assert_eq!(chain.text.get("type").map(String::as_str), Some("Chain"));
+        assert_eq!(chain.value("linkVal"), 2.0);
     }
 
     #[test]
@@ -311,6 +316,79 @@ mod tests {
         assert_eq!(next_step.pos.y, starting_y - 2.0);
         assert_eq!(next_step.vel.y, -2.0, "myGrav=0 prevents stale gravity");
         assert_eq!(next_step.value("yVel"), -2.0);
+    }
+
+    #[test]
+    fn source_lava_carry_motion_survives_the_live_game_step_dispatcher() {
+        let mut game = game();
+        game.generation_revision = crate::model::GenerationRevision::SourceClassicV2;
+        let mut ending = EndingState::new(&game, EndingKind::Campaign, EndingStage::Chamber);
+        enter(&mut game, &mut ending, EndingStage::Chamber, "rEnd");
+
+        let platform = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oEndPlat")
+            .unwrap()
+            .clone();
+        let dummy_id = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oPDummy")
+            .unwrap()
+            .id;
+        actor_alarm(&mut game, &mut ending, dummy_id, 1);
+        let treasure_id = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oBigTreasure")
+            .expect("the chamber chest alarm creates the treasure")
+            .id;
+        {
+            let treasure = game.world.entity_mut(treasure_id).unwrap();
+            treasure.pos = Vec2::new(500.0, 80.0);
+            treasure.previous_pos = treasure.pos;
+        }
+
+        actor_alarm(&mut game, &mut ending, dummy_id, 3);
+        let spray_id = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oLavaSpray")
+            .expect("the chamber alarm creates the lava spray")
+            .id;
+        let bounds = platform.sprite_bounds();
+        let probe = Vec2::new(bounds.x + bounds.w / 2.0, bounds.y + bounds.h / 2.0);
+        {
+            let spray = game.world.entity_mut(spray_id).unwrap();
+            spray.pos = Vec2::new(probe.x, probe.y + 3.0);
+            spray.previous_pos = spray.pos;
+            spray.vel.y = -2.0;
+            spray.data.insert("yVel".into(), -2.0);
+            spray.data.insert("y_acc".into(), 0.0);
+        }
+
+        game.ending = Some(ending);
+        game.state = RunState::Ending;
+        game.step(&InputFrame::default());
+
+        let carried = game.world.entity(treasure_id).unwrap();
+        assert_eq!(carried.value("yVel"), -2.0);
+        assert_eq!(carried.value("myGrav"), 0.0);
+        assert_eq!(carried.vel.y, -2.0);
+        let after_carry_y = carried.pos.y;
+
+        game.world.entity_mut(spray_id).unwrap().alive = false;
+        game.step(&InputFrame::default());
+
+        let carried = game.world.entity(treasure_id).unwrap();
+        assert_eq!(carried.pos.y, after_carry_y - 2.0);
+        assert_eq!(carried.value("yVel"), -2.0);
+        assert_eq!(carried.vel.y, -2.0, "myGrav=0 preserves source carry speed");
     }
 
     #[test]
@@ -1547,6 +1625,113 @@ mod tests {
     }
 
     #[test]
+    fn source_transition_room_terrain_creates_preserve_instance_rng_and_inherited_fields() {
+        let cases: &[(Area, u32, &str, &[&str])] = &[
+            (Area::Jungle, 5, "rTransition1x", &["oLush"]),
+            (Area::Jungle, 6, "rTransition2", &["oLush"]),
+            (Area::Jungle, 9, "rTransition2x", &["oLush", "oDark"]),
+            (Area::Ice, 10, "rTransition3", &["oDark"]),
+            (Area::Ice, 13, "rTransition3x", &["oDark", "oTemple"]),
+            (Area::Temple, 14, "rTransition4", &["oTemple"]),
+        ];
+        let rooms: serde_json::Value =
+            serde_json::from_str(include_str!("../../../assets/cinematics.json")).unwrap();
+
+        for (index, (area, next, room_name, families)) in cases.iter().enumerate() {
+            let mut game = Game::shell(index as u32 + 101, RulesPreset::Classic);
+            game.generation_revision = crate::model::GenerationRevision::SourceClassicV2;
+            game.world = World::new(40, 16, *area, *next - 1);
+            game.world.name = "rLevel".into();
+            game.rng = crate::model::Rng::new(index as u32 + 301);
+
+            let instances = rooms["rooms"][*room_name]["instances"].as_array().unwrap();
+            let mut expected_rng = game.rng.clone();
+            let mut expected_n = BTreeMap::new();
+            for instance in instances {
+                let object = instance["object"].as_str().unwrap();
+                let x = instance["x"].as_f64().unwrap() as i32;
+                let y = instance["y"].as_f64().unwrap() as i32;
+                let n = match object {
+                    "oBrick" => {
+                        expected_rng.range(10);
+                        1 + expected_rng.range(100)
+                    }
+                    "oLush" | "oDark" | "oTemple" => 1 + expected_rng.range(100),
+                    _ => continue,
+                };
+                expected_n.insert((x, y), (object, n));
+            }
+
+            load_room(&mut game, room_name);
+
+            let mut observed_gold =
+                BTreeMap::from([("oLush", false), ("oDark", false), ("oTemple", false)]);
+            for ((x, y), (object, n)) in expected_n {
+                let tile = game
+                    .world
+                    .tile(x / 16, y / 16)
+                    .unwrap_or_else(|| panic!("{room_name} missing {object} tile at {x},{y}"));
+                assert_eq!(tile.object, object, "{room_name} tile at {x},{y}");
+                let metadata = game
+                    .world
+                    .tile_sprite_metadata(x / 16, y / 16)
+                    .unwrap_or_else(|| panic!("{room_name} missing Create metadata at {x},{y}"));
+                assert_eq!(
+                    metadata.value("n"),
+                    f64::from(n),
+                    "{room_name} {object} at {x},{y}"
+                );
+                assert_eq!(metadata.value("terrain_initialized"), 1.0);
+                assert_eq!(metadata.value("terrain_setup_initialized"), 1.0);
+                assert_eq!(metadata.value("invincible"), 0.0, "inherited oSolid Create");
+                assert_eq!(metadata.value("shopWall"), 0.0, "inherited oSolid Create");
+                assert_eq!(metadata.value("cleanDeath"), 0.0, "inherited oSolid Create");
+                assert_eq!(metadata.text.get("type").map(String::as_str), Some("None"));
+                assert_eq!(metadata.text.get("treasure").map(String::as_str), Some(""));
+                assert_eq!(
+                    metadata.value(if object == "oLush" {
+                        "source_ground_lush_created"
+                    } else {
+                        "source_room_terrain_created"
+                    }),
+                    1.0,
+                    "{room_name} {object} Create dispatch at {x},{y}"
+                );
+
+                let gold_sprite = match object {
+                    "oLush" => &["sLushGold", "sLushGoldBig"][..],
+                    "oDark" => &["sDarkGold", "sDarkGoldBig"][..],
+                    "oTemple" => &["sTempleGold", "sTempleGoldBig"][..],
+                    _ => continue,
+                };
+                let sprite = metadata
+                    .text
+                    .get("terrain_sprite")
+                    .map(String::as_str)
+                    .unwrap_or("");
+                if gold_sprite.contains(&sprite) {
+                    observed_gold.insert(object, true);
+                    assert!(
+                        n < 30,
+                        "{room_name} {object} gold variant must match Create roll"
+                    );
+                    assert_eq!(metadata.value("gold_chunks"), 3.0);
+                    assert_eq!(
+                        metadata.value("gold_nuggets"),
+                        f64::from(sprite == gold_sprite[1])
+                    );
+                }
+            }
+            for family in *families {
+                assert!(
+                    observed_gold[family],
+                    "{room_name} should retain a source {family} gold variant"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn source_end_room_runs_brick_and_temple_creates_in_authored_order() {
         let mut room_game = game();
         room_game.generation_revision = crate::model::GenerationRevision::SourceClassicV2;
@@ -1556,6 +1741,7 @@ mod tests {
         let instances = room["rooms"]["rEnd"]["instances"].as_array().unwrap();
         let mut expected_rng = room_game.rng.clone();
         let mut expected_n = BTreeMap::new();
+        let mut expected_lava_spurt_times = Vec::new();
         for instance in instances {
             let object = instance["object"].as_str().unwrap();
             let x = instance["x"].as_f64().unwrap() as i32;
@@ -1566,6 +1752,10 @@ mod tests {
                     1 + expected_rng.range(100)
                 }
                 "oTemple" => 1 + expected_rng.range(100),
+                "oLava" => {
+                    expected_lava_spurt_times.push((x, y, 100 + expected_rng.range(201)));
+                    continue;
+                }
                 _ => continue,
             };
             expected_n.insert((x, y), n);
@@ -1585,6 +1775,31 @@ mod tests {
             );
             assert_eq!(metadata.value("terrain_initialized"), 1.0);
             assert_eq!(metadata.value("source_room_terrain_created"), 1.0);
+            assert_eq!(metadata.value("invincible"), 0.0, "inherited oSolid Create");
+            assert_eq!(metadata.value("shopWall"), 0.0, "inherited oSolid Create");
+            assert_eq!(metadata.value("cleanDeath"), 0.0, "inherited oSolid Create");
+            assert_eq!(metadata.text.get("type").map(String::as_str), Some("None"));
+            assert_eq!(metadata.text.get("treasure").map(String::as_str), Some(""));
+        }
+        assert_eq!(expected_lava_spurt_times.len(), 36);
+        for (x, y, expected_time) in expected_lava_spurt_times {
+            let lava = room_game
+                .world
+                .entities
+                .iter()
+                .find(|entity| {
+                    entity.object == "oLava" && entity.pos == Vec2::new(x as f64, y as f64)
+                })
+                .unwrap_or_else(|| panic!("missing authored oLava at {x},{y}"));
+            assert_eq!(
+                lava.value("spurt_time"),
+                f64::from(expected_time),
+                "Create RNG at {x},{y}"
+            );
+            assert_eq!(lava.value("spurt_counter"), f64::from(expected_time));
+            assert_eq!(lava.value("lava_initialized"), 1.0);
+            assert_eq!(lava.text.get("type").map(String::as_str), Some("Lava"));
+            assert_eq!(lava.image_speed(), 0.4);
         }
         assert!(
             room_game
@@ -1675,6 +1890,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(links.len(), 4);
         for link in links {
+            assert_eq!(link.text.get("type").map(String::as_str), Some("Chain"));
             let fraction = link.value("linkVal") / 4.;
             assert_eq!(
                 link.pos,
@@ -2342,23 +2558,23 @@ fn init_actor(game: &mut Game, s: &mut EndingState, id: u64) {
 }
 fn spawn(game: &mut Game, s: &mut EndingState, object: &str, pos: Vec2) -> u64 {
     let id = game.world.spawn(object, pos);
-    if game.generation_revision == crate::model::GenerationRevision::SourceClassicV2
-        && matches!(
-            object,
-            "oPDummy5"
-                | "oCape"
-                | "oDamselKiss"
-                | "oHeart"
-                | "oPoof"
-                | "oPDummy2"
-                | "oBurn"
-                | "oSprite"
-                | "oDesertScroll"
-                | "oDesertScroll2"
-        )
-    {
-        if let Some(actor) = game.world.entity_mut(id) {
-            crate::world_events::initialize_source_drawn_sprite_create(actor);
+    if game.generation_revision == crate::model::GenerationRevision::SourceClassicV2 {
+        match object {
+            "oPDummy5" | "oCape" | "oDamselKiss" | "oHeart" | "oPoof" | "oPDummy2" | "oBurn"
+            | "oSprite" | "oDesertScroll" | "oDesertScroll2" => {
+                if let Some(actor) = game.world.entity_mut(id) {
+                    crate::world_events::initialize_source_drawn_sprite_create(actor);
+                }
+            }
+            "oChain2" => {
+                // The producer replaces linkVal after instance_create, but
+                // the source object's own Create starts it at two.
+                if let Some(actor) = game.world.entity_mut(id) {
+                    actor.text.insert("type".into(), "Chain".into());
+                    actor.data.insert("linkVal".into(), 2.);
+                }
+            }
+            _ => {}
         }
     }
     init_actor(game, s, id);
