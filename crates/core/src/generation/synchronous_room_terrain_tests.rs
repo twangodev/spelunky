@@ -258,7 +258,7 @@ fn direct(
     );
     let traces = TRACES.with(|t| t.borrow_mut().take().unwrap());
     assert_eq!(traces.len(), 1);
-    let in_level = !(name == "rIntro" || name == "rTitle");
+    let in_level = source_is_level(&world);
     assert_trace(
         &traces[0],
         name == "City of Gold",
@@ -268,6 +268,42 @@ fn direct(
     );
     (world, rng)
 }
+
+#[test]
+fn transition_room_lush_create_keeps_level_only_loot_guards() {
+    let seed = (0..100)
+        .find(|seed| {
+            let mut rng = Rng::new(*seed);
+            1 + rng.range(100) >= 30
+        })
+        .expect("a seed beyond the Lush gold variants");
+    let mut expected = Rng::new(seed);
+    let n = 1 + expected.range(100);
+    let mut world = World::new(20, 16, Area::Jungle, 5);
+    world.name = "rTransition1x".into();
+    world.set_tile(6, 6, "oLush");
+    let mut actual = Rng::new(seed);
+
+    create_source_room_terrain(
+        &mut world,
+        &mut actual,
+        6,
+        6,
+        super::super::GenerationContext::default(),
+    );
+
+    let metadata = world.tile_sprite_metadata(6, 6).unwrap();
+    assert_eq!(metadata.value("n"), f64::from(n));
+    assert_eq!(actual.state_bits(), expected.state_bits());
+    assert!(
+        world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive)
+            .all(|entity| entity.object == "oTerrainMetadata")
+    );
+}
+
 #[test]
 fn all_three_room_parent_families_birth_all_literal_gems_and_set2_items_before_late_phase() {
     for (object, name, level) in [

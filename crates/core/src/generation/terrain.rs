@@ -240,6 +240,17 @@ pub(super) fn initialize_source_lava_create(entity: &mut Entity, time: f64) {
 /// Complete the remaining room-script terrain constructors at actual birth.
 /// The grid/proxy representation is retained; duplicate overlapping instances
 /// and SetupWalls interleaving remain separately stated adapter debt.
+fn source_is_level(world: &World) -> bool {
+    if world.name.starts_with('r') {
+        matches!(
+            world.name.as_str(),
+            "rTutorial" | "rLoadLevel" | "rLevel" | "rLevel2" | "rLevel3" | "rOlmec"
+        )
+    } else {
+        (1..=16).contains(&world.level) || world.name == "Tutorial Cave"
+    }
+}
+
 pub(super) fn create_source_room_terrain(
     world: &mut World,
     rng: &mut Rng,
@@ -248,12 +259,23 @@ pub(super) fn create_source_room_terrain(
     context: super::GenerationContext,
 ) {
     let object = world.tiles[y * world.width + x].object.clone();
+    create_source_room_terrain_for_object(world, rng, x, y, &object, context);
+}
+
+pub(super) fn create_source_room_terrain_for_object(
+    world: &mut World,
+    rng: &mut Rng,
+    x: usize,
+    y: usize,
+    object: &str,
+    context: super::GenerationContext,
+) {
     if object == "oLush" {
         create_source_ground_lush(world, rng, x, y, context);
         return;
     }
     assert!(matches!(
-        object.as_str(),
+        object,
         "oBrick" | "oDark" | "oTemple" | "oIce" | "oBlock"
     ));
     for old in &mut world.entities {
@@ -276,15 +298,8 @@ pub(super) fn create_source_room_terrain(
     let trace = synchronous_room_terrain_tests::observe_before(world, rng, id);
     #[cfg(test)]
     let contents_trace = create_contents_tests::observe_before(world, rng, x, y, id, false);
-    let city = world.name == "City of Gold";
-    let in_level = if world.name.starts_with('r') {
-        matches!(
-            world.name.as_str(),
-            "rTutorial" | "rLoadLevel" | "rLevel" | "rLevel2" | "rLevel3" | "rOlmec"
-        )
-    } else {
-        (1..=16).contains(&world.level) || world.name == "Tutorial Cave"
-    };
+    let city = world.name == "City of Gold" || context.has_city_of_gold;
+    let in_level = source_is_level(world);
     let interior = in_level && x > 0 && y > 0 && x + 1 < world.width && y + 1 < world.height;
     let mut sprite = format!("s{}", &object[1..]);
     let mut gold = 0;
@@ -317,7 +332,7 @@ pub(super) fn create_source_room_terrain(
                 sprite = format!("s{}GoldBig", &object[1..]);
                 gold = 2;
             } else if interior {
-                let chances = match object.as_str() {
+                let chances = match object {
                     "oBrick" => [100, 120, 140],
                     "oDark" => [40, 60, 80],
                     "oTemple" => [60, 80, 100],
@@ -388,10 +403,8 @@ pub(super) fn create_source_ground_lush(
     y: usize,
     context: super::GenerationContext,
 ) {
-    assert_eq!(world.tiles[y * world.width + x].object, "oLush");
-    // set_tile has just created/replaced the represented parent. A stale
-    // metadata proxy must not carry old initialization/sprite/loot fields into
-    // its new Create. This changes no lifetime of its already-live children.
+    // A stale metadata proxy must not carry old initialization/sprite/loot
+    // fields into this parent Create. This changes no lifetime of its children.
     for old in &mut world.entities {
         if old.alive
             && old.object == "oTerrainMetadata"
@@ -421,7 +434,12 @@ pub(super) fn create_source_ground_lush(
     } else if n < 30 {
         sprite = "sLushGoldBig";
         gold = 2;
-    } else if x > 0 && x + 1 < world.width && y > 0 && y + 1 < world.height {
+    } else if source_is_level(world)
+        && x > 0
+        && x + 1 < world.width
+        && y > 0
+        && y + 1 < world.height
+    {
         if rng.range(80) == 0 {
             selected = Some(("oSapphireBig", 0., 0.));
         } else if rng.range(100) == 0 {

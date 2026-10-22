@@ -1620,6 +1620,7 @@ mod tests {
             Some(super::super::GenerationContext {
                 has_spectacles: false,
                 has_cemetery: true,
+                has_city_of_gold: false,
             }),
         );
 

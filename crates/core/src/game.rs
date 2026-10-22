@@ -142,6 +142,8 @@ impl Game {
                 generation::GenerationContext {
                     has_spectacles: self.player.has("Spectacles"),
                     has_cemetery: false,
+                    has_city_of_gold: self.flags.contains("cityOfGold")
+                        || self.flags.contains("city_of_gold"),
                 },
             )
         } else {
@@ -211,6 +213,8 @@ impl Game {
             generation::GenerationContext {
                 has_spectacles: self.player.has("Spectacles"),
                 has_cemetery: false,
+                has_city_of_gold: self.flags.contains("cityOfGold")
+                    || self.flags.contains("city_of_gold"),
             },
         );
         self.world.name = name.to_owned();
@@ -676,6 +680,8 @@ impl Game {
         let context = generation::GenerationContext {
             has_spectacles: self.player.has("Spectacles"),
             has_cemetery: false,
+            has_city_of_gold: self.flags.contains("cityOfGold")
+                || self.flags.contains("city_of_gold"),
         };
         let historical = self.generation_revision == GenerationRevision::HistoricalV1;
         let market = if historical {

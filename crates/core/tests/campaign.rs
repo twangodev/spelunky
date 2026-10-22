@@ -347,7 +347,7 @@ fn generated_market_ankh_moai_chain_to_temple(seed: u32) -> Game {
 
     // Drop it into an adjacent non-shop room. A source-faithful Ankh is not
     // stock for oItem's outside-shop theft check, so its price remains intact.
-    let outside_shop = Vec2::new(520.0, 200.0); // Black Market path[1][3] == 2.
+    let outside_shop = Vec2::new(552.0, 200.0); // Clear air in Black Market path[1][3] == 2.
     assert_eq!(game.world.source_room_path.unwrap()[1][3], 2);
     position_player(&mut game, outside_shop);
     let ankh = game.world.entity_mut(ankh_id).unwrap();

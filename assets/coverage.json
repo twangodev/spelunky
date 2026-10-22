@@ -827,12 +827,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2114,
+          "line": 2242,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2926,
+          "line": 3054,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -916,12 +916,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2054,
+          "line": 2182,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2782,
+          "line": 2910,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -1276,12 +1276,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2048,
+          "line": 2176,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2781,
+          "line": 2909,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -1927,32 +1927,32 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 321,
+          "line": 336,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 519,
+          "line": 537,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 874,
+          "line": 892,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 999,
+          "line": 1017,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1377,
+          "line": 1395,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1582,
+          "line": 1600,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
@@ -2001,7 +2001,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2131,
+          "line": 2259,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -2011,7 +2011,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1400,
+          "line": 1403,
           "module": "crates/core/src/generation.rs"
         }
       ],
@@ -2121,12 +2121,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2101,
+          "line": 2229,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2966,
+          "line": 3094,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -2197,12 +2197,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2078,
+          "line": 2206,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2904,
+          "line": 3032,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -2222,7 +2222,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2990,
+          "line": 3118,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -2333,12 +2333,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2086,
+          "line": 2214,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2904,
+          "line": 3032,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -2630,7 +2630,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 3016,
+          "line": 3144,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -2968,7 +2968,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2132,
+          "line": 2260,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -2999,7 +2999,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2132,
+          "line": 2260,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3210,12 +3210,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2043,
+          "line": 2171,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2890,
+          "line": 3018,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3259,27 +3259,27 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 322,
+          "line": 337,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 531,
+          "line": 549,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 876,
+          "line": 894,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1388,
+          "line": 1406,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1584,
+          "line": 1602,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
@@ -3448,17 +3448,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2110,
+          "line": 2238,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2139,
+          "line": 2267,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2951,
+          "line": 3079,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3478,17 +3478,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2110,
+          "line": 2238,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2140,
+          "line": 2268,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2951,
+          "line": 3079,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3527,17 +3527,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2110,
+          "line": 2238,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2141,
+          "line": 2269,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2951,
+          "line": 3079,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3903,7 +3903,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2131,
+          "line": 2259,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3924,7 +3924,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2131,
+          "line": 2259,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3958,7 +3958,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2131,
+          "line": 2259,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -3986,7 +3986,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2131,
+          "line": 2259,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -4014,7 +4014,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2867,
+          "line": 2995,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -4107,7 +4107,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 235,
+          "line": 239,
           "module": "crates/core/src/game.rs"
         }
       ],
@@ -4870,7 +4870,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 915,
+          "line": 933,
           "module": "crates/core/src/generation/terrain.rs"
         }
       ],
@@ -4890,7 +4890,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2131,
+          "line": 2259,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -5800,17 +5800,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2107,
+          "line": 2235,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2751,
+          "line": 2879,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2961,
+          "line": 3089,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -5898,12 +5898,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 560,
+          "line": 578,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1012,
+          "line": 1030,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
@@ -6042,12 +6042,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2119,
+          "line": 2247,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2935,
+          "line": 3063,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -6481,7 +6481,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 822,
+          "line": 828,
           "module": "crates/core/src/game.rs"
         },
         {
@@ -6915,7 +6915,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2025,
+          "line": 2153,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -7020,17 +7020,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2128,
+          "line": 2256,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2750,
+          "line": 2878,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2831,
+          "line": 2959,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -7299,7 +7299,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 828,
+          "line": 834,
           "module": "crates/core/src/game.rs"
         },
         {
@@ -7355,22 +7355,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 525,
+          "line": 543,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 875,
+          "line": 893,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1378,
+          "line": 1396,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1583,
+          "line": 1601,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
@@ -8284,7 +8284,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 831,
+          "line": 837,
           "module": "crates/core/src/game.rs"
         },
         {
@@ -8803,17 +8803,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2028,
+          "line": 2156,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2667,
+          "line": 2795,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2772,
+          "line": 2900,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8841,17 +8841,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2033,
+          "line": 2161,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2728,
+          "line": 2856,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2773,
+          "line": 2901,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8919,7 +8919,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2774,
+          "line": 2902,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -8939,7 +8939,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2038,
+          "line": 2166,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -9025,17 +9025,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2111,
+          "line": 2239,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2142,
+          "line": 2270,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2952,
+          "line": 3080,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -9486,12 +9486,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2071,
+          "line": 2199,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2868,
+          "line": 2996,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -9511,12 +9511,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2101,
+          "line": 2229,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2962,
+          "line": 3090,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -11197,17 +11197,17 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2110,
+          "line": 2238,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2143,
+          "line": 2271,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2951,
+          "line": 3079,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -12381,7 +12381,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2125,
+          "line": 2253,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -12628,22 +12628,22 @@
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 323,
+          "line": 338,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 537,
+          "line": 555,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1005,
+          "line": 1023,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 1389,
+          "line": 1407,
           "module": "crates/core/src/generation/terrain.rs"
         },
         {
@@ -13022,7 +13022,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2131,
+          "line": 2259,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -13090,12 +13090,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2071,
+          "line": 2199,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2868,
+          "line": 2996,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -13249,7 +13249,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2960,
+          "line": 3088,
           "module": "crates/core/src/ending.rs"
         },
         {
@@ -13626,12 +13626,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2095,
+          "line": 2223,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2975,
+          "line": 3103,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -13653,12 +13653,12 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 2092,
+          "line": 2220,
           "module": "crates/core/src/ending.rs"
         },
         {
           "kind": "explicit_object_match_arm",
-          "line": 2896,
+          "line": 3024,
           "module": "crates/core/src/ending.rs"
         }
       ],
@@ -14072,7 +14072,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 834,
+          "line": 840,
           "module": "crates/core/src/game.rs"
         },
         {

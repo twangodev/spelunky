@@ -1488,8 +1488,101 @@ mod tests {
                     "{room} {family}"
                 );
                 assert_eq!(metadata.value("down"), 1.0, "{room} {family} floor bound");
+                assert_eq!(
+                    metadata.value("terrain_initialized"),
+                    1.0,
+                    "{room} {family} Create runs before SetupWalls"
+                );
+                assert_eq!(
+                    metadata.value(if *family == "oLush" {
+                        "source_ground_lush_created"
+                    } else {
+                        "source_room_terrain_created"
+                    }),
+                    1.0
+                );
+                assert!((1.0..=100.0).contains(&metadata.value("n")));
             }
         }
+    }
+
+    #[test]
+    fn source_end_room_runs_brick_and_temple_creates_in_authored_order() {
+        let mut room_game = game();
+        room_game.generation_revision = crate::model::GenerationRevision::SourceClassicV2;
+        room_game.rng = crate::model::Rng::new(31);
+        let room: serde_json::Value =
+            serde_json::from_str(include_str!("../../../assets/cinematics.json")).unwrap();
+        let instances = room["rooms"]["rEnd"]["instances"].as_array().unwrap();
+        let mut expected_rng = room_game.rng.clone();
+        let mut expected_n = BTreeMap::new();
+        for instance in instances {
+            let object = instance["object"].as_str().unwrap();
+            let x = instance["x"].as_f64().unwrap() as i32;
+            let y = instance["y"].as_f64().unwrap() as i32;
+            let n = match object {
+                "oBrick" => {
+                    expected_rng.range(10);
+                    1 + expected_rng.range(100)
+                }
+                "oTemple" => 1 + expected_rng.range(100),
+                _ => continue,
+            };
+            expected_n.insert((x, y), n);
+        }
+
+        load_room(&mut room_game, "rEnd");
+
+        for ((x, y), n) in expected_n {
+            let metadata = room_game
+                .world
+                .tile_sprite_metadata(x / 16, y / 16)
+                .unwrap_or_else(|| panic!("missing terrain metadata at {x},{y}"));
+            assert_eq!(
+                metadata.value("n"),
+                f64::from(n),
+                "terrain Create at {x},{y}"
+            );
+            assert_eq!(metadata.value("terrain_initialized"), 1.0);
+            assert_eq!(metadata.value("source_room_terrain_created"), 1.0);
+        }
+        assert!(
+            room_game
+                .world
+                .tiles
+                .iter()
+                .enumerate()
+                .any(|(index, tile)| {
+                    if tile.object != "oTemple" {
+                        return false;
+                    }
+                    let x = (index % room_game.world.width) as i32;
+                    let y = (index / room_game.world.width) as i32;
+                    room_game
+                        .world
+                        .tile_sprite_metadata(x, y)
+                        .and_then(|metadata| metadata.text.get("terrain_sprite"))
+                        .is_some_and(|sprite| {
+                            matches!(sprite.as_str(), "sTempleGold" | "sTempleGoldBig")
+                        })
+                })
+        );
+
+        let mut city = game();
+        city.generation_revision = crate::model::GenerationRevision::SourceClassicV2;
+        city.flags.insert("cityOfGold".into());
+        load_room(&mut city, "rEnd");
+        assert!(city.world.tiles.iter().enumerate().all(|(index, tile)| {
+            if tile.object != "oTemple" {
+                return true;
+            }
+            let x = (index % city.world.width) as i32;
+            let y = (index / city.world.width) as i32;
+            city.world
+                .tile_sprite_metadata(x, y)
+                .and_then(|metadata| metadata.text.get("terrain_sprite"))
+                .is_some_and(|sprite| sprite.starts_with("sGTemple"))
+        }));
     }
 
     #[test]
@@ -1809,6 +1902,41 @@ fn selected_sprite<'a>(
 
 /// Load the authored instances, including their original offsets and layers.
 /// Gameplay counters intentionally survive until the host consumes the record.
+fn initialize_room_terrain_creates(game: &mut Game, instances: &[serde_json::Value]) {
+    if game.generation_revision != crate::model::GenerationRevision::SourceClassicV2 {
+        crate::hub::initialize_brick_variants(game);
+        return;
+    }
+
+    let context = crate::generation::GenerationContext {
+        has_spectacles: game.player.has("Spectacles"),
+        has_cemetery: game.flags.contains("cemetary") || game.flags.contains("cemetery"),
+        has_city_of_gold: game.flags.contains("cityOfGold") || game.flags.contains("city_of_gold"),
+    };
+    for instance in instances {
+        let object = instance["object"].as_str().unwrap();
+        if !matches!(
+            object,
+            "oBrick" | "oLush" | "oDark" | "oTemple" | "oIce" | "oBlock"
+        ) {
+            continue;
+        }
+        let x = instance["x"].as_f64().unwrap();
+        let y = instance["y"].as_f64().unwrap();
+        if x < 0. || y < 0. || x % 16. != 0. || y % 16. != 0. {
+            continue;
+        }
+        crate::generation::initialize_source_room_terrain(
+            &mut game.world,
+            &mut game.rng,
+            (x / 16.) as usize,
+            (y / 16.) as usize,
+            object,
+            context,
+        );
+    }
+}
+
 pub fn load_room(game: &mut Game, name: &str) {
     static ROOMS: OnceLock<serde_json::Value> = OnceLock::new();
     let rooms = ROOMS.get_or_init(|| {
@@ -1848,7 +1976,7 @@ pub fn load_room(game: &mut Game, name: &str) {
         );
     }
     game.world = world;
-    crate::hub::initialize_brick_variants(game);
+    initialize_room_terrain_creates(game, room["instances"].as_array().unwrap());
     let city = game.flags.contains("cityOfGold") || game.flags.contains("city_of_gold");
     let cemetery = game.flags.contains("cemetary") || game.flags.contains("cemetery");
     if !crate::generation::initialize_authored_setup_walls(

@@ -802,6 +802,8 @@ pub(crate) struct GenerationContext {
     pub has_spectacles: bool,
     /// The source `oTreeBranch` Create body reads global.cemetary directly.
     pub has_cemetery: bool,
+    /// Authored ending rooms retain this run global after leaving City of Gold.
+    pub has_city_of_gold: bool,
 }
 
 /// Persistent campaign input/output for the versioned Jungle producer.
@@ -1098,6 +1100,7 @@ pub(crate) fn generate_campaign_result_for_route(
     }
     let context = GenerationContext {
         has_cemetery: has(&selected, "cemetery"),
+        has_city_of_gold: has(&selected, "city_of_gold"),
         ..context
     };
     if !source_classic {
@@ -1415,6 +1418,18 @@ pub(crate) fn initialize_authored_setup_walls(
     }
     terrain::setup_authored_walls(world, rng, graphics_high, city, cemetery);
     true
+}
+
+/// Run one source terrain parent Create at its authored room-instance slot.
+pub(crate) fn initialize_source_room_terrain(
+    world: &mut World,
+    rng: &mut Rng,
+    x: usize,
+    y: usize,
+    object: &str,
+    context: GenerationContext,
+) {
+    terrain::create_source_room_terrain_for_object(world, rng, x, y, object, context);
 }
 
 /// Run one authored room's `oLava.Create` in its source instance-order slot.
