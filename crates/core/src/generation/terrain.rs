@@ -621,11 +621,19 @@ pub(super) fn initialize_custom_with_context(
     births.sort_by_key(|(serial, _)| *serial);
     let city = world.name == "City of Gold";
     for (_, birth) in births {
-        match birth {
+        let creation_serial = match birth {
+            CustomCreateBirth::Tile(index) => world.tiles[index].creation_serial,
+            CustomCreateBirth::Entity(id) => {
+                world
+                    .entity(id)
+                    .expect("custom Create birth remains live")
+                    .creation_serial
+            }
+        };
+        with_custom_create_prefix(world, creation_serial, |world| match birth {
             CustomCreateBirth::Tile(index) => {
                 let x = index % world.width;
                 let y = index / world.width;
-                let creation_serial = world.tiles[index].creation_serial;
                 let object = world.tiles[index].object.as_str();
                 if object == "oLava" {
                     let id = metadata(world, x, y);
@@ -645,7 +653,7 @@ pub(super) fn initialize_custom_with_context(
             }
             CustomCreateBirth::Entity(id) => {
                 let Some(object) = world.entity(id).map(|entity| entity.object.clone()) else {
-                    continue;
+                    return;
                 };
                 if object == "oLava" {
                     if let Some(entity) = world.entity_mut(id) {
@@ -658,6 +666,11 @@ pub(super) fn initialize_custom_with_context(
                     initialize_custom_instance(world, rng, id, context);
                 } else {
                     crate::creation::initialize_entity_local(world, rng, id);
+                    if world.source_create_projection
+                        && let Some(entity) = world.entity_mut(id)
+                    {
+                        crate::world_events::initialize_source_generated_create(entity);
+                    }
                     if crate::catalog::is_a(&object, "oItem") {
                         crate::items::initialize_inherited_depth(
                             world.entity_mut(id).unwrap(),
@@ -666,8 +679,52 @@ pub(super) fn initialize_custom_with_context(
                     }
                 }
             }
+        });
+    }
+}
+
+/// Classic creates room instances one at a time. Hide prebuilt later births
+/// while a custom-room Create callback probes the active world, then restore
+/// their normal activity before the next birth is processed.
+fn with_custom_create_prefix<T>(
+    world: &mut World,
+    creation_serial: u64,
+    create: impl FnOnce(&mut World) -> T,
+) -> T {
+    let future_entities: Vec<_> = world
+        .entities
+        .iter()
+        .filter(|entity| entity.creation_serial > creation_serial)
+        .map(|entity| (entity.id, entity.engine_active))
+        .collect();
+    let future_tiles: Vec<_> = world
+        .tiles
+        .iter()
+        .enumerate()
+        .filter(|(_, tile)| tile.creation_serial > creation_serial)
+        .map(|(index, tile)| (index, tile.engine_active))
+        .collect();
+
+    for (id, _) in &future_entities {
+        if let Some(entity) = world.entities.iter_mut().find(|entity| entity.id == *id) {
+            entity.engine_active = false;
         }
     }
+    for (index, _) in &future_tiles {
+        world.tiles[*index].engine_active = false;
+    }
+
+    let result = create(world);
+
+    for (id, active) in future_entities {
+        if let Some(entity) = world.entities.iter_mut().find(|entity| entity.id == id) {
+            entity.engine_active = active;
+        }
+    }
+    for (index, active) in future_tiles {
+        world.tiles[index].engine_active = active;
+    }
+    result
 }
 
 #[derive(Clone, Copy)]
@@ -2155,3 +2212,44 @@ mod synchronous_room_terrain_tests;
 #[cfg(test)]
 #[path = "lava_source_birth_tests.rs"]
 pub(super) mod lava_source_birth_tests;
+
+#[cfg(test)]
+mod custom_create_prefix_tests {
+    use super::*;
+    use crate::Area;
+
+    fn frog_create_with_water_order(water_first: bool) -> bool {
+        let mut world = World::new(8, 8, Area::Jungle, 5);
+        let pos = Vec2::new(32.0, 32.0);
+        let (frog, creation_serial) = if water_first {
+            world.spawn("oWaterSwim", pos);
+            let frog = world.spawn("oFrog", pos);
+            let serial = world.entity(frog).unwrap().creation_serial;
+            (frog, serial)
+        } else {
+            let frog = world.spawn("oFrog", pos);
+            let serial = world.entity(frog).unwrap().creation_serial;
+            world.spawn("oWaterSwim", pos);
+            (frog, serial)
+        };
+        let mut rng = Rng::new(7);
+
+        with_custom_create_prefix(&mut world, creation_serial, |world| {
+            crate::creation::initialize_entity_local(world, &mut rng, frog);
+        });
+
+        world.entity(frog).unwrap().value("swimming") != 0.0
+    }
+
+    #[test]
+    fn custom_dynamic_create_queries_only_prior_water_births() {
+        assert!(
+            frog_create_with_water_order(true),
+            "a water instance created earlier is visible to Frog Create"
+        );
+        assert!(
+            !frog_create_with_water_order(false),
+            "a water instance created later is not visible to Frog Create"
+        );
+    }
+}

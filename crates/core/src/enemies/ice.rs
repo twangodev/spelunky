@@ -1908,6 +1908,8 @@ mod tests {
             let unchanged_rng = game.rng.clone();
             let effect_id = game.spawn("oPsychicCreate", origin);
             let effect = game.world.entity(effect_id).unwrap();
+            assert_eq!(effect.text.get("type").map(String::as_str), Some(""));
+            assert_eq!(effect.value("blinkToggle"), 0.0);
             assert_eq!(
                 effect.pos, origin,
                 "Create captures heading without movement"
@@ -2720,6 +2722,12 @@ mod tests {
         }
         assert_eq!(g.camera.x, 16.0);
         let id = g.spawn("oAlienEject", Vec2::new(335.0, 70.0));
+        let alien = g.world.entity(id).unwrap();
+        assert_eq!(
+            alien.text.get("type").map(String::as_str),
+            Some("Alien Eject")
+        );
+        assert_eq!(alien.value("blinkToggle"), 0.0);
         for _ in 0..16 {
             g.step(&crate::InputFrame::default());
             if g.world.entity(id).unwrap().sprite == "sAlienDeploy" {

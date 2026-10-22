@@ -1238,7 +1238,7 @@ pub(super) fn terrain_property(w: &mut World, x: usize, y: usize, key: &str, val
     let existing = w
         .entities
         .iter()
-        .find(|e| e.object == "oTerrainMetadata" && e.pos == p)
+        .find(|e| e.alive && e.object == "oTerrainMetadata" && e.pos == p)
         .map(|e| e.id);
     let id = existing.unwrap_or_else(|| {
         let id = w.spawn("oTerrainMetadata", p);
@@ -1495,6 +1495,32 @@ mod tests {
             false,
             "General",
         );
+    }
+
+    #[test]
+    fn terrain_property_skips_metadata_retired_by_source_terrain_create() {
+        let mut world = World::new(20, 16, Area::Mines, 1);
+        world.name = "Mines".into();
+        world.set_tile(6, 6, "oBrick");
+        let old = terrain_property(&mut world, 6, 6, "shopWall", 1.0);
+
+        super::super::terrain::create_source_room_terrain(
+            &mut world,
+            &mut Rng::new(17),
+            6,
+            6,
+            super::super::GenerationContext::default(),
+        );
+        assert!(
+            world.entity(old).is_none(),
+            "terrain Create retires old proxy"
+        );
+
+        let live = terrain_property(&mut world, 6, 6, "shopWall", 1.0);
+        assert_ne!(live, old);
+        let metadata = world.entity(live).expect("property attaches to live proxy");
+        assert_eq!(metadata.value("shopWall"), 1.0);
+        assert_eq!(metadata.text.get("type").map(String::as_str), Some("None"));
     }
 
     #[test]

@@ -199,6 +199,33 @@ async function saved(page) {
   return page.evaluate(() => JSON.parse(localStorage.getItem('spelunky-rust.save')));
 }
 
+async function browserFullscreenAcceptance(page, result) {
+  const initial = await page.evaluate(() => ({
+    active: Boolean(document.fullscreenElement || document.webkitFullscreenElement),
+    preferred: JSON.parse(localStorage.getItem('spelunky-rust.save'))?.settings?.fullscreen,
+  }));
+  assert.equal(initial.active, false, 'Browser startup must defer fullscreen until a user gesture');
+  assert.equal(initial.preferred, true, 'The initial browser state must preserve Classic fullscreen preference');
+
+  await page.keyboard.press('F4');
+  await page.waitForFunction(() => Boolean(document.fullscreenElement || document.webkitFullscreenElement)
+    && JSON.parse(localStorage.getItem('spelunky-rust.save'))?.settings?.fullscreen === true,
+  null, { timeout: 10000 });
+  await page.keyboard.press('F4');
+  await page.waitForFunction(() => !document.fullscreenElement && !document.webkitFullscreenElement
+    && JSON.parse(localStorage.getItem('spelunky-rust.save'))?.settings?.fullscreen === false,
+  null, { timeout: 10000 });
+  await page.keyboard.press('F4');
+  await page.waitForFunction(() => Boolean(document.fullscreenElement || document.webkitFullscreenElement)
+    && JSON.parse(localStorage.getItem('spelunky-rust.save'))?.settings?.fullscreen === true,
+  null, { timeout: 10000 });
+  await page.keyboard.press('F4');
+  await page.waitForFunction(() => !document.fullscreenElement && !document.webkitFullscreenElement
+    && JSON.parse(localStorage.getItem('spelunky-rust.save'))?.settings?.fullscreen === false,
+  null, { timeout: 10000 });
+  result.checks.push('Fullscreen preference survives gesture-blocked startup and follows user-initiated enter/exit');
+}
+
 async function screenshot(page, name, result) {
   // Host telemetry is published before its GPU submission. Let the browser
   // present the new scene before capturing a transition's visible evidence.
@@ -284,6 +311,7 @@ try {
         if (message.type() === 'warning') result.warnings.push(message.text());
       });
       result.openingRoute = await ready(page);
+      await browserFullscreenAcceptance(page, result);
       assert.match(await page.title(), /Spelunky Classic/);
       assert.match(await page.locator('#attribution').textContent(), /Derek Yu \/ Mossmouth/);
       const license = await page.request.get(new URL('assets/LICENSE', base).href);

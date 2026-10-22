@@ -1179,32 +1179,38 @@ fn collision(game: &mut Game, this: Instance, other: Instance) {
     }
 }
 fn automatic_collision_pair(game: &mut Game, a: Instance, b: Instance) {
-    // GM8 applies automatic solid response once per accepted pair, outside the
-    // directional event wrappers. If either participant is solid, both are
-    // rewound before either Collision body; after both bodies, movement for
-    // both is replayed if either participant remains solid.
-    if source_solid(game, a) || source_solid(game, b) {
-        restore_previous(game, a);
-        restore_previous(game, b);
-    }
-
-    collision(game, a, b);
+    // GM8 resolves solid response for the receiving instance of each
+    // directional Collision event. A solid `other` rewinds only the receiver
+    // before its event; the receiver's motion is then replayed and checked for
+    // remaining overlap. A solid receiver alone does not rewind a one-sided
+    // event owned by its non-solid counterpart.
+    automatic_collision_direction(game, a, b);
     if !matches!(
         game.state,
         crate::RunState::Transition | crate::RunState::Won
     ) {
-        collision(game, b, a);
+        automatic_collision_direction(game, b, a);
+    }
+}
+
+fn automatic_collision_direction(game: &mut Game, receiver: Instance, other: Instance) {
+    let receiver_object = source_object(game, receiver);
+    let other_object = source_object(game, other);
+    if !collision_events::has_event(&receiver_object, &other_object) {
+        return;
     }
 
-    if source_solid(game, a) || source_solid(game, b) {
-        replay_motion(game, a);
-        replay_motion(game, b);
+    if source_solid(game, other) {
+        restore_previous(game, receiver);
+        collision(game, receiver, other);
+        replay_motion(game, receiver);
         // GM's overlap helper rejects actors marked for destruction, even
         // though they remain in physical storage until the post-End-Step pass.
-        if alive(game, a) && alive(game, b) && intersects(game, a, b) {
-            restore_previous(game, a);
-            restore_previous(game, b);
+        if alive(game, receiver) && alive(game, other) && intersects(game, receiver, other) {
+            restore_previous(game, receiver);
         }
+    } else {
+        collision(game, receiver, other);
     }
 }
 fn source_solid(game: &Game, i: Instance) -> bool {
@@ -1790,7 +1796,13 @@ pub(crate) fn step(game: &mut Game, input: &InputFrame) {
     }
     game.dispatcher.phase = Phase::Animation;
     let room_tick = game.level_tick;
-    for i in game.dispatcher.active_order.clone() {
+    // Classic advances surviving instances in creation/registration order;
+    // Draw may have depth-sorted active_order immediately above.
+    let animation_order = game.dispatcher.registration_order.clone();
+    for i in animation_order {
+        if !game.dispatcher.active_order.contains(&i) {
+            continue;
+        }
         advance_one(game, i);
         if game.level_tick != room_tick {
             break;
@@ -1813,16 +1825,16 @@ mod automatic_collision_tests {
     use crate::{Area, PlayerState, RulesPreset, World};
 
     #[test]
-    fn one_sided_collision_with_solid_rolls_back_both_participants() {
+    fn one_sided_event_with_solid_other_rewinds_only_its_receiver() {
         let mut game = Game::shell(5, RulesPreset::Classic);
         game.world = World::new(24, 18, Area::Mines, 1);
         game.player.pos = Vec2::new(24.0, 24.0);
         game.player.state = PlayerState::Standing;
 
         // oRuby's source descriptor is GM-solid. oWeb has only a Collision
-        // with oTreasure body, which zeros the Ruby's custom velocity. GM8's
-        // pair-level response still rewinds both actors before that one-sided
-        // callback, even though Ruby declares no reverse event.
+        // with oTreasure body, which zeros Ruby's custom velocity. GM8 rewinds
+        // the receiver (Web) because its `other` (Ruby) is solid. Ruby declares
+        // no reverse event, so its own position keeps the one-pixel movement.
         let web = game.spawn("oWeb", Vec2::new(120.0, 120.0));
         let ruby = game.spawn("oRuby", Vec2::new(120.0, 120.0));
         game.world.entity_mut(ruby).unwrap().vel = Vec2::new(1.0, 0.0);
@@ -1838,27 +1850,24 @@ mod automatic_collision_tests {
             Vec2::default(),
             "oWeb's source Collision zeros other velocity"
         );
-        assert_eq!(
-            ruby.pos.x, 120.0,
-            "solid pair response restores the target to its frame-start pose"
-        );
+        assert_eq!(ruby.pos.x, 121.0, "Ruby has no reverse Collision event");
         assert_eq!(
             game.world.entity(web).unwrap().pos.x,
             120.0,
-            "solid pair response restores the event receiver too"
+            "solid `other` rewinds the Collision receiver"
         );
     }
 
     #[test]
-    fn solid_large_gem_is_rewound_before_its_one_sided_ghost_collision() {
+    fn solid_large_gem_with_nonsolid_ghost_keeps_its_moved_position() {
         let mut game = Game::shell(5, RulesPreset::Classic);
         game.world = World::new(24, 18, Area::Mines, 1);
         game.player.pos = Vec2::new(24.0, 24.0);
         game.player.state = PlayerState::Standing;
 
-        // Big gems are solid; Ghost is not. GM8 rewinds both participants
-        // before the one-sided Collision callback, so the Diamond is born at
-        // the gem's frame-start coordinates even though that callback destroys it.
+        // Big gems are solid; Ghost is not. The gem owns the one-sided event,
+        // and its `other` is non-solid, so GM8 does not rewind it before the
+        // callback. The Diamond is born where the gem moved this tick.
         let ghost = game.spawn("oGhost", Vec2::new(120.0, 120.0));
         game.world.entity_mut(ghost).unwrap().state = 0;
         let gem = game.spawn("oRubyBig", Vec2::new(128.0, 128.0));
@@ -1876,8 +1885,8 @@ mod automatic_collision_tests {
             .find(|entity| entity.alive && entity.object == "oDiamond")
             .unwrap();
         assert_eq!(
-            diamond.pos.x, 128.0,
-            "source solid-pair response rewinds the gem before its callback"
+            diamond.pos.x, 129.0,
+            "a solid receiver is not rewound when its `other` is non-solid"
         );
     }
 }

@@ -316,7 +316,15 @@ fn character_collision(game: &mut Game, e: &mut Entity) {
 
 /// oOlmecSlam Create keeps its invisible collision sprite and emits once.
 pub(super) fn create(game: &mut Game, e: &mut Entity) {
-    if e.object == "oOlmec" {
+    if e.object == "oFly" && game.generation_revision == crate::GenerationRevision::SourceClassicV2
+    {
+        // oFly/Create: xVel=0; yVel=-random(3)+0.5. The parentless effect
+        // still receives a synchronous source Create through Game::spawn.
+        e.vel.x = 0.0;
+        e.data.insert("xVel".into(), 0.0);
+        e.vel.y = 0.5 - 3.0 * game.rng.unit();
+        e.data.insert("yVel".into(), e.vel.y);
+    } else if e.object == "oOlmec" {
         // Literal final Create writes. Automatic follow occurs pre-Draw,
         // after the first Level Step has observed this canonical Y400.
         game.data.insert("camera_hborder".into(), 0.0);
@@ -405,7 +413,7 @@ pub(super) fn collision(game: &mut Game, e: &mut Entity, other: Instance) -> boo
             return true;
         }
         if crate::catalog::is_a(&object, "oSolid") {
-            game.world.spawn("oSmokePuff", e.pos);
+            crate::world_events::spawn_runtime_object(game, "oSmokePuff", e.pos);
             game.sound("sndHit", e.pos);
             e.alive = false;
             return true;
@@ -413,7 +421,7 @@ pub(super) fn collision(game: &mut Game, e: &mut Entity, other: Instance) -> boo
     }
     if matches!(e.object.as_str(), "oMagmaMan" | "oMagma") {
         if e.object == "oMagma" && crate::catalog::is_a(&object, "oWater") {
-            game.world.spawn("oSmokePuff", e.pos);
+            crate::world_events::spawn_runtime_object(game, "oSmokePuff", e.pos);
             e.alive = false;
             return true;
         }
@@ -513,9 +521,21 @@ fn side(e: &Entity) -> &'static str {
     if e.facing < 0 { "L" } else { "R" }
 }
 fn spawn(game: &mut Game, object: &str, pos: Vec2) -> u64 {
+    if matches!(object, "oMagmaMan" | "oHawkman" | "oCaveman")
+        && game.generation_revision == crate::GenerationRevision::SourceClassicV2
+    {
+        // These source Create callbacks set inherited and object-specific
+        // fields synchronously. Their AI/default initialization already runs
+        // through World::spawn; Game::spawn completes the Create projection.
+        return game.spawn(object, pos);
+    }
     if matches!(object, "oOlmecSlam" | "oFrog" | "oFireFrog") {
         // Slam's sound and the hatching frogs' facing/water Creates finish
         // synchronously before their source producer resumes or retires.
+        return game.spawn(object, pos);
+    }
+    if object == "oFly" && game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+        // Finish oFly/Create before Tomb Lord writes the caller's xVel.
         return game.spawn(object, pos);
     }
     let id = game.world.spawn(object, pos);
@@ -858,6 +878,7 @@ fn tomb_lord(game: &mut Game, e: &mut Entity) {
                 let vx = (3 + game.rng.range(3)) as f64 * e.facing as f64;
                 if let Some(f) = game.world.entity_mut(id) {
                     f.vel.x = vx;
+                    f.data.insert("xVel".into(), vx);
                 }
             }
         }
@@ -1006,7 +1027,7 @@ pub(super) fn alarm(game: &mut Game, e: &mut Entity, index: u8) {
                 .count()
                 < 12
             {
-                game.world.spawn("oYellowTrail", e.pos);
+                crate::world_events::spawn_runtime_object(game, "oYellowTrail", e.pos);
             }
             e.alarms[1] = 4;
         }
@@ -1402,7 +1423,7 @@ fn debris(game: &mut Game, e: &mut Entity) {
         if e.vel.y > 1.0 {
             e.vel.y *= -0.4;
         } else {
-            game.world.spawn("oSmokePuff", e.pos);
+            crate::world_events::spawn_runtime_object(game, "oSmokePuff", e.pos);
             e.alive = false;
         }
         e.vel.x = if e.vel.x.abs() < 0.1 {
@@ -2361,6 +2382,17 @@ mod tests {
                             .iter()
                             .all(|e| e.animation == 0.0 && e.value("animation_speed") == 0.0)
                     );
+                    let hawkmen: Vec<_> = game
+                        .world
+                        .entities
+                        .iter()
+                        .filter(|e| e.alive && e.object == "oHawkman")
+                        .collect();
+                    assert!(!hawkmen.is_empty(), "Olmec Alarm 1 hatches worshippers");
+                    assert!(hawkmen.iter().all(|e| {
+                        e.text.get("type").map(String::as_str) == Some("Yeti")
+                            && e.value("blinkToggle") == 0.0
+                    }));
                 }
                 238 => assert_eq!(boss.sprite, "sOlmecStart3"),
                 287 => assert_eq!(boss.sprite, "sOlmec"),
@@ -2410,6 +2442,16 @@ mod tests {
                         .filter(|e| e.alive && e.object == "oCaveman")
                         .count(),
                     3
+                );
+                assert!(
+                    game.world
+                        .entities
+                        .iter()
+                        .filter(|e| e.alive && e.object == "oCaveman")
+                        .all(|e| {
+                            e.text.get("type").map(String::as_str) == Some("Caveman")
+                                && e.value("blinkToggle") == 0.0
+                        })
                 );
             }
             if game.player.data.get("active") == Some(&1.0) {
@@ -3005,7 +3047,14 @@ mod tests {
         game.world.entity_mut(id).unwrap().vel = Vec2::default();
         game.step(&crate::InputFrame::default());
         assert!(game.world.entity(id).is_none());
-        assert!(game.world.entities.iter().any(|e| e.object == "oSmokePuff"));
+        let smoke = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oSmokePuff")
+            .unwrap();
+        assert_eq!(smoke.text.get("type").map(String::as_str), Some(""));
+        assert_eq!(smoke.value("blinkToggle"), 0.0);
     }
     #[test]
     fn actual_step_yellow_ball_outside_room_uses_full_sprite_at_top_and_side() {
@@ -3082,7 +3131,7 @@ mod tests {
             } else {
                 Vec2::new(96.0, 144.0)
             };
-            let damsel_id = g.world.spawn("oDamsel", damsel_pos);
+            let damsel_id = g.spawn("oDamsel", damsel_pos);
             let damsel = g.world.entity_mut(damsel_id).unwrap();
             damsel.held = held;
             damsel
@@ -3093,7 +3142,7 @@ mod tests {
             }
             // The held fixture touches the Damsel's exposed right edge while
             // clearing the player's sprite, so the dedicated event must run.
-            let fly_id = g.world.spawn(
+            let fly_id = g.spawn(
                 "oFly",
                 if held {
                     Vec2::new(150.0, 148.0)
@@ -3102,7 +3151,9 @@ mod tests {
                 },
             );
             let vx = if held { -1.0 } else { 1.0 };
-            g.world.entity_mut(fly_id).unwrap().vel = Vec2::new(vx, 0.0);
+            let fly = g.world.entity_mut(fly_id).unwrap();
+            fly.vel = Vec2::new(vx, 0.0);
+            fly.data.insert("xVel".into(), vx);
             g.step(&crate::InputFrame::default());
             let damsel = g.world.entity(damsel_id).unwrap();
             assert_eq!(g.player.health, 4.0);
@@ -3156,6 +3207,43 @@ mod tests {
             }
         }
         panic!("natural YellowBall trajectory never reached either wall");
+    }
+
+    #[test]
+    fn actual_step_yellow_ball_alarm_runs_trail_create_synchronously() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        game.world = World::new(40, 30, Area::Mines, 1);
+        game.flags.insert("custom".into());
+        let ball = game.spawn("oYellowBall", Vec2::new(180.0, 128.0));
+        game.world.entity_mut(ball).unwrap().alarms[1] = 1;
+
+        game.step(&crate::InputFrame::default());
+
+        let trail = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oYellowTrail")
+            .expect("YellowBall Alarm 1 creates a trail");
+        assert_eq!(trail.text.get("type").map(String::as_str), Some(""));
+        assert_eq!(trail.value("blinkToggle"), 0.0);
+        assert_eq!(trail.image_speed(), 1.0);
+        assert_eq!(game.world.entity(ball).unwrap().alarms[1], 4);
+    }
+
+    #[test]
+    fn source_olmec_and_magma_births_complete_enemy_create_state() {
+        let mut game = Game::shell(42, RulesPreset::Classic);
+        for (object, kind) in [
+            ("oMagmaMan", "Magma Man"),
+            ("oHawkman", "Yeti"),
+            ("oCaveman", "Caveman"),
+        ] {
+            let id = spawn(&mut game, object, Vec2::new(96.0, 96.0));
+            let entity = game.world.entity(id).unwrap();
+            assert_eq!(entity.text.get("type").map(String::as_str), Some(kind));
+            assert_eq!(entity.value("blinkToggle"), 0.0);
+        }
     }
     #[test]
     fn hawk_stomp_wins_over_grab_in_integrated_combat() {
@@ -3243,7 +3331,14 @@ mod tests {
         e.data.insert("started".into(), 1.0);
         assert!(collision(&mut g, &mut e, Instance::Entity(water)));
         assert!(!e.alive);
-        assert!(g.world.entities.iter().any(|e| e.object == "oSmokePuff"));
+        let smoke = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oSmokePuff")
+            .unwrap();
+        assert_eq!(smoke.text.get("type").map(String::as_str), Some(""));
+        assert_eq!(smoke.value("blinkToggle"), 0.0);
     }
     #[test]
     fn actual_step_magma_enemy_uses_its_local_collision_after_reverse_pair_dispatch() {
@@ -3585,6 +3680,27 @@ mod tests {
         assert_eq!(e.state, 0);
         assert_eq!(e.value("attack_cooldown"), 100.0);
     }
+
+    #[test]
+    fn source_fly_spawn_runs_its_create_draw_without_changing_historical_spawns() {
+        let mut source = Game::shell(43, RulesPreset::Classic);
+        let mut source_expected = source.rng.clone();
+        let expected_y = 0.5 - 3.0 * source_expected.unit();
+        let source_id = source.spawn("oFly", Vec2::new(80.0, 64.0));
+        let fly = source.world.entity(source_id).unwrap();
+        assert_eq!(fly.vel, Vec2::new(0.0, expected_y));
+        assert_eq!(fly.value("xVel"), 0.0);
+        assert_eq!(fly.value("yVel"), expected_y);
+        assert_eq!(source.rng.next_u64(), source_expected.next_u64());
+
+        let mut historical = Game::legacy_shell(43, RulesPreset::Classic);
+        let mut historical_expected = historical.rng.clone();
+        let historical_id = historical.spawn("oFly", Vec2::new(80.0, 64.0));
+        let historical_fly = historical.world.entity(historical_id).unwrap();
+        assert_eq!(historical_fly.vel, Vec2::default());
+        assert_eq!(historical.rng.next_u64(), historical_expected.next_u64());
+    }
+
     #[test]
     fn temple_embedded_actor_checks_follow_source_points() {
         let mut g = room();

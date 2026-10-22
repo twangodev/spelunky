@@ -770,17 +770,19 @@ impl App {
             return;
         };
         let canvas: web_sys::Element = canvas.unchecked_into();
+        let focus_canvas = canvas.clone();
         let proxy = self.proxy.clone();
         let listener =
             wasm_bindgen::closure::Closure::wrap(Box::new(move |event: web_sys::Event| {
                 // The canvas can remain the active DOM element while its
-                // browser window loses OS focus. On return, resume only when
-                // the document and the game's canvas both own focus.
+                // browser window loses OS focus. Also observe canvas focus
+                // directly: after a browser restore Winit can suppress a
+                // focus event because its cached canvas state is stale.
                 let focused = event.type_() == "focus"
                     && document.has_focus().unwrap_or(false)
                     && document
                         .active_element()
-                        .is_some_and(|active_element| active_element == canvas);
+                        .is_some_and(|active_element| active_element == focus_canvas);
                 let _ = proxy.send_event(UserEvent::BrowserWindowFocusChanged(focused));
             }) as Box<dyn FnMut(web_sys::Event)>);
         let callback = listener.as_ref().unchecked_ref();
@@ -791,6 +793,19 @@ impl App {
         if let Err(error) = browser_window.add_event_listener_with_callback("focus", callback) {
             let _ = browser_window.remove_event_listener_with_callback("blur", callback);
             self.toast(format!("Cannot observe browser focus state: {error:?}"));
+            return;
+        }
+        if let Err(error) = canvas.add_event_listener_with_callback("blur", callback) {
+            let _ = browser_window.remove_event_listener_with_callback("blur", callback);
+            let _ = browser_window.remove_event_listener_with_callback("focus", callback);
+            self.toast(format!("Cannot observe game canvas focus state: {error:?}"));
+            return;
+        }
+        if let Err(error) = canvas.add_event_listener_with_callback("focus", callback) {
+            let _ = browser_window.remove_event_listener_with_callback("blur", callback);
+            let _ = browser_window.remove_event_listener_with_callback("focus", callback);
+            let _ = canvas.remove_event_listener_with_callback("blur", callback);
+            self.toast(format!("Cannot observe game canvas focus state: {error:?}"));
             return;
         }
         self.browser_focus_listener = Some(listener);
@@ -820,9 +835,6 @@ impl App {
         // Safari's prefixed event is still used by older WebKit fullscreen APIs.
         let _ = document.add_event_listener_with_callback("webkitfullscreenchange", callback);
         self.browser_fullscreen_listener = Some(listener);
-        let _ = self.proxy.send_event(UserEvent::BrowserFullscreenChanged(
-            browser_fullscreen_active(),
-        ));
     }
     fn reset_room_timing(&mut self) {
         if let Some(game) = &mut self.game {
@@ -1846,6 +1858,9 @@ impl App {
                 self.unreadable_custom_levels.remove(&key);
                 self.custom_level_catalog.insert(key.clone(), text);
                 let result = self.store.save();
+                #[cfg(not(target_arch = "wasm32"))]
+                let command = complete_native_editor_save(&mut self.editor, &key, result);
+                #[cfg(target_arch = "wasm32")]
                 let command = complete_editor_save(&mut self.editor, &key, result);
                 self.editor_command(command);
             }
@@ -3968,6 +3983,24 @@ fn complete_editor_save(
         Err(error) => {
             editor.message(error);
             EditorCommand::None
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn complete_native_editor_save(
+    editor: &mut EditorUi,
+    name: &str,
+    profile_result: Result<(), String>,
+) -> EditorCommand {
+    match profile_result {
+        Ok(()) => complete_editor_save(editor, name, Ok(())),
+        Err(error) => {
+            // The native `.lvl` file was already written successfully. Classic
+            // proceeds with EXIT/NEW after closing that file; profile storage
+            // is auxiliary on native and must not strand the editor draft.
+            editor.message(format!("SAVED {name}; PROFILE SAVE FAILED: {error}"));
+            editor.saved()
         }
     }
 }
@@ -10235,6 +10268,41 @@ mod tests {
         assert_eq!(game.player.facing, -1);
         assert!(!game.flags.contains("custom"));
         assert!(!game.flags.contains("custom_level"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_editor_continues_exit_and_new_after_profile_save_failure() {
+        let mut exit_editor = EditorUi::new();
+        for _ in 0..3 {
+            exit_editor.wheel(1.0);
+        }
+        exit_editor.key(KeyCode::KeyN, None, false);
+        exit_editor.key(KeyCode::KeyA, Some("saved-room"), false);
+        exit_editor.key(KeyCode::Enter, None, false);
+        exit_editor.key(KeyCode::Escape, None, false);
+        let EditorCommand::Save { name, .. } = exit_editor.key(KeyCode::KeyY, None, false) else {
+            panic!("source Y must request saving before leaving");
+        };
+        assert!(matches!(
+            complete_native_editor_save(&mut exit_editor, &name, Err("profile locked".into())),
+            EditorCommand::Back
+        ));
+
+        let mut new_editor = EditorUi::new();
+        new_editor.key(KeyCode::KeyN, None, true);
+        let EditorCommand::Save { name, .. } = new_editor.key(KeyCode::KeyY, None, false) else {
+            panic!("source NEW/Y must save before creating another level");
+        };
+        assert!(matches!(
+            complete_native_editor_save(&mut new_editor, &name, Err("profile locked".into())),
+            EditorCommand::None
+        ));
+        new_editor.key(KeyCode::KeyF, Some("fresh"), false);
+        assert!(matches!(
+            new_editor.key(KeyCode::Enter, None, false),
+            EditorCommand::OpenLevel { .. }
+        ));
     }
 
     #[test]

@@ -142,6 +142,25 @@ const TUTORIAL_TERRAIN: [&str; 19] = [
     "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh",
 ];
 
+/// The 246 `oBrick` instances from `Rooms/rTutorial.xml`, in source instance
+/// order. Each value is `row * 42 + column`; row-major terrain decoding does
+/// not preserve the room resource's Create sequence.
+const TUTORIAL_BRICK_CREATE_ORDER: [u16; 246] = [
+    383, 384, 385, 386, 387, 388, 389, 390, 391, 392, 393, 394, 395, 396, 397, 398, 399, 400, 401,
+    402, 403, 404, 405, 406, 407, 408, 409, 410, 411, 299, 300, 301, 302, 303, 304, 305, 306, 307,
+    308, 309, 310, 311, 312, 313, 314, 360, 361, 362, 363, 364, 365, 366, 367, 368, 369, 327, 326,
+    325, 324, 323, 322, 321, 320, 319, 318, 317, 316, 315, 348, 347, 344, 342, 341, 343, 345, 346,
+    349, 350, 351, 352, 353, 354, 355, 356, 357, 358, 359, 212, 211, 260, 266, 224, 225, 226, 227,
+    228, 229, 230, 231, 232, 274, 273, 272, 271, 270, 269, 268, 267, 370, 371, 415, 414, 413, 412,
+    418, 376, 334, 754, 753, 752, 751, 750, 749, 748, 747, 746, 745, 744, 743, 742, 741, 740, 739,
+    738, 737, 736, 735, 734, 733, 732, 731, 715, 716, 717, 718, 719, 720, 721, 722, 723, 724, 725,
+    726, 727, 728, 729, 730, 532, 533, 575, 574, 616, 617, 659, 658, 700, 701, 601, 643, 685, 463,
+    464, 505, 674, 676, 165, 164, 163, 162, 161, 160, 159, 158, 157, 699, 657, 615, 573, 531, 612,
+    611, 604, 603, 602, 644, 686, 687, 645, 646, 688, 600, 642, 684, 641, 683, 682, 610, 333, 332,
+    451, 450, 449, 448, 447, 446, 445, 609, 698, 530, 572, 614, 656, 697, 558, 516, 474, 432, 294,
+    252, 421, 422, 423, 382, 381, 380, 379, 337, 338, 339, 340, 298, 297, 296, 295, 253, 254,
+];
+
 // Object positions retain GameMaker sprite origins, not assumed tile centers.
 const TUTORIAL_ENTITIES: &[(&str, f64, f64, &str)] = &[
     ("oXTitle", 16.0, 64.0, "sExit"),
@@ -225,6 +244,25 @@ fn tutorial() -> World {
         }
     }
     world
+}
+
+/// Complete each authored tutorial brick's Create event at its source
+/// instance-order slot, sharing the normal room-terrain constructor so
+/// embedded loot receives its own synchronous Create and producer overrides.
+pub(super) fn create_tutorial_source_terrain(
+    world: &mut World,
+    rng: &mut Rng,
+    context: super::GenerationContext,
+) {
+    debug_assert_eq!(world.name, "Tutorial Cave");
+    debug_assert_eq!((world.width, world.height), (42, 19));
+    for &position in &TUTORIAL_BRICK_CREATE_ORDER {
+        let position = usize::from(position);
+        let x = position % world.width;
+        let y = position / world.width;
+        debug_assert_eq!(world.tiles[position].object, "oBrick");
+        super::terrain::create_source_room_terrain(world, rng, x, y, context);
+    }
 }
 
 // The portable core seeds dynamic tutorial labels with semantic action names.
@@ -389,9 +427,18 @@ fn boss_arena(
             if let Some(tape) = boss_create_tape {
                 // Reuse the authored Create draw made before route generation.
                 let id = world.spawn(object, Vec2::new(x, y));
-                let entity = world.entity_mut(id).expect("new authored Olmec");
-                entity.facing = tape.olmec_facing;
-                entity.data.insert("olmec_facing_created".into(), 1.0);
+                {
+                    let entity = world.entity_mut(id).expect("new authored Olmec");
+                    entity.facing = tape.olmec_facing;
+                    entity.data.insert("olmec_facing_created".into(), 1.0);
+                }
+                // Run the source Create projection after recording the taped
+                // random facing, so its shared local handler cannot draw a
+                // second facing value.
+                crate::creation::initialize_entity_local(world, rng, id);
+                crate::world_events::initialize_source_generated_create(
+                    world.entity_mut(id).expect("initialized authored Olmec"),
+                );
                 id
             } else {
                 // Preserve standalone arena fixtures that do not run the
@@ -466,6 +513,77 @@ mod tests {
                 .entities
                 .iter()
                 .any(|entity| entity.object == "oSnake" && entity.pos == Vec2::new(352.0, 64.0))
+        );
+    }
+
+    fn source_tutorial_brick_create_rng(rng: &mut Rng) {
+        for &position in &TUTORIAL_BRICK_CREATE_ORDER {
+            // oBrick/Create.xml:29-41. This seed deliberately reaches no
+            // underground-item branch, whose child Create has its own RNG.
+            rng.range(10);
+            let n = 1 + rng.range(100);
+            let x = usize::from(position) % 42;
+            let y = usize::from(position) / 42;
+            if n < 30 || x == 0 || y == 0 || x + 1 >= 42 || y + 1 >= 19 {
+                continue;
+            }
+            if rng.range(100) == 0 || rng.range(120) == 0 || rng.range(140) == 0 {
+                continue;
+            }
+            assert_ne!(rng.range(1200), 0, "seed 13 selects an underground item");
+        }
+    }
+
+    fn assert_seed_13_tutorial_brick(world: &World) {
+        assert_eq!(world.tiles[7 * world.width + 15].object, "oBrick");
+        let brick = world.tile_sprite_metadata(15, 7).unwrap();
+        assert_eq!(brick.text["terrain_sprite"], "sBrick2");
+        assert_eq!(brick.value("n"), 54.0);
+        assert_eq!(brick.value("source_room_terrain_created"), 1.0);
+
+        let loot = world
+            .entities
+            .iter()
+            .find(|entity| {
+                entity.alive
+                    && entity.object == "oEmeraldBig"
+                    && entity.pos == Vec2::new(248.0, 120.0)
+            })
+            .expect("source Create embeds an Emerald in the selected tutorial brick");
+        assert_eq!(loot.value("cost"), 0.0);
+        assert_eq!(loot.value("forSale"), 0.0);
+    }
+
+    #[test]
+    fn tutorial_routes_project_authored_brick_create_and_continue_the_game_rng() {
+        // The first authored oBrick in rTutorial.xml is at (80,144), unlike
+        // the first row-major brick in TUTORIAL_TERRAIN.
+        assert_eq!(TUTORIAL_BRICK_CREATE_ORDER[0], 9 * 42 + 5);
+
+        let mut expected = Rng::new(13);
+        source_tutorial_brick_create_rng(&mut expected);
+        assert_eq!(expected.state_bits(), 1_726_824_778);
+        let expected_continuation = expected.clone().next_u64();
+
+        let direct = crate::Game::try_tutorial(13, crate::RulesPreset::Classic).unwrap();
+        assert_eq!(
+            direct.generation_revision,
+            crate::GenerationRevision::SourceClassicV2
+        );
+        assert!(direct.world.source_create_projection);
+        assert_seed_13_tutorial_brick(&direct.world);
+        assert_eq!(direct.rng.state_bits(), expected.state_bits());
+        assert_eq!(direct.rng.clone().next_u64(), expected_continuation);
+
+        let mut from_hub = crate::Game::shell(13, crate::RulesPreset::Classic);
+        let mut hub_expected = from_hub.rng.clone();
+        source_tutorial_brick_create_rng(&mut hub_expected);
+        from_hub.start_from_hub(true, 1);
+        assert_seed_13_tutorial_brick(&from_hub.world);
+        assert_eq!(from_hub.rng.state_bits(), hub_expected.state_bits());
+        assert_eq!(
+            from_hub.rng.clone().next_u64(),
+            hub_expected.clone().next_u64()
         );
     }
 
@@ -544,6 +662,26 @@ mod tests {
             Some(&tape),
         );
         assert_eq!(rng.state_bits(), state_after_source_creates);
+        let olmec = world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oOlmec")
+            .expect("authored Olmec is created");
+        assert_eq!(olmec.facing, tape.olmec_facing);
+        assert_eq!(olmec.state, -1);
+        assert_eq!(olmec.image_speed(), 0.4);
+        assert_eq!(olmec.value("collision_left"), 2.0);
+        assert_eq!(olmec.value("collision_top"), 0.0);
+        assert_eq!(olmec.value("collision_right"), 62.0);
+        assert_eq!(olmec.value("collision_bottom"), 64.0);
+        assert_eq!(olmec.value("xAcc"), 0.0);
+        assert_eq!(olmec.value("yAcc"), 0.0);
+        assert_eq!(olmec.value("yDelta"), -0.4);
+        assert_eq!(olmec.value("view_yview[0]"), 400.0);
+        assert_eq!(
+            olmec.text.get("view_object[0]").map(String::as_str),
+            Some("oOlmec")
+        );
         let entities_before_terrain = world.entities.len();
         super::super::terrain::create_generated_with_context(
             &mut world,

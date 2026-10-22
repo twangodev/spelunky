@@ -128,11 +128,25 @@ impl Game {
     }
 
     fn prepare_tutorial(mut game: Self) -> Self {
-        game.world = generation::tutorial();
+        game.world = game.generate_tutorial_world();
         game.flags.insert("tutorial".into());
         game.reset_position();
         traps::initialize_level(&mut game);
         game
+    }
+
+    fn generate_tutorial_world(&mut self) -> World {
+        if self.generation_revision == GenerationRevision::SourceClassicV2 {
+            generation::tutorial_with_context(
+                &mut self.rng,
+                generation::GenerationContext {
+                    has_spectacles: self.player.has("Spectacles"),
+                    has_cemetery: false,
+                },
+            )
+        } else {
+            generation::tutorial()
+        }
     }
 
     pub fn load_custom(&mut self, level: &level::Level, name: &str, previous: &str) {
@@ -188,6 +202,8 @@ impl Game {
         // the zero grid established by scrInitLevel.
         let source_room_path = self.world.source_room_path.unwrap_or([[0; 4]; 5]);
         self.world = level.to_world();
+        self.world.source_create_projection =
+            self.generation_revision == GenerationRevision::SourceClassicV2;
         self.world.source_room_path = Some(source_room_path);
         generation::initialize_custom_terrain_with_context(
             &mut self.world,
@@ -625,7 +641,7 @@ impl Game {
             self.data.insert("levelType".into(), 0.0);
             self.player.bombs = 0.0;
             self.player.ropes = 2.0;
-            self.world = generation::tutorial();
+            self.world = self.generate_tutorial_world();
         } else {
             if level > 1 {
                 self.flags.insert("used_shortcut".into());
@@ -1492,6 +1508,57 @@ mod tests {
             f64::from(expected_bubble_timer)
         );
         assert_eq!(game.rng.state_bits(), expected.state_bits());
+    }
+
+    #[test]
+    fn source_custom_room_projects_create_fields_before_custom_overrides() {
+        let mut game = Game::try_shell(17, crate::RulesPreset::Classic).unwrap();
+        let mut level = crate::level::Level::default();
+        level.set_tile(2, 2, 'c').unwrap();
+        level.set_tile(5, 2, 'X').unwrap();
+        level.set_tile(8, 2, '!').unwrap();
+        level.exit_targets = vec!["next-room".into()];
+
+        game.load_custom(&level, "source-custom-create", "previous-room");
+
+        let chest = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oChest")
+            .expect("custom chest was created");
+        assert_eq!(chest.text.get("type").map(String::as_str), Some("Chest"));
+        assert_eq!(chest.value("active"), 1.0);
+        assert_eq!(chest.value("collision_left"), -6.0);
+        assert_eq!(chest.value("collision_right"), 6.0);
+        assert_eq!(chest.value("yAcc"), 0.2);
+
+        let exit = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oExit")
+            .expect("custom exit was created");
+        assert_eq!(exit.text.get("type").map(String::as_str), Some("Exit"));
+        assert_eq!(
+            exit.text.get("leadsTo").map(String::as_str),
+            Some("next-room")
+        );
+
+        let keeper = game
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oShopkeeper")
+            .expect("custom shopkeeper was created");
+        assert_eq!(
+            keeper.text.get("type").map(String::as_str),
+            Some("Shopkeeper")
+        );
+        assert_eq!(keeper.value("collision_left"), 2.0);
+        assert_eq!(keeper.value("collision_top"), 0.0);
+        assert_eq!(keeper.value("collision_right"), 14.0);
+        assert_eq!(keeper.value("collision_bottom"), 16.0);
     }
 
     #[test]

@@ -3421,6 +3421,8 @@ mod tests {
                 );
                 assert_eq!(particle.vel, Vec2::new(velocity.x, velocity.y + 0.6));
                 assert_eq!(particle.animation, 0.2);
+                assert_eq!(particle.text.get("type").map(String::as_str), Some(""));
+                assert_eq!(particle.value("blinkToggle"), 0.0);
             }
             let wave = game
                 .world

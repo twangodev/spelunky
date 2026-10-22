@@ -361,7 +361,8 @@ pub(super) fn collision(game: &mut Game, this: Instance, other: Instance) {
         }
         "oDarkFall" if crate::catalog::is_a(&other_object, "oSolid") => {
             game.sound("sndBreak", entity.pos);
-            game.world.spawn(
+            crate::world_events::spawn_runtime_object(
+                game,
                 "oSmokePuff",
                 Vec2::new(entity.pos.x + 8.0, entity.pos.y + 8.0),
             );
@@ -1972,7 +1973,14 @@ mod tests {
         let id = game.world.spawn("oDarkFall", Vec2::new(80.0, 88.0));
         game.step(&crate::InputFrame::default());
         assert!(game.world.entity(id).is_none());
-        assert!(game.world.entities.iter().any(|e| e.object == "oSmokePuff"));
+        let smoke = game
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oSmokePuff")
+            .unwrap();
+        assert_eq!(smoke.text.get("type").map(String::as_str), Some(""));
+        assert_eq!(smoke.value("blinkToggle"), 0.0);
     }
 
     #[test]

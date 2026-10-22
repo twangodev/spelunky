@@ -426,7 +426,7 @@ fn environmental_prelude(game: &mut Game) {
     let pos = game.player.pos;
     if ledge_point(&game.world, pos, "oWaterSwim") && value(&game.player, "swimming", 0.0) == 0.0 {
         set(&mut game.player, "swimming", 1.0);
-        game.world.spawn("oSplash", Vec2::new(pos.x, pos.y - 8.0));
+        crate::world_events::spawn_runtime_object(game, "oSplash", Vec2::new(pos.x, pos.y - 8.0));
         game.sound("sndSplash", pos);
     }
     let burning = value(&game.player, "burning", 0.0);
@@ -434,7 +434,7 @@ fn environmental_prelude(game: &mut Game) {
         if game.rng.range(5) == 0 {
             let x = pos.x - 8.0 + 4.0 + f64::from(game.rng.range(9));
             let y = pos.y - 8.0 + 4.0 + f64::from(game.rng.range(9));
-            game.world.spawn("oBurn", Vec2::new(x, y));
+            crate::world_events::spawn_runtime_object(game, "oBurn", Vec2::new(x, y));
         }
         set(&mut game.player, "burning", burning - 1.0);
     }
@@ -1167,9 +1167,7 @@ pub fn tick(game: &mut Game, input: &InputFrame) {
     let mut effective = *input;
     let cant_jump = value(p, "cantJump", 0.0);
     if cant_jump > 0.0 || (tunnelman && p.sprite == "sTunnelAttackL" && p.held.is_none()) {
-        if cant_jump > 0.0 {
-            set(p, "cantJump", cant_jump - 1.0);
-        }
+        set(p, "cantJump", cant_jump - 1.0);
         effective.jump = false;
         effective.jump_pressed = false;
         effective.jump_released = false;
@@ -3281,6 +3279,14 @@ mod tests {
                 .count(),
             1
         );
+        let splash = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.object == "oSplash")
+            .unwrap();
+        assert_eq!(splash.text.get("type").map(String::as_str), Some(""));
+        assert_eq!(splash.value("blinkToggle"), 0.0);
         assert_eq!(
             g.world
                 .entities
@@ -3377,6 +3383,10 @@ mod tests {
             assert_eq!(value(&g.player, "burning", -1.0), f64::from(100 - n));
         }
         assert!(produced);
+        for burn in g.world.entities.iter().filter(|e| e.object == "oBurn") {
+            assert_eq!(burn.text.get("type").map(String::as_str), Some(""));
+            assert_eq!(burn.value("blinkToggle"), 0.0);
+        }
         for _ in 0..30 {
             g.step(&InputFrame::default());
         }
@@ -4353,6 +4363,7 @@ mod tests {
         );
         assert_eq!(g.player.vel.y, 0.0);
         assert_eq!(g.player.buffered_jump_ticks, 0);
+        assert_eq!(value(&g.player, "cantJump", 0.0), -1.0);
         g.player.sprite = "sTunnelLeft".into();
         g.player.attack_timer = 0;
         step(

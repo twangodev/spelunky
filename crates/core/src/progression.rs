@@ -825,9 +825,9 @@ fn complete(game: &mut Game, door_id: u64) {
     };
     let object = door.object.clone();
     let ending = object == "oXEnd";
-    if object == "oExit" {
-        // Classic oPlayer1 Step clears holdArrow only in its ordinary level
-        // exit branch; title, shortcut, and ending portals use oXStart paths.
+    if crate::catalog::is_a(&object, "oExit") {
+        // Classic oPlayer1 Step clears holdArrow in the inherited oExit
+        // branch, including the Market and City of Gold portals.
         game.player.data.insert("hold_arrow".into(), 0.0);
     }
     let leads_to = door.text.get("leadsTo").cloned().unwrap_or_default();
@@ -1978,6 +1978,30 @@ mod tests {
         assert_eq!(game.world.level, 7);
         assert_ne!(game.world.name, "Black Market");
         assert!(game.flags.contains("genBlackMarket"));
+    }
+
+    #[test]
+    fn actual_step_secret_exits_clear_charged_arrow() {
+        for object in ["oXMarket", "oXGold"] {
+            let mut game = game(2);
+            for x in 0..game.world.width {
+                game.world.set_tile(x, 4, "oBlock");
+            }
+            game.player.pos = Vec2::new(80., 56.);
+            game.player.previous_pos = game.player.pos;
+            game.player.grounded = true;
+            game.player.state = PlayerState::Standing;
+            game.player.data.insert("hold_arrow".into(), 1.0);
+            game.world.spawn(object, game.player.pos);
+
+            game.step(&InputFrame {
+                up: true,
+                ..Default::default()
+            });
+
+            assert_eq!(game.state, RunState::Ending, "{object}");
+            assert_eq!(game.player.data.get("hold_arrow"), Some(&0.0), "{object}");
+        }
     }
 
     #[test]

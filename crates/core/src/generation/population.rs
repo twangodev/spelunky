@@ -97,7 +97,7 @@ fn spawn(world: &mut World, rng: &mut Rng, name: &str, x: i32, y: i32) {
         Vec2::new(f64::from(x) * 16.0, f64::from(y) * 16.0),
     );
 }
-fn spawn_at(world: &mut World, rng: &mut Rng, name: &str, origin: Vec2) {
+fn spawn_at(world: &mut World, rng: &mut Rng, name: &str, origin: Vec2) -> u64 {
     // `x,y` denotes the tile, while these offsets are the literal
     // instance_create offsets used by the source population scripts.
     let offset = match name {
@@ -120,16 +120,31 @@ fn spawn_at(world: &mut World, rng: &mut Rng, name: &str, origin: Vec2) {
         damsel.data.insert("cost".into(), 0.0);
         damsel.data.insert("for_sale".into(), 0.0);
     }
+    id
+}
+fn spawn_source_item(world: &mut World, object: &str, pos: Vec2) -> u64 {
+    let id = world.spawn(object, pos);
+    crate::world_events::initialize_source_generated_create(world.entity_mut(id).unwrap());
+    id
+}
+fn spawn_source_item_at(world: &mut World, rng: &mut Rng, object: &str, origin: Vec2) -> u64 {
+    let id = spawn_at(world, rng, object, origin);
+    crate::world_events::initialize_source_generated_create(world.entity_mut(id).unwrap());
+    id
 }
 fn exists(world: &World, name: &str) -> bool {
     world.entities.iter().any(|e| e.alive && e.object == name)
 }
-fn bones_at(world: &mut World, rng: &mut Rng, origin: Vec2) {
+fn bones_at(world: &mut World, rng: &mut Rng, origin: Vec2, source_classic: bool) {
     if rng.chance(1, 8) {
         spawn_at(world, rng, "oFakeBones", origin);
     } else {
         spawn_at(world, rng, "oBones", origin);
-        world.spawn("oSkull", Vec2::new(origin.x + 12.0, origin.y + 12.0));
+        if source_classic {
+            spawn_source_item(world, "oSkull", Vec2::new(origin.x + 12.0, origin.y + 12.0));
+        } else {
+            world.spawn("oSkull", Vec2::new(origin.x + 12.0, origin.y + 12.0));
+        }
     }
 }
 
@@ -722,6 +737,7 @@ fn treasure(
         state,
         Vec2::new(f64::from(x) * 16.0, f64::from(y) * 16.0),
         None,
+        false,
     );
 }
 
@@ -738,6 +754,7 @@ fn treasure_at(
     state: &mut TreasureState,
     origin: Vec2,
     receiver_bounds: Option<Rect>,
+    source_classic: bool,
 ) {
     let pos = Vec2::new(origin.x + 8.0, origin.y + 8.0);
     let near_landmark = if let Some(bounds) = receiver_bounds {
@@ -797,7 +814,11 @@ fn treasure_at(
             spawn_at(world, rng, "oWeb", above);
         } else if state.udjat && !exists(world, "oLockedChest") {
             if rng.chance(1, state.chest_chance) {
-                spawn_at(world, rng, "oLockedChest", above);
+                if source_classic {
+                    spawn_source_item_at(world, rng, "oLockedChest", above);
+                } else {
+                    spawn_at(world, rng, "oLockedChest", above);
+                }
             } else {
                 state.chest_chance = state.chest_chance.saturating_sub(1).max(1);
             }
@@ -818,7 +839,7 @@ fn treasure_at(
             spawn_at(world, rng, "oDamsel", above);
             state.damsel = true;
         } else if rng.chance(1 + bonus, 40_u32.saturating_sub(2 * level).max(1)) {
-            bones_at(world, rng, above);
+            bones_at(world, rng, above, source_classic);
         } else if rng.chance(1, 3) {
             spawn_at(world, rng, "oGoldBar", above);
         } else if rng.chance(1, 6) {
@@ -843,7 +864,7 @@ fn treasure_at(
         } else if rng.chance(1, 8) {
             spawn_at(world, rng, "oGoldBars", above);
         } else if rng.chance(1 + bonus, 80_u32.saturating_sub(level).max(1)) {
-            bones_at(world, rng, above);
+            bones_at(world, rng, above, source_classic);
         } else if rng.chance(1, 8) {
             spawn_at(world, rng, "oEmeraldBig", above);
         } else if rng.chance(1, 9) {
@@ -857,7 +878,7 @@ fn treasure_at(
         } else if rng.chance(1, 50) {
             spawn_at(world, rng, "oGoldBars", above);
         } else if rng.chance(1 + bonus, 140_u32.saturating_sub(2 * level).max(1)) {
-            bones_at(world, rng, above);
+            bones_at(world, rng, above, source_classic);
         }
     }
 }
@@ -1165,7 +1186,15 @@ fn temple_population(
                 (origin.y / 16.0) as i32,
                 PopulationPhase::Treasure,
             );
-            treasure_at(world, rng, water, state, origin, Some(receiver.bounds));
+            treasure_at(
+                world,
+                rng,
+                water,
+                state,
+                origin,
+                Some(receiver.bounds),
+                true,
+            );
         }
     }
     made_gold
@@ -1189,12 +1218,13 @@ fn mines_ceiling(world: &mut World, rng: &mut Rng, giant_spider: bool, x: i32, y
     // the roll when a flag or clearance check is false. Else-if statements
     // remain conditional: a successful spawn suppresses all later rolls.
     let giant_roll = rng.chance(1, 40);
-    if giant_spider
-        && !exists(world, "oGiantSpiderHang")
-        && !solid(world, x + 1, y + 1)
-        && !solid(world, x + 1, y + 2)
-        && giant_roll
-    {
+    let giant_clear = if world.source_create_projection {
+        !source_point_family(world, at(x + 1, y + 1), "oSolid")
+            && !source_point_family(world, at(x + 1, y + 2), "oSolid")
+    } else {
+        !solid(world, x + 1, y + 1) && !solid(world, x + 1, y + 2)
+    };
+    if giant_spider && !exists(world, "oGiantSpiderHang") && giant_clear && giant_roll {
         spawn(world, rng, "oGiantSpiderHang", x, y + 1);
     } else {
         let lamp_roll = rng.chance(1, 60);
@@ -1270,6 +1300,7 @@ fn populate_internal(
     let source_classic = campaign
         .as_ref()
         .is_some_and(|state| state.revision == crate::GenerationRevision::SourceClassicV2);
+    world.source_create_projection = source_classic;
     let mut gold_chance = campaign.as_ref().map_or(160, |state| state.gold_chance);
     let water = WaterMasks::new(world);
     let cemetery = flag(flags, &["cemetery", "cemetary"]);
@@ -1401,7 +1432,15 @@ fn populate_internal(
             #[cfg(test)]
             trace_population_phase(world, x, y, PopulationPhase::Treasure);
             if source_classic {
-                treasure_at(world, rng, &water, &mut state, origin, Some(support.bounds));
+                treasure_at(
+                    world,
+                    rng,
+                    &water,
+                    &mut state,
+                    origin,
+                    Some(support.bounds),
+                    true,
+                );
             } else {
                 treasure(world, rng, &water, &mut state, x, y);
             }
@@ -1666,7 +1705,15 @@ fn populate_internal(
             #[cfg(test)]
             trace_population_phase(world, x, y, PopulationPhase::Treasure);
             if source_classic {
-                treasure_at(world, rng, &water, &mut state, origin, Some(support.bounds));
+                treasure_at(
+                    world,
+                    rng,
+                    &water,
+                    &mut state,
+                    origin,
+                    Some(support.bounds),
+                    true,
+                );
             } else {
                 treasure(world, rng, &water, &mut state, x, y);
             }
@@ -1675,7 +1722,7 @@ fn populate_internal(
     if udjat && !exists(world, "oLockedChest") {
         if source_classic {
             if let Some(position) = source_udjat_chest_position(world) {
-                world.spawn("oLockedChest", position);
+                spawn_source_item(world, "oLockedChest", position);
             }
         } else {
             world.spawn("oLockedChest", free_near(world, world.exit));
@@ -1757,7 +1804,7 @@ fn populate_internal(
     if world.dark {
         if source_classic {
             for position in source_flare_crate_positions(world) {
-                world.spawn("oFlareCrate", position);
+                spawn_source_item(world, "oFlareCrate", position);
             }
         } else {
             world.spawn("oFlareCrate", free_near(world, world.entrance));
@@ -2098,6 +2145,16 @@ mod tests {
             Vec2::new(exit.x + 24.0, exit.y + 8.0),
             "the left source point query sees an active oSolid descendant even though its engine solid flag is false"
         );
+        assert_eq!(
+            chest.text.get("type").map(String::as_str),
+            Some("Locked Chest")
+        );
+        assert_eq!(chest.value("blinkToggle"), 0.0);
+        assert_eq!(chest.value("collision_left"), -6.0);
+        assert_eq!(chest.value("collision_top"), -2.0);
+        assert_eq!(chest.value("collision_right"), 6.0);
+        assert_eq!(chest.value("collision_bottom"), 8.0);
+        assert_eq!(chest.value("y_acc"), 0.2);
     }
 
     #[test]
@@ -2129,6 +2186,171 @@ mod tests {
             Vec2::new(entrance.x + 24.0, entrance.y + 8.0),
             "the source checks x+16 before choosing the right-side crate offset"
         );
+        assert_eq!(
+            flare.text.get("type").map(String::as_str),
+            Some("Flare Crate")
+        );
+        assert_eq!(flare.value("blinkToggle"), 0.0);
+        assert_eq!(flare.value("collision_left"), -6.0);
+        assert_eq!(flare.value("collision_top"), 0.0);
+        assert_eq!(flare.value("collision_right"), 6.0);
+        assert_eq!(flare.value("collision_bottom"), 8.0);
+        assert_eq!(flare.value("y_acc"), 0.2);
+        assert_eq!(flare.image_speed(), 0.2);
+        assert_eq!(flare.alarms[0], 1);
+    }
+
+    #[test]
+    fn source_generated_population_finishes_enemy_and_treasure_create_before_return() {
+        let mut source = World::new(42, 34, Area::Mines, 2);
+        source.source_create_projection = true;
+        let mut source_rng = Rng::new(7);
+
+        let gold_id = spawn_at(
+            &mut source,
+            &mut source_rng,
+            "oGoldBar",
+            Vec2::new(160.0, 160.0),
+        );
+        let gold = source.entity(gold_id).unwrap();
+        assert_eq!(gold.text.get("type").map(String::as_str), Some("Gold Bar"));
+        assert_eq!(gold.value("blinkToggle"), 0.0);
+        assert_eq!(gold.value("ACTIVE"), 1.0);
+        assert_eq!(gold.value("STATIC"), 0.0);
+        assert_eq!(gold.value("xVel"), gold.vel.x);
+        assert_eq!(gold.value("yVel"), gold.vel.y);
+        assert_eq!(gold.value("xAcc"), 0.0);
+        assert_eq!(gold.value("yAcc"), 0.0);
+        assert_eq!(gold.value("collision_left"), -4.0);
+        assert_eq!(gold.value("collision_top"), -4.0);
+        assert_eq!(gold.value("collision_right"), 4.0);
+        assert_eq!(gold.value("collision_bottom"), 4.0);
+        assert_eq!(gold.value("yOff"), 4.0);
+        assert_eq!(gold.value("value"), 500.0);
+        assert_eq!(gold.value("canCollect"), 1.0);
+
+        let diamond_id = spawn_at(
+            &mut source,
+            &mut source_rng,
+            "oDiamond",
+            Vec2::new(176.0, 160.0),
+        );
+        let diamond = source.entity(diamond_id).unwrap();
+        assert_eq!(
+            diamond.text.get("type").map(String::as_str),
+            Some("Diamond")
+        );
+        assert_eq!(diamond.value("ACTIVE"), 1.0);
+        assert_eq!(diamond.value("collision_left"), -4.0);
+        assert_eq!(diamond.value("collision_top"), -4.0);
+        assert_eq!(diamond.value("collision_right"), 4.0);
+        assert_eq!(diamond.value("collision_bottom"), 4.0);
+        assert_eq!(diamond.value("yOff"), 4.0);
+        assert_eq!(diamond.value("value"), 5000.0);
+        assert_eq!(diamond.value("canCollect"), 0.0);
+        assert_eq!(diamond.alarms[0], 20);
+
+        let frog_id = spawn_at(
+            &mut source,
+            &mut source_rng,
+            "oFrog",
+            Vec2::new(192.0, 160.0),
+        );
+        let frog = source.entity(frog_id).unwrap();
+        assert_eq!(frog.text.get("type").map(String::as_str), Some("Frog"));
+        assert_eq!(frog.value("blinkToggle"), 0.0);
+        assert_eq!(frog.value("active"), 1.0);
+        assert_eq!(frog.value("xVel"), frog.vel.x);
+        assert_eq!(frog.value("yVel"), frog.vel.y);
+        assert_eq!(frog.value("xAcc"), 0.0);
+        assert_eq!(frog.value("yAcc"), 0.0);
+        assert_eq!(frog.value("collision_left"), 4.0);
+        assert_eq!(frog.value("collision_top"), 4.0);
+        assert_eq!(frog.value("collision_right"), 12.0);
+        assert_eq!(frog.value("collision_bottom"), 16.0);
+
+        for (object, expected_type, bounds) in [
+            ("oKey", "Key", [-4.0, -4.0, 4.0, 4.0]),
+            ("oChest", "Chest", [-6.0, 0.0, 6.0, 8.0]),
+            ("oCrate", "Crate", [-6.0, 0.0, 6.0, 8.0]),
+        ] {
+            let id = spawn_at(
+                &mut source,
+                &mut source_rng,
+                object,
+                Vec2::new(224.0, 160.0),
+            );
+            let item = source.entity(id).unwrap();
+            assert_eq!(
+                item.text.get("type").map(String::as_str),
+                Some(expected_type)
+            );
+            assert_eq!(item.value("active"), 1.0, "{object}");
+            assert_eq!(item.value("collision_left"), bounds[0], "{object}");
+            assert_eq!(item.value("collision_top"), bounds[1], "{object}");
+            assert_eq!(item.value("collision_right"), bounds[2], "{object}");
+            assert_eq!(item.value("collision_bottom"), bounds[3], "{object}");
+            if object == "oKey" {
+                assert_eq!(item.value("cost"), 0.0);
+                assert_eq!(item.value("yAcc"), 0.0);
+            } else {
+                assert_eq!(item.value("heavy"), 1.0);
+                assert_eq!(item.value("yVel"), 0.0);
+                assert_eq!(item.value("yAcc"), 0.2);
+            }
+        }
+
+        for object in ["oBones", "oFakeBones"] {
+            let id = spawn_at(
+                &mut source,
+                &mut source_rng,
+                object,
+                Vec2::new(256.0, 160.0),
+            );
+            let bones = source.entity(id).unwrap();
+            assert_eq!(bones.text.get("type").map(String::as_str), Some(""));
+            assert_eq!(bones.value("blinkToggle"), 0.0);
+            assert_eq!(bones.value("yVel"), 0.0);
+            assert_eq!(bones.value("yAcc"), 0.2);
+        }
+
+        let mut historical = World::new(42, 34, Area::Mines, 2);
+        let mut historical_rng = Rng::legacy(7);
+        let historical_gold = spawn_at(
+            &mut historical,
+            &mut historical_rng,
+            "oGoldBar",
+            Vec2::new(160.0, 160.0),
+        );
+        let historical_gold = historical.entity(historical_gold).unwrap();
+        assert!(!historical_gold.text.contains_key("type"));
+        assert!(!historical_gold.data.contains_key("blinkToggle"));
+        assert!(!historical_gold.data.contains_key("collision_left"));
+    }
+
+    #[test]
+    fn source_bones_population_completes_skull_create_fields() {
+        let seed = (0..128)
+            .find(|seed| {
+                let mut rng = Rng::new(*seed);
+                !rng.chance(1, 8)
+            })
+            .unwrap();
+        let mut world = room_fixture(Area::Mines, 2);
+        let mut rng = Rng::new(seed);
+        bones_at(&mut world, &mut rng, Vec2::new(160.0, 160.0), true);
+        let skull = world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oSkull")
+            .expect("non-fake bones also create a Skull");
+        assert_eq!(skull.pos, Vec2::new(172.0, 172.0));
+        assert_eq!(skull.text.get("type").map(String::as_str), Some("Skull"));
+        assert_eq!(skull.value("blinkToggle"), 0.0);
+        assert_eq!(skull.bounds(), Rect::new(168.0, 168.0, 8.0, 8.0));
+        for field in ["colTop", "colLeft", "colRight", "colBot"] {
+            assert_eq!(skull.value(field), 0.0, "{field}");
+        }
     }
 
     #[test]
@@ -2999,6 +3221,53 @@ mod tests {
     }
 
     #[test]
+    fn source_mines_ceiling_bat_projects_create_acceleration_without_rng_shift() {
+        // Exercise the natural Mines ceiling statement chain through its bat
+        // birth, rather than testing only the shared generated-spawn helper.
+        // Port seed 40 yields guard values [10, 13, 20, 0].
+        let mut world = World::new(42, 34, Area::Mines, 1);
+        world.source_create_projection = true;
+        let mut actual = Rng::new(40);
+        let mut source = actual.clone();
+        assert_eq!(source.range(40), 10); // Giant Spider guard.
+        assert_eq!(source.range(60), 13); // Lamp guard.
+        assert_eq!(source.range(40), 20); // Scarab guard.
+        assert_eq!(source.range(60), 0); // Bat succeeds.
+
+        mines_ceiling(&mut world, &mut actual, false, 20, 5);
+
+        let bat = world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oBat")
+            .expect("Mines ceiling chain spawns its Bat");
+        assert_eq!(bat.value("xAcc"), 0.2);
+        assert_eq!(bat.value("yAcc"), 0.2);
+        assert_eq!(actual.state_bits(), source.state_bits());
+    }
+
+    #[test]
+    fn source_mines_ceiling_giant_clearance_includes_dynamic_solids() {
+        let mut world = World::new(42, 34, Area::Mines, 1);
+        world.source_create_projection = true;
+        // scrRoomGen can place PushBlocks at the exact point queried by the
+        // Giant Spider ceiling-spawn check.
+        world.spawn("oPushBlock", Vec2::new(21.0 * 16.0, 6.0 * 16.0));
+        let mut actual = Rng::new(0);
+        let mut oracle = actual.clone();
+        assert_eq!(1 + oracle.range(40), 1);
+        oracle.range(60);
+        oracle.range(40);
+        oracle.range(60);
+        oracle.range(80);
+
+        mines_ceiling(&mut world, &mut actual, true, 20, 5);
+
+        assert!(!exists(&world, "oGiantSpiderHang"));
+        assert_eq!(actual.next_u64(), oracle.next_u64());
+    }
+
+    #[test]
     fn mines_ceiling_eager_existing_or_blocked_giant_still_consumes_first_roll() {
         for already_exists in [false, true] {
             let mut world = World::new(42, 34, Area::Mines, 1);
@@ -3388,6 +3657,7 @@ mod tests {
                 &mut treasure_state(),
                 origin,
                 Some(saved),
+                false,
             );
             assert_eq!(actual.next_u64(), oracle.next_u64());
             let rocks: Vec<_> = world
@@ -3456,6 +3726,7 @@ mod tests {
             &mut state,
             Vec2::new(320.0, 320.0),
             Some(bounds),
+            false,
         );
         assert!(!exists(&world, "oDamsel"));
         assert!(exists(&world, "oGoldBar"));

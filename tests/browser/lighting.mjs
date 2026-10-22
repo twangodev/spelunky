@@ -10,26 +10,46 @@ export function installLightingProfile() {
 export function installLightingSeedControl() {
   const actualNow = Performance.prototype.now;
   const actualDateNow = Date.now;
-  let lastPerformanceMs;
+  let pendingPerformanceSample = null;
   const control = window.__lightingSeedControl = { armed: null, observations: [] };
   Performance.prototype.now = function (...args) {
-    const value = actualNow.apply(this, args);
-    lastPerformanceMs = value;
-    return value;
+    // Production XORs Date.now().to_bits() with (performance.now()/1000).to_bits()
+    // in the same synchronous start_game expression. Reuse one actual sample
+    // for the latter so both halves describe a coherent, real browser clock.
+    if (pendingPerformanceSample !== null) {
+      const value = pendingPerformanceSample;
+      pendingPerformanceSample = null;
+      return value;
+    }
+    return actualNow.apply(this, args);
   };
   Date.now = function () {
     if (control.armed === null) return actualDateNow();
-    if (!Number.isFinite(lastPerformanceMs)) throw new Error('No real performance clock sample before source seed selection');
+    const performanceMs = actualNow.call(performance);
+    if (!Number.isFinite(performanceMs)) throw new Error('No real performance clock sample before source seed selection');
     const desiredSeed = BigInt(control.armed);
-    // Match the host's exact floating-point expression, keeping its actual
-    // performance clock and every simulation/presentation elapsed time intact.
-    const performanceMicros = BigInt(Math.trunc((lastPerformanceMs / 1000) * 1000000));
-    const encodedMicros = desiredSeed ^ performanceMicros;
-    if (encodedMicros > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('Controlled seed exceeds exact clock encoding range');
-    const wallMs = (Number(encodedMicros) + .125) / 1000;
-    control.observations.push({ desiredSeed: String(desiredSeed), performanceMs: lastPerformanceMs, wallMs,
-      actualWallMs: actualDateNow() });
+    const performanceBits = new DataView(new ArrayBuffer(8));
+    performanceBits.setFloat64(0, performanceMs / 1000, true);
+    const performanceFold = (performanceBits.getUint32(0, true) ^ performanceBits.getUint32(4, true)) >>> 0;
+    const dateFold = Number(desiredSeed ^ BigInt(performanceFold));
+
+    // Pick an ordinary finite ~1000 ms double whose folded IEEE-754 words are
+    // exactly the requested Date entropy. Rust's fold_seed_entropy XORs the
+    // float's low and high u32 words, so fixing its high word makes the low word
+    // an exact inverse of that fold.
+    const highWord = 0x408f4000; // high word of the f64 value 1000.0
+    const dateBits = new DataView(new ArrayBuffer(8));
+    dateBits.setUint32(0, (dateFold ^ highWord) >>> 0, true);
+    dateBits.setUint32(4, highWord, true);
+    const wallMs = dateBits.getFloat64(0, true);
+    const actualDateFold = (dateBits.getUint32(0, true) ^ dateBits.getUint32(4, true)) >>> 0;
+    pendingPerformanceSample = performanceMs;
     control.armed = null;
+    control.observations.push({
+      desiredSeed: String(desiredSeed), performanceMs, performanceSeconds: performanceMs / 1000,
+      performanceFold, wallMs, dateFold: actualDateFold,
+      predictedSeed: (actualDateFold ^ performanceFold) >>> 0, actualWallMs: actualDateNow(),
+    });
     return wallMs;
   };
 }
@@ -285,6 +305,7 @@ async function enterEligibleDarkRoom(page, entry, result, screenshot) {
   await press(page, 'ArrowDown', 5);
   await page.keyboard.press('Enter');
   await state(page, 'Shortcuts');
+  entry.preStart = await snapshot(page);
   await page.bringToFront();
   await page.locator('canvas').focus();
   await page.evaluate(installLightingRoute, { seed: entry.seed, waitTicks: entry.waitTicks,
@@ -294,9 +315,10 @@ async function enterEligibleDarkRoom(page, entry, result, screenshot) {
   await page.waitForFunction(() => window.__spelunkyTest?.screen === 'Playing' && window.__spelunkyTest.world.level === 5,
     null, { timeout: 15000 });
   entry.start = await snapshot(page);
+  entry.environmentClock = await page.evaluate(() => window.__lightingSeedControl.observations);
   assert.equal(entry.start.seed, entry.seed, 'One-shot environment clock must select the documented source seed');
   assert.equal(entry.start.world.dark, false, 'Fresh shortcut is correctly suppressed by source noDarkLevel');
-  entry.environmentClock = await page.evaluate(() => window.__lightingSeedControl.observations);
+  await screenshot(page, `lighting-level5-start-${entry.attempt}`, result);
   try {
     await page.waitForFunction(() => window.__spelunkyTest.ending?.stage === 'Transition' || window.__lightingRoute.error,
       null, { timeout: 70000 });
@@ -305,6 +327,7 @@ async function enterEligibleDarkRoom(page, entry, result, screenshot) {
     if (routeError !== null) {
       entry.rejected = routeError;
       console.log(`Lighting route rejected: ${routeError}`);
+      await screenshot(page, `lighting-route-rejected-${entry.attempt}`, result);
       return false;
     }
     assert.equal(entry.transition.world.name, 'rTransition2');

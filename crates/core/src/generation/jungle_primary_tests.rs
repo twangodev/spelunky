@@ -602,6 +602,44 @@ fn jungle_primary_source_new_native_constructors_are_rng_free_and_revision_gated
 }
 
 #[test]
+fn jungle_generated_shotgun_and_big_gems_have_source_motion_and_collision_bounds() {
+    let mut world = fixture();
+    let mut rng = Rng::new_canonical(71);
+
+    for (object, expected_type, bounds) in [
+        ("oShotgun", "Shotgun", [-4.0, -4.0, 4.0, 4.0]),
+        ("oSapphireBig", "Big Sapphire", [-4.0, -4.0, 4.0, 4.0]),
+    ] {
+        let id = crate::creation::spawn_generated_jungle_child(
+            &mut world,
+            &mut rng,
+            object,
+            Vec2::new(240.0, 192.0),
+            true,
+        );
+        let child = world.entity(id).unwrap();
+        assert_eq!(
+            child.text.get("type").map(String::as_str),
+            Some(expected_type)
+        );
+        assert_eq!(child.value("blinkToggle"), 0.0);
+        assert_eq!(child.value("collision_left"), bounds[0]);
+        assert_eq!(child.value("collision_top"), bounds[1]);
+        assert_eq!(child.value("collision_right"), bounds[2]);
+        assert_eq!(child.value("collision_bottom"), bounds[3]);
+        assert_eq!(child.value("xVel"), child.vel.x);
+        assert_eq!(child.value("yVel"), child.vel.y);
+        assert_eq!(child.value("xAcc"), 0.0);
+        assert_eq!(child.value("yAcc"), 0.0);
+        if object == "oSapphireBig" {
+            assert_eq!(child.value("ACTIVE"), 1.0);
+            assert_eq!(child.value("canCollect"), 0.0);
+            assert_eq!(child.alarms[0], 20);
+        }
+    }
+}
+
+#[test]
 fn jungle_primary_source_forced_pass_includes_new_spears_without_retesting_made() {
     let seed = (0..4096)
         .find(|&seed| {

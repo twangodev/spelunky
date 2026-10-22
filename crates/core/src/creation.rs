@@ -60,6 +60,11 @@ fn spawn_generated_with_item_context(
     let rng_before =
         GENERATED_CREATE_TRACES.with(|traces| traces.borrow().as_ref().map(|_| rng.clone()));
     initialize_entity_local(world, rng, id);
+    if source_jungle || world.source_create_projection {
+        crate::world_events::initialize_source_generated_create(
+            world.entity_mut(id).expect("generated entity remains live"),
+        );
+    }
     if let Some(has_spectacles) = has_spectacles {
         if source_jungle {
             let entity = world.entity_mut(id).unwrap();
@@ -105,10 +110,10 @@ pub(crate) fn initialize_source_jungle_market(entity: &mut crate::Entity) {
 /// Classic Create. Preserve producer writes made after synchronous Create.
 pub(crate) fn initialize_source_exit_create(entity: &mut crate::Entity) {
     if entity.object == "oEntrance" || crate::catalog::is_a(&entity.object, "oExit") {
-        entity
-            .text
-            .entry("type".into())
-            .or_insert_with(|| "Exit".into());
+        let source_type = entity.text.entry("type".into()).or_default();
+        if source_type.is_empty() || source_type == "None" {
+            *source_type = "Exit".into();
+        }
         entity.text.entry("leadsTo".into()).or_default();
     }
 }

@@ -561,6 +561,7 @@ pub(crate) fn create_instance(game: &mut Game, id: u64) {
         // oDetritus sets type=""), then the concrete Create callback assigns
         // its own type. Apply the explicit source values after that chain.
         source_create_variables(&mut e);
+        initialize_source_item_create(&mut e);
     }
     game.world.entities[index] = e;
 }
@@ -578,29 +579,543 @@ pub(crate) fn spawn_runtime_object(game: &mut Game, object: &str, pos: Vec2) -> 
 /// Explicit dynamic variables assigned by Classic Create events. Keep these
 /// on the source revision so historical snapshots retain their old projection.
 fn source_create_variables(entity: &mut Entity) {
+    if catalog::is_a(&entity.object, "oEnemy") {
+        // oEnemy inherits oDrawnSprite, then replaces its default type and
+        // enables its own Step controller. Child Create events may refine the
+        // type below.
+        entity.text.insert("type".into(), "None".into());
+        entity.data.entry("active".into()).or_insert(1.0);
+        let source_type = crate::items::explosives::source_type_for_object(&entity.object);
+        if source_type != "None" {
+            entity.text.insert("type".into(), source_type);
+        }
+    }
+    if catalog::is_a(&entity.object, "oItem") {
+        // oItem Create replaces oDrawnSprite's empty type. Concrete item
+        // Creates then assign their own pickup type, including ordinary items
+        // such as Bow that are not initialized by a generation adapter.
+        entity.text.insert(
+            "type".into(),
+            crate::items::explosives::source_type_for_object(&entity.object),
+        );
+        entity.data.entry("active".into()).or_insert(1.0);
+    }
+    if catalog::is_a(&entity.object, "oSolid") || catalog::is_a(&entity.object, "oTreasure") {
+        // These parents replace DrawnSprite's empty type with "None" before
+        // their concrete Create callback assigns a more specific value.
+        entity.text.insert("type".into(), "None".into());
+    }
     crate::creation::initialize_source_exit_create(entity);
-    if entity.object == "oLava" {
-        entity.text.insert("type".into(), "Lava".into());
-    } else if catalog::is_a(&entity.object, "oWater") {
-        entity.text.insert("type".into(), "Water".into());
-        entity.data.insert("checked".into(), 0.0);
-    } else if catalog::is_a(&entity.object, "oRubblePiece") {
-        let kind = match entity.object.as_str() {
-            "oDrip" => "Drip",
-            "oLeaf" => "Leaf",
-            _ => "None",
-        };
-        entity.text.insert("type".into(), kind.into());
+    if source_uses_make_active(&entity.object) {
+        initialize_source_motion_fields(entity);
+    }
+    // These child Create events assign acceleration directly; they do not
+    // call SOURCE_CREATE_MAKE_ACTIVE, whose inherited motion defaults are 0.
+    if matches!(
+        entity.object.as_str(),
+        "oBat" | "oGhost" | "oScarab" | "oPiranha" | "oJaws" | "oUFO" | "oDeadFish"
+    ) {
+        entity.data.insert("xAcc".into(), 0.2);
+        entity.data.insert("yAcc".into(), 0.2);
+    }
+    match entity.object.as_str() {
+        "oLava" => {
+            entity.text.insert("type".into(), "Lava".into());
+        }
+        "oOlmec" => initialize_source_olmec_create(entity),
+        "oWater" | "oWaterSwim" => {
+            entity.text.insert("type".into(), "Water".into());
+            entity.data.insert("checked".into(), 0.0);
+        }
+        "oRubble" | "oRubbleSmall" | "oLavaDrip" => {
+            entity.text.insert("type".into(), "None".into());
+        }
+        "oDrip" => {
+            entity.text.insert("type".into(), "Drip".into());
+        }
+        "oLeaf" => {
+            entity.text.insert("type".into(), "Leaf".into());
+        }
+        "oAlienEject" => {
+            entity.text.insert("type".into(), "Alien Eject".into());
+        }
+        "oSkull" => {
+            entity.text.insert("type".into(), "Skull".into());
+        }
+        "oRope" => {
+            entity.text.insert("type".into(), "Rope".into());
+        }
+        "oShopkeeper" | "oShopkeeper2" => {
+            entity.text.insert("type".into(), "Shopkeeper".into());
+            if let Some((width, height)) = catalog::sprite_dimensions(&entity.sprite) {
+                set_source_collision_bounds(
+                    entity,
+                    [2.0, 0.0, f64::from(width) - 2.0, f64::from(height)],
+                );
+            }
+        }
+        "oLockedChest" => {
+            entity.text.insert("type".into(), "Locked Chest".into());
+        }
+        "oFlareCrate" => {
+            entity.text.insert("type".into(), "Flare Crate".into());
+        }
+        "oMagmaMan" => {
+            entity.text.insert("type".into(), "Magma Man".into());
+        }
+        "oAlien" => {
+            entity.text.insert("type".into(), "Alien".into());
+        }
+        "oAlienBoss" => {
+            entity.text.insert("type".into(), "Alien Boss".into());
+        }
+        "oFireFrog" => {
+            entity.text.insert("type".into(), "Fire Frog".into());
+        }
+        "oFrog" => {
+            entity.text.insert("type".into(), "Frog".into());
+        }
+        "oGiantSpider" => {
+            entity.text.insert("type".into(), "Giant Spider".into());
+        }
+        "oJaws" => {
+            entity.text.insert("type".into(), "Mega Mouth".into());
+        }
+        "oManTrap" => {
+            entity.text.insert("type".into(), "ManTrap".into());
+        }
+        "oMonkey" => {
+            entity.text.insert("type".into(), "Monkey".into());
+        }
+        "oPiranha" => {
+            entity.text.insert("type".into(), "Piranha".into());
+        }
+        "oSkeleton" => {
+            entity.text.insert("type".into(), "Skeleton".into());
+        }
+        "oSnake" => {
+            entity.text.insert("type".into(), "Snake".into());
+        }
+        "oSpider" => {
+            entity.text.insert("type".into(), "Spider".into());
+        }
+        "oTombLord" => {
+            entity.text.insert("type".into(), "Tomb Lord".into());
+        }
+        "oUFO" => {
+            entity.text.insert("type".into(), "UFO".into());
+        }
+        "oVampire" => {
+            entity.text.insert("type".into(), "Vampire".into());
+        }
+        "oYeti" => {
+            entity.text.insert("type".into(), "Yeti".into());
+        }
+        "oYetiKing" => {
+            entity.text.insert("type".into(), "Yeti King".into());
+        }
+        "oGoldBar" => {
+            entity.text.insert("type".into(), "Gold Bar".into());
+        }
+        "oDiamond" => {
+            entity.text.insert("type".into(), "Diamond".into());
+        }
+        "oChest" => {
+            entity.text.insert("type".into(), "Chest".into());
+        }
+        "oCrate" => {
+            entity.text.insert("type".into(), "Crate".into());
+        }
+        "oKey" => {
+            entity.text.insert("type".into(), "Key".into());
+        }
+        "oShotgun" => {
+            entity.text.insert("type".into(), "Shotgun".into());
+        }
+        "oWhip" | "oWhipPre" => {
+            entity.text.insert("type".into(), "Whip".into());
+        }
+        "oSlash" | "oMachetePre" => {
+            entity.text.insert("type".into(), "Machete".into());
+        }
+        "oMattockHit" | "oMattockPre" => {
+            entity.text.insert("type".into(), "Mattock".into());
+        }
+        "oGoldBars" => {
+            entity.text.insert("type".into(), "Gold Bars".into());
+        }
+        "oEmerald" => {
+            entity.text.insert("type".into(), "Emerald".into());
+        }
+        "oSapphire" => {
+            entity.text.insert("type".into(), "Sapphire".into());
+        }
+        "oRuby" => {
+            entity.text.insert("type".into(), "Ruby".into());
+        }
+        "oGoldNugget" => {
+            entity.text.insert("type".into(), "Gold Nugget".into());
+        }
+        "oGoldChunk" => {
+            entity.text.insert("type".into(), "Gold Chunk".into());
+        }
+        "oEmeraldBig" => {
+            entity.text.insert("type".into(), "Big Emerald".into());
+        }
+        "oSapphireBig" => {
+            entity.text.insert("type".into(), "Big Sapphire".into());
+        }
+        "oRubyBig" => {
+            entity.text.insert("type".into(), "Big Ruby".into());
+        }
+        "oTemp" | "oArrowTrapLeft" | "oArrowTrapRight" | "oArrowTrapLeftLit"
+        | "oArrowTrapRightLit" | "oArrowRepeaterL" | "oArrowRepeaterR" => {
+            entity.text.insert("type".into(), "Arrow Trap".into());
+        }
+        "oChain" | "oChain2" => {
+            entity.text.insert("type".into(), "Chain".into());
+        }
+        "oRopeTop" => {
+            entity.text.insert("type".into(), "Rope".into());
+        }
+        "oSacAltarLeft" => {
+            entity.text.insert("type".into(), "Altar".into());
+        }
+        "oTree" | "oTreeTile" => {
+            entity.text.insert("type".into(), "Tree".into());
+        }
+        "oLeavesTile" => {
+            entity.text.insert("type".into(), "Tree Leaves".into());
+        }
+        "oTreeBranchTile" => {
+            entity.text.insert("type".into(), "Tree Branch".into());
+        }
+        "oMsgSign" => {
+            entity.text.insert("type".into(), "Message Sign".into());
+        }
+        "oMegaMouthTile" => {
+            entity.text.insert("type".into(), "Mega Mouth".into());
+        }
+        "oYetiKingTile" => {
+            entity.text.insert("type".into(), "Yeti King".into());
+        }
+        "oAlienBossTile" => {
+            entity.text.insert("type".into(), "Alien Boss".into());
+        }
+        "oGiantSpiderTile" => {
+            entity.text.insert("type".into(), "Giant Spider".into());
+        }
+        "oTombLordTile" => {
+            entity.text.insert("type".into(), "Tomb Lord".into());
+        }
+        "oHawkman" => {
+            entity.text.insert("type".into(), "Yeti".into());
+        }
+        "oCaveman" => {
+            entity.text.insert("type".into(), "Caveman".into());
+        }
+        _ if catalog::is_a(&entity.object, "oWater") => {
+            entity.text.insert("type".into(), "Water".into());
+            entity.data.insert("checked".into(), 0.0);
+        }
+        _ if catalog::is_a(&entity.object, "oRubblePiece") => {
+            entity.text.insert("type".into(), "None".into());
+        }
+        _ => {}
     }
 }
 
-/// Inherited `oDrawnSprite.Create` assignments explicitly run for IceBottom
-/// and every `oRubblePiece` child in the source. HistoricalV1 keeps its older
+/// Complete the RNG-free Create fields for source-generated item instances.
+/// Runtime Create uses the same projection after the ordinary item adapter.
+pub(crate) fn initialize_source_item_create(entity: &mut Entity) {
+    match entity.object.as_str() {
+        "oGoldBar" | "oGoldNugget" | "oDiamond" | "oEmeraldBig" | "oSapphireBig" | "oRubyBig" => {
+            initialize_source_treasure_motion(entity);
+            set_source_collision_bounds(entity, [-4.0, -4.0, 4.0, 4.0]);
+            entity.data.insert("yOff".into(), 4.0);
+        }
+        "oGoldBars" => {
+            initialize_source_treasure_motion(entity);
+            set_source_collision_bounds(entity, [-7.0, -8.0, 7.0, 8.0]);
+            entity.data.insert("yOff".into(), 8.0);
+        }
+        "oGoldChunk" | "oEmerald" | "oSapphire" | "oRuby" => {
+            initialize_source_treasure_motion(entity);
+            set_source_collision_bounds(entity, [-2.0, -2.0, 2.0, 2.0]);
+            entity.data.insert("yOff".into(), 2.0);
+        }
+        "oShotgun" => {
+            initialize_source_motion_fields(entity);
+            set_source_collision_bounds(entity, [-4.0, -4.0, 4.0, 4.0]);
+        }
+        "oKey" => {
+            entity.data.insert("active".into(), 1.0);
+            initialize_source_motion_fields(entity);
+            set_source_collision_bounds(entity, [-4.0, -4.0, 4.0, 4.0]);
+            entity.data.insert("cost".into(), 0.0);
+        }
+        "oChest" | "oCrate" => {
+            initialize_source_crate_create(entity, 0.0);
+            entity.data.insert("yVel".into(), 0.0);
+            entity.data.insert("yAcc".into(), 0.2);
+        }
+        "oBones" | "oFakeBones" => {
+            entity.data.insert("yVel".into(), entity.vel.y);
+            entity.data.insert("yAcc".into(), 0.2);
+        }
+        "oDarkFall" => {
+            set_source_collision_bounds(entity, [0.0, 0.0, 16.0, 8.0]);
+            for (key, value) in [
+                ("invincible", 0.0),
+                ("grav", 1.0),
+                ("timeFall", 20.0),
+                ("timeFallMax", 20.0),
+            ] {
+                entity.data.insert(key.into(), value);
+            }
+        }
+        "oSkull" => {
+            entity.data.insert("active".into(), 1.0);
+            for (key, value) in [
+                ("collision_left", -4.0),
+                ("collision_top", -4.0),
+                ("collision_right", 4.0),
+                ("collision_bottom", 4.0),
+                ("x_acc", 0.0),
+                ("y_acc", 0.0),
+                ("breakPieces", 1.0),
+                ("colTop", 0.0),
+                ("colLeft", 0.0),
+                ("colRight", 0.0),
+                ("colBot", 0.0),
+            ] {
+                entity.data.insert(key.into(), value);
+            }
+        }
+        "oLockedChest" => initialize_source_crate_create(entity, -2.0),
+        "oFlareCrate" => initialize_source_crate_create(entity, 0.0),
+        _ => {}
+    }
+}
+
+fn initialize_source_treasure_motion(entity: &mut Entity) {
+    initialize_source_motion_fields(entity);
+    for (name, value) in [("STATIC", 0.0), ("ACTIVE", 1.0)] {
+        entity.data.insert(name.into(), value);
+    }
+}
+
+fn initialize_source_olmec_create(entity: &mut Entity) {
+    set_source_collision_bounds(entity, [2.0, 0.0, 62.0, 64.0]);
+    entity.set_image_speed(0.4);
+    entity.state = -1;
+    for (key, value) in [
+        ("shopWall", 0.0),
+        ("xVel", 0.0),
+        ("yVel", 0.0),
+        ("yDelta", -0.4),
+        ("myGrav", 0.2),
+        ("invincible", 1.0),
+        ("viscidTop", 1.0),
+        ("carryPlayer", 0.0),
+        ("LEFT", 0.0),
+        ("RIGHT", 1.0),
+        ("START2", -2.0),
+        ("START1", -1.0),
+        ("IDLE", 0.0),
+        ("BOUNCE", 1.0),
+        ("RECOVER", 2.0),
+        ("WALK", 3.0),
+        ("DROWNING", 4.0),
+        ("PREPARE", 5.0),
+        ("SLAM", 6.0),
+        ("CREATE", 7.0),
+        ("DEAD", 99.0),
+        ("status", -1.0),
+        ("counter", 0.0),
+        ("bounceCounter", 0.0),
+        ("slammed", 0.0),
+        ("view_hborder[0]", 0.0),
+        ("view_vborder[0]", 0.0),
+        ("view_yview[0]", 400.0),
+    ] {
+        entity.data.insert(key.into(), value);
+    }
+    entity.text.insert("view_object[0]".into(), "oOlmec".into());
+}
+
+fn initialize_source_motion_fields(entity: &mut Entity) {
+    entity.data.insert("xVel".into(), entity.vel.x);
+    entity.data.insert("yVel".into(), entity.vel.y);
+    entity.data.entry("xAcc".into()).or_insert(0.0);
+    entity.data.entry("yAcc".into()).or_insert(0.0);
+}
+
+const SOURCE_CREATE_MAKE_ACTIVE: &[&str] = &[
+    "oAlien",
+    "oAlienBoss",
+    "oAlienEject",
+    "oAnkh",
+    "oArrow",
+    "oBall",
+    "oBall2",
+    "oBasketball",
+    "oBone",
+    "oBigTreasure",
+    "oBomb",
+    "oBombBag",
+    "oBombBox",
+    "oBoulder",
+    "oBow",
+    "oCapePickup",
+    "oCaveman",
+    "oCeilingTrap",
+    "oChest",
+    "oCompass",
+    "oCrate",
+    "oCrown",
+    "oCrystalSkull",
+    "oDamsel",
+    "oDarkFall",
+    "oDetritus",
+    "oDiamond",
+    "oDice",
+    "oDoor",
+    "oEmerald",
+    "oEmeraldBig",
+    "oFireFrog",
+    "oFireFrogArmed",
+    "oFireFrogBomb",
+    "oFishBone",
+    "oFlare",
+    "oFlareCrate",
+    "oFrog",
+    "oGiantSpider",
+    "oGiantSpiderHang",
+    "oGloves",
+    "oGoldBar",
+    "oGoldBars",
+    "oGoldChunk",
+    "oGoldIdol",
+    "oGoldNugget",
+    "oHawkman",
+    "oJar",
+    "oJetpack",
+    "oJordans",
+    "oKapala",
+    "oKey",
+    "oLampItem",
+    "oLampRedItem",
+    "oLockedChest",
+    "oMachete",
+    "oMagma",
+    "oMagmaMan",
+    "oManTrap",
+    "oMattock",
+    "oMattockHead",
+    "oMitt",
+    "oMonkey",
+    "oOlmec",
+    "oOlmecDebris",
+    "oParaPickup",
+    "oPaste",
+    "oPistol",
+    "oRock",
+    "oRope",
+    "oRopeBag",
+    "oRopePile",
+    "oRopeThrow",
+    "oRopeTop",
+    "oRuby",
+    "oRubyBig",
+    "oSapphire",
+    "oSapphireBig",
+    "oSceptre",
+    "oShopkeeper",
+    "oShopkeeper2",
+    "oShotgun",
+    "oSkeleton",
+    "oSkull",
+    "oSmashTrap",
+    "oSmashTrapLit",
+    "oSnake",
+    "oSpectacles",
+    "oSpider",
+    "oSpiderHang",
+    "oSpikeShoes",
+    "oSpringShoes",
+    "oTeleporter",
+    "oThwompTrap",
+    "oTombLord",
+    "oUdjatEye",
+    "oVampire",
+    "oWebCannon",
+    "oYeti",
+    "oYetiKing",
+    "oZombie",
+];
+
+fn source_uses_make_active(object: &str) -> bool {
+    SOURCE_CREATE_MAKE_ACTIVE.contains(&object)
+}
+
+fn set_source_collision_bounds(entity: &mut Entity, bounds: [f64; 4]) {
+    for (name, value) in [
+        "collision_left",
+        "collision_top",
+        "collision_right",
+        "collision_bottom",
+    ]
+    .into_iter()
+    .zip(bounds)
+    {
+        entity.data.insert(name.into(), value);
+    }
+}
+
+/// Population cannot dispatch through Game::spawn; run the same explicit
+/// source Create projection immediately after its fixed World::spawn defaults.
+pub(crate) fn initialize_source_generated_create(entity: &mut Entity) {
+    if entity.value("source_generated_create_initialized") != 0.0 {
+        return;
+    }
+    initialize_source_drawn_sprite_create(entity);
+    source_create_variables(entity);
+    initialize_source_item_create(entity);
+    crate::creation::initialize_source_jungle_market(entity);
+    entity
+        .data
+        .insert("source_generated_create_initialized".into(), 1.0);
+}
+
+fn initialize_source_crate_create(entity: &mut Entity, collision_top: f64) {
+    entity.data.insert("active".into(), 1.0);
+    entity.data.insert("xVel".into(), entity.vel.x);
+    entity.data.insert("yVel".into(), entity.vel.y);
+    entity.data.insert("xAcc".into(), 0.0);
+    entity.data.insert("yAcc".into(), 0.2);
+    for (key, value) in [
+        ("collision_left", -6.0),
+        ("collision_top", collision_top),
+        ("collision_right", 6.0),
+        ("collision_bottom", 8.0),
+        ("x_acc", 0.0),
+        ("y_acc", 0.2),
+        ("heavy", 1.0),
+    ] {
+        entity.data.insert(key.into(), value);
+    }
+}
+
+/// Inherited `oDrawnSprite.Create` assignments run for these explicit source
+/// children and every `oRubblePiece` child. HistoricalV1 keeps its older
 /// projection; SourceClassicV2 calls this before the child's own Create.
 pub(crate) fn initialize_source_drawn_sprite_create(entity: &mut Entity) {
-    if entity.object == "oIceBottom" || catalog::is_a(&entity.object, "oRubblePiece") {
-        entity.text.insert("type".into(), String::new());
-        entity.data.insert("blinkToggle".into(), 0.0);
+    if catalog::is_a(&entity.object, "oDrawnSprite")
+        || catalog::is_a(&entity.object, "oRubblePiece")
+    {
+        entity.text.entry("type".into()).or_default();
+        entity.data.entry("blinkToggle".into()).or_insert(0.0);
     }
 }
 
@@ -949,7 +1464,7 @@ pub(crate) fn collision(game: &mut Game, id: u64, other: crate::dispatcher::Inst
                     .entity(other_id)
                     .is_some_and(|other| other.vel.x > 0.0 || other.vel.y > 0.0)
                 {
-                    game.world.spawn("oParaUsed", e.pos);
+                    spawn_runtime_object(game, "oParaUsed", e.pos);
                     e.alive = false;
                     game.player.data.insert("parachute_open".into(), 0.0);
                 }
@@ -1145,7 +1660,7 @@ fn canopy(game: &mut Game, e: &mut Entity) {
 }
 
 pub(crate) fn spawn_psychic_create_p(game: &mut Game, pos: Vec2, velocity: Vec2) -> u64 {
-    let id = game.world.spawn("oPsychicCreateP", pos);
+    let id = spawn_runtime_object(game, "oPsychicCreateP", pos);
     let e = game.world.entity_mut(id).unwrap();
     e.vel = velocity;
     e.data.insert("psychic_initialized".into(), 1.0);
@@ -1247,6 +1762,9 @@ fn report_psychic_create_missing_owner(game: &mut Game) {
 
 pub(crate) fn spawn_psychic_create_2(game: &mut Game, pos: Vec2, target: Vec2) -> u64 {
     let id = game.world.spawn("oPsychicCreate2", pos);
+    if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+        initialize_source_drawn_sprite_create(game.world.entity_mut(id).unwrap());
+    }
     initialize_psychic_create_2(game.world.entity_mut(id).unwrap(), Some(target));
     id
 }
@@ -1256,6 +1774,9 @@ pub(crate) fn spawn_psychic_create_2(game: &mut Game, pos: Vec2, target: Vec2) -
 /// separate error rather than using a fabricated heading to a retired boss.
 pub(crate) fn spawn_psychic_create_2_without_owner(game: &mut Game, pos: Vec2) -> u64 {
     let id = game.world.spawn("oPsychicCreate2", pos);
+    if game.generation_revision == crate::GenerationRevision::SourceClassicV2 {
+        initialize_source_drawn_sprite_create(game.world.entity_mut(id).unwrap());
+    }
     initialize_psychic_create_2(game.world.entity_mut(id).unwrap(), None);
     report_psychic_create_missing_owner(game);
     id
@@ -1361,10 +1882,10 @@ fn lava(game: &mut Game, e: &mut Entity, terrain: bool) {
     } else {
         e.pos
     };
-    let dist = if game.flags.contains("hub") {
-        0.0
-    } else {
+    let dist = if game.is_level() {
         (origin.x - game.player.pos.x).hypot(origin.y - game.player.pos.y)
+    } else {
+        0.0
     };
     if e.value("spurt") == 0.0 || dist >= 240.0 {
         return;
@@ -1854,7 +2375,8 @@ pub(crate) fn sync_parachute(game: &mut Game) {
             if let Some(e) = game.world.entity_mut(id) {
                 e.alive = false;
             }
-            game.world.spawn(
+            spawn_runtime_object(
+                game,
                 "oParaUsed",
                 Vec2::new(game.player.pos.x - 8.0, game.player.pos.y - 24.0),
             );
@@ -2209,6 +2731,9 @@ mod tests {
         g.set_simulation_view_extent(320.0, 256.0).unwrap();
         let olmec = g.world.spawn("oOlmec", Vec2::new(200.0, 80.0));
         let id = spawn_psychic_create_2(&mut g, Vec2::new(100.0, 96.0), Vec2::new(232.0, 96.0));
+        let effect = g.world.entity(id).unwrap();
+        assert_eq!(effect.text.get("type").map(String::as_str), Some(""));
+        assert_eq!(effect.value("blinkToggle"), 0.0);
         assert_eq!(g.world.entity(id).unwrap().vel, Vec2::new(2.0, 0.0));
         g.step(&InputFrame::default());
         assert_eq!(g.world.entity(id).unwrap().pos, Vec2::new(102.0, 96.0));
@@ -2847,6 +3372,35 @@ mod tests {
         );
         assert_eq!(authored.animation, 0.4);
     }
+
+    #[test]
+    fn lava_spurts_in_ending_rooms_without_a_player_distance_gate() {
+        let mut g = room();
+        g.world.name = "rEnd".into();
+        g.player.pos = Vec2::new(1000.0, 1000.0);
+        g.rng = crate::Rng::new(10);
+        assert!(!g.is_level());
+        let id = configured_lava(&mut g, Vec2::new(80.0, 96.0), false);
+
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().value("spurt_counter"), 0.0);
+        assert!(
+            !g.world
+                .entities
+                .iter()
+                .any(|e| matches!(e.object.as_str(), "oFlame" | "oMagma"))
+        );
+
+        g.step(&InputFrame::default());
+        assert_eq!(g.world.entity(id).unwrap().value("spurt_counter"), 100.0);
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .any(|e| matches!(e.object.as_str(), "oFlame" | "oMagma"))
+        );
+    }
+
     #[test]
     fn lava_spurts_initialize_both_flame_and_magma_before_overriding_launch() {
         let mut seen = std::collections::BTreeSet::new();
@@ -3234,6 +3788,14 @@ mod tests {
                 .iter()
                 .any(|e| e.alive && e.object == "oParaUsed")
         );
+        let used = g
+            .world
+            .entities
+            .iter()
+            .find(|e| e.alive && e.object == "oParaUsed")
+            .unwrap();
+        assert_eq!(used.text.get("type").map(String::as_str), Some(""));
+        assert_eq!(used.value("blinkToggle"), 0.0);
     }
     #[test]
     fn naturally_deployed_parachute_is_interrupted_by_yeti_zero_timer_and_timed_stun() {
@@ -4086,6 +4648,118 @@ mod source_create_variable_tests {
     use crate::{Game, RulesPreset, Vec2};
 
     #[test]
+    fn source_actor_create_acceleration_projects_for_generated_and_runtime_births() {
+        const ACTORS: [&str; 7] = [
+            "oBat",
+            "oGhost",
+            "oScarab",
+            "oPiranha",
+            "oJaws",
+            "oUFO",
+            "oDeadFish",
+        ];
+        let expected_acceleration = |entity: &crate::Entity, object: &str| {
+            assert!(
+                !super::source_uses_make_active(object),
+                "{object} assigns acceleration in its child Create event"
+            );
+            assert_eq!(entity.value("xAcc"), 0.2, "{object} xAcc");
+            assert_eq!(entity.value("yAcc"), 0.2, "{object} yAcc");
+        };
+        let source_create_draws = |rng: &mut crate::Rng, object: &str| match object {
+            // These are their own source Create draws, before the fields
+            // projected by source_create_variables.
+            "oScarab" => {
+                rng.range(21);
+            }
+            "oPiranha" | "oUFO" => {
+                rng.range(2);
+            }
+            _ => {}
+        };
+
+        let mut generated_world = crate::World::new(20, 16, crate::Area::Mines, 1);
+        generated_world.source_create_projection = true;
+        let mut generated_rng = crate::Rng::new(37);
+        let mut generated_expected = generated_rng.clone();
+        for (index, object) in ACTORS.into_iter().enumerate() {
+            source_create_draws(&mut generated_expected, object);
+            let id = crate::creation::spawn_generated_entity(
+                &mut generated_world,
+                &mut generated_rng,
+                object,
+                Vec2::new(48.0 + index as f64 * 24.0, 80.0),
+            );
+            expected_acceleration(generated_world.entity(id).unwrap(), object);
+            assert_eq!(
+                generated_rng.state_bits(),
+                generated_expected.state_bits(),
+                "generated {object} Create projection must not shift RNG"
+            );
+        }
+
+        let mut runtime_game = Game::try_shell(37, RulesPreset::Classic).unwrap();
+        let mut runtime_expected = runtime_game.rng.clone();
+        for (index, object) in ACTORS.into_iter().enumerate() {
+            source_create_draws(&mut runtime_expected, object);
+            let id = runtime_game.spawn(object, Vec2::new(48.0 + index as f64 * 24.0, 80.0));
+            expected_acceleration(runtime_game.world.entity(id).unwrap(), object);
+            assert_eq!(
+                runtime_game.rng.state_bits(),
+                runtime_expected.state_bits(),
+                "runtime {object} Create projection must not shift RNG"
+            );
+        }
+    }
+
+    #[test]
+    fn source_shopkeeper2_materializes_inherited_make_active_fields() {
+        let mut world = crate::World::new(20, 16, crate::Area::Mines, 1);
+        world.source_create_projection = true;
+        let mut rng = crate::Rng::new(23);
+
+        let id = crate::creation::spawn_generated_entity(
+            &mut world,
+            &mut rng,
+            "oShopkeeper2",
+            Vec2::new(80.0, 64.0),
+        );
+
+        let keeper = world.entity(id).expect("generated keeper remains live");
+        for (key, expected) in [("xVel", 0.0), ("yVel", 0.0), ("xAcc", 0.0), ("yAcc", 0.0)] {
+            assert_eq!(keeper.data.get(key), Some(&expected), "inherited {key}");
+        }
+        assert_eq!(keeper.value("collision_left"), 2.0);
+        assert_eq!(keeper.value("collision_top"), 0.0);
+        assert_eq!(keeper.value("collision_right"), 14.0);
+        assert_eq!(keeper.value("collision_bottom"), 16.0);
+    }
+
+    #[test]
+    fn source_crystal_skull_materializes_gold_idols_make_active_fields() {
+        let mut game = Game::shell(13, RulesPreset::Classic);
+        let runtime_id = game.spawn("oCrystalSkull", Vec2::new(80.0, 64.0));
+        let runtime_skull = game.world.entity(runtime_id).unwrap();
+        for key in ["xVel", "yVel", "xAcc", "yAcc"] {
+            assert_eq!(runtime_skull.value(key), 0.0, "runtime {key}");
+        }
+
+        let mut world = crate::World::new(20, 16, crate::Area::Mines, 1);
+        world.source_create_projection = true;
+        let mut rng = crate::Rng::new(13);
+        let generated_id = crate::creation::spawn_generated_entity(
+            &mut world,
+            &mut rng,
+            "oCrystalSkull",
+            Vec2::new(80.0, 64.0),
+        );
+        let generated_skull = world.entity(generated_id).unwrap();
+        for key in ["xVel", "yVel", "xAcc", "yAcc"] {
+            assert_eq!(generated_skull.value(key), 0.0, "generated {key}");
+        }
+    }
+
+    #[test]
     fn source_create_assignments_cover_water_lava_and_rubble_families() {
         let mut game = Game::shell(13, RulesPreset::Classic);
         let mut expected_rng = game.rng.clone();
@@ -4156,6 +4830,48 @@ mod source_create_variable_tests {
             assert_eq!(portal.text.get("type").map(String::as_str), Some(kind));
             assert_eq!(portal.text.get("leadsTo").map(String::as_str), Some(""));
         }
+
+        for (object, kind) in [
+            ("oSkull", "Skull"),
+            ("oLockedChest", "Locked Chest"),
+            ("oFlareCrate", "Flare Crate"),
+            ("oMagmaMan", "Magma Man"),
+            ("oHawkman", "Yeti"),
+            ("oCaveman", "Caveman"),
+        ] {
+            let id = game.spawn(object, Vec2::new(160.0, 96.0));
+            let entity = game.world.entity(id).unwrap();
+            assert_eq!(entity.text.get("type").map(String::as_str), Some(kind));
+            assert_eq!(entity.value("blinkToggle"), 0.0, "{object}");
+        }
+
+        for (object, speed) in [("oYellowTrail", 1.0), ("oPoof", 0.4)] {
+            let id = game.spawn(object, Vec2::new(176.0, 96.0));
+            let entity = game.world.entity(id).unwrap();
+            assert_eq!(entity.text.get("type").map(String::as_str), Some(""));
+            assert_eq!(entity.value("blinkToggle"), 0.0, "{object}");
+            assert_eq!(entity.image_speed(), speed, "{object}");
+        }
+
+        let skull = game.spawn("oSkull", Vec2::new(192.0, 96.0));
+        let skull = game.world.entity(skull).unwrap();
+        assert_eq!(skull.value("collision_left"), -4.0);
+        assert_eq!(skull.value("collision_top"), -4.0);
+        assert_eq!(skull.value("collision_right"), 4.0);
+        assert_eq!(skull.value("collision_bottom"), 4.0);
+        for field in ["colTop", "colLeft", "colRight", "colBot"] {
+            assert_eq!(skull.value(field), 0.0, "{field}");
+        }
+
+        for (object, top) in [("oLockedChest", -2.0), ("oFlareCrate", 0.0)] {
+            let id = game.spawn(object, Vec2::new(208.0, 96.0));
+            let entity = game.world.entity(id).unwrap();
+            assert_eq!(entity.value("collision_left"), -6.0, "{object}");
+            assert_eq!(entity.value("collision_top"), top, "{object}");
+            assert_eq!(entity.value("collision_right"), 6.0, "{object}");
+            assert_eq!(entity.value("collision_bottom"), 8.0, "{object}");
+            assert_eq!(entity.value("y_acc"), 0.2, "{object}");
+        }
     }
 
     #[test]
@@ -4172,6 +4888,14 @@ mod source_create_variable_tests {
             "oExit",
             "oXGold",
             "oXMarket",
+            "oSkull",
+            "oLockedChest",
+            "oFlareCrate",
+            "oMagmaMan",
+            "oHawkman",
+            "oCaveman",
+            "oYellowTrail",
+            "oPoof",
         ] {
             let id = game.spawn(object, Vec2::new(80.0, 80.0));
             let entity = game.world.entity(id).unwrap();

@@ -3,7 +3,7 @@
 use spelunky_core::{Game, InputFrame, Rng, RngAlgorithm, RulesPreset, replay};
 
 #[test]
-fn default_constructors_use_the_executable_state_transition_without_reseeding() {
+fn default_rng_and_shell_constructors_use_the_executable_transition_without_reseeding() {
     // Frozen static prediction from PE SHA56b913...: 40338C/4033A8 update
     // DWORD589008 by 0x08088405*x+1 modulo2^32. Not an original runtime capture.
     for (seed, first) in [
@@ -13,16 +13,20 @@ fn default_constructors_use_the_executable_state_transition_without_reseeding() 
         (0x80000000, 2147483649),
         (u32::MAX, 4160191484),
     ] {
-        for mut game in [
-            Game::shell(seed, RulesPreset::Classic),
-            Game::tutorial(seed, RulesPreset::Classic),
-        ] {
-            assert_eq!(game.seed, u64::from(seed));
-            assert_eq!(game.rng.algorithm(), RngAlgorithm::Gm8Lcg32V1);
-            assert_eq!(game.rng.state_bits(), u64::from(seed));
-            assert_eq!(game.rng.next_u64(), first);
-        }
+        let mut shell = Game::shell(seed, RulesPreset::Classic);
+        assert_eq!(shell.seed, u64::from(seed));
+        assert_eq!(shell.rng.algorithm(), RngAlgorithm::Gm8Lcg32V1);
+        assert_eq!(shell.rng.state_bits(), u64::from(seed));
+        assert_eq!(shell.rng.next_u64(), first);
         assert_eq!(Rng::new(seed).next_u64(), first);
+
+        // A prepared tutorial synchronously runs its authored brick Create
+        // callbacks, so its RNG has advanced from the seeded state. Exact
+        // source-order continuation is covered by the tutorial-route test.
+        let tutorial = Game::tutorial(seed, RulesPreset::Classic);
+        assert_eq!(tutorial.seed, u64::from(seed));
+        assert_eq!(tutorial.rng.algorithm(), RngAlgorithm::Gm8Lcg32V1);
+        assert_ne!(tutorial.rng.state_bits(), u64::from(seed));
     }
 }
 

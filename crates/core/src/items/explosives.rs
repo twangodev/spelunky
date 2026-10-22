@@ -151,7 +151,13 @@ pub(crate) fn source_type(entity: &Entity) -> String {
     if let Some(item_type) = entity.text.get("type") {
         return item_type.clone();
     }
-    let mut object = entity.object.as_str();
+    source_type_for_object(&entity.object)
+}
+
+/// Resolve the value assigned by an object's own Create, ignoring the
+/// inherited `oDrawnSprite` placeholder already stored on a fresh instance.
+pub(crate) fn source_type_for_object(name: &str) -> String {
+    let mut object = name;
     while !object.is_empty() {
         let item_type = match object {
             "oAlien" => Some("Alien"),

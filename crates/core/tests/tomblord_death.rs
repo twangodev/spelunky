@@ -248,6 +248,8 @@ fn ordinary_pistol_shots_kill_authored_tomb_with_interleaved_bone_creates_and_la
                     "source tail birth after Bones/Sceptre"
                 );
                 assert_eq!(fly.vel, vel);
+                assert_eq!(fly.value("xVel"), vel.x, "Tomb Lord writes source xVel");
+                assert_eq!(fly.value("yVel"), vel.y, "Fly Create writes source yVel");
                 assert_eq!(
                     fly.pos,
                     Vec2::new(pos.x + vel.x, pos.y + vel.y),

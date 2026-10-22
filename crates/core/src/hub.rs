@@ -1384,7 +1384,7 @@ pub fn complete_portal(game: &mut Game, portal: HubPortal) {
 }
 fn poof_pair(game: &mut Game, pos: Vec2, horizontal: bool) {
     for sign in [-1.0, 1.0] {
-        let id = game.world.spawn("oPoof", pos);
+        let id = crate::world_events::spawn_runtime_object(game, "oPoof", pos);
         game.world.entity_mut(id).unwrap().vel = if horizontal {
             Vec2::new(sign, 0.0)
         } else {
@@ -2185,6 +2185,36 @@ fn static_targets(game: &mut Game) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_hub_poofs_run_the_drawn_sprite_create_before_velocity_overrides() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        poof_pair(&mut game, Vec2::new(160.0, 40.0), true);
+        let poofs: Vec<_> = game
+            .world
+            .entities
+            .iter()
+            .filter(|entity| entity.alive && entity.object == "oPoof")
+            .collect();
+        assert_eq!(poofs.len(), 2);
+        assert_eq!(poofs[0].text.get("type").map(String::as_str), Some(""));
+        assert_eq!(poofs[0].value("blinkToggle"), 0.0);
+        assert_eq!(poofs[0].image_speed(), 0.4);
+        assert_eq!(poofs[0].vel, Vec2::new(-1.0, 0.0));
+        assert_eq!(poofs[1].vel, Vec2::new(1.0, 0.0));
+
+        let mut historical = Game::legacy_shell(7, RulesPreset::Classic);
+        poof_pair(&mut historical, Vec2::new(160.0, 40.0), true);
+        let legacy_poof = historical
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.object == "oPoof")
+            .unwrap();
+        assert!(!legacy_poof.text.contains_key("type"));
+        assert!(!legacy_poof.data.contains_key("blinkToggle"));
+    }
+
     fn challenge(kind: HubKind) -> Game {
         challenge_with_seed(kind, 7)
     }

@@ -606,6 +606,10 @@ pub struct World {
     /// retain the prior shop adapter until a custom load seeds this state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_room_path: Option<[[u8; 4]; 5]>,
+    /// Generation-time switch for source Create projections. This is derived
+    /// from the campaign revision and intentionally never enters snapshots.
+    #[serde(skip)]
+    pub(crate) source_create_projection: bool,
 }
 impl World {
     pub fn new(width: usize, height: usize, area: Area, level: u32) -> Self {
@@ -627,6 +631,7 @@ impl World {
             tile_revision: 0,
             fluid_dirty: false,
             source_room_path: None,
+            source_create_projection: false,
         }
     }
     /// Append in source emission order. Only the independent graphics counter

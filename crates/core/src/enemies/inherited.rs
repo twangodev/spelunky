@@ -100,7 +100,7 @@ pub(super) fn tick(game: &mut Game, e: &mut Entity) {
     );
     let swimming = swimming_point(&game.world, center);
     if swimming && e.value("swimming") == 0.0 {
-        game.world.spawn("oSplash", Vec2::new(center.x, e.pos.y));
+        crate::world_events::spawn_runtime_object(game, "oSplash", Vec2::new(center.x, e.pos.y));
         game.sound("sndSplash", e.pos);
     }
     e.data.insert("swimming".into(), f64::from(swimming));

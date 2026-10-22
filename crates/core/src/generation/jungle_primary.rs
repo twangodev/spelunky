@@ -334,6 +334,7 @@ pub(super) fn populate(
                 treasure_state,
                 origin,
                 Some(receiver.bounds),
+                true,
             );
         }
         let destination = source_room(above);

@@ -222,6 +222,8 @@ fn room_path_with_probabilities(
         path.start = 0;
         path.end = 3;
         path.rooms = [
+            // Store Classic's roomPath[x, y] assignments in row-major [y][x]
+            // order; keep this authored axis conversion explicit.
             [2, 4, 4, 2],
             [2, 4, 4, 2],
             [2, 4, 5, 4],
@@ -996,8 +998,19 @@ pub(crate) fn generate_campaign_result_for_route(
         selected.insert("lake".into());
     }
     let mut world = World::new(42, 34, area, level);
+    world.source_create_projection = source_classic;
     if special::generate_special(&mut world, rng, flags) {
         if source_classic {
+            // The special room replaces the initial World. Restore its
+            // generation revision so any generated children use the same
+            // source Create projection as ordinary campaign rooms.
+            world.source_create_projection = true;
+            for entity in &mut world.entities {
+                crate::world_events::initialize_source_generated_create(entity);
+            }
+            if has(flags, "tutorial") {
+                special::create_tutorial_source_terrain(&mut world, rng, context);
+            }
             initialize_generated_item_depths(&mut world, context.has_spectacles);
             initialize_generated_source_exit_creates(&mut world);
         }
@@ -1034,6 +1047,7 @@ pub(crate) fn generate_campaign_result_for_route(
     };
     if source_classic {
         world = World::new(42, height, area, level);
+        world.source_create_projection = true;
         if area == Area::Boss {
             // rOlmec's authored Temple instances and their child Creates run
             // before oGame.Create starts scrInitLevel. Keep their birth serials
@@ -1548,9 +1562,13 @@ fn boundary_tile(world: &mut World, x: usize, y: usize, object: &str) {
 }
 
 pub fn tutorial() -> World {
+    tutorial_with_context(&mut Rng::new(0), GenerationContext::default())
+}
+
+pub(crate) fn tutorial_with_context(rng: &mut Rng, context: GenerationContext) -> World {
     let mut flags = BTreeSet::new();
     flags.insert("tutorial".into());
-    generate(&mut Rng::new(0), 0, &flags)
+    generate_with_context(rng, 0, &flags, context)
 }
 
 /// Run custom-room terrain Create events without generated-room SetupWalls.
@@ -1965,6 +1983,17 @@ mod tests {
             let mut flags = BTreeSet::from(["black_market".into()]);
             let path = room_path(&mut actual, Area::Jungle, 5, &mut flags, true);
             assert_eq!((path.start, path.end), (0, 3));
+            assert_eq!(
+                path.rooms,
+                [
+                    [2, 4, 4, 2],
+                    [2, 4, 4, 2],
+                    [2, 4, 5, 4],
+                    [3, 1, 1, 3],
+                    [0; 4],
+                ],
+                "Classic roomPath[x, y] must be stored row-major as [y][x]"
+            );
             assert_eq!(actual.next_u64(), expected.next_u64(), "seed{seed}");
         }
     }

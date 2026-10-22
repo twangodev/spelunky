@@ -194,10 +194,10 @@ fn cross_resource_creation_order_does_not_change_step_rng_assignment() {
 }
 
 #[test]
-fn animation_callbacks_follow_depth_sorted_draw_order_and_exclude_newborns() {
+fn animation_callbacks_follow_creation_order_and_exclude_newborns() {
     let mut game = flat_room();
     // Birth order deliberately opposes draw order. FakeBones657 depth900 must
-    // animate before WebBall750 depth1, although the web was created first.
+    // still animate after WebBall750 depth1, because the web was created first.
     let web_ball = game.world.spawn("oWebBall", Vec2::new(64.0, 112.0));
     let web_ball = game.world.entity_mut(web_ball).unwrap();
     web_ball.sprite = "sWebCreate".into();
@@ -229,15 +229,15 @@ fn animation_callbacks_follow_depth_sorted_draw_order_and_exclude_newborns() {
     assert_eq!(skeletons.len(), 1);
     assert_eq!(webs.len(), 1);
     assert!(
-        skeletons[0].id < webs[0].id,
-        "depth900 FakeBones must finish before depth1 WebBall"
+        webs[0].id < skeletons[0].id,
+        "creation-first WebBall must finish before depth900 FakeBones"
     );
     assert_eq!(skeletons[0].animation, 0.0);
     assert_eq!(webs[0].animation, 0.0);
 }
 
 #[test]
-fn solid_webball_contact_rolls_back_both_participants_to_frame_start() {
+fn solid_basketball_rewinds_only_the_webball_collision_receiver() {
     let mut game = Game::shell(7, RulesPreset::Classic);
     game.world = World::new(40, 30, Area::Mines, 1);
     game.player.pos = Vec2::new(400.0, 152.0);
@@ -259,12 +259,13 @@ fn solid_webball_contact_rolls_back_both_participants_to_frame_start() {
     assert_eq!(web_ball.sprite, "sWebCreate");
     assert_eq!(web_ball.vel, Vec2::default());
     assert_eq!(
-        basketball.pos, basketball_start,
-        "a solid participant rolls both instances back to their frame-start poses"
+        basketball.pos,
+        Vec2::new(basketball_start.x + 2.0, basketball_start.y),
+        "the solid Basketball is not the receiver of WebBall's one-sided Item collision"
     );
     assert_eq!(
         web_ball.pos, web_ball_start,
-        "the callback runs after both participants have been rolled back"
+        "a solid `other` rewinds the WebBall receiver before its collision callback"
     );
 }
 

@@ -171,6 +171,51 @@ fn ordinary_fragile_pickup_throw_damsel_creates_direct_blood_without_hit_sound()
 }
 
 #[test]
+fn source_runtime_keeper_type_controls_jar_and_dice_hit_branches() {
+    for keeper_object in ["oShopkeeper", "oShopkeeper2"] {
+        for (item_object, speed, expected_state, expected_health) in
+            [("oJar", 5.0, 98, 20), ("oDice", 4.0, 2, 19)]
+        {
+            let mut game = room(RulesPreset::Classic, 40.0, 1);
+            let keeper = game.spawn(keeper_object, Vec2::new(160.0, 144.0));
+            assert_eq!(
+                game.world
+                    .entity(keeper)
+                    .unwrap()
+                    .text
+                    .get("type")
+                    .map(String::as_str),
+                Some("Shopkeeper"),
+                "{keeper_object} inherits the source type used by item impacts"
+            );
+            let item = game.spawn(item_object, Vec2::new(160.0, 144.0));
+            game.world.entity_mut(item).unwrap().vel.x = speed;
+
+            game.step(&InputFrame::default());
+
+            let keeper = game.world.entity(keeper).unwrap();
+            assert_eq!(
+                keeper.health, expected_health,
+                "{keeper_object}/{item_object}"
+            );
+            assert_eq!(
+                keeper.state, expected_state,
+                "{keeper_object}/{item_object}"
+            );
+            assert!(
+                !keeper.data.contains_key("origX"),
+                "Shopkeeper-specific impact must not take the ordinary enemy branch"
+            );
+            assert_eq!(
+                game.world.entity(item).is_none(),
+                item_object == "oJar",
+                "Classic destroys an impacted jar, while dice continues rolling"
+            );
+        }
+    }
+}
+
+#[test]
 fn natural_wall_break_continues_into_enemy_before_destroy_and_direct_blood_ignores_script_cap() {
     for preset in PRESETS {
         for object in FRAGILE {
