@@ -2405,7 +2405,9 @@ mod tests {
             assert_eq!(decoration.value("source_w"), 16.0);
             assert_eq!(decoration.value("source_h"), 16.0);
         }
-        assert_eq!(game.rng.state_bits(), 2_491_910_436);
+        // Successful Ice spring rolls assign sDark before their guards, so
+        // they now spawn the trap and skip the source else-if Yeti draw.
+        assert_eq!(game.rng.state_bits(), 1_532_323_483);
     }
 
     #[test]

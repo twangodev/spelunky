@@ -315,6 +315,45 @@ fn source_sprite(world: &World, support: &PopulationSupport) -> Option<String> {
     }
 }
 
+fn set_source_sprite(world: &mut World, support: &PopulationSupport, sprite: &str) {
+    match support.instance {
+        FamilyInstance::Tile(index) => {
+            let bound_metadata = world
+                .tiles
+                .get(index)
+                .and_then(|tile| tile.source_metadata_id)
+                .filter(|id| {
+                    world.entity(*id).is_some_and(|metadata| {
+                        metadata.alive
+                            && metadata.object == "oTerrainMetadata"
+                            && (metadata.pos.x / 16.0).floor() as i32 == support.x
+                            && (metadata.pos.y / 16.0).floor() as i32 == support.y
+                    })
+                });
+            let metadata_id = bound_metadata
+                .or_else(|| {
+                    world
+                        .tile_sprite_metadata(support.x, support.y)
+                        .map(|metadata| metadata.id)
+                })
+                .unwrap_or_else(|| {
+                    super::terrain::metadata(world, support.x as usize, support.y as usize)
+                });
+            if let Some(tile) = world.tiles.get_mut(index) {
+                tile.source_metadata_id = Some(metadata_id);
+            }
+            if let Some(metadata) = world.entity_mut(metadata_id) {
+                metadata.text.insert("terrain_sprite".into(), sprite.into());
+            }
+        }
+        FamilyInstance::Entity(id) => {
+            if let Some(entity) = world.entity_mut(id) {
+                entity.sprite = sprite.into();
+            }
+        }
+    }
+}
+
 struct TempleReceiver {
     instance: FamilyInstance,
     origin: Vec2,
@@ -1622,14 +1661,12 @@ fn populate_internal(
                                 rng.clone(),
                                 world.entities.len(),
                                 if source_classic {
-                                    source_sprite(world, support).as_deref() == Some("sDark")
-                                        && !source_rectangle_family(
-                                            world,
-                                            Rect::new(origin.x, origin.y - 64.0, 16.0, 64.0),
-                                            "oSolid",
-                                        )
-                                        && source_family_distance(world, support.bounds, "oExit")
-                                            > 64.0
+                                    !source_rectangle_family(
+                                        world,
+                                        Rect::new(origin.x, origin.y - 64.0, 16.0, 64.0),
+                                        "oSolid",
+                                    ) && source_family_distance(world, support.bounds, "oExit")
+                                        > 64.0
                                 } else {
                                     tile == "oDark"
                                         && !solid(world, x, y - 2)
@@ -1643,6 +1680,11 @@ fn populate_internal(
                     // Source :370 evaluates its roll before every pure guard.
                     let spring_roll = rng.chance(1, 10);
                     let spring_allowed = if source_classic {
+                        if spring_roll {
+                            // The source condition assigns sDark here rather than
+                            // comparing against the support's existing sprite.
+                            set_source_sprite(world, support, "sDark");
+                        }
                         source_sprite(world, support).as_deref() == Some("sDark")
                             && !source_rectangle_family(
                                 world,
@@ -1678,6 +1720,7 @@ fn populate_internal(
                                     after: rng.clone(),
                                     births: world.entities[first_birth..]
                                         .iter()
+                                        .filter(|entity| entity.object != "oTerrainMetadata")
                                         .map(|e| (e.object.clone(), e.pos))
                                         .collect(),
                                 });
@@ -5432,16 +5475,29 @@ mod tests {
     }
 
     #[test]
-    fn eager_ice_spring_floor_keeps_roll_before_sprite_and_exit_guards() {
+    fn eager_ice_spring_assignment_mutates_support_before_exit_guard() {
+        let spring_seed = (0..100)
+            .find(|seed| Rng::new(*seed).range(10) == 0)
+            .expect("a seed with a successful spring roll");
+        let missed_spring_seed = (0..100)
+            .find(|seed| Rng::new(*seed).range(10) != 0)
+            .expect("a seed with a missed spring roll");
         for (object, near_exit, seed) in [
-            ("oIce", false, 0),
-            ("oIce", false, 2),
-            ("oDark", false, 2),
-            ("oDark", true, 2),
+            ("oIce", false, spring_seed),
+            ("oIce", false, missed_spring_seed),
+            ("oIce", true, spring_seed),
+            ("oDark", false, spring_seed),
+            ("oDark", true, spring_seed),
         ] {
             let mut world = World::new(42, 38, Area::Ice, 9);
             world.entrance = at(1, 1);
             world.exit = if near_exit { at(8, 6) } else { at(38, 30) };
+            world.spawn(
+                "oEntrance",
+                Vec2::new(world.entrance.x - 8.0, world.entrance.y - 8.0),
+            );
+            world.spawn("oExit", Vec2::new(world.exit.x - 8.0, world.exit.y - 8.0));
+            world.source_room_path = Some([[0; 4]; 5]);
             world.set_tile(6, 6, object);
             // Same start room suppresses the earlier UFO/ceiling branch.
             assert!(start_room(&world, 6, 5));
@@ -5449,19 +5505,53 @@ mod tests {
             // An authored nearby idol suppresses only later treasure generation.
             world.spawn("oGoldIdol", Vec2::new(136.0, 116.0));
             let flags = BTreeSet::from(["made_udjat_eye".into(), "made_market_entrance".into()]);
+            ICE_FLOOR_ROLL_TRACE.with(|trace| *trace.borrow_mut() = Some(Vec::new()));
             let mut actual = Rng::new(seed);
-            let mut source = actual.clone();
-            let spring_roll = source.range(10) == 0;
-            let spring = spring_roll && object == "oDark" && !near_exit;
-            let yeti = !spring && source.range(20) == 0;
-            populate(&mut world, &mut actual, &flags);
-            assert_eq!(
-                exists(&world, "oSpringTrap"),
-                spring,
-                "{object} near_exit={near_exit} seed={seed}"
+            let mut campaign = super::super::GenerationState::fresh(&actual);
+            campaign.revision = crate::GenerationRevision::SourceClassicV2;
+            populate_with_campaign(
+                &mut world,
+                &mut actual,
+                &flags,
+                super::super::GenerationContext::default(),
+                &mut campaign,
+                &[[0; 4]; 5],
             );
-            assert_eq!(exists(&world, "oYeti"), yeti);
-            assert_eq!(actual.next_u64(), source.next_u64());
+            let mut trace = ICE_FLOOR_ROLL_TRACE.with(|trace| {
+                trace
+                    .borrow_mut()
+                    .take()
+                    .unwrap()
+                    .into_iter()
+                    .find(|trace| trace.origin == Vec2::new(96.0, 96.0))
+                    .expect("the target support reaches the Ice floor roll")
+            });
+            let mut source = trace.before.clone();
+            let spring_roll = source.range(10) == 0;
+            let spring = spring_roll && !near_exit;
+            let yeti = !spring && source.range(20) == 0;
+            let expected_births: Vec<_> = if spring {
+                vec![("oSpringTrap".into(), Vec2::new(96.0, 80.0))]
+            } else if yeti {
+                vec![("oYeti".into(), Vec2::new(96.0, 80.0))]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(
+                trace.births, expected_births,
+                "{object} near_exit={near_exit} seed={seed} roll={spring_roll} guard={} dark={}",
+                trace.spring_allowed, trace.dark_support,
+            );
+            assert_eq!(trace.dark_support, object == "oDark" || spring_roll);
+            assert_eq!(
+                world
+                    .tile_sprite_metadata(6, 6)
+                    .and_then(|metadata| metadata.text.get("terrain_sprite"))
+                    .map(String::as_str),
+                spring_roll.then_some("sDark"),
+                "support sprite assignment for {object} near_exit={near_exit} seed={seed}"
+            );
+            assert_eq!(trace.after.next_u64(), source.next_u64());
         }
     }
 
