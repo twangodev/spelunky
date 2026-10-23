@@ -1852,6 +1852,11 @@ mod tests {
             "  leading space .lvl",
             "Classic preserves spaces entered in the filename"
         );
+        assert_eq!(
+            file_name(&"x".repeat(101)).unwrap(),
+            format!("{}.lvl", "x".repeat(101)),
+            "Classic accepts filenames longer than the old 100-character guard"
+        );
         assert!(file_name("../../map").is_err());
         assert!(file_name("..").is_err());
         assert!(file_name(".lvl").is_err());

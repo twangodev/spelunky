@@ -108,11 +108,15 @@ pub(crate) fn relative_level_filename(value: &str) -> Result<String, String> {
     if stem.is_empty() {
         return Err("Enter a valid level filename".into());
     }
-    if filename.to_ascii_lowercase().ends_with(".lvl") {
-        Ok(path)
+    let path = if filename.to_ascii_lowercase().ends_with(".lvl") {
+        path
     } else {
-        Ok(format!("{path}.lvl"))
+        format!("{path}.lvl")
+    };
+    if path.rsplit('/').next().is_some_and(|name| name.len() > 255) {
+        return Err("Use a level filename that fits the filesystem limit".into());
     }
+    Ok(path)
 }
 
 /// Convert a directory-picker path to a safe catalog key. The picker returns
@@ -165,7 +169,7 @@ fn safe_relative_path(value: &str) -> Result<String, String> {
                             ' ' | '!' | '@' | '$' | '%' | '&' | '(' | ')' | '.' | '-' | '_'
                         )
                 });
-                if name.len() > 100 || !portable || name == "." || name == ".." {
+                if name.len() > 255 || !portable || name == "." || name == ".." {
                     return Err("Use portable level path components".into());
                 }
                 components.push(name);
@@ -671,6 +675,14 @@ mod tests {
         assert!(relative_level_filename("../room").is_err());
         assert!(relative_level_filename("C:\\room").is_err());
         assert!(relative_level_filename("/tmp/room").is_err());
+        let long_name = "x".repeat(101);
+        assert_eq!(
+            relative_level_filename(&long_name),
+            Ok(format!("{long_name}.lvl"))
+        );
+        let at_limit = format!("{}.lvl", "x".repeat(251));
+        assert_eq!(relative_level_filename(&at_limit), Ok(at_limit));
+        assert!(relative_level_filename(&"x".repeat(252)).is_err());
     }
 }
 
