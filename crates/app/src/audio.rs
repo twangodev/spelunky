@@ -355,7 +355,7 @@ impl Audio {
 #[cfg(not(target_arch = "wasm32"))]
 mod backend {
     use super::*;
-    use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source, SpatialSink};
+    use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
     use std::{collections::HashMap, io::Cursor, time::Instant};
 
     struct Track {
@@ -366,7 +366,7 @@ mod backend {
     }
     struct Effect {
         name: &'static str,
-        sink: SpatialSink,
+        sink: Sink,
     }
     type NativeEffectSource = rodio::source::Buffered<Decoder<Cursor<&'static [u8]>>>;
 
@@ -483,19 +483,18 @@ mod backend {
             if self.effects.len() >= MAX_EFFECTS {
                 self.effects.remove(0).sink.stop();
             }
-            let sink = SpatialSink::connect_new(
-                mixer,
-                [
-                    self.sound_pans
-                        .get(name)
-                        .copied()
-                        .unwrap_or_else(|| pan(position)),
-                    0.0,
-                    0.0,
-                ],
-                [-1.0, 0.0, 0.0],
-                [1.0, 0.0, 0.0],
-            );
+            let position = self
+                .sound_pans
+                .get(name)
+                .copied()
+                .unwrap_or_else(|| pan(position));
+            // Classic's pan endpoints are hard left/right. SpatialSink adds
+            // inverse-distance attenuation to both channels, so even its
+            // endpoint positions leak sound to the far ear. Match the browser
+            // StereoPannerNode with equal-power stereo gains instead.
+            let angle = (position + 1.0) * std::f32::consts::FRAC_PI_4;
+            let channels = vec![angle.cos(), angle.sin()];
+            let sink = Sink::connect_new(mixer);
             sink.set_volume(resource_volume_with_override(
                 name,
                 self.music_volume,
@@ -509,9 +508,9 @@ mod backend {
                 );
             }
             if let Some(source) = source {
-                sink.append(source);
+                sink.append(rodio::source::ChannelVolume::new(source, channels));
             } else if let Ok(source) = Decoder::try_from(Cursor::new(bytes)) {
-                sink.append(source);
+                sink.append(rodio::source::ChannelVolume::new(source, channels));
             }
             self.effects.push(Effect { name, sink });
         }
@@ -871,8 +870,7 @@ mod backend {
         }
 
         fn infinite_effect(mixer: &rodio::mixer::Mixer, name: &'static str) -> Effect {
-            let sink =
-                SpatialSink::connect_new(mixer, [0.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+            let sink = Sink::connect_new(mixer);
             sink.append(
                 rodio::buffer::SamplesBuffer::new(2, 44_100, vec![0.25; 1024]).repeat_infinite(),
             );
@@ -880,8 +878,7 @@ mod backend {
         }
 
         fn finite_effect(mixer: &rodio::mixer::Mixer, name: &'static str) -> Effect {
-            let sink =
-                SpatialSink::connect_new(mixer, [0.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+            let sink = Sink::connect_new(mixer);
             sink.append(rodio::buffer::SamplesBuffer::new(
                 2,
                 44_100,
@@ -1126,7 +1123,10 @@ mod backend {
                     energy[i % 2] += f64::from(output.next().unwrap_or(0.0).abs());
                 }
                 assert!(energy[0] > 0.0);
-                assert!(energy[0] > energy[1] * 1.5);
+                assert!(
+                    energy[0] > energy[1] * 8.0,
+                    "hard-left source pan must dominate the right channel: {energy:?}"
+                );
                 audio.stop_sound(alias);
             }
             audio.set_sound_pan("sndDamsel", 9.0);
@@ -1192,12 +1192,7 @@ mod backend {
                     })
                     .collect();
                 let (effects_mixer, mut effects_output) = rodio::mixer::mixer(2, 44_100);
-                let effect = SpatialSink::connect_new(
-                    &effects_mixer,
-                    [0.0, 0.0, 0.0],
-                    [-1.0, 0.0, 0.0],
-                    [1.0, 0.0, 0.0],
-                );
+                let effect = Sink::connect_new(&effects_mixer);
                 effect.append(
                     rodio::buffer::SamplesBuffer::new(2, 44_100, vec![0.1; 1024]).repeat_infinite(),
                 );

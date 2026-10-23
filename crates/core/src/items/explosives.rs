@@ -669,7 +669,7 @@ pub(crate) fn step_instance(game: &mut Game, id: u64) {
             step_bomb_body(game, &mut entity);
         }
         "oRopeThrow" => tick_rope(game, &mut entity),
-        "oRope" | "oRopeTop" => tick_rope_burn(game, &mut entity),
+        "oRope" => tick_rope_burn(game, &mut entity),
         "oRopeBurn" => tick_burning_flame(game, &mut entity),
         // oExplosion has no Normal Step event.
         _ => {}
@@ -1021,13 +1021,7 @@ pub(crate) fn tick_entities(game: &mut Game) {
             entity.alive
                 && matches!(
                     entity.object.as_str(),
-                    "oBomb"
-                        | "oFireFrogBomb"
-                        | "oRopeThrow"
-                        | "oExplosion"
-                        | "oRope"
-                        | "oRopeTop"
-                        | "oRopeBurn"
+                    "oBomb" | "oFireFrogBomb" | "oRopeThrow" | "oExplosion" | "oRope" | "oRopeBurn"
                 )
         })
         .map(|entity| entity.id)
@@ -1058,7 +1052,7 @@ pub(crate) fn tick_entities(game: &mut Game) {
                     entity.alive = false;
                 }
             }
-            "oRope" | "oRopeTop" => tick_rope_burn(game, &mut entity),
+            "oRope" => tick_rope_burn(game, &mut entity),
             "oRopeBurn" => {
                 tick_burning_flame(game, &mut entity);
                 entity.animation += 0.8;
@@ -3221,6 +3215,21 @@ mod tests {
         let mut g = Game::shell(7, RulesPreset::Classic);
         g.player.pos = Vec2::new(160.0, 160.0);
         g
+    }
+
+    #[test]
+    fn rope_top_does_not_run_the_rope_burn_step() {
+        let mut game = game();
+        let id = game.spawn("oRopeTop", Vec2::new(80.0, 80.0));
+        game.world
+            .entity_mut(id)
+            .unwrap()
+            .data
+            .insert("burn_timer".into(), 5.0);
+
+        step_instance(&mut game, id);
+
+        assert_eq!(game.world.entity(id).unwrap().value("burn_timer"), 5.0);
     }
 
     fn temple_clean_source(object: &str) -> Entity {

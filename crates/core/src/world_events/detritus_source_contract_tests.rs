@@ -219,12 +219,26 @@ fn natural_runtime_cap_runs_flame_destroy_then_all_child_create_draws() {
     for _ in 0..32 {
         g.spawn("oBone", Vec2::new(160.0, 96.0));
     }
+    let offscreen = g
+        .world
+        .entities
+        .iter()
+        .filter(|entity| entity.object == "oBone")
+        .nth(31)
+        .unwrap()
+        .id;
+    g.world.entity_mut(offscreen).unwrap().engine_active = false;
+    crate::dispatcher::activate_region(&mut g, Rect::new(0.0, 0.0, 32.0, 32.0));
+    assert_eq!(g.dispatcher.hidden_entities().len(), 1);
     let mut state = u32::try_from(g.rng.state_bits()).unwrap();
     let (velocity, gravity) = child_create_oracle(&mut state);
     let id = g.spawn("oFlame", Vec2::new(160.0, 96.0));
     let flame = stored(&g, id);
-    assert!(!flame.alive);
-    assert_eq!(smokes(&g), vec![Vec2::new(160.0, 96.0)]);
+    assert!(
+        flame.alive,
+        "inactive Detritus is excluded from instance_number"
+    );
+    assert!(smokes(&g).is_empty());
     assert_eq!(flame.vel, velocity);
     assert_eq!(flame.value("gravity"), gravity);
     assert_eq!(flame.image_speed(), 0.3);

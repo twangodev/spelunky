@@ -353,6 +353,7 @@ struct App {
     screen: Screen,
     pause_summary: Vec<String>,
     settings_return: Screen,
+    cheats_return: Screen,
     selection: usize,
     settings_ui: SettingsUi,
     cheat_ui: CheatUi,
@@ -627,6 +628,7 @@ impl App {
             screen: Screen::Playing,
             pause_summary: Vec::new(),
             settings_return: Screen::Title,
+            cheats_return: Screen::Pause,
             selection: 0,
             settings_ui: SettingsUi::new(),
             cheat_ui: CheatUi::default(),
@@ -918,6 +920,12 @@ impl App {
         }
         self.apply_audio_policy();
     }
+
+    fn open_cheats(&mut self) {
+        self.cheats_return = cheats_return_screen(self.screen);
+        self.screen(Screen::Cheats);
+    }
+
     /// Classic clears `global.testLevel` before opening the level editor from
     /// the title screen, so a fresh title/editor entry must not revive the last
     /// document. Its preview still shares the game's source RNG stream.
@@ -1259,7 +1267,7 @@ impl App {
         if self.screen == Screen::Cheats {
             if let Some(game) = &mut self.game {
                 if self.cheat_ui.key(key, game) {
-                    self.screen(Screen::Pause);
+                    self.screen(self.cheats_return);
                 }
             }
             return;
@@ -1270,7 +1278,7 @@ impl App {
                 g.state == RunState::Playing && g.opening.is_none() && g.ending.is_none()
             })
         {
-            self.screen(Screen::Cheats);
+            self.open_cheats();
             return;
         }
         // Deliver earlier room producers before a new F1/selector stop.
@@ -1543,7 +1551,7 @@ impl App {
                     }
                     PauseMenuAction::Editor => self.screen(Screen::Editor),
                     PauseMenuAction::Title => self.screen(Screen::Title),
-                    PauseMenuAction::Cheats => self.screen(Screen::Cheats),
+                    PauseMenuAction::Cheats => self.open_cheats(),
                 }
             }
             Screen::Finished => match self.selection {
@@ -3591,6 +3599,13 @@ enum PauseMenuAction {
     Cheats,
 }
 
+fn cheats_return_screen(from: Screen) -> Screen {
+    match from {
+        Screen::Playing | Screen::Pause => from,
+        _ => Screen::Pause,
+    }
+}
+
 fn pause_menu_action(
     selection: usize,
     editor_play: bool,
@@ -5414,6 +5429,15 @@ mod tests {
         reactivate_instances_after_pause(Screen::Title, Screen::Playing, Some(&mut game));
 
         assert!(!game.world.entity(spider).unwrap().engine_active);
+    }
+
+    #[test]
+    fn cheat_menu_returns_to_the_screen_that_opened_it() {
+        use super::{Screen, cheats_return_screen};
+
+        assert_eq!(cheats_return_screen(Screen::Playing), Screen::Playing);
+        assert_eq!(cheats_return_screen(Screen::Pause), Screen::Pause);
+        assert_eq!(cheats_return_screen(Screen::Title), Screen::Pause);
     }
 
     #[test]
@@ -10218,7 +10242,7 @@ mod tests {
             editor.wheel(1.0);
         }
         editor.key(KeyCode::KeyN, None, false);
-        editor.key(KeyCode::KeyA, Some("saved-room"), false);
+        editor.key(KeyCode::KeyA, Some("savedroom"), false);
         editor.key(KeyCode::Enter, None, false);
         // A genuine pointer edit, followed by ordinary source Escape/Y input.
         // Keep the same global source tile after the editor starts at (0, 0).
@@ -10231,7 +10255,7 @@ mod tests {
         let EditorCommand::Save { name, text } = editor.key(KeyCode::KeyY, None, false) else {
             panic!("source Y must request saving before leaving");
         };
-        assert_eq!(name, "saved-room.lvl");
+        assert_eq!(name, "SAVEDROOM.lvl");
         assert_eq!(
             spelunky_core::level::Level::parse(&text)
                 .unwrap()
@@ -10253,13 +10277,13 @@ mod tests {
         let mut save = crate::storage::SaveData::default();
         save.custom_levels.insert(level_name(&name), text.clone());
         let restored = crate::storage::SaveData::from_json(&save.to_json().unwrap()).unwrap();
-        assert_eq!(restored.custom_levels["saved-room"], text);
+        assert_eq!(restored.custom_levels["savedroom"], text);
         assert!(matches!(
             complete_editor_save(&mut editor, &name, Ok(())),
             EditorCommand::Back
         ));
         let mut game = Game::shell(19, spelunky_core::RulesPreset::Classic);
-        game.load_custom(&spelunky_core::level::Level::default(), "saved-room", "");
+        game.load_custom(&spelunky_core::level::Level::default(), "savedroom", "");
         game.flags.insert("title_start:1".into());
         prepare_editor_return(&mut game);
         game.load_hub(spelunky_core::hub::HubKind::Title);

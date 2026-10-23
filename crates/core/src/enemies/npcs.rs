@@ -421,14 +421,7 @@ fn create_blood(game: &mut Game, e: &Entity, pos: Vec2, count: u32) {
         return;
     }
     for _ in 0..count {
-        if game
-            .world
-            .entities
-            .iter()
-            .filter(|p| p.alive && p.engine_active && crate::catalog::is_a(&p.object, "oDetritus"))
-            .count()
-            < 16
-        {
+        if crate::world_events::detritus_instance_count(game) < 16 {
             crate::world_events::spawn_detritus(game, "oBlood", pos);
         }
     }

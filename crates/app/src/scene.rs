@@ -1,5 +1,5 @@
 //! Builds a presentation snapshot without advancing simulation or animation.
-use spelunky_core::{Area, Entity, Game, PlayerState, Vec2, catalog};
+use spelunky_core::{Area, Entity, Game, Player, PlayerState, Vec2, catalog};
 use std::collections::{HashMap, HashSet};
 
 use crate::{
@@ -347,6 +347,29 @@ fn presentation_animation(animation: f64, image_speed: f64, alpha: f64) -> f64 {
     }
 }
 
+fn presentation_entity_animation(entity: &Entity, current_sprite: Option<&str>, alpha: f64) -> f64 {
+    if current_sprite == Some(entity.sprite.as_str()) {
+        presentation_animation(entity.animation, entity.image_speed(), alpha)
+    } else if entity.animation.is_finite() {
+        // Draw is captured before Animation End. If that callback destroys the
+        // instance or switches sprites, retain its last source subimage rather
+        // than interpolating the discarded animation into frame zero.
+        entity.animation.floor()
+    } else {
+        entity.animation
+    }
+}
+
+fn presentation_player_animation(player: &Player, current_sprite: &str, alpha: f64) -> f64 {
+    if current_sprite == player.sprite {
+        presentation_animation(player.animation, player.image_speed(), alpha)
+    } else if player.animation.is_finite() {
+        player.animation.floor()
+    } else {
+        player.animation
+    }
+}
+
 fn entity_sprite<'a>(atlas: &Atlas, entity: &'a Entity) -> Option<&'a str> {
     if atlas.sprite(&entity.sprite, entity.animation).is_some() {
         return Some(&entity.sprite);
@@ -441,6 +464,7 @@ fn entity_draw_extras(
     layer: &mut Vec<DrawQuad>,
     game: &Game,
     entity: &Entity,
+    current_sprite: Option<&str>,
     atlas: &Atlas,
     x: f32,
     y: f32,
@@ -489,7 +513,7 @@ fn entity_draw_extras(
                     layer,
                     atlas,
                     name,
-                    presentation_animation(entity.animation, entity.image_speed(), animation_alpha),
+                    presentation_entity_animation(entity, current_sprite, animation_alpha),
                     x + 4.0,
                     y + 2.0,
                     false,
@@ -637,6 +661,7 @@ pub struct SceneBuffers {
     sprites: Vec<DrawQuad>,
     layers: Vec<(f64, u8, u64, std::ops::Range<usize>)>,
     source_entity_order: HashMap<u64, u64>,
+    current_entity_index: HashMap<u64, (bool, usize)>,
     source_player_order: Option<u64>,
     visible_ids: HashSet<u64>,
     hidden_ids: HashSet<u64>,
@@ -670,6 +695,7 @@ pub fn game_scene_in_view_into(
         sprites,
         layers,
         source_entity_order,
+        current_entity_index,
         source_player_order,
         visible_ids,
         hidden_ids,
@@ -680,12 +706,24 @@ pub fn game_scene_in_view_into(
     sprites.clear();
     layers.clear();
     source_entity_order.clear();
+    current_entity_index.clear();
     *source_player_order = None;
     visible_ids.clear();
     hidden_ids.clear();
     hidden_indices.clear();
     terrain_sprites.clear();
-    let game = game.presentation();
+    let current_game = game;
+    let game = current_game.presentation();
+    for (index, entity) in current_game.world.entities.iter().enumerate() {
+        if entity.alive {
+            current_entity_index.insert(entity.id, (false, index));
+        }
+    }
+    for (index, entity) in current_game.dispatcher.hidden_entities().iter().enumerate() {
+        if entity.alive {
+            current_entity_index.insert(entity.id, (true, index));
+        }
+    }
     // Classic draws the global active list after sorting it by depth. The
     // stable sort keeps the list's instance order for depth ties, including
     // instances appended by region reactivation. Reuse that per-frame rank as
@@ -1044,6 +1082,19 @@ pub fn game_scene_in_view_into(
         } else {
             source_alpha as f32
         };
+        let current_sprite = current_entity_index
+            .get(&entity.id)
+            .map(|&(hidden, index)| {
+                if hidden {
+                    current_game.dispatcher.hidden_entities()[index]
+                        .sprite
+                        .as_str()
+                } else {
+                    current_game.world.entities[index].sprite.as_str()
+                }
+            });
+        let entity_animation =
+            presentation_entity_animation(entity, current_sprite, animation_alpha);
         if matches!(entity.object.as_str(), "oPDummy" | "oPDummy2")
             && game.player.has("Jetpack")
             && !matches!(
@@ -1066,7 +1117,7 @@ pub fn game_scene_in_view_into(
             layer,
             atlas,
             name,
-            presentation_animation(entity.animation, entity.image_speed(), animation_alpha),
+            entity_animation,
             entity_draw_x(&entity.object, x, mirror),
             y,
             mirror,
@@ -1091,7 +1142,17 @@ pub fn game_scene_in_view_into(
                 ];
             }
         }
-        entity_draw_extras(layer, game, entity, atlas, x, y, animation_alpha, view);
+        entity_draw_extras(
+            layer,
+            game,
+            entity,
+            current_sprite,
+            atlas,
+            x,
+            y,
+            animation_alpha,
+            view,
+        );
         let depth = entity_draw_depth(game, entity, definition.map_or(60, |def| def.depth));
         layers.push((
             f64::from(depth),
@@ -1175,7 +1236,7 @@ pub fn game_scene_in_view_into(
             layer,
             atlas,
             name,
-            presentation_animation(player.animation, player.image_speed(), animation_alpha),
+            presentation_player_animation(player, &current_game.player.sprite, animation_alpha),
             x,
             y,
             player.facing > 0,
@@ -2407,8 +2468,10 @@ fn hud_in_view(
     offset_panel_translation(&mut quads[status_start..], view.ui_origin(), -1.0);
     if player.has("Compass") {
         let [ox, oy] = view.ui_origin();
-        let exit_x = (game.world.exit.x - camera.x) as f32 + ox;
-        let exit_y = (game.world.exit.y - camera.y) as f32 + oy;
+        // World exits are stored at the 16x16 door center. Classic's global
+        // exitX/exitY and compass Draw use the door's top-left tile origin.
+        let exit_x = (game.world.exit.x - 8.0 - camera.x) as f32 + ox;
+        let exit_y = (game.world.exit.y - 8.0 - camera.y) as f32 + oy;
         let below_view = exit_y > view.height;
         let direction = if below_view {
             if exit_x < 0.0 {
@@ -2614,9 +2677,9 @@ mod tests {
             atlas,
             quad,
             &player.sprite,
-            presentation_animation(
-                player.animation,
-                player.image_speed(),
+            presentation_player_animation(
+                player,
+                &game.player.sprite,
                 presentation_animation_alpha(game, alpha),
             ),
             player.facing > 0,
@@ -2635,9 +2698,17 @@ mod tests {
             atlas,
             quad,
             &entity.sprite,
-            presentation_animation(
-                entity.animation,
-                entity.image_speed(),
+            presentation_entity_animation(
+                entity,
+                game.world
+                    .entity(entity.id)
+                    .or_else(|| {
+                        game.dispatcher
+                            .hidden_entities()
+                            .iter()
+                            .find(|current| current.id == entity.id && current.alive)
+                    })
+                    .map(|current| current.sprite.as_str()),
                 presentation_animation_alpha(game, alpha),
             ),
             mirrored,
@@ -3213,7 +3284,9 @@ mod tests {
                     let mut game = Game::shell(1, RulesPreset::Classic);
                     game.player.equipment.insert("Compass".into());
                     game.data.insert("message_timer".into(), message);
-                    game.world.exit = exit;
+                    // Fixtures above are expressed in Classic's source tile
+                    // origin; the world model stores the door center.
+                    game.world.exit = Vec2::new(exit.x + 8.0, exit.y + 8.0);
                     let [ox, oy] = view.ui_origin();
                     // hud_in_view receives expanded camera plus uiOrigin;
                     // fixture rendered camera is independently fixed at0,0.
@@ -4137,7 +4210,7 @@ mod tests {
             !quads.iter().any(|q| arrows.contains(&q.uv)),
             "visible expanded exit incorrectly got arrow"
         );
-        game.world.exit = Vec2::new(800.0, 400.0);
+        game.world.exit = Vec2::new(808.0, 408.0);
         let quads = game_scene_in_view(&game, 0.5, false, &atlas, view);
         let frame = atlas.sprite("sCompassLR", 0.0).unwrap();
         let q = quads.iter().find(|q| q.uv == frame.uv).unwrap();
@@ -4322,6 +4395,15 @@ mod tests {
                 assert!(quads.iter().any(|quad| {
                     presentation_entity_frame_matches(&game, draw, quad, &atlas, alpha, false)
                 }));
+                if tick == 15 {
+                    let last_frame = atlas.sprite("sPoof", 5.0).unwrap();
+                    let poof = quads
+                        .iter()
+                        .find(|quad| quad.uv == last_frame.uv)
+                        .expect("the Animation End Draw keeps the source's last poof frame");
+                    assert_eq!(poof.next_uv, last_frame.uv);
+                    assert_eq!(poof.frame_mix, 0.0);
+                }
                 assert_eq!(game.state_hash(), hash);
                 assert_eq!(game.presentation().state_hash(), draw_hash);
             }

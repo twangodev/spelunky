@@ -678,7 +678,7 @@ fn item_impact_family(game: &Game, family: &str, receiver: u64) -> Vec<u64> {
             Instance::Entity(id) => game
                 .world
                 .entity(id)
-                .filter(|e| e.engine_active && e.id != receiver)
+                .filter(|e| e.alive && e.engine_active && e.id != receiver)
                 .map(|e| e.id),
             _ => None,
         })
@@ -902,18 +902,7 @@ pub(super) fn create_blood(game: &mut Game, e: &Entity, pos: Vec2, count: u32) {
         return;
     }
     for _ in 0..count {
-        if game
-            .world
-            .entities
-            .iter()
-            .filter(|other| {
-                other.alive
-                    && other.engine_active
-                    && crate::catalog::is_a(&other.object, "oDetritus")
-            })
-            .count()
-            < 16
-        {
+        if crate::world_events::detritus_instance_count(game) < 16 {
             crate::world_events::spawn_detritus(game, "oBlood", pos);
         }
     }

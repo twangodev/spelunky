@@ -3600,6 +3600,39 @@ mod tests {
         assert_eq!(eligible_steps, source_window.len());
         assert!(past_window_steps > 0);
     }
+
+    #[test]
+    fn laser_solid_collision_removes_decoration_above_the_solid() {
+        let mut game = game();
+        let laser_id = game.spawn("oLaser", Vec2::new(32.0, 64.0));
+        let solid_id = game.spawn("oPushBlock", Vec2::new(128.0, 96.0));
+        let laser_decoration = game.spawn("oGenerationDecoration", Vec2::new(32.0, 48.0));
+        let solid_decoration = game.spawn("oGenerationDecoration", Vec2::new(128.0, 80.0));
+        for id in [laser_decoration, solid_decoration] {
+            let decoration = game.world.entity_mut(id).unwrap();
+            decoration.data.insert("depth".into(), 3.0);
+            decoration.data.insert("source_w".into(), 16.0);
+            decoration.data.insert("source_h".into(), 16.0);
+        }
+        let mut laser = game.world.entity(laser_id).unwrap().clone();
+
+        assert!(super::collision(
+            &mut game,
+            &mut laser,
+            crate::dispatcher::Instance::Entity(solid_id),
+        ));
+
+        assert!(game.world.entity(laser_decoration).unwrap().alive);
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .find(|decoration| decoration.id == solid_decoration)
+                .unwrap()
+                .alive
+        );
+    }
 }
 
 #[cfg(test)]

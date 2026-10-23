@@ -427,13 +427,7 @@ pub(super) fn player_hurt(game: &mut Game) {
     game.player.pos.y -= 1.0;
     // Source deliberately leaves the independent stun flag and movement state alone.
     if game.player.data.get("bloodless").copied().unwrap_or(0.0) == 0.0
-        && game
-            .world
-            .entities
-            .iter()
-            .filter(|e| e.alive && e.engine_active && crate::catalog::is_a(&e.object, "oDetritus"))
-            .count()
-            < 16
+        && crate::world_events::detritus_instance_count(game) < 16
     {
         game.spawn("oBlood", game.player.pos);
     }

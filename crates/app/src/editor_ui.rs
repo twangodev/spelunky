@@ -21,6 +21,23 @@ const MAP_Y: f32 = 36.0;
 const CELL: f32 = 8.0;
 const COLS: usize = 30;
 const ROWS: usize = 21;
+const BUTTON_TOP_Y: f32 = 16.0;
+const BUTTON_BOTTOM_Y: f32 = 208.0;
+
+fn classic_editor_character(ch: char) -> Option<char> {
+    if ch.is_ascii_alphabetic() {
+        Some(ch.to_ascii_uppercase())
+    } else if ch.is_ascii_digit()
+        || matches!(
+            ch,
+            ' ' | '!' | '@' | '$' | '%' | '&' | '(' | ')' | '.' | '?'
+        )
+    {
+        Some(ch)
+    } else {
+        None
+    }
+}
 
 pub enum EditorCommand {
     None,
@@ -38,7 +55,7 @@ pub struct EditorPlay {
     pub starting_inventory: [f64; 3],
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Confirmation {
     Exit,
     New,
@@ -52,7 +69,7 @@ enum PaletteGroup {
     Items,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Field {
     OpenName,
     Author,
@@ -96,8 +113,11 @@ pub struct EditorUi {
     stroke: Option<(usize, usize, bool)>,
     entry: Option<Entry>,
     metadata_index: usize,
+    edit_metadata_step: Option<usize>,
     confirmation: Option<Confirmation>,
     new_pressed: bool,
+    edit_pressed: bool,
+    test_pressed: bool,
     pointer_left: bool,
     status: String,
     play_snapshot: Option<(Level, [String; 3])>,
@@ -129,8 +149,11 @@ impl EditorUi {
             stroke: None,
             entry: None,
             metadata_index: 0,
+            edit_metadata_step: None,
             confirmation: None,
             new_pressed: false,
+            edit_pressed: false,
+            test_pressed: false,
             pointer_left: false,
             status: "PAINT: LEFT   ERASE: RIGHT   ARROWS: PAN".into(),
             play_snapshot: None,
@@ -153,8 +176,11 @@ impl EditorUi {
         self.name = name;
         self.starting_inventory = starting_inventory;
         self.entry = None;
+        self.edit_metadata_step = None;
         self.confirmation = None;
         self.new_pressed = false;
+        self.edit_pressed = false;
+        self.test_pressed = false;
         self.pointer_left = false;
         self.cursor = None;
         self.stroke = None;
@@ -214,6 +240,7 @@ impl EditorUi {
     /// name when no entry exists.
     pub fn begin_open_level_name(&mut self, value: String) {
         self.status.clear();
+        self.edit_metadata_step = None;
         self.begin(Field::OpenName, value);
     }
 
@@ -222,6 +249,8 @@ impl EditorUi {
     pub fn cancel_pointer(&mut self) {
         self.stroke = None;
         self.new_pressed = false;
+        self.edit_pressed = false;
+        self.test_pressed = false;
         self.pointer_left = false;
         self.pointer_sample = None;
     }
@@ -249,6 +278,17 @@ impl EditorUi {
         if self.entry.is_some() {
             match key {
                 KeyCode::Escape => {
+                    if self
+                        .entry
+                        .as_ref()
+                        .is_some_and(|entry| matches!(entry.field, Field::Sign(_) | Field::Link(_)))
+                    {
+                        // Classic's Escape event cancels EDIT_MSG / EDIT_DOOR
+                        // and restores the editor buttons without leaving the
+                        // room editor.
+                        self.entry = None;
+                        return EditorCommand::None;
+                    }
                     let entry = self.entry.take().unwrap();
                     if matches!(
                         entry.field,
@@ -261,6 +301,7 @@ impl EditorUi {
                             | Field::Ropes
                             | Field::Next
                     ) {
+                        self.edit_metadata_step = None;
                         return EditorCommand::Back;
                     }
                 }
@@ -276,14 +317,37 @@ impl EditorUi {
                         }
                         self.entry = Some(entry);
                     } else {
+                        let advance_editor_metadata = self.edit_metadata_step.is_some();
                         self.commit_entry();
+                        if advance_editor_metadata && self.entry.is_none() {
+                            self.advance_editor_metadata();
+                        }
                     }
                 }
                 KeyCode::Tab => {
+                    if self
+                        .entry
+                        .as_ref()
+                        .is_some_and(|entry| matches!(entry.field, Field::Sign(_) | Field::Link(_)))
+                    {
+                        // Tab is not a special key in Classic sign or door
+                        // entry; scrGetChar returns an empty string.
+                        return EditorCommand::None;
+                    }
+                    if self.edit_metadata_step.is_some() {
+                        // The mouse Edit wizard follows Classic's any-key
+                        // handler: Tab is an empty character, not Enter.
+                        return EditorCommand::None;
+                    }
+                    let advance_editor_metadata = self.edit_metadata_step.is_some();
                     self.commit_entry();
                     if self.entry.is_none() {
-                        self.metadata_index = (self.metadata_index + 1) % 6;
-                        self.metadata();
+                        if advance_editor_metadata {
+                            self.advance_editor_metadata();
+                        } else {
+                            self.metadata_index = (self.metadata_index + 1) % 6;
+                            self.metadata();
+                        }
                     }
                 }
                 KeyCode::Backspace | KeyCode::Delete => {
@@ -301,11 +365,16 @@ impl EditorUi {
                 _ if !control => {
                     if let Some(value) = typed {
                         let entry = self.entry.as_mut().unwrap();
+                        let accepted: Vec<_> =
+                            value.chars().filter_map(classic_editor_character).collect();
+                        if accepted.is_empty() {
+                            return EditorCommand::None;
+                        }
                         if entry.replace {
                             entry.value.clear();
                             entry.replace = false;
                         }
-                        for ch in value.chars().filter(|ch| !ch.is_control()) {
+                        for ch in accepted {
                             let max_chars = match entry.field {
                                 Field::Sign(_) | Field::Link(_) => 38,
                                 _ => 1024,
@@ -358,6 +427,7 @@ impl EditorUi {
                     self.pan[1] = (self.pan[1] + 1.0).min((LEVEL_HEIGHT - ROWS) as f32)
                 }
                 KeyCode::KeyM => {
+                    self.edit_metadata_step = None;
                     self.metadata_index = 0;
                     self.metadata();
                 }
@@ -547,6 +617,40 @@ impl EditorUi {
         };
         self.begin(field, value);
     }
+    fn begin_editor_metadata(&mut self) {
+        self.edit_metadata_step = Some(0);
+        self.editor_metadata(0);
+    }
+    fn advance_editor_metadata(&mut self) {
+        let Some(step) = self.edit_metadata_step else {
+            return;
+        };
+        if step == 6 {
+            self.edit_metadata_step = None;
+        } else {
+            let next = step + 1;
+            self.edit_metadata_step = Some(next);
+            self.editor_metadata(next);
+        }
+    }
+    fn editor_metadata(&mut self, step: usize) {
+        let level = &self.state.level;
+        let (field, value) = match step {
+            0 => (Field::Name, self.name.clone()),
+            1 => (Field::Author, level.author.clone()),
+            2 => (Field::Music, level.music.clone()),
+            3 => (Field::Life, self.starting_inventory[0].clone()),
+            4 => (Field::Bombs, self.starting_inventory[1].clone()),
+            5 => (Field::Ropes, self.starting_inventory[2].clone()),
+            _ => (Field::Next, level.next_level.clone()),
+        };
+        self.begin(field, value);
+        if step == 0
+            && let Some(entry) = self.entry.as_mut()
+        {
+            entry.replace = false;
+        }
+    }
     fn record(&mut self, door: bool) {
         self.record_at_cursor(Some(door));
     }
@@ -626,7 +730,7 @@ impl EditorUi {
                         if entry.value.is_empty() {
                             Err("MUSIC CANNOT BE EMPTY".to_owned())
                         } else {
-                            next.music = entry.value.to_ascii_uppercase();
+                            next.music = entry.value.clone();
                             Ok(())
                         }
                     }
@@ -705,6 +809,13 @@ impl EditorUi {
         if !(0.0..240.0).contains(&x) || !(MAP_Y..204.0).contains(&y) {
             self.pointer_step(x, y, left, right)
         } else {
+            // Classic's button Mouse Leave events clear the pressed sprite
+            // immediately, even though map editing is sampled only at the
+            // fixed source Step. Do not let a held drag leave and re-enter a
+            // button between source ticks and turn into a click on release.
+            self.new_pressed = false;
+            self.edit_pressed = false;
+            self.test_pressed = false;
             EditorCommand::None
         }
     }
@@ -769,17 +880,33 @@ impl EditorUi {
         if self.confirmation.is_some() || self.entry.is_some() {
             return EditorCommand::None;
         }
-        let over_new = (280.0..317.0).contains(&x) && (10.0..23.0).contains(&y);
-        if pressed && over_new {
-            self.new_pressed = true;
-        } else if !over_new {
-            self.new_pressed = false;
+        let button_y = self.button_y();
+        let over_new = (232.0..264.0).contains(&x) && (button_y..button_y + 16.0).contains(&y);
+        let over_edit = (16.0..32.0).contains(&x) && (button_y..button_y + 16.0).contains(&y);
+        let over_test = (272.0..304.0).contains(&x) && (button_y..button_y + 16.0).contains(&y);
+        if pressed {
+            self.new_pressed = over_new;
+            self.edit_pressed = over_edit;
+            self.test_pressed = over_test;
+        } else {
+            self.new_pressed &= over_new;
+            self.edit_pressed &= over_edit;
+            self.test_pressed &= over_test;
         }
         if released && self.new_pressed {
             self.confirm(Confirmation::New);
             return EditorCommand::None;
         }
-        if over_new {
+        if released && self.edit_pressed {
+            self.edit_pressed = false;
+            self.begin_editor_metadata();
+            return EditorCommand::None;
+        }
+        if released && self.test_pressed {
+            self.test_pressed = false;
+            return self.playtest();
+        }
+        if over_new || over_edit || over_test {
             self.stroke = None;
             return EditorCommand::None;
         }
@@ -813,6 +940,14 @@ impl EditorUi {
         EditorCommand::None
     }
 
+    fn button_y(&self) -> f32 {
+        if self.pan[1] == 0.0 {
+            BUTTON_BOTTOM_Y
+        } else {
+            BUTTON_TOP_Y
+        }
+    }
+
     pub fn draw(&self, atlas: &Atlas, quads: &mut Vec<DrawQuad>) {
         rect(quads, [0.0, 0.0, 320.0, 240.0], [0.025, 0.025, 0.035, 1.0]);
         text(
@@ -824,27 +959,26 @@ impl EditorUi {
             0.75,
             GOLD,
         );
-        text(
-            quads,
-            atlas,
-            "CTRL S SAVE / E EXPORT / I IMPORT / CTRL+D FOLDER",
-            3.0,
-            12.0,
-            0.5,
-            WHITE,
-        );
-        text(
-            quads,
-            atlas,
-            "ACTION/F5 PLAY  1-4 GROUP  A/S TILE  E TEXT  L LINK",
-            3.0,
-            21.0,
-            0.5,
-            WHITE,
-        );
-        text(quads, atlas, "CTRL N NEW", 224.0, 13.0, 0.5, WHITE);
-        rect(quads, [280.0, 10.0, 37.0, 13.0], [0.15, 0.15, 0.16, 1.0]);
-        text(quads, atlas, "NEW", 289.0, 13.0, 0.75, GOLD);
+        if self.pan[1] == 0.0 {
+            text(
+                quads,
+                atlas,
+                "CTRL N NEW  CTRL S SAVE  E EXPORT  I IMPORT  CTRL+D FOLDER",
+                3.0,
+                12.0,
+                0.5,
+                WHITE,
+            );
+            text(
+                quads,
+                atlas,
+                "F5 PLAY  1-4 GROUP  A/S TILE  E TEXT  L LINK",
+                3.0,
+                21.0,
+                0.5,
+                WHITE,
+            );
+        }
         let fractional_x = self.pan[0].fract() * CELL;
         let fractional_y = self.pan[1].fract() * CELL;
         for sy in 0..=ROWS {
@@ -917,11 +1051,47 @@ impl EditorUi {
         let label = spelunky_core::level::tile_spawns(self.state.selected_tile)
             .first()
             .map_or("ERASER", |spawn| spawn.object);
+        if self.entry.is_none() && self.confirmation.is_none() {
+            let button_y = self.button_y();
+            draw_ui_sprite(
+                quads,
+                atlas,
+                if self.new_pressed {
+                    "sNewButtonPressed"
+                } else {
+                    "sNewButton"
+                },
+                232.0,
+                button_y,
+            );
+            draw_ui_sprite(
+                quads,
+                atlas,
+                if self.edit_pressed {
+                    "sEditButtonPressed"
+                } else {
+                    "sEditButton"
+                },
+                16.0,
+                button_y,
+            );
+            draw_ui_sprite(
+                quads,
+                atlas,
+                if self.test_pressed {
+                    "sTestButtonPressed"
+                } else {
+                    "sTestButton"
+                },
+                272.0,
+                button_y,
+            );
+        }
         text(
             quads,
             atlas,
             &format!("{}  PAN {:.2},{:.2}", label, self.pan[0], self.pan[1]),
-            3.0,
+            38.0,
             207.0,
             0.5,
             GOLD,
@@ -930,7 +1100,7 @@ impl EditorUi {
             quads,
             atlas,
             "CTRL Z/Y UNDO/REDO  PGUP/DN TILE  ESC EXIT",
-            3.0,
+            38.0,
             218.0,
             0.5,
             WHITE,
@@ -1043,6 +1213,23 @@ fn editor_icon(tile: char) -> Option<&'static str> {
 }
 fn editor_preview_icon(tile: char) -> Option<&'static str> {
     preview::preview_sprite(tile)
+}
+
+fn draw_ui_sprite(quads: &mut Vec<DrawQuad>, atlas: &Atlas, sprite: &str, x: f32, y: f32) {
+    let Some(frame) = atlas.sprite(sprite, 0.0) else {
+        return;
+    };
+    quads.push(DrawQuad {
+        rect: [
+            x - frame.origin[0],
+            y - frame.origin[1],
+            frame.size[0],
+            frame.size[1],
+        ],
+        uv: frame.uv,
+        color: WHITE,
+        ..DrawQuad::default()
+    });
 }
 
 fn draw_map_sprite(
@@ -1173,7 +1360,7 @@ mod tests {
         ui.key(KeyCode::KeyM, Some("mine"), false);
         assert!(matches!(
             ui.key(KeyCode::Enter, None, false),
-            EditorCommand::OpenLevel { name } if name == "mine"
+            EditorCommand::OpenLevel { name } if name == "MINE"
         ));
 
         ui.begin_open_level_name(String::new());
@@ -1554,7 +1741,7 @@ mod tests {
         ui.key(KeyCode::KeyH, Some("hello"), false);
         ui.key(KeyCode::Enter, None, false);
         let saved = ui.state.level.to_text();
-        assert_eq!(Level::parse(&saved).unwrap().sign_message(0), "hello");
+        assert_eq!(Level::parse(&saved).unwrap().sign_message(0), "HELLO");
         ui.key(KeyCode::KeyZ, None, true);
         assert_eq!(ui.state.level.sign_message(0), "");
     }
@@ -1673,7 +1860,7 @@ mod tests {
         ui.key(KeyCode::KeyL, Some("l"), false);
         ui.key(KeyCode::KeyN, Some("next.lvl"), false);
         ui.key(KeyCode::Enter, None, false);
-        assert_eq!(ui.state.level.exit_target(0), "next.lvl");
+        assert_eq!(ui.state.level.exit_target(0), "NEXT.LVL");
         let EditorCommand::Save { name, text } = ui.key(KeyCode::KeyS, Some("s"), true) else {
             panic!("Ctrl+S must save");
         };
@@ -1690,11 +1877,138 @@ mod tests {
         ui.key(KeyCode::KeyM, None, false);
         ui.key(KeyCode::KeyA, Some("Ada"), false);
         ui.key(KeyCode::Tab, None, false);
-        assert_eq!(ui.state.level.author, "ANONYMOUSAda");
+        assert_eq!(ui.state.level.author, "ANONYMOUSADA");
         ui.key(KeyCode::KeyJ, Some("jungle"), false);
         ui.key(KeyCode::Enter, None, false);
         assert_eq!(ui.state.level.music, "CAVEJUNGLE");
     }
+
+    #[test]
+    fn mouse_edit_button_walks_source_metadata_fields_in_order() {
+        let mut ui = EditorUi::new();
+        assert!(matches!(
+            ui.stage_pointer(20.0, 212.0, true, false),
+            EditorCommand::None
+        ));
+        assert!(ui.entry.is_none(), "the button activates on release");
+        assert!(matches!(
+            ui.stage_pointer(20.0, 212.0, false, false),
+            EditorCommand::None
+        ));
+        assert!(matches!(
+            ui.entry.as_ref().map(|entry| entry.field),
+            Some(Field::Name)
+        ));
+
+        ui.key(KeyCode::Tab, None, false);
+        assert_eq!(
+            ui.entry.as_ref().map(|entry| entry.field),
+            Some(Field::Name),
+            "Tab is not a commit or advance key in the source Edit flow"
+        );
+
+        for field in [
+            Field::Author,
+            Field::Music,
+            Field::Life,
+            Field::Bombs,
+            Field::Ropes,
+            Field::Next,
+        ] {
+            assert!(matches!(
+                ui.key(KeyCode::Enter, None, false),
+                EditorCommand::None
+            ));
+            assert_eq!(ui.entry.as_ref().map(|entry| entry.field), Some(field));
+        }
+        ui.key(KeyCode::Enter, None, false);
+        assert!(ui.entry.is_none());
+        assert!(ui.edit_metadata_step.is_none());
+    }
+
+    #[test]
+    fn mouse_test_button_emits_play_command_on_release() {
+        let mut ui = EditorUi::new();
+        assert!(matches!(
+            ui.stage_pointer(280.0, 212.0, true, false),
+            EditorCommand::None
+        ));
+        assert!(ui.play_snapshot.is_none());
+        assert!(matches!(
+            ui.stage_pointer(280.0, 212.0, false, false),
+            EditorCommand::Play(_)
+        ));
+        assert!(ui.play_snapshot.is_some());
+    }
+
+    #[test]
+    fn leaving_editor_buttons_for_map_cancels_click_before_next_source_tick() {
+        let mut edit = EditorUi::new();
+        edit.stage_pointer(20.0, 212.0, true, false);
+        edit.stage_pointer(100.0, 100.0, true, false);
+        edit.stage_pointer(20.0, 212.0, true, false);
+        edit.stage_pointer(20.0, 212.0, false, false);
+        assert!(edit.entry.is_none());
+
+        let mut test = EditorUi::new();
+        test.stage_pointer(280.0, 212.0, true, false);
+        test.stage_pointer(100.0, 100.0, true, false);
+        test.stage_pointer(280.0, 212.0, true, false);
+        assert!(matches!(
+            test.stage_pointer(280.0, 212.0, false, false),
+            EditorCommand::None
+        ));
+        assert!(test.play_snapshot.is_none());
+
+        let mut new = EditorUi::new();
+        new.stage_pointer(240.0, 212.0, true, false);
+        new.stage_pointer(100.0, 100.0, true, false);
+        new.stage_pointer(240.0, 212.0, true, false);
+        new.stage_pointer(240.0, 212.0, false, false);
+        assert_eq!(new.confirmation, None);
+    }
+
+    #[test]
+    fn editor_buttons_follow_classic_viewport_anchor_after_vertical_pan() {
+        let mut edit = EditorUi::new();
+        edit.pan[1] = 11.0;
+        edit.stage_pointer(20.0, 20.0, true, false);
+        edit.stage_pointer(20.0, 20.0, false, false);
+        assert_eq!(
+            edit.entry.as_ref().map(|entry| entry.field),
+            Some(Field::Name)
+        );
+
+        let mut test = EditorUi::new();
+        test.pan[1] = 11.0;
+        test.stage_pointer(280.0, 20.0, true, false);
+        assert!(matches!(
+            test.stage_pointer(280.0, 20.0, false, false),
+            EditorCommand::Play(_)
+        ));
+
+        let mut new = EditorUi::new();
+        new.pan[1] = 11.0;
+        new.stage_pointer(240.0, 20.0, true, false);
+        new.stage_pointer(240.0, 20.0, false, false);
+        assert_eq!(new.confirmation, Some(Confirmation::New));
+    }
+
+    #[test]
+    fn committing_unchanged_lowercase_music_preserves_the_saved_value() {
+        let mut level = Level::default();
+        level.music = "ice".into();
+        let mut ui = EditorUi::new();
+        ui.load("lowercase.lvl", &level.to_text()).unwrap();
+        ui.key(KeyCode::KeyM, None, false);
+        ui.key(KeyCode::Tab, None, false);
+        ui.key(KeyCode::Enter, None, false);
+        let EditorCommand::Save { text, .. } = ui.key(KeyCode::KeyS, None, true) else {
+            panic!("Ctrl+S must save the edited level");
+        };
+        assert_eq!(text.lines().nth(33), Some("ice"));
+    }
+
     #[test]
     fn source_exit_confirmation_blocks_edits_cancels_and_discards_with_ordinary_keys() {
         let mut ui = editor_with_block_selected();
@@ -1736,15 +2050,15 @@ mod tests {
     fn source_new_button_release_confirmation_and_escape_policy_are_preserved() {
         let mut ui = EditorUi::new();
         let original = ui.state.level.clone();
-        ui.pointer(290., 15., true, false);
+        ui.pointer(240., 212., true, false);
         // Releasing outside cancels the button, without opening a prompt.
-        ui.pointer(270., 15., false, false);
+        ui.pointer(270., 212., false, false);
         assert!(matches!(
             ui.key(KeyCode::KeyS, None, true),
             EditorCommand::Save { .. }
         ));
-        ui.pointer(290., 15., true, false);
-        ui.pointer(290., 15., false, false);
+        ui.pointer(240., 212., true, false);
+        ui.pointer(240., 212., false, false);
         ui.pointer(4., 40., true, false);
         assert_eq!(
             ui.state.level, original,
@@ -1766,39 +2080,39 @@ mod tests {
     }
 
     #[test]
-    fn delete_matches_backspace_for_name_metadata_sign_and_link_text() {
+    fn delete_matches_backspace_and_input_uses_classic_character_set() {
         let mut ui = EditorUi::new();
         ui.key(KeyCode::KeyN, None, false);
-        ui.key(KeyCode::KeyC, Some("Café🦇"), false);
+        ui.key(KeyCode::KeyC, Some("Cafe🦇"), false);
         ui.key(KeyCode::Delete, None, false);
         ui.key(KeyCode::Backspace, None, false);
         ui.key(KeyCode::Enter, None, false);
-        assert_eq!(ui.level_name(), "Caf.lvl");
+        assert_eq!(ui.level_name(), "CA.lvl");
         ui.key(KeyCode::KeyM, None, false);
         ui.key(KeyCode::KeyA, Some("Ada!"), false);
         ui.key(KeyCode::Delete, None, false);
         ui.key(KeyCode::Enter, None, false);
-        assert_eq!(ui.state.level.author, "ANONYMOUSAda");
+        assert_eq!(ui.state.level.author, "ANONYMOUSADA");
         ui.state.set_tile(0, 0, 'I').unwrap();
         ui.pointer(4., 40., false, false);
         ui.key(KeyCode::KeyE, None, false);
         ui.key(KeyCode::KeyH, Some("hello!"), false);
         ui.key(KeyCode::Delete, None, false);
         ui.key(KeyCode::Enter, None, false);
-        assert_eq!(ui.state.level.sign_message(0), "hello");
+        assert_eq!(ui.state.level.sign_message(0), "HELLO");
         ui.state.set_tile(0, 0, 'X').unwrap();
         ui.key(KeyCode::KeyL, None, false);
         ui.key(KeyCode::KeyN, Some("next.lvl!"), false);
         ui.key(KeyCode::Delete, None, false);
         ui.key(KeyCode::Enter, None, false);
-        assert_eq!(ui.state.level.exit_target(0), "next.lvl");
+        assert_eq!(ui.state.level.exit_target(0), "NEXT.LVL");
         ui.key(KeyCode::KeyN, None, false);
         ui.key(KeyCode::KeyA, None, true);
         ui.key(KeyCode::Delete, None, false);
         ui.key(KeyCode::Delete, None, false);
         ui.key(KeyCode::KeyN, Some("new"), false);
         ui.key(KeyCode::Enter, None, false);
-        assert_eq!(ui.level_name(), "new.lvl");
+        assert_eq!(ui.level_name(), "NEW.lvl");
     }
 
     #[test]
@@ -1825,27 +2139,60 @@ mod tests {
         door.key(KeyCode::KeyL, None, false);
         door.key(KeyCode::KeyJ, Some(".lvl"), false);
         door.key(KeyCode::Enter, None, false);
-        assert_eq!(door.state.level.exit_target(0), "next.lvl");
+        assert_eq!(door.state.level.exit_target(0), "next.LVL");
     }
 
     #[test]
-    fn escape_from_metadata_leaves_for_title_but_text_edit_returns_to_editor() {
+    fn escape_leaves_metadata_for_title_and_cancels_sign_and_door_text() {
         let mut metadata = EditorUi::new();
         metadata.key(KeyCode::KeyM, None, false);
         assert!(matches!(
             metadata.key(KeyCode::Escape, None, false),
             EditorCommand::Back
         ));
+        assert!(metadata.entry.is_none());
 
         let mut sign = EditorUi::new();
-        sign.state.set_tile(0, 0, 'I').unwrap();
+        let mut sign_level = Level::default();
+        sign_level.set_tile(0, 0, 'I').unwrap();
+        sign_level.signs.push("ORIGINAL".into());
+        sign.load("sign.lvl", &sign_level.to_text()).unwrap();
         sign.pointer(4.0, 40.0, false, false);
         sign.key(KeyCode::KeyE, None, false);
+        sign.key(KeyCode::KeyH, Some("pending"), false);
         assert!(matches!(
             sign.key(KeyCode::Escape, None, false),
             EditorCommand::None
         ));
         assert!(sign.entry.is_none());
+        assert_eq!(sign.state.level.sign_message(0), "ORIGINAL");
+
+        let mut door = EditorUi::new();
+        let mut door_level = Level::default();
+        door_level.set_tile(0, 0, 'X').unwrap();
+        door_level.exit_targets.push("NEXT".into());
+        door.load("door.lvl", &door_level.to_text()).unwrap();
+        door.pointer(4.0, 40.0, false, false);
+        door.key(KeyCode::KeyL, None, false);
+        assert!(matches!(
+            door.entry.as_ref().map(|entry| entry.field),
+            Some(Field::Link(_))
+        ));
+        door.key(KeyCode::KeyA, Some("PENDING"), false);
+        assert!(matches!(
+            door.key(KeyCode::Escape, None, false),
+            EditorCommand::None
+        ));
+        assert!(door.entry.is_none());
+        assert_eq!(door.state.level.exit_target(0), "NEXT");
+    }
+
+    #[test]
+    fn classic_editor_character_filter_uppercases_and_ignores_unsupported_text() {
+        let mut ui = EditorUi::new();
+        ui.begin(Field::Sign(0), String::new());
+        ui.key(KeyCode::KeyA, Some("aé#2!?"), false);
+        assert_eq!(ui.entry.as_ref().unwrap().value, "A2!?");
     }
 
     #[test]
@@ -2047,7 +2394,7 @@ mod tests {
             ui.entry.is_some(),
             "new instances append: first precise point selects the earlier door"
         );
-        ui.key(KeyCode::Escape, None, false);
+        ui.key(KeyCode::Enter, None, false);
         ui.pointer(20.0, 48.0, false, false);
         quads.clear();
         ui.draw(&atlas, &mut quads);
@@ -2336,7 +2683,7 @@ mod tests {
         paint_at(&mut ui, 'S', 12.0, 48.0);
         ui.pointer(20.0, 48.0, false, false);
         ui.key(KeyCode::KeyL, None, false);
-        ui.key(KeyCode::Escape, None, false);
+        ui.key(KeyCode::Enter, None, false);
         ui.pointer(20.0, 48.0, false, false);
         choose_palette(&mut ui, '0');
         ui.pointer(20.0, 48.0, false, true);

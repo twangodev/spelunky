@@ -237,7 +237,7 @@ fn animation_callbacks_follow_creation_order_and_exclude_newborns() {
 }
 
 #[test]
-fn solid_basketball_rewinds_only_the_webball_collision_receiver() {
+fn solid_basketball_pair_rewinds_both_collision_participants() {
     let mut game = Game::shell(7, RulesPreset::Classic);
     game.world = World::new(40, 30, Area::Mines, 1);
     game.player.pos = Vec2::new(400.0, 152.0);
@@ -259,13 +259,12 @@ fn solid_basketball_rewinds_only_the_webball_collision_receiver() {
     assert_eq!(web_ball.sprite, "sWebCreate");
     assert_eq!(web_ball.vel, Vec2::default());
     assert_eq!(
-        basketball.pos,
-        Vec2::new(basketball_start.x + 2.0, basketball_start.y),
-        "the solid Basketball is not the receiver of WebBall's one-sided Item collision"
+        basketball.pos, basketball_start,
+        "a solid collision pair restores both participants after their callbacks"
     );
     assert_eq!(
         web_ball.pos, web_ball_start,
-        "a solid `other` rewinds the WebBall receiver before its collision callback"
+        "the non-solid WebBall also returns to its previous position"
     );
 }
 

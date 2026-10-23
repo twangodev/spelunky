@@ -16,7 +16,8 @@ fn rock_source_fixture(health: f64) -> (Game, u64) {
 
 #[test]
 fn rock_literal_script_cap_bloodless_and_four_create_draws_per_birth() {
-    // Source scrCreateBlood checks <16 before EACH synchronous Create.
+    // Source scrCreateBlood checks <16 before EACH synchronous Create;
+    // `instance_number` excludes entities deactivated outside the active region.
     for (active, inactive, unrelated, bloodless, expected_count) in [
         (0, 0, 0, false, 3),
         (14, 0, 0, false, 2),
@@ -41,6 +42,14 @@ fn rock_literal_script_cap_bloodless_and_four_create_draws_per_birth() {
         game.player
             .data
             .insert("bloodless".into(), if bloodless { 1.0 } else { 0.0 });
+        if inactive > 0 {
+            crate::dispatcher::activate_region(&mut game, Rect::new(0.0, 0.0, 32.0, 32.0));
+            assert_eq!(
+                game.dispatcher.hidden_entities().len(),
+                inactive,
+                "off-camera Detritus moves to hidden storage"
+            );
+        }
         let origin = game.player.pos;
         let mut oracle = game.rng.clone();
         let expected: Vec<_> = (0..expected_count)

@@ -379,6 +379,9 @@ impl SettingsUi {
             1 => settings.pixel_snap = !settings.pixel_snap,
             2 => settings.music_volume = volume_step(settings.music_volume, direction),
             3 => settings.effects_volume = volume_step(settings.effects_volume, direction),
+            #[cfg(target_arch = "wasm32")]
+            4 => return SettingsCommand::None,
+            #[cfg(not(target_arch = "wasm32"))]
             4 => settings.vsync = !settings.vsync,
             5 => {
                 let index = CAPS.iter().position(|cap| *cap == settings.frame_cap);
@@ -478,7 +481,16 @@ impl SettingsUi {
             0 => "RULES APPLY WHEN STARTING A NEW RUN.",
             1 => "OFF: SMOOTH MOTION. ON: PIXEL SNAPPING.",
             2 | 3 => "CLICK / DRAG TRACK OR USE LEFT / RIGHT.",
-            4 => "SYNC TO DISPLAY REFRESH WHEN AVAILABLE.",
+            4 => {
+                #[cfg(target_arch = "wasm32")]
+                {
+                    "BROWSER PRESENTATION CONTROLS FRAME PACING."
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    "SYNC TO DISPLAY REFRESH WHEN AVAILABLE."
+                }
+            }
             5 => "BROWSER FRAME TIMING FOLLOWS THE DISPLAY.",
             6 => "ENTER: TOGGLE FULLSCREEN.",
             7 => "HOLD DOWN WHILE MOVING TO RUN.",
@@ -696,6 +708,9 @@ fn row(index: usize, settings: &Settings) -> (String, String) {
             "EFFECTS",
             format!("{}%", classic_volume_percent(settings.effects_volume)),
         ),
+        #[cfg(target_arch = "wasm32")]
+        4 => ("PRESENTATION", "BROWSER".into()),
+        #[cfg(not(target_arch = "wasm32"))]
         4 => ("VSYNC", on(settings.vsync)),
         5 => (
             "FRAME CAP",

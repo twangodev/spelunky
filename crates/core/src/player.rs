@@ -561,17 +561,7 @@ fn active_prelude(game: &mut Game) {
         if game.player.health < 1.0 {
             for _ in 0..3 {
                 if value(&game.player, "bloodless", 0.0) == 0.0
-                    && game
-                        .world
-                        .entities
-                        .iter()
-                        .filter(|e| {
-                            e.alive
-                                && e.engine_active
-                                && crate::catalog::is_a(&e.object, "oDetritus")
-                        })
-                        .count()
-                        < 16
+                    && crate::world_events::detritus_instance_count(game) < 16
                 {
                     game.spawn("oBlood", game.player.pos);
                 }
@@ -883,7 +873,8 @@ fn move_by(
                     crate::dispatcher::Instance::Entity(id) => {
                         id != moved.id
                             && w.entity(id).is_some_and(|other| {
-                                other.engine_active
+                                other.alive
+                                    && other.engine_active
                                     && crate::catalog::is_a(&other.object, "oSolid")
                                     && mask.intersects_mask(&other.collision_mask())
                             })
@@ -2015,18 +2006,7 @@ pub(crate) fn script_player_blood(game: &mut Game, count: u32) {
         return;
     }
     for _ in 0..count {
-        if game
-            .world
-            .entities
-            .iter()
-            .filter(|entity| {
-                entity.alive
-                    && entity.engine_active
-                    && crate::catalog::is_a(&entity.object, "oDetritus")
-            })
-            .count()
-            < 16
-        {
+        if crate::world_events::detritus_instance_count(game) < 16 {
             game.spawn("oBlood", game.player.pos);
         }
     }
@@ -4579,6 +4559,31 @@ mod tests {
         }
         assert_eq!(g.world.entity(block).unwrap().pos.x, 112.0);
         assert!(g.player.pos.x <= 107.0);
+    }
+    #[test]
+    fn destroyed_dynamic_solid_does_not_block_a_same_tick_push() {
+        let mut g = room(RulesPreset::Classic);
+        let block = g.world.spawn("oPushBlock", Vec2::new(100.0, 100.0));
+        let destroyed = g.world.spawn("oPushBlock", Vec2::new(116.0, 100.0));
+        g.world.entity_mut(destroyed).unwrap().alive = false;
+        g.player.pos = Vec2::new(95.0, 100.0);
+
+        crate::dispatcher::register_instances(&mut g);
+        let solid_order = crate::dispatcher::descendant_instances(&g, "oSolid");
+        assert!(solid_order.contains(&crate::dispatcher::Instance::Entity(destroyed)));
+        let mut events = Vec::new();
+        move_by(
+            &mut g.world,
+            &mut g.player,
+            1,
+            false,
+            Vec2::new(1.0, 0.0),
+            &solid_order,
+            &mut events,
+        );
+
+        assert_eq!(g.world.entity(block).unwrap().pos.x, 101.0);
+        assert_eq!(g.player.pos.x, 96.0);
     }
     #[test]
     fn player_can_push_an_ice_block_while_airborne_and_facing_away() {

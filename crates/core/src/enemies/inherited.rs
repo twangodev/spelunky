@@ -337,7 +337,8 @@ fn body_projectile(game: &mut Game, e: &Entity) {
             _ => None,
         })
         .find(|other| {
-            other.id != e.id
+            other.alive
+                && other.id != e.id
                 && other.engine_active
                 && other
                     .collision_mask()

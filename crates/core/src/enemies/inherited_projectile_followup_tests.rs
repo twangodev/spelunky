@@ -68,6 +68,19 @@ fn fixture(legacy: bool, rules: RulesPreset, object: &str) -> (Game, Entity, u64
 }
 
 #[test]
+fn moving_body_skips_retired_overlap_and_hits_next_live_enemy() {
+    let (mut game, donor, retired) = fixture(false, RulesPreset::Classic, "oCaveman");
+    let live = game.spawn("oCaveman", Vec2::new(88.0, 144.0));
+    game.world.entity_mut(retired).unwrap().alive = false;
+    let live_health = game.world.entity(live).unwrap().health;
+
+    body_projectile(&mut game, &donor);
+
+    assert!(game.world.entity(retired).is_none());
+    assert_eq!(game.world.entity(live).unwrap().health, live_health - 1);
+}
+
+#[test]
 fn moving_body_emits_literal_target_blood_before_damage_with_source_caps() {
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         for legacy in [false, true] {

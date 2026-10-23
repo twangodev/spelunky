@@ -306,11 +306,9 @@ pub(crate) fn item_step(game: &mut Game, item: &mut Entity) {
     {
         return;
     }
-    let keeper_exists = game
-        .world
-        .entities
-        .iter()
-        .any(|keeper| keeper.alive && crate::catalog::is_a(&keeper.object, "oShopkeeper"));
+    let keeper_exists = game.world.entities.iter().any(|keeper| {
+        keeper.alive && keeper.engine_active && crate::catalog::is_a(&keeper.object, "oShopkeeper")
+    });
     let wanted =
         game.flags.contains("murderer") || game.data.get("thiefLevel").copied().unwrap_or(0.) > 0.;
     if (!keeper_exists || wanted) && item.value("cost") > 0. {
@@ -345,10 +343,10 @@ pub(crate) fn player_held_step(game: &mut Game) {
         return;
     }
     let damsel = acquire_sale_damsel(game, id);
-    if !damsel {
-        crate::items::collectibles::grant(game, id);
+    let acquired = damsel || crate::items::collectibles::grant(game, id);
+    if acquired {
+        clear_sale(game, id);
     }
-    clear_sale(game, id);
     if game.is_level()
         && game
             .world
@@ -512,10 +510,10 @@ pub(crate) fn player_pay_step(game: &mut Game, input: &InputFrame) {
             let damsel = acquire_sale_damsel(game, id);
             game.player.money -= price;
             count(game, "itemsBought", LifetimeCounter::ItemsBought);
-            if !damsel {
-                crate::items::collectibles::grant(game, id);
+            let acquired = damsel || crate::items::collectibles::grant(game, id);
+            if acquired {
+                clear_sale(game, id);
             }
-            clear_sale(game, id);
             game.data.insert("message_timer".into(), 80.);
         }
     }
@@ -941,6 +939,42 @@ mod tests {
         assert!(!game.flags.contains("wanted"));
     }
     #[test]
+    fn unsupported_custom_shop_item_stays_priced_after_each_payment() {
+        let (mut game, id) = shop();
+        game.world.entity_mut(id).unwrap().object = "oRock".into();
+        game.player.money = 5000;
+
+        for money in [2500, 0] {
+            tick(
+                &mut game,
+                &InputFrame {
+                    pay_pressed: true,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(game.player.money, money);
+            let item = game
+                .world
+                .entity(id)
+                .expect("custom stock remains in world");
+            assert_eq!(item.value("cost"), 2500.);
+            assert_eq!(item.value("forSale"), 1.);
+        }
+    }
+    #[test]
+    fn unsupported_custom_held_item_stays_priced_when_taken_out_of_shop() {
+        let (mut game, id) = shop();
+        game.world.entity_mut(id).unwrap().object = "oRock".into();
+        game.player.pos.x = 300.;
+
+        player_held_step(&mut game);
+
+        let item = game.world.entity(id).expect("custom item remains held");
+        assert_eq!(item.value("cost"), 2500.);
+        assert_eq!(item.value("forSale"), 1.);
+        assert!(game.flags.contains("wanted"));
+    }
+    #[test]
     fn insufficient_funds_drop_without_buying() {
         let (mut game, id) = shop();
         game.player.money = 2499;
@@ -978,6 +1012,21 @@ mod tests {
         game.world.entity_mut(id).unwrap().pos.x = 300.;
         tick(&mut game, &InputFrame::default());
         assert!(!game.flags.contains("wanted"));
+    }
+    #[test]
+    fn item_clears_sale_when_its_only_shopkeeper_is_inactive() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let keeper = game.world.spawn("oShopkeeper", Vec2::new(96.0, 40.0));
+        game.world.entity_mut(keeper).unwrap().engine_active = false;
+        let id = game.world.spawn("oBombBag", Vec2::new(80.0, 80.0));
+        let mut item = game.world.entity(id).unwrap().clone();
+        item.data.insert("cost".into(), 2500.0);
+        item.data.insert("forSale".into(), 1.0);
+
+        item_step(&mut game, &mut item);
+
+        assert_eq!(item.value("cost"), 0.0);
+        assert_eq!(item.value("forSale"), 0.0);
     }
     #[test]
     fn dice_wager_and_cash_payout_preserve_source_accounting() {

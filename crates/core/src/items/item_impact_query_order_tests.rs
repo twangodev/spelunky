@@ -119,6 +119,25 @@ fn item_enemy_queries_ignore_inactive_storage_and_keep_active_nearest_tie_order(
 }
 
 #[test]
+fn item_enemy_queries_skip_retired_nearest_instances() {
+    for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
+        for algorithm in [RngAlgorithm::LegacySplitMix64V1, RngAlgorithm::Gm8Lcg32V1] {
+            let mut g = scene(rules, algorithm);
+            let retired = g.spawn("oSnake", Vec2::new(160.0, 160.0));
+            let live = g.spawn("oSnake", Vec2::new(160.0, 160.0));
+            g.world.entity_mut(retired).unwrap().alive = false;
+            let item = shot(&mut g);
+            let live_health = g.world.entity(live).unwrap().health;
+
+            crate::enemies::inherited_item_step_impacts(&mut g, item);
+
+            assert!(g.world.entity(retired).is_none());
+            assert_eq!(g.world.entity(live).unwrap().health, live_health - 1);
+        }
+    }
+}
+
+#[test]
 fn item_damsel_rectangle_selects_first_active_overlap_before_testing_eligibility() {
     for rules in [RulesPreset::Classic, RulesPreset::Assisted] {
         for algorithm in [RngAlgorithm::LegacySplitMix64V1, RngAlgorithm::Gm8Lcg32V1] {

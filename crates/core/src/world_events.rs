@@ -2177,17 +2177,22 @@ pub(crate) fn spawn_detritus(game: &mut Game, object: &str, pos: Vec2) -> u64 {
 /// The graphics setting belongs to each caller, rather than this script.
 pub(crate) fn create_flames(game: &mut Game, pos: Vec2, count: usize) {
     for _ in 0..count {
-        if game
-            .world
-            .entities
-            .iter()
-            .filter(|e| e.alive && e.engine_active && catalog::is_a(&e.object, "oDetritus"))
-            .count()
-            < 16
-        {
+        if detritus_instance_count(game) < 16 {
             game.spawn("oFlame", pos);
         }
     }
+}
+
+fn live_detritus_instances(game: &Game) -> impl Iterator<Item = &Entity> {
+    game.world.entities.iter().filter(|entity| {
+        entity.alive && entity.engine_active && catalog::is_a(&entity.object, "oDetritus")
+    })
+}
+
+/// GameMaker's `instance_number(oDetritus)` excludes instances deactivated by
+/// the level controller, which the dispatcher keeps in hidden storage.
+pub(crate) fn detritus_instance_count(game: &Game) -> usize {
+    live_detritus_instances(game).count()
 }
 
 pub(crate) fn initialize_detritus(game: &mut Game, e: &mut Entity) {
@@ -2214,16 +2219,8 @@ pub(crate) fn initialize_detritus(game: &mut Game, e: &mut Entity) {
     }
     // The current receiver has already been registered; include it even when
     // an actor adapter temporarily owns it outside world storage.
-    let others = game
-        .world
-        .entities
-        .iter()
-        .filter(|other| {
-            other.id != e.id
-                && other.alive
-                && other.engine_active
-                && catalog::is_a(&other.object, "oDetritus")
-        })
+    let others = live_detritus_instances(game)
+        .filter(|other| other.id != e.id)
         .count();
     if others + 1 > 32 {
         destroy_detritus(game, e);

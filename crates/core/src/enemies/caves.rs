@@ -402,18 +402,7 @@ fn blood(game: &mut Game, e: &Entity, pos: Vec2, count: usize) {
         return;
     }
     for _ in 0..count {
-        if game
-            .world
-            .entities
-            .iter()
-            .filter(|other| {
-                other.alive
-                    && other.engine_active
-                    && crate::catalog::is_a(&other.object, "oDetritus")
-            })
-            .count()
-            < 16
-        {
+        if crate::world_events::detritus_instance_count(game) < 16 {
             game.spawn("oBlood", pos);
         }
     }
