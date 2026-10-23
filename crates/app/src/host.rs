@@ -1175,17 +1175,16 @@ impl App {
             for (key, value) in &self.store.data.challenge_records {
                 game.data.insert(format!("best_{key}"), f64::from(*value));
             }
-            let records: Vec<_> = self
-                .store
-                .data
-                .records
-                .iter()
-                .filter(|record| record.rules == game.rules)
-                .collect();
+            let records: Vec<_> = self.store.data.records.iter().collect();
+            let source_highscores = profile_source_highscores(&self.store.data);
             for (key, value) in [
                 (
                     "best_money",
-                    records.iter().map(|record| record.score).max().unwrap_or(0) as f64,
+                    f64::from(
+                        source_highscores
+                            .money
+                            .max(records.iter().map(|record| record.score).max().unwrap_or(0)),
+                    ),
                 ),
                 (
                     "best_time",
@@ -1198,15 +1197,23 @@ impl App {
                 ),
                 (
                     "best_kills",
-                    records.iter().map(|record| record.kills).max().unwrap_or(0) as f64,
+                    f64::from(
+                        source_highscores
+                            .kills
+                            .max(records.iter().map(|record| record.kills).max().unwrap_or(0)),
+                    ),
                 ),
                 (
                     "best_saves",
-                    records
-                        .iter()
-                        .map(|record| record.rescues)
-                        .max()
-                        .unwrap_or(0) as f64,
+                    f64::from(
+                        source_highscores.saves.max(
+                            records
+                                .iter()
+                                .map(|record| record.rescues)
+                                .max()
+                                .unwrap_or(0),
+                        ),
+                    ),
                 ),
                 ("total_plays", records.len() as f64),
                 (
@@ -1237,7 +1244,8 @@ impl App {
     }
     fn return_from_challenge(&mut self) {
         let changed = if let Some(game) = &mut self.game {
-            let changed = capture_challenge_records(game, &mut self.store.data.challenge_records);
+            let mut changed = commit_source_highscore_update(game, &mut self.store.data);
+            changed |= capture_challenge_records(game, &mut self.store.data.challenge_records);
             prepare_challenge_scores(game);
             changed
         } else {
@@ -1918,12 +1926,19 @@ impl App {
         if self.editor_play {
             return;
         }
-        self.game
-            .as_mut()
-            .unwrap()
-            .flags
-            .extend(record_improvements(&record, &self.store.data.records));
+        let highscore_baseline = profile_source_highscores(&self.store.data);
+        let improvements =
+            record_improvements(&record, &self.store.data.records, highscore_baseline);
+        self.game.as_mut().unwrap().flags.extend(improvements);
+        self.store
+            .data
+            .source_highscores
+            .include(record.score, record.kills, record.rescues);
         let game = self.game.as_ref().unwrap();
+        self.store
+            .data
+            .tunnel_remaining
+            .extend(tunnel_progress(game));
         self.store
             .data
             .unlocks
@@ -2006,7 +2021,8 @@ impl App {
             return false;
         };
         self.snapshot_lifetime_stats();
-        if let Some(game) = &self.game {
+        if let Some(game) = &mut self.game {
+            commit_source_highscore_update(game, &mut self.store.data);
             capture_challenge_records(game, &mut self.store.data.challenge_records);
         }
         if let Err(error) = self.store.save() {
@@ -2030,9 +2046,14 @@ impl App {
             &mut self.source_message,
             &mut self.drawn_source_message,
         );
-        if self.game.as_ref().is_some_and(|game| {
-            capture_challenge_records(game, &mut self.store.data.challenge_records)
-        }) {
+        let score_data_changed = if let Some(game) = &mut self.game {
+            let mut changed = commit_source_highscore_update(game, &mut self.store.data);
+            changed |= capture_challenge_records(game, &mut self.store.data.challenge_records);
+            changed
+        } else {
+            false
+        };
+        if score_data_changed {
             if let Err(error) = self.store.save() {
                 self.toast(error);
             }
@@ -2342,6 +2363,7 @@ impl App {
                 let mut input = self.input.take_tick();
                 apply_cinematic_start(&mut input, &mut self.cinematic_action);
                 apply_credits_keyboard_skip(&mut input, &mut self.credits_keyboard_skip);
+                let mut source_score_changed = false;
                 if let Some(game) = &mut self.game {
                     let mut begin_message = self.source_message.clone();
                     game.down_to_run = self.store.data.settings.down_to_run;
@@ -2397,6 +2419,13 @@ impl App {
                         }
                     }
                     self.drawn_source_message = begin_source_message(game, begin_message.as_ref());
+                    source_score_changed =
+                        commit_source_highscore_update(game, &mut self.store.data);
+                }
+                if source_score_changed {
+                    if let Err(error) = self.store.save() {
+                        self.toast(error);
+                    }
                 }
                 if self.finish_cinematic() {
                     break;
@@ -2487,11 +2516,6 @@ impl App {
         if let Some(game) = &self.game {
             let previous = self.store.data.unlocks.clone();
             let previous_challenges = self.store.data.challenge_records.clone();
-            let previous_tunnels = self.store.data.tunnel_remaining.clone();
-            self.store
-                .data
-                .tunnel_remaining
-                .extend(tunnel_progress(game));
             capture_challenge_records(game, &mut self.store.data.challenge_records);
             if game.flags.contains("hub") {
                 self.store
@@ -2507,7 +2531,6 @@ impl App {
             );
             if self.store.data.unlocks != previous
                 || self.store.data.challenge_records != previous_challenges
-                || self.store.data.tunnel_remaining != previous_tunnels
             {
                 if let Err(error) = self.store.save() {
                     self.toast(error)
@@ -4120,6 +4143,7 @@ fn consume_highscores_reset(game: &mut Game, data: &mut crate::storage::SaveData
     }
     data.records.clear();
     data.challenge_records.clear();
+    data.source_highscores = crate::storage::SourceHighscores::default();
     data.unlocks.retain(|flag| {
         !flag.starts_with("unlock_")
             && !flag.starts_with("trophy_")
@@ -4131,27 +4155,41 @@ fn consume_highscores_reset(game: &mut Game, data: &mut crate::storage::SaveData
     ]);
     true
 }
-fn record_improvements(record: &Record, records: &[Record]) -> std::collections::BTreeSet<String> {
-    let previous: Vec<_> = records
-        .iter()
-        .filter(|old| old.rules == record.rules)
-        .collect();
+fn profile_source_highscores(data: &crate::storage::SaveData) -> crate::storage::SourceHighscores {
+    let mut highscores = data.source_highscores;
+    for record in &data.records {
+        highscores.include(record.score, record.kills, record.rescues);
+    }
+    highscores
+}
+fn record_improvements(
+    record: &Record,
+    records: &[Record],
+    source_highscores: crate::storage::SourceHighscores,
+) -> std::collections::BTreeSet<String> {
+    let previous: Vec<_> = records.iter().collect();
     let mut flags = std::collections::BTreeSet::new();
     for (name, current, best) in [
         (
             "new_money",
             record.score,
-            previous.iter().map(|old| old.score).max().unwrap_or(0),
+            source_highscores
+                .money
+                .max(previous.iter().map(|old| old.score).max().unwrap_or(0)),
         ),
         (
             "new_kills",
             record.kills,
-            previous.iter().map(|old| old.kills).max().unwrap_or(0),
+            source_highscores
+                .kills
+                .max(previous.iter().map(|old| old.kills).max().unwrap_or(0)),
         ),
         (
             "new_saves",
             record.rescues,
-            previous.iter().map(|old| old.rescues).max().unwrap_or(0),
+            source_highscores
+                .saves
+                .max(previous.iter().map(|old| old.rescues).max().unwrap_or(0)),
         ),
     ] {
         if current > best {
@@ -4280,7 +4318,10 @@ fn settings_controller_frame(
     let mut changed = false;
     if capture {
         for &button in physical {
-            changed |= ui.controller(button, settings) == SettingsCommand::Changed;
+            if ui.controller(button, settings) == SettingsCommand::Changed {
+                changed = true;
+                break;
+            }
         }
     }
     // Controller navigation never masquerades as physical keyboard input.
@@ -4301,7 +4342,10 @@ fn settings_browser_direction_frame(
     let mut changed = false;
     if capture {
         for &control in controls {
-            changed |= ui.controller_direction(control, settings) == SettingsCommand::Changed;
+            if ui.controller_direction(control, settings) == SettingsCommand::Changed {
+                changed = true;
+                break;
+            }
         }
     }
     if capture || ui.awaiting_binding() {
@@ -4338,7 +4382,7 @@ fn source_game_over_hint_for_input(game: &Game, editor_play: bool, input: &Input
 }
 
 fn campaign_record(game: &Game) -> Option<Record> {
-    if ["custom", "hub", "cheats_used"]
+    if ["custom", "hub", "cheats_used", "scores_disabled"]
         .iter()
         .any(|flag| game.flags.contains(*flag))
     {
@@ -4532,15 +4576,65 @@ fn capture_challenge_records(
     records: &mut std::collections::BTreeMap<String, u32>,
 ) -> bool {
     let mut changed = false;
-    if game.flags.contains("hub") {
+    if game.flags.contains("hub")
+        && game.flags.contains("hub_challenge_finished")
+        && !game.flags.contains("scores_disabled")
+    {
         for key in ["mini1", "mini2", "mini3"] {
             if let Some(value) = game.data.get(key).filter(|value| value.is_finite()) {
                 let score = value.clamp(0., 99.) as u32;
-                let best = records.entry(key.into()).or_default();
-                changed |= score > *best;
-                *best = (*best).max(score);
+                match records.get_mut(key) {
+                    Some(best) if score > *best => {
+                        *best = score;
+                        changed = true;
+                    }
+                    Some(_) => {}
+                    None => {
+                        records.insert(key.into(), score);
+                        changed = true;
+                    }
+                }
             }
         }
+    }
+    changed
+}
+fn commit_source_highscore_update(game: &mut Game, data: &mut crate::storage::SaveData) -> bool {
+    if !game.flags.remove("source_highscore_update_pending")
+        || game.flags.contains("scores_disabled")
+    {
+        return false;
+    }
+
+    let previous = profile_source_highscores(data);
+    let money = game.player.money;
+    let kills = game.data.get("kills").copied().unwrap_or(0.).max(0.) as u32;
+    let saves = game.data.get("damsels").copied().unwrap_or(0.).max(0.) as u32;
+    if money > previous.money {
+        game.flags.insert("new_money".into());
+    }
+    if kills > previous.kills {
+        game.flags.insert("new_kills".into());
+    }
+    if saves > previous.saves {
+        game.flags.insert("new_saves".into());
+    }
+
+    let old_highscores = data.source_highscores;
+    data.source_highscores.include(money, kills, saves);
+    let mut changed = data.source_highscores != old_highscores;
+    changed |= capture_challenge_records(game, &mut data.challenge_records);
+
+    let old_tunnels = data.tunnel_remaining.clone();
+    data.tunnel_remaining.extend(tunnel_progress(game));
+    changed |= data.tunnel_remaining != old_tunnels;
+
+    for (key, value) in [
+        ("best_money", previous.money.max(money)),
+        ("best_kills", previous.kills.max(kills)),
+        ("best_saves", previous.saves.max(saves)),
+    ] {
+        game.data.insert(key.into(), f64::from(value));
     }
     changed
 }
@@ -6154,6 +6248,51 @@ mod tests {
         ));
         assert_eq!(menu, original);
         assert_eq!(serde_json::to_value(&settings).unwrap(), before);
+    }
+
+    #[test]
+    fn controller_capture_advances_at_most_one_slot_per_host_frame() {
+        let mut ui = SettingsUi::new();
+        let mut settings = crate::storage::Settings::default();
+        controller_remap_enter_wizard(&mut ui, &mut settings);
+        let mut menu = vec![UiButton::Confirm, UiButton::Cancel];
+
+        assert!(settings_controller_frame(
+            &mut ui,
+            &mut settings,
+            &[
+                crate::controller::Button::East,
+                crate::controller::Button::North
+            ],
+            &mut menu
+        ));
+
+        assert!(menu.is_empty());
+        assert!(ui.awaiting_controller_binding());
+        assert_eq!(settings.controller_bindings["jump"], "East");
+        assert_eq!(settings.controller_bindings["attack"], "South");
+
+        let mut settings = crate::storage::Settings::default();
+        let mut ui = SettingsUi::new();
+        ui.begin_browser_direction_calibration();
+        let mut menu = vec![UiButton::Confirm];
+        let controls = [
+            crate::controller::BrowserGamepadControl::Axis {
+                index: 0,
+                positive: true,
+            },
+            crate::controller::BrowserGamepadControl::Button { index: 3 },
+        ];
+        assert!(settings_browser_direction_frame(
+            &mut ui,
+            &mut settings,
+            &controls,
+            &mut menu
+        ));
+        assert!(menu.is_empty());
+        assert!(ui.awaiting_direction_binding());
+        assert_eq!(settings.browser_direction_bindings.left, Some(controls[0]));
+        assert_eq!(settings.browser_direction_bindings.right, None);
     }
 
     #[test]
@@ -7937,26 +8076,122 @@ mod tests {
             kills: 5,
             rescues: 2,
         };
-        assert!(record_improvements(&old, std::slice::from_ref(&old)).is_empty());
+        assert!(
+            record_improvements(
+                &old,
+                std::slice::from_ref(&old),
+                crate::storage::SourceHighscores::default(),
+            )
+            .is_empty()
+        );
         let mut next = old.clone();
         next.score += 1;
         next.kills += 1;
         next.rescues += 1;
         next.elapsed_ms = Some(499_000);
         assert_eq!(
-            record_improvements(&next, std::slice::from_ref(&old)),
+            record_improvements(
+                &next,
+                std::slice::from_ref(&old),
+                crate::storage::SourceHighscores::default(),
+            ),
             ["new_money", "new_kills", "new_saves", "new_time"]
                 .map(str::to_owned)
                 .into_iter()
                 .collect()
         );
         next.fastest_eligible = false;
-        assert!(!record_improvements(&next, std::slice::from_ref(&old)).contains("new_time"));
+        assert!(
+            !record_improvements(
+                &next,
+                std::slice::from_ref(&old),
+                crate::storage::SourceHighscores::default(),
+            )
+            .contains("new_time")
+        );
         next.fastest_eligible = true;
         next.won = false;
-        assert!(!record_improvements(&next, std::slice::from_ref(&old)).contains("new_time"));
+        assert!(
+            !record_improvements(
+                &next,
+                std::slice::from_ref(&old),
+                crate::storage::SourceHighscores::default(),
+            )
+            .contains("new_time")
+        );
         next.won = true;
-        assert!(record_improvements(&next, &[]).contains("new_time"));
+        assert!(
+            record_improvements(&next, &[], crate::storage::SourceHighscores::default(),)
+                .contains("new_time")
+        );
+
+        let mut source_best = crate::storage::SourceHighscores::default();
+        source_best.money = next.score + 1;
+        assert!(!record_improvements(&next, &[], source_best).contains("new_money"));
+    }
+
+    #[test]
+    fn challenge_highscore_snapshots_store_global_bests_and_tunnel_progress_once() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        game.load_hub(spelunky_core::hub::HubKind::Sun);
+        game.flags.insert("hub_challenge_finished".into());
+        game.flags.insert("source_highscore_update_pending".into());
+        game.data.insert("mini1".into(), 38.0);
+        game.data.insert("kills".into(), 72.0);
+        game.data.insert("damsels".into(), 3.0);
+        game.data.insert("tunnel1_remaining".into(), 64_000.0);
+        game.data.insert("tunnel2_remaining".into(), 170_000.0);
+        game.data.insert("tunnel3_remaining".into(), 290_000.0);
+        game.player.money = 260_000;
+
+        let mut save = crate::storage::SaveData::default();
+        assert!(commit_source_highscore_update(&mut game, &mut save));
+        assert_eq!(
+            save.source_highscores,
+            crate::storage::SourceHighscores {
+                money: 260_000,
+                kills: 72,
+                saves: 3,
+            }
+        );
+        assert_eq!(save.challenge_records["mini1"], 38);
+        assert_eq!(save.tunnel_remaining["tunnel1_remaining"], 64_000);
+        assert_eq!(save.tunnel_remaining["tunnel2_remaining"], 170_000);
+        assert_eq!(save.tunnel_remaining["tunnel3_remaining"], 290_000);
+        assert!(game.flags.contains("new_money"));
+        assert!(game.flags.contains("new_kills"));
+        assert!(game.flags.contains("new_saves"));
+        assert!(!game.flags.contains("source_highscore_update_pending"));
+        assert!(!commit_source_highscore_update(&mut game, &mut save));
+
+        let reopened = crate::storage::SaveData::from_json(&save.to_json().unwrap()).unwrap();
+        assert_eq!(reopened.source_highscores.money, 260_000);
+        assert_eq!(reopened.challenge_records["mini1"], 38);
+        assert_eq!(reopened.tunnel_remaining["tunnel1_remaining"], 64_000);
+    }
+
+    #[test]
+    fn custom_highscore_gate_discards_pending_score_updates_and_campaign_records() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        game.load_hub(spelunky_core::hub::HubKind::Moon);
+        game.flags.insert("scores_disabled".into());
+        game.flags.insert("hub_challenge_finished".into());
+        game.flags.insert("source_highscore_update_pending".into());
+        game.data.insert("mini2".into(), 50.0);
+        game.player.money = 90_000;
+        game.state = RunState::Dead;
+        game.flags.remove("hub");
+
+        let mut save = crate::storage::SaveData::default();
+        assert!(!commit_source_highscore_update(&mut game, &mut save));
+        assert_eq!(
+            save.source_highscores,
+            crate::storage::SourceHighscores::default()
+        );
+        assert!(save.challenge_records.is_empty());
+        assert!(save.tunnel_remaining.is_empty());
+        assert!(campaign_record(&game).is_none());
+        assert!(!game.flags.contains("source_highscore_update_pending"));
     }
     #[test]
     fn lifetime_snapshots_survive_new_runs_without_aggregating_deaths() {
@@ -9725,6 +9960,7 @@ mod tests {
         game.flags.extend(["unlock_moon".into(), "hub".into()]);
         game.load_hub(spelunky_core::hub::HubKind::Moon);
         game.data.insert("mini2".into(), 12.);
+        game.flags.insert("hub_challenge_finished".into());
         let mut records = std::collections::BTreeMap::new();
         records.insert("mini2".into(), 5);
         assert!(capture_challenge_records(&game, &mut records));
@@ -9795,7 +10031,8 @@ mod tests {
         assert_eq!(record.level, 0);
         assert_eq!(record.score, 50_000);
         assert_eq!(record.elapsed_seconds(), 549);
-        let improvements = record_improvements(&record, &[]);
+        let improvements =
+            record_improvements(&record, &[], crate::storage::SourceHighscores::default());
         assert!(improvements.contains("new_money"));
         let unlocks = spelunky_core::hub::record_unlocks(
             record.score,

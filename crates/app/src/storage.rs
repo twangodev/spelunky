@@ -106,6 +106,25 @@ pub struct Record {
     pub rescues: u32,
 }
 
+/// Classic stores MONEY, KILLS, and SAVES as profile-wide maxima. Minigames
+/// call `scrUpdateHighscores(2)`, which can improve these without creating a
+/// campaign record.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SourceHighscores {
+    pub money: u32,
+    pub kills: u32,
+    pub saves: u32,
+}
+
+impl SourceHighscores {
+    pub fn include(&mut self, money: u32, kills: u32, saves: u32) {
+        self.money = self.money.max(money);
+        self.kills = self.kills.max(kills);
+        self.saves = self.saves.max(saves);
+    }
+}
+
 fn ineligible_legacy_record() -> bool {
     false
 }
@@ -156,6 +175,10 @@ pub struct SaveData {
     /// hits, mini3 = Stars shopkeeper kills. Unknown keys remain compatible.
     #[serde(default)]
     pub challenge_records: BTreeMap<String, u32>,
+    /// Profile-wide Classic money/kills/saves maxima. Challenge deaths and
+    /// the Moon timeout update these without producing campaign records.
+    #[serde(default)]
+    pub source_highscores: SourceHighscores,
     /// Outstanding shortcut donations, keyed by tunnel1_remaining through
     /// tunnel3_remaining. Missing keys use original costs (100k, 200k, 300k).
     #[serde(default)]
@@ -175,6 +198,7 @@ impl Default for SaveData {
             lifetime_stats: Default::default(),
             classic_stats_imported: false,
             challenge_records: BTreeMap::new(),
+            source_highscores: SourceHighscores::default(),
             tunnel_remaining: BTreeMap::new(),
             unlocks: BTreeSet::new(),
             custom_levels: BTreeMap::new(),
@@ -1700,14 +1724,21 @@ mod tests {
         for json in ["{}", r#"{"version":0}"#, r#"{"version":1}"#] {
             let mut data = SaveData::from_json(json).unwrap();
             assert!(data.challenge_records.is_empty());
+            assert_eq!(data.source_highscores, SourceHighscores::default());
             data.challenge_records.extend([
                 ("mini1".into(), 45),
                 ("mini2".into(), 8),
                 ("mini3".into(), 101),
             ]);
+            data.source_highscores = SourceHighscores {
+                money: 210_000,
+                kills: 122,
+                saves: 9,
+            };
             let decoded = SaveData::from_json(&data.to_json().unwrap()).unwrap();
             assert_eq!(decoded.version, SAVE_VERSION);
             assert_eq!(decoded.challenge_records, data.challenge_records);
+            assert_eq!(decoded.source_highscores, data.source_highscores);
         }
         let data =
             SaveData::from_json(r#"{"version":1,"challenge_records":{"future-challenge":42}}"#)

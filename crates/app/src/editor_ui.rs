@@ -1203,7 +1203,7 @@ fn raw_starting_inventory(source: &str) -> Result<[String; 3], String> {
 }
 
 fn file_name(name: &str) -> Result<String, String> {
-    crate::editor_io::relative_level_filename(name.trim())
+    crate::editor_io::relative_level_filename(name)
         .map_err(|_| "ENTER A VALID RELATIVE FILE NAME".into())
 }
 
@@ -1847,6 +1847,11 @@ mod tests {
             ui.state.select(tile).unwrap();
         }
         assert_eq!(file_name("sub/map").unwrap(), "sub/map.lvl");
+        assert_eq!(
+            file_name("  leading space ").unwrap(),
+            "  leading space .lvl",
+            "Classic preserves spaces entered in the filename"
+        );
         assert!(file_name("../../map").is_err());
         assert!(file_name("..").is_err());
         assert!(file_name(".lvl").is_err());

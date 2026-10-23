@@ -223,6 +223,10 @@ impl Game {
         });
         self.flags.insert("custom".into());
         self.flags.insert("custom_level".into());
+        // rLoadLevel Create sets global.keepScore=false, and only oTitle Create
+        // turns it back on. This flag survives the custom ending's return to
+        // the score room and any challenge rooms entered from there.
+        self.flags.insert("scores_disabled".into());
         self.flags.remove("tutorial");
         self.flags
             .retain(|f| !f.starts_with("custom_level:") && !f.starts_with("default_next_custom:"));
@@ -269,6 +273,10 @@ impl Game {
                 && !flag.starts_with("default_next_custom:")
                 && !matches!(flag.as_str(), "custom" | "custom_level" | "tutorial")
         });
+        if kind == hub::HubKind::Title {
+            // oTitle Create restores global.keepScore after custom play.
+            self.flags.remove("scores_disabled");
+        }
         self.data.retain(|key, _| {
             !key.starts_with("hub_")
                 && !key.starts_with("sun_")
@@ -982,6 +990,24 @@ impl Game {
 
     pub fn source_elapsed_seconds(&self) -> u64 {
         self.source_elapsed_ms() / 1000
+    }
+}
+
+#[cfg(test)]
+mod classic_score_eligibility_tests {
+    use crate::{Game, RulesPreset, hub::HubKind, level::Level};
+
+    #[test]
+    fn custom_score_suppression_survives_scores_until_title_create() {
+        let mut game = Game::shell(7, RulesPreset::Classic);
+        game.load_custom(&Level::default(), "custom", "");
+        assert!(game.flags.contains("scores_disabled"));
+
+        game.load_hub(HubKind::Scores);
+        assert!(game.flags.contains("scores_disabled"));
+
+        game.load_hub(HubKind::Title);
+        assert!(!game.flags.contains("scores_disabled"));
     }
 }
 

@@ -1046,7 +1046,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 2024,
+          "line": 2033,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -1195,7 +1195,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1610,
+          "line": 1619,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -4137,7 +4137,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 239,
+          "line": 243,
           "module": "crates/core/src/game.rs"
         }
       ],
@@ -5881,7 +5881,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 1112,
+          "line": 1121,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -6516,7 +6516,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 828,
+          "line": 836,
           "module": "crates/core/src/game.rs"
         },
         {
@@ -7334,7 +7334,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 834,
+          "line": 842,
           "module": "crates/core/src/game.rs"
         },
         {
@@ -8319,7 +8319,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 837,
+          "line": 845,
           "module": "crates/core/src/game.rs"
         },
         {
@@ -8514,7 +8514,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 1412,
+          "line": 1421,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -9925,7 +9925,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1942,
+          "line": 1951,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -9942,7 +9942,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 1949,
+          "line": 1958,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -12445,7 +12445,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 1412,
+          "line": 1421,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -12488,7 +12488,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 1412,
+          "line": 1421,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -12520,7 +12520,7 @@
         },
         {
           "kind": "manually_reviewed_shared_behavior",
-          "line": 2160,
+          "line": 2169,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -14049,7 +14049,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 1206,
+          "line": 1215,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -14066,7 +14066,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 1206,
+          "line": 1215,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -14083,7 +14083,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 1206,
+          "line": 1215,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -14117,7 +14117,7 @@
       "handlers": [
         {
           "kind": "explicit_object_match_arm",
-          "line": 840,
+          "line": 848,
           "module": "crates/core/src/game.rs"
         },
         {
@@ -14141,7 +14141,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 1206,
+          "line": 1215,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -14158,7 +14158,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 1206,
+          "line": 1215,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -14175,7 +14175,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 1206,
+          "line": 1215,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -14192,7 +14192,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 1206,
+          "line": 1215,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -14209,7 +14209,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 1206,
+          "line": 1215,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -14226,7 +14226,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 1206,
+          "line": 1215,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -14243,7 +14243,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 1206,
+          "line": 1215,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -14260,7 +14260,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 1206,
+          "line": 1215,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -14277,7 +14277,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 1206,
+          "line": 1215,
           "module": "crates/core/src/hub.rs"
         }
       ],
@@ -14294,7 +14294,7 @@
       "handlers": [
         {
           "kind": "manually_reviewed_state_adapter",
-          "line": 1206,
+          "line": 1215,
           "module": "crates/core/src/hub.rs"
         }
       ],

@@ -1006,10 +1006,19 @@ fn value(game: &Game, key: &str) -> f64 {
 fn record(game: &mut Game, key: &str, score: f64) {
     let score = score.clamp(0.0, 99.0);
     let best = value(game, &format!("best_{key}"));
-    game.data
-        .insert("challenge_highscore".into(), f64::from(score > best));
+    let score_eligible = !game.flags.contains("scores_disabled");
+    game.data.insert(
+        "challenge_highscore".into(),
+        f64::from(score_eligible && score > best),
+    );
     game.data.insert(key.into(), score);
     game.flags.insert("hub_challenge_finished".into());
+    if score_eligible {
+        // Host persistence consumes this once after the source callback. The
+        // original `scrUpdateHighscores(2)` also updates MONEY/KILLS/SAVES and
+        // tunnel donations, even though this is not a campaign record.
+        game.flags.insert("source_highscore_update_pending".into());
+    }
     game.events.push(GameEvent::Message(format!(
         "Challenge score: {}",
         score as u32
@@ -2771,6 +2780,22 @@ mod tests {
             assert_eq!(g.data["challenge_highscore"], expected);
             assert_eq!(g.data["mini2"], score.min(99.));
         }
+    }
+    #[test]
+    fn challenge_highscore_updates_follow_the_source_keep_score_gate() {
+        let mut scored = loaded(HubKind::Moon);
+        scored.data.insert("best_mini2".into(), 10.0);
+        record(&mut scored, "mini2", 11.0);
+        assert_eq!(scored.data["challenge_highscore"], 1.0);
+        assert!(scored.flags.contains("source_highscore_update_pending"));
+
+        let mut unscored = loaded(HubKind::Moon);
+        unscored.flags.insert("scores_disabled".into());
+        unscored.data.insert("best_mini2".into(), 10.0);
+        record(&mut unscored, "mini2", 11.0);
+        assert_eq!(unscored.data["challenge_highscore"], 0.0);
+        assert!(!unscored.flags.contains("source_highscore_update_pending"));
+        assert!(unscored.flags.contains("hub_challenge_finished"));
     }
     #[test]
     fn authored_scores_block_inputs_clear_only_after_nineteen_contact_ticks() {
