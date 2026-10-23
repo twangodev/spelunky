@@ -1025,6 +1025,26 @@ fn record(game: &mut Game, key: &str, score: f64) {
     )));
 }
 
+/// oPlayer1's fatal branch snapshots challenge scores before later source
+/// objects run their Step events. In particular, the Stars room's
+/// oShopkeeper2 Step follows Player and can add a kill in this same tick.
+pub(crate) fn player_death_step(game: &mut Game) {
+    if game.player.health > 0.0 {
+        return;
+    }
+
+    if game.flags.contains("hub_sun") && !game.flags.contains("hub_challenge_finished") {
+        record(game, "mini1", value(game, "points"));
+    } else if game.flags.contains("hub_moon") && value(game, "moon_death_recorded") == 0.0 {
+        game.data.insert("timer".into(), -1.0);
+        game.data.insert("hub_alarm10".into(), 30.0);
+        game.data.insert("moon_death_recorded".into(), 1.0);
+        record(game, "mini2", value(game, "baskets"));
+    } else if game.flags.contains("hub_stars") && !game.flags.contains("hub_challenge_finished") {
+        record(game, "mini3", value(game, "stars_kills"));
+    }
+}
+
 /// oPlayer1's start-door branch, before inventory actions and hurt queries.
 pub(crate) fn player_portal_actions(game: &mut Game, input: &InputFrame) {
     if (game.flags.contains("hub") || game.flags.contains("tutorial"))
@@ -3677,6 +3697,35 @@ mod tests {
         assert_eq!(stars.data.get("kills").copied().unwrap_or(0.0), 0.0);
         assert!(!stars.flags.contains("murderer"));
     }
+
+    #[test]
+    fn stars_death_score_is_snapshotted_before_later_keeper_step() {
+        let mut stars = loaded(HubKind::Stars);
+        for _ in 0..100 {
+            stars.step(&InputFrame::default());
+        }
+        let shop = stars
+            .world
+            .entities
+            .iter()
+            .find(|entity| entity.alive && entity.object == "oShopkeeper2")
+            .unwrap()
+            .id;
+
+        // Player's resource (319) runs before Shopkeeper2 (702). Classic
+        // snapshots the Stars score in Player Step, then the keeper's Step
+        // credits its same-frame death to the still-live room counter.
+        stars.player.health = 0.0;
+        stars.world.entity_mut(shop).unwrap().health = 0;
+        stars.step(&InputFrame::default());
+
+        assert_eq!(stars.data["stars_kills"], 1.0);
+        assert_eq!(stars.data["mini3"], 0.0);
+        assert_eq!(stars.data["challenge_highscore"], 0.0);
+        assert!(stars.flags.contains("hub_challenge_finished"));
+        assert!(stars.flags.contains("source_highscore_update_pending"));
+    }
+
     #[test]
     fn moon_timeout_return_restores_source_scores_door_position() {
         let mut g = loaded(HubKind::Moon);

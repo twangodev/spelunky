@@ -1024,6 +1024,7 @@ fn player_step(game: &mut Game, input: &InputFrame) {
         let first = game.state != crate::RunState::Dead;
         if first {
             game.player.health = 0.0;
+            crate::hub::player_death_step(game);
         }
         crate::player::enter_dead(game);
         game.state = crate::RunState::Dead;
