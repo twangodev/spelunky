@@ -125,6 +125,34 @@ pub(super) fn create_source_boundary(
     city: bool,
     invincible_override: bool,
 ) {
+    create_source_boundary_with_storage(world, rng, x, y, object, city, invincible_override, false);
+}
+
+/// Tutorial room boundaries are additional room instances layered over the
+/// authored room's existing solids. Preserve that solid and represent the
+/// controller-created boundary as a second live instance.
+pub(super) fn create_source_boundary_instance(
+    world: &mut World,
+    rng: &mut Rng,
+    x: usize,
+    y: usize,
+    object: &str,
+    city: bool,
+    invincible_override: bool,
+) {
+    create_source_boundary_with_storage(world, rng, x, y, object, city, invincible_override, true);
+}
+
+fn create_source_boundary_with_storage(
+    world: &mut World,
+    rng: &mut Rng,
+    x: usize,
+    y: usize,
+    object: &str,
+    city: bool,
+    invincible_override: bool,
+    force_instance: bool,
+) {
     let origin = Vec2::new(x as f64 * 16.0, y as f64 * 16.0);
     // The source condition is strict and uses room dimensions, not storage
     // existence. Every boundary and y=640 floor origin fails it. Refuse to
@@ -135,9 +163,12 @@ pub(super) fn create_source_boundary(
             && origin.y > 1.0
             && origin.y < (world.height - 1) as f64 * 16.0)
     );
-    let stored = x < world.width && y < world.height;
-    let id = if stored {
+    let in_bounds = x < world.width && y < world.height;
+    if in_bounds && !force_instance {
         assert!(world.tile(x as i32, y as i32).unwrap().object.is_empty());
+    }
+    let stored = in_bounds && !force_instance;
+    let id = if stored {
         world.set_tile(x, y, object);
         metadata(world, x, y)
     } else {

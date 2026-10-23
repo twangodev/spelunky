@@ -599,11 +599,41 @@ pub fn tunnel_offer(game: &Game) -> Option<TunnelOffer> {
     if game.world.level != u32::from(stage) * 4 {
         return None;
     }
+    let maximum = u32::from(stage) * 100000;
+    let remaining = tunnel_remaining(game, stage);
+    // Classic's Transition Create consumes this reset-highscore sentinel and
+    // skips creating Tunnel Man on that first encounter.
+    if remaining > maximum {
+        return None;
+    }
     Some(TunnelOffer {
         stage,
-        remaining: tunnel_remaining(game, stage),
+        remaining,
         destination: u32::from(stage) * 4 + 1,
     })
+}
+
+/// Model the source Transition-room Create when the host leaves its summary.
+/// A reset highscore stores max+1 to suppress the first Tunnel Man encounter;
+/// Classic decrements that marker before creating the next playable room.
+pub(crate) fn consume_tunnel_first_encounter(game: &mut Game) {
+    let Some(stage) = (match game.world.level {
+        4 => Some(1u8),
+        8 => Some(2u8),
+        12 => Some(3u8),
+        _ => None,
+    }) else {
+        return;
+    };
+    let key = format!("tunnel{stage}_remaining");
+    let maximum = u32::from(stage) * 100000;
+    if game
+        .data
+        .get(&key)
+        .is_some_and(|remaining| remaining.is_finite() && *remaining > f64::from(maximum))
+    {
+        game.data.insert(key, f64::from(maximum));
+    }
 }
 
 pub(crate) fn apply_donation(game: &mut Game, stage: u8, requested: u32) -> u32 {
@@ -694,7 +724,7 @@ fn donate(game: &mut Game, input: &InputFrame) {
 
 /// A damsel enters the door independently of the player. Each rescue produces
 /// one transition kiss, including several rescues in the same room.
-fn rescue_held_damsel(game: &mut Game, id: u64, door_center: Vec2) {
+fn rescue_held_damsel(game: &mut Game, id: u64, door_center: Vec2, player_exit: bool) {
     let Some(damsel) = game.world.entity_mut(id) else {
         return;
     };
@@ -708,6 +738,10 @@ fn rescue_held_damsel(game: &mut Game, id: u64, door_center: Vec2) {
     damsel.held = false;
     damsel.sprite = if game.flags.contains("character_damsel") {
         "sPExit".into()
+    } else if player_exit {
+        // The Up + grounded Player branch assigns sDamselExit. The passive
+        // touch-deposit branch below uses the Damsel's own sDamselExit2.
+        "sDamselExit".into()
     } else {
         "sDamselExit2".into()
     };
@@ -783,7 +817,7 @@ fn deposit_at_exit(game: &mut Game) {
             .and_then(|door| game.world.entity(door))
             .map(|door| Vec2::new(door.pos.x + 8., door.pos.y + 8.))
         {
-            rescue_held_damsel(game, id, center);
+            rescue_held_damsel(game, id, center, false);
         }
     } else if matches!(object.as_str(), "oGoldIdol" | "oCrystalSkull") {
         redeem_held_idol(game, id, false);
@@ -862,7 +896,7 @@ fn complete(game: &mut Game, door_id: u64) {
                     item.held = false;
                 }
             } else if object == "oDamsel" && health > 0 {
-                rescue_held_damsel(game, id, door_center);
+                rescue_held_damsel(game, id, door_center, true);
             } else if matches!(object.as_str(), "oGoldIdol" | "oCrystalSkull") {
                 redeem_held_idol(game, id, true);
             } else if object == "oDamsel" || heavy {
@@ -1712,6 +1746,44 @@ mod tests {
         g.flags.insert("shortcut_13".into());
         assert_eq!(tunnel_offer(&g), None);
     }
+
+    #[test]
+    fn reset_tunnel_markers_skip_once_then_become_payable() {
+        let mut g = game(4);
+        g.state = RunState::Transition;
+        g.data.insert("tunnel1_remaining".into(), 100001.);
+        g.data.insert("tunnel2_remaining".into(), 200001.);
+        assert_eq!(tunnel_offer(&g), None);
+
+        g.next_level();
+        assert_eq!(g.data["tunnel1_remaining"], 100000.);
+        assert_eq!(g.data["tunnel2_remaining"], 200001.);
+
+        g.world.level = 4;
+        g.state = RunState::Transition;
+        assert_eq!(tunnel_offer(&g).unwrap().remaining, 100000);
+
+        g.flags.insert("shortcut_5".into());
+        g.world.level = 8;
+        g.data.insert("tunnel2_remaining".into(), 200001.);
+        assert_eq!(tunnel_offer(&g), None);
+        g.next_level();
+        assert_eq!(g.data["tunnel2_remaining"], 200000.);
+
+        g.world.level = 8;
+        g.state = RunState::Transition;
+        assert_eq!(tunnel_offer(&g).unwrap().remaining, 200000);
+
+        g.flags.insert("shortcut_9".into());
+        g.world.level = 12;
+        g.data.insert("tunnel3_remaining".into(), 300001.);
+        assert_eq!(tunnel_offer(&g), None);
+        g.next_level();
+        assert_eq!(g.data["tunnel3_remaining"], 300000.);
+        g.world.level = 12;
+        g.state = RunState::Transition;
+        assert_eq!(tunnel_offer(&g).unwrap().remaining, 300000);
+    }
     #[test]
     fn partial_transition_donation_preserves_world_and_carry_and_survives_runs() {
         let mut g = game(4);
@@ -2146,10 +2218,31 @@ mod tests {
         assert!(g.player.held.is_none());
         let rescued = g.world.entity(id).expect("damsel plays its exit animation");
         assert_eq!(rescued.state, 4);
+        assert_eq!(rescued.sprite, "sDamselExit2");
         assert_eq!(rescued.pos, Vec2::new(88., 56.));
         assert_eq!(g.data["pending_damsel_kisses"], 1.);
         g.step(&InputFrame::default());
         assert_eq!(g.data["damsels"], 1., "rescue must be counted only once");
+    }
+
+    #[test]
+    fn player_activated_exit_uses_the_held_damsel_exit_animation() {
+        let (mut g, id) = carried_exit("oDamsel");
+        g.step(&InputFrame {
+            up: true,
+            ..Default::default()
+        });
+
+        assert_eq!(g.state, RunState::Ending);
+        assert_eq!(g.player.held, None);
+        let rescued = g
+            .world
+            .entity(id)
+            .expect("rescued Damsel remains in the exit room");
+        assert_eq!(rescued.state, 4);
+        assert_eq!(rescued.sprite, "sDamselExit");
+        assert_eq!(g.data["damsels"], 1.);
+        assert_eq!(g.data["pending_damsel_kisses"], 1.);
     }
 
     fn walk_carried_item_to_portal(object: &str, door: &str) -> (Game, u64) {

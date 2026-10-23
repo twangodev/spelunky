@@ -311,8 +311,11 @@ pub fn run() -> Result<(), String> {
             .skip(1)
             .filter(|path| is_level_argument(path))
         {
-            match std::fs::read_to_string(&path) {
-                Ok(contents) => app.import_level(path, contents),
+            match std::fs::read(&path) {
+                Ok(bytes) => app.import_level(
+                    path,
+                    spelunky_core::level::decode_classic_text_bytes(&bytes).into_owned(),
+                ),
                 Err(error) => app.message = format!("IMPORT FAILED: {error}"),
             }
         }
@@ -344,6 +347,8 @@ struct App {
     source_music: SourceMusicState,
     store: Store,
     custom_level_catalog: std::collections::BTreeMap<String, String>,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_custom_level_paths: std::collections::BTreeMap<String, std::path::PathBuf>,
     unreadable_custom_levels: std::collections::BTreeSet<String>,
     timing: HostTiming,
     sfx_preload_was_ready: bool,
@@ -369,6 +374,8 @@ struct App {
     browser_ended: bool,
     focused: bool,
     occluded: bool,
+    #[cfg(target_arch = "wasm32")]
+    browser_render_sequence: u64,
     next_frame: f64,
     #[cfg(target_arch = "wasm32")]
     presentation_cadence: crate::timing::PresentationCadence,
@@ -619,6 +626,8 @@ impl App {
             source_music,
             store,
             custom_level_catalog,
+            #[cfg(not(target_arch = "wasm32"))]
+            native_custom_level_paths: std::collections::BTreeMap::new(),
             unreadable_custom_levels: std::collections::BTreeSet::new(),
             timing: HostTiming::default(),
             sfx_preload_was_ready,
@@ -644,6 +653,8 @@ impl App {
             browser_ended: false,
             focused: true,
             occluded: false,
+            #[cfg(target_arch = "wasm32")]
+            browser_render_sequence: 0,
             next_frame: 0.,
             #[cfg(target_arch = "wasm32")]
             presentation_cadence: crate::timing::PresentationCadence::default(),
@@ -897,7 +908,10 @@ impl App {
                 game.rng = self.editor.source_rng().clone();
             }
             self.editor
-                .set_palette_progress(editor_palette_progress(&self.store.data.unlocks));
+                .set_palette_progress(editor_palette_progress_for_game(
+                    &self.store.data.unlocks,
+                    self.game.as_ref(),
+                ));
         }
         self.screen = screen;
         #[cfg(target_arch = "wasm32")]
@@ -956,30 +970,44 @@ impl App {
         self.custom_level_catalog = self.store.data.custom_levels.clone();
         self.unreadable_custom_levels.clear();
         #[cfg(not(target_arch = "wasm32"))]
-        match crate::editor_io::load_native_level_directory(std::path::Path::new("levels")) {
+        {
+            self.native_custom_level_paths.clear();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        match crate::editor_io::index_native_level_directory(std::path::Path::new("levels")) {
             Ok(catalog) => {
-                for name in &catalog.unreadable {
-                    // A native file shadows save-data copies, even when the
-                    // current process cannot open it.
-                    self.custom_level_catalog.remove(name);
-                }
-                self.unreadable_custom_levels = catalog.unreadable;
-                self.custom_level_catalog.extend(catalog.levels);
-                let warning_count = catalog.warnings.len();
-                if let Some(warning) = catalog.warnings.into_iter().next() {
-                    let message = if warning_count > 1 {
-                        format!(
-                            "{warning} ({} more unreadable level files)",
-                            warning_count - 1
-                        )
-                    } else {
-                        warning
-                    };
-                    self.toast(message);
+                for (name, path) in catalog.paths {
+                    // The native file shadows saved imports as Classic's
+                    // levels/ directory is the selector's source of truth.
+                    self.custom_level_catalog.remove(&name);
+                    self.custom_level_catalog
+                        .insert(name.clone(), String::new());
+                    self.native_custom_level_paths.insert(name, path);
                 }
             }
             Err(error) => self.toast(error),
         }
+    }
+    fn custom_level_contents(&mut self, name: &str) -> Result<String, String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(path) = self.native_custom_level_paths.get(name).cloned() {
+            return match crate::editor_io::read_native_level_contents(&path) {
+                Ok(contents) => {
+                    self.custom_level_catalog
+                        .insert(name.to_owned(), contents.clone());
+                    self.unreadable_custom_levels.remove(name);
+                    Ok(contents)
+                }
+                Err(_) => {
+                    self.unreadable_custom_levels.insert(name.to_owned());
+                    Err("NO SUCH LEVEL EXISTS!".into())
+                }
+            };
+        }
+        self.custom_level_catalog
+            .get(name)
+            .cloned()
+            .ok_or_else(|| "NO SUCH LEVEL EXISTS!".into())
     }
     fn dispatch_source_host_control(&mut self, control: SourceHostControl) {
         if control.stops_all_music() {
@@ -1105,6 +1133,7 @@ impl App {
         }
     }
     fn start_game(&mut self, tutorial: bool) {
+        let tunnel_session = self.game.as_ref().map(tunnel_session_state);
         self.flush_source_music();
         self.snapshot_lifetime_stats();
         self.source_message = None;
@@ -1126,7 +1155,7 @@ impl App {
                 graphics_high,
             )
         };
-        hydrate_run(&mut game, &self.store.data);
+        hydrate_run_with_session(&mut game, &self.store.data, tunnel_session);
         if tutorial {
             game.player.bombs = 0.0;
             game.player.ropes = 2.0;
@@ -1158,6 +1187,11 @@ impl App {
         self.snapshot_lifetime_stats();
         self.source_message = None;
         self.drawn_source_message = None;
+        if refresh_profile_score_unlocks(&mut self.store.data) {
+            if let Err(error) = self.store.save() {
+                self.toast(error);
+            }
+        }
         if self.game.is_none() {
             self.start_game(false);
         }
@@ -1486,8 +1520,12 @@ impl App {
                     self.toast("NO SUCH LEVEL EXISTS!");
                     return;
                 }
-                let Some(contents) = self.custom_level_catalog.get(&name).cloned() else {
-                    return;
+                let contents = match self.custom_level_contents(&name) {
+                    Ok(contents) => contents,
+                    Err(error) => {
+                        self.toast(error);
+                        return;
+                    }
                 };
                 if let Some(game) = &self.game {
                     self.editor.set_source_rng(game.rng.clone());
@@ -1665,17 +1703,22 @@ impl App {
         self.snapshot_lifetime_stats();
         self.source_message = None;
         self.drawn_source_message = None;
-        let Some(contents) = self.custom_level_catalog.get(name) else {
-            return;
+        let contents = match self.custom_level_contents(name) {
+            Ok(contents) => contents,
+            Err(error) => {
+                self.toast(error);
+                return;
+            }
         };
-        match spelunky_core::level::Level::parse(contents) {
+        match spelunky_core::level::Level::parse(&contents) {
             Ok(level) => {
+                let tunnel_session = self.game.as_ref().map(tunnel_session_state);
                 let mut game = new_custom_game(
                     wall_seed(),
                     self.store.data.settings.rules,
                     &self.source_music,
                 );
-                hydrate_run(&mut game, &self.store.data);
+                hydrate_run_with_session(&mut game, &self.store.data, tunnel_session);
                 load_custom_catalog(&mut game, &level, name, "");
                 if editor {
                     game.flags.insert("editor_test".into());
@@ -1732,29 +1775,31 @@ impl App {
     }
     fn import_level(&mut self, name: String, contents: String) {
         let name = level_name(&name);
+        let mut imported_editor = self.editor.clone();
         if let Some(game) = &self.game {
-            self.editor.set_source_rng(game.rng.clone());
-            self.editor.set_source_context(editor_preview_context(game));
+            imported_editor.set_source_rng(game.rng.clone());
+            imported_editor.set_source_context(editor_preview_context(game));
         }
-        let result = self.editor.load_catalog_key(&name, &contents);
-        if let Some(game) = &mut self.game {
-            game.rng = self.editor.source_rng().clone();
-        }
-        if let Err(error) = result {
+        if let Err(error) = imported_editor.load_catalog_key(&name, &contents) {
             self.toast(format!("INVALID LEVEL: {error}"));
             return;
         }
-        self.store
-            .data
-            .custom_levels
-            .insert(name.clone(), contents.clone());
+        if let Err(error) = self
+            .store
+            .persist_custom_level(name.clone(), contents.clone())
+        {
+            self.toast(error);
+            return;
+        }
+        self.editor = imported_editor;
+        if let Some(game) = &mut self.game {
+            game.rng = self.editor.source_rng().clone();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.native_custom_level_paths.remove(&name);
         self.unreadable_custom_levels.remove(&name);
         self.custom_level_catalog.insert(name.clone(), contents);
-        if let Err(error) = self.store.save() {
-            self.toast(error)
-        } else {
-            self.toast(format!("IMPORTED {name}"))
-        }
+        self.toast(format!("IMPORTED {name}"));
     }
     #[cfg(target_arch = "wasm32")]
     fn import_level_directory(&mut self, files: Vec<(String, String)>) {
@@ -1826,6 +1871,24 @@ impl App {
         match command {
             EditorCommand::None => {}
             EditorCommand::OpenLevel { name } => {
+                #[cfg(not(target_arch = "wasm32"))]
+                let native_key =
+                    crate::editor_io::canonical_level_target_key(&name.to_ascii_lowercase());
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.native_custom_level_paths.contains_key(&native_key) {
+                    match self.custom_level_contents(&native_key) {
+                        Ok(contents) => {
+                            open_editor_level_contents(&mut self.editor, &name, &contents)
+                        }
+                        Err(error) => {
+                            self.editor.message(error.clone());
+                            self.toast(error);
+                        }
+                    }
+                } else {
+                    open_editor_level_name(&mut self.editor, &self.custom_level_catalog, &name);
+                }
+                #[cfg(target_arch = "wasm32")]
                 open_editor_level_name(&mut self.editor, &self.custom_level_catalog, &name);
             }
             EditorCommand::Back => {
@@ -1863,7 +1926,12 @@ impl App {
                     }
                 };
                 #[cfg(not(target_arch = "wasm32"))]
-                if let Err(error) = crate::editor_io::save_native_level(&name, &text) {
+                let native_save = self.native_custom_level_paths.get(&key).map_or_else(
+                    || crate::editor_io::save_native_level(&name, &text),
+                    |path| crate::editor_io::save_native_level_at_path(path, &text),
+                );
+                #[cfg(not(target_arch = "wasm32"))]
+                if let Err(error) = native_save {
                     complete_editor_save(&mut self.editor, &name, Err(error));
                     return;
                 }
@@ -1885,6 +1953,7 @@ impl App {
                 Err(error) => self.editor.message(error),
             },
             EditorCommand::Play(test) => {
+                let tunnel_session = self.game.as_ref().map(tunnel_session_state);
                 self.flush_source_music();
                 self.snapshot_lifetime_stats();
                 self.source_message = None;
@@ -1894,7 +1963,7 @@ impl App {
                     self.store.data.settings.rules,
                     &self.source_music,
                 );
-                hydrate_run(&mut game, &self.store.data);
+                hydrate_run_with_session(&mut game, &self.store.data, tunnel_session);
                 game.rng = self.editor.source_rng().clone();
                 game.load_custom_editor_test(
                     &test.level,
@@ -2058,6 +2127,36 @@ impl App {
                 self.toast(error);
             }
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(key) = self
+            .game
+            .as_ref()
+            .filter(|game| game.flags.contains("custom"))
+            .and_then(|game| {
+                game.flags
+                    .iter()
+                    .find_map(|flag| flag.strip_prefix("custom_level:"))
+                    .or_else(|| {
+                        game.flags
+                            .iter()
+                            .find_map(|flag| flag.strip_prefix("default_next_custom:"))
+                    })
+            })
+            .map(crate::editor_io::canonical_level_target_key)
+        {
+            if let Some(path) = self.native_custom_level_paths.get(&key).cloned() {
+                match crate::editor_io::read_native_level_contents(&path) {
+                    Ok(contents) => {
+                        self.custom_level_catalog.insert(key.clone(), contents);
+                        self.unreadable_custom_levels.remove(&key);
+                    }
+                    Err(_) => {
+                        self.custom_level_catalog.remove(&key);
+                        self.unreadable_custom_levels.insert(key);
+                    }
+                }
+            }
+        }
         let Some(game) = &mut self.game else {
             return;
         };
@@ -2126,14 +2225,10 @@ impl App {
         self.screen(Screen::Playing);
     }
     fn shortcuts(&self) -> Vec<u32> {
+        let unlocks = effective_shortcut_unlocks(&self.store.data.unlocks, self.game.as_ref());
         [5, 9, 13]
             .into_iter()
-            .filter(|level| {
-                self.store
-                    .data
-                    .unlocks
-                    .contains(&format!("shortcut_{level}"))
-            })
+            .filter(|level| unlocks.contains(&format!("shortcut_{level}")))
             .collect()
     }
     fn update(&mut self) {
@@ -2523,12 +2618,7 @@ impl App {
                     .unlocks
                     .retain(|flag| !flag.starts_with("character_"));
             }
-            self.store.data.unlocks.extend(
-                game.flags
-                    .iter()
-                    .filter(|flag| persistent_flag(flag))
-                    .cloned(),
-            );
+            capture_live_persistent_unlocks(game, &mut self.store.data);
             if self.store.data.unlocks != previous
                 || self.store.data.challenge_records != previous_challenges
             {
@@ -3146,6 +3236,7 @@ impl App {
         snapshot["rendererReady"] = serde_json::Value::Bool(self.renderer.is_some());
         snapshot["hostFocused"] = serde_json::Value::Bool(self.focused);
         snapshot["hostOccluded"] = serde_json::Value::Bool(self.occluded);
+        snapshot["renderSequence"] = self.browser_render_sequence.into();
         apply_viewport_snapshot(
             &mut snapshot,
             self.game.as_ref(),
@@ -3975,6 +4066,9 @@ fn hydrate_run(game: &mut Game, data: &crate::storage::SaveData) {
 }
 fn tunnel_progress(game: &Game) -> std::collections::BTreeMap<String, u32> {
     let mut progress = donation_ui::progress(game);
+    // Only tunnel1 and tunnel2 persist source max+1 sentinels. After tunnel2,
+    // Classic stores the stage-three sentinel in tunnel1; Rust models it as a
+    // missing tunnel3_remaining key until the first stage-three encounter.
     for (stage, maximum) in [(1, 100_000), (2, 200_000)] {
         let key = format!("tunnel{stage}_remaining");
         if game.data.get(&key) == Some(&f64::from(maximum + 1)) {
@@ -3982,6 +4076,38 @@ fn tunnel_progress(game: &Game) -> std::collections::BTreeMap<String, u32> {
         }
     }
     progress
+}
+#[derive(Default)]
+struct TunnelSessionState {
+    progress: std::collections::BTreeMap<String, u32>,
+    shortcuts: std::collections::BTreeSet<String>,
+}
+fn tunnel_session_state(game: &Game) -> TunnelSessionState {
+    TunnelSessionState {
+        progress: tunnel_progress(game),
+        shortcuts: game
+            .flags
+            .iter()
+            .filter(|flag| flag.starts_with("shortcut_"))
+            .cloned()
+            .collect(),
+    }
+}
+fn carry_tunnel_session_state(session: TunnelSessionState, next: &mut Game) {
+    for (key, value) in session.progress {
+        next.data.insert(key, f64::from(value));
+    }
+    next.flags.extend(session.shortcuts);
+}
+fn hydrate_run_with_session(
+    game: &mut Game,
+    data: &crate::storage::SaveData,
+    session: Option<TunnelSessionState>,
+) {
+    hydrate_run(game, data);
+    if let Some(session) = session {
+        carry_tunnel_session_state(session, game);
+    }
 }
 fn editor_preview_context(game: &Game) -> spelunky_core::editor::preview::PreviewContext {
     spelunky_core::editor::preview::PreviewContext {
@@ -4006,6 +4132,29 @@ fn editor_palette_progress(
         unlocks.contains("shortcut_9"),
         unlocks.contains("shortcut_13"),
     )
+}
+
+fn effective_shortcut_unlocks(
+    unlocks: &std::collections::BTreeSet<String>,
+    game: Option<&Game>,
+) -> std::collections::BTreeSet<String> {
+    let mut current = unlocks.clone();
+    if let Some(game) = game {
+        current.extend(
+            game.flags
+                .iter()
+                .filter(|flag| flag.starts_with("shortcut_"))
+                .cloned(),
+        );
+    }
+    current
+}
+
+fn editor_palette_progress_for_game(
+    unlocks: &std::collections::BTreeSet<String>,
+    game: Option<&Game>,
+) -> spelunky_core::editor::EditorPaletteProgress {
+    editor_palette_progress(&effective_shortcut_unlocks(unlocks, game))
 }
 
 fn complete_editor_save(
@@ -4054,10 +4203,7 @@ fn open_editor_level_name(
     let key = crate::editor_io::canonical_level_target_key(&name);
     let filename = format!("{name}.lvl");
     if let Some(source) = catalog.get(&key) {
-        if let Err(error) = editor.load(&filename, source) {
-            editor.message(format!("INVALID LEVEL: {error}"));
-            editor.begin_open_level_name(name.to_owned());
-        }
+        open_editor_level_contents(editor, &name, source);
         return;
     }
 
@@ -4070,6 +4216,14 @@ fn open_editor_level_name(
             editor.message(error);
             editor.begin_open_level_name(name.to_owned());
         }
+    }
+}
+
+fn open_editor_level_contents(editor: &mut EditorUi, name: &str, source: &str) {
+    let filename = format!("{}.lvl", name.to_ascii_lowercase());
+    if let Err(error) = editor.load(&filename, source) {
+        editor.message(format!("INVALID LEVEL: {error}"));
+        editor.begin_open_level_name(name.to_ascii_lowercase());
     }
 }
 
@@ -4107,8 +4261,8 @@ fn session_exit_action(is_browser: bool) -> SessionExitAction {
         SessionExitAction::CloseApplication
     }
 }
-fn browser_frame_is_needed(ended: bool) -> bool {
-    !ended
+fn browser_frame_is_needed(ended: bool, focused: bool, occluded: bool) -> bool {
+    !ended && focused && !occluded
 }
 fn finish_title_credits(
     game: &mut Option<Game>,
@@ -4153,6 +4307,10 @@ fn consume_highscores_reset(game: &mut Game, data: &mut crate::storage::SaveData
         ("tunnel1_remaining".into(), 100_001),
         ("tunnel2_remaining".into(), 200_001),
     ]);
+    game.flags.retain(|flag| !flag.starts_with("shortcut_"));
+    game.data.insert("tunnel1_remaining".into(), 100_001.);
+    game.data.insert("tunnel2_remaining".into(), 200_001.);
+    game.data.remove("tunnel3_remaining");
     true
 }
 fn profile_source_highscores(data: &crate::storage::SaveData) -> crate::storage::SourceHighscores {
@@ -4161,6 +4319,24 @@ fn profile_source_highscores(data: &crate::storage::SaveData) -> crate::storage:
         highscores.include(record.score, record.kills, record.rescues);
     }
     highscores
+}
+fn refresh_profile_score_unlocks(data: &mut crate::storage::SaveData) -> bool {
+    let highscores = profile_source_highscores(data);
+    let best_time = data
+        .records
+        .iter()
+        .filter(|record| record.won && record.fastest_eligible)
+        .map(Record::elapsed_seconds)
+        .min()
+        .map(|seconds| seconds as f64);
+    let previous = data.unlocks.clone();
+    data.unlocks.extend(spelunky_core::hub::record_unlocks(
+        highscores.money,
+        best_time,
+        highscores.kills,
+        highscores.saves,
+    ));
+    data.unlocks != previous
 }
 fn record_improvements(
     record: &Record,
@@ -4394,12 +4570,23 @@ fn campaign_record(game: &Game) -> Option<Record> {
     if game.state != RunState::Dead && !won {
         return None;
     }
+    let source_stats = game.death_stats_snapshot;
+    let (score, kills, rescues) = source_stats.map_or_else(
+        || {
+            (
+                game.player.money,
+                game.data.get("kills").copied().unwrap_or(0.).max(0.) as u32,
+                game.data.get("damsels").copied().unwrap_or(0.).max(0.) as u32,
+            )
+        },
+        |snapshot| (snapshot.money, snapshot.kills, snapshot.saves),
+    );
     Some(Record {
         seed: game.seed,
         rng_algorithm: game.rng.algorithm(),
         simulation_version: game.simulation_version(),
         rules: game.rules,
-        score: game.player.money,
+        score,
         level: game
             .ending
             .as_ref()
@@ -4413,8 +4600,8 @@ fn campaign_record(game: &Game) -> Option<Record> {
             .map(|ending| ending.shortcut_used)
             .unwrap_or_else(|| game.flags.contains("used_shortcut")),
         won,
-        kills: game.data.get("kills").copied().unwrap_or(0.).max(0.) as u32,
-        rescues: game.data.get("damsels").copied().unwrap_or(0.).max(0.) as u32,
+        kills,
+        rescues,
     })
 }
 
@@ -4607,9 +4794,19 @@ fn commit_source_highscore_update(game: &mut Game, data: &mut crate::storage::Sa
     }
 
     let previous = profile_source_highscores(data);
-    let money = game.player.money;
-    let kills = game.data.get("kills").copied().unwrap_or(0.).max(0.) as u32;
-    let saves = game.data.get("damsels").copied().unwrap_or(0.).max(0.) as u32;
+    let lethal_stats = (game.state == RunState::Dead)
+        .then_some(game.death_stats_snapshot)
+        .flatten();
+    let (money, kills, saves) = lethal_stats.map_or_else(
+        || {
+            (
+                game.player.money,
+                game.data.get("kills").copied().unwrap_or(0.).max(0.) as u32,
+                game.data.get("damsels").copied().unwrap_or(0.).max(0.) as u32,
+            )
+        },
+        |snapshot| (snapshot.money, snapshot.kills, snapshot.saves),
+    );
     if money > previous.money {
         game.flags.insert("new_money".into());
     }
@@ -4624,10 +4821,20 @@ fn commit_source_highscore_update(game: &mut Game, data: &mut crate::storage::Sa
     data.source_highscores.include(money, kills, saves);
     let mut changed = data.source_highscores != old_highscores;
     changed |= capture_challenge_records(game, &mut data.challenge_records);
+    changed |= refresh_profile_score_unlocks(data);
 
     let old_tunnels = data.tunnel_remaining.clone();
     data.tunnel_remaining.extend(tunnel_progress(game));
     changed |= data.tunnel_remaining != old_tunnels;
+
+    let old_unlocks = data.unlocks.clone();
+    data.unlocks.extend(
+        game.flags
+            .iter()
+            .filter(|flag| flag.starts_with("shortcut_"))
+            .cloned(),
+    );
+    changed |= data.unlocks != old_unlocks;
 
     for (key, value) in [
         ("best_money", previous.money.max(money)),
@@ -4643,6 +4850,16 @@ fn persistent_flag(value: &str) -> bool {
         || value.starts_with("unlock_")
         || value.starts_with("character_")
         || value.starts_with("trophy_")
+}
+fn capture_live_persistent_unlocks(game: &Game, data: &mut crate::storage::SaveData) -> bool {
+    let previous = data.unlocks.clone();
+    data.unlocks.extend(
+        game.flags
+            .iter()
+            .filter(|flag| persistent_flag(flag) && !flag.starts_with("shortcut_"))
+            .cloned(),
+    );
+    data.unlocks != previous
 }
 fn truncate(value: &str, max: usize) -> String {
     value.chars().take(max).collect()
@@ -5061,13 +5278,19 @@ impl ApplicationHandler<UserEvent> for App {
                 self.editor.wheel(vertical);
             }
             #[cfg(not(target_arch = "wasm32"))]
-            WindowEvent::DroppedFile(path) => match std::fs::read_to_string(&path) {
-                Ok(text) if self.screen == Screen::Stats => self.import_classic_stats(&text),
-                Ok(text) => self.import_level(path.to_string_lossy().into_owned(), text),
+            WindowEvent::DroppedFile(path) => match std::fs::read(&path) {
+                Ok(bytes) => {
+                    let text = spelunky_core::level::decode_classic_text_bytes(&bytes).into_owned();
+                    if self.screen == Screen::Stats {
+                        self.import_classic_stats(&text);
+                    } else {
+                        self.import_level(path.to_string_lossy().into_owned(), text);
+                    }
+                }
                 Err(error) => self.toast(format!("IMPORT FAILED: {error}")),
             },
             WindowEvent::RedrawRequested => {
-                if !browser_frame_is_needed(self.browser_ended) {
+                if !browser_frame_is_needed(self.browser_ended, self.focused, self.occluded) {
                     return;
                 }
                 let frame_started = self.now();
@@ -5118,7 +5341,10 @@ impl ApplicationHandler<UserEvent> for App {
                 let scene_ms = Stamp::elapsed_ms(&timer);
                 let quad_count = buffers.quads.len();
                 #[cfg(target_arch = "wasm32")]
-                self.publish_test_snapshot(alpha);
+                {
+                    self.browser_render_sequence = self.browser_render_sequence.wrapping_add(1);
+                    self.publish_test_snapshot(alpha);
+                }
                 if let Some(window) = &self.window {
                     window.pre_present_notify();
                 }
@@ -5173,7 +5399,7 @@ impl ApplicationHandler<UserEvent> for App {
             // Winit's web request_redraw is requestAnimationFrame. Keep one RAF
             // chain instead of polling browser tasks between display frames.
             event_loop.set_control_flow(ControlFlow::Wait);
-            if !browser_frame_is_needed(self.browser_ended) {
+            if !browser_frame_is_needed(self.browser_ended, self.focused, self.occluded) {
                 return;
             }
             if let Some(window) = &self.window {
@@ -5455,10 +5681,18 @@ mod tests {
     fn browser_terminal_notice_parks_future_frames() {
         use super::browser_frame_is_needed;
 
-        assert!(browser_frame_is_needed(false));
+        assert!(browser_frame_is_needed(false, true, false));
         assert!(
-            !browser_frame_is_needed(true),
+            !browser_frame_is_needed(true, true, false),
             "the final end-card frame is rendered before the next scheduling decision"
+        );
+        assert!(
+            !browser_frame_is_needed(false, false, false),
+            "browser rendering stops when the canvas loses focus"
+        );
+        assert!(
+            !browser_frame_is_needed(false, true, true),
+            "browser rendering stops while the page is hidden"
         );
     }
 
@@ -6786,12 +7020,12 @@ mod tests {
             Some(SourceHostControl::CustomLevels)
         );
         assert_eq!(
-            title_menu_source_control(4),
-            Some(SourceHostControl::Editor)
-        );
-        assert_eq!(
             title_menu_source_control(3),
             source_host_control(Screen::Title, None, KeyCode::F3)
+        );
+        assert_eq!(
+            title_menu_source_control(4),
+            Some(SourceHostControl::Editor)
         );
         assert_eq!(
             title_menu_source_control(4),
@@ -8006,6 +8240,63 @@ mod tests {
     }
 
     #[test]
+    fn live_shortcuts_are_available_to_the_editor_before_the_score_save_boundary() {
+        let unlocks = std::collections::BTreeSet::new();
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        game.flags.insert("shortcut_9".into());
+
+        let progress = editor_palette_progress_for_game(&unlocks, Some(&game));
+
+        assert!(progress.shortcut_5);
+        assert!(progress.shortcut_9);
+        assert!(!progress.shortcut_13);
+        assert!(effective_shortcut_unlocks(&unlocks, Some(&game)).contains("shortcut_9"));
+    }
+
+    #[test]
+    fn live_shortcut_unlocks_wait_for_source_highscore_update_to_persist() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        game.flags
+            .extend(["shortcut_5", "unlock_sun", "trophy_money_3"].map(str::to_owned));
+        game.data.insert("tunnel1_remaining".into(), 0.);
+        let mut save = crate::storage::SaveData::default();
+
+        assert!(capture_live_persistent_unlocks(&game, &mut save));
+        assert!(!save.unlocks.contains("shortcut_5"));
+        assert!(save.unlocks.contains("unlock_sun"));
+        assert!(save.unlocks.contains("trophy_money_3"));
+
+        game.flags.insert("source_highscore_update_pending".into());
+        assert!(commit_source_highscore_update(&mut game, &mut save));
+        assert!(save.unlocks.contains("shortcut_5"));
+        assert_eq!(save.tunnel_remaining["tunnel1_remaining"], 0);
+    }
+
+    #[test]
+    fn tunnel_session_state_survives_saved_profile_hydration_on_game_replacement() {
+        let mut previous = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        previous.data.insert("tunnel1_remaining".into(), 0.);
+        previous.data.insert("tunnel2_remaining".into(), 137_000.);
+        previous.data.insert("tunnel3_remaining".into(), 284_000.);
+        previous.flags.insert("shortcut_5".into());
+        let session = tunnel_session_state(&previous);
+
+        let mut save = crate::storage::SaveData::default();
+        save.tunnel_remaining = std::collections::BTreeMap::from([
+            ("tunnel1_remaining".into(), 100_000),
+            ("tunnel2_remaining".into(), 200_000),
+            ("tunnel3_remaining".into(), 300_000),
+        ]);
+        let mut next = Game::shell(8, save.settings.rules);
+        hydrate_run_with_session(&mut next, &save, Some(session));
+
+        assert_eq!(next.data["tunnel1_remaining"], 0.);
+        assert_eq!(next.data["tunnel2_remaining"], 137_000.);
+        assert_eq!(next.data["tunnel3_remaining"], 284_000.);
+        assert!(next.flags.contains("shortcut_5"));
+    }
+
+    #[test]
     fn scores_reset_persists_source_sentinels_and_preserves_the_selected_character_and_lifetime_stats()
      {
         let mut save = crate::storage::SaveData::default();
@@ -8026,10 +8317,20 @@ mod tests {
         hydrate_run(&mut game, &save);
         game.state = RunState::Dead;
         save.records.push(campaign_record(&game).unwrap());
-        game.data.insert("tunnel1_remaining".into(), 100_001.);
-        game.data.insert("tunnel2_remaining".into(), 200_001.);
+        game.data.insert("tunnel1_remaining".into(), 84_000.);
+        game.data.insert("tunnel2_remaining".into(), 173_000.);
+        game.data.insert("tunnel3_remaining".into(), 271_000.);
+        save.tunnel_remaining = std::collections::BTreeMap::from([
+            ("tunnel1_remaining".into(), 84_000),
+            ("tunnel2_remaining".into(), 173_000),
+            ("tunnel3_remaining".into(), 271_000),
+        ]);
+        assert!(game.flags.contains("shortcut_5"));
         assert!(!consume_highscores_reset(&mut game, &mut save));
         assert_eq!(save.records.len(), 1);
+        assert_eq!(game.data["tunnel1_remaining"], 84_000.);
+        assert_eq!(game.data["tunnel2_remaining"], 173_000.);
+        assert_eq!(game.data["tunnel3_remaining"], 271_000.);
         game.flags.insert("highscores_clear_requested".into());
         assert!(consume_highscores_reset(&mut game, &mut save));
         assert!(!consume_highscores_reset(&mut game, &mut save));
@@ -8042,6 +8343,17 @@ mod tests {
         assert_eq!(
             save.unlocks,
             std::collections::BTreeSet::from(["character_tunnelman".into()])
+        );
+        assert!(!game.flags.contains("shortcut_5"));
+        assert_eq!(game.data["tunnel1_remaining"], 100_001.);
+        assert_eq!(game.data["tunnel2_remaining"], 200_001.);
+        assert!(!game.data.contains_key("tunnel3_remaining"));
+        assert_eq!(
+            save.tunnel_remaining,
+            std::collections::BTreeMap::from([
+                ("tunnel1_remaining".into(), 100_001),
+                ("tunnel2_remaining".into(), 200_001),
+            ])
         );
         save.tunnel_remaining.extend(tunnel_progress(&game));
         assert_eq!(save.tunnel_remaining["tunnel1_remaining"], 100_001);
@@ -8168,6 +8480,67 @@ mod tests {
         assert_eq!(reopened.source_highscores.money, 260_000);
         assert_eq!(reopened.challenge_records["mini1"], 38);
         assert_eq!(reopened.tunnel_remaining["tunnel1_remaining"], 64_000);
+    }
+
+    #[test]
+    fn challenge_death_highscore_uses_lethal_step_counters() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        game.load_hub(spelunky_core::hub::HubKind::Moon);
+        game.flags.insert("source_highscore_update_pending".into());
+        game.state = RunState::Dead;
+        game.player.money = 260_000;
+        game.data.insert("kills".into(), 72.0);
+        game.data.insert("damsels".into(), 3.0);
+        game.death_stats_snapshot = Some(spelunky_core::DeathStatsSnapshot {
+            money: 50_000,
+            kills: 12,
+            saves: 1,
+        });
+
+        let mut save = crate::storage::SaveData::default();
+        assert!(commit_source_highscore_update(&mut game, &mut save));
+        assert_eq!(
+            save.source_highscores,
+            crate::storage::SourceHighscores {
+                money: 50_000,
+                kills: 12,
+                saves: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn challenge_score_thresholds_project_saved_trophies_and_doors() {
+        let mut save = crate::storage::SaveData::default();
+        save.source_highscores.kills = 119;
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        game.flags.insert("source_highscore_update_pending".into());
+        game.state = RunState::Dead;
+        game.death_stats_snapshot = Some(spelunky_core::DeathStatsSnapshot {
+            money: 0,
+            kills: 120,
+            saves: 0,
+        });
+
+        assert!(commit_source_highscore_update(&mut game, &mut save));
+        assert_eq!(save.source_highscores.kills, 120);
+        assert!(save.unlocks.contains("trophy_kills_3"));
+        assert!(save.unlocks.contains("unlock_stars"));
+
+        let scores = spelunky_core::hub::world(spelunky_core::hub::HubKind::Scores, &save.unlocks);
+        assert!(scores.entities.iter().any(|entity| {
+            entity.object == "oTrophy"
+                && entity.pos == spelunky_core::Vec2::new(32.0, 96.0)
+                && entity.sprite == "sGoldTrophy"
+        }));
+        assert!(scores.entities.iter().any(|entity| {
+            entity.object == "oXStars" && entity.pos == spelunky_core::Vec2::new(32.0, 112.0)
+        }));
+
+        let mut old_save = crate::storage::SaveData::default();
+        old_save.source_highscores.kills = 120;
+        assert!(refresh_profile_score_unlocks(&mut old_save));
+        assert!(old_save.unlocks.contains("unlock_stars"));
     }
 
     #[test]
@@ -10012,6 +10385,25 @@ mod tests {
             campaign_record(&game).is_none(),
             "A win without completed credits cannot be persisted"
         );
+    }
+
+    #[test]
+    fn death_record_uses_the_source_lethal_step_counter_snapshot() {
+        let mut game = Game::shell(7, spelunky_core::RulesPreset::Classic);
+        game.state = RunState::Dead;
+        game.player.money = 150;
+        game.data.insert("kills".into(), 5.0);
+        game.data.insert("damsels".into(), 7.0);
+        game.death_stats_snapshot = Some(spelunky_core::DeathStatsSnapshot {
+            money: 50,
+            kills: 2,
+            saves: 3,
+        });
+
+        let record = campaign_record(&game).unwrap();
+        assert_eq!(record.score, 50);
+        assert_eq!(record.kills, 2);
+        assert_eq!(record.rescues, 3);
     }
 
     #[test]

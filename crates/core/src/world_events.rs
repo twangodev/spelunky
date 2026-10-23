@@ -73,6 +73,15 @@ pub(crate) fn fluid_tick(game: &mut Game) {
         let fluids: Vec<_> = crate::dispatcher::descendant_instances(game, "oWater")
             .into_iter()
             .filter(|i| crate::dispatcher::is_active(game, *i))
+            // instance_destroy removes a cell from later source instance_place
+            // queries immediately, even though this adapter retires storage at
+            // the end of the step.
+            .filter(|instance| match instance {
+                crate::dispatcher::Instance::Entity(id) => {
+                    game.world.entity(*id).is_some_and(|entity| entity.alive)
+                }
+                _ => true,
+            })
             .map(|i| {
                 let id = match i {
                     crate::dispatcher::Instance::Entity(id) => Some(id),
@@ -2077,10 +2086,15 @@ fn flame(game: &mut Game, e: &mut Entity) {
     if e.vel.y > 6.0 {
         destroy_detritus(game, e);
     }
-    if game
-        .world
-        .collides_except(Rect::new(e.pos.x - 4.0, e.pos.y + 4.0, 8.0, 1.0), e.id)
-        && e.value("life") > 20.0
+    // `isCollisionBottom(1)` calls collision_line(round(lb), round(bb),
+    // round(rb - 1), round(bb), oSolid, 1, 1). Query the active oSolid family
+    // directly; engine `solid` flags do not control an explicit family query.
+    let y = (e.pos.y + 4.0).round();
+    if game.world.solid_line_except(
+        Vec2::new((e.pos.x - 4.0).round(), y),
+        Vec2::new((e.pos.x + 3.0).round(), y),
+        e.id,
+    ) && e.value("life") > 20.0
     {
         e.data.insert("life".into(), 20.0);
     }
@@ -3317,6 +3331,35 @@ mod tests {
         assert!(g.world.entity(isolated).is_some());
         assert!(!g.world.fluid_dirty);
     }
+
+    #[test]
+    fn fluid_neighbor_query_ignores_a_cell_drained_earlier_in_the_same_pass() {
+        let mut g = room();
+        g.flags.insert("custom".into());
+        // The right cell remains supported. Its exposed top is blocked, and
+        // its left point is covered by the solid beneath the drained cell.
+        for (x, y) in [(5, 5), (5, 6), (6, 4), (6, 6), (7, 5)] {
+            g.world.set_tile(x, y, "oBrick");
+        }
+        let drained = g.world.spawn("oWaterSwim", Vec2::new(80.0, 80.0));
+        g.world.entity_mut(drained).unwrap().set_sprite("sWaterTop");
+        let survivor = g.world.spawn("oWaterSwim", Vec2::new(96.0, 80.0));
+        g.world.fluid_dirty = true;
+        crate::dispatcher::register_instances(&mut g);
+
+        fluid_tick(&mut g);
+
+        assert!(
+            g.world
+                .entities
+                .iter()
+                .any(|entity| entity.id == drained && !entity.alive)
+        );
+        let survivor = g.world.entity(survivor).unwrap();
+        assert!(survivor.alive);
+        assert_eq!(survivor.sprite, "sWater");
+    }
+
     #[test]
     fn magma_inherits_detritus_lifetime_and_instance_cap_without_replacing_launch() {
         let mut g = room();
@@ -3656,6 +3699,51 @@ mod tests {
             2
         );
     }
+
+    #[test]
+    fn flame_bottom_probe_uses_the_active_solid_family_even_when_entity_is_not_solid() {
+        let mut g = room();
+        let id = g.world.spawn("oFlame", Vec2::new(100.0, 100.0));
+        let trap = g.world.spawn("oArrowTrapLeft", Vec2::new(100.0, 104.0));
+        // GameMaker's object has its own `solid` property false; the source
+        // collision query still selects it through the oSolid family.
+        g.world.entity_mut(trap).unwrap().solid = false;
+
+        let mut particle = g.world.entity(id).unwrap().clone();
+        particle.data.insert("world_effect_initialized".into(), 1.0);
+        particle.data.insert("life".into(), 60.0);
+        particle.data.insert("gravity".into(), 0.0);
+        particle.vel = Vec2::new(0.0, 0.0);
+        flame(&mut g, &mut particle);
+
+        assert_eq!(particle.value("life"), 20.0);
+    }
+
+    #[test]
+    fn flame_bottom_probe_respects_rotating_boulder_mask_pixels() {
+        // Frame zero of sBoulderRotateR has an empty top-left corner. The
+        // source's precise collision_line must leave that Flame alive, while
+        // an eight-pixel line over the opaque span clamps its life to 20.
+        for (flame_x, expected_life) in [(68.0, 59.0), (79.0, 20.0)] {
+            let mut g = room();
+            let id = g.world.spawn("oFlame", Vec2::new(flame_x, 60.0));
+            let boulder = g.world.spawn("oBoulder", Vec2::new(80.0, 80.0));
+            g.world
+                .entity_mut(boulder)
+                .unwrap()
+                .set_sprite("sBoulderRotateR");
+
+            let mut particle = g.world.entity(id).unwrap().clone();
+            particle.data.insert("world_effect_initialized".into(), 1.0);
+            particle.data.insert("life".into(), 60.0);
+            particle.data.insert("gravity".into(), 0.0);
+            particle.vel = Vec2::new(0.0, 0.0);
+            flame(&mut g, &mut particle);
+
+            assert_eq!(particle.value("life"), expected_life, "flame x={flame_x}");
+        }
+    }
+
     #[test]
     fn detritus_move_to_ignores_head_overlap_in_horizontal_probe() {
         let mut g = room();

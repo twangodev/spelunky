@@ -76,6 +76,8 @@ async function runWindowFocusRegression({ page, result }) {
   const paused = await snapshot(page);
   assert.equal(paused.hostFocused, false);
   assert.equal(paused.tick, blurred.tick, 'A browser window blur must freeze the source simulation');
+  assert.equal(paused.renderSequence, blurred.renderSequence,
+    'A browser window blur must stop GPU presentation as well as simulation');
 
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await page.waitForFunction(() => window.__spelunkyTest?.hostFocused === true, null, { timeout: 5000 });
@@ -91,10 +93,14 @@ async function runWindowFocusRegression({ page, result }) {
   const stillPaused = await snapshot(page);
   assert.equal(stillPaused.hostFocused, false);
   assert.equal(stillPaused.tick, linkFocused.tick, 'Window focus must not resume while a link owns DOM focus');
+  assert.equal(stillPaused.renderSequence, linkFocused.renderSequence,
+    'Moving DOM focus to a link must stop browser rendering');
 
   await page.locator('#spelunky-canvas').focus();
   await page.waitForFunction(() => window.__spelunkyTest?.hostFocused === true, null, { timeout: 5000 });
   await page.waitForFunction(tick => window.__spelunkyTest?.tick > tick, linkFocused.tick, { timeout: 5000 });
+  await page.waitForFunction(sequence => window.__spelunkyTest?.renderSequence > sequence,
+    stillPaused.renderSequence, { timeout: 5000 });
   result.checks.push('browser window blur freezes simulation and focus resumes only with the canvas active');
 }
 

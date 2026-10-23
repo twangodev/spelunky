@@ -40,6 +40,12 @@ fn campaign_level_type(level: u32) -> u32 {
     }
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static CAMPAIGN_ROOM_CREATE_HEALTH: std::cell::Cell<Option<(u32, f64)>> =
+        const { std::cell::Cell::new(None) };
+}
+
 impl Game {
     pub fn new(seed: u32, rules: RulesPreset) -> Self {
         Self::generate_first_room(Self::shell(seed, rules))
@@ -128,6 +134,14 @@ impl Game {
     }
 
     fn prepare_tutorial(mut game: Self) -> Self {
+        // Both direct constructors and the title/hub route enter rTutorial
+        // with the same globals established by Classic's tutorial transition.
+        game.data.insert("currLevel".into(), 0.0);
+        game.data.insert("levelType".into(), 0.0);
+        // oPlayer1's xSTART/xTUTORIAL animation-end branches set these before
+        // room_goto(rTutorial); keep direct core constructors on that path too.
+        game.player.bombs = 0.0;
+        game.player.ropes = 2.0;
         game.world = game.generate_tutorial_world();
         game.flags.insert("tutorial".into());
         game.reset_position();
@@ -145,6 +159,7 @@ impl Game {
                     has_city_of_gold: self.flags.contains("cityOfGold")
                         || self.flags.contains("city_of_gold"),
                 },
+                !self.flags.contains("low_graphics"),
             )
         } else {
             generation::tutorial()
@@ -489,6 +504,9 @@ impl Game {
     /// scrClearGlobals changes run globals without replacing the current room,
     /// actor callbacks, selected character, profile, or random stream.
     pub(crate) fn clear_run_globals(&mut self) {
+        // The lethal-step counters have been consumed by the score boundary
+        // before Classic clears run globals on Game Over or a hub return.
+        self.death_stats_snapshot = None;
         let tunnel = characters::selected(self) == characters::Character::TunnelMan;
         self.player.health = if tunnel { 2.0 } else { 4.0 };
         self.player.bombs = if tunnel { 0.0 } else { 4.0 };
@@ -628,12 +646,16 @@ impl Game {
 
     /// Start a destination using the existing source RNG and persistent profile.
     pub fn start_from_hub(&mut self, tutorial: bool, level: u32) {
+        // Reusing the Game for a fresh adventure must not let the previous
+        // run's lethal-step counters override a later win record.
+        self.death_stats_snapshot = None;
         let character = characters::selected(self);
         self.flags.retain(|f| {
             f.starts_with("unlock_")
                 || f.starts_with("character_")
                 || f.starts_with("shortcut")
                 || f == "first_time"
+                || f == "low_graphics"
         });
         self.data
             .retain(|key, _| key.starts_with("tunnel") || key.starts_with("shortcut"));
@@ -733,6 +755,12 @@ impl Game {
                 || self.flags.contains("madeMarketEntrance"),
             probabilities,
         };
+        #[cfg(test)]
+        CAMPAIGN_ROOM_CREATE_HEALTH.with(|observed| {
+            if observed.get().is_some() {
+                observed.set(Some((level, self.player.health)));
+            }
+        });
         if !historical {
             generation::reset_dark_history(&mut self.flags, level);
         }
@@ -795,6 +823,7 @@ impl Game {
     }
 
     pub fn next_level(&mut self) {
+        crate::progression::consume_tunnel_first_encounter(self);
         let carry = self.take_transition_carry();
         let kisses = self.take_pending_kisses();
         let next = self
@@ -830,6 +859,9 @@ impl Game {
         // scrLevelGen, before it selects the next room. Clear their previous
         // room values before passing flags into generation so they cannot
         // force the same special layout to repeat.
+        // oDamselKiss Room End runs while leaving the transition room, before
+        // any destination-room Create callback.
+        self.apply_kisses(kisses);
         self.generate_campaign_room(next);
         for e in &self.world.entities {
             match e.object.as_str() {
@@ -852,7 +884,6 @@ impl Game {
             }
         }
         self.reset_position();
-        self.apply_kisses(kisses);
         self.restore_transition_carry(carry);
         traps::initialize_level(self);
         if !self.flags.contains("wanted") && !self.flags.contains("murderer") {
@@ -990,6 +1021,32 @@ impl Game {
 
     pub fn source_elapsed_seconds(&self) -> u64 {
         self.source_elapsed_ms() / 1000
+    }
+}
+
+#[cfg(test)]
+mod damsel_room_end_order_tests {
+    use super::*;
+
+    #[test]
+    fn room_end_kiss_is_applied_before_campaign_room_create() {
+        let mut game = Game::shell(11, RulesPreset::Classic);
+        game.player.health = 2.0;
+        game.data.insert("pending_damsel_kisses".into(), 2.0);
+        game.data.insert("next_level".into(), 2.0);
+        CAMPAIGN_ROOM_CREATE_HEALTH.with(|observed| {
+            observed.set(Some((0, f64::NAN)));
+        });
+
+        game.next_level();
+
+        let health_seen_by_create = CAMPAIGN_ROOM_CREATE_HEALTH.with(|observed| {
+            let value = observed.get();
+            observed.set(None);
+            value
+        });
+        assert_eq!(health_seen_by_create, Some((2, 3.0)));
+        assert_eq!(game.player.health, 3.0);
     }
 }
 
@@ -1325,10 +1382,23 @@ mod tests {
     }
 
     #[test]
+    fn direct_tutorial_constructor_enters_classics_zero_level_context() {
+        let game = Game::tutorial(17, RulesPreset::Classic);
+
+        assert_eq!(game.world.name, "Tutorial Cave");
+        assert_eq!(game.world.level, 0);
+        assert_eq!(game.data["currLevel"], 0.0);
+        assert_eq!(game.data["levelType"], 0.0);
+        assert_eq!(game.player.bombs, 0.0);
+        assert_eq!(game.player.ropes, 2.0);
+    }
+
+    #[test]
     fn tutorial_start_publishes_zero_level_globals_after_clearing_run_data() {
         let mut game = Game::shell(17, RulesPreset::Classic);
         game.data.insert("currLevel".into(), 13.0);
         game.data.insert("levelType".into(), 3.0);
+        game.flags.insert("low_graphics".into());
         game.start_from_hub(true, 1);
 
         assert_eq!(game.world.name, "Tutorial Cave");
@@ -1336,6 +1406,32 @@ mod tests {
         assert_eq!(game.world.level, 0);
         assert_eq!(game.data["currLevel"], 0.0);
         assert_eq!(game.data["levelType"], 0.0);
+        assert!(game.flags.contains("low_graphics"));
+        assert!(
+            !game
+                .world
+                .entities
+                .iter()
+                .any(|e| { e.object == "oGenerationDecoration" && e.value("decoration") != 0.0 })
+        );
+    }
+
+    #[test]
+    fn run_resets_discard_the_previous_lethal_stats_snapshot() {
+        let mut game = Game::shell(17, RulesPreset::Classic);
+        let previous = crate::DeathStatsSnapshot {
+            money: 50,
+            kills: 2,
+            saves: 3,
+        };
+        game.death_stats_snapshot = Some(previous);
+
+        game.clear_run_globals();
+        assert_eq!(game.death_stats_snapshot, None);
+
+        game.death_stats_snapshot = Some(previous);
+        game.start_from_hub(false, 1);
+        assert_eq!(game.death_stats_snapshot, None);
     }
 
     fn flat_game() -> Game {
@@ -1373,6 +1469,49 @@ mod tests {
             "following the camera must not replace the pre-Animation actor"
         );
     }
+
+    #[test]
+    fn held_camera_look_survives_follow_update_and_restarts_after_release() {
+        let mut game = flat_game();
+        for x in 0..game.world.width {
+            game.world.set_tile(x, 13, "oBlock");
+        }
+        game.player.pos = Vec2::new(40.0, 200.0);
+        game.player.previous_pos = game.player.pos;
+        game.player.vel = Vec2::default();
+        game.player.state = PlayerState::Standing;
+        game.player.grounded = true;
+        game.camera.y = 100.0;
+        game.previous_camera = game.camera;
+
+        let up = InputFrame {
+            up: true,
+            ..Default::default()
+        };
+        for _ in 0..31 {
+            game.step(&up);
+        }
+        assert_eq!(game.camera.y, 100.0, "source waits through 31 held ticks");
+        game.step(&up);
+        assert_eq!(
+            game.camera.y, 96.0,
+            "the 32nd held tick moves the camera and camera follow keeps it"
+        );
+
+        game.step(&InputFrame::default());
+        assert_eq!(game.player.data.get("view_count"), None);
+        let down = InputFrame {
+            down: true,
+            ..Default::default()
+        };
+        for _ in 0..31 {
+            game.step(&down);
+        }
+        assert_eq!(game.camera.y, 96.0);
+        game.step(&down);
+        assert_eq!(game.camera.y, 100.0);
+    }
+
     #[test]
     fn gem_collection_delay_advances_in_real_simulation() {
         let mut game = flat_game();
@@ -1392,6 +1531,34 @@ mod tests {
         assert!(game.world.entity(id).is_none());
         assert!(game.data.get("collect").copied().unwrap_or(0.0) > 0.0 || game.player.money > 0);
     }
+
+    #[test]
+    fn lethal_step_snapshots_campaign_stats_before_posthumous_collection() {
+        let mut game = flat_game();
+        game.player.health = 0.0;
+        game.player.money = 50;
+        game.data.insert("collect".into(), 150.0);
+        game.data.insert("collectCounter".into(), 0.0);
+        game.data.insert("kills".into(), 2.0);
+        game.data.insert("damsels".into(), 3.0);
+
+        game.step(&InputFrame::default());
+
+        assert_eq!(game.state, RunState::Dead);
+        assert_eq!(
+            game.player.money, 150,
+            "Classic still pays the collection later in this Step"
+        );
+        assert_eq!(
+            game.death_stats_snapshot,
+            Some(crate::DeathStatsSnapshot {
+                money: 50,
+                kills: 2,
+                saves: 3,
+            })
+        );
+    }
+
     #[test]
     fn abyss_death_and_ankh_revival_use_same_integrated_tick() {
         let mut game = flat_game();

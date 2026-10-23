@@ -1534,6 +1534,10 @@ pub struct Game {
     pub generation_revision: GenerationRevision,
     pub events: Vec<GameEvent>,
     pub state: RunState,
+    /// Classic snapshots campaign counters inside the lethal player Step,
+    /// before later collection/deposit logic runs in that same Step.
+    #[serde(skip)]
+    pub death_stats_snapshot: Option<DeathStatsSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ending: Option<crate::ending::EndingState>,
     #[serde(default, skip_serializing_if = "ViewTarget::is_player")]
@@ -1556,6 +1560,14 @@ pub struct Game {
     #[serde(default)]
     pub game_over: crate::progression::GameOverState,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeathStatsSnapshot {
+    pub money: u32,
+    pub kills: u32,
+    pub saves: u32,
+}
+
 impl Game {
     pub fn set_simulation_view_extent(
         &mut self,
@@ -1715,6 +1727,7 @@ impl Game {
             generation_revision,
             events: Vec::new(),
             state: RunState::Playing,
+            death_stats_snapshot: None,
             ending: None,
             opening: None,
             game_over: Default::default(),

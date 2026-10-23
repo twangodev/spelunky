@@ -1007,11 +1007,11 @@ pub(crate) fn generate_campaign_result_for_route(
             // generation revision so any generated children use the same
             // source Create projection as ordinary campaign rooms.
             world.source_create_projection = true;
+            if has(flags, "tutorial") {
+                return initialize_source_tutorial(world, rng, &selected, context, state);
+            }
             for entity in &mut world.entities {
                 crate::world_events::initialize_source_generated_create(entity);
-            }
-            if has(flags, "tutorial") {
-                special::create_tutorial_source_terrain(&mut world, rng, context);
             }
             initialize_generated_item_depths(&mut world, context.has_spectacles);
             initialize_generated_source_exit_creates(&mut world);
@@ -1354,6 +1354,83 @@ pub(crate) fn generate_campaign_result_for_route(
     }
 }
 
+/// Finish the same `scrInitLevel` phases that `rTutorial` reaches in Classic.
+/// It creates its authored room first, then the controller boundaries, path
+/// and global rolls, SetupWalls(528), optional detail tiles, and cleanup. It
+/// deliberately skips generated-room population just as `scrEntityGen` does.
+fn initialize_source_tutorial(
+    mut world: World,
+    rng: &mut Rng,
+    flags: &BTreeSet<String>,
+    context: GenerationContext,
+    state: &GenerationState,
+) -> GeneratedLevel {
+    for entity in &mut world.entities {
+        crate::world_events::initialize_source_generated_create(entity);
+    }
+    special::create_tutorial_source_terrain(&mut world, rng, context);
+    source_tutorial_boundaries(&mut world, rng);
+
+    let mut selected = flags.clone();
+    let _path = room_path_with_probabilities(
+        rng,
+        Area::Mines,
+        0,
+        &mut selected,
+        true,
+        state.probabilities,
+    );
+    // scrLevelGen evaluates rand(1,currLevel) before its currLevel > 1 guard;
+    // tutorial currLevel is zero, so this is a source zero-width draw only.
+    let _ = rng
+        .source_rand(1, 0)
+        .expect("tutorial shop predicate uses the canonical zero-width source draw");
+
+    if select_cemetery_with_probability(
+        rng,
+        Area::Mines,
+        has(&selected, "cemetery"),
+        true,
+        state.probabilities.cemetery,
+    ) {
+        selected.insert("cemetery".into());
+    }
+    let (dark, dark_roll_selected) = select_dark_level_with_probability(
+        rng,
+        0,
+        Area::Mines,
+        &selected,
+        state.probabilities.dark_level,
+    );
+    debug_assert!(
+        !dark,
+        "the source tutorial suppresses dark levels at level 0"
+    );
+    population::initialize_source_schedules(rng, 0, &selected);
+
+    let graphics_high = !has(&selected, "low_graphics");
+    terrain::setup_generated_with_revision(
+        &mut world,
+        rng,
+        graphics_high,
+        state.revision,
+        has(&selected, "cemetery"),
+    );
+    if graphics_high {
+        background_extras(&mut world, rng, true);
+    }
+    init_cleanup::cleanup(&mut world, state.revision);
+    terrain::finalize_generated(&mut world, state.revision);
+    initialize_generated_item_depths(&mut world, context.has_spectacles);
+    initialize_generated_source_exit_creates(&mut world);
+    world.fluid_dirty = false;
+    GeneratedLevel {
+        world,
+        dark_roll_selected,
+        cemetery_selected: has(&selected, "cemetery"),
+    }
+}
+
 /// Generated worlds run local enemy/trap Creates as their producers execute,
 /// but are assembled outside `Game::spawn`, so inherited item Create depth
 /// must be projected from the same room context before the first Draw.
@@ -1556,6 +1633,19 @@ fn source_boundaries(world: &mut World, rng: &mut Rng, lake: bool, city: bool) {
     }
 }
 
+/// `rTutorial` already contains authored terrain under most of its controller
+/// boundary positions. Classic creates a second invincible object there, so
+/// retain those room instances and add the boundary as a separate entity.
+fn source_tutorial_boundaries(world: &mut World, rng: &mut Rng) {
+    for i in 0..=42 {
+        for j in 0..=33 {
+            if i == 0 || i == 41 || j == 0 || j >= 33 {
+                terrain::create_source_boundary_instance(world, rng, i, j, "oBrick", false, true);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "generation/source_boundary_tests.rs"]
 mod source_boundary_tests;
@@ -1577,12 +1667,19 @@ fn boundary_tile(world: &mut World, x: usize, y: usize, object: &str) {
 }
 
 pub fn tutorial() -> World {
-    tutorial_with_context(&mut Rng::new(0), GenerationContext::default())
+    tutorial_with_context(&mut Rng::new(0), GenerationContext::default(), true)
 }
 
-pub(crate) fn tutorial_with_context(rng: &mut Rng, context: GenerationContext) -> World {
+pub(crate) fn tutorial_with_context(
+    rng: &mut Rng,
+    context: GenerationContext,
+    graphics_high: bool,
+) -> World {
     let mut flags = BTreeSet::new();
     flags.insert("tutorial".into());
+    if !graphics_high {
+        flags.insert("low_graphics".into());
+    }
     generate_with_context(rng, 0, &flags, context)
 }
 

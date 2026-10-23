@@ -10,6 +10,7 @@ edition = "2024"
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+encoding_rs = "0.8"
 spelunky-core = { path = "crates/core" }
 
 [profile.release]

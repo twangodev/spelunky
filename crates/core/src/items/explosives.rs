@@ -1953,8 +1953,10 @@ fn apply_explosion(game: &mut Game, explosion: &Entity) {
                 // Collision callbacks run on every overlapping frame. In
                 // particular an overlapping blast resets this short fuse again.
                 entity.sprite = "sBombArmed".into();
+                entity.set_image_speed(1.0);
                 entity.data.insert("attached_id".into(), 0.0);
-                entity.timer = 4 + game.rng.range(5);
+                entity.alarms[1] = 4 + game.rng.range(5) as i32;
+                entity.timer = entity.alarms[1] as u32;
                 if entity.pos.y < explosion.pos.y {
                     entity.vel.y = -(2.0 + f64::from(game.rng.range(3)));
                 }
@@ -3564,13 +3566,23 @@ mod tests {
     #[test]
     fn chain_reaction_does_not_arm_an_unarmed_bomb() {
         let mut g = game();
-        let bomb = g.world.spawn("oBomb", Vec2::new(88.0, 88.0));
-        init_entity(g.world.entity_mut(bomb).unwrap());
+        let bomb_id = g.world.spawn("oBomb", Vec2::new(88.0, 88.0));
+        init_entity(g.world.entity_mut(bomb_id).unwrap());
         explode(&mut g, Vec2::new(88.0, 88.0));
-        let bomb = g.world.entity(bomb).unwrap();
+        let bomb = g.world.entity(bomb_id).unwrap();
         assert_eq!(bomb.value("armed"), 0.0);
         assert_eq!(bomb.sprite, "sBombArmed");
-        assert!((4..=8).contains(&bomb.timer));
+        assert_eq!(bomb.image_speed(), 1.0);
+        assert!((4..=8).contains(&bomb.alarms[1]));
+        assert_eq!(bomb.timer, bomb.alarms[1] as u32);
+
+        for _ in 0..40 {
+            g.step(&InputFrame::default());
+        }
+        assert!(
+            g.world.entity(bomb_id).is_none_or(|bomb| !bomb.alive),
+            "the source Alarm 1 must detonate an unarmed bomb hit through the idle adapter"
+        );
     }
 
     #[test]

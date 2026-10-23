@@ -1178,15 +1178,21 @@ fn boulder(game: &mut Game, entity: &mut Entity) {
         CollisionPrecision::BoundingBox,
         None,
     ) {
-        let left = collides_except(
-            game,
-            Rect::new(entity.pos.x - 16.0, entity.pos.y - 16.0, 9.0, 33.0),
-            entity.id,
+        // Classic uses collision_rectangle(..., oSolid, false, true), which
+        // selects active family members regardless of their engine solid flag.
+        let left = game.world.rectangle_family_except(
+            Vec2::new(entity.pos.x - 16.0, entity.pos.y - 16.0),
+            Vec2::new(entity.pos.x - 8.0, entity.pos.y + 16.0),
+            "oSolid",
+            Some(entity.id),
+            CollisionPrecision::BoundingBox,
         );
-        let right = collides_except(
-            game,
-            Rect::new(entity.pos.x + 8.0, entity.pos.y - 16.0, 9.0, 33.0),
-            entity.id,
+        let right = game.world.rectangle_family_except(
+            Vec2::new(entity.pos.x + 8.0, entity.pos.y - 16.0),
+            Vec2::new(entity.pos.x + 16.0, entity.pos.y + 16.0),
+            "oSolid",
+            Some(entity.id),
+            CollisionPrecision::BoundingBox,
         );
         if left && !right {
             entity.pos.x += 1.0;
@@ -2079,6 +2085,19 @@ mod tests {
             assert_eq!(game.world.entity(id).unwrap().pos.x, expected);
             assert_eq!(game.world.entity(id).unwrap().vel.x, expected_velocity);
         }
+    }
+
+    #[test]
+    fn boulder_side_correction_queries_o_solid_family_independent_of_runtime_flag() {
+        let mut game = Game::shell(1, RulesPreset::Classic);
+        let id = game.world.spawn("oBoulder", Vec2::new(100.0, 100.0));
+        let trap = game.world.spawn("oArrowTrapLeft", Vec2::new(88.0, 100.0));
+        game.world.entity_mut(trap).unwrap().solid = false;
+
+        let mut rock = game.world.entity(id).unwrap().clone();
+        boulder(&mut game, &mut rock);
+
+        assert_eq!(rock.pos.x, 101.0);
     }
 
     #[test]

@@ -681,7 +681,13 @@ fn open_chest(game: &mut Game, id: u64, pos: Vec2) {
     let chest = game.world.entity_mut(id).unwrap();
     chest.set_sprite("sChestOpen");
     chest.state = 1;
-    if game.rng.range(12) == 0 && game.world.level > 0 {
+    let trap_roll = game.rng.range(12) == 0;
+    let current_level = game
+        .data
+        .get("currLevel")
+        .copied()
+        .unwrap_or(f64::from(game.world.level));
+    if trap_roll && current_level > 0.0 {
         let vx = game.rng.range(4) as f64 - game.rng.range(4) as f64;
         let bomb = spawn(game, "oBomb", pos, Vec2::new(vx, -2.));
         let e = game.world.entity_mut(bomb).unwrap();
@@ -1064,6 +1070,46 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn chest_trap_uses_source_current_level_even_when_world_level_differs() {
+        let seed = (0..1000)
+            .find(|seed| crate::model::Rng::new(*seed).range(12) == 0)
+            .unwrap();
+        let mut g = Game::shell(seed, RulesPreset::Classic);
+        assert_eq!(g.world.level, 1);
+        g.data.insert("currLevel".into(), 0.0);
+        let pos = g.player.pos;
+        let chest = g.spawn("oChest", pos);
+
+        assert!(interact(
+            &mut g,
+            &InputFrame {
+                up: true,
+                attack_pressed: true,
+                ..Default::default()
+            }
+        ));
+        assert_eq!(g.world.entity(chest).unwrap().sprite, "sChestOpen");
+        assert!(
+            !g.world
+                .entities
+                .iter()
+                .any(|entity| entity.alive && entity.object == "oBomb")
+        );
+        assert!(g.world.entities.iter().any(|entity| {
+            entity.alive
+                && matches!(
+                    entity.object.as_str(),
+                    "oEmerald"
+                        | "oSapphire"
+                        | "oRuby"
+                        | "oEmeraldBig"
+                        | "oSapphireBig"
+                        | "oRubyBig"
+                )
+        }));
     }
 
     #[test]

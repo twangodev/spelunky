@@ -98,12 +98,14 @@ impl Field {
         }
     }
 }
+#[derive(Clone)]
 struct Entry {
     field: Field,
     value: String,
     replace: bool,
 }
 
+#[derive(Clone)]
 pub struct EditorUi {
     state: EditorState,
     palette_progress: EditorPaletteProgress,
@@ -375,11 +377,8 @@ impl EditorUi {
                             entry.replace = false;
                         }
                         for ch in accepted {
-                            let max_chars = match entry.field {
-                                Field::Sign(_) | Field::Link(_) => 38,
-                                _ => 1024,
-                            };
-                            if entry.value.chars().count() < max_chars {
+                            let bounded = matches!(entry.field, Field::Sign(_) | Field::Link(_));
+                            if !bounded || entry.value.chars().count() < 38 {
                                 entry.value.push(ch);
                             }
                         }
@@ -948,12 +947,26 @@ impl EditorUi {
         }
     }
 
+    fn source_display_name(&self) -> String {
+        if let Some(entry) = self
+            .entry
+            .as_ref()
+            .filter(|entry| matches!(entry.field, Field::OpenName))
+        {
+            return entry.value.to_ascii_uppercase();
+        }
+        self.name
+            .strip_suffix(".lvl")
+            .unwrap_or(&self.name)
+            .to_ascii_uppercase()
+    }
+
     pub fn draw(&self, atlas: &Atlas, quads: &mut Vec<DrawQuad>) {
         rect(quads, [0.0, 0.0, 320.0, 240.0], [0.025, 0.025, 0.035, 1.0]);
         text(
             quads,
             atlas,
-            &format!("EDITOR: {}", self.name),
+            &format!("EDITOR: {}", self.source_display_name()),
             3.0,
             2.0,
             0.75,
@@ -1371,6 +1384,37 @@ mod tests {
     }
 
     #[test]
+    fn editor_header_matches_classic_name_without_filename_extension() {
+        let mut ui = EditorUi::new();
+        ui.begin_open_level_name(String::new());
+        assert_eq!(ui.source_display_name(), "");
+
+        ui.load("mine.lvl", &Level::default().to_text()).unwrap();
+        assert_eq!(ui.level_name(), "mine.lvl");
+        assert_eq!(ui.source_display_name(), "MINE");
+    }
+
+    #[test]
+    fn preparing_an_import_on_a_clone_keeps_the_active_editor_unchanged() {
+        let mut active = EditorUi::new();
+        let mut existing = Level::default();
+        existing.author = "ACTIVE DRAFT".into();
+        active.load("active.lvl", &existing.to_text()).unwrap();
+
+        let mut candidate = active.clone();
+        let mut imported = Level::default();
+        imported.author = "IMPORTED LEVEL".into();
+        candidate
+            .load_catalog_key("imported", &imported.to_text())
+            .unwrap();
+
+        assert_eq!(active.level_name(), "active.lvl");
+        assert_eq!(active.state.level.author, "ACTIVE DRAFT");
+        assert_eq!(candidate.level_name(), "imported.lvl");
+        assert_eq!(candidate.state.level.author, "IMPORTED LEVEL");
+    }
+
+    #[test]
     fn simultaneous_mouse_buttons_paint_before_right_only_erase() {
         let mut ui = editor_with_block_selected();
         ui.pointer(4.0, 48.0, true, true);
@@ -1744,6 +1788,19 @@ mod tests {
         assert_eq!(Level::parse(&saved).unwrap().sign_message(0), "HELLO");
         ui.key(KeyCode::KeyZ, None, true);
         assert_eq!(ui.state.level.sign_message(0), "");
+    }
+
+    #[test]
+    fn classic_metadata_is_unbounded_while_sign_text_keeps_its_source_limit() {
+        let long = "X".repeat(1025);
+        let mut ui = EditorUi::new();
+        ui.begin(Field::Author, String::new());
+        ui.key(KeyCode::KeyA, Some(&long), false);
+        assert_eq!(ui.entry.as_ref().unwrap().value.chars().count(), 1025);
+
+        ui.begin(Field::Sign(1), String::new());
+        ui.key(KeyCode::KeyA, Some(&long), false);
+        assert_eq!(ui.entry.as_ref().unwrap().value.chars().count(), 38);
     }
 
     #[test]

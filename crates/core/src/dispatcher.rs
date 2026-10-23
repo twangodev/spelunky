@@ -1,5 +1,5 @@
 //! Source resource dispatch and independent engine activation membership.
-use crate::{Entity, Game, InputFrame, Rect, Tile, Vec2, catalog};
+use crate::{DeathStatsSnapshot, Entity, Game, InputFrame, Rect, Tile, Vec2, catalog};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 mod collision_events;
@@ -1025,6 +1025,11 @@ fn player_step(game: &mut Game, input: &InputFrame) {
         if first {
             game.player.health = 0.0;
             crate::hub::player_death_step(game);
+            game.death_stats_snapshot = Some(DeathStatsSnapshot {
+                money: game.player.money,
+                kills: game.data.get("kills").copied().unwrap_or(0.0).max(0.0) as u32,
+                saves: game.data.get("damsels").copied().unwrap_or(0.0).max(0.0) as u32,
+            });
         }
         crate::player::enter_dead(game);
         game.state = crate::RunState::Dead;
@@ -1180,31 +1185,12 @@ fn collision(game: &mut Game, this: Instance, other: Instance) {
     }
 }
 fn automatic_collision_pair(game: &mut Game, a: Instance, b: Instance) {
-    // GM8 resolves the collision for the pair when either participant is
-    // solid: it rewinds both before dispatch, runs both directional events,
-    // reapplies built-in hspeed/vspeed, then rewinds both again if they still
-    // overlap. Scripted xVel/yVel movement is not replayed here.
-    let solid_pair = source_solid(game, a) || source_solid(game, b);
-    if solid_pair {
-        restore_previous(game, a);
-        restore_previous(game, b);
-    }
     automatic_collision_direction(game, a, b);
     if !matches!(
         game.state,
         crate::RunState::Transition | crate::RunState::Won
     ) {
         automatic_collision_direction(game, b, a);
-    }
-    if source_solid(game, a) || source_solid(game, b) {
-        replay_motion(game, a);
-        replay_motion(game, b);
-        // Destroyed objects remain in storage until the post-End-Step pass,
-        // but the source overlap check ignores them.
-        if alive(game, a) && alive(game, b) && intersects(game, a, b) {
-            restore_previous(game, a);
-            restore_previous(game, b);
-        }
     }
 }
 
@@ -1215,7 +1201,30 @@ fn automatic_collision_direction(game: &mut Game, receiver: Instance, other: Ins
         return;
     }
 
+    // Classic resolves each directional Collision event independently. It
+    // rewinds only this event's receiver when `other` is solid, then runs the
+    // callback and applies the receiver's current built-in motion. A remaining
+    // solid overlap rewinds that same receiver again. Non-solid `other`
+    // instances run the callback at the current position without a recheck.
+    let other_is_solid = source_solid(game, other);
+    if other_is_solid {
+        restore_previous(game, receiver);
+    }
     collision(game, receiver, other);
+    if !other_is_solid
+        || !alive(game, receiver)
+        || matches!(
+            game.state,
+            crate::RunState::Transition | crate::RunState::Won
+        )
+    {
+        return;
+    }
+
+    replay_motion(game, receiver);
+    if alive(game, other) && source_solid(game, other) && intersects(game, receiver, other) {
+        restore_previous(game, receiver);
+    }
 }
 fn source_solid(game: &Game, i: Instance) -> bool {
     let default = catalog::object(&source_object(game, i)).is_some_and(|o| o.solid);
@@ -1829,16 +1838,15 @@ mod automatic_collision_tests {
     use crate::{Area, PlayerState, RulesPreset, World};
 
     #[test]
-    fn one_sided_event_with_solid_pair_rewinds_both_participants() {
+    fn one_sided_collision_with_solid_other_rewinds_only_the_receiver() {
         let mut game = Game::shell(5, RulesPreset::Classic);
         game.world = World::new(24, 18, Area::Mines, 1);
         game.player.pos = Vec2::new(24.0, 24.0);
         game.player.state = PlayerState::Standing;
 
-        // oRuby's source descriptor is GM-solid. oWeb has only a Collision
-        // with oTreasure body, which zeros Ruby's custom velocity. GM8 rewinds
-        // the pair because Ruby is solid; its custom xVel movement is not
-        // replayed after the callback.
+        // oRuby is solid and oWeb owns the one-sided Collision event. Classic
+        // rewinds the receiver (Web) because its `other` Ruby is solid; Ruby
+        // keeps its scripted movement because it has no reverse event.
         let web = game.spawn("oWeb", Vec2::new(120.0, 120.0));
         let ruby = game.spawn("oRuby", Vec2::new(120.0, 120.0));
         game.world.entity_mut(ruby).unwrap().vel = Vec2::new(1.0, 0.0);
@@ -1854,7 +1862,7 @@ mod automatic_collision_tests {
             Vec2::default(),
             "oWeb's source Collision zeros other velocity"
         );
-        assert_eq!(ruby.pos.x, 120.0, "solid pair response rewinds Ruby too");
+        assert_eq!(ruby.pos.x, 121.0, "only the event receiver is rewound");
         assert_eq!(
             game.world.entity(web).unwrap().pos.x,
             120.0,
@@ -1863,15 +1871,14 @@ mod automatic_collision_tests {
     }
 
     #[test]
-    fn solid_large_gem_with_nonsolid_ghost_creates_diamond_at_previous_position() {
+    fn solid_large_gem_with_nonsolid_ghost_creates_diamond_at_current_position() {
         let mut game = Game::shell(5, RulesPreset::Classic);
         game.world = World::new(24, 18, Area::Mines, 1);
         game.player.pos = Vec2::new(24.0, 24.0);
         game.player.state = PlayerState::Standing;
 
         // Big gems are solid; Ghost is not. The gem owns the one-sided event,
-        // and its `other` is non-solid. GM8 rewinds the pair before the
-        // callback, so the Diamond is born at the gem's previous position.
+        // and Classic does not rewind it because its `other` is non-solid.
         let ghost = game.spawn("oGhost", Vec2::new(120.0, 120.0));
         game.world.entity_mut(ghost).unwrap().state = 0;
         let gem = game.spawn("oRubyBig", Vec2::new(128.0, 128.0));
@@ -1889,8 +1896,8 @@ mod automatic_collision_tests {
             .find(|entity| entity.alive && entity.object == "oDiamond")
             .unwrap();
         assert_eq!(
-            diamond.pos.x, 128.0,
-            "the solid pair is rewound before the Collision callback"
+            diamond.pos.x, 129.0,
+            "the callback creates the Diamond at the gem's moved position"
         );
     }
 }

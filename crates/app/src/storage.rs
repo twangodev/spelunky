@@ -446,6 +446,21 @@ impl Store {
         result
     }
 
+    /// Persist one imported custom level without leaving memory ahead of disk
+    /// or browser storage when the write fails.
+    pub fn persist_custom_level(&mut self, key: String, source: String) -> Result<(), String> {
+        let previous = self.data.custom_levels.insert(key.clone(), source);
+        if let Err(error) = self.save() {
+            if let Some(previous) = previous {
+                self.data.custom_levels.insert(key, previous);
+            } else {
+                self.data.custom_levels.remove(&key);
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
     fn persistence_json(&self) -> Result<String, String> {
         let mut persisted = self.data.clone();
         persisted.first_time = false;
@@ -968,6 +983,29 @@ fn write(json: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_custom_level_persistence_rolls_back_memory() {
+        let mut store = Store::from_read(Err("unreadable test save".into()));
+        store
+            .data
+            .custom_levels
+            .insert("room".into(), "previous level".into());
+
+        assert!(
+            store
+                .persist_custom_level("room".into(), "replacement".into())
+                .is_err()
+        );
+        assert_eq!(store.data.custom_levels["room"], "previous level");
+
+        assert!(
+            store
+                .persist_custom_level("new".into(), "not persisted".into())
+                .is_err()
+        );
+        assert!(!store.data.custom_levels.contains_key("new"));
+    }
 
     #[test]
     fn classic_custom_level_names_migrate_to_lowercase_filename_identity() {

@@ -1,6 +1,5 @@
 //! Embedded Classic audio with nonfatal native and browser backends.
 const CROSSFADE_SECONDS: f64 = 0.35;
-const MAX_EFFECTS: usize = 48;
 
 static ASSETS: &[(&str, &[u8])] = &[
     ("alert", include_bytes!("../../../assets/audio/alert.wav")),
@@ -158,12 +157,42 @@ fn volume(value: f32) -> f32 {
         0.0
     }
 }
+fn source_volume_gain(value: f32) -> f32 {
+    let value = volume(value);
+    if value == 0.0 {
+        0.0
+    } else {
+        // Classic passes (10000 * value) - 10000 to DirectSound, where volume
+        // is hundredths of a decibel. Convert that attenuation to linear gain.
+        10.0_f32.powf((value - 1.0) * 5.0)
+    }
+}
 fn pan(value: f32) -> f32 {
     if value.is_finite() {
         value.clamp(-1.0, 1.0)
     } else {
         0.0
     }
+}
+fn source_pan_gains(value: f32) -> [f32; 2] {
+    let value = pan(value);
+    let attenuated = 10.0_f32.powf(-5.0 * value.abs());
+    if value < 0.0 {
+        [1.0, attenuated]
+    } else {
+        [attenuated, 1.0]
+    }
+}
+
+/// Map Classic's dB pan curve onto Web Audio's equal-power panner plus gain.
+fn web_panner_controls(value: f32) -> (f32, f32) {
+    let [left, right] = source_pan_gains(value);
+    let angle = right.atan2(left);
+    let left_equal_power = angle.cos();
+    let right_equal_power = angle.sin();
+    let compensation = 1.0 / left_equal_power.max(right_equal_power);
+    let panner_position = angle * (4.0 / std::f32::consts::PI) - 1.0;
+    (panner_position, compensation)
 }
 
 const MUSIC_RESOURCES: [&str; 8] = [
@@ -233,14 +262,45 @@ fn defer_effect(
     name: &'static str,
     position: f32,
 ) {
-    if queue.len() >= MAX_EFFECTS {
-        queue.pop_front();
-    }
+    queue.retain(|(queued_name, _)| *queued_name != name);
     queue.push_back((name, position));
 }
 
 fn effective_music_volume(music: f32, music_muted: bool) -> f32 {
     if music_muted { 0.0 } else { music }
+}
+
+fn resource_gain_with_override(
+    name: &str,
+    music: f32,
+    effects: f32,
+    music_muted: bool,
+    effect_override: Option<f32>,
+) -> f32 {
+    source_volume_gain(resource_volume_with_override(
+        name,
+        music,
+        effects,
+        music_muted,
+        effect_override,
+    ))
+}
+
+fn music_gain(music: f32, music_muted: bool) -> f32 {
+    source_volume_gain(effective_music_volume(music, music_muted))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn web_effect_gain(
+    name: &str,
+    music: f32,
+    effects: f32,
+    music_muted: bool,
+    effect_override: Option<f32>,
+    position: f32,
+) -> f32 {
+    let (_, pan_gain) = web_panner_controls(position);
+    resource_gain_with_override(name, music, effects, music_muted, effect_override) * pan_gain
 }
 #[cfg(test)]
 fn resource_volume(name: &str, music: f32, effects: f32, music_muted: bool) -> f32 {
@@ -295,6 +355,41 @@ mod policy_tests {
     }
 
     #[test]
+    fn classic_sound_volume_uses_directsound_decibel_attenuation() {
+        assert_eq!(source_volume_gain(0.0), 0.0);
+        assert!((source_volume_gain(0.2) - 0.0001).abs() < 1e-7);
+        assert!((source_volume_gain(0.8) - 0.1).abs() < 1e-6);
+        assert_eq!(source_volume_gain(1.0), 1.0);
+        assert_eq!(source_volume_gain(f32::NAN), 0.0);
+    }
+
+    #[test]
+    fn classic_pan_has_a_full_gain_near_channel_and_five_decibel_far_channel() {
+        assert_eq!(source_pan_gains(0.0), [1.0, 1.0]);
+        assert_eq!(source_pan_gains(-1.0), [1.0, 0.00001]);
+        assert_eq!(source_pan_gains(1.0), [0.00001, 1.0]);
+        assert_eq!(source_pan_gains(f32::NAN), [1.0, 1.0]);
+    }
+
+    #[test]
+    fn web_audio_panner_controls_reproduce_directsound_pan_gains() {
+        for position in [-1.0, -0.5, 0.0, 0.5, 1.0] {
+            let (web_position, compensation) = web_panner_controls(position);
+            let angle = (web_position + 1.0) * std::f32::consts::FRAC_PI_4;
+            let actual = [angle.cos() * compensation, angle.sin() * compensation];
+            let expected = source_pan_gains(position);
+            assert!(
+                (actual[0] - expected[0]).abs() < 1e-5,
+                "{position}: {actual:?}"
+            );
+            assert!(
+                (actual[1] - expected[1]).abs() < 1e-5,
+                "{position}: {actual:?}"
+            );
+        }
+    }
+
+    #[test]
     fn rejected_audio_resume_stays_locked_until_a_later_resume_succeeds() {
         let locked = resumed_unlock_state(false, false);
         assert!(!locked, "a rejected resume must not drain queued audio");
@@ -336,6 +431,16 @@ mod policy_tests {
             queue.into_iter().collect::<Vec<_>>(),
             [("jump", 0.0), ("whip", 0.5)]
         );
+
+        let mut queue = std::collections::VecDeque::new();
+        defer_effect(&mut queue, "jump", -1.0);
+        defer_effect(&mut queue, "whip", 0.0);
+        defer_effect(&mut queue, "jump", 1.0);
+        assert_eq!(
+            queue.into_iter().collect::<Vec<_>>(),
+            [("whip", 0.0), ("jump", 1.0)],
+            "replaying a resource while queued restarts it at the latest position"
+        );
     }
 }
 
@@ -356,19 +461,148 @@ impl Audio {
 mod backend {
     use super::*;
     use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
-    use std::{collections::HashMap, io::Cursor, time::Instant};
+    use std::{
+        collections::HashMap,
+        io::Cursor,
+        sync::{
+            Arc,
+            atomic::{AtomicU32, Ordering},
+        },
+        time::Instant,
+    };
 
     struct Track {
         name: &'static str,
         sink: Sink,
+        pan: Arc<PanGains>,
         gain: f32,
         target: f32,
     }
     struct Effect {
         name: &'static str,
         sink: Sink,
+        pan: Arc<PanGains>,
     }
     type NativeEffectSource = rodio::source::Buffered<Decoder<Cursor<&'static [u8]>>>;
+
+    struct PanGains {
+        left: AtomicU32,
+        right: AtomicU32,
+    }
+    impl PanGains {
+        fn new(position: f32) -> Arc<Self> {
+            let gains = source_pan_gains(position);
+            Arc::new(Self {
+                left: AtomicU32::new(gains[0].to_bits()),
+                right: AtomicU32::new(gains[1].to_bits()),
+            })
+        }
+        fn set(&self, position: f32) {
+            let [left, right] = source_pan_gains(position);
+            self.left.store(left.to_bits(), Ordering::Relaxed);
+            self.right.store(right.to_bits(), Ordering::Relaxed);
+        }
+        fn get(&self, channel: usize) -> f32 {
+            let bits = match channel {
+                0 => self.left.load(Ordering::Relaxed),
+                1 => self.right.load(Ordering::Relaxed),
+                _ => unreachable!("stereo panner only has two channels"),
+            };
+            f32::from_bits(bits)
+        }
+    }
+
+    struct PanSource<S: Source> {
+        input: S,
+        gains: Arc<PanGains>,
+        current_frame: [f32; 2],
+        output_channel: usize,
+    }
+    impl<S: Source> PanSource<S> {
+        fn new(input: S, gains: Arc<PanGains>) -> Self {
+            Self {
+                input,
+                gains,
+                current_frame: [0.0; 2],
+                output_channel: 2,
+            }
+        }
+    }
+    impl<S: Source<Item = f32>> Iterator for PanSource<S> {
+        type Item = f32;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.output_channel >= 2 {
+                let channels = usize::from(self.input.channels());
+                if channels == 0 {
+                    return None;
+                }
+                self.current_frame = match channels {
+                    1 => {
+                        let sample = self.input.next()?;
+                        [sample, sample]
+                    }
+                    2 => [self.input.next()?, self.input.next()?],
+                    _ => {
+                        let mut sum = 0.0;
+                        let mut count = 0;
+                        for _ in 0..channels {
+                            let Some(sample) = self.input.next() else {
+                                break;
+                            };
+                            sum += sample;
+                            count += 1;
+                        }
+                        if count == 0 {
+                            return None;
+                        }
+                        let mono = sum / count as f32;
+                        [mono, mono]
+                    }
+                };
+                self.output_channel = 0;
+            }
+
+            let result =
+                self.current_frame[self.output_channel] * self.gains.get(self.output_channel);
+            self.output_channel += 1;
+            Some(result)
+        }
+
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            let (lower, upper) = self.input.size_hint();
+            let input_channels = usize::from(self.input.channels()).max(1);
+            let pending = 2usize.saturating_sub(self.output_channel);
+            (
+                (lower / input_channels).saturating_mul(2) + pending,
+                upper.map(|samples| (samples / input_channels).saturating_mul(2) + pending),
+            )
+        }
+    }
+    impl<S: Source<Item = f32>> Source for PanSource<S> {
+        fn current_span_len(&self) -> Option<usize> {
+            let channels = usize::from(self.input.channels()).max(1);
+            let pending = 2usize.saturating_sub(self.output_channel);
+            self.input
+                .current_span_len()
+                .map(|samples| (samples / channels).saturating_mul(2) + pending)
+        }
+        fn channels(&self) -> rodio::ChannelCount {
+            2
+        }
+        fn sample_rate(&self) -> rodio::SampleRate {
+            self.input.sample_rate()
+        }
+        fn total_duration(&self) -> Option<std::time::Duration> {
+            self.input.total_duration()
+        }
+        fn try_seek(&mut self, pos: std::time::Duration) -> Result<(), rodio::source::SeekError> {
+            self.input.try_seek(pos)?;
+            self.current_frame = [0.0; 2];
+            self.output_channel = 2;
+            Ok(())
+        }
+    }
 
     fn native_effect_sources() -> &'static HashMap<&'static str, NativeEffectSource> {
         static SOURCES: std::sync::OnceLock<HashMap<&'static str, NativeEffectSource>> =
@@ -448,7 +682,6 @@ mod backend {
             self.play_with_mixer(&mixer, name, position, false);
         }
         /// Source `SS_IsSoundPlaying` gate, based on actual mixer completion.
-        /// Normal `play` remains free to overlap the same sound.
         pub fn play_if_idle(&mut self, name: &str, position: f32) {
             let Some(mixer) = self.stream.as_ref().map(|stream| stream.mixer().clone()) else {
                 return;
@@ -469,8 +702,18 @@ mod backend {
             let Some((name, bytes)) = asset(name) else {
                 return;
             };
-            if only_if_idle && self.effects.iter().any(|effect| effect.name == name) {
+            if only_if_idle
+                && (self.effects.iter().any(|effect| effect.name == name)
+                    || self
+                        .tracks
+                        .iter()
+                        .any(|track| track.name == name && !track.sink.empty()))
+            {
                 return;
+            }
+            if !only_if_idle {
+                self.stop_effect_voices(name);
+                self.stop_named_track(name);
             }
             let source = if is_music_resource(name) {
                 None
@@ -480,22 +723,14 @@ mod backend {
             if !is_music_resource(name) && source.is_none() {
                 return;
             }
-            if self.effects.len() >= MAX_EFFECTS {
-                self.effects.remove(0).sink.stop();
-            }
             let position = self
                 .sound_pans
                 .get(name)
                 .copied()
                 .unwrap_or_else(|| pan(position));
-            // Classic's pan endpoints are hard left/right. SpatialSink adds
-            // inverse-distance attenuation to both channels, so even its
-            // endpoint positions leak sound to the far ear. Match the browser
-            // StereoPannerNode with equal-power stereo gains instead.
-            let angle = (position + 1.0) * std::f32::consts::FRAC_PI_4;
-            let channels = vec![angle.cos(), angle.sin()];
+            let pan = PanGains::new(position);
             let sink = Sink::connect_new(mixer);
-            sink.set_volume(resource_volume_with_override(
+            sink.set_volume(resource_gain_with_override(
                 name,
                 self.music_volume,
                 self.effects_volume,
@@ -508,13 +743,36 @@ mod backend {
                 );
             }
             if let Some(source) = source {
-                sink.append(rodio::source::ChannelVolume::new(source, channels));
+                sink.append(PanSource::new(source, pan.clone()));
             } else if let Ok(source) = Decoder::try_from(Cursor::new(bytes)) {
-                sink.append(rodio::source::ChannelVolume::new(source, channels));
+                sink.append(PanSource::new(source, pan.clone()));
             }
-            self.effects.push(Effect { name, sink });
+            self.effects.push(Effect { name, sink, pan });
         }
-        /// Cancel matching effect voices only; music is a separate resource lane.
+        fn stop_effect_voices(&mut self, name: &'static str) {
+            self.effects.retain(|effect| {
+                if effect.name == name {
+                    effect.sink.stop();
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        fn stop_named_track(&mut self, name: &'static str) {
+            self.tracks.retain(|track| {
+                if track.name == name {
+                    track.sink.stop();
+                    false
+                } else {
+                    true
+                }
+            });
+            if self.current == Some(name) {
+                self.current = None;
+            }
+        }
+        /// Stop the named loaded resource across both playback paths.
         pub fn stop_sound(&mut self, name: &str) {
             let Some((name, _)) = asset(name) else {
                 return;
@@ -527,12 +785,23 @@ mod backend {
                     true
                 }
             });
+            self.stop_named_track(name);
         }
-        /// Persist a named pan for subsequent starts. Existing voices retain
-        /// their start pan; the source DLL's active-voice behavior is unverified.
+        /// Source SS_SetSoundPan updates the single loaded voice for this handle.
         pub fn set_sound_pan(&mut self, name: &str, position: f32) {
             if let Some((name, _)) = asset(name) {
-                self.sound_pans.insert(name, pan(position));
+                let position = pan(position);
+                self.sound_pans.insert(name, position);
+                for effect in &self.effects {
+                    if effect.name == name {
+                        effect.pan.set(position);
+                    }
+                }
+                for track in &self.tracks {
+                    if track.name == name {
+                        track.pan.set(position);
+                    }
+                }
             }
         }
         /// Apply a positive source frequency only to matching music tracks,
@@ -660,7 +929,7 @@ mod backend {
             name: &'static str,
             source: S,
         ) where
-            S: Source + Send + 'static,
+            S: Source<Item = f32> + Send + 'static,
         {
             self.start_music_source_policy(mixer, name, source, true);
         }
@@ -671,7 +940,7 @@ mod backend {
             source: S,
             fade_in: bool,
         ) where
-            S: Source + Send + 'static,
+            S: Source<Item = f32> + Send + 'static,
         {
             if fade_in {
                 for track in &mut self.tracks {
@@ -687,14 +956,17 @@ mod backend {
                 self.music_frequencies.get(name).copied().unwrap_or(44_100) as f32 / 44_100.0,
             );
             let gain = if fade_in { 0.0 } else { 1.0 };
-            sink.set_volume(gain * effective_music_volume(self.music_volume, self.music_muted));
-            sink.append(source);
+            sink.set_volume(gain * music_gain(self.music_volume, self.music_muted));
+            let position = self.sound_pans.get(name).copied().unwrap_or(0.0);
+            let pan = PanGains::new(position);
+            sink.append(PanSource::new(source, pan.clone()));
             if self.paused {
                 sink.pause();
             }
             self.tracks.push(Track {
                 name,
                 sink,
+                pan,
                 gain,
                 target: 1.0,
             });
@@ -712,12 +984,12 @@ mod backend {
             self.music_volume = volume(music);
             self.effects_volume = volume(effects);
             for track in &self.tracks {
-                track.sink.set_volume(
-                    track.gain * effective_music_volume(self.music_volume, self.music_muted),
-                );
+                track
+                    .sink
+                    .set_volume(track.gain * music_gain(self.music_volume, self.music_muted));
             }
             for effect in &self.effects {
-                effect.sink.set_volume(resource_volume_with_override(
+                effect.sink.set_volume(resource_gain_with_override(
                     effect.name,
                     self.music_volume,
                     self.effects_volume,
@@ -729,15 +1001,15 @@ mod backend {
         pub fn set_music_volume(&mut self, music: f32) {
             self.music_volume = volume(music);
             for track in &self.tracks {
-                track.sink.set_volume(
-                    track.gain * effective_music_volume(self.music_volume, self.music_muted),
-                );
+                track
+                    .sink
+                    .set_volume(track.gain * music_gain(self.music_volume, self.music_muted));
             }
             for effect in &self.effects {
                 if is_music_resource(effect.name) {
-                    effect
-                        .sink
-                        .set_volume(self.music_volume_for_resource(effect.name));
+                    effect.sink.set_volume(source_volume_gain(
+                        self.music_volume_for_resource(effect.name),
+                    ));
                 }
             }
         }
@@ -753,7 +1025,7 @@ mod backend {
             self.effect_volume_overrides.insert(name, effects);
             for effect in &self.effects {
                 if effect.name == name {
-                    effect.sink.set_volume(effects);
+                    effect.sink.set_volume(source_volume_gain(effects));
                 }
             }
         }
@@ -776,10 +1048,10 @@ mod backend {
             for track in &self.tracks {
                 track
                     .sink
-                    .set_volume(track.gain * effective_music_volume(self.music_volume, muted));
+                    .set_volume(track.gain * music_gain(self.music_volume, muted));
             }
             for effect in &self.effects {
-                effect.sink.set_volume(resource_volume_with_override(
+                effect.sink.set_volume(resource_gain_with_override(
                     effect.name,
                     self.music_volume,
                     self.effects_volume,
@@ -821,9 +1093,9 @@ mod backend {
                 } else {
                     (track.gain - step).max(track.target)
                 };
-                track.sink.set_volume(
-                    track.gain * effective_music_volume(self.music_volume, self.music_muted),
-                );
+                track
+                    .sink
+                    .set_volume(track.gain * music_gain(self.music_volume, self.music_muted));
             }
             self.tracks.retain(|track| {
                 let keep = track.target > 0.0 || track.gain > 0.0;
@@ -871,20 +1143,82 @@ mod backend {
 
         fn infinite_effect(mixer: &rodio::mixer::Mixer, name: &'static str) -> Effect {
             let sink = Sink::connect_new(mixer);
-            sink.append(
+            let pan = PanGains::new(0.0);
+            sink.append(PanSource::new(
                 rodio::buffer::SamplesBuffer::new(2, 44_100, vec![0.25; 1024]).repeat_infinite(),
-            );
-            Effect { name, sink }
+                pan.clone(),
+            ));
+            Effect { name, sink, pan }
         }
 
         fn finite_effect(mixer: &rodio::mixer::Mixer, name: &'static str) -> Effect {
             let sink = Sink::connect_new(mixer);
-            sink.append(rodio::buffer::SamplesBuffer::new(
-                2,
-                44_100,
-                vec![0.25; 4096],
+            let pan = PanGains::new(0.0);
+            sink.append(PanSource::new(
+                rodio::buffer::SamplesBuffer::new(2, 44_100, vec![0.25; 4096]),
+                pan.clone(),
             ));
-            Effect { name, sink }
+            Effect { name, sink, pan }
+        }
+
+        #[test]
+        fn native_pan_source_applies_live_directsound_gains() {
+            let gains = PanGains::new(0.0);
+            let source = rodio::buffer::SamplesBuffer::new(1, 44_100, vec![0.5; 4]);
+            let mut source = PanSource::new(source, gains.clone());
+            assert_eq!(source.next(), Some(0.5));
+            assert_eq!(source.next(), Some(0.5));
+
+            gains.set(-1.0);
+            assert_eq!(source.next(), Some(0.5));
+            let attenuated = source.next().expect("right channel sample");
+            assert!((attenuated - 0.000005).abs() < 1e-8);
+
+            gains.set(1.0);
+            assert!((source.next().unwrap() - 0.000005).abs() < 1e-8);
+            assert_eq!(source.next(), Some(0.5));
+
+            let gains = PanGains::new(0.0);
+            let stereo =
+                rodio::buffer::SamplesBuffer::new(2, 44_100, vec![0.25, -0.5, 0.75, -0.125]);
+            let mut stereo = PanSource::new(stereo, gains.clone());
+            assert_eq!(stereo.next(), Some(0.25));
+            assert_eq!(stereo.next(), Some(-0.5));
+            gains.set(-1.0);
+            assert_eq!(stereo.next(), Some(0.75));
+            assert!((stereo.next().unwrap() + 0.00000125).abs() < 1e-8);
+        }
+
+        #[test]
+        fn named_resource_replay_idle_gate_pan_and_stop_share_music_and_effect_lanes() {
+            let (mixer, _output) = rodio::mixer::mixer(2, 44_100);
+            let mut audio = headless_audio();
+            audio.start_music_source(
+                &mixer,
+                "title",
+                rodio::buffer::SamplesBuffer::new(2, 44_100, vec![0.25; 256]).repeat_infinite(),
+            );
+            audio.set_sound_pan("musTitle", -1.0);
+            assert!((audio.tracks[0].pan.get(0) - 1.0).abs() < 1e-7);
+            assert!((audio.tracks[0].pan.get(1) - 0.00001).abs() < 1e-8);
+
+            audio.play_with_mixer(&mixer, "title.ogg", 0.0, true);
+            assert!(audio.effects.is_empty(), "idle-gated play sees the track");
+            assert_eq!(audio.tracks.len(), 1);
+
+            audio.play_with_mixer(&mixer, "musTitle", 0.0, false);
+            assert!(
+                audio.tracks.is_empty(),
+                "normal replay stops the music handle"
+            );
+            assert_eq!(audio.effects.len(), 1);
+            audio.set_sound_pan("musTitle", 1.0);
+            assert!((audio.effects[0].pan.get(0) - 0.00001).abs() < 1e-8);
+            assert!((audio.effects[0].pan.get(1) - 1.0).abs() < 1e-7);
+
+            audio.stop_sound("global.musTitle");
+            assert!(audio.effects.is_empty());
+            assert!(audio.tracks.is_empty());
         }
 
         #[test]
@@ -896,13 +1230,19 @@ mod backend {
             audio.set_volumes(0.4, 0.8);
             audio.set_effect_volume("global.sndJump", 0.2);
 
-            assert_eq!(audio.effects[0].sink.volume(), 0.2);
-            assert_eq!(audio.effects[1].sink.volume(), 0.8);
+            assert_eq!(audio.effects[0].sink.volume(), source_volume_gain(0.2));
+            assert_eq!(audio.effects[1].sink.volume(), source_volume_gain(0.8));
 
             audio.play_with_mixer(&mixer, "jump.wav", 0.0, false);
             audio.play_with_mixer(&mixer, "sndFlame", 0.0, false);
-            assert_eq!(audio.effects[2].sink.volume(), 0.2);
-            assert_eq!(audio.effects[3].sink.volume(), 0.8);
+            assert_eq!(audio.effects.len(), 2, "each resource has one active voice");
+            for effect in &audio.effects {
+                if effect.name == "jump" {
+                    assert_eq!(effect.sink.volume(), source_volume_gain(0.2));
+                } else {
+                    assert_eq!(effect.sink.volume(), source_volume_gain(0.8));
+                }
+            }
         }
 
         #[test]
@@ -917,18 +1257,18 @@ mod backend {
                 rodio::buffer::SamplesBuffer::new(1, 44_100, vec![0.25; 2048]),
             );
             audio.tracks[0].gain = 1.0;
-            audio.tracks[0].sink.set_volume(0.2);
+            audio.tracks[0].sink.set_volume(music_gain(0.2, false));
             audio.effects.push(finite_effect(&effects_mixer, "cave"));
             audio.effects.push(infinite_effect(&effects_mixer, "flame"));
             audio.set_volumes(0.2, 0.8);
-            assert_eq!(audio.tracks[0].sink.volume(), 0.2);
-            assert_eq!(audio.effects[0].sink.volume(), 0.2);
-            assert_eq!(audio.effects[1].sink.volume(), 0.8);
+            assert_eq!(audio.tracks[0].sink.volume(), music_gain(0.2, false));
+            assert_eq!(audio.effects[0].sink.volume(), source_volume_gain(0.2));
+            assert_eq!(audio.effects[1].sink.volume(), source_volume_gain(0.8));
 
             audio.set_music_muted(true);
             assert_eq!(audio.tracks[0].sink.volume(), 0.0);
             assert_eq!(audio.effects[0].sink.volume(), 0.0);
-            assert_eq!(audio.effects[1].sink.volume(), 0.8);
+            assert_eq!(audio.effects[1].sink.volume(), source_volume_gain(0.8));
             assert!(!audio.tracks[0].sink.is_paused());
             assert!(!audio.effects[0].sink.is_paused());
             assert!(!audio.effects[1].sink.is_paused());
@@ -955,11 +1295,11 @@ mod backend {
             audio.set_volumes(0.6, 0.3);
             assert_eq!(audio.tracks[0].sink.volume(), 0.0);
             assert_eq!(audio.effects[0].sink.volume(), 0.0);
-            assert_eq!(audio.effects[1].sink.volume(), 0.3);
+            assert_eq!(audio.effects[1].sink.volume(), source_volume_gain(0.3));
             audio.set_music_muted(false);
-            assert_eq!(audio.tracks[0].sink.volume(), 0.6);
-            assert_eq!(audio.effects[0].sink.volume(), 0.6);
-            assert_eq!(audio.effects[1].sink.volume(), 0.3);
+            assert_eq!(audio.tracks[0].sink.volume(), music_gain(0.6, false));
+            assert_eq!(audio.effects[0].sink.volume(), source_volume_gain(0.6));
+            assert_eq!(audio.effects[1].sink.volume(), source_volume_gain(0.3));
         }
 
         #[test]
@@ -971,9 +1311,9 @@ mod backend {
             audio.source_music_with_mixer(&mixer, "global.musTitle", false, false);
             audio.play_with_mixer(&mixer, "sndFlame", 0.0, false);
             assert_eq!(audio.effects[0].name, "title");
-            assert_eq!(audio.effects[0].sink.volume(), 0.2);
+            assert_eq!(audio.effects[0].sink.volume(), source_volume_gain(0.2));
             assert!((audio.effects[0].sink.speed() - 34_100.0 / 44_100.0).abs() < 1e-6);
-            assert_eq!(audio.effects[1].sink.volume(), 0.8);
+            assert_eq!(audio.effects[1].sink.volume(), source_volume_gain(0.8));
             audio.source_music_with_mixer(&mixer, "title.ogg", true, true);
             assert!(
                 audio.tracks.is_empty(),
@@ -982,17 +1322,17 @@ mod backend {
             audio.source_music_with_mixer(&mixer, "musTitle", false, false);
             assert_eq!(
                 audio.effects.iter().filter(|e| e.name == "title").count(),
-                2,
+                1,
                 "literal producer is not idle-gated"
             );
             audio.set_volumes(0.8, 0.2);
             audio.set_source_music_frequency("musTitle", 22_050);
             for effect in &audio.effects {
                 if effect.name == "title" {
-                    assert_eq!(effect.sink.volume(), 0.8);
+                    assert_eq!(effect.sink.volume(), source_volume_gain(0.8));
                     assert_eq!(effect.sink.speed(), 0.5);
                 } else {
-                    assert_eq!(effect.sink.volume(), 0.2);
+                    assert_eq!(effect.sink.volume(), source_volume_gain(0.2));
                     assert_eq!(effect.sink.speed(), 1.0);
                 }
             }
@@ -1026,7 +1366,7 @@ mod backend {
             audio.set_volumes(0.4, 0.8);
             audio.music_with_mixer(&mixer, "title", true);
             audio.tracks[0].gain = 1.0;
-            audio.tracks[0].sink.set_volume(0.4);
+            audio.tracks[0].sink.set_volume(music_gain(0.4, false));
 
             audio.source_music_with_mixer(&mixer, "cave", true, true);
 
@@ -1034,7 +1374,7 @@ mod backend {
             assert_eq!(audio.tracks[0].target, 1.0);
             assert_eq!(audio.tracks[1].gain, 1.0);
             assert_eq!(audio.tracks[1].target, 1.0);
-            assert_eq!(audio.tracks[1].sink.volume(), 0.4);
+            assert_eq!(audio.tracks[1].sink.volume(), music_gain(0.4, false));
         }
 
         #[test]
@@ -1082,7 +1422,7 @@ mod backend {
                 audio.effects.push(infinite_effect(&other, "flame"));
                 audio.start_music_source(
                     &music,
-                    "bowpull",
+                    "title",
                     rodio::buffer::SamplesBuffer::new(1, 44_100, vec![0.25; 1024])
                         .repeat_infinite(),
                 );
@@ -1095,7 +1435,7 @@ mod backend {
                 assert_eq!(audio.effects.len(), 1);
                 assert_eq!(audio.effects[0].name, "flame");
                 assert_eq!(audio.tracks.len(), 1);
-                assert_eq!(audio.current, Some("bowpull"));
+                assert_eq!(audio.current, Some("title"));
                 assert_eq!(audio.paused, paused);
                 assert_eq!((audio.music_volume, audio.effects_volume), (0.65, 0.8));
                 audio.pause(false);
@@ -1186,6 +1526,7 @@ mod backend {
                         Track {
                             name: "title",
                             sink,
+                            pan: PanGains::new(0.0),
                             gain: 1.0,
                             target,
                         }
@@ -1201,6 +1542,7 @@ mod backend {
                     effects: vec![Effect {
                         name: "flame",
                         sink: effect,
+                        pan: PanGains::new(0.0),
                     }],
                     tracks,
                     current: Some("title"),
@@ -1328,7 +1670,7 @@ mod backend {
         }
 
         #[test]
-        fn idle_gate_uses_clip_completion_and_aliases_while_normal_play_overlaps() {
+        fn idle_gate_uses_clip_completion_and_normal_replay_restarts_the_resource() {
             let (mixer, mut output) = rodio::mixer::mixer(2, 44_100);
             let mut audio = Audio {
                 stream: None,
@@ -1351,7 +1693,7 @@ mod backend {
                 assert_eq!(audio.effects.len(), 1, "duplicate {alias}");
             }
             audio.play_with_mixer(&mixer, "global.sndFlame", 0.0, false);
-            assert_eq!(audio.effects.len(), 2, "normal playback must still overlap");
+            assert_eq!(audio.effects.len(), 1, "a handle owns a single voice");
             assert!(output.by_ref().take(4096).any(|sample| sample.abs() > 1e-8));
             // Consume decoded audio until the mixer reports actual completion;
             // no simulation-tick duration or fixed retrigger interval is used.
@@ -1398,12 +1740,15 @@ mod backend {
         source: PlaybackSource,
         gain: GainNode,
         panner: StereoPannerNode,
+        position: f32,
         end: f64,
     }
     struct Track {
         name: &'static str,
         source: PlaybackSource,
         gain_node: GainNode,
+        panner: StereoPannerNode,
+        position: f32,
         gain: f32,
         target: f32,
         end: f64,
@@ -1733,6 +2078,8 @@ mod backend {
             let Some((name, _)) = asset(name) else {
                 return;
             };
+            self.stop_named_track(name);
+            self.stop_effect_voice(name);
             let position = pan(position);
             let buffer_ready = if needs_pcm_decode(name) {
                 self.decode(name);
@@ -1764,6 +2111,10 @@ mod backend {
                 || self.effects.iter().any(|effect| {
                     effect.name == name && !effect.source.is_finished(effect.end, now)
                 })
+                || self
+                    .tracks
+                    .iter()
+                    .any(|track| track.name == name && !track.source.is_finished(track.end, now))
             {
                 return;
             }
@@ -1776,24 +2127,36 @@ mod backend {
                 return;
             };
             self.queued.retain(|(queued, _)| *queued != name);
-            self.effects.retain(|effect| {
-                if effect.name == name {
-                    effect.gain.gain().set_value(0.0);
-                    effect.source.stop();
-                    effect.source.disconnect();
-                    let _ = effect.panner.disconnect();
-                    let _ = effect.gain.disconnect();
-                    false
-                } else {
-                    true
-                }
-            });
+            self.stop_effect_voice(name);
+            self.stop_named_track(name);
         }
-        /// Persist a named pan for later and queued starts. Existing voices
-        /// retain their start pan pending source DLL evidence.
+        /// Source SS_SetSoundPan updates the single loaded voice for this handle.
         pub fn set_sound_pan(&mut self, name: &str, position: f32) {
             if let Some((name, _)) = asset(name) {
-                self.sound_pans.insert(name, pan(position));
+                let position = pan(position);
+                self.sound_pans.insert(name, position);
+                for effect in &mut self.effects {
+                    if effect.name == name {
+                        effect.position = position;
+                        let (panner_position, _) = web_panner_controls(position);
+                        effect.panner.pan().set_value(panner_position);
+                        effect.gain.gain().set_value(web_effect_gain(
+                            effect.name,
+                            self.music_volume,
+                            self.effects_volume,
+                            self.music_muted,
+                            self.effect_volume_overrides.get(effect.name).copied(),
+                            position,
+                        ));
+                    }
+                }
+                let (panner_position, _) = web_panner_controls(position);
+                for track in &mut self.tracks {
+                    if track.name == name {
+                        track.position = position;
+                        track.panner.pan().set_value(panner_position);
+                    }
+                }
             }
         }
         /// Persist positive source frequency through deferred streamed playback.
@@ -1891,6 +2254,7 @@ mod backend {
                 track.gain_node.gain().set_value(0.0);
                 track.source.stop();
                 track.source.disconnect();
+                let _ = track.panner.disconnect();
                 let _ = track.gain_node.disconnect();
             }
         }
@@ -1898,33 +2262,40 @@ mod backend {
             self.music_volume = volume(music);
             self.effects_volume = volume(effects);
             for track in &self.tracks {
-                track.gain_node.gain().set_value(
-                    track.gain * effective_music_volume(self.music_volume, self.music_muted),
-                );
+                track
+                    .gain_node
+                    .gain()
+                    .set_value(track.gain * music_gain(self.music_volume, self.music_muted));
             }
             for effect in &self.effects {
-                effect.gain.gain().set_value(resource_volume_with_override(
+                effect.gain.gain().set_value(web_effect_gain(
                     effect.name,
                     self.music_volume,
                     self.effects_volume,
                     self.music_muted,
                     self.effect_volume_overrides.get(effect.name).copied(),
+                    effect.position,
                 ));
             }
         }
         pub fn set_music_volume(&mut self, music: f32) {
             self.music_volume = volume(music);
             for track in &self.tracks {
-                track.gain_node.gain().set_value(
-                    track.gain * effective_music_volume(self.music_volume, self.music_muted),
-                );
+                track
+                    .gain_node
+                    .gain()
+                    .set_value(track.gain * music_gain(self.music_volume, self.music_muted));
             }
             for effect in &self.effects {
                 if is_music_resource(effect.name) {
-                    effect
-                        .gain
-                        .gain()
-                        .set_value(self.music_volume_for_resource(effect.name));
+                    effect.gain.gain().set_value(web_effect_gain(
+                        effect.name,
+                        self.music_volume,
+                        self.effects_volume,
+                        self.music_muted,
+                        self.effect_volume_overrides.get(effect.name).copied(),
+                        effect.position,
+                    ));
                 }
             }
         }
@@ -1940,18 +2311,16 @@ mod backend {
             self.effect_volume_overrides.insert(name, effects);
             for effect in &self.effects {
                 if effect.name == name {
-                    effect.gain.gain().set_value(effects);
+                    effect.gain.gain().set_value(web_effect_gain(
+                        name,
+                        self.music_volume,
+                        self.effects_volume,
+                        self.music_muted,
+                        self.effect_volume_overrides.get(name).copied(),
+                        effect.position,
+                    ));
                 }
             }
-        }
-        fn music_volume_for_resource(&self, name: &str) -> f32 {
-            resource_volume_with_override(
-                name,
-                self.music_volume,
-                self.effects_volume,
-                self.music_muted,
-                self.effect_volume_overrides.get(name).copied(),
-            )
         }
         /// Mute only music resources while preserving their playback clocks and
         /// leaving ordinary sound effects audible. Used by the in-game menu.
@@ -1964,15 +2333,16 @@ mod backend {
                 track
                     .gain_node
                     .gain()
-                    .set_value(track.gain * effective_music_volume(self.music_volume, muted));
+                    .set_value(track.gain * music_gain(self.music_volume, muted));
             }
             for effect in &self.effects {
-                effect.gain.gain().set_value(resource_volume_with_override(
+                effect.gain.gain().set_value(web_effect_gain(
                     effect.name,
                     self.music_volume,
                     self.effects_volume,
                     muted,
                     self.effect_volume_overrides.get(effect.name).copied(),
+                    effect.position,
                 ));
             }
         }
@@ -2015,6 +2385,8 @@ mod backend {
             let Some(context) = self.context.clone() else {
                 return;
             };
+            self.stop_named_track(name);
+            self.stop_effect_voice(name);
             let now = context.current_time();
             let rate = if is_music_resource(name) {
                 self.music_frequencies.get(name).copied().unwrap_or(44_100) as f32 / 44_100.0
@@ -2039,16 +2411,17 @@ mod backend {
             else {
                 return;
             };
-            gain.gain().set_value(resource_volume_with_override(
+            let position = self.sound_pans.get(name).copied().unwrap_or(position);
+            let (panner_position, _) = web_panner_controls(position);
+            gain.gain().set_value(web_effect_gain(
                 name,
                 self.music_volume,
                 self.effects_volume,
                 self.music_muted,
                 self.effect_volume_overrides.get(name).copied(),
+                position,
             ));
-            panner
-                .pan()
-                .set_value(self.sound_pans.get(name).copied().unwrap_or(position));
+            panner.pan().set_value(panner_position);
             if source
                 .audio_node()
                 .connect_with_audio_node(&panner)
@@ -2072,20 +2445,51 @@ mod backend {
                 }
                 PlaybackSource::Streamed(_) => f64::INFINITY,
             };
-            if self.effects.len() >= MAX_EFFECTS {
-                let old = self.effects.remove(0);
-                old.source.stop();
-                old.source.disconnect();
-                let _ = old.gain.disconnect();
-                let _ = old.panner.disconnect();
-            }
             self.effects.push(Effect {
                 name,
                 source,
                 gain,
                 panner,
+                position,
                 end,
             });
+        }
+        fn stop_effect_voice(&mut self, name: &'static str) {
+            self.effects.retain(|effect| {
+                if effect.name == name {
+                    effect.gain.gain().set_value(0.0);
+                    effect.source.stop();
+                    effect.source.disconnect();
+                    let _ = effect.panner.disconnect();
+                    let _ = effect.gain.disconnect();
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        fn stop_named_track(&mut self, name: &'static str) {
+            self.tracks.retain(|track| {
+                if track.name == name {
+                    track.gain_node.gain().set_value(0.0);
+                    track.source.stop();
+                    track.source.disconnect();
+                    let _ = track.panner.disconnect();
+                    let _ = track.gain_node.disconnect();
+                    false
+                } else {
+                    true
+                }
+            });
+            if self.current_music == Some(name) {
+                self.current_music = None;
+            }
+            if self
+                .requested_music
+                .is_some_and(|(requested, _, _)| requested == name)
+            {
+                self.requested_music = None;
+            }
         }
         fn start_music(&mut self, name: &'static str, looping: bool, fade_in: bool) {
             let Some(context) = self.context.clone() else {
@@ -2099,20 +2503,28 @@ mod backend {
             let Ok(gain_node) = context.create_gain() else {
                 return;
             };
+            let Ok(panner) = context.create_stereo_panner() else {
+                return;
+            };
+            let position = self.sound_pans.get(name).copied().unwrap_or(0.0);
+            let (panner_position, _) = web_panner_controls(position);
+            panner.pan().set_value(panner_position);
             let gain = if fade_in { 0.0 } else { 1.0 };
             gain_node
                 .gain()
-                .set_value(gain * effective_music_volume(self.music_volume, self.music_muted));
+                .set_value(gain * music_gain(self.music_volume, self.music_muted));
             if source
                 .audio_node()
-                .connect_with_audio_node(&gain_node)
+                .connect_with_audio_node(&panner)
                 .is_err()
+                || panner.connect_with_audio_node(&gain_node).is_err()
                 || gain_node
                     .connect_with_audio_node(&context.destination())
                     .is_err()
                 || source.start().is_err()
             {
                 source.disconnect();
+                let _ = panner.disconnect();
                 let _ = gain_node.disconnect();
                 return;
             }
@@ -2125,12 +2537,15 @@ mod backend {
                 let old = self.tracks.remove(0);
                 old.source.stop();
                 old.source.disconnect();
+                let _ = old.panner.disconnect();
                 let _ = old.gain_node.disconnect();
             }
             self.tracks.push(Track {
                 name,
                 source,
                 gain_node,
+                panner,
+                position,
                 gain,
                 target: 1.0,
                 end: f64::INFINITY,
@@ -2181,9 +2596,10 @@ mod backend {
                 } else {
                     (track.gain - step).max(track.target)
                 };
-                track.gain_node.gain().set_value(
-                    track.gain * effective_music_volume(self.music_volume, self.music_muted),
-                );
+                track
+                    .gain_node
+                    .gain()
+                    .set_value(track.gain * music_gain(self.music_volume, self.music_muted));
             }
             self.tracks.retain(|track| {
                 let keep = !track.source.is_finished(track.end, now)
@@ -2191,6 +2607,7 @@ mod backend {
                 if !keep {
                     track.source.stop();
                     let _ = track.source.disconnect();
+                    let _ = track.panner.disconnect();
                     let _ = track.gain_node.disconnect();
                 }
                 keep
@@ -2278,7 +2695,7 @@ mod backend {
             assert_eq!(audio.music_frequencies["title"], 34_100);
         }
         #[test]
-        fn source_music_idle_checks_pending_literal_resource_and_bypass_can_overlap() {
+        fn literal_music_handle_gates_duplicate_track_requests_and_deduplicates_replays() {
             let mut audio = pending_audio();
             audio.source_music("musTitle", false, false);
             audio.source_music("title.ogg", true, true);
@@ -2289,8 +2706,8 @@ mod backend {
             audio.source_music("musTitle", false, false);
             assert_eq!(
                 audio.queued.len(),
-                2,
-                "literal one-shot bypass remains ungated"
+                1,
+                "same loaded resource restarts from the most recent request"
             );
             audio.stop_all_music();
             audio.source_music("musTitle", true, true);
@@ -2300,6 +2717,21 @@ mod backend {
                 audio.requested_music,
                 Some(("title", true, false)),
                 "pending decode blocks duplicate playMusic"
+            );
+        }
+
+        #[test]
+        fn literal_play_restarts_a_pending_same_name_music_handle() {
+            let mut audio = pending_audio();
+            audio.source_music("musTitle", true, true);
+            assert_eq!(audio.requested_music, Some(("title", true, false)));
+
+            audio.play("musTitle", 0.0);
+
+            assert_eq!(audio.requested_music, None);
+            assert_eq!(
+                audio.queued.iter().copied().collect::<Vec<_>>(),
+                [("title", 0.0)]
             );
         }
 
@@ -2366,10 +2798,14 @@ mod backend {
             for track in &self.tracks {
                 track.source.stop();
                 track.source.disconnect();
+                let _ = track.panner.disconnect();
+                let _ = track.gain_node.disconnect();
             }
             for effect in &self.effects {
                 effect.source.stop();
                 effect.source.disconnect();
+                let _ = effect.panner.disconnect();
+                let _ = effect.gain.disconnect();
             }
             for url in self.music_urls.values() {
                 let _ = Url::revoke_object_url(url);

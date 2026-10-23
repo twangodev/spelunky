@@ -3,9 +3,11 @@
 /// Explicit user-requested export; native exports never overwrite an existing file.
 pub fn export(name: &str, text: &str) -> Result<(), String> {
     let filename = export_name(name)?;
+    let bytes = spelunky_core::level::encode_classic_level_bytes(text)
+        .map_err(|error| format!("Cannot export {filename}: {error}"))?;
     #[cfg(target_arch = "wasm32")]
     {
-        download(&filename, text)
+        download_bytes(&filename, &bytes, "text/plain;charset=windows-1252")
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -21,7 +23,7 @@ pub fn export(name: &str, text: &str) -> Result<(), String> {
                     format!("Cannot export {filename}: {error}")
                 }
             })?;
-        file.write_all(text.as_bytes())
+        file.write_all(&bytes)
             .map_err(|error| format!("Cannot write {filename}: {error}"))?;
         Ok(())
     }
@@ -39,6 +41,7 @@ pub(crate) fn save_native_level(name: &str, text: &str) -> Result<(), String> {
 fn save_native_level_to(directory: &std::path::Path, name: &str, text: &str) -> Result<(), String> {
     // Classic writes `string_lower(levelName) + ".lvl"` on every platform.
     let filename = relative_level_filename(&name.to_lowercase())?;
+    let bytes = spelunky_core::level::encode_classic_level_bytes(text)?;
     std::fs::create_dir_all(directory).map_err(|error| {
         format!(
             "Cannot create custom level directory {}: {error}",
@@ -54,7 +57,18 @@ fn save_native_level_to(directory: &std::path::Path, name: &str, text: &str) -> 
             )
         })?;
     }
-    std::fs::write(&path, text).map_err(|error| format!("Cannot save {}: {error}", path.display()))
+    write_native_level_path(&path, &bytes)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn save_native_level_at_path(path: &std::path::Path, text: &str) -> Result<(), String> {
+    let bytes = spelunky_core::level::encode_classic_level_bytes(text)?;
+    write_native_level_path(path, &bytes)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_native_level_path(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    std::fs::write(path, bytes).map_err(|error| format!("Cannot save {}: {error}", path.display()))
 }
 
 /// Write the Classic stats report to the source-compatible `stats.txt` path.
@@ -281,6 +295,111 @@ pub(crate) fn canonical_level_sources_v2(
 /// explicit user imports stored in the save data.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Default)]
+pub(crate) struct NativeLevelPathCatalog {
+    pub paths: std::collections::BTreeMap<String, std::path::PathBuf>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn index_native_level_directory(
+    directory: &std::path::Path,
+) -> Result<NativeLevelPathCatalog, String> {
+    match std::fs::read_dir(directory) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(NativeLevelPathCatalog::default());
+        }
+        Err(error) => {
+            return Err(format!(
+                "Cannot list custom levels in {}: {error}",
+                directory.display()
+            ));
+        }
+    }
+
+    let mut files = std::collections::BTreeMap::new();
+    index_native_level_files(directory, directory, &mut files)?;
+    let mut catalog = NativeLevelPathCatalog::default();
+    for (name, path) in files {
+        let key = canonical_level_path_key(&name);
+        if key.is_empty() {
+            continue;
+        }
+        match catalog.paths.entry(key.clone()) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(path);
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry)
+                if name == format!("{key}.lvl") =>
+            {
+                let _ = entry.insert(path);
+            }
+            std::collections::btree_map::Entry::Occupied(_) => {}
+        }
+    }
+    Ok(catalog)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn index_native_level_files(
+    root: &std::path::Path,
+    directory: &std::path::Path,
+    files: &mut std::collections::BTreeMap<String, std::path::PathBuf>,
+) -> Result<(), String> {
+    let entries = std::fs::read_dir(directory).map_err(|error| {
+        format!(
+            "Cannot list custom levels in {}: {error}",
+            directory.display()
+        )
+    })?;
+    let mut entries = entries
+        .map(|entry| {
+            entry.map_err(|error| {
+                format!(
+                    "Cannot list custom levels in {}: {error}",
+                    directory.display()
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("Cannot inspect {}: {error}", path.display()))?;
+        if file_type.is_dir() {
+            index_native_level_files(root, &path, files)?;
+            continue;
+        }
+        if !file_type.is_file()
+            || !path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("lvl"))
+        {
+            continue;
+        }
+        let Some(name) = path
+            .strip_prefix(root)
+            .ok()
+            .and_then(std::path::Path::to_str)
+        else {
+            continue;
+        };
+        files.insert(name.to_owned(), path);
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn read_native_level_contents(path: &std::path::Path) -> Result<String, String> {
+    let bytes =
+        std::fs::read(path).map_err(|error| format!("Cannot read {}: {error}", path.display()))?;
+    Ok(spelunky_core::level::decode_classic_text_bytes(&bytes).into_owned())
+}
+
+#[cfg(all(not(target_arch = "wasm32"), test))]
+#[derive(Debug, Default)]
 pub(crate) struct NativeLevelCatalog {
     pub levels: std::collections::BTreeMap<String, String>,
     /// Paths that Classic can enumerate, but the host could not read. They are
@@ -289,14 +408,14 @@ pub(crate) struct NativeLevelCatalog {
     pub warnings: Vec<String>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), test))]
 pub(crate) fn load_native_level_directory(
     directory: &std::path::Path,
 ) -> Result<NativeLevelCatalog, String> {
     load_native_level_directory_with(directory, &|path| std::fs::read(path))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), test))]
 fn load_native_level_directory_with(
     directory: &std::path::Path,
     read_file: &impl Fn(&std::path::Path) -> std::io::Result<Vec<u8>>,
@@ -354,7 +473,7 @@ fn load_native_level_directory_with(
     Ok(catalog)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), test))]
 fn read_native_level_files<F>(
     root: &std::path::Path,
     directory: &std::path::Path,
@@ -409,7 +528,9 @@ where
             continue;
         };
         let contents = match read_file(&path) {
-            Ok(contents) => Ok(String::from_utf8_lossy(&contents).into_owned()),
+            Ok(contents) => {
+                Ok(spelunky_core::level::decode_classic_text_bytes(&contents).into_owned())
+            }
             Err(error) => {
                 // Classic enumerates level names without opening each file.
                 // A single unreadable level must not hide the rest of the
@@ -522,6 +643,38 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
+    fn native_level_index_enumerates_paths_without_loading_contents() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spelunky-native-level-index-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(root.join("nested")).unwrap();
+        std::fs::write(root.join("room.lvl"), [0xff, 0xfe]).unwrap();
+        std::fs::write(root.join("nested/next.lvl.lvl"), "linked").unwrap();
+        std::fs::write(root.join("notes.txt"), "ignored").unwrap();
+
+        let catalog = index_native_level_directory(&root).unwrap();
+        assert_eq!(
+            catalog
+                .paths
+                .keys()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from(["nested/next.lvl".into(), "room".into()])
+        );
+        assert_eq!(
+            read_native_level_contents(catalog.paths.get("room").unwrap()).unwrap(),
+            "ÿþ"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
     fn native_catalog_retains_legacy_text_and_unreadable_level_names() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -535,6 +688,16 @@ mod tests {
         std::fs::write(root.join("valid.lvl"), "readable level").unwrap();
         std::fs::write(root.join("legacy.lvl"), [0xff, 0xfe]).unwrap();
         std::fs::write(root.join("unreadable.lvl"), "unreadable").unwrap();
+        let mut authored = spelunky_core::level::Level::default();
+        authored.author = "CAFÉ".into();
+        let mut windows_1252 = authored.to_text().into_bytes();
+        let accented_e = "É".as_bytes();
+        let offset = windows_1252
+            .windows(accented_e.len())
+            .position(|window| window == accented_e)
+            .unwrap();
+        windows_1252.splice(offset..offset + accented_e.len(), [0xc9]);
+        std::fs::write(root.join("cafe.lvl"), windows_1252).unwrap();
 
         let catalog = load_native_level_directory_with(&root, &|path| {
             if path
@@ -551,7 +714,8 @@ mod tests {
         assert_eq!(
             catalog.levels,
             std::collections::BTreeMap::from([
-                ("legacy".into(), "��".into()),
+                ("cafe".into(), authored.to_text()),
+                ("legacy".into(), "ÿþ".into()),
                 ("valid".into(), "readable level".into()),
             ])
         );
@@ -584,6 +748,15 @@ mod tests {
         save_native_level_to(&directory, "Sub/Room.LVL", "nested room").unwrap();
         save_native_level_to(&directory, "MiXeD.LvL", "lowercase filename").unwrap();
 
+        let mut accented = spelunky_core::level::Level::default();
+        accented.author = "CAFÉ".into();
+        let accented_text = accented.to_text();
+        save_native_level_to(&directory, "cafe.lvl", &accented_text).unwrap();
+        assert_eq!(
+            std::fs::read(directory.join("cafe.lvl")).unwrap(),
+            spelunky_core::level::encode_classic_level_bytes(&accented_text).unwrap()
+        );
+
         assert!(directory.join("sub/room.lvl").is_file());
         assert!(directory.join("mixed.lvl").is_file());
         assert!(!directory.join("MiXeD.LvL").exists());
@@ -592,11 +765,38 @@ mod tests {
             load_native_level_directory(&directory).unwrap().levels,
             std::collections::BTreeMap::from([
                 ("bonus.lvl".into(), "double extension".into()),
+                ("cafe".into(), accented_text),
                 ("mixed".into(), "lowercase filename".into()),
                 ("room".into(), "edited room".into()),
                 ("sub/room".into(), "nested room".into()),
             ])
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_editor_save_updates_selected_mixed_case_path_without_duplicate() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "spelunky-native-level-case-save-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let original = root.join("RoomA.LVL");
+        std::fs::write(&original, "old room").unwrap();
+
+        let catalog = index_native_level_directory(&root).unwrap();
+        let key = canonical_level_path_key("RoomA.LVL");
+        let selected = catalog.paths.get(&key).unwrap();
+        save_native_level_at_path(selected, "edited room").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&original).unwrap(), "edited room");
+        assert!(!root.join("rooma.lvl").exists());
+        assert_eq!(index_native_level_directory(&root).unwrap().paths.len(), 1);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -767,16 +967,10 @@ pub fn choose_level_directory(
                     callback(Err("Folder levels exceed the 4096 KiB import limit".into()));
                     return;
                 }
-                let text = match wasm_bindgen_futures::JsFuture::from(file.text()).await {
-                    Ok(value) => match value.as_string() {
-                        Some(text) => text,
-                        None => {
-                            callback(Err(format!("{} is not text", file.name())));
-                            return;
-                        }
-                    },
+                let text = match read_browser_text_file(file.clone()).await {
+                    Ok(text) => text,
                     Err(error) => {
-                        callback(Err(format!("Cannot read {}: {error:?}", file.name())));
+                        callback(Err(error));
                         return;
                     }
                 };
@@ -843,13 +1037,8 @@ fn choose_text_file(
             return;
         }
         wasm_bindgen_futures::spawn_local(async move {
-            let result = wasm_bindgen_futures::JsFuture::from(file.text())
+            let result = read_browser_text_file(file.clone())
                 .await
-                .map_err(|error| format!("Cannot read {description}: {error:?}"))
-                .and_then(|text| {
-                    text.as_string()
-                        .ok_or_else(|| format!("{description} is not text"))
-                })
                 .map(|text| (file.name(), text));
             callback(result);
         });
@@ -863,16 +1052,32 @@ fn choose_text_file(
 }
 
 #[cfg(target_arch = "wasm32")]
+async fn read_browser_text_file(file: web_sys::File) -> Result<String, String> {
+    let name = file.name();
+    let buffer = wasm_bindgen_futures::JsFuture::from(file.array_buffer())
+        .await
+        .map_err(|error| format!("Cannot read {name}: {error:?}"))?;
+    let bytes = js_sys::Uint8Array::new(&buffer).to_vec();
+    Ok(spelunky_core::level::decode_classic_text_bytes(&bytes).into_owned())
+}
+
+#[cfg(target_arch = "wasm32")]
 pub fn download(name: &str, text: &str) -> Result<(), String> {
+    download_bytes(name, text.as_bytes(), "text/plain;charset=utf-8")
+}
+
+#[cfg(target_arch = "wasm32")]
+fn download_bytes(name: &str, bytes: &[u8], mime_type: &str) -> Result<(), String> {
     use wasm_bindgen::JsCast;
     let document = web_sys::window()
         .and_then(|window| window.document())
         .ok_or("Browser document is unavailable")?;
     let parts = js_sys::Array::new();
-    parts.push(&wasm_bindgen::JsValue::from_str(text));
+    let data = js_sys::Uint8Array::from(bytes);
+    parts.push(data.as_ref());
     let options = web_sys::BlobPropertyBag::new();
-    options.set_type("text/plain;charset=utf-8");
-    let blob = web_sys::Blob::new_with_str_sequence_and_options(&parts, &options)
+    options.set_type(mime_type);
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options)
         .map_err(|error| format!("Cannot create download: {error:?}"))?;
     let url = web_sys::Url::create_object_url_with_blob(&blob)
         .map_err(|error| format!("Cannot create download URL: {error:?}"))?;

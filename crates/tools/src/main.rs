@@ -85,7 +85,7 @@ fn execute(args: Vec<String>) -> Result<String, String> {
             print_json(serde_json::to_value(result).map_err(|e| e.to_string())?)
         }
         Some("validate-level") if args.len() == 2 => {
-            let text = read_text(Path::new(&args[1]), 4 * 1024 * 1024)?;
+            let text = read_level_text(Path::new(&args[1]), 4 * 1024 * 1024)?;
             let custom = level::Level::parse(&text)?;
             let world = custom.to_world();
             print_json(
@@ -123,6 +123,16 @@ fn execute(args: Vec<String>) -> Result<String, String> {
 }
 
 fn read_text(path: &Path, max_bytes: u64) -> Result<String, String> {
+    let bytes = read_bytes(path, max_bytes)?;
+    String::from_utf8(bytes).map_err(|e| format!("Input is not UTF-8: {e}"))
+}
+
+fn read_level_text(path: &Path, max_bytes: u64) -> Result<String, String> {
+    let bytes = read_bytes(path, max_bytes)?;
+    Ok(level::decode_classic_text_bytes(&bytes).into_owned())
+}
+
+fn read_bytes(path: &Path, max_bytes: u64) -> Result<Vec<u8>, String> {
     let file = fs::File::open(path).map_err(|e| format!("Cannot open {}: {e}", path.display()))?;
     if !file.metadata().map_err(|e| e.to_string())?.is_file() {
         return Err("Input must be a regular file".into());
@@ -135,7 +145,7 @@ fn read_text(path: &Path, max_bytes: u64) -> Result<String, String> {
     if bytes.len() as u64 > max_bytes {
         return Err(format!("Input exceeds {max_bytes} bytes"));
     }
-    String::from_utf8(bytes).map_err(|e| format!("Input is not UTF-8: {e}"))
+    Ok(bytes)
 }
 
 fn number<T: std::str::FromStr>(value: &str, name: &str) -> Result<T, String> {
@@ -579,5 +589,40 @@ mod tests {
         .unwrap();
         let value: Value = serde_json::from_str(&canonical).unwrap();
         assert_eq!(value["algorithm"], "gm8_lcg32_v1");
+    }
+
+    #[test]
+    fn validate_level_decodes_classic_windows_1252_metadata() {
+        let text = level::Level::default()
+            .to_text()
+            .replace("ANONYMOUS", "CAFÉ");
+        let mut bytes = Vec::new();
+        for character in text.chars() {
+            if character == 'É' {
+                bytes.push(0xc9);
+            } else {
+                let mut buffer = [0; 4];
+                bytes.extend_from_slice(character.encode_utf8(&mut buffer).as_bytes());
+            }
+        }
+        let path = env::temp_dir().join(format!(
+            "spelunky-validate-level-cp1252-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&path, bytes).unwrap();
+        let result = execute(vec![
+            "validate-level".into(),
+            path.to_string_lossy().into_owned(),
+        ]);
+        fs::remove_file(path).unwrap();
+
+        let output = result.unwrap();
+        let output: Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(output["valid"], true);
+        assert_eq!(output["author"], "CAFÉ");
     }
 }

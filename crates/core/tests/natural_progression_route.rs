@@ -182,4 +182,50 @@ fn generated_seed_three_wall_hang_jumps_up_on_the_source_fresh_press() {
         "held jump continues the release arc"
     );
     assert_eq!(game.player.state, PlayerState::Jumping);
+
+    // The source player uses bounds y-8..y+8. The generated wall's upper
+    // surface is the tile boundary above this 8-pixel-snapped hang position.
+    let upper_surface_y = (hanging_y / 16.0).floor() * 16.0;
+    let upper_player_y = upper_surface_y - 8.0;
+    let mut cleared_wall = false;
+    let mut landed = false;
+    for _ in 0..30 {
+        game.step(&InputFrame {
+            left: true,
+            run: true,
+            jump: true,
+            ..Default::default()
+        });
+        cleared_wall |= game.player.pos.y + 8.0 < upper_surface_y;
+        if game.player.grounded {
+            assert!(cleared_wall, "jump must clear the wall's upper edge");
+            assert_eq!(game.player.pos.y, upper_player_y);
+            let column = (game.player.pos.x / 16.0).floor() as i32;
+            let row = (upper_surface_y / 16.0).floor() as i32;
+            assert!(
+                game.world.tile_collision_mask(column, row).contains(
+                    Vec2::new(game.player.pos.x, upper_surface_y),
+                    spelunky_core::CollisionPrecision::Precise,
+                ),
+                "landing point must touch the generated wall's top collision mask"
+            );
+            landed = true;
+            break;
+        }
+    }
+    assert!(landed, "generated wall jump must land on its upper surface");
+
+    // Keep the same natural directional input for one more source tick. This
+    // catches a one-frame landing that immediately loses support.
+    game.step(&InputFrame {
+        left: true,
+        run: true,
+        jump: true,
+        ..Default::default()
+    });
+    assert!(
+        game.player.grounded,
+        "upper surface must support the next tick"
+    );
+    assert_eq!(game.player.pos.y, upper_player_y);
 }

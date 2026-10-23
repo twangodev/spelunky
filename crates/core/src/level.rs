@@ -1,10 +1,64 @@
 //! Classic 1.1 custom levels. Coordinates and spawn offsets follow scrCreateTileObj.
 use crate::model::{Area, Vec2, World};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 
 pub const LEVEL_WIDTH: usize = 40;
 pub const LEVEL_HEIGHT: usize = 32;
 const MAX_LEVEL_BYTES: usize = 4 * 1024 * 1024;
+const CLASSIC_CP1252_TRAILER: &[u8] = b"\n#SPelunky-Rust-Encoding=Windows-1252";
+
+/// Decode level files from Classic's Windows-1252 format while accepting
+/// UTF-8 files written by this port. Classic's `.lvl` format has no encoding
+/// marker, so valid UTF-8 takes precedence and legacy bytes fall back to the
+/// source game's Windows code page.
+pub fn decode_classic_text_bytes(bytes: &[u8]) -> Cow<'_, str> {
+    if let Some(classic_bytes) = bytes.strip_suffix(CLASSIC_CP1252_TRAILER) {
+        // The marker is outside the Classic format. Only treat it as our
+        // encoding trailer when removing it leaves one complete level. A
+        // sign may legitimately contain this exact text as its final record;
+        // blindly stripping the suffix then corrupts the level.
+        if let Ok(text) = std::str::from_utf8(classic_bytes) {
+            let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+            if Level::parse_for_editor(text).is_ok() {
+                return encoding_rs::WINDOWS_1252
+                    .decode_without_bom_handling(classic_bytes)
+                    .0;
+            }
+        }
+    }
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return Cow::Borrowed(text.strip_prefix('\u{feff}').unwrap_or(text));
+    }
+    encoding_rs::WINDOWS_1252
+        .decode_without_bom_handling(bytes)
+        .0
+}
+
+/// Encode `.lvl` text in Classic's Windows-1252 format. The source editor
+/// writes text files without an encoding marker, so silently replacing a
+/// character would make an exported level lose metadata when reopened.
+pub fn encode_classic_text_bytes(text: &str) -> Result<Vec<u8>, String> {
+    let (bytes, _, had_errors) = encoding_rs::WINDOWS_1252.encode(text);
+    if had_errors {
+        return Err(
+            "Level text contains characters that Classic's Windows-1252 format cannot represent"
+                .into(),
+        );
+    }
+    Ok(bytes.into_owned())
+}
+
+/// Encode a level file in Classic's Windows-1252 format and mark ambiguous
+/// byte sequences that also happen to be valid UTF-8. The trailing marker is
+/// after all declared level records, which Classic ignores when loading.
+pub fn encode_classic_level_bytes(text: &str) -> Result<Vec<u8>, String> {
+    let mut bytes = encode_classic_text_bytes(text)?;
+    if bytes.iter().any(|byte| *byte >= 0x80) && std::str::from_utf8(&bytes).is_ok() {
+        bytes.extend_from_slice(CLASSIC_CP1252_TRAILER);
+    }
+    Ok(bytes)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Level {
@@ -1107,7 +1161,85 @@ pub fn tile_spawns(tile: char) -> Vec<TileSpawn> {
 
 #[cfg(test)]
 mod tests {
-    use super::Level;
+    use super::{
+        Level, decode_classic_text_bytes, encode_classic_level_bytes, encode_classic_text_bytes,
+    };
+
+    #[test]
+    fn classic_text_encoding_roundtrips_windows_1252_and_rejects_lossy_text() {
+        let text = "Café – €";
+        let encoded = encode_classic_text_bytes(text).unwrap();
+        assert_eq!(encoded, [b'C', b'a', b'f', 0xe9, b' ', 0x96, b' ', 0x80]);
+        assert_eq!(decode_classic_text_bytes(&encoded), text);
+        assert!(encode_classic_text_bytes("emoji 🧗").is_err());
+    }
+
+    #[test]
+    fn classic_level_marker_preserves_cp1252_that_looks_like_utf8() {
+        let mut level = Level::default();
+        level.author = "MÃ©".into();
+        let text = level.to_text();
+        let encoded = encode_classic_level_bytes(&text).unwrap();
+        assert!(encoded.ends_with(b"\n#SPelunky-Rust-Encoding=Windows-1252"));
+        assert_eq!(decode_classic_text_bytes(&encoded), text);
+        assert_eq!(
+            Level::parse(&decode_classic_text_bytes(&encoded)).unwrap(),
+            level
+        );
+    }
+
+    #[test]
+    fn marker_looking_final_sign_roundtrips_without_being_stripped() {
+        let marker_sign = "#SPelunky-Rust-Encoding=Windows-1252";
+        for author in ["Café", "ASCII", "MÃ©"] {
+            let mut level = Level::default();
+            level.author = author.into();
+            level.set_tile(4, 4, 'I').unwrap();
+            level.signs.push(marker_sign.into());
+
+            let encoded = encode_classic_level_bytes(&level.to_text()).unwrap();
+            let decoded = decode_classic_text_bytes(&encoded);
+            let loaded = Level::parse(&decoded).unwrap();
+
+            assert_eq!(loaded, level, "author encoding {author:?}");
+        }
+    }
+
+    #[test]
+    fn marker_decoding_accepts_editor_raw_inventory_fields() {
+        let mut level = Level::default();
+        level.author = "MÃ©".into();
+        level
+            .signs
+            .push("#SPelunky-Rust-Encoding=Windows-1252".into());
+        let mut lines: Vec<_> = level.to_text().lines().map(str::to_owned).collect();
+        lines[34] = "12A".into();
+        let text = lines.join("\n");
+
+        let encoded = encode_classic_level_bytes(&text).unwrap();
+        assert!(encoded.ends_with(
+            b"\n#SPelunky-Rust-Encoding=Windows-1252\n#SPelunky-Rust-Encoding=Windows-1252"
+        ));
+        assert_eq!(decode_classic_text_bytes(&encoded), text);
+        assert!(Level::parse_for_editor(&decode_classic_text_bytes(&encoded)).is_ok());
+        assert!(Level::parse(&decode_classic_text_bytes(&encoded)).is_err());
+    }
+
+    #[test]
+    fn classic_text_decoding_accepts_windows_1252_and_utf8_levels() {
+        let mut level = Level::default();
+        level.author = "CAFÉ".into();
+        let utf8 = level.to_text();
+        assert_eq!(decode_classic_text_bytes(utf8.as_bytes()), utf8);
+
+        let (windows_1252, _, had_errors) = encoding_rs::WINDOWS_1252.encode(&utf8);
+        assert!(!had_errors);
+        let decoded = decode_classic_text_bytes(&windows_1252);
+        assert_eq!(decoded, utf8);
+        assert_eq!(Level::parse(&decoded).unwrap().author, "CAFÉ");
+        assert_eq!(decode_classic_text_bytes(&[0xff, 0xfe]), "ÿþ");
+        assert_eq!(decode_classic_text_bytes(b"\xef\xbb\xbfLEVEL"), "LEVEL");
+    }
 
     #[test]
     fn linked_level_load_skips_start_inventory_conversion() {

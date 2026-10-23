@@ -934,6 +934,17 @@ fn schedule(rng: &mut Rng, level: u32, first: u32, last: u32) -> bool {
     }
 }
 
+/// Run the two `scrInitLevel` secret-schedule chains without populating a room.
+/// The authored tutorial skips `scrEntityGen`, but reaches these source draws.
+pub(super) fn initialize_source_schedules(rng: &mut Rng, level: u32, flags: &BTreeSet<String>) {
+    if !flag(flags, &["made_udjat_eye", "madeUdjatEye"]) {
+        let _ = schedule(rng, level, 2, 4);
+    }
+    if !flag(flags, &["made_market_entrance", "madeMarketEntrance"]) {
+        let _ = schedule(rng, level, 5, 7);
+    }
+}
+
 // Test-only observation of the existing Ice floor geometry adapter. This
 // proves its random/event ordering on natural layouts, not geometry parity.
 #[cfg(test)]
@@ -1680,11 +1691,10 @@ fn populate_internal(
                     // Source :370 evaluates its roll before every pure guard.
                     let spring_roll = rng.chance(1, 10);
                     let spring_allowed = if source_classic {
-                        if spring_roll {
-                            // The source condition assigns sDark here rather than
-                            // comparing against the support's existing sprite.
-                            set_source_sprite(world, support, "sDark");
-                        }
+                        // Game Maker 8 evaluates every operand in a Boolean
+                        // expression, so the source's assignment to sDark runs
+                        // even when the preceding spring roll misses.
+                        set_source_sprite(world, support, "sDark");
                         source_sprite(world, support).as_deref() == Some("sDark")
                             && !source_rectangle_family(
                                 world,
@@ -5416,7 +5426,6 @@ mod tests {
 
     #[test]
     fn eager_natural_ice_generation_uses_literal_spring_then_yeti_stream() {
-        let mut non_dark = 0;
         let mut allowed = 0;
         let mut disallowed = 0;
         let mut springs = 0;
@@ -5428,7 +5437,10 @@ mod tests {
             let traces = ICE_FLOOR_ROLL_TRACE.with(|trace| trace.borrow_mut().take().unwrap());
             assert!(!traces.is_empty(), "generated seed={seed}");
             for trace in traces {
-                non_dark += usize::from(!trace.dark_support);
+                assert!(
+                    trace.dark_support,
+                    "the eager source assignment darkens the support"
+                );
                 allowed += usize::from(trace.spring_allowed);
                 disallowed += usize::from(!trace.spring_allowed);
                 let mut source = trace.before;
@@ -5467,7 +5479,7 @@ mod tests {
             assert_eq!(game.world.area, Area::Ice);
             assert_eq!(game.player.health, 4.0);
         }
-        assert!(non_dark > 0 && allowed > 0 && disallowed > 0);
+        assert!(allowed > 0 && disallowed > 0);
         assert!(
             springs > 0 && yetis > 0,
             "actual generation must cover both branch births"
@@ -5542,13 +5554,16 @@ mod tests {
                 "{object} near_exit={near_exit} seed={seed} roll={spring_roll} guard={} dark={}",
                 trace.spring_allowed, trace.dark_support,
             );
-            assert_eq!(trace.dark_support, object == "oDark" || spring_roll);
+            assert!(
+                trace.dark_support,
+                "the reached assignment sets sDark on {object}"
+            );
             assert_eq!(
                 world
                     .tile_sprite_metadata(6, 6)
                     .and_then(|metadata| metadata.text.get("terrain_sprite"))
                     .map(String::as_str),
-                spring_roll.then_some("sDark"),
+                Some("sDark"),
                 "support sprite assignment for {object} near_exit={near_exit} seed={seed}"
             );
             assert_eq!(trace.after.next_u64(), source.next_u64());

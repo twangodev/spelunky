@@ -256,6 +256,18 @@ pub(super) fn create_tutorial_source_terrain(
 ) {
     debug_assert_eq!(world.name, "Tutorial Cave");
     debug_assert_eq!((world.width, world.height), (42, 19));
+    // The encoded room grid is convenient storage, but GameMaker instantiates
+    // these bricks in XML order. Reassign only their existing serial slots so
+    // family iteration (notably SetupWalls) sees that order without colliding
+    // with other room instances' serials.
+    let mut brick_serials: Vec<_> = TUTORIAL_BRICK_CREATE_ORDER
+        .iter()
+        .map(|&position| world.tiles[usize::from(position)].creation_serial)
+        .collect();
+    brick_serials.sort_unstable();
+    for (&position, serial) in TUTORIAL_BRICK_CREATE_ORDER.iter().zip(brick_serials) {
+        world.tiles[usize::from(position)].creation_serial = serial;
+    }
     for &position in &TUTORIAL_BRICK_CREATE_ORDER {
         let position = usize::from(position);
         let x = position % world.width;
@@ -534,12 +546,70 @@ mod tests {
         }
     }
 
+    fn source_tutorial_initialization_rng(seed: u32, graphics_high: bool) -> Rng {
+        let mut rng = Rng::new(seed);
+        let mut world = tutorial();
+        world.source_create_projection = true;
+        for entity in &mut world.entities {
+            crate::world_events::initialize_source_generated_create(entity);
+        }
+        super::create_tutorial_source_terrain(
+            &mut world,
+            &mut rng,
+            super::super::GenerationContext::default(),
+        );
+        super::super::source_tutorial_boundaries(&mut world, &mut rng);
+
+        let mut flags = BTreeSet::from(["tutorial".to_owned()]);
+        if !graphics_high {
+            flags.insert("low_graphics".into());
+        }
+        let state = super::super::GenerationState::fresh(&rng);
+        let _ = super::super::room_path_with_probabilities(
+            &mut rng,
+            crate::Area::Mines,
+            0,
+            &mut flags,
+            true,
+            state.probabilities,
+        );
+        let _ = rng.source_rand(1, 0).unwrap();
+        let _ = super::super::select_cemetery_with_probability(
+            &mut rng,
+            crate::Area::Mines,
+            false,
+            true,
+            state.probabilities.cemetery,
+        );
+        let _ = super::super::select_dark_level_with_probability(
+            &mut rng,
+            0,
+            crate::Area::Mines,
+            &flags,
+            state.probabilities.dark_level,
+        );
+        super::super::population::initialize_source_schedules(&mut rng, 0, &flags);
+        super::super::terrain::setup_generated_with_revision(
+            &mut world,
+            &mut rng,
+            graphics_high,
+            state.revision,
+            false,
+        );
+        if graphics_high {
+            super::super::background_extras(&mut world, &mut rng, true);
+        }
+        super::super::init_cleanup::cleanup(&mut world, state.revision);
+        super::super::terrain::finalize_generated(&mut world, state.revision);
+        rng
+    }
+
     fn assert_seed_13_tutorial_brick(world: &World) {
         assert_eq!(world.tiles[7 * world.width + 15].object, "oBrick");
         let brick = world.tile_sprite_metadata(15, 7).unwrap();
-        assert_eq!(brick.text["terrain_sprite"], "sBrick2");
         assert_eq!(brick.value("n"), 54.0);
         assert_eq!(brick.value("source_room_terrain_created"), 1.0);
+        assert_eq!(brick.value("terrain_setup_initialized"), 1.0);
 
         let loot = world
             .entities
@@ -560,9 +630,11 @@ mod tests {
         // the first row-major brick in TUTORIAL_TERRAIN.
         assert_eq!(TUTORIAL_BRICK_CREATE_ORDER[0], 9 * 42 + 5);
 
-        let mut expected = Rng::new(13);
-        source_tutorial_brick_create_rng(&mut expected);
-        assert_eq!(expected.state_bits(), 1_726_824_778);
+        let mut brick_only = Rng::new(13);
+        source_tutorial_brick_create_rng(&mut brick_only);
+        assert_eq!(brick_only.state_bits(), 1_726_824_778);
+        let expected = source_tutorial_initialization_rng(13, true);
+        assert_eq!(expected.state_bits(), 3_584_169_550);
         let expected_continuation = expected.clone().next_u64();
 
         let direct = crate::Game::try_tutorial(13, crate::RulesPreset::Classic).unwrap();
@@ -576,15 +648,77 @@ mod tests {
         assert_eq!(direct.rng.clone().next_u64(), expected_continuation);
 
         let mut from_hub = crate::Game::shell(13, crate::RulesPreset::Classic);
-        let mut hub_expected = from_hub.rng.clone();
-        source_tutorial_brick_create_rng(&mut hub_expected);
         from_hub.start_from_hub(true, 1);
         assert_seed_13_tutorial_brick(&from_hub.world);
-        assert_eq!(from_hub.rng.state_bits(), hub_expected.state_bits());
+        assert_eq!(from_hub.rng.state_bits(), expected.state_bits());
+        assert_eq!(from_hub.rng.clone().next_u64(), expected.clone().next_u64());
+    }
+
+    #[test]
+    fn tutorial_runs_invincible_boundaries_setup_walls_and_graphics_setting() {
+        let high = crate::Game::tutorial(13, crate::RulesPreset::Classic);
+        let boundaries: Vec<_> = high
+            .world
+            .entities
+            .iter()
+            .filter(|entity| {
+                entity.object == "oBrick" && entity.value("source_boundary_birth") != 0.0
+            })
+            .collect();
+        assert_eq!(boundaries.len(), 150);
         assert_eq!(
-            from_hub.rng.clone().next_u64(),
-            hub_expected.clone().next_u64()
+            boundaries
+                .iter()
+                .filter(|entity| {
+                    entity.pos.x >= 0.0
+                        && entity.pos.x < 672.0
+                        && entity.pos.y >= 0.0
+                        && entity.pos.y < 304.0
+                })
+                .count(),
+            78
         );
+        for y in [6, 7] {
+            assert_eq!(high.world.tile(0, y).unwrap().object, "oBrick");
+            assert!(boundaries.iter().any(|entity| {
+                entity.pos == Vec2::new(0.0, f64::from(y * 16)) && entity.value("invincible") != 0.0
+            }));
+        }
+        for (index, tile) in high.world.tiles.iter().enumerate() {
+            if tile.object == "oBrick" {
+                let metadata = high
+                    .world
+                    .tile_sprite_metadata(
+                        (index % high.world.width) as i32,
+                        (index / high.world.width) as i32,
+                    )
+                    .expect("SetupWalls initializes every authored tutorial brick");
+                assert_eq!(metadata.value("terrain_setup_initialized"), 1.0);
+            }
+        }
+        assert_eq!(
+            high.world
+                .entities
+                .iter()
+                .filter(|entity| {
+                    entity.object == "oGenerationDecoration"
+                        && entity.sprite.starts_with("bgExtras")
+                })
+                .count(),
+            20
+        );
+
+        let low = crate::Game::tutorial_with_music_and_graphics(
+            13,
+            crate::RulesPreset::Classic,
+            crate::SourceMusicState::default(),
+            false,
+        );
+        assert!(low.flags.contains("low_graphics"));
+        assert!(!low.world.entities.iter().any(|entity| {
+            entity.object == "oGenerationDecoration" && entity.sprite.starts_with("bgExtras")
+        }));
+        assert_ne!(high.rng.state_bits(), low.rng.state_bits());
     }
 
     #[test]

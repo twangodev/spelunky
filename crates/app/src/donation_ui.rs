@@ -91,7 +91,12 @@ impl TransitionDonation {
 
 pub fn hydrate(game: &mut Game, remaining: &BTreeMap<String, u32>) {
     for (key, amount) in remaining {
-        game.data.insert(key.clone(), f64::from(*amount));
+        // Saved balances initialize a fresh run. When hub navigation reuses a
+        // live Game, its unsaved source globals remain authoritative until the
+        // next high-score update instead of being replaced by an older file.
+        game.data
+            .entry(key.clone())
+            .or_insert_with(|| f64::from(*amount));
     }
 }
 pub fn progress(game: &Game) -> BTreeMap<String, u32> {
@@ -164,6 +169,27 @@ mod tests {
                 .remaining(&reloaded),
             99_900
         );
+    }
+
+    #[test]
+    fn source_first_encounter_marker_hides_the_donation_screen() {
+        let mut game = exited(4, 500);
+        game.data.insert("tunnel1_remaining".into(), 100001.);
+        assert!(TransitionDonation::begin(&game).is_none());
+    }
+    #[test]
+    fn saved_balances_fill_missing_run_state_without_overwriting_live_donations() {
+        let saved = BTreeMap::from([
+            ("tunnel1_remaining".into(), 100_000),
+            ("tunnel2_remaining".into(), 200_000),
+        ]);
+        let mut game = exited(4, 100_000);
+        game.data.insert("tunnel1_remaining".into(), 99_000.);
+
+        hydrate(&mut game, &saved);
+
+        assert_eq!(game.data["tunnel1_remaining"], 99_000.);
+        assert_eq!(game.data["tunnel2_remaining"], 200_000.);
     }
     #[test]
     fn exit_input_is_cleared_before_transition_selection() {
